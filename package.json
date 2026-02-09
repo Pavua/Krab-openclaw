@@ -1,0 +1,24 @@
+{
+  "name": "kraab",
+  "version": "1.0.0",
+  "description": "🦀 Краб - AI Userbot с интеграцией OpenClaw и LM Studio",
+  "main": "src/main.py",
+  "scripts": {
+    "start": "./run_krab.sh",
+    "test": "pytest",
+    "test:unit": "pytest tests/unit/ -v",
+    "test:integration": "pytest tests/integration/ -v",
+    "test:cov": "pytest tests/ --cov=src --cov-report=html",
+    "lint": "ruff check src/",
+    "format": "ruff format src/"
+  },
+  "keywords": [
+    "telegram",
+    "userbot",
+    "ai",
+    "openclaw",
+    "lmstudio"
+  ],
+  "author": "pablito",
+  "license": "MIT"
+}

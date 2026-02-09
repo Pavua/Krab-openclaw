@@ -1,0 +1,16 @@
+2026-02-09 03:17:24 [info     ] memory_manager_initialized     path=/Users/pablito/Antigravity_AGENTS/Краб/memory_db
+INFO:httpx:HTTP Request: GET http://192.168.0.171:1234/v1/models "HTTP/1.1 200 OK"
+
+    🦀 KRAB USERBOT STARTED 🦀
+    Owner: @yung_nagato
+    Mode: INFO
+    RAM Limit: 36GB
+    
+2026-02-09 03:17:24 [info     ] models_discovered              count=40
+INFO:httpx:HTTP Request: GET https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSyAQPLHxwal68OlhQ2xaL3kGI9D9iPmo6eQ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:18789/health "HTTP/1.1 200 OK"
+2026-02-09 03:17:24 [info     ] system_check                   lm_studio={'status': 'healthy', 'models_count': 65, 'ram': {'total_gb': 36.0, 'used_gb': 10.76, 'available_gb': 7.51, 'percent': 79.2}} openclaw=True
+2026-02-09 03:17:24 [info     ] starting_userbot
+2026-02-09 03:17:25 [error    ] fatal_error                    error='database is locked'
+2026-02-09 03:17:25 [info     ] mcp_all_stopped
+2026-02-09 03:17:25 [info     ] kraab_stopped

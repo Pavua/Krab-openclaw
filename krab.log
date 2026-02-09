@@ -1,0 +1,35 @@
+2026-02-09 16:00:39 [info     ] memory_manager_initialized     path=/Users/pablito/Antigravity_AGENTS/Краб/memory_db
+
+    🦀 KRAB USERBOT STARTED 🦀
+    Owner: @yung_nagato
+    Mode: INFO
+    RAM Limit: 36GB
+    
+INFO:httpx:HTTP Request: GET http://192.168.0.171:1234/v1/models "HTTP/1.1 200 OK"
+2026-02-09 16:00:39 [info     ] models_discovered              count=40
+INFO:httpx:HTTP Request: GET https://generativelanguage.googleapis.com/v1beta/models?key=AIzaSyAQPLHxwal68OlhQ2xaL3kGI9D9iPmo6eQ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://127.0.0.1:18792/health "HTTP/1.1 404 Not Found"
+2026-02-09 16:00:39 [info     ] system_check                   lm_studio={'status': 'healthy', 'models_count': 65, 'ram': {'total_gb': 36.0, 'used_gb': 12.44, 'available_gb': 9.05, 'percent': 74.9}} openclaw=False
+2026-02-09 16:00:39 [warning  ] openclaw_unreachable           url=http://127.0.0.1:18792
+2026-02-09 16:00:39 [info     ] starting_userbot
+INFO:pyrogram.connection.connection:Connecting...
+INFO:pyrogram.connection.connection:Connected! Production DC4 - IPv4
+INFO:pyrogram.session.session:NetworkTask started
+INFO:pyrogram.session.session:Session initialized: Layer 158
+INFO:pyrogram.session.session:Device: CPython 3.13.5 - Pyrogram 2.0.106
+INFO:pyrogram.session.session:System: Darwin 25.3.0 (en)
+INFO:pyrogram.session.session:Session started
+INFO:pyrogram.session.session:PingTask started
+INFO:pyrogram.dispatcher:Started 18 HandlerTasks
+2026-02-09 16:00:40 [info     ] userbot_started                id=6435872621 me=yung_nagato
+2026-02-09 16:00:40 [info     ] wake_up_message_sent
+2026-02-09 16:00:40 [info     ] kraab_running
+2026-02-09 16:00:40 [info     ] maintenance_task_start
+2026-02-09 16:00:40 [info     ] maintenance_started
+INFO:httpx:HTTP Request: GET http://192.168.0.171:1234/v1/models "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://127.0.0.1:18792/health "HTTP/1.1 404 Not Found"
+2026-02-09 16:00:58 [info     ] processing_ai_request          chat_id=312322764 has_photo=False user=p0lrd
+2026-02-09 16:00:59 [info     ] openclaw_stream_start          chat_id=312322764 model=google/gemini-3-flash-preview
+INFO:httpx:HTTP Request: POST http://127.0.0.1:18792/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-02-09 16:00:59 [info     ] openclaw_response_status       status=404
+2026-02-09 16:00:59 [error    ] openclaw_api_error             body='not found' status=404

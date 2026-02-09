@@ -1,0 +1,6 @@
+🌍 Testing Web Session Manager...
+{"headless": true, "event": "web_session_started"}
+✅ Browser started successfully.
+📄 Page Title: Google
+{"event": "web_session_stopped"}
+✅ Browser stopped.
