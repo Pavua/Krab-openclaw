@@ -1,0 +1,100 @@
+{
+    "gateway": {
+        "port": 18789,
+        "http": {
+            "endpoints": {
+                "chatCompletions": {
+                    "enabled": true
+                }
+            }
+        },
+        "auth": {
+            "mode": "token",
+            "token": "sk-nexus-bridge"
+        },
+        "nodes": {
+            "allowCommands": [
+                "bash",
+                "sh",
+                "git",
+                "grep",
+                "curl",
+                "python3",
+                "ls",
+                "cat",
+                "echo",
+                "mkdir",
+                "touch",
+                "rm",
+                "mv",
+                "cp",
+                "say",
+                "osascript"
+            ]
+        }
+    },
+    "skills": {
+        "allowBundled": [
+            "*"
+        ],
+        "entries": {
+            "coding-agent": {
+                "enabled": true
+            },
+            "crypto": {
+                "enabled": true
+            },
+            "weather": {
+                "enabled": true
+            },
+            "openai-image-gen": {
+                "enabled": true
+            },
+            "session-logs": {
+                "enabled": true
+            }
+        }
+    },
+    "models": {
+        "providers": {
+            "google": {
+                "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+                "api": "google-generative-ai",
+                "auth": "api-key",
+                "apiKey": "${GEMINI_API_KEY}",
+                "models": [
+                    {
+                        "id": "gemini-2.0-flash-exp",
+                        "name": "Gemini 2.0 Flash"
+                    },
+                    {
+                        "id": "google/gemini-2.0-flash-exp",
+                        "name": "Gemini 2.0 Flash (Prefixed)"
+                    },
+                    {
+                        "id": "anthropic/gemini-2.0-flash-exp",
+                        "name": "Gemini 2.0 Flash (Fallback Alias)"
+                    },
+                    {
+                        "id": "gemini-1.5-pro-latest",
+                        "name": "Gemini 1.5 Pro"
+                    }
+                ]
+            },
+            "local": {
+                "baseUrl": "http://localhost:1234/v1",
+                "api": "openai-completions",
+                "auth": "api-key",
+                "apiKey": "lm-studio",
+                "models": [
+                    {
+                        "id": "local",
+                        "name": "Local Model (LM Studio)",
+                        "contextWindow": 32000,
+                        "maxTokens": 4096
+                    }
+                ]
+            }
+        }
+    }
+}

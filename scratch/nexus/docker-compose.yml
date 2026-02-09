@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  nexus:
+    build: .
+    container_name: nexus_core
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./agents:/app/agents
+      - ./config:/app/config
+      - ./logs:/app/logs
+    depends_on:
+      - db
+    networks:
+      - nexus_net
+
+  db:
+    image: postgres:15-alpine
+    container_name: nexus_db
+    restart: always
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus_password
+      POSTGRES_DB: nexus_data
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nexus_net
+
+volumes:
+  postgres_data:
+
+
+networks:
+  nexus_net:
+    driver: bridge

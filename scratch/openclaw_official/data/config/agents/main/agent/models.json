@@ -1,0 +1,27 @@
+{
+  "providers": {
+    "google": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "api": "google-generative-ai",
+      "models": [
+        {
+          "id": "gemini-2.5-flash-preview-09-2025",
+          "name": "gemini-2.5-flash-preview-09-2025",
+          "contextWindow": 1000000,
+          "maxTokens": 8192,
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ],
+      "apiKey": "GEMINI_API_KEY"
+    }
+  }
+}

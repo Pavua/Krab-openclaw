@@ -1,0 +1,193 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.1",
+    "lastTouchedAt": "2026-02-02T19:51:35.934Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-02-02T19:51:35.932Z",
+    "lastRunVersion": "2026.2.1",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    },
+    "auth": {
+      "mode": "token",
+      "token": "sk-nexus-bridge"
+    }
+  },
+  "hooks": {
+    "enabled": false
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true
+  },
+  "models": {
+    "providers": {
+      "google": {
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "api": "google-generative-ai",
+        "models": [
+          {
+            "id": "gemini-2.5-flash-preview-09-2025",
+            "name": "gemini-2.5-flash-preview-09-2025",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "gemini-2.5-pro-preview-09-2025",
+            "name": "gemini-2.5-pro-preview-09-2025",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 2000000,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "lmstudio": {
+        "api": "openai-completions",
+        "baseUrl": "http://localhost:1234/v1",
+        "models": [
+          {
+            "id": "local",
+            "name": "Local Loaded Model (LM Studio)",
+            "contextWindow": 32768,
+            "compat": {
+              "maxTokensField": "max_tokens"
+            },
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "maxTokens": 8192
+          },
+          {
+            "id": "seed-oss-36b-instruct-mlx",
+            "name": "Seed OSS 36B Instruct MLX",
+            "contextWindow": 32768,
+            "compat": {
+              "maxTokensField": "max_tokens"
+            },
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "google/gemini-2.5-flash-preview-09-2025"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8,
+        "model": "lmstudio/seed-oss-36b-instruct-mlx"
+      },
+      "memorySearch": {
+        "enabled": true,
+        "provider": "gemini",
+        "model": "models/text-embedding-004",
+        "fallback": "none"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "subagents": {
+          "allowAgents": [
+            "*"
+          ]
+        }
+      }
+    ]
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "brave",
+        "apiKey": "BSA0Wc1DkryOW0CL8moj0PvjEbhUiAe"
+      }
+    },
+    "exec": {
+      "security": "full"
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions",
+    "groupChat": {
+      "mentionPatterns": [
+        "@mytest_feb2026_bot",
+        "OpenClaw",
+        "Краб"
+      ]
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "groupPolicy": "open",
+      "groups": {
+        "-1001804661353": {
+          "enabled": true,
+          "requireMention": true
+        }
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": false
+      }
+    }
+  }
+}
