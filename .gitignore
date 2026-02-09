@@ -1,0 +1,38 @@
+# System files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+logs/
+*.pid
+
+# Sessions & Local Data
+*.session
+*.session-journal
+memory_db/
+browser_data/
+backups/
+scratch/
+voice_cache/
+
+# Node
+node_modules/
+
+# IDEs
+.vscode/
+.idea/
+.gemini/
+.agent/
