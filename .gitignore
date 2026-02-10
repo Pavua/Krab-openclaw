@@ -13,6 +13,9 @@ env/
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+dist/
+build/
 
 # Logs
 *.log
@@ -27,6 +30,7 @@ memory_db/
 browser_data/
 backups/
 voice_cache/
+artifacts/
 
 # Node
 node_modules/
@@ -36,3 +40,19 @@ node_modules/
 .idea/
 .gemini/
 .agent/
+
+# Heavy directories (не загружаем на GitHub)
+ComfyUI/
+scratch/backups/
+scratch/nexus/
+scratch/openclaw_official/
+
+# ChromaDB
+chroma_data/
+
+# Temporary & debugging files
+temp/
+*.n8n
+verify_*.py
+verify_*.sh
+test_mcp_imports.py

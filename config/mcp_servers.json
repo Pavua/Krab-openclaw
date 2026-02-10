@@ -1,0 +1,26 @@
+{
+    "mcpServers": {
+        "filesystem": {
+            "command": "node",
+            "args": [
+                "/Users/pablito/Antigravity_AGENTS/Краб/mcp-servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js",
+                "/Users/pablito/Antigravity_AGENTS/Краб"
+            ]
+        },
+        "memory": {
+            "command": "node",
+            "args": [
+                "/Users/pablito/Antigravity_AGENTS/Краб/mcp-servers/node_modules/@modelcontextprotocol/server-memory/dist/index.js"
+            ]
+        },
+        "brave-search": {
+            "command": "node",
+            "args": [
+                "/Users/pablito/Antigravity_AGENTS/Краб/mcp-servers/node_modules/@modelcontextprotocol/server-brave-search/dist/index.js"
+            ],
+            "env": {
+                "BRAVE_API_KEY": ""
+            }
+        }
+    }
+}

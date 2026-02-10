@@ -55,6 +55,21 @@ class ContextKeeper:
             # logger.error(f"Error reading context: {e}")
             return []
 
+    def save_summary(self, chat_id: int, summary: str):
+        """Сохраняет саммари чата."""
+        chat_dir = self.get_chat_storage_path(chat_id)
+        summary_file = chat_dir / "summary.txt"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write(summary)
+
+    def get_summary(self, chat_id: int) -> str:
+        """Получает текущее саммари чата."""
+        chat_dir = self.get_chat_storage_path(chat_id)
+        summary_file = chat_dir / "summary.txt"
+        if summary_file.exists():
+            return summary_file.read_text(encoding="utf-8")
+        return ""
+
 # Пример использования в Pyrogram handler:
 # keeper = ContextKeeper()
 # @app.on_message()

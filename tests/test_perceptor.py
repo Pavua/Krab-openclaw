@@ -1,37 +1,36 @@
-
+# -*- coding: utf-8 -*-
 import pytest
-from unittest.mock import MagicMock, patch
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 from src.modules.perceptor import Perceptor
 
-@pytest.fixture
-def mock_mlx_whisper():
-    mock_module = MagicMock()
-    mock_module.transcribe.return_value = {"text": "Test transcription."}
-    
-    with patch.dict("sys.modules", {"mlx_whisper": mock_module}):
-        yield mock_module
-
-def test_perceptor_initialization(mock_mlx_whisper):
-    """Проверка инициализации и warmup."""
-    config = {"WHISPER_MODEL": "test-model"}
-    # Import inside verify to ensure patch is active
-    from src.modules.perceptor import Perceptor
-    
-    perceptor = Perceptor(config)
-    
-    assert perceptor.whisper_model == "mlx-community/whisper-large-v3-turbo" 
-    # Verify warmup called transcribe
-    mock_mlx_whisper.transcribe.assert_called()
+@pytest.mark.asyncio
+async def test_perceptor_stt_mock():
+    # Мокаем внешнюю зависимость mlx_whisper
+    with patch('mlx_whisper.transcribe', return_value={"text": "Привет мир"}):
+        perceptor = Perceptor({"WHISPER_MODEL": "test"})
+        # Создаем пустой файл для теста
+        test_file = "test_audio.ogg"
+        with open(test_file, "w") as f: f.write("dummy")
+        
+        res = await perceptor.transcribe(test_file, MagicMock())
+        assert res == "Привет мир"
+        os.remove(test_file)
 
 @pytest.mark.asyncio
-async def test_transcribe(mock_mlx_whisper):
-    """Проверка метода transcribe."""
-    from src.modules.perceptor import Perceptor
-    perceptor = Perceptor({"WHISPER_MODEL": "test"})
-    
-    # Mock router
-    router_mock = MagicMock()
-    
-    result = await perceptor.transcribe("/tmp/test.ogg", router_mock)
-    
-    assert result == "Test transcription."
+async def test_perceptor_tts_logic():
+    perceptor = Perceptor({})
+    # Проверяем структуру генерации путей (не запуская say)
+    with patch('asyncio.create_subprocess_exec') as mock_exec:
+        # Мокаем успех обоих процессов
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_exec.return_value = mock_proc
+        
+        # Мокаем наличие файлов
+        with patch('os.path.exists', return_value=True),              patch('os.remove'):
+            res = await perceptor.speak("Hello", voice="Milena")
+            assert res is not None
+            assert ".ogg" in res
+

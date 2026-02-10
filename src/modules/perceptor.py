@@ -15,6 +15,7 @@ Perceptor Module (Eyes & Ears).
 """
 
 import os
+import asyncio
 import logging
 from typing import Dict, Any
 from io import BytesIO
@@ -30,9 +31,11 @@ logger = logging.getLogger(__name__)
 class Perceptor:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        # M4 Max Optimization: Use mlx-community/whisper-large-v3-turbo
-        self.whisper_model = "mlx-community/whisper-large-v3-turbo"
-        logger.info(f"👂 Perceptor initialized. Audio Model: {self.whisper_model}")
+        # Whisper-модель из конфига вместо хардкода
+        self.whisper_model = config.get("WHISPER_MODEL", os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"))
+        # Vision-модель из .env (убрали хардкод gemini-2.0-flash)
+        self.vision_model = os.getenv("GEMINI_VISION_MODEL", "gemini-2.0-flash")
+        logger.info(f"👂 Perceptor initialized. Audio: {self.whisper_model}, Vision: {self.vision_model}")
         
         # Warmup MLX
         self._warmup_audio()
@@ -113,7 +116,7 @@ class Perceptor:
                 return "Ошибка: Нет ключа Gemini API."
 
             genai.configure(api_key=router.gemini_key)
-            model = genai.GenerativeModel('gemini-2.0-flash') # Vision model
+            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
 
             cookie_picture = Image.open(converted_path)
             response = model.generate_content([prompt, cookie_picture])
@@ -126,6 +129,71 @@ class Perceptor:
             # Чистим конвертированный файл если он создавался
             if converted_path != file_path and os.path.exists(converted_path):
                 os.remove(converted_path)
+
+    async def analyze_visual(self, file_path: str, prompt: str) -> str:
+        """
+        Универсальный анализ изображений (включая скриншоты) через Gemini 2.0 Flash.
+        """
+        try:
+            import google.generativeai as genai
+            
+            # Получаем ключ из конфига
+            api_key = self.config.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                return "Ошибка: Нет ключа Gemini API."
+
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
+
+            # Обработка картинки
+            img = Image.open(file_path)
+            response = await model.generate_content_async([prompt, img])
+            return response.text
+
+        except Exception as e:
+            logger.error(f"Visual analysis error: {e}")
+            return f"Ошибка зрения: {e}"
+
+    async def analyze_video(self, file_path: str, router, prompt: str) -> str:
+        """
+        Анализирует видео-сообщение (включая кружки) через Gemini 2.0 Flash.
+        """
+        try:
+            import google.generativeai as genai
+            import time
+            
+            api_key = router.gemini_key or os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                return "Ошибка: Нет ключа Gemini API для анализа видео."
+
+            genai.configure(api_key=api_key)
+            
+            logger.info(f"🎞️ Uploading video to Gemini: {file_path}")
+            
+            # Загружаем файл в Google AI Storage (рекомендуется для видео)
+            video_file = genai.upload_file(path=file_path)
+            
+            # Ждем обработки (видео требует времени на стороне Google)
+            while video_file.state.name == "PROCESSING":
+                await asyncio.sleep(2)  # Async sleep instead of time.sleep
+                video_file = genai.get_file(video_file.name)
+
+            if video_file.state.name == "FAILED":
+                raise Exception("Google Video Processing failed.")
+
+            logger.info(f"✅ Video processing complete: {video_file.name}")
+            
+            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
+            response = await model.generate_content_async([prompt, video_file])
+            
+            # Удаляем файл из облака после анализа
+            genai.delete_file(video_file.name)
+            
+            return response.text
+
+        except Exception as e:
+            logger.error(f"Video analysis error: {e}")
+            return f"Не удалось посмотреть видео: {e}"
 
     async def speak(self, text: str, voice: str = "Milena") -> str:
         """
