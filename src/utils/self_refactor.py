@@ -9,6 +9,7 @@ Self-Refactoring Module (Phase 9).
 """
 
 import os
+import time
 import logging
 from pathlib import Path
 from typing import List, Dict, Any
@@ -87,7 +88,7 @@ class SelfRefactor:
         
         try:
             # Делаем бекап перед записью
-            backup_path = file_path.with_suffix(f".py.bak_{int(os.time.time())}")
+            backup_path = file_path.with_suffix(f".py.bak_{int(time.time())}")
             file_path.rename(backup_path)
             
             # Записываем новый контент

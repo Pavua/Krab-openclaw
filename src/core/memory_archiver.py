@@ -6,6 +6,7 @@ Memory Archiver v1.0 (Phase 10).
 с тегами 'archive' и 'history', освобождая контекстное окно.
 """
 
+import json
 import structlog
 import asyncio
 from datetime import datetime, timedelta

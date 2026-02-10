@@ -11,7 +11,7 @@ from datetime import datetime
 
 # Настройка страницы
 st.set_page_config(
-    page_title="🦀 Krab v2.0 Dashboard",
+    page_title="🦀 Krab v6.5 Dashboard",
     page_icon="🦀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -64,7 +64,7 @@ def load_events():
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("🦀 Krab Control")
-    st.write("v3.0 Intelligence Evolution")
+    st.write("v6.5 Modular Architecture")
     st.divider()
     
     # Системные метрики
@@ -88,7 +88,7 @@ with st.sidebar:
         st.rerun()
 
 # --- MAIN UI ---
-st.title("📊 Krab Intelligence Dashboard v3.0")
+st.title("📊 Krab Intelligence Dashboard v6.5")
 
 df = load_data()
 
@@ -166,4 +166,4 @@ if not ev_df.empty:
 else:
     st.info("Событий не зафиксировано.")
 
-st.caption(f"Backend: {platform.system()} {platform.release()} | Krab v3.0 Intelligence Evolution")
+st.caption(f"Backend: {platform.system()} {platform.release()} | Krab v6.5 Modular Architecture")
