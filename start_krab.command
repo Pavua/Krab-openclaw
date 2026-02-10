@@ -1,68 +1,64 @@
-#!/bin/bash
-# Script to launch Krab Userbot on macOS
-# Get the directory where this script is located
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$DIR"
+#!/bin/zsh
+# ==============================================================
+# 🦀 Krab v2.0 — Запуск "в один клик"
+# Дважды кликни по этому файлу в Finder для запуска бота.
+# ==============================================================
 
-# Launch Terminal if not waiting
-echo "🦀 Launching Krab Userbot..."
-echo "📂 Directory: $DIR"
+# Переходим в директорию проекта
+cd "$(dirname "$0")"
 
-# Check for venv
-if [ ! -d "venv" ]; then
-    echo "❌ Virtual environment 'venv' not found!"
-    echo "Please run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
-    read -p "Press Enter to exit..."
-    exit 1
+echo "🦀 =============================="
+echo "   Krab v2.0 — Starting Up..."
+echo "   =============================="
+
+# Убиваем предыдущий процесс если работает
+if pgrep -f "python3 -m src.main" > /dev/null 2>&1; then
+    echo "⚠️  Убиваю предыдущий процесс..."
+    pkill -f "python3 -m src.main"
+    sleep 2
 fi
 
-# Activate venv
-# Activate venv
-source venv/bin/activate
+# Создаём директорию логов
+mkdir -p logs artifacts/downloads
 
-# Start OpenClaw Gateway in background
-echo "🦀 Starting OpenClaw Gateway..."
-# Assuming OpenCrawl is a sibling directory
-OPENCLAW_BIN="$DIR/../OpenCrawl/node_modules/.bin/openclaw"
+# Активируем venv
+source .venv/bin/activate
 
-if [ -f "$OPENCLAW_BIN" ]; then
-    "$OPENCLAW_BIN" gateway --port 18792 > openclaw.log 2>&1 &
-    OPENCLAW_PID=$!
-    echo "✅ OpenClaw started (PID $OPENCLAW_PID)"
-else
-    echo "⚠️ OpenClaw binary not found at $OPENCLAW_BIN"
-    echo "Please ensure 'OpenCrawl' project is adjacent to this folder."
-fi
+# Проверяем зависимости
+echo "📦 Проверяю зависимости..."
+pip install --quiet --upgrade pyrogram google-generativeai python-dotenv aiohttp Pillow psutil 2>/dev/null
 
-# Give it a moment to initialize
+# Запускаем бота в фоне
+echo "🚀 Запускаю бота..."
+nohup python3 -m src.main > logs/krab.log 2>&1 &
+BOT_PID=$!
+echo $BOT_PID > krab.pid
+
+# Ждём запуска
 sleep 3
 
-# Run the bot
-# Run the bot in a loop for auto-restart
-while true; do
-    echo "🚀 Starting Python Bot..."
-    python3 -m src.main
-    EXIT_CODE=$?
-    
-    if [ $EXIT_CODE -eq 42 ]; then
-        echo "🔄 Restart requested (Code 42)..."
-        sleep 1
-        continue
-    elif [ $EXIT_CODE -eq 0 ]; then
-        echo "✅ Bot stopped cleanly."
-        break
-    else
-        echo "⚠️ Bot crashed (Code $EXIT_CODE). Restarting in 5 seconds..."
-        sleep 5
-    fi
-done
-
-# Keep window open if it crashes
-# Cleanup on exit
-if [ -n "$OPENCLAW_PID" ]; then
-    kill "$OPENCLAW_PID"
-    echo "🛑 OpenClaw stopped."
+# Проверяем
+if ps -p $BOT_PID > /dev/null 2>&1; then
+    echo ""
+    echo "✅ Krab v2.0 запущен! (PID: $BOT_PID)"
+    echo ""
+    echo "📋 Доступные команды:"
+    echo "   !help      — Справка"
+    echo "   !status    — Статус AI"
+    echo "   !diagnose  — Полная диагностика"
+    echo "   !summary   — Саммари чата"
+    echo "   !translate  — Перевод"
+    echo "   !say       — Голосовое"
+    echo "   !code      — Генерация кода"
+    echo "   !exec      — Python REPL (Owner)"
+    echo ""
+    echo "📄 Логи: logs/krab.log"
+    echo "🛑 Остановить: kill $BOT_PID"
+else
+    echo "❌ Ошибка запуска! Проверь логи:"
+    echo "   cat logs/krab.log"
 fi
 
-echo "⚠️ Krab stopped."
-read -p "Press Enter to close..."
+echo ""
+echo "Нажми Enter для закрытия этого окна..."
+read
