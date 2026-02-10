@@ -254,15 +254,18 @@ async def main():
         await app.stop()
         logger.info("✅ Krab stopped cleanly.")
 
-    # Уведомление владельца о запуске
+    # Уведомление владельца о запуске (в Saved Messages)
     try:
-        await app.send_message("p0lrd", (
+        owner = os.getenv("OWNER_USERNAME", "").replace("@", "").strip()
+        # Отправляем в Saved Messages (самому себе), а не по хардкоду
+        await app.send_message("me", (
             "🦀 **Krab v6.0 Modular Architecture Online.**\n"
+            f"👤 Owner: @{owner}\n"
             "📦 Handlers: 9 modules loaded\n"
-            "🧠 Swarm Intelligence: Active\n"
+            "🧠 AI Router: Local + Cloud\n"
             "🔌 MCP Singularity: Active\n"
             "👀 Screen Awareness: Ready (!see)\n"
-            "🗣️ Neural Voice: Ready (!voice)\n"
+            "🗣️ Neural Voice: Ready (!say)\n"
             "🛡️ Stealth Mode: Ready (!panic)\n"
             "✅ RAG Memory v2.0: Ready"
         ))

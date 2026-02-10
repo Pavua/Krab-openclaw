@@ -47,14 +47,21 @@ def register_handlers(app, deps: dict):
         # Формируем отчёт
         local_status = "🟢 Online" if local_ok else "🔴 Offline"
         gemini_status = "🟢 Ready" if gemini_ok else "🟡 Degraded"
+        local_model = router.active_local_model or "—"
+        cloud_model = router.models.get("chat", "—")
 
         report = (
-            "**🦀 Krab v5.0 (Singularity) Status:**\n\n"
-            f"  🤖 Local AI: {local_status}\n"
-            f"  ☁️  Gemini: {gemini_status}\n"
-            f"  🧠 RAG: 🟢 Active ({router.rag.get_total_documents()} docs)\n"
-            f"  📊 Uptime: {black_box.get_uptime()}\n"
-            f"  📂 Config: Hot-reload {'🟢' if config_manager else '⚪'}\n"
+            "**🦀 Krab v6.5 Status:**\n\n"
+            f"🤖 **Local AI:** {local_status}\n"
+            f"   └ Engine: `{router.local_engine or '—'}`\n"
+            f"   └ Model: `{local_model}`\n"
+            f"☁️  **Gemini:** {gemini_status}\n"
+            f"   └ Model: `{cloud_model}`\n"
+            f"🧠 **RAG:** 🟢 Active ({router.rag.get_total_documents()} docs)\n"
+            f"📊 **Uptime:** {black_box.get_uptime()}\n"
+            f"📂 **Config:** Hot-reload {'🟢' if config_manager else '⚪'}\n"
+            f"📈 **Calls:** Local {router._stats['local_calls']}, "
+            f"Cloud {router._stats['cloud_calls']}\n"
         )
 
         await notification.edit_text(report)
@@ -143,47 +150,113 @@ def register_handlers(app, deps: dict):
                 "`!config set <key> <value>` — изменить"
             )
 
+    # --- !model: Просмотр и управление моделями ---
+    @app.on_message(filters.command("model", prefixes="!"))
+    @safe_handler
+    async def model_command(client, message: Message):
+        """
+        Управление моделями.
+        !model — показать текущие модели
+        !model set <slot> <name> — переключить модель в runtime
+        """
+        if not is_owner(message):
+            return
+
+        args = message.command
+
+        if len(args) == 1:
+            # Показываем текущие модели
+            info = router.get_model_info()
+            local_line = (
+                f"🟢 `{info['local_engine']}`: `{info['local_model']}`"
+                if info['local_available']
+                else "🔴 Offline"
+            )
+
+            text = (
+                "**🧠 Krab v6.5 — Модели:**\n\n"
+                f"**☁️ Cloud (Gemini):**\n"
+            )
+            for slot, name in info['cloud_models'].items():
+                text += f"  `{slot}`: **{name}**\n"
+
+            text += f"\n**🖥️ Local:**\n  {local_line}\n"
+            text += (
+                f"\n📈 **Статистика:**\n"
+                f"  Local: {info['stats']['local_calls']} ok / {info['stats']['local_failures']} fail\n"
+                f"  Cloud: {info['stats']['cloud_calls']} ok / {info['stats']['cloud_failures']} fail\n"
+                f"\n_Изменить:_ `!model set chat gemini-2.5-flash`"
+            )
+            await message.reply_text(text)
+            return
+
+        if args[1] == "set" and len(args) >= 4:
+            slot = args[2].lower()
+            model_name = " ".join(args[3:])
+
+            if slot not in router.models:
+                await message.reply_text(
+                    f"❌ Слот `{slot}` не найден.\n"
+                    f"Доступные: {', '.join(router.models.keys())}"
+                )
+                return
+
+            old = router.models[slot]
+            router.models[slot] = model_name
+            await message.reply_text(
+                f"✅ **Модель обновлена:**\n"
+                f"  `{slot}`: ~~{old}~~ → **{model_name}**"
+            )
+        else:
+            await message.reply_text(
+                "🧠 Использование:\n"
+                "`!model` — показать все\n"
+                "`!model set <slot> <name>` — изменить\n"
+                "Слоты: chat, thinking, pro, coding"
+            )
+
     # --- !help: Справка ---
     @app.on_message(filters.command("help", prefixes="!"))
     @safe_handler
     async def show_help(client, message: Message):
         """Справка по командам бота."""
         text = (
-            "**🦀 Krab v4.0 (Singularity) — Команды:**\n\n"
-            "**Основные:**\n"
+            "**🦀 Krab v6.5 — Команды:**\n\n"
+            "**📋 Основные:**\n"
             "`!status` — Здоровье AI\n"
             "`!diagnose` — Полная диагностика\n"
+            "`!model` — Модели (просмотр/переключение)\n"
             "`!config` — Настройки (hot-reload)\n"
             "`!logs` — Чтение системного лога\n"
             "`!help` — Справка\n\n"
-            "**Intelligence & Agents (v3.0):**\n"
-            "`!smart <задача>` — Автономное решение задачи (Plan -> Gen)\n"
-            "`!personality` — Смена личности (coder, pirate...)\n"
-            "`!think <тема>` — Deep Reasoning (Thinking Mode)\n"
-            "`!scout <тема>` — Deep Research (Web Search)\n"
-            "`!learn <факт>` — Обучение (RAG)\n"
+            "**🧠 AI & Agents:**\n"
+            "`!think <тема>` — Deep Reasoning\n"
+            "`!smart <задача>` — Агентный цикл (Plan → Gen)\n"
+            "`!code <описание>` — Генерация кода\n"
+            "`!learn <факт>` — Обучение RAG-памяти\n"
+            "`!scout <тема>` — Deep Research (Web)\n"
+            "`!personality` — Смена личности\n"
             "`!summary` — Саммари чата\n\n"
-            "**AI Tools:**\n"
+            "**🛠️ AI Tools:**\n"
             "`!translate` — Перевод RU↔EN\n"
             "`!say` — Голосовое (TTS)\n"
-            "`!code` — Написать код\n"
-            "📎 Отправь документ — авто-анализ (PDF/DOCX/Excel)\n"
-            "📹 Отправь видео/кружок — AI-анализ контента\n\n"
-            "**System & macOS (v5.0):**\n"
-            "`!sysinfo` — RAM / CPU / Диск / GPU / Батарея\n"
-            "`!mac` — macOS Bridge (уведомления, громкость, приложения)\n"
-            "`!rag` — Управление базой знаний (stats/cleanup/search)\n"
-            "`!refactor` — Саморефакторинг проекта (Owner)\n"
-            "`!panic` — Режим секретности (Panic Button)\n\n"
-            "**Dev (Owner):**\n"
+            "`!see` — Screen Awareness\n"
+            "📎 Документ → авто-анализ\n"
+            "📹 Видео/кружок → AI-анализ\n\n"
+            "**💻 System & macOS:**\n"
+            "`!sysinfo` — RAM/CPU/GPU/Батарея\n"
+            "`!mac` — macOS Bridge\n"
+            "`!rag` — База знаний\n"
+            "`!panic` — Stealth Mode\n\n"
+            "**🔧 Dev (Owner):**\n"
             "`!exec` — Python REPL\n"
-            "`!sh` — Terminal (Shell)\n"
+            "`!sh` — Terminal\n"
             "`!commit` — Git push\n"
         )
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📚 Wiki", url="https://github.com/Pavua/Krab-openclaw")],
-            [InlineKeyboardButton("📊 Статистика", callback_data="diag_full")]
+            [InlineKeyboardButton("📚 GitHub", url="https://github.com/Pavua/Krab-openclaw")],
+            [InlineKeyboardButton("📊 Диагностика", callback_data="diag_full")]
         ])
 
         await message.reply_text(text, reply_markup=keyboard)
