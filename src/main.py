@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Krab v6.0 — Core Orchestrator (Entry Point)
+Krab v7.0 — Core Orchestrator (Entry Point)
 
 Тонкий оркестратор. Вся логика обработчиков вынесена в src/handlers/.
 Этот файл отвечает только за:
@@ -12,12 +12,14 @@ Krab v6.0 — Core Orchestrator (Entry Point)
 Предыдущая версия (1661 строка) сохранена в main_legacy.py.
 """
 
+from dotenv import load_dotenv
+load_dotenv() # Загружаем .env ПЕРВЫМ ДЕЛОМ
+
 import os
 import signal
 import asyncio
 from datetime import datetime
 
-from dotenv import load_dotenv
 from pyrogram import Client, filters, idle
 from pyrogram.types import (
     Message,
@@ -162,7 +164,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
         bb_stats = black_box.get_stats()
 
         new_text = (
-            "**🦀 Krab v6.0 Statistics (Refreshed)**\n\n"
+            "**🦀 Krab v7.0 Statistics (Refreshed)**\n\n"
             f"🧠 **Local Brain:** {local_status}\n"
             f"🖤 **Black Box:** {bb_stats['total']} msgs\n\n"
             f"🕒 Обновлено: {datetime.now().strftime('%H:%M:%S')}"
@@ -218,7 +220,7 @@ async def main():
     """Точка входа: запуск клиента, MCP, планировщика."""
     global scheduler
 
-    logger.info("🦀 Starting Krab v6.0 (Modular Architecture)...")
+    logger.info("🦀 Starting Krab v7.0 (Modular Architecture)...")
     await app.start()
 
     # MCP Initialization
@@ -259,7 +261,7 @@ async def main():
         owner = os.getenv("OWNER_USERNAME", "").replace("@", "").strip()
         # Отправляем в Saved Messages (самому себе), а не по хардкоду
         await app.send_message("me", (
-            "🦀 **Krab v6.0 Modular Architecture Online.**\n"
+            "🦀 **Krab v7.0 Modular Architecture Online.**\n"
             f"👤 Owner: @{owner}\n"
             "📦 Handlers: 9 modules loaded\n"
             "🧠 AI Router: Local + Cloud\n"

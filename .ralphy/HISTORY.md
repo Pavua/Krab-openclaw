@@ -68,3 +68,38 @@
 - **Description**: Invoked skill: prd-converter
 - **Status**: ✓
 - **Files**: `/Users/pablito/Antigravity_AGENTS/Краб/tasks/Roadmap & Tasks-tasks-1770692177484.yaml`
+
+### 2026-02-11T00:00:50.131+00:00
+- **Task**: `SYSTEM`
+- **Type**: command_run
+- **Description**: Invoked skill: prd-converter
+- **Status**: ✓
+- **Files**: `/Users/pablito/Antigravity_AGENTS/Краб/tasks/AGENTS-tasks-1770768050128.md`
+
+### 2026-02-11T00:14:26.741+00:00
+- **Task**: `SYSTEM`
+- **Type**: command_run
+- **Description**: Invoked skill: prd-converter
+- **Status**: ✓
+- **Files**: `/Users/pablito/Antigravity_AGENTS/Краб/tasks/task-tasks-1770768866734.md`
+
+### 2026-02-11T00:19:22.405+00:00
+- **Task**: `SYSTEM`
+- **Type**: command_run
+- **Description**: Invoked skill: prd-reviewer
+- **Status**: ✓
+- **Files**: `/Users/pablito/Antigravity_AGENTS/Краб/prd/reviews/task-tasks-1770768866734-review-2026-02-11T00-19-22-404Z.md`
+
+### 2026-02-11T00:21:16.037+00:00
+- **Task**: `SYSTEM`
+- **Type**: command_run
+- **Description**: Invoked skill: prd-converter
+- **Status**: ✓
+- **Files**: `/Users/pablito/Antigravity_AGENTS/Краб/tasks/task-tasks-1770768866734-tasks-1770769276030.json`
+
+### 2026-02-11T01:03:55.003+00:00
+- **Task**: `SYSTEM`
+- **Type**: command_run
+- **Description**: Invoked skill: prd-converter
+- **Status**: ✓
+- **Files**: `/Users/pablito/Antigravity_AGENTS/Краб/tasks/implementation_plan-tasks-1770771835000.json`

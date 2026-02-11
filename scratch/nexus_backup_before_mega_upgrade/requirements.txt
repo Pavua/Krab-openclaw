@@ -1,7 +1,0 @@
-telethon
-aiohttp
-python-dotenv
-requests
-psutil
-pytest
-pytest-asyncio

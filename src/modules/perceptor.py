@@ -110,16 +110,19 @@ class Perceptor:
             # (Этот тип нужно добавить в router, пока используем chat заглушку)
 
             # Временная реализация через Gemini напрямую (так как Router в процессе доработки)
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
 
             if not router.gemini_key:
                 return "Ошибка: Нет ключа Gemini API."
 
-            genai.configure(api_key=router.gemini_key)
-            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
-
+            client = genai.Client(api_key=router.gemini_key)
+            
             cookie_picture = Image.open(converted_path)
-            response = model.generate_content([prompt, cookie_picture])
+            response = client.models.generate_content(
+                model=self.vision_model,
+                contents=[prompt, cookie_picture]
+            )
             return response.text
 
         except Exception as e:
@@ -135,19 +138,22 @@ class Perceptor:
         Универсальный анализ изображений (включая скриншоты) через Gemini 2.0 Flash.
         """
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
             
             # Получаем ключ из конфига
             api_key = self.config.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
             if not api_key:
                 return "Ошибка: Нет ключа Gemini API."
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
+            client = genai.Client(api_key=api_key)
 
             # Обработка картинки
             img = Image.open(file_path)
-            response = await model.generate_content_async([prompt, img])
+            response = await client.models.generate_content(
+                model=self.vision_model,
+                contents=[prompt, img]
+            )
             return response.text
 
         except Exception as e:
@@ -159,35 +165,40 @@ class Perceptor:
         Анализирует видео-сообщение (включая кружки) через Gemini 2.0 Flash.
         """
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
             import time
             
             api_key = router.gemini_key or os.getenv("GEMINI_API_KEY")
             if not api_key:
                 return "Ошибка: Нет ключа Gemini API для анализа видео."
 
-            genai.configure(api_key=api_key)
+            client = genai.Client(api_key=api_key)
             
             logger.info(f"🎞️ Uploading video to Gemini: {file_path}")
             
             # Загружаем файл в Google AI Storage (рекомендуется для видео)
-            video_file = genai.upload_file(path=file_path)
+            # В новом SDK: client.files.upload(file=path)
+            video_file = client.files.upload(file=file_path)
             
             # Ждем обработки (видео требует времени на стороне Google)
             while video_file.state.name == "PROCESSING":
-                await asyncio.sleep(2)  # Async sleep instead of time.sleep
-                video_file = genai.get_file(video_file.name)
+                await asyncio.sleep(2)
+                video_file = client.files.get(name=video_file.name)
 
             if video_file.state.name == "FAILED":
                 raise Exception("Google Video Processing failed.")
 
             logger.info(f"✅ Video processing complete: {video_file.name}")
             
-            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
-            response = await model.generate_content_async([prompt, video_file])
+            response = await client.models.generate_content(
+                model=self.vision_model,
+                contents=[prompt, video_file]
+            )
             
             # Удаляем файл из облака после анализа
-            genai.delete_file(video_file.name)
+            # client.files.delete(name=...)
+            client.files.delete(name=video_file.name)
             
             return response.text
 

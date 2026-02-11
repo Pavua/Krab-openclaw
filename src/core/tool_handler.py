@@ -19,7 +19,10 @@ import structlog
 import json
 from typing import Any
 from src.utils.web_scout import WebScout
-from src.core.swarm import SwarmOrchestrator
+# ПРИМЕЧАНИЕ: SwarmOrchestrator был удалён при рефакторинге v7.0.
+# Оригинал сохранён в src/archive/legacy/v6_backup/
+# Вместо полноценного Swarm используем легковесную заглушку,
+# которая делегирует решение напрямую через tool chain без оверхеда.
 
 logger = structlog.get_logger("ToolHandler")
 
@@ -30,7 +33,7 @@ class ToolHandler:
         self.rag = rag
         self.scout = scout
         self.mcp = mcp  # Инстанс MCPManager
-        self.swarm = SwarmOrchestrator(self)  # Система Роя (Phase 10)
+        # Swarm будет восстановлен в Phase 10, пока используем прямой вызов
         
         # Ленивая инициализация опциональных модулей
         self._mac_bridge = None
@@ -78,7 +81,31 @@ class ToolHandler:
         AI-driven Tool Selection (Phase 10):
         Использует SwarmOrchestrator для параллельного выполнения задач.
         """
-        return await self.swarm.autonomous_decision(query)
+        # Прямая логика вместо Swarm: ищем ключевые слова для tool selection
+        result_parts = []
+        
+        # Веб-поиск если запрос похож на поисковый
+        search_triggers = ['поищи', 'найди', 'новости', 'что такое', 'кто такой', 'когда', 'где']
+        query_lower = query.lower()
+        
+        if any(trigger in query_lower for trigger in search_triggers):
+            try:
+                search_result = await self.scout.search(query)
+                if search_result:
+                    result_parts.append(f"🌐 Результаты поиска:\n{search_result}")
+            except Exception as e:
+                logger.warning(f"Web search failed: {e}")
+        
+        # MCP tools если доступны
+        if self.mcp:
+            try:
+                mcp_result = await self.mcp.auto_route(query)
+                if mcp_result:
+                    result_parts.append(f"🔧 MCP:\n{mcp_result}")
+            except Exception as e:
+                logger.debug(f"MCP auto-route не сработал: {e}")
+        
+        return "\n\n".join(result_parts) if result_parts else None
 
     async def run_shell(self, command: str) -> str:
         """Выполнение системных команд (Owner only)."""

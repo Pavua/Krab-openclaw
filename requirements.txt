@@ -1,5 +1,6 @@
 pyrogram>=2.0.106
 httpx>=0.27.0
+aiohttp>=3.9.0
 structlog>=24.1.0
 python-dotenv>=1.0.0
 psutil>=6.0.0

@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Tools Handler — Инструменты: поиск, новости, перевод, TTS.
+Tools Handler v2.0 — Инструменты: поиск, Deep Research, новости, перевод, TTS.
 
 Извлечён из main.py. Включает:
-- !scout: Deep Research (Web Search)
-- !nexus: Extended research report
+- !scout: Быстрый поиск + AI-анализ
+- !nexus: Extended Intelligence Report
+- !research: Deep Research Pro (3-волновой анализ)
 - !news: Дайджест новостей
 - !translate: Перевод RU↔EN
 - !say / !voice: TTS
@@ -97,6 +98,48 @@ def register_handlers(app, deps: dict):
 
         final_text = f"🕵️‍♂️ **Nexus Intelligence Report: {query}**\n\n{report}"
         await notification.edit_text(final_text)
+
+    # --- !research: Deep Research Pro (3-волновой анализ) ---
+    @app.on_message(filters.command("research", prefixes="!"))
+    @safe_handler
+    async def research_command(client, message: Message):
+        """Deep Research Pro: !research <тема>"""
+        if len(message.command) < 2:
+            await message.reply_text(
+                "🧪 Что исследовать в глубину?\n"
+                "`!research Будущее квантовых процессоров`\n\n"
+                "_3-волновой анализ: поиск → подзапросы AI → финальный отчёт_"
+            )
+            return
+
+        query = message.text.split(" ", 1)[1]
+        notification = await message.reply_text(
+            f"🧪 **Deep Research Pro:** `{query}`\n\n"
+            "⏳ Волна 1: основной поиск...\n"
+            "_Это может занять 30-60 секунд_"
+        )
+
+        try:
+            report = await scout.deep_research(query, router=router)
+
+            # Telegram ограничивает 4096 символов
+            if len(report) > 4000:
+                # Разбиваем на части
+                parts = [report[i:i+4000] for i in range(0, len(report), 4000)]
+                await notification.edit_text(
+                    f"🧪 **Deep Research Pro: {query}**\n\n{parts[0]}"
+                )
+                for part in parts[1:]:
+                    await message.reply_text(part)
+            else:
+                await notification.edit_text(
+                    f"🧪 **Deep Research Pro: {query}**\n\n{report}"
+                )
+        except Exception as e:
+            logger.error(f"Deep Research error: {e}")
+            await notification.edit_text(
+                f"❌ Ошибка Deep Research: {e}"
+            )
 
     # --- !news: Дайджест новостей ---
     @app.on_message(filters.command("news", prefixes="!"))

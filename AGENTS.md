@@ -1,223 +1,139 @@
-# AGENTS.md
+# AGENTS.md — Krab v7.0
 
-> **AI Coding Assistant Instructions** - This document guides AI tools (GitHub Copilot, Cursor, Claude, etc.) on how to work with this codebase effectively.
+> **Инструкция для AI-агентов** (Antigravity, Cursor, Claude, Gemini, Copilot).
+> Все комментарии в коде и документация — **на русском**.
 
 ---
 
-## Project Overview
+## Проект
 
-**Description**: Персональный AI-ассистент на базе OpenClaw с доступом через Telegram Userbot.
+**Krab** — Telegram AI Userbot. Персональный ассистент с AI-мозгом (Gemini Cloud + Local LLM),
+голосом (MLX Whisper + TTS), зрением (Gemini Vision), памятью (RAG + BlackBox),
+веб-разведкой (DuckDuckGo) и автономными агентами.
 
-**Tech Stack**:
-- **Framework**: React
-- **Language**: JavaScript
-- **Build Tool**: Not detected
-- **Styling**: CSS Modules
-- **State Management**: React Context API
-- **Routing**: Not configured
-- **Data Fetching**: fetch API
-- **Forms**: Native forms
-- **Validation**: Manual validation
-- **Testing**: Not configured
-- **Package Manager**: npm
+---
+
+## Tech Stack
+
+- **Язык:** Python 3.13+
+- **Telegram:** Pyrogram 2.0
+- **AI:** Google Gemini SDK, LM Studio / Ollama (local)
+- **RAG:** ChromaDB + sentence-transformers
+- **Audio:** MLX Whisper (Apple Silicon), gTTS
+- **Логирование:** structlog
+- **Тесты:** pytest + smoke_test.py (45 тестов)
+- **OS:** macOS (Apple Silicon M-series)
 
 ---
 
 ## Quick Start
 
 ```bash
-# Setup
-npm install
+# 1. Виртуальное окружение (уже создано)
+source .venv/bin/activate
 
-# Development
-npm run dev
+# 2. Запуск бота
+python -m src.main
 
-# Build
-npm run build
+# 3. Smoke-тесты (ОБЯЗАТЕЛЬНО перед push)
+PYTHONPATH=. .venv/bin/python tests/smoke_test.py
 
-# Testing
-npm run test
+# 4. Unit-тесты
+pytest tests/ -v
 
-# Linting
-npm run lint
+# 5. Запуск одним кликом на macOS
+open start_krab.command
 ```
 
 ---
 
-## Project Structure
+## Структура проекта
 
 ```
 src/
-├── __pycache__/
-└── skills/
-```
-
-**Directory Purposes**:
-
-- **`__pycache__/`** - Project-specific directory
-- **`skills/`** - Project-specific directory
-
----
-
-## Code Conventions
-
-### General Guidelines
-
-- **Language**: Use JavaScript for all files
-- **Components**: Use functional components with hooks
-- **File Naming**: PascalCase for components, camelCase for utilities
-
-### Component Structure
-
-```tsx
-import { useState } from 'react';
-
-export function UserCard({ user, onEdit }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  
-  return (
-    <div>
-      {/* Component content */}
-    </div>
-  );
-}
-```
-
-### Import Organization
-
-```tsx
-// 1. External dependencies
-import { useState } from 'react';
-
-// 2. Internal modules (use path aliases)
-import { Component } from '../components/Component';
-
-// 3. Types
-import type { User } from '@/types';
-
-// 4. Styles (if applicable)
-import styles from './Component.module.css';
+├── main.py              # Оркестратор — точка входа
+├── core/                # Ядро (14 модулей)
+│   ├── model_manager.py # AI Router: local + cloud
+│   ├── rag_engine.py    # RAG v2.0 (ChromaDB)
+│   ├── config_manager.py# YAML-конфигурация
+│   ├── security_manager.py # Безопасность
+│   ├── mcp_client.py    # MCP интеграция
+│   ├── scheduler.py     # APScheduler задачи
+│   ├── memory_archiver.py # Infinite Memory
+│   ├── agent_manager.py # Swarm Intelligence (Phase 6)
+│   ├── swarm.py         # Parallel task orchestrator
+│   ├── tool_handler.py  # Function calling
+│   ├── persona_manager.py # Персоны AI
+│   ├── context_manager.py # Контекст диалогов
+│   ├── error_handler.py # Обработка ошибок
+│   ├── rate_limiter.py  # Rate limiting
+│   ├── logger_setup.py  # structlog настройка
+│   └── supervisor.py    # Watchdog + auto-restart
+├── handlers/            # Обработчики команд (9 модулей)
+│   ├── commands.py      # !help, !status, !model, !diagnose
+│   ├── ai.py            # AI-ответы и reasoning
+│   ├── tools.py         # !research, !scout, !nexus, !news, !translate, !say
+│   ├── system.py        # !sh, !commit, !sysinfo, !refactor, !panic
+│   ├── media.py         # !see, !hear — мультимедиа
+│   ├── rag.py           # !rag — поиск по памяти
+│   ├── persona.py       # !persona — управление ролями
+│   ├── scheduling.py    # !remind — напоминания
+│   ├── auth.py          # Авторизация и безопасность
+│   └── mac.py           # !mac — macOS интеграция
+├── modules/             # Внешние модули
+│   ├── perceptor.py     # Audio (Whisper) + Vision (Gemini)
+│   └── screen_catcher.py# Скриншоты
+└── utils/               # Утилиты
+    ├── web_scout.py     # WebScout v2.0 + deep_research()
+    ├── black_box.py     # SQLite лог сообщений
+    ├── self_refactor.py # AI самоанализ кода
+    ├── system_monitor.py# Системные метрики
+    └── dashboard_app.py # Streamlit dashboard
 ```
 
 ---
 
-## Styling Approach
-
-**Primary Method**: CSS Modules
-
-- One CSS module per component
-- Use camelCase for class names
-- Leverage composition with `composes`
-
----
-
-## State Management
-
-**Approach**: React Context API
-
-- Create context providers in `src/context/`
-- Separate context by domain
-- Use custom hooks to access context
-
----
-
-## Data Fetching
-
-**Method**: fetch API
-
-- All API calls should be organized in the services layer
-- Use proper error handling and loading states
-- Leverage fetch API features for caching and optimistic updates
-
----
-
-## Routing
-
-**Router**: Not configured
-
-
-
----
-
-## Forms & Validation
-
-**Forms**: Native forms
-**Validation**: Manual validation
-
-
-
----
-
-## Testing
-
-**Framework**: Not configured
-
-### Conventions
-
-- Test file location: Co-located with components
-- Naming: `ComponentName.test.tsx`
-- Focus on user behavior and integration tests
-
----
-
-## Environment Variables
-
-**Location**: `.env.local`
+## Переменные окружения (.env)
 
 ```bash
-TELEGRAM_API_ID=[value]
-TELEGRAM_API_HASH=[value]
-TELEGRAM_SESSION_NAME=kraab
-OPENCLAW_URL=http://127.0.0.1:18789
-OPENCLAW_TOKEN=sk-nexus-bridge
+TELEGRAM_API_ID=...          # Обязательно
+TELEGRAM_API_HASH=...       # Обязательно
+TELEGRAM_SESSION_NAME=kraab_pure_debug
+OWNER_USERNAME=@yung_nagato
+ALLOWED_USERS=user1,user2
+GEMINI_API_KEY=...           # Обязательно для cloud AI
 LM_STUDIO_URL=http://192.168.0.171:1234
-GEMINI_API_KEY=[value]
-MAX_RAM_GB=24
 LOG_LEVEL=INFO
 ```
 
-**Note**: Never commit `.env.local` - use `.env.example` as template
+---
+
+## Конвенции кода
+
+1. **Язык комментариев:** Русский
+2. **Docstring:** В начале каждого файла и класса — на русском
+3. **Импорты:** stdlib → сторонние → внутренние, разделённые пустой строкой
+4. **Логирование:** `structlog` (НЕ `logging`)
+5. **Ошибки:** `@safe_handler` декоратор для обработчиков
+6. **Тесты:** Smoke + pytest. Все тесты должны пройти перед push
+7. **Версии:** При обновлении версии — менять во ВСЕХ файлах (main.py, commands.py, dashboard_app.py)
 
 ---
 
-## Available Scripts
+## Roadmap
 
-- `npm run start` - Start production server
-- `npm run test` - Run tests
-- `npm run test:unit` - pytest tests/unit/ -v
-- `npm run test:integration` - pytest tests/integration/ -v
-- `npm run test:cov` - pytest tests/ --cov=src --cov-report=html
-- `npm run lint` - Run linter
-- `npm run format` - Format code with Prettier
+Полный мастер-план: **task.md** в `brain/` артефактах (19+ фаз, 200+ задач).
+
+**Текущая цель:** Фаза 3 (v7.5) — Миграция Gemini SDK + Тотальная Очистка.
 
 ---
 
-## Path Aliases
+## Известные проблемы
 
-No path aliases configured.
-
----
-
-## AI Assistant Guidelines
-
-### When Generating Code
-
-1. **Follow existing patterns**: Match the style and structure in the codebase
-2. **Use type safety**: Always use JavaScript types
-3. **Use path aliases**: Import using configured aliases
-4. **Match styling approach**: Use CSS Modules conventions
-5. **Follow state management**: Use React Context API patterns
-
-### When Refactoring
-
-1. Preserve functionality
-2. Maintain type safety
-3. Update related tests
-4. Follow established conventions
+- `google.generativeai` FutureWarning → нужна миграция на `google.genai`
+- `streamlit` не установлен (dashboard опционален)
+- Рудименты в `src/`: `userbot_bridge.py`, `openclaw_client.py` и др. (см. Фаза 3 в task.md)
 
 ---
 
-**Last Generated**: 2026-02-09  
-**Auto-generated from**: package.json, tsconfig.json, and project structure
-
-> 💡 **Tip**: Use the Agent Automation dashboard to regenerate this file after major changes.
+**Last Updated:** 2026-02-11 | **Version:** v7.0

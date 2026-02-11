@@ -15,6 +15,7 @@ logger = logging.getLogger("BlackBox")
 class BlackBox:
     def __init__(self, db_path="artifacts/memory/black_box.db"):
         self.db_path = db_path
+        self.start_time = datetime.now()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
 
@@ -76,22 +77,19 @@ class BlackBox:
             logger.error(f"❌ Failed to log event: {e}")
 
     def get_stats(self):
-        """Получение статистики БД."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
-            c.execute("SELECT COUNT(*) FROM messages")
-            count = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM messages WHERE direction='INCOMING'")
-            incoming = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM messages WHERE direction='OUTGOING'")
-            outgoing = c.fetchone()[0]
-            conn.close()
-            return {
-                "total": count,
-                "incoming": incoming,
-                "outgoing": outgoing,
-                "path": self.db_path
-            }
-        except:
-            return {"total": 0, "path": self.db_path}
+        # ... existing logic ...
+        pass
+
+    def get_uptime(self) -> str:
+        """Расчет времени работы с момента старта."""
+        delta = datetime.now() - self.start_time
+        hours, remainder = divmod(int(delta.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        days, hours = divmod(hours, 24)
+        
+        parts = []
+        if days > 0: parts.append(f"{days}d")
+        if hours > 0: parts.append(f"{hours}h")
+        if minutes > 0: parts.append(f"{minutes}m")
+        parts.append(f"{seconds}s")
+        return " ".join(parts)

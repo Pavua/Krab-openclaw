@@ -51,7 +51,7 @@ def register_handlers(app, deps: dict):
         cloud_model = router.models.get("chat", "—")
 
         report = (
-            "**🦀 Krab v6.5 Status:**\n\n"
+            "**🦀 Krab v7.0 Status:**\n\n"
             f"🤖 **Local AI:** {local_status}\n"
             f"   └ Engine: `{router.local_engine or '—'}`\n"
             f"   └ Model: `{local_model}`\n"
@@ -221,7 +221,7 @@ def register_handlers(app, deps: dict):
     async def show_help(client, message: Message):
         """Справка по командам бота."""
         text = (
-            "**🦀 Krab v6.5 — Команды:**\n\n"
+            "**🦀 Krab v7.0 — Команды:**\n\n"
             "**📋 Основные:**\n"
             "`!status` — Здоровье AI\n"
             "`!diagnose` — Полная диагностика\n"
@@ -234,9 +234,13 @@ def register_handlers(app, deps: dict):
             "`!smart <задача>` — Агентный цикл (Plan → Gen)\n"
             "`!code <описание>` — Генерация кода\n"
             "`!learn <факт>` — Обучение RAG-памяти\n"
-            "`!scout <тема>` — Deep Research (Web)\n"
             "`!personality` — Смена личности\n"
             "`!summary` — Саммари чата\n\n"
+            "**🔍 Research & Intel:**\n"
+            "`!scout <тема>` — Быстрый поиск + AI\n"
+            "`!research <тема>` — Deep Research Pro (3 волны)\n"
+            "`!nexus <тема>` — Intelligence Report\n"
+            "`!news [тема]` — Дайджест новостей\n\n"
             "**🛠️ AI Tools:**\n"
             "`!translate` — Перевод RU↔EN\n"
             "`!say` — Голосовое (TTS)\n"
@@ -252,6 +256,7 @@ def register_handlers(app, deps: dict):
             "`!exec` — Python REPL\n"
             "`!sh` — Terminal\n"
             "`!commit` — Git push\n"
+            "`!refactor` — AI-рефакторинг кода\n"
         )
 
         keyboard = InlineKeyboardMarkup([
