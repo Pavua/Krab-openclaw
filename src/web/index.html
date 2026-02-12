@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krab Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --card-bg: rgba(255, 255, 255, 0.05);
+            --accent: #00f2ff;
+            --text: #ffffff;
+            --glass: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .background-blob {
+            position: fixed;
+            width: 300px;
+            height: 300px;
+            background: linear-gradient(45deg, var(--accent), #7000ff);
+            filter: blur(100px);
+            z-index: -1;
+            border-radius: 50%;
+            opacity: 0.3;
+            animation: move 20s infinite alternate;
+        }
+
+        @keyframes move {
+            from {
+                transform: translate(-50%, -50%);
+            }
+
+            to {
+                transform: translate(50%, 50%);
+            }
+        }
+
+        header {
+            width: 100%;
+            max-width: 800px;
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin: 0;
+            background: linear-gradient(90deg, #fff, var(--accent));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            width: 100%;
+            max-width: 800px;
+            padding: 0 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--glass);
+            border-radius: 20px;
+            padding: 25px;
+            transition: transform 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent);
+        }
+
+        .card h3 {
+            margin: 0 0 10px 0;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.7;
+        }
+
+        .card .value {
+            font-size: 2rem;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 50px;
+            font-size: 0.8rem;
+            background: rgba(0, 255, 127, 0.2);
+            color: #00ff7f;
+            border: 1px solid #00ff7f;
+        }
+
+        footer {
+            margin-top: auto;
+            padding: 40px;
+            font-size: 0.8rem;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="background-blob"></div>
+    <header>
+        <h1>🦀 KRAB COMMAND</h1>
+        <p>Phase 15: Single Plane of Output</p>
+    </header>
+
+    <div class="stats-grid">
+        <div class="card">
+            <h3>Статус системы</h3>
+            <div class="status-badge" id="status">ONLINE</div>
+        </div>
+        <div class="card">
+            <h3>Black Box</h3>
+            <div class="value" id="bb_total">--</div>
+        </div>
+        <div class="card">
+            <h3>RAG Memory</h3>
+            <div class="value" id="rag_total">--</div>
+        </div>
+        <div class="card">
+            <h3>Local AI</h3>
+            <div class="value" id="local_ai" style="font-size: 1.2rem; color: var(--accent);">--</div>
+        </div>
+    </div>
+
+    <footer>
+        &copy; 2026 KRAB NEURAL SYSTEM
+    </footer>
+
+    <script>
+        async function updateStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('bb_total').innerText = data.black_box.total;
+                document.getElementById('rag_total').innerText = data.rag.count;
+                document.getElementById('local_ai').innerText = data.router.local_model || 'Offline';
+            } catch (e) {
+                console.error("Stats fail", e);
+            }
+        }
+        setInterval(updateStats, 5000);
+        updateStats();
+    </script>
+</body>
+
+</html>

@@ -9,6 +9,7 @@ import sqlite3
 import os
 import logging
 from datetime import datetime
+from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger("BlackBox")
 
@@ -43,6 +44,15 @@ class BlackBox:
                           timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                           event_type TEXT,
                           description TEXT)''')
+                          
+            # Таблица настроек групп (Phase 12.2)
+            c.execute('''CREATE TABLE IF NOT EXISTS group_settings
+                         (chat_id INTEGER PRIMARY KEY,
+                          is_active BOOLEAN DEFAULT 1,
+                          auto_moderation BOOLEAN DEFAULT 0,
+                          welcome_message TEXT,
+                          allowed_commands TEXT, -- JSON list
+                          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
             
             conn.commit()
             conn.close()
@@ -95,3 +105,81 @@ class BlackBox:
             }
         except:
             return {"total": 0, "path": self.db_path}
+
+    def get_active_chats_count(self, days=7):
+        """Количество уникальных чатов за последние N дней."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(DISTINCT chat_id) FROM messages WHERE timestamp > datetime('now', ?)", (f"-{days} days",))
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        except:
+            return 0
+
+    def get_recent_messages(self, limit=10):
+        """Возвращает список последних сообщений в виде словарей."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("SELECT timestamp, username, direction, text FROM messages ORDER BY id DESC LIMIT ?", (limit,))
+            rows = c.fetchall()
+            conn.close()
+            return [
+                {"timestamp": r[0], "user": r[1], "dir": r[2], "text": r[3]}
+                for r in rows
+            ]
+        except:
+            return []
+
+    # --- Методы для работы с группами (Phase 12.2) ---
+    
+    def get_group_settings(self, chat_id: int) -> Dict[str, Any]:
+        """Получить настройки конкретной группы."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT * FROM group_settings WHERE chat_id = ?", (chat_id,))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                return dict(row)
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting group settings: {e}")
+            return {}
+
+    def set_group_setting(self, chat_id: int, key: str, value: Any):
+        """Установить конкретную настройку для группы."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            # Проверяем наличие записи
+            c.execute("SELECT 1 FROM group_settings WHERE chat_id = ?", (chat_id,))
+            if not c.fetchone():
+                c.execute("INSERT INTO group_settings (chat_id) VALUES (?)", (chat_id,))
+            
+            # Динамический SQL (безопасно, так как key мы контролируем в коде)
+            if key in ["is_active", "auto_moderation", "welcome_message", "allowed_commands"]:
+                c.execute(f"UPDATE group_settings SET {key} = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?", (value, chat_id))
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error setting group setting: {e}")
+
+    def delete_user_data(self, username: str, user_id: int):
+        """Полное удаление данных пользователя (Phase 12.3 GDPR)."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("DELETE FROM messages WHERE username = ? OR sender_id = ?", (username, user_id))
+            conn.commit()
+            conn.close()
+            logger.info(f"🗑 GDPR: Data for {username} wiped from BlackBox")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to wipe user data: {e}")
+            return False

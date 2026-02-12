@@ -15,6 +15,7 @@ from datetime import datetime
 from pyrogram import filters, enums
 from pyrogram.types import Message
 
+from .auth import is_owner, is_authorized
 import structlog
 logger = structlog.get_logger(__name__)
 
@@ -60,44 +61,68 @@ def register_handlers(app, deps: dict):
                 file_name=f"artifacts/downloads/{filename}"
             )
 
-            text, metadata = await DocumentParser.parse(file_path)
-
-            if text.startswith("⚠️") or text.startswith("❌"):
-                await notification.edit_text(text)
-            else:
+            # Deep Analysis (Vision/Native) for PDFs if there is a question
+            is_pdf = filename.lower().endswith(".pdf")
+            if is_pdf and message.caption and not message.caption.startswith("!"):
+                await notification.edit_text(f"🧠 **Deep Analysis (PDF Native):** `{filename}`...")
+                response = await perceptor.analyze_document(file_path, router, message.caption)
+                await message.reply_text(response)
+                memory.save_message(
+                    message.chat.id, {"role": "assistant", "text": response}
+                )
+                # Keep RAG indexing
                 doc_id = router.rag.add_document(
-                    text=f"[Document: {filename}]\n{text}",
+                    text=f"[Document: {filename}]\n{response}",
                     metadata={
-                        **metadata,
-                        "chat_id": str(message.chat.id),
-                        "timestamp": str(datetime.now()),
-                    },
-                    category="document",
+                       "filename": filename,
+                       "type": "pdf_native_analysis",
+                       "chat_id": str(message.chat.id),
+                       "timestamp": str(datetime.now()),
+                    }
                 )
+                await notification.edit_text(f"📄 **Документ проанализирован через Vision Engine.**\nПроиндексирован: `{doc_id}`")
+            else:
+                # Стандартный парсинг для RAG
+                text, metadata = await DocumentParser.parse(file_path)
 
-                preview = text[:500] + "..." if len(text) > 500 else text
-                result_text = (
-                    f"📄 **Документ проанализирован:** `{filename}`\n"
-                    f"📊 Размер: {metadata.get('size_kb', '?')} KB | "
-                    f"Символов: {metadata.get('chars_extracted', '?')}\n"
-                    f"🧠 Проиндексирован в RAG: `{doc_id}`\n\n"
-                    f"**Превью:**\n```\n{preview}\n```"
-                )
-
-                await notification.edit_text(result_text)
-
-                # Если в caption есть вопрос — отвечаем на него
-                if message.caption and not message.caption.startswith("!"):
-                    context = memory.get_recent_context(message.chat.id, limit=5)
-                    response = await router.route_query(
-                        prompt=f"[Документ '{filename}']: {text[:5000]}\n\nВопрос пользователя: {message.caption}",
-                        task_type="chat",
-                        context=context,
+                if text.startswith("⚠️") or text.startswith("❌"):
+                    await notification.edit_text(text)
+                else:
+                    doc_id = router.rag.add_document(
+                        text=f"[Document: {filename}]\n{text}",
+                        metadata={
+                            **metadata,
+                            "chat_id": str(message.chat.id),
+                            "timestamp": str(datetime.now()),
+                        },
+                        category="document",
                     )
-                    await message.reply_text(response)
-                    memory.save_message(
-                        message.chat.id, {"role": "assistant", "text": response}
+
+                    preview = text[:500] + "..." if len(text) > 500 else text
+                    result_text = (
+                        f"📄 **Документ проанализирован:** `{filename}`\n"
+                        f"📊 Размер: {metadata.get('size_kb', '?')} KB | "
+                        f"Символов: {metadata.get('chars_extracted', '?')}\n"
+                        f"🧠 Проиндексирован в RAG: `{doc_id}`\n\n"
+                        f"**Превью:**\n```\n{preview}\n```"
                     )
+
+                    await notification.edit_text(result_text)
+
+                    # Если в caption есть вопрос — отвечаем на него (для не-PDF или когда Vision не сработал)
+                    if message.caption and not message.caption.startswith("!"):
+                        context = memory.get_recent_context(message.chat.id, limit=5)
+                        response = await router.route_query(
+                            prompt=f"[Документ '{filename}']: {text[:5000]}\n\nВопрос пользователя: {message.caption}",
+                            task_type="chat",
+                            context=context,
+                            chat_type=message.chat.type.name.lower(),
+                            is_owner=is_owner(message)
+                        )
+                        await message.reply_text(response)
+                        memory.save_message(
+                            message.chat.id, {"role": "assistant", "text": response}
+                        )
 
             # Чистим скачанный файл
             if os.path.exists(file_path):
@@ -197,14 +222,24 @@ def register_handlers(app, deps: dict):
         await notification.edit_text(f"**Transcript:** `{text}`\n\n🤔 Думаю...")
 
         # Запрашиваем ответ AI
+        from src.core.prompts import AUDIO_TRANSCRIPTION_PROMPT
+
         context = memory.get_recent_context(message.chat.id, limit=5)
-        voice_prompt = f"[Голосовое сообщение]: {text}"
+        
+        # Явный формат промпта, чтобы модель не искала поле audio_transcript
+        voice_prompt = (
+            f"{AUDIO_TRANSCRIPTION_PROMPT}\n\n"
+            f"📥 **Входящее голосовое сообщение (Транскрипция):**\n"
+            f"\"\"\"\n{text}\n\"\"\"\n\n"
+            f"📝 **Инструкция:** Сфокусируйся на содержимом сообщения выше."
+        )
 
         response_text = await router.route_query(
             prompt=voice_prompt,
             task_type="chat",
             context=context,
-            is_private=message.chat.type == enums.ChatType.PRIVATE,
+            chat_type=message.chat.type.name.lower(),
+            is_owner=is_owner(message)
         )
 
         await message.reply_text(response_text)
@@ -264,6 +299,8 @@ def register_handlers(app, deps: dict):
             prompt=vision_prompt,
             task_type="chat",
             context=context,
+            chat_type=message.chat.type.name.lower(),
+            is_owner=is_owner(message)
         )
 
         await message.reply_text(response_text)

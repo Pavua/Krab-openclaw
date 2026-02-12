@@ -52,6 +52,10 @@ class RAGEngine:
         )
         logger.info(f"✅ RAG Engine v2.0 Initialized. Collection size: {self.collection.count()}")
 
+    def get_total_documents(self) -> int:
+        """Возвращает общее количество документов (для совместимости)."""
+        return self.collection.count()
+
     def add_document(self, text: str, metadata: Optional[dict] = None, 
                      doc_id: Optional[str] = None, category: str = "general",
                      ttl_days: Optional[int] = None) -> Optional[str]:

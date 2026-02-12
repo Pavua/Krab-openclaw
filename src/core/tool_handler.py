@@ -18,19 +18,22 @@ Tool Handler v2.0 (Phase 8).
 import structlog
 import json
 from typing import Any
-from src.utils.web_scout import WebScout
+# from src.utils.web_scout import WebScout # Deprecated
 from src.core.swarm import SwarmOrchestrator
 
 logger = structlog.get_logger("ToolHandler")
 
 
 class ToolHandler:
-    def __init__(self, router, rag, scout: WebScout, mcp=None):
+    def __init__(self, router, rag, openclaw_client, mcp=None, browser_agent=None, crypto_intel=None, reminder_manager=None):
         self.router = router
         self.rag = rag
-        self.scout = scout
+        self.openclaw = openclaw_client
         self.mcp = mcp  # Инстанс MCPManager
-        self.swarm = SwarmOrchestrator(self)  # Система Роя (Phase 10)
+        self.browser_agent = browser_agent
+        self.crypto_intel = crypto_intel
+        self.reminder_manager = reminder_manager
+        self.swarm = SwarmOrchestrator(self, router)  # Система Роя (Phase 10)
         
         # Ленивая инициализация опциональных модулей
         self._mac_bridge = None
@@ -139,6 +142,121 @@ class ToolHandler:
         
         return await self.doc_parser.parse(file_path)
 
+    def get_tool_registry(self) -> str:
+        """Возвращает текстовое описание инструментов для LLM."""
+        registry = [
+            "1. web_search(query: str) - Поиск свежей информации в интернете.",
+            "2. rag_search(query: str) - Поиск в твоей долгосрочной памяти (RAG).",
+            "3. shell_exec(command: str) - Выполнение команд в терминале macOS.",
+            "4. mac_automation(intent: str, params: dict) - Управление macOS (уведомления, запуск приложений).",
+            "5. system_info() - Получение данных о загрузке CPU/RAM."
+        ]
+        if self.mcp:
+            registry.append("6. mcp_term(server: str, tool: str, args: dict) - Вызов инструментов из MCP-серверов.")
+            
+        if self.browser_agent:
+            registry.append("7. browse(url: str) - Прочитать содержимое веб-страницы.")
+            registry.append("8. screenshot(url: str) - Сделать скриншот веб-страницы.")
+
+        if self.crypto_intel:
+            registry.append("9. crypto_price(symbol: str) - Узнать цену криптовалюты (btc, eth, sol).")
+        
+        if self.reminder_manager:
+            registry.append("10. add_reminder(text: str, time: str) - Поставить напоминание. Время можно указывать фразой 'через 5 минут' или 'в 10:00'.")
+            registry.append("11. list_reminders() - Показать список активных напоминаний.")
+
+        return "\n".join(registry)
+
+    async def execute_named_tool(self, name: str, **kwargs) -> str:
+        """Единая точка входа для исполнения инструментов по имени."""
+        logger.info(f"🛠️ Executing tool: {name}", args=kwargs)
+        try:
+            if name == "web_search":
+                # res = await self.scout.search(kwargs.get("query", ""))
+                # return self.scout.format_results(res)
+                # Use OpenClaw
+                response = await self.openclaw.invoke_tool("web_search", {
+                    "query": kwargs.get("query", ""),
+                    "count": 5
+                })
+                # Format logic similar to other places, or just dump string
+                # For basic tool execution, we might return raw string or simple text
+                results = response.get("details", {}).get("results", [])
+                
+                # Fallback parse
+                if not results and "content" in response:
+                    try:
+                        import json
+                        text = response["content"][0]["text"]
+                        results = json.loads(text).get("results", [])
+                    except: pass
+
+                if not results: return "❌ No results found via OpenClaw."
+                
+                start_text = "🔎 **OpenClaw Search Results:**\n"
+                for i, r in enumerate(results, 1):
+                    if isinstance(r, dict):
+                        start_text += f"{i}. [{r.get('title')}]({r.get('url')})\n"
+                    else:
+                        start_text += f"{i}. {r}\n"
+                return start_text
+            elif name == "rag_search":
+                return self.rag.query(kwargs.get("query", ""))
+            elif name == "shell_exec":
+                return await self.run_shell(kwargs.get("command", ""))
+            elif name == "mac_automation":
+                return await self.run_mac_intent(kwargs.get("intent", ""), kwargs.get("params", {}))
+            elif name == "system_info":
+                return str(self.system_monitor.get_snapshot().to_dict()) if self.system_monitor else "Monitor offline"
+            elif name == "mcp_tool":
+                res = await self.call_mcp_tool(kwargs.get("server", ""), kwargs.get("tool", ""), kwargs.get("args", {}))
+                return str(res)
+            elif name == "browse":
+                if not self.browser_agent: return "❌ Browser Agent не подключен"
+                res = await self.browser_agent.browse(kwargs.get("url", ""))
+                if "error" in res: return f"❌ Ошибка браузера: {res['error']}"
+                return f"📄 Title: {res['title']}\nURL: {res['url']}\nContent:\n{res['content']}"
+            elif name == "screenshot":
+                if not self.browser_agent: return "❌ Browser Agent не подключен"
+                path = await self.browser_agent.screenshot_only(kwargs.get("url", ""))
+                return f"📸 Скриншот сохранен: {path}"
+            elif name == "crypto_price":
+                if not self.crypto_intel: return "❌ Crypto module not loaded"
+                symbol = kwargs.get("symbol", "bitcoin").lower()
+                data = await self.crypto_intel.get_price(symbol)
+                if "error" in data: return f"❌ Error: {data['error']}"
+                price = data.get("usd", 0)
+                change = data.get("usd_24h_change", 0)
+                return f"💰 {symbol.upper()}: ${price:,.2f} ({change:+.2f}%)"
+            elif name == "add_reminder":
+                if not self.reminder_manager: return "❌ Reminder module not loaded"
+                import dateparser
+                from datetime import datetime
+                time_str = kwargs.get("time", "")
+                text = kwargs.get("text", "Без названия")
+                parsed_time = dateparser.parse(time_str, settings={'PREFER_DATES_FROM': 'future'})
+                if not parsed_time: return "❌ Не удалось распознать время напоминания."
+                # В ReAct у нас нет прямого доступа к chat_id в execute_named_tool (он передается в run),
+                # но мы можем добавить его в kwargs при вызове в AgentExecutor
+                chat_id = kwargs.get("chat_id", 0)
+                if not chat_id: return "❌ Не указан chat_id для напоминания."
+                rid = self.reminder_manager.add_reminder(chat_id, text, parsed_time)
+                return f"✅ Напоминание установлено на {parsed_time.strftime('%Y-%m-%d %H:%M:%S')} (ID: {rid})"
+            elif name == "list_reminders":
+                if not self.reminder_manager: return "❌ Reminder module not loaded"
+                chat_id = kwargs.get("chat_id", 0)
+                reminders = self.reminder_manager.get_list(chat_id)
+                if not reminders: return "📝 Список напоминаний пуст."
+                res = "🗓️ Активные напоминания:\n"
+                for r in reminders:
+                    res += f"- {r['due_time']}: {r['text']} (ID: {r['id']})\n"
+                return res
+            else:
+                return f"❌ Tool '{name}' not found."
+        except Exception as e:
+            logger.error(f"Tool execution failed: {name}", error=str(e))
+            return f"❌ Error: {e}"
+
     def get_available_tools(self) -> list:
         """Список доступных инструментов для !help и диагностики."""
         tools = [
@@ -159,7 +277,10 @@ class ToolHandler:
             tools.append({"name": "System Monitor", "status": "✅", "trigger": "!sysinfo"})
         
         if self.mcp:
-            tools.append({"name": "MCP Client", "status": "✅", "trigger": "Filesystem/Search/Memory"})
+            tools.append({"name": "MCP Client", "status": "✅", "trigger": "Filesystem/GitHub"})
+            
+        if self.crypto_intel:
+             tools.append({"name": "Crypto Intel", "status": "✅", "trigger": "!crypto"})
         
         return tools
 

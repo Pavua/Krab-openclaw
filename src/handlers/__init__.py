@@ -32,6 +32,11 @@ def register_all_handlers(app, deps: dict):
     from .mac import register_handlers as reg_mac
     from .rag import register_handlers as reg_rag
     from .persona import register_handlers as reg_persona
+    from .cyber import register_cyber_handlers as reg_cyber
+    from .communication import register_handlers as reg_comm
+    from .privacy import register_handlers as reg_privacy
+    from .plugins import register_handlers as reg_plugins
+    from .groups import register_handlers as reg_groups
 
     # Порядок важен: debug_logger должен быть зарегистрирован ПЕРВЫМ (group=-1)
     reg_commands(app, deps)
@@ -43,3 +48,11 @@ def register_all_handlers(app, deps: dict):
     reg_mac(app, deps)
     reg_rag(app, deps)
     reg_persona(app, deps)
+    reg_cyber(app, deps)
+    reg_comm(app, deps)
+    reg_groups(app, deps)
+    reg_privacy(app, deps)
+    reg_plugins(app, deps)
+    
+    from .finance import register_handlers as reg_finance
+    reg_finance(app, deps)

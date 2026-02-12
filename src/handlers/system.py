@@ -206,3 +206,92 @@ def register_handlers(app, deps: dict):
                 "• Стандартный режим работы восстановлен.\n"
                 "• Уровни доступа (Admin/User) снова активны."
             )
+
+    # --- !grant: Назначение ролей ---
+    @app.on_message(filters.command("grant", prefixes="!"))
+    @safe_handler
+    async def grant_command(client, message: Message):
+        """!grant @username <role> (admin/user/blocked)"""
+        if not is_owner(message): return
+        
+        args = message.command
+        if len(args) < 3:
+            await message.reply_text("👮 Usage: `!grant @username <role>`")
+            return
+            
+        target = args[1]
+        role = args[2].lower()
+        
+        if role not in ["admin", "user", "guest", "blocked"]:
+             await message.reply_text("❌ Invalid role. Use: admin, user, guest, blocked")
+             return
+
+        if security.grant_role(target, role):
+            await message.reply_text(f"✅ Role **{role.upper()}** granted to `{target}`")
+        else:
+            await message.reply_text(f"❌ Failed to grant role to `{target}` (Owner protected?)")
+
+    # --- !revoke: Снятие ролей ---
+    @app.on_message(filters.command("revoke", prefixes="!"))
+    @safe_handler
+    async def revoke_command(client, message: Message):
+        """!revoke @username"""
+        if not is_owner(message): return
+        
+        if len(message.command) < 2:
+            await message.reply_text("👮 Usage: `!revoke @username`")
+            return
+            
+        target = message.command[1]
+        if security.revoke_role(target):
+            await message.reply_text(f"✅ Role revoked from `{target}` (now Guest)")
+        else:
+             await message.reply_text(f"❌ Failed to revoke `{target}`")
+
+    # --- !godmode: Переход в God Mode (Native) ---
+    @app.on_message(filters.command("godmode", prefixes="!"))
+    @safe_handler
+    async def godmode_launch_command(client, message: Message):
+        """Native Launch: !godmode (Owner only)"""
+        if not is_owner(message): return
+        
+        notification = await message.reply_text("🚀 **Активирую God Mode (Native macOS)...**")
+        
+        cmd_path = os.path.join(os.getcwd(), "start_god_mode.command")
+        
+        if not os.path.exists(cmd_path):
+             await notification.edit_text("❌ Ошибка: файл `start_god_mode.command` не найден в корне проекта.")
+             return
+
+        # Запуск на macOS через open (открывает новое окно терминала)
+        # Если мы в Docker, это сработает ТОЛЬКО если есть доступ к хосту (например, через shared socket или mount)
+        # Однако, в God Mode native это просто удобный способ перезапуска/открытия нового окна.
+        try:
+            # Используем open для запуска .command файла (стандарт для macOS)
+            import subprocess
+            subprocess.Popen(["open", cmd_path], start_new_session=True)
+            
+            await notification.edit_text(
+                "🚀 **God Mode запущен в новом окне терминала!**\n\n"
+                "Если ты в Docker — убедись, что скрипт имеет доступ к хосту. "
+                "В нативном режиме это просто откроет параллельную сессию."
+            )
+        except Exception as e:
+             await notification.edit_text(f"❌ Ошибка запуска: {e}")
+
+    # --- !roles: Список ролей ---
+    @app.on_message(filters.command("roles", prefixes="!"))
+    @safe_handler
+    async def roles_list_command(client, message: Message):
+        """Show all user roles."""
+        if not is_owner(message): return
+        
+        text = "**👮 User Roles:**\n\n"
+        if not security.roles:
+            text += "_No roles assigned (defaults only)._"
+        else:
+            for user, role in security.roles.items():
+                emoji = {"admin": "⭐️", "blocked": "🚫", "user": "👤"}.get(role, "❔")
+                text += f"{emoji} `{user}`: **{role.upper()}**\n"
+        
+        await message.reply_text(text)

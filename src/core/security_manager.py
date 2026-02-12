@@ -21,12 +21,59 @@ INJECTION_PATTERNS = [
 ]
 
 class SecurityManager:
-    def __init__(self, owner_username: str):
-        self.owner = owner_username.replace("@", "").strip()
-        self.admins = []
-        self.users = []
-        self.blocked = []
-        self.stealth_mode = False  # Режим скрытности (Panic Button)
+    def __init__(self, owner_username: str, config=None):
+        self.config = config
+        # Нормализация username (без @)
+        self.owner = (owner_username or "").replace("@", "").strip().lower()
+        
+        # Загружаем роли из конфига
+        # Формат: config["security.roles"] = {"username": "admin", "12345": "user"}
+        self.roles = {}
+        if config:
+            self.roles = config.get("security.roles", {})
+            self.stealth_mode = config.get("security.stealth_mode", False)
+        else:
+            self.stealth_mode = False
+
+    def get_role(self, user_identifier: str) -> str:
+        """Получить роль пользователя по username или ID (строкой)."""
+        ident = str(user_identifier).replace("@", "").lower().strip()
+        if ident == self.owner:
+            return "owner"
+        return self.roles.get(ident, "guest")
+
+    def grant_role(self, user_identifier: str, role: str) -> bool:
+        """Назначить роль пользователю."""
+        if not self.config:
+            return False
+            
+        ident = str(user_identifier).replace("@", "").lower().strip()
+        if ident == self.owner:
+            return False # Нельзя менять роль владельца
+            
+        if role not in ["admin", "user", "guest", "blocked"]:
+            return False
+            
+        self.roles[ident] = role
+        self.config.set("security.roles", self.roles)
+        logger.info(f"Role granted: {ident} -> {role}")
+        return True
+
+    def revoke_role(self, user_identifier: str) -> bool:
+        """Сбросить роль (станет guest)."""
+        if not self.config:
+            return False
+            
+        ident = str(user_identifier).replace("@", "").lower().strip()
+        if ident == self.owner:
+            return False
+            
+        if ident in self.roles:
+            del self.roles[ident]
+            self.config.set("security.roles", self.roles)
+            logger.info(f"Role revoked: {ident}")
+            return True
+        return False
 
     def is_safe(self, text: str) -> bool:
         """Проверка текста на наличие попыток инъекции."""
@@ -40,22 +87,24 @@ class SecurityManager:
                 return False
         return True
 
+    # Совместимость со старым API
     def get_user_role(self, username: str, user_id: int) -> str:
-        """Определяет роль пользователя."""
-        username = (username or "").replace("@", "").strip()
+        """Определяет эффективную роль пользователя."""
+        # Проверяем ID, затем Username
+        role_by_id = self.get_role(str(user_id))
+        role_by_name = self.get_role(username)
         
-        if username == self.owner:
-            return "owner"
+        # Приоритет: Owner > Blocked > Admin > User > Guest
+        if "owner" in [role_by_id, role_by_name]: return "owner"
         
-        # Если включен режим Stealth, все кроме владельца считаются временно ограниченными
-        if self.stealth_mode:
-            return "stealth_restricted"
-
-        if username in self.admins or user_id in self.admins:
-            return "admin"
-        if username in self.blocked or user_id in self.blocked:
-            return "blocked"
-        return "user"
+        # Stealth Mode check
+        if self.stealth_mode: return "stealth_restricted"
+        
+        if "blocked" in [role_by_id, role_by_name]: return "blocked"
+        if "admin" in [role_by_id, role_by_name]: return "admin"
+        if "user" in [role_by_id, role_by_name]: return "user"
+        
+        return "guest"
 
     def can_execute_command(self, username: str, user_id: int, command_level: str = "user") -> bool:
         """Проверяет права на выполнение команды."""
@@ -76,6 +125,8 @@ class SecurityManager:
     def toggle_stealth(self) -> bool:
         """Переключает режим Stealth Mode."""
         self.stealth_mode = not self.stealth_mode
+        if self.config:
+            self.config.set("security.stealth_mode", self.stealth_mode)
         logger.info(f"🕶️ Stealth Mode changed to: {self.stealth_mode}")
         return self.stealth_mode
 

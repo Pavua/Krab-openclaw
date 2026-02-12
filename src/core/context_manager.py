@@ -55,6 +55,45 @@ class ContextKeeper:
             # logger.error(f"Error reading context: {e}")
             return []
 
+    async def sync_telegram_history(self, client, chat_id: int, limit: int = 50):
+        """
+        Синхронизирует историю сообщений с Telegram.
+        Если локальная история пуста, загружает последние N сообщений.
+        """
+        history_file = self.get_chat_storage_path(chat_id) / "history.jsonl"
+        
+        # Если файл уже содержит сообщения, считаем что синхронизация не нужна 
+        # (или можно добавить проверку по времени/количеству)
+        if history_file.exists() and history_file.stat().st_size > 0:
+            return False
+
+        try:
+            from pyrogram.enums import MessageServiceType
+            
+            messages = []
+            async for message in client.get_chat_history(chat_id, limit=limit):
+                if not message.text and not message.caption:
+                    continue
+                
+                role = "assistant" if message.from_user and message.from_user.is_self else "user"
+                sender = message.from_user.username if message.from_user else "Unknown"
+                
+                messages.append({
+                    "role": role,
+                    "user": sender,
+                    "text": message.text or message.caption,
+                    "timestamp": message.date.timestamp() if message.date else 0
+                })
+            
+            # Сохраняем в обратном порядке (от старых к новым)
+            for msg in reversed(messages):
+                self.save_message(chat_id, msg)
+            
+            return True
+        except Exception as e:
+            # logger.error(f"Failed to sync history for {chat_id}: {e}")
+            return False
+
     def save_summary(self, chat_id: int, summary: str):
         """Сохраняет саммари чата."""
         chat_dir = self.get_chat_storage_path(chat_id)
@@ -69,6 +108,18 @@ class ContextKeeper:
         if summary_file.exists():
             return summary_file.read_text(encoding="utf-8")
         return ""
+
+    def clear_history(self, chat_id: int):
+        """Полная очистка истории конкретного чата."""
+        chat_dir = self.get_chat_storage_path(chat_id)
+        history_file = chat_dir / "history.jsonl"
+        summary_file = chat_dir / "summary.txt"
+        
+        if history_file.exists():
+            os.remove(history_file)
+        if summary_file.exists():
+            os.remove(summary_file)
+        return True
 
 # Пример использования в Pyrogram handler:
 # keeper = ContextKeeper()

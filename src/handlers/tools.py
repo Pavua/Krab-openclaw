@@ -22,8 +22,9 @@ logger = structlog.get_logger(__name__)
 def register_handlers(app, deps: dict):
     """Регистрирует обработчики инструментов."""
     router = deps["router"]
-    scout = deps["scout"]
+    # scout = deps["scout"]  # Deprecated
     safe_handler = deps["safe_handler"]
+    openclaw = deps["openclaw_client"]
 
     # --- !scout: Deep Research ---
     @app.on_message(filters.command("scout", prefixes="!"))
@@ -37,30 +38,13 @@ def register_handlers(app, deps: dict):
             return
 
         query = message.text.split(" ", 1)[1]
-        notification = await message.reply_text(
-            f"🔎 **Исследую:** `{query}`..."
-        )
-
-        search_results = await scout.search(query)
-        if not search_results:
-            await notification.edit_text("❌ Ничего не найдено.")
-            return
-
-        formatted = scout.format_results(search_results)
-        await notification.edit_text("🧠 **Анализирую результаты...**")
-
-        prompt = (
-            f"Проведи глубокий анализ темы '{query}' на основе этих данных:\n\n"
-            f"{formatted}\n\nСделай структурированный отчёт."
-        )
-        analysis = await router.route_query(
-            prompt,
-            task_type="reasoning",
-            is_private=message.chat.type == enums.ChatType.PRIVATE,
-        )
-
-        await notification.edit_text(
-            f"🔎 **Deep Research: {query}**\n\n{analysis}"
+        # Единая логика для Deep Research / Nexus Intelligence
+        await _process_research_task(
+            client=client,
+            message=message,
+            openclaw=openclaw,
+            query=query,
+            mode="scout"
         )
 
     # --- !nexus: Extended Research ---
@@ -77,26 +61,14 @@ def register_handlers(app, deps: dict):
         query = message.text.split(" ", 1)[1]
         notification = await message.reply_text("🕵️‍♂️ **Nexus Intelligence: сканирую...**")
 
-        search_results = await scout.search(query, max_results=10)
-        if search_results:
-            formatted = scout.format_results(search_results)
-        else:
-            formatted = "Нет данных из веб-поиска."
-
-        prompt = (
-            f"Составь обширный аналитический INTELLIGENCE REPORT по теме: {query}\n\n"
-            f"Источники:\n{formatted}\n\n"
-            "Включи: ключевые факты, тренды, риски, прогнозы."
+        # Единая логика для Deep Research / Nexus Intelligence
+        await _process_research_task(
+            client=client,
+            message=message,
+            openclaw=openclaw,
+            query=query,
+            mode="nexus"
         )
-
-        report = await router.route_query(
-            prompt,
-            task_type="reasoning",
-            is_private=message.chat.type == enums.ChatType.PRIVATE,
-        )
-
-        final_text = f"🕵️‍♂️ **Nexus Intelligence Report: {query}**\n\n{report}"
-        await notification.edit_text(final_text)
 
     # --- !news: Дайджест новостей ---
     @app.on_message(filters.command("news", prefixes="!"))
@@ -112,27 +84,63 @@ def register_handlers(app, deps: dict):
             f"🗞️ Ищу свежие новости по теме `{query}`..."
         )
 
-        news_results = await scout.search_news(query)
-        if not news_results:
-            await notification.edit_text("❌ Не удалось найти свежих новостей.")
-            return
+        # Use OpenClaw for news search (via web_search tool)
+        logger.info(f"News Search via OpenClaw: {query}")
+        
+        try:
+            # 1. Search recent news
+            search_results = await openclaw.invoke_tool("web_search", {
+                "query": f"news about {query}", 
+                "count": 5,
+                "freshness": "pd" # Past Day (Brave specific, might need check if supported by OpenClaw wrapper)
+            })
+            
+            results_data = search_results.get("details", {}).get("results", [])
+            # Fallback parsing if needed (same as in execute_agent_task)
+            if not results_data and "content" in search_results:
+                 try:
+                     import json
+                     text = search_results["content"][0]["text"]
+                     parsed = json.loads(text)
+                     results_data = parsed.get("results", [])
+                 except:
+                     pass
 
-        formatted_news = scout.format_results(news_results)
-        await notification.edit_text("🧠 **Саммари новостей...**")
+            if not results_data:
+                await notification.edit_text("❌ Не удалось найти свежих новостей через OpenClaw.")
+                return
 
-        prompt = (
-            f"Составь краткий дайджест самых свежих новостей по теме '{query}' "
-            f"на основе этих данных:\n\n{formatted_news}\n\nБудь краток."
-        )
-        summary = await router.route_query(
-            prompt,
-            task_type="chat",
-            is_private=message.chat.type == enums.ChatType.PRIVATE,
-        )
+            formatted_news = ""
+            for i, res in enumerate(results_data, 1):
+                if isinstance(res, dict):
+                    title = res.get('title', 'No Title').replace("<<<EXTERNAL_UNTRUSTED_CONTENT>>>", "").strip()
+                    url = res.get('url', '#')
+                    date = res.get('published', 'Unknown date')
+                    formatted_news += f"{i}. [{title}]({url}) ({date})\n"
+                else:
+                    formatted_news += f"{i}. {str(res)}\n"
+            
+            await notification.edit_text("🧠 **Анализирую новости...**")
 
-        await notification.edit_text(
-            f"🗞️ **Fresh News Digest: {query}**\n\n{summary}"
-        )
+            prompt = (
+                f"Составь краткий дайджест самых свежих новостей по теме '{query}' "
+                f"на основе этих заголовков:\n\n{formatted_news}\n\n"
+                "Выдели главное. Используй Markdown."
+            )
+            
+            # Use OpenClaw LLM for summary too, to be consistent? 
+            # Or keep local Router? The user wants to replace local AI.
+            # Let's use OpenClaw Chat Completions.
+            messages = [{"role": "user", "content": prompt}]
+            summary = await openclaw.chat_completions(messages)
+
+            await notification.edit_text(
+                f"🗞️ **Fresh News Digest: {query}**\n\n{summary}"
+            )
+            
+        except Exception as e:
+            logger.error(f"News command error: {e}")
+            await notification.edit_text(f"❌ Ошибка: {e}")
 
     # --- !translate: Перевод ---
     @app.on_message(filters.command("translate", prefixes="!"))
@@ -187,3 +195,106 @@ def register_handlers(app, deps: dict):
         except Exception as e:
             logger.error(f"TTS error: {e}")
             await notification.edit_text(f"❌ Ошибка TTS: {e}")
+
+    # --- !browse: Browser Automation (Phase 9.2) ---
+    @app.on_message(filters.command("browse", prefixes="!"))
+    @safe_handler
+    async def browse_command(client, message: Message):
+        """Browser: !browse <url>"""
+        browser_agent = deps.get("browser_agent")
+        
+        if not browser_agent:
+            await message.reply_text("❌ Browser Agent не инициализирован. Убедитесь, что установлен playwright.")
+            return
+
+        if len(message.command) < 2:
+            await message.reply_text("🌐 Какой URL открыть? Пример: `!browse https://example.com`")
+            return
+            
+        url = message.text.split(" ", 1)[1]
+        notification = await message.reply_text(f"🌐 **Навигация:** `{url}`...")
+        
+        try:
+            result = await browser_agent.browse(url)
+            
+            if "error" in result:
+                await notification.edit_text(f"❌ Ошибка загрузки: {result['error']}")
+                return
+            
+            # Отправка скриншота
+            screenshot_path = result.get("screenshot_path")
+            if screenshot_path:
+                await message.reply_photo(
+                    photo=screenshot_path,
+                    caption=f"📄 **{result['title']}**\n🔗 `{result['url']}`"
+                )
+                
+            # Отправка контента (первые 3000 символов)
+            content_snippet = result.get("content", "")[:3000]
+            if len(result.get("content", "")) > 3000:
+                content_snippet += "\n... [далее обрезано]"
+                
+            await notification.edit_text(
+                f"📄 **Content Preview:**\n\n```text\n{content_snippet}\n```"
+            )
+            
+        except Exception as e:
+            logger.error(f"Browse command error: {e}")
+            await notification.edit_text(f"❌ Критическая ошибка браузера: {e}")
+
+    # --- !screenshot: Web Screenshot ---
+    @app.on_message(filters.command("screenshot", prefixes="!"))
+    @safe_handler
+    async def screenshot_command(client, message: Message):
+        """Screenshot: !screenshot <url>"""
+        browser_agent = deps.get("browser_agent")
+
+        if not browser_agent:
+            await message.reply_text("❌ Browser Agent не инициализирован.")
+            return
+
+        if len(message.command) < 2:
+            await message.reply_text("📸 Какой URL снять? Пример: `!screenshot https://google.com`")
+            return
+
+        url = message.text.split(" ", 1)[1]
+        notification = await message.reply_text(f"📸 **Снимаю страницу:** `{url}`...")
+
+        try:
+            path = await browser_agent.screenshot_only(url)
+            
+            if path and path.endswith(".png"):
+                await message.reply_photo(photo=path, caption=f"📸 Screenshot: {url}")
+                await notification.delete()
+            else:
+                await notification.edit_text(f"❌ Не удалось сделать скриншот.")
+        except Exception as e:
+            logger.error(f"Screenshot error: {e}")
+            await notification.edit_text(f"❌ Ошибка: {e}")
+    # --- Helper Functions ---
+    async def _process_research_task(client, message, openclaw, query: str, mode: str = "scout"):
+        """
+        Delegates research task to OpenClaw Engine.
+        """
+        icon = "🔎" if mode == "scout" else "🕵️‍♂️"
+        title = "OpenClaw Scout" if mode == "scout" else "Nexus Intelligence"
+        
+        notification = await message.reply_text(
+            f"{icon} **{title}: Transmitting to Engine...** `{query}`"
+        )
+
+        try:
+            # Determine agent based on mode
+            agent_id = "research_deep" if mode == "nexus" else "research_fast"
+            
+            # Execute via OpenClaw Client
+            response = await openclaw.execute_agent_task(query, agent_id=agent_id)
+            
+            # Send result
+            await notification.edit_text(
+                f"{icon} **{title}: Report**\n\n{response}"
+            )
+            
+        except Exception as e:
+            logger.error(f"OpenClaw Request failed: {e}")
+            await notification.edit_text(f"❌ **Engine Error:** {e}")

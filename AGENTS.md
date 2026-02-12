@@ -6,40 +6,43 @@
 
 ## Project Overview
 
-**Description**: Персональный AI-ассистент на базе OpenClaw с доступом через Telegram Userbot.
+**Description**: Krab AI Userbot — Personal AI Assistant based on Python 3.13 & Pyrogram, integrated with OpenClaw Gateway.
 
 **Tech Stack**:
-- **Framework**: React
-- **Language**: JavaScript
-- **Build Tool**: Not detected
-- **Styling**: CSS Modules
-- **State Management**: React Context API
-- **Routing**: Not configured
-- **Data Fetching**: fetch API
-- **Forms**: Native forms
-- **Validation**: Manual validation
-- **Testing**: Not configured
-- **Package Manager**: npm
+- **Core**: Python 3.13+
+- **Telegram Lib**: Pyrogram 2.0 (Async)
+- **AI Gateway**: OpenClaw (HTTP API)
+- **Database**: SQLite (local logs), ChromaDB (RAG - Deprecated/External)
+- **Environment**: macOS (Native)
+
+---
+
+## 🚨 CRITICAL ARCHITECTURE RULES (v7.6+)
+
+1.  **Do NOT implement local scraping/browser logic.**
+    - Use `src.core.openclaw_client.OpenClawClient`.
+    - Method: `await openclaw.invoke_tool("web_search", ...)`
+
+2.  **Do NOT use `google.generativeai` (Old SDK).**
+    - Use `google.genai` (New SDK) if direct Gemini access is needed.
+    - Prefer OpenClaw where possible.
+
+3.  **Do NOT use `WebScout` class.**
+    - It is deprecated and kept only for reference.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Setup
-npm install
+# 1. Activate venv
+source .venv/bin/activate
 
-# Development
-npm run dev
+# 2. Run Smoke Tests
+python tests/smoke_test.py
 
-# Build
-npm run build
-
-# Testing
-npm run test
-
-# Linting
-npm run lint
+# 3. Start Bot
+./start_krab.command
 ```
 
 ---
@@ -48,176 +51,60 @@ npm run lint
 
 ```
 src/
-├── __pycache__/
-└── skills/
-```
-
-**Directory Purposes**:
-
-- **`__pycache__/`** - Project-specific directory
-- **`skills/`** - Project-specific directory
-
----
-
-## Code Conventions
-
-### General Guidelines
-
-- **Language**: Use JavaScript for all files
-- **Components**: Use functional components with hooks
-- **File Naming**: PascalCase for components, camelCase for utilities
-
-### Component Structure
-
-```tsx
-import { useState } from 'react';
-
-export function UserCard({ user, onEdit }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  
-  return (
-    <div>
-      {/* Component content */}
-    </div>
-  );
-}
-```
-
-### Import Organization
-
-```tsx
-// 1. External dependencies
-import { useState } from 'react';
-
-// 2. Internal modules (use path aliases)
-import { Component } from '../components/Component';
-
-// 3. Types
-import type { User } from '@/types';
-
-// 4. Styles (if applicable)
-import styles from './Component.module.css';
+├── core/
+│   ├── openclaw_client.py   # <--- MAIN AI GATEWAY
+│   ├── model_manager.py     # Router (Cloud/Local)
+│   ├── tool_handler.py      # Tool execution
+│   └── ...
+├── handlers/
+│   ├── commands.py          # User commands (!help, !status)
+│   └── tools.py             # Research tools (!news, !scout)
+├── utils/                   # Helpers
+└── main.py                  # Entry point
 ```
 
 ---
 
-## Styling Approach
+## Code Sections
 
-**Primary Method**: CSS Modules
+### OpenClaw Integration (`src/core/openclaw_client.py`)
+This is the **primary** way to interact with the outside world (Search, RAG, News).
+```python
+# Example Usage
+result = await openclaw.execute_agent_task("Research quantum physics")
+```
 
-- One CSS module per component
-- Use camelCase for class names
-- Leverage composition with `composes`
-
----
-
-## State Management
-
-**Approach**: React Context API
-
-- Create context providers in `src/context/`
-- Separate context by domain
-- Use custom hooks to access context
+### Command Handlers (`src/handlers/*.py`)
+- use `@app.on_message(filters.me & ...)`
+- Always handle errors with `try/except` and log them.
 
 ---
 
-## Data Fetching
+## Environment Variables (`.env`)
 
-**Method**: fetch API
-
-- All API calls should be organized in the services layer
-- Use proper error handling and loading states
-- Leverage fetch API features for caching and optimistic updates
-
----
-
-## Routing
-
-**Router**: Not configured
-
-
-
----
-
-## Forms & Validation
-
-**Forms**: Native forms
-**Validation**: Manual validation
-
-
+Required for v7.6+:
+```ini
+TELEGRAM_API_ID=...
+TELEGRAM_API_HASH=...
+TELEGRAM_SESSION_NAME=...
+OPENCLAW_BASE_URL=http://localhost:8000
+OPENCLAW_API_KEY=sk-...
+GEMINI_API_KEY=...
+```
 
 ---
 
 ## Testing
 
-**Framework**: Not configured
-
-### Conventions
-
-- Test file location: Co-located with components
-- Naming: `ComponentName.test.tsx`
-- Focus on user behavior and integration tests
-
----
-
-## Environment Variables
-
-**Location**: `.env.local`
-
 ```bash
-TELEGRAM_API_ID=[value]
-TELEGRAM_API_HASH=[value]
-TELEGRAM_SESSION_NAME=kraab
-OPENCLAW_URL=http://127.0.0.1:18789
-OPENCLAW_TOKEN=sk-nexus-bridge
-LM_STUDIO_URL=http://192.168.0.171:1234
-GEMINI_API_KEY=[value]
-MAX_RAM_GB=24
-LOG_LEVEL=INFO
+# Run all tests
+python -m unittest discover tests
+
+# Run specific test
+python tests/test_openclaw_client.py
 ```
 
-**Note**: Never commit `.env.local` - use `.env.example` as template
-
 ---
 
-## Available Scripts
-
-- `npm run start` - Start production server
-- `npm run test` - Run tests
-- `npm run test:unit` - pytest tests/unit/ -v
-- `npm run test:integration` - pytest tests/integration/ -v
-- `npm run test:cov` - pytest tests/ --cov=src --cov-report=html
-- `npm run lint` - Run linter
-- `npm run format` - Format code with Prettier
-
----
-
-## Path Aliases
-
-No path aliases configured.
-
----
-
-## AI Assistant Guidelines
-
-### When Generating Code
-
-1. **Follow existing patterns**: Match the style and structure in the codebase
-2. **Use type safety**: Always use JavaScript types
-3. **Use path aliases**: Import using configured aliases
-4. **Match styling approach**: Use CSS Modules conventions
-5. **Follow state management**: Use React Context API patterns
-
-### When Refactoring
-
-1. Preserve functionality
-2. Maintain type safety
-3. Update related tests
-4. Follow established conventions
-
----
-
-**Last Generated**: 2026-02-09  
-**Auto-generated from**: package.json, tsconfig.json, and project structure
-
-> 💡 **Tip**: Use the Agent Automation dashboard to regenerate this file after major changes.
+**Last Updated**: 2026-02-12 (Phase 4.1 Completed)
+**Architect**: Antigravity

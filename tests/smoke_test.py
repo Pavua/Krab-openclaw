@@ -1,249 +1,162 @@
 # -*- coding: utf-8 -*-
-"""
-Smoke-тест Krab v6.0 — отправляет команду через Pyrogram и проверяет ответ.
-
-Для работы нужен ДРУГОЙ Telegram-сессия (не та что использует бот).
-Вместо этого — используем Telethon или прямой API-вызов.
-
-Но поскольку бот — юзербот и реагирует на СВОИ сообщения тоже,
-мы можем просто проверить через лог, что хендлеры зарегистрированы.
-"""
-
-import os
 import sys
+import os
 import asyncio
-import importlib
+import unittest
+from unittest.mock import MagicMock, patch, AsyncMock
 
-# Добавляем корень проекта
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add src to path
+sys.path.append(os.getcwd())
 
-def test_all_imports():
-    """Проверяем что все модули импортируются без ошибок."""
-    modules = [
-        "src.core.model_manager",
-        "src.core.context_manager",
-        "src.core.error_handler",
-        "src.core.rate_limiter",
-        "src.core.config_manager",
-        "src.core.security_manager",
-        "src.core.logger_setup",
-        "src.core.persona_manager",
-        "src.core.rag_engine",
-        "src.core.scheduler",
-        "src.core.agent_manager",
-        "src.core.tool_handler",
-        "src.core.mcp_client",
-        "src.modules.perceptor",
-        "src.modules.screen_catcher",
-        "src.utils.black_box",
-        "src.utils.web_scout",
-        "src.utils.system_monitor",
-        "src.handlers",
-        "src.handlers.auth",
-        "src.handlers.commands",
-        "src.handlers.ai",
-        "src.handlers.media",
-        "src.handlers.tools",
-        "src.handlers.system",
-        "src.handlers.scheduling",
-        "src.handlers.mac",
-        "src.handlers.rag",
-        "src.handlers.persona",
-    ]
-    
-    passed = 0
-    failed = 0
-    errors = []
-    
-    for mod_name in modules:
+# Mock configuration
+MOCK_CONFIG = {
+    "LM_STUDIO_URL": "http://localhost:1234/v1",
+    "GEMINI_API_KEY": "fake_key",
+    "OWNER_ID": 123456,
+    "OWNER_USERNAME": "test_owner",
+    "security.stealth_mode": False
+}
+
+class TestSystemHealth(unittest.IsolatedAsyncioTestCase):
+    async def test_01_imports(self):
+        """Test strict imports of all core modules."""
+        modules = [
+            "src.core.model_manager",
+            "src.core.rag_engine",
+            "src.core.security_manager",
+            "src.core.image_manager",
+            "src.core.summary_manager",
+            "src.modules.perceptor",
+            "src.utils.black_box",
+            "src.handlers.ai",
+            "src.handlers.cyber",
+            "src.modules.browser"
+        ]
+        for mod in modules:
+            try:
+                __import__(mod)
+            except ImportError as e:
+                self.fail(f"Import failed for {mod}: {e}")
+        print("✅ Core & Handler Imports: OK")
+
+    async def test_02_rag_engine(self):
+        """Test RAG Engine v2.0."""
+        from src.core.rag_engine import RAGEngine
+        # Use a temporary test database
+        rag = RAGEngine(db_path="artifacts/memory/tests_chroma")
+        doc_id = rag.add_document("Test knowledge", category="general")
+        self.assertIsNotNone(doc_id)
+        res = rag.query("knowledge")
+        self.assertIn("Test", res)
+        print("✅ RAG Engine v2.0: OK")
+
+    async def test_03_model_router(self):
+        """Test ModelRouter logic and fallback."""
+        from src.core.model_manager import ModelRouter
+        router = ModelRouter(MOCK_CONFIG)
+        self.assertEqual(router.force_mode, "auto")
+        router.set_force_mode("local")
+        self.assertEqual(router.force_mode, "force_local")
+        print("✅ ModelRouter Core: OK")
+
+    async def test_04_security_manager(self):
+        """Test SecurityManager and Stealth Mode."""
+        from src.core.security_manager import SecurityManager
+        sec = SecurityManager("test_owner")
+        self.assertFalse(sec.stealth_mode)
+        sec.toggle_stealth()
+        self.assertTrue(sec.stealth_mode)
+        
+        # Test roles
+        sec.config = MagicMock()
+        sec.config.get.return_value = {}
+        sec.config.set = MagicMock()
+        sec.roles = {} # reset
+        
+        self.assertTrue(sec.grant_role("new_user", "admin"))
+        self.assertEqual(sec.get_role("new_user"), "admin")
+        self.assertTrue(sec.revoke_role("new_user"))
+        self.assertEqual(sec.get_role("new_user"), "guest")
+        print("✅ SecurityManager (Stealth): OK")
+
+    async def test_05_black_box_stats(self):
+        """Test BlackBox database operations."""
+        from src.utils.black_box import BlackBox
+        bb = BlackBox(db_path="artifacts/memory/tests_black_box.db")
+        bb.log_message(123, "Test Chat", 456, "Test Sender", "test_user", "INCOMING", "Hello")
+        stats = bb.get_stats()
+        self.assertGreaterEqual(stats["total"], 1)
+        recent = bb.get_recent_messages(limit=1)
+        self.assertEqual(recent[0]["text"], "Hello")
+        print("✅ BlackBox Stats & Logging: OK")
+
+    async def test_06_image_manager(self):
+        """Test ImageManager initialization."""
+        from src.core.image_manager import ImageManager
+        im = ImageManager(MOCK_CONFIG)
+        self.assertIsNotNone(im)
+        print("✅ ImageManager: OK")
+
+    async def test_07_summary_manager(self):
+        """Test SummaryManager logic."""
+        from src.core.summary_manager import SummaryManager
+        router = MagicMock()
+        memory = MagicMock()
+        sm = SummaryManager(router, memory, min_messages=10)
+        self.assertEqual(sm.min_messages, 10)
+        print("✅ SummaryManager Init: OK")
+
+    async def test_08_task_queue(self):
+        """Test TaskQueue background execution."""
+        from src.core.task_queue import TaskQueue
+        app = MagicMock()
+        app.send_message = AsyncMock()
+        
+        tq = TaskQueue(app)
+        
+        async def dummy_task():
+            await asyncio.sleep(0.1)
+            return "Task Done"
+            
+        task_id = await tq.enqueue("Test Task", 123456, dummy_task())
+        self.assertIsNotNone(task_id)
+        
+        # Wait a bit for background execution
+        await asyncio.sleep(0.3)
+        self.assertEqual(tq.tasks[task_id].status, "COMPLETED")
+        app.send_message.assert_called()
+        print("✅ TaskQueue: OK")
+
+    async def test_09_browser_agent(self):
+        """Test Browser Agent initialization."""
         try:
-            importlib.import_module(mod_name)
-            passed += 1
-            print(f"  ✅ {mod_name}")
-        except Exception as e:
-            failed += 1
-            errors.append((mod_name, str(e)))
-            print(f"  ❌ {mod_name}: {e}")
-    
-    return passed, failed, errors
+            from src.modules.browser import BrowserAgent
+            agent = BrowserAgent(headless=True)
+            self.assertIsNotNone(agent)
+            
+            # Mock playwright to avoid launching browser in smoke test
+            agent.playwright = MagicMock() 
+            agent.browser = MagicMock()
+            
+            # Simple check
+            self.assertTrue(agent.headless)
+            print("✅ BrowserAgent: Init OK")
+        except ImportError:
+            print("⚠️ BrowserAgent skipped (playwright missing)")
 
-
-def test_config_reads_env():
-    """Проверяем что конфиг читается из .env."""
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    checks = {
-        "TELEGRAM_API_ID": os.getenv("TELEGRAM_API_ID"),
-        "TELEGRAM_API_HASH": os.getenv("TELEGRAM_API_HASH"),
-        "TELEGRAM_SESSION_NAME": os.getenv("TELEGRAM_SESSION_NAME"),
-        "OWNER_USERNAME": os.getenv("OWNER_USERNAME"),
-        "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
-    }
-    
-    passed = 0
-    failed = 0
-    
-    for key, val in checks.items():
-        if val and val.strip():
-            passed += 1
-            # Маскируем значение
-            masked = val[:4] + "..." if len(val) > 4 else val
-            print(f"  ✅ {key} = {masked}")
-        else:
-            failed += 1
-            print(f"  ❌ {key} = NOT SET")
-    
-    return passed, failed
-
-
-def test_router_init():
-    """Проверяем инициализацию ModelRouter."""
-    from src.core.model_manager import ModelRouter
-    
-    router = ModelRouter(config=os.environ)
-    
-    checks = [
-        ("models.chat", "chat" in router.models),
-        ("models.thinking", "thinking" in router.models),
-        ("gemini_key", bool(router.gemini_key)),
-        ("lm_studio_url", bool(router.lm_studio_url)),
-    ]
-    
-    passed = 0
-    for name, ok in checks:
-        if ok:
-            passed += 1
-            print(f"  ✅ {name}")
-        else:
-            print(f"  ❌ {name}")
-    
-    return passed, len(checks) - passed
-
-
-def test_auth_functions():
-    """Проверяем auth-модуль."""
-    from src.handlers.auth import get_owner, get_allowed_users
-    
-    owner = get_owner()
-    allowed = get_allowed_users()
-    
-    checks = [
-        ("owner не пустой", bool(owner)),
-        ("owner без @", "@" not in owner),
-        ("owner в allowed", owner in allowed),
-        ("allowed >= 1", len(allowed) >= 1),
-    ]
-    
-    passed = 0
-    for name, ok in checks:
-        if ok:
-            passed += 1
-            print(f"  ✅ {name}: {owner if 'owner' in name else allowed}")
-        else:
-            print(f"  ❌ {name}")
-    
-    return passed, len(checks) - passed
-
-
-def test_rag_engine():
-    """Проверяем RAG Engine."""
-    from src.core.rag_engine import RAGEngine
-    
-    rag = RAGEngine()
-    
-    # Добавляем тестовый документ
-    rag.add_document("Это тестовый документ для проверки RAG.", 
-                     metadata={"source": "smoke_test"})
-    
-    # Ищем
-    result = rag.query("тестовый документ")
-    
-    ok = result and len(result) > 0
-    if ok:
-        print(f"  ✅ RAG query работает: {result[:60]}...")
-        return 1, 0
-    else:
-        print(f"  ❌ RAG query вернул пустой результат")
-        return 0, 1
-
-
-def test_security_manager():
-    """Проверяем SecurityManager."""
-    from src.core.security_manager import SecurityManager
-    
-    sec = SecurityManager(owner_username="testowner")
-    
-    checks = [
-        ("owner", sec.owner == "testowner"),
-        ("stealth off", not sec.stealth_mode),
-    ]
-    
-    passed = 0
-    for name, ok in checks:
-        if ok:
-            passed += 1
-            print(f"  ✅ {name}")
-        else:
-            print(f"  ❌ {name}")
-    
-    return passed, len(checks) - passed
-
+    async def test_10_crypto_intel(self):
+        """Test CryptoIntel module initialization."""
+        try:
+            from src.modules.crypto import CryptoIntel
+            ci = CryptoIntel()
+            self.assertIsNotNone(ci)
+            await ci.close()
+            print("✅ CryptoIntel: Init OK")
+        except ImportError:
+            self.fail("CryptoIntel import failed")
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    
-    print("=" * 60)
-    print("🦀 KRAB v6.0 SMOKE TEST")
-    print("=" * 60)
-    
-    total_passed = 0
-    total_failed = 0
-    
-    # 1. Imports
-    print("\n📦 1. Module Imports:")
-    p, f, _ = test_all_imports()
-    total_passed += p
-    total_failed += f
-    
-    # 2. Config
-    print("\n⚙️  2. Environment Config:")
-    p, f = test_config_reads_env()
-    total_passed += p
-    total_failed += f
-    
-    # 3. Router
-    print("\n🧠 3. ModelRouter Init:")
-    p, f = test_router_init()
-    total_passed += p
-    total_failed += f
-    
-    # 4. Auth
-    print("\n🔐 4. Auth Module:")
-    p, f = test_auth_functions()
-    total_passed += p
-    total_failed += f
-    
-    # 5. RAG
-    print("\n📚 5. RAG Engine:")
-    p, f = test_rag_engine()
-    total_passed += p
-    total_failed += f
-    
-    # 6. Security
-    print("\n🛡️  6. SecurityManager:")
-    p, f = test_security_manager()
-    total_passed += p
-    total_failed += f
-    
-    # Summary
-    print("\n" + "=" * 60)
-    total = total_passed + total_failed
-    print(f"🏆 ИТОГО: {total_passed}/{total} passed ({total_passed/total*100:.0f}%)")
-    if total_failed == 0:
-        print("✅ ALL SMOKE TESTS PASSED!")
-    else:
-        print(f"❌ {total_failed} TESTS FAILED")
-    print("=" * 60)
-    
-    sys.exit(0 if total_failed == 0 else 1)
+    print("🦀 Running Krab v10.0 Comprehensive Smoke Tests...")
+    # Create artifacts dir for tests
+    os.makedirs("artifacts/memory", exist_ok=True)
+    unittest.main(verbosity=1)

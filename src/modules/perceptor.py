@@ -17,6 +17,7 @@ Perceptor Module (Eyes & Ears).
 import os
 import asyncio
 import logging
+import time
 from typing import Dict, Any
 from io import BytesIO
 from PIL import Image
@@ -28,6 +29,15 @@ register_heif_opener()
 
 logger = logging.getLogger(__name__)
 
+# Gemini SDK (New v1.0+)
+try:
+    from google import genai
+    from google.genai import types
+    _GENAI_AVAILABLE = True
+except ImportError:
+    _GENAI_AVAILABLE = False
+    genai = None
+
 class Perceptor:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -35,6 +45,9 @@ class Perceptor:
         self.whisper_model = config.get("WHISPER_MODEL", os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"))
         # Vision-модель из .env (убрали хардкод gemini-2.0-flash)
         self.vision_model = os.getenv("GEMINI_VISION_MODEL", "gemini-2.0-flash")
+        
+        self.gemini_key = config.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        
         logger.info(f"👂 Perceptor initialized. Audio: {self.whisper_model}, Vision: {self.vision_model}")
         
         # Warmup MLX
@@ -59,16 +72,16 @@ class Perceptor:
         try:
             logger.info(f"🎤 Transcribing: {file_path}")
             import mlx_whisper
-            import time
-
+            
             start_time = time.time()
             
-            # Используем модель из конфига/инита
-            # Промпт-подсказка для Whisper (улучшает пунктуацию и точность)
-            # Взято из KrabEar v4.7 (проверенная конфигурация)
+            # Промпт-подсказка для Whisper
             punctuation_prompt = "Привет, я транскрибирую этот текст с правильной пунктуацией, заглавными буквами и форматированием."
             
-            result = mlx_whisper.transcribe(
+            # Запускаем в executor, чтобы не блокировать event loop (MLX тяжелый)
+            # Хотя mlx_whisper может быть оптимизирован, лучше перестраховаться
+            result = await asyncio.to_thread(
+                mlx_whisper.transcribe,
                 file_path, 
                 path_or_hf_repo=self.whisper_model,
                 initial_prompt=punctuation_prompt,
@@ -101,26 +114,27 @@ class Perceptor:
                 img.save(converted_path, format="JPEG")
                 logger.info(f"Converted HEIC to JPG: {converted_path}")
 
-            # 2. Отправка в Роутер (Vision Request)
-            # Vision задачи лучше всего решает Cloud Gemini (Pro Vision) или LLaVA (Local)
-            # Передаем в router путь к картинке
-
-            # ВНИМАНИЕ: Здесь router должен уметь принимать image_path.
-            # Мы вызываем метод router.route_query с типом 'vision'
-            # (Этот тип нужно добавить в router, пока используем chat заглушку)
-
-            # Временная реализация через Gemini напрямую (так как Router в процессе доработки)
-            import google.generativeai as genai
-
-            if not router.gemini_key:
+            # 2. Vision Request via Gemini SDK
+            if not _GENAI_AVAILABLE:
+                return "Ошибка: Google GenAI SDK не установлен."
+                
+            api_key = router.gemini_key or self.gemini_key
+            if not api_key:
                 return "Ошибка: Нет ключа Gemini API."
 
-            genai.configure(api_key=router.gemini_key)
-            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
-
-            cookie_picture = Image.open(converted_path)
-            response = model.generate_content([prompt, cookie_picture])
-            return response.text
+            client = genai.Client(api_key=api_key)
+            
+            img = Image.open(converted_path)
+            
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.vision_model,
+                contents=[prompt, img]
+            )
+            
+            if response and response.text:
+                 return response.text
+            return "Не удалось проанализировать изображение (пустой ответ)."
 
         except Exception as e:
             logger.error(f"Vision error: {e}")
@@ -132,23 +146,25 @@ class Perceptor:
 
     async def analyze_visual(self, file_path: str, prompt: str) -> str:
         """
-        Универсальный анализ изображений (включая скриншоты) через Gemini 2.0 Flash.
+        Универсальный анализ изображений (включая скриншоты).
         """
         try:
-            import google.generativeai as genai
-            
-            # Получаем ключ из конфига
-            api_key = self.config.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+            if not _GENAI_AVAILABLE:
+                return "Ошибка: Google GenAI SDK не установлен."
+
+            api_key = self.gemini_key
             if not api_key:
                 return "Ошибка: Нет ключа Gemini API."
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
-
-            # Обработка картинки
+            client = genai.Client(api_key=api_key)
             img = Image.open(file_path)
-            response = await model.generate_content_async([prompt, img])
-            return response.text
+            
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.vision_model,
+                contents=[prompt, img]
+            )
+            return response.text if response else "Пустой ответ."
 
         except Exception as e:
             logger.error(f"Visual analysis error: {e}")
@@ -159,48 +175,115 @@ class Perceptor:
         Анализирует видео-сообщение (включая кружки) через Gemini 2.0 Flash.
         """
         try:
-            import google.generativeai as genai
-            import time
-            
-            api_key = router.gemini_key or os.getenv("GEMINI_API_KEY")
+            if not _GENAI_AVAILABLE:
+                return "Ошибка: Google GenAI SDK не установлен."
+
+            api_key = router.gemini_key or self.gemini_key
             if not api_key:
                 return "Ошибка: Нет ключа Gemini API для анализа видео."
 
-            genai.configure(api_key=api_key)
+            client = genai.Client(api_key=api_key)
             
             logger.info(f"🎞️ Uploading video to Gemini: {file_path}")
             
-            # Загружаем файл в Google AI Storage (рекомендуется для видео)
-            video_file = genai.upload_file(path=file_path)
+            # Загружаем файл
+            video_file = await asyncio.to_thread(
+                client.files.upload,
+                path=file_path
+            )
             
-            # Ждем обработки (видео требует времени на стороне Google)
-            while video_file.state.name == "PROCESSING":
-                await asyncio.sleep(2)  # Async sleep instead of time.sleep
-                video_file = genai.get_file(video_file.name)
-
-            if video_file.state.name == "FAILED":
-                raise Exception("Google Video Processing failed.")
+            # Ждем обработки
+            while True:
+                # Polling file status
+                # Using to_thread because client methods might be blocking
+                file_info = await asyncio.to_thread(client.files.get, name=video_file.name)
+                
+                # Check status (Assuming 'ACTIVE' or 'PROCESSING')
+                # In new SDK, state is an enum or string.
+                state = str(file_info.state)
+                
+                if "ACTIVE" in state:
+                    break
+                elif "FAILED" in state:
+                    raise Exception("Google Video Processing failed.")
+                
+                logger.info(f"Video processing... {state}")
+                await asyncio.sleep(2)
 
             logger.info(f"✅ Video processing complete: {video_file.name}")
             
-            model = genai.GenerativeModel(self.vision_model)  # Из .env вместо хардкода
-            response = await model.generate_content_async([prompt, video_file])
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.vision_model,
+                contents=[prompt, video_file]
+            )
             
-            # Удаляем файл из облака после анализа
-            genai.delete_file(video_file.name)
+            # Удаляем файл
+            await asyncio.to_thread(client.files.delete, name=video_file.name)
             
-            return response.text
+            return response.text if response else "Пустой ответ по видео."
 
         except Exception as e:
             logger.error(f"Video analysis error: {e}")
             return f"Не удалось посмотреть видео: {e}"
+
+    async def analyze_document(self, file_path: str, router, prompt: str) -> str:
+        """
+        Анализирует документ (PDF) через Gemini Native Document Understanding.
+        """
+        try:
+            if not _GENAI_AVAILABLE:
+                return "Ошибка: Google GenAI SDK не установлен."
+
+            api_key = router.gemini_key or self.gemini_key
+            if not api_key:
+                return "Ошибка: Нет ключа Gemini API для анализа документа."
+
+            client = genai.Client(api_key=api_key)
+            
+            logger.info(f"📄 Uploading document to Gemini: {file_path}")
+            
+            # Загружаем файл
+            doc_file = await asyncio.to_thread(
+                client.files.upload,
+                path=file_path
+            )
+            
+            # Ждем обработки
+            while True:
+                file_info = await asyncio.to_thread(client.files.get, name=doc_file.name)
+                state = str(file_info.state)
+                
+                if "ACTIVE" in state:
+                    break
+                elif "FAILED" in state:
+                    raise Exception("Google Document Processing failed.")
+                
+                logger.info(f"Document processing... {state}")
+                await asyncio.sleep(2)
+
+            logger.info(f"✅ Document processing complete: {doc_file.name}")
+            
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.vision_model,
+                contents=[prompt, doc_file]
+            )
+            
+            # Удаляем файл из облака
+            await asyncio.to_thread(client.files.delete, name=doc_file.name)
+            
+            return response.text if response else "Пустой ответ по документу."
+
+        except Exception as e:
+            logger.error(f"Document analysis error: {e}")
+            return f"Не удалось проанализировать документ: {e}"
 
     async def speak(self, text: str, voice: str = "Milena") -> str:
         """
         Генерирует голосовое сообщение (TTS) через macOS 'say' + ffmpeg.
         Возвращает путь к .ogg файлу.
         """
-        import asyncio
         import uuid
         
         file_id = str(uuid.uuid4())
@@ -239,7 +322,6 @@ class Perceptor:
             
             if proc_ffmpeg.returncode != 0:
                  logger.error(f"ffmpeg conversion failed: {stderr.decode().strip()}")
-                 # Don't return None yet, maybe AIFF is useful? No, Telegram needs OGG/MP3 for voice usually.
                  return None
 
             if os.path.exists(aiff_path):

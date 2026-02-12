@@ -52,10 +52,17 @@ class MCPManager:
         conf = self.configs[name]
         logger.info(f"🔌 Connecting to MCP server: {name}")
 
+        env = conf.get("env", {}).copy() if conf.get("env") else {}
+        # Подстановка переменных окружения
+        for k, v in env.items():
+            if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
+                env_var = v[2:-1]
+                env[k] = os.getenv(env_var, "")
+
         params = StdioServerParameters(
             command=conf["command"],
             args=conf.get("args", []),
-            env=conf.get("env")
+            env=env
         )
 
         try:

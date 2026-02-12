@@ -1,159 +1,120 @@
 # -*- coding: utf-8 -*-
 """
-Scheduling Handler — Обработчики планирования: напоминания, таймеры, Screen Awareness.
-
-Извлечён из main.py. Включает:
-- !remind: установка напоминаний с гибким парсингом (5m, 2h, 1d)
-- !timer: простой таймер
-- !see / !screen: скриншот экрана и AI-анализ
-- _parse_duration: утилита парсинга времени
+Scheduling Handler v1.0.
+Управляет напоминаниями и другими задачами по расписанию.
 """
-
-import re
-import asyncio
-from datetime import datetime, timedelta
 
 from pyrogram import filters
 from pyrogram.types import Message
+import dateparser
+from datetime import datetime, strftime, timedelta
+import logging
 
-from .auth import is_owner
+logger = logging.getLogger("SchedulingHandler")
 
-import structlog
-logger = structlog.get_logger(__name__)
+# Глобальный список активных задач для graceful shutdown (если необходимо)
+_active_tasks = []
 
-# Список активных задач-напоминаний (для graceful shutdown)
-_reminders: list[asyncio.Task] = []
-
-
-def _parse_duration(text: str) -> int:
-    """
-    Парсинг длительности из строки.
-    Форматы: 5m, 10min, 2h, 1d, 30s, 90 (секунды по умолчанию).
-    Возвращает количество секунд (0 если не распознано).
-    """
-    text = text.strip().lower()
-    match = re.match(r'^(\d+)\s*(s|sec|m|min|h|hour|d|day)?$', text)
-    if not match:
-        return 0
-
-    amount = int(match.group(1))
-    unit = match.group(2) or 's'
-
-    if unit in ('m', 'min'):
-        return amount * 60
-    elif unit in ('h', 'hour'):
-        return amount * 3600
-    elif unit in ('d', 'day'):
-        return amount * 86400
-    else:
-        return amount
-
+def get_active_reminders():
+    return _active_tasks
 
 def register_handlers(app, deps: dict):
-    """Регистрирует обработчики планирования."""
-    router = deps["router"]
-    security = deps["security"]
-    safe_handler = deps["safe_handler"]
+    """Регистрирует обработчики для работы с расписанием."""
+    scheduler_obj = deps.get("scheduler")
+    reminder_manager = deps.get("reminder_manager")
+    safe_handler = deps.get("safe_handler")
 
-    # --- !remind: Напоминания ---
     @app.on_message(filters.command("remind", prefixes="!"))
     @safe_handler
-    async def remind_command(client, message: Message):
-        """Напоминание: !remind 30m Позвонить врачу"""
+    async def remind_command(client: Message, message: Message):
+        """
+        Установка напоминания: !remind <время> <текст>
+        Пример: !remind через 5 минут купить хлеб
+        !remind в 18:00 созвон
+        """
+        if not reminder_manager:
+            await message.reply_text("❌ Менеджер напоминаний не инициализирован.")
+            return
+
         if len(message.command) < 3:
             await message.reply_text(
-                "⏰ **Использование:** `!remind <время> <текст>`\n"
-                "Примеры: `!remind 30m Обед`, `!remind 2h Встреча`, `!remind 1d Дедлайн`"
+                "⏰ **Как использовать:**\n`!remind <время> <текст>`\n\n"
+                "Примеры:\n"
+                "- `!remind через 10 минут выпить воды`\n"
+                "- `!remind завтра в 9:00 проверить почту`"
             )
             return
 
-        duration_str = message.command[1]
-        seconds = _parse_duration(duration_str)
-
-        if seconds <= 0:
-            await message.reply_text(
-                "❌ Не могу распознать время. Используй: `5m`, `2h`, `30s`, `1d`"
-            )
+        # Пытаемся распарсить время и текст
+        # Мы предполагаем, что время идет первым, но оно может состоять из нескольких слов (через 10 минут)
+        full_text = message.text.split(" ", 1)[1]
+        
+        # Интеллектуальный парсинг через dateparser (поддерживает русский)
+        # Мы будем пробовать разные префиксы текста как дату
+        words = full_text.split()
+        due_time = None
+        rem_text = ""
+        
+        for i in range(len(words), 0, -1):
+            time_part = " ".join(words[:i])
+            parsed = dateparser.parse(time_part, settings={'PREFER_DATES_FROM': 'future'})
+            if parsed:
+                # Проверяем, что время в будущем
+                if parsed < datetime.now():
+                    # Попробуем принудительно сдвинуть на завтра если это просто время (например "в 10:00")
+                    if parsed.time() and (datetime.now() - parsed).total_seconds() < 86400:
+                         parsed += timedelta(days=1)
+                
+                if parsed > datetime.now():
+                    due_time = parsed
+                    rem_text = " ".join(words[i:])
+                    break
+        
+        if not due_time:
+            await message.reply_text("❌ Не удалось распознать время. Попробуй: `через 5 минут`, `в 15:00`, `завтра в 10 утра`.")
             return
 
-        reminder_text = message.text.split(maxsplit=2)[2]
-        chat_id = message.chat.id
+        if not rem_text:
+            rem_text = "Без названия"
 
-        fire_time = datetime.now() + timedelta(seconds=seconds)
-
+        reminder_id = reminder_manager.add_reminder(message.chat.id, rem_text, due_time)
+        
+        time_str = due_time.strftime("%d.%m %H:%M:%S")
         await message.reply_text(
-            f"⏰ **Напоминание установлено!**\n"
-            f"📝 `{reminder_text}`\n"
-            f"🕐 Через {duration_str} (в {fire_time.strftime('%H:%M')})"
+            f"✅ **Напоминание установлено!**\n"
+            f"📅 Время: `{time_str}`\n"
+            f"📝 Текст: `{rem_text}`\n"
+            f"🆔 ID: `{reminder_id}`"
         )
 
-        async def _fire_reminder():
-            await asyncio.sleep(seconds)
-            await client.send_message(
-                chat_id,
-                f"🔔 **НАПОМИНАНИЕ:**\n\n{reminder_text}\n\n"
-                f"_Установлено {duration_str} назад_",
-            )
-
-        task = asyncio.create_task(_fire_reminder())
-        _reminders.append(task)
-
-    # --- !timer: Простой таймер ---
-    @app.on_message(filters.command("timer", prefixes="!"))
+    @app.on_message(filters.command("reminders", prefixes="!"))
     @safe_handler
-    async def timer_command(client, message: Message):
-        """Таймер: !timer 5m"""
+    async def list_reminders_command(client, message: Message):
+        """Список моих напоминаний."""
+        if not reminder_manager: return
+        
+        reminders = reminder_manager.get_list(message.chat.id)
+        if not reminders:
+            await message.reply_text("⏰ У тебя нет активных напоминаний.")
+            return
+            
+        text = "⏰ **Твои активные напоминания:**\n\n"
+        for i, r in enumerate(reminders, 1):
+            dt = datetime.fromisoformat(r["due_time"])
+            text += f"{i}. `{dt.strftime('%H:%M')}` — {r['text']} (ID: `{r['id']}`)\n"
+            
+        await message.reply_text(text)
+
+    @app.on_message(filters.command("rm_remind", prefixes="!"))
+    @safe_handler
+    async def remove_reminder_command(client, message: Message):
+        """Удалить напоминание: !rm_remind <id>"""
+        if not reminder_manager: return
+        
         if len(message.command) < 2:
-            await message.reply_text(
-                "⏱ **Использование:** `!timer <время>`\n"
-                "Примеры: `!timer 5m`, `!timer 30s`, `!timer 1h`"
-            )
+            await message.reply_text("🆔 Введи ID напоминания из списка `!reminders`.")
             return
-
-        duration_str = message.command[1]
-        seconds = _parse_duration(duration_str)
-
-        if seconds <= 0:
-            await message.reply_text("❌ Не могу распознать время.")
-            return
-
-        notification = await message.reply_text(
-            f"⏱ **Таймер запущен:** {duration_str}"
-        )
-
-        async def _fire_timer():
-            await asyncio.sleep(seconds)
-            await notification.reply(
-                f"🔔 **Таймер {duration_str} завершён!** ⏱✅"
-            )
-
-        task = asyncio.create_task(_fire_timer())
-        _reminders.append(task)
-
-    # --- !see: Screen Awareness ---
-    @app.on_message(filters.command("see", prefixes="!"))
-    async def see_command(client, message: Message):
-        """Screen Awareness: !see [вопрос]"""
-        if not security.is_owner(message):
-            return
-
-        query = (
-            " ".join(message.command[1:])
-            or "Опиши, что происходит на моем экране."
-        )
-        status_msg = await message.reply_text("👀 Смотрю на экран...")
-
-        try:
-            screen_catcher = deps.get("screen_catcher")
-            if screen_catcher:
-                report = await screen_catcher.analyze_screen(query)
-                await status_msg.edit_text(report)
-            else:
-                await status_msg.edit_text("❌ Screen Awareness не инициализирован.")
-        except Exception as e:
-            await status_msg.edit_text(f"❌ Ошибка зрения: {e}")
-
-
-def get_active_reminders() -> list[asyncio.Task]:
-    """Возвращает список активных задач (для graceful shutdown)."""
-    return _reminders
+            
+        rid = message.command[1]
+        reminder_manager.remove_reminder(rid)
+        await message.reply_text(f"🗑️ Напоминание `{rid}` удалено.")

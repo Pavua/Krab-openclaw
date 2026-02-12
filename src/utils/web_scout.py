@@ -14,14 +14,15 @@ class WebScout:
     def __init__(self, max_results: int = 5):
         self.max_results = max_results
 
-    async def search(self, query: int, region: str = "ru-ru") -> List[Dict]:
+    async def search(self, query: int, region: str = "ru-ru", max_results: int = None) -> List[Dict]:
         """Поиск в вебе."""
+        limit = max_results if max_results else self.max_results
         results = []
         try:
             with DDGS() as ddgs:
                 ddgs_gen = ddgs.text(query, region=region, safesearch='off', timelimit='d')
                 for i, r in enumerate(ddgs_gen):
-                    if i >= self.max_results:
+                    if i >= limit:
                         break
                     results.append({
                         "title": r.get('title'),
@@ -33,14 +34,15 @@ class WebScout:
             logger.error(f"❌ Search error: {e}")
             return []
 
-    async def search_news(self, query: str, region: str = "ru-ru") -> List[Dict]:
+    async def search_news(self, query: str, region: str = "ru-ru", max_results: int = None) -> List[Dict]:
         """Поиск свежих новостей."""
+        limit = max_results if max_results else self.max_results
         results = []
         try:
             with DDGS() as ddgs:
                 ddgs_gen = ddgs.news(query, region=region, safesearch='off', timelimit='d')
                 for i, r in enumerate(ddgs_gen):
-                    if i >= self.max_results:
+                    if i >= limit:
                         break
                     results.append({
                         "title": r.get('title'),

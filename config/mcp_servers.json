@@ -21,6 +21,25 @@
             "env": {
                 "BRAVE_API_KEY": ""
             }
+        },
+        "github": {
+            "command": "node",
+            "args": [
+                "/Users/pablito/Antigravity_AGENTS/Краб/mcp-servers/node_modules/@modelcontextprotocol/server-github/dist/index.js"
+            ],
+            "env": {
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+            }
+        },
+        "notion": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@notionhq/notion-mcp-server"
+            ],
+            "env": {
+                "NOTION_TOKEN": "${NOTION_TOKEN}"
+            }
         }
     }
 }

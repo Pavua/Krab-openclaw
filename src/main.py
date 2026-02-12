@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Krab v6.0 — Core Orchestrator (Entry Point)
+Krab v7.2 (Stable) — Core Orchestrator (Entry Point)
 
 Тонкий оркестратор. Вся логика обработчиков вынесена в src/handlers/.
 Этот файл отвечает только за:
@@ -39,10 +39,14 @@ from src.core.persona_manager import PersonaManager
 from src.modules.perceptor import Perceptor
 from src.modules.screen_catcher import ScreenCatcher
 from src.utils.black_box import BlackBox
-from src.utils.web_scout import WebScout
+# from src.utils.web_scout import WebScout # Deprecated
 from src.core.scheduler import KrabScheduler
 from src.core.agent_manager import AgentWorkflow
 from src.core.tool_handler import ToolHandler
+from src.core.summary_manager import SummaryManager
+from src.core.image_manager import ImageManager
+from src.modules.reminder_pro import ReminderManager
+from src.core.openclaw_client import OpenClawClient # Phase 4.1
 
 # Handler-модули (новая модульная система)
 from src.handlers import register_all_handlers
@@ -79,25 +83,32 @@ screen_catcher = ScreenCatcher(perceptor)
 # Черный Ящик (SQLite логирование)
 black_box = BlackBox()
 
-# Разведчик (Web Search)
-scout = WebScout()
-
-# Безопасность (роли, stealth mode)
-security = SecurityManager(owner_username=os.getenv("OWNER_USERNAME", "p0lrd"))
+# Разведчик (Web Search) - Deprecated
+# scout = WebScout()
 
 # Конфигурация с hot-reload (YAML)
 cfg = ConfigManager()
+
+# Безопасность (роли, stealth mode)
+security = SecurityManager(owner_username=os.getenv("OWNER_USERNAME", "p0lrd"), config=cfg)
 
 # Персоны (личности бота)
 persona_manager = PersonaManager(cfg, black_box)
 router.persona = persona_manager
 
-# Агентный воркфлоу (Phase 6)
-agent = AgentWorkflow(router, memory, security)
+# Browser Agent (Phase 9.2)
+try:
+    from src.modules.browser import BrowserAgent
+    browser_agent = BrowserAgent(headless=True)
+except ImportError:
+    browser_agent = None
 
-# Инструменты (shell, RAG, MCP)
-tools = ToolHandler(router, router.rag, scout, mcp=mcp_manager)
+# Инструменты (shell, RAG, MCP, Browser)
+tools = ToolHandler(router, router.rag, openclaw_client, mcp=mcp_manager, browser_agent=browser_agent)
 router.tools = tools
+
+# Агентный воркфлоу (Phase 8.1 ReAct)
+agent = AgentWorkflow(router, memory, security, tools=tools)
 
 # Rate Limiter
 rate_limiter = RateLimiter(
@@ -108,15 +119,54 @@ rate_limiter = RateLimiter(
 # Memory Archiver (если доступен)
 try:
     from src.core.memory_archiver import MemoryArchiver
-    archiver = MemoryArchiver(memory, router)
+    archiver = MemoryArchiver(router, memory)
 except ImportError:
     archiver = None
 
-# Планировщик (будет инициализирован в main())
-scheduler = None
+# Summary Manager (для сжатия контекста)
+summarizer = SummaryManager(router, memory, min_messages=cfg.get("ai.summary_threshold", 40))
+
+# Image Manager (генерация картинок)
+image_gen = ImageManager(cfg.get_all())
+
+# Crypto Intel (Phase 9.4)
+try:
+    from src.modules.crypto import CryptoIntel
+    crypto_intel = CryptoIntel()
+except ImportError:
+    crypto_intel = None
+
+# Email Manager (Phase 9.3)
+try:
+    from src.modules.email_manager import EmailManager
+    email_manager = EmailManager(os.environ)
+except ImportError:
+    email_manager = None
+
+# OpenClaw Client (Phase 4.1)
+openclaw_client = OpenClawClient(
+    base_url=os.getenv("OPENCLAW_BASE_URL", "http://localhost:18789"),
+    api_key=os.getenv("OPENCLAW_API_KEY")
+)
+
+# Web App (Phase 15)
+from src.modules.web_app import WebApp
+web_app = None
 
 # === PYROGRAM CLIENT ===
 app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
+
+# Plugin Manager (Phase 13)
+from src.core.plugin_manager import PluginManager
+plugin_manager = PluginManager()
+
+# Task Queue (Фоновые задачи)
+from src.core.task_queue import TaskQueue
+task_queue = TaskQueue(app)
+
+# Планировщик (будет инициализирован в main())
+scheduler = None
+reminder_manager = None
 
 
 # === DEBUG LOGGER (group=-1, срабатывает первым на каждое сообщение) ===
@@ -193,19 +243,31 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 # чтобы их было легко тестировать и переиспользовать.
 _deps = {
     "router": router,
+    "pyrogram": Client,  # fixed: pyrogram module is usually imported as 'from pyrogram import Client' or similar, but here Client is what's used
     "memory": memory,
     "perceptor": perceptor,
     "screen_catcher": screen_catcher,
     "black_box": black_box,
-    "scout": scout,
+    # "scout": scout,
     "security": security,
     "config_manager": cfg,
     "persona_manager": persona_manager,
     "agent": agent,
     "tools": tools,
     "rate_limiter": rate_limiter,
+    "summarizer": summarizer,
+    "image_gen": image_gen,
     "safe_handler": safe_handler,
     "get_last_logs": get_last_logs,
+    "task_queue": task_queue,
+    "browser_agent": browser_agent,
+    "crypto_intel": crypto_intel,
+    "email_manager": email_manager,
+    "plugin_manager": plugin_manager,
+    "web_app": web_app,
+    "reminder_manager": None, # Will be set in main()
+    "scheduler": None, # Will be set in main()
+    "openclaw_client": openclaw_client,
 }
 
 # Регистрируем все обработчики из src/handlers/
@@ -218,12 +280,17 @@ async def main():
     """Точка входа: запуск клиента, MCP, планировщика."""
     global scheduler
 
-    logger.info("🦀 Starting Krab v6.0 (Modular Architecture)...")
+    logger.info("🦀 Starting Krab v7.2 (Stable)...")
     await app.start()
 
     # MCP Initialization
     logger.info("🔌 Initializing MCP Servers...")
     await mcp_manager.connect_all()
+
+    # Инициализация WebApp (Phase 15)
+    web_app = WebApp(_deps, port=cfg.get("WEB_PORT", 8080))
+    await web_app.start()
+    _deps["web_app"] = web_app
 
     # Проверка роутера
     await router.check_local_health()
@@ -232,7 +299,15 @@ async def main():
 
     # Планировщик
     scheduler = KrabScheduler(app, router, black_box, archiver=archiver)
+    reminder_manager = ReminderManager(scheduler)
     scheduler.start()
+    
+    _deps["scheduler"] = scheduler
+    _deps["reminder_manager"] = reminder_manager
+
+    # 10. Загрузка плагинов (Phase 13)
+    await plugin_manager.load_all(app, _deps)
+    logger.info("🧩 All plugins from plugins/ loaded")
 
     # Graceful shutdown по SIGTERM/SIGINT
     def handle_signal(sig, frame):
@@ -251,6 +326,19 @@ async def main():
             task.cancel()
 
         await mcp_manager.shutdown()
+        
+        if browser_agent:
+            await browser_agent.stop()
+            
+        if crypto_intel:
+            await crypto_intel.close()
+        
+        if email_manager:
+            # EmailManager uses blocking clients but we close the httpx client if we added one 
+            # (In my implementation I didn't add a close for smtp/imap as they are context managed 
+            # or closed immediately, but it's good practice)
+            pass
+            
         await app.stop()
         logger.info("✅ Krab stopped cleanly.")
 
@@ -259,10 +347,10 @@ async def main():
         owner = os.getenv("OWNER_USERNAME", "").replace("@", "").strip()
         # Отправляем в Saved Messages (самому себе), а не по хардкоду
         await app.send_message("me", (
-            "🦀 **Krab v6.0 Modular Architecture Online.**\n"
+            "🦀 **Krab v7.2 (Stable) Modular Architecture Online.**\n"
             f"👤 Owner: @{owner}\n"
             "📦 Handlers: 9 modules loaded\n"
-            "🧠 AI Router: Local + Cloud\n"
+            "🧠 AI Router: Cloud + Local Fallback\n"
             "🔌 MCP Singularity: Active\n"
             "👀 Screen Awareness: Ready (!see)\n"
             "🗣️ Neural Voice: Ready (!say)\n"

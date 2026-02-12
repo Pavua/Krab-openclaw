@@ -170,6 +170,30 @@ class KrabScheduler:
         except Exception as e:
             logger.warning(f"Health check error: {e}")
 
+    async def check_ai_health(self):
+        """Проверка работоспособности ИИ и авто-восстановление."""
+        logger.info("🩺 AI Health Watchdog Start")
+        
+        # 1. Проверка локального ИИ
+        await self.router.check_local_health()
+        if not self.router.is_local_available:
+            logger.warning("🚑 Local AI offline. Attempting health refresh...")
+            # Можно добавить логику рестарта LM Studio через shell если нужно, 
+            # но пока просто логируем и переключаем в cloud mode
+            self.router.set_force_mode("cloud")
+        
+        # 2. Проверка Gemini
+        try:
+            test_resp = await self.router.route_query("ping", task_type='chat')
+            if not test_resp:
+                raise Exception("Empty response from AI")
+            logger.info("✅ AI Pipeline: Functional")
+        except Exception as e:
+            logger.error(f"🚨 AI Pipeline FAILURE: {e}")
+            owner_id = await self._resolve_owner_id()
+            if owner_id:
+                await self.client.send_message(owner_id, f"🚨 **AI Pipeline Failure!**\nОшибка: {e}\nБот перешел в ограниченный режим.")
+
     def start(self):
         """Запуск всех периодических задач."""
         # Ежедневный отчет в 09:00
@@ -209,6 +233,14 @@ class KrabScheduler:
             id='heartbeat'
         )
         
+        # AI Health Watchdog — каждые 30 минут
+        self.scheduler.add_job(
+            self.check_ai_health,
+            'interval',
+            minutes=30,
+            id='ai_watchdog'
+        )
+        
         # Infinite Memory Archival — каждую ночь в 03:30
         self.scheduler.add_job(
             self.run_archival,
@@ -217,7 +249,7 @@ class KrabScheduler:
         )
         
         self.scheduler.start()
-        logger.info("✅ Krab Scheduler v2.0 Started (5 jobs)")
+        logger.info("✅ Krab Scheduler v2.1 Started (6 jobs)")
 
     def shutdown(self):
         self.scheduler.shutdown()

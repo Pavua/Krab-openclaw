@@ -21,8 +21,10 @@ class SwarmTask:
         self.error = None
 
 class SwarmOrchestrator:
-    def __init__(self, tool_handler):
+    def __init__(self, tool_handler, router):
         self.tools = tool_handler
+        self.router = router
+        # PersonaManager is available via self.router.persona (set in main.py)
 
     async def execute_parallel(self, tasks: List[SwarmTask]) -> Dict[str, Any]:
         """
@@ -50,17 +52,41 @@ class SwarmOrchestrator:
             
         return results
 
-    async def autonomous_decision(self, query: str) -> str:
+    async def consilium_reasoning(self, query: str) -> str:
         """
-        Принимает решение о запуске "Роя" на основе запроса.
-        Если запрос комплексный (например, "найди в почте и поищи в гугле"), 
-        оркестратор запускает несколько инструментов сразу.
+        [PHASE 4.1] Consilium Mode: Multi-agent debate.
+        1. Architect: Designs solution.
+        2. Coder/Expert: Implements.
+        3. Critic: Checks for flaws.
         """
-        # (v1.0) Упрощенный мапинг — в будущем заменить на LLM-планировщик
-        tasks_to_run = []
-        lower_query = query.lower()
+        logger.info("🏛️ Entering Consilium Mode", query=query[:50])
         
-        # Анализ на параллельность
+        # Step 1: Architect Plan
+        architect_prompt = f"{self.router.persona.get_role_prompt('architect')}\n\nЗАДАЧА: {query}\n\nРазработай верхнеуровневый план решения."
+        plan = await self.router.route_query(architect_prompt, task_type='reasoning')
+        
+        # Step 2: Expert Implementation
+        expert_prompt = f"{self.router.persona.get_role_prompt('coder')}\n\nПЛАН: {plan}\n\nРеализуй решение согласно плану."
+        solution = await self.router.route_query(expert_prompt, task_type='chat')
+        
+        # Step 3: Critic Review
+        critic_prompt = f"{self.router.persona.get_role_prompt('critic')}\n\nРЕШЕНИЕ: {solution}\n\nНайди ошибки или предложи улучшения."
+        feedback = await self.router.route_query(critic_prompt, task_type='reasoning')
+        
+        # Final Consolidation
+        final_prompt = f"### ARCHITECT PLAN:\n{plan}\n\n### EXPERT SOLUTION:\n{solution}\n\n### CRITIC FEEDBACK:\n{feedback}\n\n### TASK:\nНа основе дискуссии выше, выдай финальный идеальный результат."
+        final_result = await self.router.route_query(final_prompt, task_type='chat')
+        
+        return f"🌟 **Consilium Result:**\n\n{final_result}\n\n--- \n🏛️ *Agents involved: Architect, Coder, Critic*"
+
+    async def autonomous_decision(self, query: str) -> str:
+        # ... (rest of the code same or improved)
+        lower_query = query.lower()
+        if "подумай глубоко" in lower_query or "консилиум" in lower_query:
+            return await self.consilium_reasoning(query)
+        
+        tasks_to_run = []
+        # ... existing logic ...
         if "поищи" in lower_query or "найди" in lower_query:
              tasks_to_run.append(SwarmTask("WebSearch", self.tools.scout.search, query))
              
@@ -72,11 +98,10 @@ class SwarmOrchestrator:
                 tasks_to_run.append(SwarmTask("Filesystem", self.tools.call_mcp_tool, "filesystem", "list_directory", {"path": "."}))
 
         if not tasks_to_run:
-            return await self.tools.execute_tool_chain(query)
+            return None
 
         results = await self.execute_parallel(tasks_to_run)
         
-        # Форматируем общий ответ
         formatted = []
         for name, res in results.items():
             if name == "WebSearch":
@@ -84,3 +109,4 @@ class SwarmOrchestrator:
             formatted.append(f"### [SWARM] {name}:\n{res}")
             
         return "\n\n".join(formatted)
+

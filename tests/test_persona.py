@@ -10,7 +10,7 @@ def test_persona_switching():
     manager = PersonaManager(cfg, bb)
     
     # Дефолтная роль
-    assert "classic" in manager.get_current_prompt().lower() or "krab v3.0" in manager.get_current_prompt().lower()
+    assert "krab v7.5" in manager.get_current_prompt().lower()
     
     # Переключение на пирата
     success = manager.set_persona("pirate")
@@ -19,6 +19,16 @@ def test_persona_switching():
     
     # Проверка сохранения в конфиг
     cfg.set.assert_called_with("personality.active_persona", "pirate")
+
+def test_add_custom_persona():
+    cfg = MagicMock()
+    bb = MagicMock()
+    manager = PersonaManager(cfg, bb)
+    
+    manager.add_custom_persona("test_id", "Test Name", "Test Prompt", "Test Desc")
+    assert "test_id" in manager.personas
+    assert manager.personas["test_id"]["name"] == "Test Name"
+    assert manager.personas["test_id"]["prompt"] == "Test Prompt"
 
 def test_persona_invalid():
     manager = PersonaManager(MagicMock(), MagicMock())
