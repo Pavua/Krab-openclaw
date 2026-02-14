@@ -1,0 +1,23 @@
+{
+  "project": "Krab Ecosystem",
+  "version": "7.2",
+  "last_sync": "Thu Feb 12 21:16:58 CET 2026",
+  "boundaries": {
+    "Krab (Bot)": {
+      "path": "Краб/",
+      "owner": "Senior Autonomous Architect (Antigravity)",
+      "status": "Production"
+    },
+    "Voice Gateway": {
+      "path": "Krab Voice Gateway/",
+      "owner": "Antigravity (Hardening Lead)",
+      "status": "Hardened"
+    },
+    "Krab Ear": {
+      "path": "Krab Ear/",
+      "owner": "Codex / Antigravity Hybrid",
+      "status": "BETA"
+    }
+  },
+  "conflicts": "None detected by run_conflict_defense.command"
+}

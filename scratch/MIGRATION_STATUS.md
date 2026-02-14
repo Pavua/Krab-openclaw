@@ -5,7 +5,7 @@
 ## Что было извлечено:
 1. **KrabEar/core/engine.py** → Perceptor (MLX Whisper + TTS)
    - initial_prompt для точности транскрипции ✅
-   - language="ru", temperature=0.0 ✅  
+   - language="ru", temperature=0.0 ✅
    - TTS через macOS `say` ✅
 
 2. **nexus/IMPROVEMENTS_RU.md** → Идеи для Roadmap Phase 4

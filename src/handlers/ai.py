@@ -16,15 +16,264 @@ import sys
 import time
 import asyncio
 import traceback
+import shlex
 from io import StringIO
 
 from pyrogram import filters, enums
 from pyrogram.types import Message
 
-from .auth import is_owner, is_authorized, get_owner, get_allowed_users
+from .auth import is_owner, is_authorized, is_superuser
 
 import structlog
 logger = structlog.get_logger(__name__)
+
+async def _process_auto_reply(client, message: Message, deps: dict):
+    """
+    Умный автоответчик v2 (Omni-channel).
+    Вынесен из register_handlers для тестируемости.
+    """
+    security = deps["security"]
+    rate_limiter = deps["rate_limiter"]
+    memory = deps["memory"]
+    router = deps["router"]
+    config_manager = deps.get("config_manager")
+    perceptor = deps.get("perceptor")
+    summarizer = deps.get("summarizer")
+    
+    sender = message.from_user.username if message.from_user else "Unknown"
+
+    # 1. Проверка через SecurityManager
+    # В ЛС больше НЕ требуем explicit authorization (кроме заблокированных)
+    role = security.get_user_role(sender, message.from_user.id if message.from_user else 0)
+    
+    if role == "blocked":
+            logger.info(f"⛔ Blocked user {sender} tried to interact.")
+            return
+
+    if role == "stealth_restricted":
+        logger.info(f"🕶️ Stealth Mode: Ignored message from @{sender}")
+        return
+
+    # 2. Логика срабатывания (Smart Reply v2.0)
+    is_private = message.chat.type == enums.ChatType.PRIVATE
+    is_reply_to_me = (
+        message.reply_to_message and 
+        message.reply_to_message.from_user and 
+        message.reply_to_message.from_user.is_self
+    )
+    
+    me = await client.get_me()
+    is_mentioned = False
+    text_content = message.text or message.caption or ""
+    
+    if text_content:
+        text_lower = text_content.lower()
+        is_mentioned = (
+            "краб" in text_lower or 
+            (me.username and f"@{me.username.lower()}" in text_lower)
+        )
+
+    # Config: Allow group replies without mention?
+    allow_group_replies = True
+    if config_manager:
+        allow_group_replies = config_manager.get("group_chat.allow_replies", True)
+
+    # Условие ответа:
+    # 1. ЛС (Private) -> Всегда отвечаем (если не заблокирован)
+    # 2. Группы -> Если упомянут ИЛИ (ответ на сообщение бота И разрешено в конфиге) ИЛИ (авторизован - owner/admin)
+    should_reply = False
+    if is_private:
+        should_reply = True
+    elif is_mentioned:
+        should_reply = True
+    elif is_reply_to_me and allow_group_replies:
+        should_reply = True
+
+    if not should_reply:
+        # В группах просто сохраняем в историю без ответа для контекста (Passive Learning)
+        logger.debug(f"🤫 Message from @{sender} in {message.chat.type} ignored (no mention/reply).")
+        memory.save_message(message.chat.id, {"user": sender, "text": text_content})
+        return
+
+    # Антиспам: игнорируем слишком короткие текстовые сообщения в группах, если это не реплай и не медиа
+    if not is_private and len(text_content) < 2 and not is_reply_to_me and not message.photo and not message.voice:
+        logger.debug(f"🔇 Anti-spam: Ignored too short message from @{sender}")
+        return
+
+    # Rate Limiting
+    user_id = message.from_user.id if message.from_user else 0
+    if not rate_limiter.is_allowed(user_id):
+        logger.warning(f"🚫 Rate limited: @{sender} ({user_id})")
+        return
+
+    await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
+
+    # 2. Обработка мультимедиа (Vision / Voice)
+    visual_context = ""
+    transcribed_text = ""
+    is_voice_response_needed = False
+    temp_files = []
+
+    try:
+        # --- PHOTO (Vision) ---
+        if message.photo:
+            if not perceptor:
+                await message.reply_text("❌ Vision module (Perceptor) недоступен.")
+                return
+
+            await client.send_chat_action(message.chat.id, action=enums.ChatAction.UPLOAD_PHOTO)
+            notif = await message.reply_text("👁️ **Смотрю...**")
+            
+            # Скачиваем фото (in-memory or temp file)
+            # Pyrogram method download() returns path
+            photo_path = await message.download()
+            temp_files.append(photo_path)
+            
+            # Анализируем через Perceptor (Gemini Vision)
+            await notif.edit_text("🧠 **Анализирую изображение через Vision Engine...**")
+            vision_result = await perceptor.analyze_image(photo_path, router, prompt="Опиши это изображение подробно на русском языке.")
+            
+            if vision_result and not vision_result.startswith("Ошибка"):
+                visual_context = f"[VISION ANALYSIS]: User sent a photo. Description: {vision_result}"
+                await notif.edit_text("📝 **Формирую ответ...**")
+                await asyncio.sleep(0.5) # Маленькая пауза для плавности
+                await notif.delete()
+            else:
+                await notif.edit_text(f"❌ Не удалось распознать изображение: {vision_result}")
+                visual_context = "[VISION ERROR]: Failed to analyze photo."
+
+        # --- VOICE (STT) ---
+        elif message.voice:
+            if not perceptor:
+                await message.reply_text("❌ Voice module (Perceptor) недоступен.")
+                return
+
+            await client.send_chat_action(message.chat.id, action=enums.ChatAction.RECORD_AUDIO)
+            notif = await message.reply_text("👂 **Слушаю...**")
+            
+            voice_path = await message.download()
+            temp_files.append(voice_path)
+            
+            # Транскрибация (Whisper via Perceptor)
+            transcribed_text = await perceptor.transcribe(voice_path, router)
+            
+            if transcribed_text and not transcribed_text.startswith("Ошибка"):
+                is_voice_response_needed = True # Reply with voice if spoken to
+                await notif.delete()
+            else:
+                await notif.edit_text("❌ Не удалось распознать речь.")
+                return
+
+    except Exception as e:
+        logger.error(f"Media processing error: {e}")
+        await message.reply_text(f"⚠️ Ошибка обработки медиа: {e}")
+    finally:
+        # Cleanup temp files
+        for p in temp_files:
+            try:
+                if os.path.exists(p): os.remove(p)
+            except: pass
+
+    # Формируем итоговый промпт
+    final_prompt = text_content
+    if transcribed_text:
+            final_prompt = f"{transcribed_text} (Voice Input)"
+    
+    if visual_context:
+        final_prompt = f"{visual_context}\n\nUser Says: {final_prompt}"
+
+    # 3. Синхронизируем историю
+    synced = await memory.sync_telegram_history(client, message.chat.id, limit=30)
+    
+    # 4. Сохраняем текущее (обогащенное) сообщение
+    memory.save_message(message.chat.id, {"user": sender, "text": final_prompt})
+    
+    if summarizer:
+        asyncio.create_task(summarizer.auto_summarize(message.chat.id))
+
+    # 5. Маршрутизация
+    context = memory.get_recent_context(message.chat.id, limit=12)
+    
+    reply_msg = await message.reply_text("🤔 **Думаю...**")
+    
+    full_response = ""
+    last_update = 0
+    
+    async def run_streaming():
+        nonlocal full_response, last_update
+        async for part in router.route_query_stream(
+            prompt=final_prompt,
+            task_type="chat",
+            context=context,
+            chat_type=message.chat.type.name.lower(),
+            is_owner=is_owner(message)
+        ):
+            full_response = part
+            curr_t = time.time()
+            if curr_t - last_update > 1.5:
+                try:
+                    # Используем message.chat.id для редактирования
+                    await reply_msg.edit_text(full_response + " ▌")
+                    last_update = curr_t
+                except Exception: pass
+
+    try:
+        # Защитный таймаут 300 секунд
+        await asyncio.wait_for(run_streaming(), timeout=300)
+    except asyncio.TimeoutError:
+        logger.error("Auto-reply timeout reached (300s)")
+        await reply_msg.edit_text("⏳ Превышено время ожидания ответа (300с). Попробуй еще раз.")
+        full_response = "Error: Timeout"
+    except Exception as e:
+        logger.error(f"Auto-reply stream failed: {e}")
+        await reply_msg.edit_text(f"❌ Ошибка: {e}")
+        full_response = f"Error: {e}"
+
+    if full_response:
+        # Логируем размер и время (последнее берется из router логов обычно)
+        logger.info(f"Final AI response ready. Length: {len(full_response)} chars.")
+        
+        # Убираем лишние теги для текста в Telegram, если они там остались
+        clean_display_text = full_response
+        
+        # Разделение на части по 4000 символов (лимит Telegram ~4096)
+        MAX_LEN = 4000
+        if len(clean_display_text) > MAX_LEN:
+            chunks = [clean_display_text[i:i+MAX_LEN] for i in range(0, len(clean_display_text), MAX_LEN)]
+            await reply_msg.edit_text(chunks[0])
+            for chunk in chunks[1:]:
+                await message.reply_text(chunk)
+        else:
+            await reply_msg.edit_text(clean_display_text)
+        
+        # --- TTS Response (Voice Mode) ---
+        if is_voice_response_needed and perceptor:
+            # Фильтруем технические отказы и ошибки, чтобы не озвучивать "Извини, я не могу..."
+            error_keywords = ["извини", "не могу", "ошибка", "error", "failed", "не удалось"]
+            clean_lower = full_response.lower()
+            is_error_response = any(kw in clean_lower for kw in error_keywords) and len(full_response) < 100
+
+            if not is_error_response:
+                await client.send_chat_action(message.chat.id, action=enums.ChatAction.RECORD_AUDIO)
+                # Generate speech
+                tts_file = await perceptor.speak(full_response)
+                
+                if tts_file and os.path.exists(tts_file):
+                    await message.reply_voice(tts_file, caption="🗣️ **AI Voice Reply**")
+                    # Clean up TTS file
+                    try:
+                        os.remove(tts_file)
+                    except: pass
+            else:
+                logger.info("🚫 TTS skipped: response looks like an error or refusal.")
+    else:
+        await reply_msg.edit_text("❌ Извини, не удалось сформулировать ответ.")
+
+    # 6. Сохраняем ответ
+    memory.save_message(
+        message.chat.id, {"role": "assistant", "text": full_response}
+    )
+
 
 
 def register_handlers(app, deps: dict):
@@ -36,29 +285,92 @@ def register_handlers(app, deps: dict):
     rate_limiter = deps["rate_limiter"]
     safe_handler = deps["safe_handler"]
 
+    def _extract_prompt_and_confirm_flag(message_text: str) -> tuple[str, bool]:
+        """
+        Разбирает команду и выделяет:
+        - пользовательский prompt,
+        - флаг подтверждения дорогого прогона (`--confirm-expensive` / `--confirm` / `confirm`).
+        """
+        raw = message_text or ""
+        try:
+            argv = shlex.split(raw)
+        except ValueError:
+            argv = raw.split()
+
+        if len(argv) < 2:
+            return "", False
+
+        confirm_expensive = False
+        payload_tokens: list[str] = []
+        for token in argv[1:]:
+            normalized = token.strip().lower()
+            if normalized in {"--confirm-expensive", "--confirm", "confirm"}:
+                confirm_expensive = True
+                continue
+            payload_tokens.append(token)
+
+        prompt = " ".join(payload_tokens).strip()
+        return prompt, confirm_expensive
+
+    async def _danger_audit(message: Message, action: str, status: str, details: str = ""):
+        """Логирует опасные действия в Saved Messages и владельцу для аудита."""
+        sender = message.from_user.username if message.from_user else "unknown"
+        chat_title = message.chat.title or "private"
+        chat_id = message.chat.id
+        payload = (
+            f"🛡️ **Danger Audit**\n"
+            f"- action: `{action}`\n"
+            f"- status: `{status}`\n"
+            f"- sender: `@{sender}`\n"
+            f"- chat: `{chat_title}` (`{chat_id}`)\n"
+        )
+        if details:
+            payload += f"- details: `{details[:800]}`\n"
+        try:
+            await app.send_message("me", payload)
+        except Exception:
+            pass
+        try:
+            await app.send_message("@p0lrd", payload)
+        except Exception:
+            pass
+
     # --- !think: Reasoning Mode ---
     @app.on_message(filters.command("think", prefixes="!"))
     @safe_handler
     async def think_command(client, message: Message):
         """Reasoning Mode: !think <запрос>"""
-        if len(message.command) < 2:
+        prompt, confirm_expensive = _extract_prompt_and_confirm_flag(message.text or "")
+        if not prompt:
             await message.reply_text(
-                "🧠 О чем мне подумать? `!think Как работает квантовый компьютер?`"
+                "🧠 О чем мне подумать? `!think Как работает квантовый компьютер?`\n"
+                "Для критичных задач: добавь `--confirm-expensive`."
             )
             return
 
-        prompt = message.text.split(" ", 1)[1]
         notification = await message.reply_text("🧠 **Размышляю...** (Reasoning Mode)")
 
         context = memory.get_recent_context(message.chat.id, limit=5)
 
-        response = await router.route_query(
-            prompt=prompt,
-            task_type="reasoning",
-            context=context,
-            chat_type=message.chat.type.name.lower(),
-            is_owner=is_owner(message)
-        )
+        try:
+            response = await asyncio.wait_for(
+                router.route_query(
+                    prompt=prompt,
+                    task_type="reasoning",
+                    context=context,
+                    chat_type=message.chat.type.name.lower(),
+                    is_owner=is_owner(message),
+                    confirm_expensive=confirm_expensive,
+                ),
+                timeout=180 # Для reasoning даем больше времени
+            )
+            await notification.edit_text(response)
+        except asyncio.TimeoutError:
+            response = "⏳ Размышление заняло слишком много времени (более 3 мин). Попробуй упростить запрос."
+            await notification.edit_text(response)
+        except Exception as e:
+            response = f"❌ Ошибка размышления: {e}"
+            await notification.edit_text(response)
 
         await notification.edit_text(response)
         memory.save_message(message.chat.id, {"role": "assistant", "text": response})
@@ -73,14 +385,29 @@ def register_handlers(app, deps: dict):
         ):
             return
 
-        if len(message.command) < 2:
+        prompt, confirm_expensive = _extract_prompt_and_confirm_flag(message.text or "")
+        if not prompt:
             await message.reply_text(
                 "🧠 Опиши сложную задачу: "
                 "`!smart Разработай план переезда в другую страну`"
             )
             return
 
-        prompt = message.text.split(" ", 1)[1]
+        # Confirm-step для потенциально дорогих критичных сценариев.
+        require_confirm = bool(getattr(router, "require_confirm_expensive", False))
+        profile = (
+            router.classify_task_profile(prompt, "reasoning")
+            if hasattr(router, "classify_task_profile")
+            else "chat"
+        )
+        is_critical = profile in {"security", "infra", "review"}
+        if require_confirm and is_critical and not confirm_expensive:
+            await message.reply_text(
+                "⚠️ Для критичной задачи нужен confirm-step.\n"
+                "Повтори с `!smart --confirm-expensive <задача>`."
+            )
+            return
+
         notification = await message.reply_text("🕵️ **Agent:** Инициализирую воркфлоу...")
 
         result = await agent.solve_complex_task(prompt, message.chat.id)
@@ -143,13 +470,13 @@ def register_handlers(app, deps: dict):
     @safe_handler
     async def code_command(client, message: Message):
         """Генерация кода: !code <описание>"""
-        if len(message.command) < 2:
+        prompt, confirm_expensive = _extract_prompt_and_confirm_flag(message.text or "")
+        if not prompt:
             await message.reply_text(
                 "💻 Опиши задачу: `!code Напиши FastAPI сервер с эндпоинтом /health`"
             )
             return
 
-        prompt = message.text.split(" ", 1)[1]
         notification = await message.reply_text("💻 **Генерирую код...**")
 
         code_prompt = (
@@ -162,7 +489,8 @@ def register_handlers(app, deps: dict):
             prompt=code_prompt,
             task_type="coding",
             chat_type=message.chat.type.name.lower(),
-            is_owner=is_owner(message)
+            is_owner=is_owner(message),
+            confirm_expensive=confirm_expensive,
         )
 
         await notification.edit_text(response)
@@ -173,6 +501,7 @@ def register_handlers(app, deps: dict):
     async def learn_command(client, message: Message):
         """Обучение: !learn <запрос или файл или ссылка>"""
         browser_agent = deps.get("browser_agent")
+        openclaw = deps.get("openclaw_client")
         
         # 1. Если есть файл
         if message.document:
@@ -214,23 +543,36 @@ def register_handlers(app, deps: dict):
         # 2. Если есть ссылка
         if len(message.command) > 1 and message.command[1].startswith('http'):
             url = message.command[1]
-            if not browser_agent:
-                await message.reply_text("❌ Browser Agent не инициализирован.")
-                return
-            
             notif = await message.reply_text(f"🌐 Изучаю ссылку: `{url}`...")
-            res = await browser_agent.browse(url)
-            
-            if "error" in res:
-                await notif.edit_text(f"❌ Ошибка браузера: {res['error']}")
+            content_text = ""
+            title = url
+
+            # OpenClaw-first: web_fetch, локальный браузер только fallback.
+            if openclaw:
+                fetched = await openclaw.invoke_tool("web_fetch", {"url": url})
+                if not fetched.get("error"):
+                    try:
+                        content_text = fetched.get("content", [{}])[0].get("text", "")[:20000]
+                        title = fetched.get("details", {}).get("title", title)
+                    except Exception:
+                        content_text = ""
+
+            if not content_text and browser_agent:
+                res = await browser_agent.browse(url)
+                if "error" not in res:
+                    content_text = res.get("content", "")
+                    title = res.get("title", title)
+
+            if not content_text:
+                await notif.edit_text("❌ Не удалось получить содержимое страницы.")
                 return
-            
+
             doc_id = router.rag.add_document(
-                text=res["content"],
-                metadata={"source": "web", "url": url, "title": res["title"]},
+                text=content_text,
+                metadata={"source": "web", "url": url, "title": title},
                 category="web"
             )
-            await notif.edit_text(f"🧠 **Ссылка изучена!**\nЗаголовок: `{res['title']}`\nID: `{doc_id}`")
+            await notif.edit_text(f"🧠 **Ссылка изучена!**\nЗаголовок: `{title}`\nID: `{doc_id}`")
             return
 
         # 3. Обычный текст
@@ -248,12 +590,14 @@ def register_handlers(app, deps: dict):
             },
             category="learning",
         )
+        await message.reply_text(f"🧠 **Сохранено в память.** ID: `{doc_id}`")
 
-        @app.on_message(filters.command("clone", prefixes="!"))
+    @app.on_message(filters.command("clone", prefixes="!"))
     @safe_handler
     async def clone_command(client, message: Message):
         """Persona Cloning: !clone [name] (Owner Only)"""
-        if not is_owner(message): return
+        if not is_owner(message):
+            return
         
         name = message.command[1] if len(message.command) > 1 else "Digital Twin"
         notif = await message.reply_text(f"👯 **Инициализирую клонирование личности `{name}`...**")
@@ -376,10 +720,15 @@ def register_handlers(app, deps: dict):
     @safe_handler
     async def exec_command(client, message: Message):
         """Python REPL: !exec <code> (Owner Only)"""
-        if not is_owner(message):
+        if not is_superuser(message):
             logger.warning(
                 f"⛔ Unauthorized exec attempt from @{message.from_user.username}"
             )
+            return
+
+        if message.chat.type != enums.ChatType.PRIVATE:
+            await message.reply_text("⛔ `!exec` разрешен только в личных сообщениях.")
+            await _danger_audit(message, "exec", "blocked", "non-private-chat")
             return
 
         if len(message.command) < 2:
@@ -392,8 +741,25 @@ def register_handlers(app, deps: dict):
         # Перехват stdout
         old_stdout = sys.stdout
         sys.stdout = buffer = StringIO()
+        # Контент для REPL (пробрасываем внутренности для отладки)
+        exec_globals = {
+            "client": client,
+            "ctx": client,
+            "message": message,
+            "msg": message,
+            "deps": deps,
+            "router": router,
+            "mr": router,
+            "lms": router,
+            "sys": sys,
+            "os": os,
+            "asyncio": asyncio,
+            "logger": logger,
+            "traceback": traceback,
+        }
+        
         try:
-            exec(code)  # noqa: S102
+            exec(code, exec_globals)  # noqa: S102
             output = buffer.getvalue() or "✅ Выполнено (нет вывода)"
         except Exception as e:
             output = f"❌ {type(e).__name__}: {e}\n{traceback.format_exc()[-500:]}"
@@ -404,127 +770,14 @@ def register_handlers(app, deps: dict):
             output = output[:3900] + "\n...[Truncated]..."
 
         await notification.edit_text(f"🐍 **Результат:**\n\n```\n{output}\n```")
+        await _danger_audit(message, "exec", "ok", code[:300])
 
-    # --- Авто-ответ (самый последний, ловит все текстовые) ---
-    @app.on_message(filters.text & ~filters.me & ~filters.bot)
+    # --- Авто-ответ (самый последний, ловит все текстовые/фото/голосовые) ---
+    @app.on_message((filters.text | filters.photo | filters.voice) & ~filters.me & ~filters.bot)
     @safe_handler
     async def auto_reply_logic(client, message: Message):
         """
-        Умный автоответчик.
-        Срабатывает если: ЛС / упоминание / белый список.
+        Умный автоответчик v2 (Omni-channel).
+        Делегирует исполнение в _process_auto_reply.
         """
-        if message.text is None:
-            return
-
-        sender = message.from_user.username if message.from_user else "Unknown"
-
-        # 1. Проверка через SecurityManager
-        role = security.get_user_role(
-            sender, message.from_user.id if message.from_user else 0
-        )
-
-        if role == "stealth_restricted":
-            logger.info(f"🕶️ Stealth Mode: Ignored message from @{sender}")
-            return
-
-        # 2. Логика срабатывания (Smart Reply v2.0)
-        is_private = message.chat.type == enums.ChatType.PRIVATE
-        is_reply_to_me = (
-            message.reply_to_message and 
-            message.reply_to_message.from_user and 
-            message.reply_to_message.from_user.is_self
-        )
-        
-        me = await client.get_me()
-        is_mentioned = False
-        if message.text:
-            text_lower = message.text.lower()
-            is_mentioned = (
-                "краб" in text_lower or 
-                (me.username and f"@{me.username.lower()}" in text_lower)
-            )
-
-        # Условие ответа: ЛС ИЛИ ответ на моё ИЛИ упоминание
-        should_reply = is_private or is_reply_to_me or is_mentioned
-
-        if not should_reply:
-            # В группах просто сохраняем в историю без ответа для контекста (Passive Learning)
-            memory.save_message(message.chat.id, {"user": sender, "text": message.text})
-            return
-
-        # Проверка авторизации (в группах отвечаем всем если упомянут, но учитываем Stealth)
-        if not is_authorized(message) and not is_mentioned:
-            logger.info(f"⛔ Ignored unauthorized message from @{sender}")
-            return
-
-        # Антиспам: игнорируем слишком короткие сообщения в группах
-        if not is_private and len(message.text) < 3 and not is_reply_to_me:
-            return
-
-        # Rate Limiting
-        user_id = message.from_user.id if message.from_user else 0
-        if not rate_limiter.is_allowed(user_id):
-            logger.warning(f"🚫 Rate limited: @{sender} ({user_id})")
-            return
-
-        # 2. Синхронизируем историю (если новый чат)
-        synced = await memory.sync_telegram_history(client, message.chat.id, limit=30)
-        if synced:
-            logger.info(f"📜 History synced for chat {message.chat.id}")
-
-        summarizer = deps.get("summarizer")
-        
-        # 3. Сохраняем текущее сообщение
-        memory.save_message(message.chat.id, {"user": sender, "text": message.text})
-        
-        # Запускаем суммаризацию в фоне (не блокируя ответ)
-        if summarizer:
-            asyncio.create_task(summarizer.auto_summarize(message.chat.id))
-
-        # 4. Маршрутизация с учетом контекста и прав
-        context = memory.get_recent_context(message.chat.id, limit=12)
-
-        await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
-
-        chat_type_str = message.chat.type.name.lower()
-        owner_flag = is_owner(message)
-
-        # Создаем сообщение-заглушку
-        reply_msg = await message.reply_text("🤔 **Размышляю...**")
-        
-        last_update = time.time()
-        full_response = ""
-        
-        try:
-            async for part in router.route_query_stream(
-                prompt=message.text,
-                task_type="chat",
-                context=context,
-                chat_type=chat_type_str,
-                is_owner=owner_flag
-            ):
-                full_response = part
-                curr_t = time.time()
-                # Обновляем не чаще чем раз в 1.5 сек, чтобы не поймать FloodWait
-                if curr_t - last_update > 1.5:
-                    try:
-                        # Добавляем курсор
-                        await reply_msg.edit_text(full_response + " ▌")
-                        last_update = curr_t
-                    except Exception:
-                        pass # Игнорируем ошибки редактирования (например, FloodWait или тот же текст)
-
-            # Финальный штрих без курсора
-            if full_response:
-                await reply_msg.edit_text(full_response)
-            else:
-                await reply_msg.edit_text("❌ Извини, не удалось сформулировать ответ.")
-        except Exception as e:
-            logger.error(f"Auto-reply stream failed: {e}")
-            await reply_msg.edit_text(f"❌ Произошла ошибка при генерации: {e}")
-            full_response = f"Error: {e}"
-
-        # 6. Сохраняем ответ
-        memory.save_message(
-            message.chat.id, {"role": "assistant", "text": full_response}
-        )
+        await _process_auto_reply(client, message, deps)

@@ -47,6 +47,13 @@ from src.core.summary_manager import SummaryManager
 from src.core.image_manager import ImageManager
 from src.modules.reminder_pro import ReminderManager
 from src.core.openclaw_client import OpenClawClient # Phase 4.1
+from src.core.voice_gateway_client import VoiceGatewayClient
+from src.core.telegram_chat_resolver import TelegramChatResolver
+from src.core.telegram_summary_service import TelegramSummaryService
+from src.core.provisioning_service import ProvisioningService
+from src.core.ai_guardian_client import AIGuardianClient
+from src.core.group_moderation_engine import GroupModerationEngine
+from src.core.agent_loop import ProjectAgent
 
 # Handler-модули (новая модульная система)
 from src.handlers import register_all_handlers
@@ -58,12 +65,27 @@ from src.handlers.scheduling import get_active_reminders
 logger = setup_logger()
 
 # Переменные окружения
-load_dotenv()
+load_dotenv(override=True)
 
 # Telegram-конфигурация
-API_ID = os.getenv("TELEGRAM_API_ID")
+try:
+    API_ID = int(os.getenv("TELEGRAM_API_ID"))
+except (ValueError, TypeError):
+    API_ID = os.getenv("TELEGRAM_API_ID") # Fallback to string if env is weird, but usually int
+
 API_HASH = os.getenv("TELEGRAM_API_HASH")
-SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME", "krab_v2_session")
+raw_session_name = os.getenv("TELEGRAM_SESSION_NAME", "krab_v2_session")
+SESSION_NAME = raw_session_name
+session_file = f"{SESSION_NAME}.session"
+
+if not os.path.exists(session_file):
+    for candidate in os.listdir("."):
+        if candidate.endswith(".session"):
+            SESSION_NAME = candidate.rsplit(".", 1)[0]
+            logger.info(f"Session file '{session_file}' missing, using '{candidate}' instead.")
+            break
+    else:
+        logger.warning(f"No session file found for '{session_file}'; interactive login may be required.")
 
 # --- Компоненты ---
 
@@ -77,11 +99,26 @@ memory = ContextKeeper()
 perceptor_config = {"WHISPER_MODEL": "mlx-community/whisper-large-v3-turbo"}
 perceptor = Perceptor(config=perceptor_config)
 
+# Очистка кэша голоса при старте
+try:
+    voice_cache_dir = "voice_cache"
+    if os.path.exists(voice_cache_dir):
+        for f in os.listdir(voice_cache_dir):
+            if f.endswith((".mp3", ".ogg")):
+                os.remove(os.path.join(voice_cache_dir, f))
+        logger.info(f"🧹 Voice cache cleared on startup.")
+except Exception as e:
+    logger.warning(f"Could not clear voice cache: {e}")
+
 # Screen Awareness (скриншоты + Vision AI)
 screen_catcher = ScreenCatcher(perceptor)
 
 # Черный Ящик (SQLite логирование)
 black_box = BlackBox()
+
+# Telegram control services (summaryx + chat picker)
+telegram_chat_resolver = TelegramChatResolver(black_box=black_box)
+telegram_summary_service = TelegramSummaryService(router=router)
 
 # Разведчик (Web Search) - Deprecated
 # scout = WebScout()
@@ -97,11 +134,43 @@ persona_manager = PersonaManager(cfg, black_box)
 router.persona = persona_manager
 
 # Browser Agent (Phase 9.2)
-try:
-    from src.modules.browser import BrowserAgent
-    browser_agent = BrowserAgent(headless=True)
-except ImportError:
-    browser_agent = None
+enable_local_browser = os.getenv("ENABLE_LOCAL_BROWSER", "0").strip().lower() in {"1", "true", "yes", "on"}
+browser_agent = None
+if enable_local_browser:
+    try:
+        from src.modules.browser import BrowserAgent
+        browser_agent = BrowserAgent(headless=True)
+    except ImportError:
+        browser_agent = None
+else:
+    logger.info("Local BrowserAgent disabled (fallback-only mode).")
+
+# OpenClaw Client (Phase 4.1)
+openclaw_client = OpenClawClient(
+    base_url=os.getenv("OPENCLAW_BASE_URL", "http://localhost:18789"),
+    api_key=os.getenv("OPENCLAW_API_KEY")
+)
+
+# AI Guardian Client (Phase 11.2)
+ai_guardian_client = AIGuardianClient(
+    base_url=os.getenv("AI_GUARDIAN_URL", "http://localhost:8000")
+)
+
+# Voice Gateway Client (Krab Voice v2)
+voice_gateway_client = VoiceGatewayClient(
+    base_url=os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
+    api_key=os.getenv("VOICE_GATEWAY_API_KEY", ""),
+)
+
+# Провизионинг и каталоги (Phase E)
+provisioning = ProvisioningService()
+
+# Групповая модерация (Phase C, moderation v2)
+group_moderation_engine = GroupModerationEngine(
+    policy_path=os.getenv("GROUP_MODERATION_POLICY_PATH", "artifacts/moderation/group_policies.json"),
+    default_dry_run=os.getenv("GROUP_MODERATION_DEFAULT_DRY_RUN", "1").strip().lower() in {"1", "true", "yes", "on"},
+    ai_guardian=ai_guardian_client,
+)
 
 # Инструменты (shell, RAG, MCP, Browser)
 tools = ToolHandler(router, router.rag, openclaw_client, mcp=mcp_manager, browser_agent=browser_agent)
@@ -109,6 +178,9 @@ router.tools = tools
 
 # Агентный воркфлоу (Phase 8.1 ReAct)
 agent = AgentWorkflow(router, memory, security, tools=tools)
+
+# Фаза 16: Автономные проекты
+project_agent = ProjectAgent(router=router, tools=tools, memory=memory)
 
 # Rate Limiter
 rate_limiter = RateLimiter(
@@ -143,18 +215,12 @@ try:
 except ImportError:
     email_manager = None
 
-# OpenClaw Client (Phase 4.1)
-openclaw_client = OpenClawClient(
-    base_url=os.getenv("OPENCLAW_BASE_URL", "http://localhost:18789"),
-    api_key=os.getenv("OPENCLAW_API_KEY")
-)
-
 # Web App (Phase 15)
 from src.modules.web_app import WebApp
 web_app = None
 
 # === PYROGRAM CLIENT ===
-app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
+app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH, workdir=".")
 
 # Plugin Manager (Phase 13)
 from src.core.plugin_manager import PluginManager
@@ -183,6 +249,7 @@ async def debug_logger(client, message: Message):
         else "INCOMING"
     )
 
+    print(f"DEBUG: Message received from @{sender} ({message.chat.id}): {text[:20]}")
     logger.info(
         f"🔍 DEBUG: {direction} from @{sender} ({message.chat.id}). "
         f"Type: {msg_type}. Text: {text[:50]}..."
@@ -268,6 +335,14 @@ _deps = {
     "reminder_manager": None, # Will be set in main()
     "scheduler": None, # Will be set in main()
     "openclaw_client": openclaw_client,
+    "voice_gateway_client": voice_gateway_client,
+    "telegram_chat_resolver": telegram_chat_resolver,
+    "telegram_summary_service": telegram_summary_service,
+    "provisioning": provisioning,
+    "ai_guardian": ai_guardian_client,
+    "moderation_engine": group_moderation_engine,
+    "project_agent": project_agent,
+    "start_time": datetime.now(),
 }
 
 # Регистрируем все обработчики из src/handlers/
@@ -288,7 +363,11 @@ async def main():
     await mcp_manager.connect_all()
 
     # Инициализация WebApp (Phase 15)
-    web_app = WebApp(_deps, port=cfg.get("WEB_PORT", 8080))
+    web_app = WebApp(
+        _deps,
+        port=cfg.get("WEB_PORT", int(os.getenv("WEB_PORT", 8080))),
+        host=str(cfg.get("WEB_HOST", os.getenv("WEB_HOST", "0.0.0.0"))),
+    )
     await web_app.start()
     _deps["web_app"] = web_app
 
@@ -312,8 +391,10 @@ async def main():
     # Graceful shutdown по SIGTERM/SIGINT
     def handle_signal(sig, frame):
         logger.info(f"⚡ Received signal {sig}, shutting down gracefully...")
+        # app.run handles signals, but if we need custom cleanup:
         asyncio.get_event_loop().create_task(graceful_shutdown())
 
+    # We rely on Pyrogram's signal handling if using app.run(), but can add custom hooks
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
@@ -343,26 +424,40 @@ async def main():
         logger.info("✅ Krab stopped cleanly.")
 
     # Уведомление владельца о запуске (в Saved Messages)
-    try:
-        owner = os.getenv("OWNER_USERNAME", "").replace("@", "").strip()
-        # Отправляем в Saved Messages (самому себе), а не по хардкоду
-        await app.send_message("me", (
-            "🦀 **Krab v7.2 (Stable) Modular Architecture Online.**\n"
-            f"👤 Owner: @{owner}\n"
-            "📦 Handlers: 9 modules loaded\n"
-            "🧠 AI Router: Cloud + Local Fallback\n"
-            "🔌 MCP Singularity: Active\n"
-            "👀 Screen Awareness: Ready (!see)\n"
-            "🗣️ Neural Voice: Ready (!say)\n"
-            "🛡️ Stealth Mode: Ready (!panic)\n"
-            "✅ RAG Memory v2.0: Ready"
-        ))
-    except Exception as e:
-        logger.warning(f"Could not send startup notification: {e}")
+    # try:
+    #     owner = os.getenv("OWNER_USERNAME", "").replace("@", "").strip()
+    #     # Отправляем в Saved Messages (самому себе), а не по хардкоду
+    #     await app.send_message("me", (
+    #         "🦀 **Krab v7.2 (Stable) Modular Architecture Online.**\n"
+    #         f"👤 Owner: @{owner}\n"
+    #         "📦 Handlers: 9 modules loaded\n"
+    #         "🧠 AI Router: Cloud + Local Fallback\n"
+    #         "🔌 MCP Singularity: Active\n"
+    #         "👀 Screen Awareness: Ready (!see)\n"
+    #         "🗣️ Neural Voice: Ready (!say)\n"
+    #         "🛡️ Stealth Mode: Ready (!panic)\n"
+    #         "✅ RAG Memory v2.0: Ready"
+    #     ))
+    # except Exception as e:
+    #     logger.warning(f"Could not send startup notification: {e}")
 
+    logger.info("⚡ Entering idle mode... Bot should be responsive.")
+    print("DEBUG: Entring idle mode.")
+    
+    # We await idle() only if we want to block HERE.
+    # But app.run() calls start(), checks signals, and waits for disconnect.
+    # Wait, app.run(coro) runs coro and then disconnects?
+    # No, app.run() -> start() -> run coro -> stop().
+    # So if coro returns, app stops.
+    # So we MUST await idle() here to keep it running.
     await idle()
+    
     await graceful_shutdown()
 
-
 if __name__ == "__main__":
-    app.run(main())
+    try:
+        app.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        logger.critical(f"🔥 Critical Crash in main loop: {e}", exc_info=True)

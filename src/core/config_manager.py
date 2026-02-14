@@ -5,6 +5,7 @@ Config Manager для Krab v2.5.
 Читает/пишет YAML-конфиг, доступен через команду !config.
 """
 
+import copy
 import os
 import yaml
 import logging
@@ -36,8 +37,10 @@ DEFAULTS = {
         "backup_hour": 3,
     },
     "personality": {
-        "active_persona": "default",
         "emoji_style": "moderate",
+    },
+    "group_chat": {
+        "allow_replies": True,
     }
 }
 
@@ -124,7 +127,7 @@ class ConfigManager:
     def reload(self):
         """Перечитать конфиг с диска."""
         self._load()
-    
+
     def to_display(self) -> str:
         """Форматированный вывод для показа в чате."""
         lines = ["**⚙️ Krab Config:**\n"]
@@ -137,3 +140,7 @@ class ConfigManager:
                 lines.append(f"  `{values}`")
             lines.append("")
         return "\n".join(lines)
+
+    def get_all(self) -> dict:
+        """Возвращает всё загруженное конфигурационное дерево (copy)."""
+        return copy.deepcopy(self.data)

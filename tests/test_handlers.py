@@ -12,7 +12,8 @@
 import os
 import sys
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Добавляем корень проекта в путь
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -301,3 +302,122 @@ class TestPerceptorConfig:
         with patch.object(perc_mod.Perceptor, '_warmup_audio'):
             p = perc_mod.Perceptor(config={"WHISPER_MODEL": "custom-whisper"})
             assert p.whisper_model == "custom-whisper"
+
+
+class TestConfigManagerExposure:
+    def test_get_all_returns_copy(self):
+        from src.core.config_manager import ConfigManager
+        cfg = ConfigManager()
+        cfg.set("ai.temperature", 0.5)
+        snapshot = cfg.get_all()
+        assert isinstance(snapshot, dict)
+        snapshot["ai"]["temperature"] = 0.1
+        assert cfg.get("ai.temperature") == 0.5
+
+
+class _DummyApp:
+    def __init__(self):
+        self.handlers = {}
+
+    def on_message(self, *args, **kwargs):
+        def decorator(func):
+            self.handlers[func.__name__] = func
+            return func
+
+        return decorator
+
+    def on_callback_query(self, *args, **kwargs):
+        return self.on_message(*args, **kwargs)
+
+
+class _MockStatusMessage:
+    def __init__(self):
+        self.command = ["!status"]
+        self.from_user = SimpleNamespace(is_self=True, username="owner", id=1)
+        self.chat = SimpleNamespace(id=123, title="test")
+        self.reply_text = AsyncMock(
+            return_value=SimpleNamespace(edit_text=AsyncMock())
+        )
+
+
+def _build_status_handler(reminder_manager, black_box=None):
+    from src.handlers.commands import register_handlers as register_commands
+
+    router = MagicMock()
+    router.check_local_health = AsyncMock(return_value=True)
+    router.gemini_client = MagicMock()
+    router.rag = MagicMock(get_total_documents=MagicMock(return_value=5))
+    router.local_engine = "lm-studio"
+    router.active_local_model = "qwen2.5-7b"
+    router.models = {"chat": "gemini-2.5-flash"}
+    router.is_local_available = True
+    router._stats = {
+        "local_calls": 1,
+        "cloud_calls": 0,
+        "local_failures": 0,
+        "cloud_failures": 0,
+    }
+
+    voice_gateway_client = MagicMock()
+    voice_gateway_client.health_check = AsyncMock(return_value=True)
+
+    openclaw_client = MagicMock()
+    openclaw_client.health_check = AsyncMock(return_value=True)
+
+    config_manager = MagicMock()
+    config_manager.get = MagicMock(side_effect=lambda key, default=None: default or 8080)
+
+    deps = {
+        "router": router,
+        "config_manager": config_manager,
+        "black_box": black_box or MagicMock(get_uptime=MagicMock(return_value="0h 0m 1s")),
+        "safe_handler": lambda f: f,
+        "voice_gateway_client": voice_gateway_client,
+        "openclaw_client": openclaw_client,
+        "reminder_manager": reminder_manager,
+        "persona_manager": MagicMock(active_persona="default", personas={"default": {}}),
+    }
+    app = _DummyApp()
+    register_commands(app, deps)
+    return app.handlers["status_command"]
+
+
+@patch("src.handlers.commands.logger.warning")
+@pytest.mark.asyncio
+async def test_status_warns_when_reminder_manager_missing(mock_warning):
+    handler = _build_status_handler(None)
+    await handler(None, _MockStatusMessage())
+    mock_warning.assert_any_call("Reminder manager missing for status command.")
+
+
+class _FailingReminderManager:
+    def get_list(self, chat_id):
+        raise RuntimeError("boom")
+
+
+@patch("src.handlers.commands.logger.warning")
+@pytest.mark.asyncio
+async def test_status_logs_when_reminder_list_fails(mock_warning):
+    handler = _build_status_handler(_FailingReminderManager())
+    await handler(None, _MockStatusMessage())
+    mock_warning.assert_any_call(
+        "Reminder manager get_list failed for status.", error="boom"
+    )
+
+
+@patch("src.handlers.commands.logger.warning")
+@pytest.mark.asyncio
+async def test_status_ignores_missing_get_uptime(mock_warning):
+    handler = _build_status_handler(None, black_box=MagicMock())
+    await handler(None, _MockStatusMessage())
+    mock_warning.assert_any_call(
+        "Reminder manager missing for status command."
+    )
+
+
+@patch("src.handlers.commands.logger.warning")
+@pytest.mark.asyncio
+async def test_status_degrades_when_blackbox_missing_get_uptime(mock_warning):
+    handler = _build_status_handler(None, black_box=SimpleNamespace())
+    await handler(None, _MockStatusMessage())
+    assert mock_warning.call_count >= 1  # ensures status ran without AttributeError

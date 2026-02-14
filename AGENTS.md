@@ -1,130 +1,134 @@
 # AGENTS.md
 
-> **AI Coding Assistant Instructions** - This document guides AI tools (GitHub Copilot, Cursor, Claude, etc.) on how to work with this codebase effectively.
+> **Инструкции для AI-агентов** — Этот документ объясняет как работать с кодовой базой Krab.
+> Предназначен для: GitHub Copilot, Cursor, Claude, Codex, Google Antigravity и других AI-инструментов.
 
 ---
 
-## Project Overview
+## Обзор проекта
 
-**Description**: Krab AI Userbot — Personal AI Assistant based on Python 3.13 & Pyrogram, integrated with OpenClaw Gateway.
+**Название**: Krab AI Userbot (Telegram Юзербот)
+**Тип**: Автономный AI-ассистент, живущий в Telegram
+**Создатель**: @p0lrd
 
-**Tech Stack**:
+**Технологический стек**:
 
-- **Core**: Python 3.13+
-- **Telegram Lib**: Pyrogram 2.0 (Async)
-- **AI Gateway**: OpenClaw (HTTP API)
-- **Database**: SQLite (local logs), ChromaDB (RAG - Deprecated/External)
-- **Environment**: macOS (Native)
-
----
-
-## 🚨 CRITICAL ARCHITECTURE RULES (v8.0+)
-
-1.  **Do NOT implement local scraping/browser logic.**
-    - Use `src.core.openclaw_client.OpenClawClient`.
-    - Method: `await openclaw.invoke_tool("web_search", ...)`
-
-2.  **Project Handover Engine**:
-    - Every Finished project must trigger `src/core/handover.py` logic.
-    - Check `src/core/agent_loop.py` for implementation details.
-
-3.  **Thin Client Philosophy**:
-    - Krab handles Telegram + Local state.
-    - OpenClaw handles Tools + Reasoning.
+| Компонент | Технология |
+|-----------|------------|
+| **Язык** | Python 3.13+ |
+| **Telegram** | Pyrogram 2.0 (Async) |
+| **AI Gateway** | OpenClaw (HTTP API) |
+| **Локальные модели** | LM Studio / Ollama |
+| **База данных** | SQLite (логи), ChromaDB (RAG) |
+| **Платформа** | macOS (Native) |
 
 ---
 
-## Quick Start
+## 🚨 КРИТИЧЕСКИЕ ПРАВИЛА АРХИТЕКТУРЫ (v8.0+)
+
+1. **НЕ ПИШИ локальный scraping/browser.**
+   - Используй `src.core.openclaw_client.OpenClawClient`
+   - Метод: `await openclaw.invoke_tool("web_search", ...)`
+
+2. **Thin Client (Тонкий клиент):**
+   - Krab = Telegram + Local State
+   - OpenClaw = Tools + Reasoning (AI Gateway)
+
+3. **Язык кода:**
+   - Все комментарии, docstring и переменные — **на русском**.
+   - Используй `structlog` для логирования.
+
+4. **Файл идентичности:**
+   - "Душа" бота хранится в `config/soul.md` — это системный промпт.
+   - НЕ упоминай "Antigravity" в промптах бота. Краб — independent Telegram userbot.
+
+---
+
+## Быстрый старт
 
 ```bash
-# 1. Activate venv
+# 1. Активировать виртуальное окружение
 source .venv/bin/activate
 
-# 2. Run Verification
+# 2. Проверить здоровье проекта
 ./verify_project.command
 
-# 3. Start Dashboard
-streamlit run src/utils/dashboard_app.py
+# 3. Запустить бота
+./start_krab.command
+
+# 4. Запустить тесты
+pytest -q
 ```
 
 ---
 
-## Project Structure
+## Структура проекта
 
 ```text
-src/
-├── core/
-│   ├── openclaw_client.py   # <--- MAIN AI GATEWAY
-│   ├── handover.py          # <--- Handover Engine (Phase 16.2)
-│   ├── agent_loop.py        # <--- Autonomous Loop
-│   ├── model_manager.py     # Router (Cloud/Local)
-│   ├── tool_handler.py      # Tool execution
-│   └── ...
-├── handlers/
-│   ├── commands.py          # User commands (!help, !status)
-│   └── tools.py             # Research tools (!news, !scout)
-├── utils/                   # Helpers
-└── main.py                  # Entry point
+Краб/
+├── config/
+│   ├── soul.md              # ← ДУША БОТА (системный промпт)
+│   ├── agents_catalog.yaml  # Каталог AI-агентов
+│   ├── skills_catalog.yaml  # Каталог навыков
+│   └── mcp_servers.json     # MCP-серверы
+├── src/
+│   ├── core/
+│   │   ├── prompts.py       # Загружает soul.md → системные промпты
+│   │   ├── openclaw_client.py  # ← ОСНОВНОЙ AI GATEWAY
+│   │   ├── model_manager.py # Роутер моделей (Local/Cloud)
+│   │   ├── persona_manager.py # Управление личностями
+│   │   ├── agent_swarm.py   # Swarm Manager (торговая/OSINT/dev команды)
+│   │   ├── swarm.py         # Swarm Orchestrator (параллельные задачи)
+│   │   ├── tool_handler.py  # Диспетчер инструментов
+│   │   └── ...
+│   ├── handlers/            # Telegram-обработчики команд
+│   │   ├── ai.py            # AI-чат (!think, !code, !smart)
+│   │   ├── commands.py      # Основные команды (!status, !web, !ops)
+│   │   ├── trading.py       # Торговый рой (!trade)
+│   │   ├── media.py         # Медиа (фото, аудио, документы)
+│   │   └── ...
+│   ├── utils/               # Утилиты
+│   └── main.py              # Точка входа
+├── tests/                   # Тесты (pytest)
+├── scripts/                 # Скрипты автоматизации
+├── docs/                    # Документация
+├── ROADMAP.md               # Дорожная карта развития
+├── HANDOVER.md              # Лог спринтов
+├── MIGRATION.md             # Руководство по миграции
+└── start_krab.command       # ← ЗАПУСК ОДНИМ КЛИКОМ
 ```
 
 ---
 
-## Code Sections
+## Ключевые команды бота
 
-### OpenClaw Integration (`src/core/openclaw_client.py`)
-
-This is the **primary** way to interact with the outside world (Search, RAG, News).
-
-```python
-# Example Usage
-result = await openclaw.execute_agent_task("Research quantum physics")
-```
-
-### Handover Engine (`src/core/handover.py`)
-
-Generates `HANDOVER.md` automatically at the end of project execution.
-
-### Command Handlers (`src/handlers/*.py`)
-
-- use `@app.on_message(filters.me & ...)`
-- Always handle errors with `try/except` and log them.
+| Команда | Описание |
+|---------|----------|
+| `!status` | Статус системы |
+| `!web` | Web-панель управления |
+| `!model` | Управление AI-моделями |
+| `!trade <запрос>` | Торговый AI-рой |
+| `!see` | Анализ экрана |
+| `!voice <текст>` | Генерация голоса |
+| `!persona <id>` | Переключение личности |
+| `!diagnose` | Глубокая диагностика |
 
 ---
 
-## Environment Variables (`.env`)
-
-Required for v8.0+:
-
-```ini
-TELEGRAM_API_ID=...
-TELEGRAM_API_HASH=...
-TELEGRAM_SESSION_NAME=...
-OPENCLAW_BASE_URL=http://localhost:8000
-OPENCLAW_API_KEY=sk-...
-GEMINI_API_KEY=...
-```
-
----
-
-## Testing
+## Тестирование
 
 ```bash
-# Run all tests
+# Все тесты
 pytest -q
 
-# Run specific test
-python tests/test_openclaw_client.py
+# Smoke test
+python tests/smoke_test.py
 
-# Run Handover Verification
-python3 verify_handover.py
+# Конкретный модуль
+pytest tests/test_openclaw_client.py -v
 ```
 
 ---
 
-**Last Updated**: 2026-02-13 (Phase 12 Completed)
-**Architect**: Antigravity (v8.0 Final)
-
----
-
-> [!IMPORTANT]
-> **Migration Readiness**: This repository is 100% prepared for migration to a new chat environment. See `MIGRATION.md` for onboarding.
+**Последнее обновление**: 2026-02-14
+**Версия**: v8.2 (Soul Edition)

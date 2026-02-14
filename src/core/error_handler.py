@@ -9,6 +9,7 @@ import asyncio
 import logging
 import traceback
 import functools
+import os
 from pyrogram.errors import FloodWait, UserNotParticipant, ChatWriteForbidden, MessageNotModified
 
 logger = logging.getLogger("ErrorHandler")

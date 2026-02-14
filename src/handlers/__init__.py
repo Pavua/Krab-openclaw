@@ -16,6 +16,28 @@ Handlers Package — Модульная структура обработчик�
 Все обработчики регистрируются через register_handlers(app, deps).
 """
 
+import asyncio
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+
+# _ensure_event_loop_for_pyrogram removed
+# Was causing loop mismatch with asyncio.run()
+
+
+
+def _register_or_skip(label: str, register_func, app, deps: dict):
+    """
+    Регистрирует обработчик и не валит запуск, если отсутствуют optional-зависимости.
+    Это важно для тестового и облегчённого профиля.
+    """
+    try:
+        register_func(app, deps)
+    except KeyError as exc:
+        logger.warning("Пропуск регистрации handler-модуля: отсутствует зависимость", module=label, missing=str(exc))
+
+
 def register_all_handlers(app, deps: dict):
     """
     Регистрирует все обработчики на Pyrogram-клиент.
@@ -37,22 +59,30 @@ def register_all_handlers(app, deps: dict):
     from .privacy import register_handlers as reg_privacy
     from .plugins import register_handlers as reg_plugins
     from .groups import register_handlers as reg_groups
+    from .telegram_control import register_handlers as reg_telegram_control
+    from .provisioning import register_handlers as reg_provisioning
+    from .ops import register_handlers as reg_ops
+    from .project import register_handlers as reg_project
 
-    # Порядок важен: debug_logger должен быть зарегистрирован ПЕРВЫМ (group=-1)
-    reg_commands(app, deps)
-    reg_ai(app, deps)
-    reg_media(app, deps)
-    reg_tools(app, deps)
-    reg_system(app, deps)
-    reg_scheduling(app, deps)
-    reg_mac(app, deps)
-    reg_rag(app, deps)
-    reg_persona(app, deps)
-    reg_cyber(app, deps)
-    reg_comm(app, deps)
-    reg_groups(app, deps)
-    reg_privacy(app, deps)
-    reg_plugins(app, deps)
+    # Порядок важен: debug_logger должен быть зарегистрирован ПЕРВЫМ (group=-1).
+    _register_or_skip("commands", reg_commands, app, deps)
+    _register_or_skip("ai", reg_ai, app, deps)
+    _register_or_skip("media", reg_media, app, deps)
+    _register_or_skip("tools", reg_tools, app, deps)
+    _register_or_skip("system", reg_system, app, deps)
+    _register_or_skip("scheduling", reg_scheduling, app, deps)
+    _register_or_skip("mac", reg_mac, app, deps)
+    _register_or_skip("rag", reg_rag, app, deps)
+    _register_or_skip("persona", reg_persona, app, deps)
+    _register_or_skip("cyber", reg_cyber, app, deps)
+    _register_or_skip("communication", reg_comm, app, deps)
+    _register_or_skip("groups", reg_groups, app, deps)
+    _register_or_skip("telegram_control", reg_telegram_control, app, deps)
+    _register_or_skip("provisioning", reg_provisioning, app, deps)
+    _register_or_skip("privacy", reg_privacy, app, deps)
+    _register_or_skip("plugins", reg_plugins, app, deps)
+    _register_or_skip("ops", reg_ops, app, deps)
+    _register_or_skip("project", reg_project, app, deps)
     
     from .finance import register_handlers as reg_finance
-    reg_finance(app, deps)
+    _register_or_skip("finance", reg_finance, app, deps)

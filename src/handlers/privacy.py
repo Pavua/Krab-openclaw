@@ -7,7 +7,7 @@ Privacy & GDPR Handler (Phase 12.3).
 import json
 import os
 from pyrogram import filters
-from pyrogram.types import Message, InputFile
+from pyrogram.types import Message
 import structlog
 
 logger = structlog.get_logger(__name__)

@@ -26,6 +26,7 @@ def register_handlers(app, deps: dict):
     memory = deps["memory"]
     perceptor = deps["perceptor"]
     safe_handler = deps["safe_handler"]
+    black_box = deps.get("black_box")
 
     # --- Обработка документов (PDF, DOCX, Excel, etc.) ---
     @app.on_message(filters.document)
@@ -71,16 +72,19 @@ def register_handlers(app, deps: dict):
                     message.chat.id, {"role": "assistant", "text": response}
                 )
                 # Keep RAG indexing
-                doc_id = router.rag.add_document(
-                    text=f"[Document: {filename}]\n{response}",
-                    metadata={
-                       "filename": filename,
-                       "type": "pdf_native_analysis",
-                       "chat_id": str(message.chat.id),
-                       "timestamp": str(datetime.now()),
-                    }
-                )
-                await notification.edit_text(f"📄 **Документ проанализирован через Vision Engine.**\nПроиндексирован: `{doc_id}`")
+                if router.rag:
+                    doc_id = router.rag.add_document(
+                        text=f"[Document: {filename}]\n{response}",
+                        metadata={
+                           "filename": filename,
+                           "type": "pdf_native_analysis",
+                           "chat_id": str(message.chat.id),
+                           "timestamp": str(datetime.now()),
+                        }
+                    )
+                    await notification.edit_text(f"📄 **Документ проанализирован через Vision Engine.**\nПроиндексирован: `{doc_id}`")
+                else:
+                    await notification.edit_text(f"📄 **Документ проанализирован через Vision Engine.**")
             else:
                 # Стандартный парсинг для RAG
                 text, metadata = await DocumentParser.parse(file_path)
@@ -88,22 +92,26 @@ def register_handlers(app, deps: dict):
                 if text.startswith("⚠️") or text.startswith("❌"):
                     await notification.edit_text(text)
                 else:
-                    doc_id = router.rag.add_document(
-                        text=f"[Document: {filename}]\n{text}",
-                        metadata={
-                            **metadata,
-                            "chat_id": str(message.chat.id),
-                            "timestamp": str(datetime.now()),
-                        },
-                        category="document",
-                    )
+                    if router.rag:
+                        doc_id = router.rag.add_document(
+                            text=f"[Document: {filename}]\n{text}",
+                            metadata={
+                                **metadata,
+                                "chat_id": str(message.chat.id),
+                                "timestamp": str(datetime.now()),
+                            },
+                            category="document",
+                        )
+                        rag_info = f"🧠 Проиндексирован в RAG: `{doc_id}`\n"
+                    else:
+                        rag_info = ""
 
                     preview = text[:500] + "..." if len(text) > 500 else text
                     result_text = (
                         f"📄 **Документ проанализирован:** `{filename}`\n"
                         f"📊 Размер: {metadata.get('size_kb', '?')} KB | "
                         f"Символов: {metadata.get('chars_extracted', '?')}\n"
-                        f"🧠 Проиндексирован в RAG: `{doc_id}`\n\n"
+                        f"{rag_info}\n"
                         f"**Превью:**\n```\n{preview}\n```"
                     )
 
@@ -160,15 +168,16 @@ def register_handlers(app, deps: dict):
 
             analysis = await perceptor.analyze_video(file_path, router, prompt)
 
-            router.rag.add_document(
-                text=f"[Video Analysis]: {analysis}",
-                metadata={
-                    "source": "video",
-                    "chat": str(message.chat.id),
-                    "timestamp": str(datetime.now()),
-                },
-                category="vision",
-            )
+            if router.rag:
+                router.rag.add_document(
+                    text=f"[Video Analysis]: {analysis}",
+                    metadata={
+                        "source": "video",
+                        "chat": str(message.chat.id),
+                        "timestamp": str(datetime.now()),
+                    },
+                    category="vision",
+                )
 
             await notification.edit_text(f"🎞️ **Анализ видео:**\n\n{analysis}")
 
@@ -234,13 +243,21 @@ def register_handlers(app, deps: dict):
             f"📝 **Инструкция:** Сфокусируйся на содержимом сообщения выше."
         )
 
-        response_text = await router.route_query(
-            prompt=voice_prompt,
-            task_type="chat",
-            context=context,
-            chat_type=message.chat.type.name.lower(),
-            is_owner=is_owner(message)
-        )
+        try:
+            response_text = await asyncio.wait_for(
+                router.route_query(
+                    prompt=voice_prompt,
+                    task_type="chat",
+                    context=context,
+                    chat_type=message.chat.type.name.lower(),
+                    is_owner=is_owner(message)
+                ),
+                timeout=90
+            )
+        except asyncio.TimeoutError:
+            response_text = "⏳ Голосовой ответ занял слишком много времени."
+        except Exception as e:
+            response_text = f"❌ Ошибка обработки голоса: {e}"
 
         await message.reply_text(response_text)
         memory.save_message(
@@ -248,6 +265,22 @@ def register_handlers(app, deps: dict):
         )
 
         await notification.edit_text(f"**Transcript:**\n\n{text}")
+
+        # AUTO-SUMMARY (Block C)
+        settings = black_box.get_group_settings(message.chat.id) if black_box else {}
+        if settings.get("call_auto_summary", 0):
+            summary_prompt = (
+                f"Сделай очень краткое резюме (1-2 предложения) следующего текста голосового сообщения:\n\n"
+                f"\"{text}\""
+            )
+            summary = await router.route_query(
+                prompt=summary_prompt,
+                task_type="chat",
+                context=[],
+                chat_type=message.chat.type.name.lower(),
+                is_owner=is_owner(message)
+            )
+            await message.reply_text(f"📝 **Auto-Summary:**\n{summary}")
 
         os.remove(file_path)
 
@@ -269,6 +302,7 @@ def register_handlers(app, deps: dict):
             file_name=f"artifacts/downloads/{message.photo.file_unique_id}"
         )
 
+        await notification.edit_text("🧠 **Анализирую изображение через Vision Engine...**")
         description = await perceptor.analyze_image(
             file_path, router, prompt="Что на изображении? Опиши подробно."
         )
@@ -276,15 +310,16 @@ def register_handlers(app, deps: dict):
             message.chat.id, {"role": "vision_analysis", "content": description}
         )
 
-        # Индексируем в RAG
-        router.rag.add_document(
-            text=f"[Vision Scan]: {description}",
-            metadata={
-                "source": "vision",
-                "chat": str(message.chat.id),
-                "timestamp": str(datetime.now()),
-            },
-        )
+        # Индексируем в RAG (если доступен)
+        if router.rag:
+            router.rag.add_document(
+                text=f"[Vision Scan]: {description}",
+                metadata={
+                    "source": "vision",
+                    "chat": str(message.chat.id),
+                    "timestamp": str(datetime.now()),
+                },
+            )
 
         await notification.edit_text(
             f"👁️ **Vision:** `{description}`\n\n🤔 Думаю..."
@@ -295,13 +330,21 @@ def register_handlers(app, deps: dict):
         if message.caption:
             vision_prompt += f"\nПодпись: {message.caption}"
 
-        response_text = await router.route_query(
-            prompt=vision_prompt,
-            task_type="chat",
-            context=context,
-            chat_type=message.chat.type.name.lower(),
-            is_owner=is_owner(message)
-        )
+        try:
+            response_text = await asyncio.wait_for(
+                router.route_query(
+                    prompt=vision_prompt,
+                    task_type="chat",
+                    context=context,
+                    chat_type=message.chat.type.name.lower(),
+                    is_owner=is_owner(message)
+                ),
+                timeout=90
+            )
+        except asyncio.TimeoutError:
+            response_text = "⏳ Анализ изображения занял слишком много времени."
+        except Exception as e:
+            response_text = f"❌ Ошибка анализа зрения: {e}"
 
         await message.reply_text(response_text)
         memory.save_message(

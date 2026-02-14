@@ -12,7 +12,8 @@ logger = structlog.get_logger("GuardianPlugin")
 
 def register_handlers(app, deps: dict):
     # Плагины могут регистрировать свои команды
-    @app.on_message(deps["pyrogram"].filters.command("guardian", prefixes="!"))
+    from pyrogram import filters
+    @app.on_message(filters.command("guardian", prefixes="!"))
     async def guardian_status(client, message):
         await message.reply_text("🛡 **Guardian System is ACTIVE.**\nMonitoring auth, logs and RAG health.")
 

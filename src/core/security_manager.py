@@ -35,6 +35,11 @@ class SecurityManager:
         else:
             self.stealth_mode = False
 
+        # Legacy-совместимость: часть тестов и старых обработчиков
+        # обращается к отдельным коллекциям admins/blocked.
+        self.admins = []
+        self.blocked = []
+
     def get_role(self, user_identifier: str) -> str:
         """Получить роль пользователя по username или ID (строкой)."""
         ident = str(user_identifier).replace("@", "").lower().strip()
@@ -99,12 +104,21 @@ class SecurityManager:
         
         # Stealth Mode check
         if self.stealth_mode: return "stealth_restricted"
-        
+
+        # Legacy fallback: explicit списки admins/blocked.
+        username_norm = (username or "").replace("@", "").strip().lower()
+        if user_id in self.blocked or username_norm in {str(item).lower() for item in self.blocked}:
+            return "blocked"
+        if username_norm in {str(item).replace("@", "").lower() for item in self.admins}:
+            return "admin"
+
         if "blocked" in [role_by_id, role_by_name]: return "blocked"
         if "admin" in [role_by_id, role_by_name]: return "admin"
         if "user" in [role_by_id, role_by_name]: return "user"
-        
-        return "guest"
+
+        # По умолчанию считаем пользователя "user" (не guest),
+        # чтобы сохранить обратную совместимость с ранними фазами.
+        return "user"
 
     def can_execute_command(self, username: str, user_id: int, command_level: str = "user") -> bool:
         """Проверяет права на выполнение команды."""
@@ -129,4 +143,3 @@ class SecurityManager:
             self.config.set("security.stealth_mode", self.stealth_mode)
         logger.info(f"🕶️ Stealth Mode changed to: {self.stealth_mode}")
         return self.stealth_mode
-

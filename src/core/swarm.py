@@ -21,7 +21,7 @@ class SwarmTask:
         self.error = None
 
 class SwarmOrchestrator:
-    def __init__(self, tool_handler, router):
+    def __init__(self, tool_handler, router=None):
         self.tools = tool_handler
         self.router = router
         # PersonaManager is available via self.router.persona (set in main.py)
@@ -59,6 +59,9 @@ class SwarmOrchestrator:
         2. Coder/Expert: Implements.
         3. Critic: Checks for flaws.
         """
+        if not self.router or not getattr(self.router, "persona", None):
+            return "⚠️ Consilium недоступен: router/persona не инициализированы."
+
         logger.info("🏛️ Entering Consilium Mode", query=query[:50])
         
         # Step 1: Architect Plan
@@ -88,10 +91,12 @@ class SwarmOrchestrator:
         tasks_to_run = []
         # ... existing logic ...
         if "поищи" in lower_query or "найди" in lower_query:
-             tasks_to_run.append(SwarmTask("WebSearch", self.tools.scout.search, query))
+             if hasattr(self.tools, "scout") and getattr(self.tools, "scout", None):
+                 tasks_to_run.append(SwarmTask("WebSearch", self.tools.scout.search, query))
              
         if "вспомни" in lower_query or "память" in lower_query:
-             tasks_to_run.append(SwarmTask("RAG", self.tools.rag.query, query))
+             if hasattr(self.tools, "rag") and getattr(self.tools, "rag", None):
+                 tasks_to_run.append(SwarmTask("RAG", self.tools.rag.query, query))
              
         if "файл" in lower_query or "папк" in lower_query:
             if self.tools.mcp:
@@ -105,8 +110,8 @@ class SwarmOrchestrator:
         formatted = []
         for name, res in results.items():
             if name == "WebSearch":
-                res = self.tools.scout.format_results(res)
+                if hasattr(self.tools, "scout") and getattr(self.tools, "scout", None) and hasattr(self.tools.scout, "format_results"):
+                    res = self.tools.scout.format_results(res)
             formatted.append(f"### [SWARM] {name}:\n{res}")
             
         return "\n\n".join(formatted)
-

@@ -18,6 +18,8 @@ import os
 import asyncio
 import logging
 import time
+import uuid
+import edge_tts
 from typing import Dict, Any
 from io import BytesIO
 from PIL import Image
@@ -105,8 +107,10 @@ class Perceptor:
         Анализирует изображение. Автоматически конвертирует HEIC.
         """
         converted_path = file_path
+        start_time = time.time()
 
         try:
+            logger.info(f"📸 Starting Vision Analysis: {file_path}")
             # 1. Проверка формата и конвертация если нужно
             if str(file_path).lower().endswith(".heic"):
                 img = Image.open(file_path)
@@ -116,38 +120,52 @@ class Perceptor:
 
             # 2. Vision Request via Gemini SDK
             if not _GENAI_AVAILABLE:
+                logger.error("❌ Google GenAI SDK not found.")
                 return "Ошибка: Google GenAI SDK не установлен."
                 
-            api_key = router.gemini_key or self.gemini_key
+            api_key = (router.gemini_key if hasattr(router, 'gemini_key') else None) or self.gemini_key
             if not api_key:
+                logger.error("❌ Gemini API Key missing.")
                 return "Ошибка: Нет ключа Gemini API."
 
+            # Инициализация клиента
             client = genai.Client(api_key=api_key)
             
-            img = Image.open(converted_path)
+            # Открываем изображение через PIL
+            img_pil = Image.open(converted_path)
             
+            logger.info(f"📡 Sending Vision Request to {self.vision_model}...")
+            # Запускаем в потоке, так как SDK блокирующий
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=self.vision_model,
-                contents=[prompt, img]
+                contents=[prompt, img_pil]
             )
             
             if response and response.text:
+                 duration = time.time() - start_time
+                 logger.info(f"✅ Vision Success in {duration:.2f}s")
                  return response.text
+            
+            logger.warning("⚠️ Gemini returned empty text.")
             return "Не удалось проанализировать изображение (пустой ответ)."
 
         except Exception as e:
-            logger.error(f"Vision error: {e}")
+            logger.error(f"❌ Vision error: {e}", exc_info=True)
             return f"Я ослеп, По. Ошибка: {e}"
         finally:
             # Чистим конвертированный файл если он создавался
             if converted_path != file_path and os.path.exists(converted_path):
-                os.remove(converted_path)
+                try:
+                    os.remove(converted_path)
+                except Exception:
+                    pass
 
     async def analyze_visual(self, file_path: str, prompt: str) -> str:
         """
         Универсальный анализ изображений (включая скриншоты).
         """
+        start_time = time.time()
         try:
             if not _GENAI_AVAILABLE:
                 return "Ошибка: Google GenAI SDK не установлен."
@@ -157,17 +175,24 @@ class Perceptor:
                 return "Ошибка: Нет ключа Gemini API."
 
             client = genai.Client(api_key=api_key)
-            img = Image.open(file_path)
+            img_pil = Image.open(file_path)
             
+            logger.info(f"📡 Sending Visual Analysis request ({self.vision_model})...")
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model=self.vision_model,
-                contents=[prompt, img]
+                contents=[prompt, img_pil]
             )
-            return response.text if response else "Пустой ответ."
+            
+            duration = time.time() - start_time
+            if response and response.text:
+                logger.info(f"✅ Visual Analysis success in {duration:.2f}s")
+                return response.text
+            
+            return "Пустой ответ."
 
         except Exception as e:
-            logger.error(f"Visual analysis error: {e}")
+            logger.error(f"❌ Visual analysis error: {e}", exc_info=True)
             return f"Ошибка зрения: {e}"
 
     async def analyze_video(self, file_path: str, router, prompt: str) -> str:
@@ -279,42 +304,57 @@ class Perceptor:
             logger.error(f"Document analysis error: {e}")
             return f"Не удалось проанализировать документ: {e}"
 
-    async def speak(self, text: str, voice: str = "Milena") -> str:
+    def _clean_text_for_tts(self, text: str) -> str:
         """
-        Генерирует голосовое сообщение (TTS) через macOS 'say' + ffmpeg.
+        Очищает текст от технических тегов и лишней разметки перед озвучкой.
+        """
+        import re
+        # Удаляем теги коробок и мыслительные блоки
+        text = re.sub(r'<\|begin_of_box\|>|<\|end_of_box\|>', '', text)
+        text = re.sub(r'<\|thought\|>.*?</\|thought\|>', '', text, flags=re.DOTALL)
+        # Удаляем лишние спецсимволы, оставляя знаки препинания
+        text = re.sub(r'[^\w\s\.\,\!\?\-\:\(\)]', '', text)
+        text = re.sub(r'http\S+', '', text)
+        # Удаляем лишние пробелы и пустые строки
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    async def speak(self, text: str, voice: str = "ru-RU-SvetlanaNeural") -> str:
+        """
+        Генерирует голосовое сообщение (TTS) через edge-tts + ffmpeg.
         Возвращает путь к .ogg файлу.
         """
-        import uuid
-        
         file_id = str(uuid.uuid4())
-        # Ensure dir exists
+        # Убеждаемся, что директория существует
         os.makedirs("artifacts/downloads", exist_ok=True)
         
-        aiff_path = f"artifacts/downloads/{file_id}.aiff"
+        mp3_path = f"artifacts/downloads/{file_id}.mp3"
         ogg_path = f"artifacts/downloads/{file_id}.ogg"
         
-        try:
-            logger.info(f"🗣️ Speaking: {text[:30]}... (Voice: {voice})")
-            
-            # 1. Generate AIFF
-            proc_say = await asyncio.create_subprocess_exec(
-                "say", "-v", voice, "-o", aiff_path, text,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await proc_say.communicate()
+        # Если голос не указан или стандартный от macOS, меняем на качественный
+        if voice in ["Milena", "Yuri", "Katya", "default"]:
+            voice = "ru-RU-SvetlanaNeural"
 
-            if proc_say.returncode != 0:
-                logger.error(f"TTS (say) failed: {stderr.decode().strip()}")
+        # Очищаем текст перед озвучкой
+        clean_text = self._clean_text_for_tts(text)
+        if not clean_text:
+            logger.warning("TTS text is empty after cleaning. Skipping speech synthesis.")
+            return None
+
+        try:
+            logger.info(f"🗣️ Speaking via edge-tts: {clean_text[:40]}... (Voice: {voice})")
+            
+            # 1. Генерация MP3 через edge-tts
+            communicate = edge_tts.Communicate(clean_text, voice)
+            await communicate.save(mp3_path)
+
+            if not os.path.exists(mp3_path) or os.path.getsize(mp3_path) < 100:
+                logger.error(f"TTS (edge-tts) failed: file missing or too small {mp3_path}")
                 return None
             
-            if not os.path.exists(aiff_path):
-                logger.error(f"TTS (say) completed but file missing: {aiff_path}")
-                return None
-            
-            # 2. Convert to OGG (Voice Note format)
+            # 2. Конвертация в OGG (Opus) для Telegram (Voice Note format)
             proc_ffmpeg = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-i", aiff_path, "-c:a", "libopus", "-b:a", "24k", "-y", ogg_path,
+                "ffmpeg", "-i", mp3_path, "-c:a", "libopus", "-b:a", "24k", "-vbr", "on", "-y", ogg_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -324,14 +364,21 @@ class Perceptor:
                  logger.error(f"ffmpeg conversion failed: {stderr.decode().strip()}")
                  return None
 
-            if os.path.exists(aiff_path):
-                 os.remove(aiff_path)
+            if os.path.exists(mp3_path):
+                 os.remove(mp3_path)
             
             if os.path.exists(ogg_path):
-                logger.info(f"✅ TTS Generated: {ogg_path}")
+                # Финальная проверка размера OGG
+                if os.path.getsize(ogg_path) < 200:
+                    logger.error(f"Generated OGG is too small ({os.path.getsize(ogg_path)} bytes), likely silent.")
+                    os.remove(ogg_path)
+                    return None
+                    
+                logger.info(f"✅ TTS Generated: {ogg_path} ({os.path.getsize(ogg_path)} bytes)")
                 return ogg_path
             return None
             
         except Exception as e:
-            logger.error(f"TTS Error: {e}")
+            logger.error(f"TTS Error (edge-tts): {e}")
+            if os.path.exists(mp3_path): os.remove(mp3_path)
             return None

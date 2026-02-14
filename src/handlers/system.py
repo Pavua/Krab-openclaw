@@ -12,10 +12,10 @@ System Handler — Системные команды: терминал, git, р�
 
 import os
 
-from pyrogram import filters
+from pyrogram import filters, enums
 from pyrogram.types import Message
 
-from .auth import is_owner
+from .auth import is_owner, is_superuser
 
 import structlog
 logger = structlog.get_logger(__name__)
@@ -28,15 +28,42 @@ def register_handlers(app, deps: dict):
     safe_handler = deps["safe_handler"]
     tools = deps["tools"]
 
+    async def _danger_audit(message: Message, action: str, status: str, details: str = ""):
+        """Логирует опасные команды в Saved Messages и владельцу."""
+        sender = message.from_user.username if message.from_user else "unknown"
+        chat_title = message.chat.title or "private"
+        payload = (
+            f"🛡️ **Danger Audit**\n"
+            f"- action: `{action}`\n"
+            f"- status: `{status}`\n"
+            f"- sender: `@{sender}`\n"
+            f"- chat: `{chat_title}` (`{message.chat.id}`)\n"
+        )
+        if details:
+            payload += f"- details: `{details[:800]}`\n"
+        try:
+            await app.send_message("me", payload)
+        except Exception:
+            pass
+        try:
+            await app.send_message("@p0lrd", payload)
+        except Exception:
+            pass
+
     # --- !sh: Терминал (Owner only) ---
     @app.on_message(filters.command(["sh", "terminal"], prefixes="!"))
     @safe_handler
     async def shell_command(client, message: Message):
         """Execution Shell: !sh <command> (Owner Only)"""
-        if not is_owner(message):
+        if not is_superuser(message):
             logger.warning(
                 f"⛔ Unauthorized shell attempt from @{message.from_user.username}"
             )
+            return
+
+        if message.chat.type != enums.ChatType.PRIVATE:
+            await message.reply_text("⛔ `!sh` разрешен только в личных сообщениях.")
+            await _danger_audit(message, "sh", "blocked", "non-private-chat")
             return
 
         if len(message.command) < 2:
@@ -53,13 +80,19 @@ def register_handlers(app, deps: dict):
             result = result[:3900] + "\n...[Output Truncated]..."
 
         await notification.edit_text(f"💻 **Результат:**\n\n```\n{result}\n```")
+        await _danger_audit(message, "sh", "ok", cmd[:300])
 
     # --- !commit: Git push ---
     @app.on_message(filters.command("commit", prefixes="!"))
     @safe_handler
     async def commit_command(client, message: Message):
         """Git commit & push: !commit [сообщение]"""
-        if not is_owner(message):
+        if not is_superuser(message):
+            return
+
+        if message.chat.type != enums.ChatType.PRIVATE:
+            await message.reply_text("⛔ `!commit` разрешен только в личных сообщениях.")
+            await _danger_audit(message, "commit", "blocked", "non-private-chat")
             return
 
         commit_msg = (
@@ -79,6 +112,7 @@ def register_handlers(app, deps: dict):
             final = final[:3900] + "\n...[Truncated]..."
 
         await notification.edit_text(final)
+        await _danger_audit(message, "commit", "ok", commit_msg[:300])
 
     # --- !sysinfo: Системный монитор ---
     @app.on_message(filters.command(["sysinfo", "system", "ram"], prefixes="!"))
@@ -130,7 +164,12 @@ def register_handlers(app, deps: dict):
         !refactor <file_path> [инструкции]
         !refactor audit — аудит безопасности
         """
-        if not is_owner(message):
+        if not is_superuser(message):
+            return
+
+        if message.chat.type != enums.ChatType.PRIVATE:
+            await message.reply_text("⛔ `!refactor` разрешен только в личных сообщениях.")
+            await _danger_audit(message, "refactor", "blocked", "non-private-chat")
             return
 
         if len(message.command) < 2:
@@ -153,6 +192,7 @@ def register_handlers(app, deps: dict):
             await notification.edit_text(
                 f"🕵️‍♂️ **Security Audit Report:**\n\n{report}"
             )
+            await _danger_audit(message, "refactor_audit", "ok", "audit")
         else:
             target_file = sub
             instructions = (
@@ -176,13 +216,19 @@ def register_handlers(app, deps: dict):
                 "💡 _Чтобы применить изменения, скопируйте код "
                 "и используйте !sh или отредактируйте вручную._"
             )
+            await _danger_audit(message, "refactor", "ok", target_file[:300])
 
     # --- !panic / !stealth: Режим секретности ---
     @app.on_message(filters.command(["panic", "stealth"], prefixes="!"))
     @safe_handler
     async def panic_command(client, message: Message):
         """Panic Button — мгновенная блокировка системы."""
-        if not is_owner(message):
+        if not is_superuser(message):
+            return
+
+        if message.chat.type != enums.ChatType.PRIVATE:
+            await message.reply_text("⛔ `!panic` разрешен только в личных сообщениях.")
+            await _danger_audit(message, "panic", "blocked", "non-private-chat")
             return
 
         is_stealth = security.toggle_stealth()
@@ -206,6 +252,7 @@ def register_handlers(app, deps: dict):
                 "• Стандартный режим работы восстановлен.\n"
                 "• Уровни доступа (Admin/User) снова активны."
             )
+        await _danger_audit(message, "panic", "ok", f"stealth={is_stealth}")
 
     # --- !grant: Назначение ролей ---
     @app.on_message(filters.command("grant", prefixes="!"))
@@ -253,7 +300,13 @@ def register_handlers(app, deps: dict):
     @safe_handler
     async def godmode_launch_command(client, message: Message):
         """Native Launch: !godmode (Owner only)"""
-        if not is_owner(message): return
+        if not is_superuser(message):
+            return
+
+        if message.chat.type != enums.ChatType.PRIVATE:
+            await message.reply_text("⛔ `!godmode` разрешен только в личных сообщениях.")
+            await _danger_audit(message, "godmode", "blocked", "non-private-chat")
+            return
         
         notification = await message.reply_text("🚀 **Активирую God Mode (Native macOS)...**")
         
@@ -276,8 +329,10 @@ def register_handlers(app, deps: dict):
                 "Если ты в Docker — убедись, что скрипт имеет доступ к хосту. "
                 "В нативном режиме это просто откроет параллельную сессию."
             )
+            await _danger_audit(message, "godmode", "ok", cmd_path)
         except Exception as e:
              await notification.edit_text(f"❌ Ошибка запуска: {e}")
+             await _danger_audit(message, "godmode", "error", str(e))
 
     # --- !roles: Список ролей ---
     @app.on_message(filters.command("roles", prefixes="!"))

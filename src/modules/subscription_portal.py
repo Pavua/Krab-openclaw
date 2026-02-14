@@ -68,17 +68,23 @@ class SubscriptionPortal:
             
             # Extract last response
             # Strategy: Get all message containers, pick the last one that isn't the user's
-            response_selector = "model-response" # Hypothetical tag or class
-            # Searching for standard text container
+            # Ищем последний ответ по нескольким DOM-стратегиям.
             last_response = await page.evaluate("""() => {
-                const responses = document.querySelectorAll('message-content'); # Check actual tag
-                if (responses.length > 0) return responses[responses.length - 1].innerText;
-                
-                # Fallback: Look for any large text block created recently
-                const blocks = document.querySelectorAll('div[data-message-id]');
-                if (blocks.length > 0) return blocks[blocks.length - 1].innerText;
-                
-                return "Error: Could not extract response.";
+                const candidates = [
+                    'message-content',
+                    '[data-message-author-role=\"model\"]',
+                    'div[data-message-id]'
+                ];
+
+                for (const selector of candidates) {
+                    const nodes = document.querySelectorAll(selector);
+                    if (nodes && nodes.length > 0) {
+                        const text = (nodes[nodes.length - 1].innerText || '').trim();
+                        if (text.length > 0) return text;
+                    }
+                }
+
+                return 'Error: Could not extract response.';
             }""")
             
             await page.close()

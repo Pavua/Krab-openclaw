@@ -16,6 +16,7 @@ logger = logging.getLogger("BlackBox")
 class BlackBox:
     def __init__(self, db_path="artifacts/memory/black_box.db"):
         self.db_path = db_path
+        self._start_time = datetime.now()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
 
@@ -133,6 +134,21 @@ class BlackBox:
         except:
             return []
 
+    def get_recent_events(self, limit=10):
+        """Возвращает список последних системных событий."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("SELECT timestamp, event_type, description FROM events ORDER BY id DESC LIMIT ?", (limit,))
+            rows = c.fetchall()
+            conn.close()
+            return [
+                {"timestamp": r[0], "event_type": r[1], "details": r[2]}
+                for r in rows
+            ]
+        except:
+            return []
+
     # --- Методы для работы с группами (Phase 12.2) ---
     
     def get_group_settings(self, chat_id: int) -> Dict[str, Any]:
@@ -183,3 +199,11 @@ class BlackBox:
         except Exception as e:
             logger.error(f"Failed to wipe user data: {e}")
             return False
+
+    def get_uptime(self) -> str:
+        """Возвращает строку uptime с момента запуска Krab."""
+        delta = datetime.now() - self._start_time
+        total_seconds = int(delta.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours}h {minutes}m {seconds}s"

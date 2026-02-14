@@ -4,166 +4,688 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Krab Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <title>Krab Web Panel</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0a0a0f;
-            --card-bg: rgba(255, 255, 255, 0.05);
-            --accent: #00f2ff;
-            --text: #ffffff;
-            --glass: rgba(255, 255, 255, 0.1);
+            --bg: #0c1016;
+            --card-bg: rgba(255, 255, 255, 0.06);
+            --accent: #1fb6ff;
+            --text: #ecf2ff;
+            --muted: #a7b5cc;
+            --ok: #22c55e;
+            --warn: #f59e0b;
+            --bad: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
         }
 
         body {
             margin: 0;
-            padding: 0;
-            font-family: 'Outfit', sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
             min-height: 100vh;
-            overflow-x: hidden;
+            font-family: 'Outfit', sans-serif;
+            background: radial-gradient(circle at 10% 20%, #152336 0%, var(--bg) 42%);
+            color: var(--text);
+            padding: 24px;
         }
 
-        .background-blob {
-            position: fixed;
-            width: 300px;
-            height: 300px;
-            background: linear-gradient(45deg, var(--accent), #7000ff);
-            filter: blur(100px);
-            z-index: -1;
-            border-radius: 50%;
-            opacity: 0.3;
-            animation: move 20s infinite alternate;
-        }
-
-        @keyframes move {
-            from {
-                transform: translate(-50%, -50%);
-            }
-
-            to {
-                transform: translate(50%, 50%);
-            }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
         }
 
         header {
-            width: 100%;
-            max-width: 800px;
-            padding: 40px 20px;
-            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 12px;
+            margin-bottom: 18px;
+            flex-wrap: wrap;
         }
 
         h1 {
-            font-size: 2.5rem;
             margin: 0;
-            background: linear-gradient(90deg, #fff, var(--accent));
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
+            font-size: 2rem;
+            letter-spacing: 0.03em;
         }
 
-        .stats-grid {
+        .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        .row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            width: 100%;
-            max-width: 800px;
-            padding: 0 20px;
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+
+        .row.metrics {
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        }
+
+        .row.wide {
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
         }
 
         .card {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 16px;
+            padding: 16px;
             background: var(--card-bg);
             backdrop-filter: blur(10px);
-            border: 1px solid var(--glass);
-            border-radius: 20px;
-            padding: 25px;
-            transition: transform 0.3s ease;
         }
 
-        .card:hover {
-            transform: translateY(-5px);
+        .k {
+            margin: 0 0 8px;
+            color: var(--muted);
+            font-size: 0.86rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .v {
+            margin: 0;
+            font-size: 1.6rem;
+            font-weight: 700;
+            line-height: 1.2;
+            word-break: break-word;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.82rem;
+            border: 1px solid;
+            margin-right: 8px;
+        }
+
+        .ok {
+            color: var(--ok);
+            border-color: var(--ok);
+            background: rgba(34, 197, 94, 0.15);
+        }
+
+        .warn {
+            color: var(--warn);
+            border-color: var(--warn);
+            background: rgba(245, 158, 11, 0.16);
+        }
+
+        .bad {
+            color: var(--bad);
+            border-color: var(--bad);
+            background: rgba(239, 68, 68, 0.16);
+        }
+
+        .links a {
+            display: block;
+            color: #9ed5ff;
+            text-decoration: none;
+            margin-bottom: 8px;
+            word-break: break-all;
+        }
+
+        .links a:hover {
+            color: var(--accent);
+            text-decoration: underline;
+        }
+
+        .meta {
+            color: var(--muted);
+            font-size: 0.84rem;
+        }
+
+        .refresh {
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text);
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+
+        .refresh:hover {
             border-color: var(--accent);
         }
 
-        .card h3 {
-            margin: 0 0 10px 0;
-            font-size: 0.9rem;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            opacity: 0.7;
+        .field {
+            width: 100%;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+            padding: 10px 12px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.95rem;
         }
 
-        .card .value {
-            font-size: 2rem;
-            font-weight: 600;
+        .field::placeholder {
+            color: var(--muted);
         }
 
-        .status-badge {
-            display: inline-block;
-            padding: 5px 12px;
-            border-radius: 50px;
-            font-size: 0.8rem;
-            background: rgba(0, 255, 127, 0.2);
-            color: #00ff7f;
-            border: 1px solid #00ff7f;
+        .row-inline {
+            display: grid;
+            grid-template-columns: 1fr 160px 150px;
+            gap: 10px;
+            margin-bottom: 10px;
         }
 
-        footer {
-            margin-top: auto;
-            padding: 40px;
-            font-size: 0.8rem;
-            opacity: 0.5;
+        .assistant-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin: 10px 0;
+        }
+
+        .assistant-output {
+            white-space: pre-wrap;
+            line-height: 1.45;
+            font-size: 0.95rem;
+            min-height: 120px;
+            max-height: 340px;
+            overflow: auto;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            padding: 10px;
+            background: rgba(8, 12, 18, 0.5);
+        }
+
+        .ops-list {
+            margin: 0;
+            padding-left: 18px;
+            line-height: 1.4;
+            color: var(--text);
+        }
+
+        .ops-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .ops-history {
+            margin-top: 10px;
+            max-height: 140px;
+            overflow: auto;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            padding: 8px;
+            background: rgba(8, 12, 18, 0.5);
+            font-size: 0.84rem;
+            line-height: 1.35;
+            color: var(--muted);
+        }
+
+        @media (max-width: 700px) {
+            body {
+                padding: 14px;
+            }
+
+            .v {
+                font-size: 1.3rem;
+            }
+
+            .row-inline {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 
 <body>
-    <div class="background-blob"></div>
-    <header>
-        <h1>🦀 KRAB COMMAND</h1>
-        <p>Phase 15: Single Plane of Output</p>
-    </header>
+    <div class="container">
+        <header>
+            <div>
+                <h1>🦀 Krab Web Panel</h1>
+                <p class="subtitle">Единый обзор экосистемы: Krab + OpenClaw + Voice Gateway + Local LM</p>
+            </div>
+            <button id="refreshBtn" class="refresh">Обновить</button>
+        </header>
 
-    <div class="stats-grid">
-        <div class="card">
-            <h3>Статус системы</h3>
-            <div class="status-badge" id="status">ONLINE</div>
+        <div class="row metrics">
+            <div class="card">
+                <p class="k">Система</p>
+                <p class="v" id="degradation">—</p>
+            </div>
+            <div class="card">
+                <p class="k">Black Box</p>
+                <p class="v" id="bb_total">—</p>
+            </div>
+            <div class="card">
+                <p class="k">RAG Docs</p>
+                <p class="v" id="rag_total">—</p>
+            </div>
+            <div class="card">
+                <p class="k">Local Model</p>
+                <p class="v" id="local_model">—</p>
+            </div>
         </div>
-        <div class="card">
-            <h3>Black Box</h3>
-            <div class="value" id="bb_total">--</div>
+
+        <div class="row wide">
+            <div class="card">
+                <p class="k">Сервисы</p>
+                <div id="checks">—</div>
+                <p class="meta" id="updated_at"></p>
+            </div>
+            <div class="card links">
+                <p class="k">Ссылки</p>
+                <div id="links">—</div>
+            </div>
+            <div class="card">
+                <p class="k">Рекомендованная модель</p>
+                <p class="v" id="recommended_model">—</p>
+                <p class="meta" id="recommended_meta"></p>
+            </div>
+            <div class="card">
+                <p class="k">Ops Alerts</p>
+                <div id="opsAlerts" class="meta">—</div>
+                <p class="meta" id="opsUsageMeta"></p>
+                <div class="ops-actions">
+                    <input id="opsAlertCode" class="field" placeholder="alert code (например cloud_share_high)">
+                    <input id="opsAlertNote" class="field" placeholder="note (опционально)">
+                    <button id="opsAckBtn" class="refresh">Ack</button>
+                    <button id="opsUnackBtn" class="refresh">Unack</button>
+                </div>
+                <p class="meta" id="opsActionMeta">Управление alert-ами через Web API</p>
+                <div id="opsHistory" class="ops-history">История ops: —</div>
+            </div>
         </div>
-        <div class="card">
-            <h3>RAG Memory</h3>
-            <div class="value" id="rag_total">--</div>
-        </div>
-        <div class="card">
-            <h3>Local AI</h3>
-            <div class="value" id="local_ai" style="font-size: 1.2rem; color: var(--accent);">--</div>
+
+        <div class="row">
+            <div class="card">
+                <p class="k">Web Assistant (без Telegram)</p>
+                <div class="row-inline">
+                    <input id="assistantTaskType" class="field" value="chat" placeholder="task_type: chat/reasoning/coding/...">
+                    <input id="assistantUseRag" class="field" value="off" placeholder="RAG: on/off">
+                    <input id="assistantApiKey" class="field" placeholder="WEB_API_KEY (если включен)">
+                </div>
+                <textarea id="assistantPrompt" class="field" rows="4" placeholder="Введите задачу для Краба..."></textarea>
+                <div class="assistant-actions">
+                    <button id="assistantPlanBtn" class="refresh">Preflight</button>
+                    <button id="assistantRunBtn" class="refresh">Выполнить</button>
+                    <span class="meta" id="assistantMeta">Готов к запросам</span>
+                </div>
+                <div id="assistantOutput" class="assistant-output">—</div>
+                <div class="row-inline" style="margin-top:10px;">
+                    <input id="feedbackScore" class="field" value="5" placeholder="Оценка 1-5">
+                    <input id="feedbackProfile" class="field" placeholder="profile (опционально)">
+                    <input id="feedbackNote" class="field" placeholder="Комментарий (опционально)">
+                </div>
+                <div class="assistant-actions">
+                    <button id="feedbackSendBtn" class="refresh">Оценить ответ</button>
+                    <button id="feedbackStatsBtn" class="refresh">Показать Feedback Stats</button>
+                    <span class="meta" id="feedbackMeta">Оценка применяется к последнему прогону роутера, если profile/model не указаны</span>
+                </div>
+            </div>
         </div>
     </div>
 
-    <footer>
-        &copy; 2026 KRAB NEURAL SYSTEM
-    </footer>
-
     <script>
-        async function updateStats() {
+        function badge(ok, label) {
+            const cls = ok ? 'ok' : 'warn';
+            return `<span class="badge ${cls}">${ok ? 'ON' : 'OFF'} ${label}</span>`;
+        }
+
+        function setText(id, value) {
+            const node = document.getElementById(id);
+            if (node) node.textContent = value;
+        }
+
+        async function fetchJson(url) {
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return response.json();
+        }
+
+        function readWebApiKey() {
+            return (document.getElementById('assistantApiKey').value || '').trim();
+        }
+
+        async function postJson(url, body, withKey = true, method = 'POST') {
+            const headers = { 'Content-Type': 'application/json' };
+            if (withKey) {
+                const webApiKey = readWebApiKey();
+                if (webApiKey) {
+                    headers['X-Krab-Web-Key'] = webApiKey;
+                }
+            }
+            const response = await fetch(url, {
+                method,
+                headers,
+                body: method === 'DELETE' ? undefined : JSON.stringify(body || {})
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(payload?.detail || `HTTP ${response.status}`);
+            }
+            return payload;
+        }
+
+        async function opsAckAction(isAck) {
+            const code = (document.getElementById('opsAlertCode').value || '').trim();
+            const note = (document.getElementById('opsAlertNote').value || '').trim();
+            if (!code) {
+                setText('opsActionMeta', 'Ошибка: укажи alert code');
+                return;
+            }
+            setText('opsActionMeta', `${isAck ? 'Ack' : 'Unack'} в процессе...`);
             try {
-                const res = await fetch('/api/stats');
-                const data = await res.json();
-                document.getElementById('bb_total').innerText = data.black_box.total;
-                document.getElementById('rag_total').innerText = data.rag.count;
-                document.getElementById('local_ai').innerText = data.router.local_model || 'Offline';
-            } catch (e) {
-                console.error("Stats fail", e);
+                if (isAck) {
+                    await postJson(`/api/ops/ack/${encodeURIComponent(code)}`, { actor: 'web_panel', note });
+                    setText('opsActionMeta', `OK: alert ${code} подтвержден`);
+                } else {
+                    await postJson(`/api/ops/ack/${encodeURIComponent(code)}`, {}, true, 'DELETE');
+                    setText('opsActionMeta', `OK: alert ${code} снят с подтверждения`);
+                }
+                await updateStats();
+            } catch (error) {
+                setText('opsActionMeta', `Ошибка: ${error.message}`);
             }
         }
-        setInterval(updateStats, 5000);
+
+        async function assistantQuery() {
+            const prompt = (document.getElementById('assistantPrompt').value || '').trim();
+            const taskType = (document.getElementById('assistantTaskType').value || 'chat').trim();
+            const ragRaw = (document.getElementById('assistantUseRag').value || 'off').trim().toLowerCase();
+            const webApiKey = (document.getElementById('assistantApiKey').value || '').trim();
+
+            if (!prompt) {
+                setText('assistantMeta', 'Ошибка: пустой prompt');
+                return;
+            }
+
+            const useRag = ['1', 'on', 'true', 'yes', 'y'].includes(ragRaw);
+            const headers = { 'Content-Type': 'application/json' };
+            if (webApiKey) {
+                headers['X-Krab-Web-Key'] = webApiKey;
+            }
+
+            setText('assistantMeta', 'Выполняю запрос...');
+            document.getElementById('assistantOutput').textContent = '⏳ Выполнение...';
+
+            try {
+                const response = await fetch('/api/assistant/query', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        prompt,
+                        task_type: taskType || 'chat',
+                        use_rag: useRag
+                    })
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload?.detail || `HTTP ${response.status}`);
+                }
+
+                document.getElementById('assistantOutput').textContent = payload.reply || '(пустой ответ)';
+                setText('assistantMeta', `OK • профиль: ${payload.profile || '-'} • task: ${payload.task_type || '-'}`);
+                const lastRoute = payload.last_route || {};
+                if (lastRoute.profile) {
+                    document.getElementById('feedbackProfile').value = String(lastRoute.profile);
+                }
+                if (lastRoute.model || lastRoute.channel) {
+                    setText(
+                        'feedbackMeta',
+                        `Последний прогон: ${lastRoute.model || '-'} (${lastRoute.channel || '-'})`
+                    );
+                }
+            } catch (error) {
+                document.getElementById('assistantOutput').textContent = `Ошибка: ${error.message}`;
+                setText('assistantMeta', 'Запрос завершился с ошибкой');
+            }
+        }
+
+        async function assistantPreflight() {
+            const prompt = (document.getElementById('assistantPrompt').value || '').trim();
+            const taskType = (document.getElementById('assistantTaskType').value || 'chat').trim();
+            const webApiKey = (document.getElementById('assistantApiKey').value || '').trim();
+            if (!prompt) {
+                setText('assistantMeta', 'Ошибка: пустой prompt');
+                return;
+            }
+
+            const headers = { 'Content-Type': 'application/json' };
+            if (webApiKey) {
+                headers['X-Krab-Web-Key'] = webApiKey;
+            }
+
+            setText('assistantMeta', 'Собираю preflight-план...');
+            document.getElementById('assistantOutput').textContent = '⏳ Анализ маршрута...';
+
+            try {
+                const response = await fetch('/api/model/preflight', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        prompt,
+                        task_type: taskType || 'chat'
+                    })
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload?.detail || `HTTP ${response.status}`);
+                }
+                if (!payload?.ok) {
+                    throw new Error(payload?.error || 'preflight_failed');
+                }
+
+                const plan = payload.preflight || {};
+                const execution = plan.execution || {};
+                const warnings = plan.warnings || [];
+                const reasons = plan.reasons || [];
+                const warningText = warnings.length ? warnings.map((item) => `- ${item}`).join('\n') : '- нет';
+                const reasonText = reasons.length ? reasons.map((item) => `- ${item}`).join('\n') : '- нет';
+
+                document.getElementById('assistantOutput').textContent =
+`Preflight:
+task_type=${plan.task_type || '-'}
+profile=${plan.profile || '-'}
+critical=${plan.critical ? 'yes' : 'no'}
+channel=${execution.channel || '-'}
+model=${execution.model || '-'}
+can_run_now=${execution.can_run_now ? 'yes' : 'no'}
+requires_confirm=${execution.requires_confirm_expensive ? 'yes' : 'no'}
+marginal_cost_usd=${plan.cost_hint?.marginal_call_cost_usd ?? 0}
+
+reasons:
+${reasonText}
+
+warnings:
+${warningText}
+
+next_step: ${plan.next_step || 'Можно запускать задачу.'}`;
+                setText('assistantMeta', `Preflight OK • профиль: ${plan.profile || '-'} • канал: ${execution.channel || '-'}`);
+            } catch (error) {
+                document.getElementById('assistantOutput').textContent = `Ошибка preflight: ${error.message}`;
+                setText('assistantMeta', 'Preflight завершился с ошибкой');
+            }
+        }
+
+        async function submitModelFeedback() {
+            const scoreRaw = (document.getElementById('feedbackScore').value || '').trim();
+            const profileRaw = (document.getElementById('feedbackProfile').value || '').trim();
+            const noteRaw = (document.getElementById('feedbackNote').value || '').trim();
+            const score = Number.parseInt(scoreRaw, 10);
+
+            if (!Number.isInteger(score) || score < 1 || score > 5) {
+                setText('feedbackMeta', 'Ошибка: score должен быть от 1 до 5');
+                return;
+            }
+
+            setText('feedbackMeta', 'Сохраняю feedback...');
+            try {
+                const payload = { score, note: noteRaw };
+                if (profileRaw) {
+                    payload.profile = profileRaw.toLowerCase();
+                }
+                const response = await postJson('/api/model/feedback', payload, true, 'POST');
+                if (!response?.ok) {
+                    throw new Error(response?.error || 'feedback_submit_failed');
+                }
+
+                const result = response.result || {};
+                setText(
+                    'feedbackMeta',
+                    `OK: ${result.model || '-'} (${result.profile || '-'}) → ${result.profile_model_stats?.avg ?? 0}/5`
+                );
+            } catch (error) {
+                setText('feedbackMeta', `Ошибка feedback: ${error.message}`);
+            }
+        }
+
+        async function loadModelFeedbackStats() {
+            const profileRaw = (document.getElementById('feedbackProfile').value || '').trim();
+            const query = profileRaw ? `?profile=${encodeURIComponent(profileRaw.toLowerCase())}&top=5` : '?top=5';
+            setText('feedbackMeta', 'Загружаю feedback-статистику...');
+
+            try {
+                const payload = await fetchJson(`/api/model/feedback${query}`);
+                if (!payload?.ok) {
+                    throw new Error(payload?.error || 'feedback_summary_failed');
+                }
+                const feedback = payload.feedback || {};
+                const models = feedback.top_models || [];
+                const channels = feedback.top_channels || [];
+                const modelsText = models.length
+                    ? models.map((item) => `- ${item.model} (${item.profile}): ${item.avg_score}/5, n=${item.count}`).join('\n')
+                    : '- нет данных';
+                const channelsText = channels.length
+                    ? channels.map((item) => `- ${item.channel}: ${item.avg_score}/5, n=${item.count}`).join('\n')
+                    : '- нет данных';
+                document.getElementById('assistantOutput').textContent =
+`Feedback summary:
+profile=${feedback.profile || 'all'}
+total_feedback=${feedback.total_feedback || 0}
+
+top models:
+${modelsText}
+
+top channels:
+${channelsText}`;
+                setText('feedbackMeta', `Feedback loaded • total=${feedback.total_feedback || 0}`);
+            } catch (error) {
+                setText('feedbackMeta', `Ошибка feedback stats: ${error.message}`);
+            }
+        }
+
+        async function updateStats() {
+            try {
+                const [stats, health, links, recommend, feedbackPayload, usagePayload, alertsPayload, historyPayload] = await Promise.all([
+                    fetchJson('/api/stats'),
+                    fetchJson('/api/health'),
+                    fetchJson('/api/links'),
+                    fetchJson('/api/model/recommend?profile=chat'),
+                    fetchJson('/api/model/feedback?profile=chat&top=1'),
+                    fetchJson('/api/ops/usage'),
+                    fetchJson('/api/ops/alerts'),
+                    fetchJson('/api/ops/history?limit=8')
+                ]);
+
+                const bb = stats.black_box || {};
+                const rag = stats.rag || {};
+                const router = stats.router || {};
+
+                setText('bb_total', String(bb.total ?? bb.total_messages ?? 0));
+                setText('rag_total', String(rag.count ?? 0));
+                setText('local_model', router.local_model || 'Offline');
+                setText('degradation', health.degradation || 'unknown');
+
+                const checks = health.checks || {};
+                document.getElementById('checks').innerHTML =
+                    badge(!!checks.openclaw, 'OpenClaw') +
+                    badge(!!checks.local_lm, 'Local LM') +
+                    badge(!!checks.voice_gateway, 'Voice Gateway') +
+                    badge(!!checks.krab_ear, 'Krab Ear');
+
+                const linksBlock = [
+                    ['Dashboard', links.dashboard],
+                    ['Stats API', links.stats_api],
+                    ['Health API', links.health_api],
+                    ['Ecosystem Health API', links.ecosystem_health_api],
+                    ['Model Preflight API', `${links.dashboard}/api/model/preflight`],
+                    ['Model Feedback API', `${links.dashboard}/api/model/feedback`],
+                    ['OpenClaw Deep Check', `${links.dashboard}/api/openclaw/deep-check`],
+                    ['OpenClaw Remediation Plan', `${links.dashboard}/api/openclaw/remediation-plan`],
+                    ['OpenClaw Browser Smoke', `${links.dashboard}/api/openclaw/browser-smoke`],
+                    ['Assistant Capabilities', `${links.dashboard}/api/assistant/capabilities`],
+                    ['Ops Cost Report', `${links.dashboard}/api/ops/cost-report`],
+                    ['Ops Executive Summary', `${links.dashboard}/api/ops/executive-summary`],
+                    ['Ops Full Report', `${links.dashboard}/api/ops/report`],
+                    ['Ops Bundle Export', `${links.dashboard}/api/ops/bundle/export`],
+                    ['OpenClaw', links.openclaw],
+                    ['Voice Gateway', links.voice_gateway],
+                ].filter(([, url]) => !!url)
+                 .map(([name, url]) => `<a href="${url}" target="_blank" rel="noreferrer">${name}: ${url}</a>`)
+                 .join('');
+                document.getElementById('links').innerHTML = linksBlock || '—';
+
+                setText('recommended_model', recommend.model || '—');
+                const bestFeedback = feedbackPayload?.feedback?.top_models?.[0] || null;
+                if (bestFeedback) {
+                    setText(
+                        'recommended_meta',
+                        `Профиль: ${recommend.profile || 'chat'} • Канал: ${recommend.channel || 'auto'} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count})`
+                    );
+                } else {
+                    setText('recommended_meta', `Профиль: ${recommend.profile || 'chat'} • Канал: ${recommend.channel || 'auto'}`);
+                }
+
+                const usage = usagePayload.usage || {};
+                const totals = usage.totals || {};
+                const ratios = usage.ratios || {};
+                const softCap = usage.soft_cap || {};
+                setText(
+                    'opsUsageMeta',
+                    `Calls: total=${totals.all_calls ?? 0}, cloud=${totals.cloud_calls ?? 0}, local=${totals.local_calls ?? 0} • cloud_share=${ratios.cloud_share ?? 0} • cap_left=${softCap.cloud_remaining_calls ?? 0}`
+                );
+
+                const alertsRoot = alertsPayload.alerts || {};
+                const alertsList = alertsRoot.alerts || [];
+                if (!alertsList.length) {
+                    document.getElementById('opsAlerts').innerHTML = '<span class="badge ok">OK no active alerts</span>';
+                } else {
+                    const html = alertsList
+                        .map((item) => {
+                            const ack = item.acknowledged ? ` <span class="badge ok">ACK ${item.ack?.actor || ''}</span>` : '';
+                            return `<div><span class="badge ${item.severity === 'high' ? 'bad' : 'warn'}">${item.severity || 'info'}</span> ${item.code || ''} — ${item.message || ''}${ack}</div>`;
+                        })
+                        .join('');
+                    document.getElementById('opsAlerts').innerHTML = html;
+                }
+
+                const history = historyPayload.history?.items || [];
+                if (!history.length) {
+                    setText('opsHistory', 'История ops: пусто');
+                } else {
+                    document.getElementById('opsHistory').innerHTML = history
+                        .map((item) => `${item.ts || '-'} • ${item.status || '-'} • alerts=${item.alerts_count ?? 0} • codes=${(item.codes || []).join(',') || '-'}`)
+                        .join('<br>');
+                }
+                setText('updated_at', `Обновлено: ${new Date().toLocaleTimeString()}`);
+            } catch (error) {
+                console.error('Stats update failed', error);
+                setText('updated_at', `Ошибка обновления: ${error.message}`);
+            }
+        }
+
+        document.getElementById('refreshBtn').addEventListener('click', updateStats);
+        document.getElementById('assistantRunBtn').addEventListener('click', assistantQuery);
+        document.getElementById('assistantPlanBtn').addEventListener('click', assistantPreflight);
+        document.getElementById('feedbackSendBtn').addEventListener('click', submitModelFeedback);
+        document.getElementById('feedbackStatsBtn').addEventListener('click', loadModelFeedbackStats);
+        document.getElementById('opsAckBtn').addEventListener('click', () => opsAckAction(true));
+        document.getElementById('opsUnackBtn').addEventListener('click', () => opsAckAction(false));
+        setInterval(updateStats, 8000);
         updateStats();
     </script>
 </body>

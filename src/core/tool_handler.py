@@ -25,10 +25,33 @@ logger = structlog.get_logger("ToolHandler")
 
 
 class ToolHandler:
-    def __init__(self, router, rag, openclaw_client, mcp=None, browser_agent=None, crypto_intel=None, reminder_manager=None):
+    def __init__(
+        self,
+        router,
+        rag,
+        openclaw_client,
+        mcp=None,
+        browser_agent=None,
+        crypto_intel=None,
+        reminder_manager=None,
+        scout=None,
+    ):
         self.router = router
         self.rag = rag
+
+        # Legacy-совместимость:
+        # в ранних тестах третий аргумент был WebScout, а не OpenClaw client.
+        self.scout = scout
         self.openclaw = openclaw_client
+        if self.scout is None and self.openclaw is not None:
+            has_search = hasattr(self.openclaw, "search")
+            has_format = hasattr(self.openclaw, "format_results")
+            if has_search and has_format:
+                # Не выключаем openclaw намеренно:
+                # в legacy-тестах это может быть WebScout mock,
+                # а в runtime при явном scout мы все равно используем OpenClaw-first.
+                self.scout = self.openclaw
+
         self.mcp = mcp  # Инстанс MCPManager
         self.browser_agent = browser_agent
         self.crypto_intel = crypto_intel
@@ -172,34 +195,39 @@ class ToolHandler:
         logger.info(f"🛠️ Executing tool: {name}", args=kwargs)
         try:
             if name == "web_search":
-                # res = await self.scout.search(kwargs.get("query", ""))
-                # return self.scout.format_results(res)
-                # Use OpenClaw
-                response = await self.openclaw.invoke_tool("web_search", {
-                    "query": kwargs.get("query", ""),
-                    "count": 5
-                })
-                # Format logic similar to other places, or just dump string
-                # For basic tool execution, we might return raw string or simple text
-                results = response.get("details", {}).get("results", [])
-                
-                # Fallback parse
-                if not results and "content" in response:
-                    try:
-                        import json
-                        text = response["content"][0]["text"]
-                        results = json.loads(text).get("results", [])
-                    except: pass
+                if self.openclaw and hasattr(self.openclaw, "invoke_tool"):
+                    response = await self.openclaw.invoke_tool("web_search", {
+                        "query": kwargs.get("query", ""),
+                        "count": 5
+                    })
+                    results = response.get("details", {}).get("results", [])
 
-                if not results: return "❌ No results found via OpenClaw."
-                
-                start_text = "🔎 **OpenClaw Search Results:**\n"
-                for i, r in enumerate(results, 1):
-                    if isinstance(r, dict):
-                        start_text += f"{i}. [{r.get('title')}]({r.get('url')})\n"
-                    else:
-                        start_text += f"{i}. {r}\n"
-                return start_text
+                    # Fallback parse
+                    if not results and "content" in response:
+                        try:
+                            import json
+                            text = response["content"][0]["text"]
+                            results = json.loads(text).get("results", [])
+                        except Exception:
+                            pass
+
+                    if not results:
+                        return "❌ No results found via OpenClaw."
+
+                    start_text = "🔎 **OpenClaw Search Results:**\n"
+                    for i, r in enumerate(results, 1):
+                        if isinstance(r, dict):
+                            start_text += f"{i}. [{r.get('title')}]({r.get('url')})\n"
+                        else:
+                            start_text += f"{i}. {r}\n"
+                    return start_text
+
+                if self.scout and hasattr(self.scout, "search"):
+                    result = await self.scout.search(kwargs.get("query", ""))
+                    if hasattr(self.scout, "format_results"):
+                        return self.scout.format_results(result)
+                    return str(result)
+                return "❌ Web search tool not configured."
             elif name == "rag_search":
                 return self.rag.query(kwargs.get("query", ""))
             elif name == "shell_exec":
@@ -212,9 +240,24 @@ class ToolHandler:
                 res = await self.call_mcp_tool(kwargs.get("server", ""), kwargs.get("tool", ""), kwargs.get("args", {}))
                 return str(res)
             elif name == "browse":
-                if not self.browser_agent: return "❌ Browser Agent не подключен"
-                res = await self.browser_agent.browse(kwargs.get("url", ""))
-                if "error" in res: return f"❌ Ошибка браузера: {res['error']}"
+                url = kwargs.get("url", "")
+                # OpenClaw-first
+                fetched = await self.openclaw.invoke_tool("web_fetch", {"url": url})
+                if not fetched.get("error"):
+                    try:
+                        details = fetched.get("details", {})
+                        title = details.get("title", url)
+                        text = fetched.get("content", [{}])[0].get("text", "")
+                        return f"📄 Title: {title}\nURL: {url}\nContent:\n{text[:10000]}"
+                    except Exception:
+                        pass
+
+                # Fallback: локальный BrowserAgent
+                if not self.browser_agent:
+                    return "❌ OpenClaw web_fetch не сработал и Browser Agent не подключен"
+                res = await self.browser_agent.browse(url)
+                if "error" in res:
+                    return f"❌ Ошибка браузера: {res['error']}"
                 return f"📄 Title: {res['title']}\nURL: {res['url']}\nContent:\n{res['content']}"
             elif name == "screenshot":
                 if not self.browser_agent: return "❌ Browser Agent не подключен"

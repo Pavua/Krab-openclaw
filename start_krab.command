@@ -1,0 +1,50 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# 🦀 Krab AI Userbot - Launch Script
+# -----------------------------------------------------------------------------
+# This is the main entry point for running Krab in interactive mode.
+# It ensures the virtual environment is active and sets up the execution context.
+# -----------------------------------------------------------------------------
+
+# Navigate to the project root directory
+cd "$(dirname "$0")"
+
+# ANSI Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Header
+echo -e "${BLUE}=======================================${NC}"
+echo -e "${GREEN}   🦀 KRAB AI: AUTONOMOUS AGENT v7.6   ${NC}"
+echo -e "${BLUE}=======================================${NC}"
+
+# Check for .env file
+if [ ! -f ".env" ]; then
+    echo -e "${RED}⚠️  WARNING: .env file not found!${NC}"
+    echo "Creating from .env.example..."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo -e "${GREEN}✅ Created .env. Please configure it!${NC}"
+    else
+        echo -e "${RED}❌ .env.example also missing! Cannot proceed.${NC}"
+        exit 1
+    fi
+fi
+
+# Check for Virtual Environment
+if [ ! -d ".venv" ]; then
+    echo -e "${RED}❌ Virtual environment (.venv) not found!${NC}"
+    echo "Please run: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+    exit 1
+fi
+
+# Launch
+echo -e "${BLUE}🚀 Starting Krab Core...${NC}"
+echo "Logs structure: logs/krab.log"
+echo "Press Ctrl+C to stop."
+echo ""
+
+# Execute
+./.venv/bin/python3 -m src.main

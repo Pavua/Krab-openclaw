@@ -118,7 +118,7 @@ with m4:
 st.divider()
 
 # TABS
-tab_analytics, tab_live, tab_tools, tab_crypto = st.tabs(["📈 Аналитика", "📝 Поток", "🛠️ Инструменты", "💰 Крипто"])
+tab_analytics, tab_live, tab_projects, tab_tools, tab_crypto = st.tabs(["📈 Аналитика", "📝 Поток", "📂 Проекты", "🛠️ Инструменты", "💰 Крипто"])
 
 with tab_analytics:
     df = load_data()
@@ -155,6 +155,37 @@ with tab_live:
             with open(log_file, "r") as f:
                 lines = f.readlines()
                 st.code("".join(lines[-40:]), language="text")
+
+with tab_projects:
+    st.subheader("📂 Autonomous Projects")
+    projects_dir = "data/projects"
+    if os.path.exists(projects_dir):
+        project_files = [f for f in os.listdir(projects_dir) if f.endswith(".json")]
+        if project_files:
+            for p_file in project_files:
+                with open(os.path.join(projects_dir, p_file), "r", encoding="utf-8") as f:
+                    p_data = json.load(f)
+                    with st.expander(f"🚀 {p_data.get('goal', 'No Goal')} ({p_data.get('status', 'unknown')})"):
+                        st.write(f"**ID:** {p_data.get('project_id')}")
+                        st.write(f"**Created:** {p_data.get('created_at')}")
+                        
+                        # Progress bar
+                        plan = p_data.get("plan", [])
+                        if plan:
+                            done = sum(1 for t in plan if t.get("status") == "completed")
+                            st.progress(done / len(plan), text=f"Progress: {done}/{len(plan)} tasks")
+                        
+                        # Show Handover if completed
+                        if p_data.get("status") == "completed":
+                            report_path = os.path.join(projects_dir, p_data.get('project_id'), "HANDOVER.md")
+                            if os.path.exists(report_path):
+                                if st.button(f"📄 View Report for {p_data.get('project_id')}"):
+                                    with open(report_path, "r", encoding="utf-8") as rf:
+                                        st.markdown(rf.read())
+        else:
+            st.info("No projects found.")
+    else:
+        st.warning("Projects directory not found.")
 
 with tab_tools:
     st.subheader("🛡️ Network Analysis")
