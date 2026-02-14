@@ -86,3 +86,9 @@ def register_all_handlers(app, deps: dict):
     
     from .finance import register_handlers as reg_finance
     _register_or_skip("finance", reg_finance, app, deps)
+
+    from .trading import register_trading_handlers as reg_trading
+    _register_or_skip("trading", reg_trading, app, deps)
+
+    from .teams import register_handlers as reg_teams
+    _register_or_skip("teams", reg_teams, app, deps)

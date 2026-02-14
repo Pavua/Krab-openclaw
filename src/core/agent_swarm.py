@@ -129,13 +129,61 @@ class SwarmManager:
                        "Найди уязвимости и дыры. Выдай разгромный отзыв или 'ОДОБРЕНО'.")
         ]
 
+    def get_summary_team(self) -> List[SwarmAgent]:
+        """Команда резюмирования документов и текстов."""
+        return [
+            SwarmAgent("Researcher", "Information Extractor", "Извлечь ключевые факты из текста.",
+                       "Выдели все ключевые тезисы, факты и цифры. Структурируй по категориям."),
+            SwarmAgent("Analyst", "Critical Analyst", "Оценить значимость и контекст.",
+                       "Оцени каждый факт по важности. Убери шум. Добавь контекст и связи."),
+            SwarmAgent("Editor", "Executive Summary Writer", "Создать финальное резюме.",
+                       "Сведи всё в лаконичное Executive Summary (3-5 пунктов). Добавь вывод и рекомендации.")
+        ]
+
+    def get_email_team(self) -> List[SwarmAgent]:
+        """Команда составления деловых писем и коммуникаций."""
+        return [
+            SwarmAgent("Copywriter", "Business Communication Expert", "Написать черновик письма.",
+                       "Напиши профессиональное письмо по теме. Учти тон, аудиторию и цель. Без воды."),
+            SwarmAgent("Stylist", "Tone & Style Advisor", "Подобрать идеальный тон.",
+                       "Проверь тон письма. Если нужно — сделай формальнее/неформальнее. Убери канцеляризмы."),
+            SwarmAgent("Proofreader", "Senior Proofreader", "Финальная корректура.",
+                       "Исправь грамматику, пунктуацию, логику. Проверь что письмо достигает цели. Выдай финальную версию.")
+        ]
+
+    def get_audit_team(self) -> List[SwarmAgent]:
+        """Команда security-аудита кода и систем."""
+        return [
+            SwarmAgent("Pentester", "Offensive Security Engineer", "Найти уязвимости.",
+                       "Ищи SQL-инъекции, XSS, SSRF, утечки ключей, небезопасные зависимости. Думай как хакер."),
+            SwarmAgent("Analyst", "Security Analyst", "Оценить риски и приоритеты.",
+                       "Классифицируй найденные уязвимости по CVSS. Определи что критично, а что можно отложить."),
+            SwarmAgent("Advisor", "Security Remediation Advisor", "Предложить исправления.",
+                       "Для каждой уязвимости предложи конкретный fix с примером кода. Формат: Проблема → Решение → Код.")
+        ]
+
+    def get_planning_team(self) -> List[SwarmAgent]:
+        """Команда бизнес-планирования и стратегии."""
+        return [
+            SwarmAgent("Strategist", "Business Strategist", "Разработать стратегию.",
+                       "Проанализируй идею: рынок, конкуренты, целевая аудитория. Предложи бизнес-модель и MVP."),
+            SwarmAgent("Financier", "Financial Analyst", "Оценить финансовую модель.",
+                       "Рассчитай unit-экономику: CAC, LTV, break-even. Предложи бюджет на 3-6-12 месяцев."),
+            SwarmAgent("Critic", "Devil's Advocate", "Разнести план в пух и прах.",
+                       "Найди все слабости плана. Задай 5 самых неудобных вопросов. Если план выдержит — ОДОБРЕНО.")
+        ]
+
     async def run_team(self, team_type: str, task: str) -> str:
         """Метод-фабрика для запуска конкретной команды."""
         teams = {
             "osint": self.get_osint_team(),
             "trading": self.get_trading_team(),
             "content": self.get_content_team(),
-            "dev": self.get_dev_team()
+            "dev": self.get_dev_team(),
+            "summary": self.get_summary_team(),
+            "email": self.get_email_team(),
+            "audit": self.get_audit_team(),
+            "planning": self.get_planning_team(),
         }
         
         if team_type not in teams:
