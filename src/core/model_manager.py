@@ -31,7 +31,10 @@ from src.core.agent_swarm import SwarmManager
 class ModelRouter:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.lm_studio_url = config.get("LM_STUDIO_URL", "http://localhost:1234/v1")
+        self.lm_studio_url = config.get("LM_STUDIO_URL", "http://localhost:1234/v1").rstrip("/")
+        if "/v1" not in self.lm_studio_url:
+            self.lm_studio_url += "/v1"
+
         self.ollama_url = config.get("OLLAMA_URL", "http://localhost:11434/api")
         self.gemini_key = config.get("GEMINI_API_KEY")
 
@@ -86,6 +89,32 @@ class ModelRouter:
             "gemini-pro-latest"         # Алиас на актуальную pro
         ]
         
+        # Предпочтительная локальная модель (из .env) — если указана,
+        # _ensure_chat_model_loaded() будет пытаться загрузить именно её,
+        # а не первую попавшуюся LLM (что приводило к дефолту на qwen 7b).
+        self.local_preferred_model = config.get("LOCAL_PREFERRED_MODEL", "").strip()
+        # Модель для кодинга (если отличается от chat-модели)
+        self.local_coding_model = config.get("LOCAL_CODING_MODEL", "").strip()
+
+        # ═══════════════════════════════════════════════════════════════
+        # Smart Memory Planner: управление RAM и авто-загрузка/выгрузка
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            self.max_ram_gb = float(config.get("MAX_RAM_GB", 36))
+        except (ValueError, TypeError):
+            self.max_ram_gb = 36.0
+        try:
+            self.lm_studio_max_ram_gb = float(config.get("LM_STUDIO_MAX_RAM_GB", self.max_ram_gb * 0.5))
+        except (ValueError, TypeError):
+            self.lm_studio_max_ram_gb = self.max_ram_gb * 0.5
+        try:
+            self.auto_unload_idle_min = int(config.get("AUTO_UNLOAD_IDLE_MIN", 30))
+        except (ValueError, TypeError):
+            self.auto_unload_idle_min = 30
+
+        # LRU-трекер: {model_id: timestamp последнего использования}
+        self._model_last_used: Dict[str, float] = {}
+
         # Режим работы: 'auto', 'force_local', 'force_cloud'
         self.force_mode = "auto"
 
@@ -497,6 +526,10 @@ class ModelRouter:
         if memorized_channels:
             top_channel = max(memorized_channels.items(), key=lambda item: int(item[1]))[0]
 
+        # Дефолты — LOCAL FIRST для всех профилей, кроме критичных
+        default_model = self.models.get("chat", "gemini-2.0-flash")
+        default_channel = "local"  # Local First стратегия
+
         if profile in {"security", "infra", "review"}:
             default_model = self.models.get("pro", self.models.get("thinking", self.models["chat"]))
             default_channel = "cloud"
@@ -505,10 +538,11 @@ class ModelRouter:
             default_channel = "local"
         elif profile == "moderation":
             default_model = self.models.get("chat", "gemini-2.0-flash")
-        
-        if not profile:
-            default_model = self.models.get("chat", "gemini-2.0-flash")
             default_channel = "local"
+        elif profile == "chat":
+            # Обычный чат — ВСЕГДА local first
+            default_channel = "local"
+
 
         # Adaptive feedback loop: если по модели накоплены оценки,
         # дополнительно взвешиваем выбор по среднему качеству.
@@ -550,10 +584,19 @@ class ModelRouter:
         selected_model = top_model or default_model
         feedback_hint = self._get_model_feedback_stats(profile, selected_model)
 
+        # Для критичных профилей — routing_memory имеет приоритет.
+        # Для обычных (chat, code, moderation) — default_channel важнее,
+        # чтобы стратегия Local First соблюдалась.
+        is_critical_profile = profile in {"security", "infra", "review"}
+        resolved_channel = (
+            (top_channel or default_channel) if is_critical_profile
+            else default_channel
+        )
+
         return {
             "profile": profile,
             "model": selected_model,
-            "channel": top_channel or default_channel,
+            "channel": resolved_channel,
             "critical": self._is_critical_profile(profile),
             "feedback_hint": {
                 "avg_score": feedback_hint.get("avg", 0.0),
@@ -673,24 +716,34 @@ class ModelRouter:
                         payload = await resp.json(content_type=None)
                         normalized = []
                         if isinstance(payload, dict):
-                            normalized = payload.get("data") or payload.get("models") or []
+                            # LM Studio 0.3.x: /api/v1/models → {"models": [...]}
+                            # OpenAI compat:    /v1/models    → {"data": [...]}
+                            normalized = payload.get("models") or payload.get("data") or []
                         elif isinstance(payload, list):
                             normalized = payload
 
                         models = []
                         for m in normalized:
-                            identifier = self._extract_model_id(m) or m.get("id", "")
+                            # LM Studio 0.3.x использует "key" как ID модели
+                            identifier = m.get("key") or self._extract_model_id(m) or m.get("id", "")
                             if not identifier: continue
                             
-                            # В 0.3.x загруженная модель часто имеет state="loaded" или аналогичное
-                            # Но самый простой способ — посмотреть, есть ли у нее инстанс в API
-                            state = m.get("state", "").lower()
-                            is_loaded = (state == "loaded" or m.get("is_loaded") is True)
+                            # В LM Studio 0.3.x загруженная модель имеет
+                            # loaded_instances: [{...}] (не пустой массив)
+                            loaded_instances = m.get("loaded_instances", [])
+                            is_loaded = isinstance(loaded_instances, list) and len(loaded_instances) > 0
+                            
+                            # Определяем тип по полю "type" из API или по имени
+                            model_type = m.get("type", "")
+                            if model_type == "embedding" or "embedding" in identifier.lower():
+                                mtype = "embedding"
+                            else:
+                                mtype = "llm"
                             
                             models.append({
                                 "id": identifier,
-                                "type": "embedding" if "embedding" in identifier.lower() else "llm",
-                                "name": m.get("name", identifier),
+                                "type": mtype,
+                                "name": m.get("display_name", m.get("name", identifier)),
                                 "loaded": is_loaded
                             })
                         return models
@@ -732,86 +785,49 @@ class ModelRouter:
 
     async def _ensure_chat_model_loaded(self) -> bool:
         """
-        Пытается загрузить любую доступную LLM модель через REST API.
+        Пытается загрузить LLM модель через REST API.
+        Приоритет: LOCAL_PREFERRED_MODEL → instruct/chat → любая LLM.
         """
-        # Сначала проверяем текущий статус
+        # Сначала проверяем текущий статус — может, уже загружена нужная модель
         if await self.check_local_health(force=True):
             if self.active_local_model and "embed" not in self.active_local_model.lower():
                 return True
 
         models = await self._scan_local_models()
-        chat_candidate = next((m["id"] for m in models if m["type"] == "llm"), None)
-        
-        if chat_candidate:
-            return await self.load_local_model(chat_candidate)
-        return False
-        lms_path = os.path.expanduser("~/.lmstudio/bin/lms")
-        if not os.path.exists(lms_path):
+        llm_models = [m for m in models if m["type"] == "llm"]
+
+        if not llm_models:
+            logger.warning("⚠️ Нет LLM-моделей в LM Studio для загрузки.")
             return False
 
-        try:
-            # 1. Проверяем текущую загруженную модель
-            proc = await asyncio.create_subprocess_exec(
-                lms_path, "ps",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, _ = await proc.communicate()
-            output = stdout.decode()
-            
-            # Если есть 'Text Embedding', выгружаем
-            if "embed" in output.lower():
-                # Парсим ID (упрощенно: берем первое слово или ищем идентификатор)
-                if "LOADED" in output: 
-                    logger.info("🔄 Unloading Embedding Model...")
-                    await asyncio.create_subprocess_exec(lms_path, "unload", "--all")
-                    await asyncio.sleep(2) # Wait for unload
+        chat_candidate = None
 
-            # 2. Проверяем снова ps, если пусто - грузим
-            proc_ps = await asyncio.create_subprocess_exec(
-                lms_path, "ps",
-                stdout=asyncio.subprocess.PIPE
-            )
-            out_ps, _ = await proc_ps.communicate()
-            if "LOADED" in out_ps.decode() and "embed" not in out_ps.decode().lower():
-                return True # Уже загружена Chat модель
+        # Приоритет 1: preferred model из конфига (LOCAL_PREFERRED_MODEL)
+        # — решает проблему дефолта на qwen 7b
+        if self.local_preferred_model:
+            matching = [
+                m["id"] for m in llm_models
+                if self.local_preferred_model.lower() in m["id"].lower()
+            ]
+            if matching:
+                chat_candidate = matching[0]
+                logger.info(f"⭐ Выбрана preferred модель: {chat_candidate}")
 
-            # 3. Ищем доступные
-            models = await self._scan_local_models()
-            
-            # Ищем LLM (не embedding)
-            chat_candidate = None
-            
-            # Priority 1: Instruct/Chat models
-            for m in models:
-                if m["type"] == "embedding":
-                    continue
+        # Приоритет 2: instruct/chat модели (обычно лучше для диалога)
+        if not chat_candidate:
+            for m in llm_models:
                 mid = m["id"].lower()
                 if "instruct" in mid or "chat" in mid:
                     chat_candidate = m["id"]
+                    logger.info(f"🔄 Выбрана instruct/chat модель: {chat_candidate}")
                     break
-            
-            # Priority 2: Any LLM
-            if not chat_candidate:
-                for m in models:
-                    if m["type"] == "embedding":
-                        continue
-                    chat_candidate = m["id"]
-                    break
-            
-            if chat_candidate:
-                logger.info(f"🚀 Auto-Loading Local Model: {chat_candidate}")
-                # Use -y to accept defaults for variants
-                await asyncio.create_subprocess_exec(lms_path, "load", chat_candidate, "--gpu", "auto", "-y")
-                await asyncio.sleep(5) # Wait for load
-                return True
-            else:
-                logger.warning("⚠️ No Chat models found in 'lms ls'.")
-                return False
 
-        except Exception as e:
-            logger.error(f"❌ Auto-load failed: {e}")
-            return False
+        # Приоритет 3: любая LLM (fallback)
+        if not chat_candidate:
+            chat_candidate = llm_models[0]["id"]
+            logger.info(f"🔄 Fallback на первую LLM: {chat_candidate}")
+
+        return await self._smart_load(chat_candidate, reason="ensure_chat")
 
     async def list_local_models(self) -> List[str]:
         """Сканирует доступные локальные модели (lms ls) и возвращает уникальные ID."""
@@ -834,13 +850,14 @@ class ModelRouter:
         
         try:
             logger.info(f"🚀 Loading model via REST API: {model_name}")
-            timeout = aiohttp.ClientTimeout(total=35)
+            # LM Studio 0.3.x: POST /api/v1/models/load
+            # Принимает {"model": "id"} — без gpu_offload (вызывает unrecognized_keys)
+            timeout = aiohttp.ClientTimeout(total=120)  # Загрузка может быть долгой
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 payload = {
-                    "identifier": model_name,
-                    "gpu_offload": "auto"
+                    "model": model_name
                 }
-                async with session.post(url, json=payload, timeout=30) as resp:
+                async with session.post(url, json=payload) as resp:
                     if resp.status == 200:
                         logger.info(f"✅ REST API Load Success: {model_name}")
                         self.active_local_model = model_name
@@ -879,7 +896,7 @@ class ModelRouter:
         try:
             payload = {}
             if model_name:
-                payload["identifier"] = model_name
+                payload["model"] = model_name
             
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -905,6 +922,284 @@ class ModelRouter:
         return False
 
         # Legacy fallback removed
+
+    # ═══════════════════════════════════════════════════════════════
+    # Smart Memory Planner: мониторинг памяти и авто-управление
+    # ═══════════════════════════════════════════════════════════════
+
+    def _touch_model_usage(self, model_id: str) -> None:
+        """
+        Обновляет метку времени последнего использования модели (LRU-трекинг).
+        Вызывается каждый раз, когда модель участвует в генерации.
+        """
+        import time
+        self._model_last_used[model_id] = time.time()
+
+    async def _get_system_memory_gb(self) -> Dict[str, float]:
+        """
+        Получает информацию о системной памяти через macOS sysctl / vm_stat.
+        Возвращает: {"total": X, "used": Y, "free": Z} в гигабайтах.
+        Fallback: если не удалось — возвращает конфигурационные значения.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "sysctl", "-n", "hw.memsize",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            total_bytes = int(stdout.decode().strip())
+            total_gb = total_bytes / (1024 ** 3)
+
+            # vm_stat даёт статистику по страницам (каждая 16384 байт на ARM mac)
+            proc2 = await asyncio.create_subprocess_exec(
+                "vm_stat",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout2, _ = await proc2.communicate()
+            vm_text = stdout2.decode()
+
+            # Парсим размер страницы и количество свободных/inactive страниц
+            import re
+            page_size = 16384  # дефолт для Apple Silicon
+            ps_match = re.search(r"page size of (\d+) bytes", vm_text)
+            if ps_match:
+                page_size = int(ps_match.group(1))
+
+            free_pages = 0
+            inactive_pages = 0
+            for line in vm_text.split("\n"):
+                if "Pages free" in line:
+                    m = re.search(r"(\d+)", line.split(":")[1])
+                    if m:
+                        free_pages = int(m.group(1))
+                elif "Pages inactive" in line:
+                    m = re.search(r"(\d+)", line.split(":")[1])
+                    if m:
+                        inactive_pages = int(m.group(1))
+
+            free_gb = (free_pages + inactive_pages) * page_size / (1024 ** 3)
+            used_gb = total_gb - free_gb
+
+            return {"total": round(total_gb, 2), "used": round(used_gb, 2), "free": round(free_gb, 2)}
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось получить системную память: {e}")
+            return {"total": self.max_ram_gb, "used": 0, "free": self.max_ram_gb}
+
+    async def _get_loaded_models_memory(self) -> List[Dict[str, Any]]:
+        """
+        Получает список загруженных моделей с оценкой потребления RAM.
+        Использует LM Studio API для получения размеров.
+        Возвращает: [{"id": "model-name", "size_gb": 4.3, "loaded": True, "last_used": timestamp}]
+        """
+        models = await self._scan_local_models()
+        result = []
+        for m in models:
+            model_id = m.get("id", "unknown")
+            # LM Studio не всегда даёт точный размер, оцениваем по имени
+            size_gb = self._estimate_model_size_gb(model_id)
+            last_used = self._model_last_used.get(model_id, 0)
+            result.append({
+                "id": model_id,
+                "type": m.get("type", "unknown"),
+                "loaded": m.get("loaded", False),
+                "size_gb": size_gb,
+                "last_used": last_used,
+            })
+        return result
+
+    def _estimate_model_size_gb(self, model_name: str) -> float:
+        """
+        Оценивает размер модели в GB на основе имени (параметры в миллиардах).
+        Эвристика: 1B параметр ≈ 0.5-1 GB в зависимости от квантизации.
+        Используется когда API не предоставляет точный размер.
+        """
+        import re
+        lowered = model_name.lower()
+        # Ищем паттерны вида 7b, 13b, 70b и т.д.
+        match = re.search(r"(\d+\.?\d*)b", lowered)
+        if match:
+            params_b = float(match.group(1))
+            # MLX/GGUF квантизация: ~0.6 GB на миллиард параметров (4-bit)
+            if "mlx" in lowered or "4bit" in lowered or "q4" in lowered:
+                return round(params_b * 0.6, 1)
+            # 8-bit квантизация
+            elif "8bit" in lowered or "q8" in lowered:
+                return round(params_b * 1.0, 1)
+            # FP16 (полная точность)
+            elif "fp16" in lowered or "f16" in lowered:
+                return round(params_b * 2.0, 1)
+            # Дефолт (4-bit GGUF — самый распространённый)
+            return round(params_b * 0.7, 1)
+
+        # Известные модели без параметров в имени
+        known_sizes = {
+            "glm-4.6v": 5.0, "glm-4": 5.0,
+            "phi-3": 2.5, "phi-4": 8.0,
+            "llama-3.2-1b": 0.8, "llama-3.2-3b": 2.0,
+        }
+        for key, size in known_sizes.items():
+            if key in lowered:
+                return size
+
+        # Совсем не знаем — дефолт 4 GB (средний размер для 7B модели)
+        return 4.0
+
+    async def _can_fit_model(self, model_name: str) -> bool:
+        """
+        Проверяет, поместится ли новая модель в пределах лимита RAM для LM Studio.
+        """
+        loaded = await self._get_loaded_models_memory()
+        current_usage = sum(m["size_gb"] for m in loaded if m["loaded"])
+        new_model_size = self._estimate_model_size_gb(model_name)
+        projected = current_usage + new_model_size
+
+        logger.info(
+            "🧠 Memory check",
+            current_loaded_gb=round(current_usage, 1),
+            new_model_gb=round(new_model_size, 1),
+            projected_gb=round(projected, 1),
+            limit_gb=self.lm_studio_max_ram_gb,
+        )
+        return projected <= self.lm_studio_max_ram_gb
+
+    async def _evict_idle_models(self, needed_gb: float = 0) -> float:
+        """
+        Выгружает неактивные модели по LRU (Least Recently Used).
+        Возвращает количество освобождённых GB.
+
+        Стратегия:
+        1. Сначала выгружаем модели idle > AUTO_UNLOAD_IDLE_MIN
+        2. Если всё ещё не хватает — выгружаем по LRU (самые давно использованные)
+        3. Никогда не выгружаем preferred модель, если она единственная загруженная
+        """
+        import time
+        loaded = await self._get_loaded_models_memory()
+        loaded_models = [m for m in loaded if m["loaded"] and m["type"] == "llm"]
+
+        if len(loaded_models) <= 1:
+            logger.info("📌 Только 1 модель загружена, выгрузка не требуется.")
+            return 0.0
+
+        freed_gb = 0.0
+        idle_threshold = time.time() - (self.auto_unload_idle_min * 60)
+
+        # Сортируем по last_used (самые давние — первые кандидаты на выгрузку)
+        candidates = sorted(loaded_models, key=lambda m: m["last_used"])
+
+        for model in candidates:
+            if freed_gb >= needed_gb and needed_gb > 0:
+                break  # Хватает места
+
+            model_id = model["id"]
+
+            # Защита: не выгружаем preferred модель, если она единственная оставшаяся
+            remaining = len(loaded_models) - 1
+            if remaining <= 0:
+                break
+            if model_id == self.active_local_model and remaining <= 1:
+                continue
+
+            # Проверяем idle time (или если нужно место)
+            is_idle = model["last_used"] < idle_threshold or model["last_used"] == 0
+            if is_idle or needed_gb > 0:
+                reason = "idle" if is_idle else "memory_pressure"
+                logger.info(f"♻️ Выгрузка модели: {model_id} (причина: {reason}, size: {model['size_gb']} GB)")
+                success = await self.unload_local_model(model_id)
+                if success:
+                    freed_gb += model["size_gb"]
+                    loaded_models = [m for m in loaded_models if m["id"] != model_id]
+                    # Обновляем active_local_model если было выгружено
+                    if self.active_local_model == model_id:
+                        self.active_local_model = None
+
+        if freed_gb > 0:
+            logger.info(f"🧹 Освобождено {round(freed_gb, 1)} GB RAM (модели: {len(candidates)} → {len(loaded_models)})")
+        return freed_gb
+
+    async def _smart_load(self, model_name: str, reason: str = "chat") -> bool:
+        """
+        Интеллектуальная загрузка модели с проверкой памяти и LRU-выгрузкой.
+
+        1. Если модель уже загружена — просто обновляем LRU и возвращаем True
+        2. Если помещается — загружаем
+        3. Если не помещается — выгружаем idle модели, пробуем снова
+        4. Если всё равно не помещается — ошибка
+
+        Args:
+            model_name: ID модели для загрузки
+            reason: причина (chat / coding / forced)
+        """
+        # Проверяем, не загружена ли уже
+        loaded = await self._get_loaded_models_memory()
+        for m in loaded:
+            if m["id"] == model_name and m["loaded"]:
+                self._touch_model_usage(model_name)
+                self.active_local_model = model_name
+                logger.info(f"✅ Модель {model_name} уже загружена, обновляем LRU (reason: {reason})")
+                return True
+
+        # Проверяем, поместится ли
+        if await self._can_fit_model(model_name):
+            logger.info(f"📥 Загружаем {model_name} (reason: {reason}), RAM позволяет")
+            success = await self.load_local_model(model_name)
+            if success:
+                self._touch_model_usage(model_name)
+            return success
+
+        # Не помещается — пробуем выгрузить idle
+        new_size = self._estimate_model_size_gb(model_name)
+        current_usage = sum(m["size_gb"] for m in loaded if m["loaded"])
+        needed_gb = (current_usage + new_size) - self.lm_studio_max_ram_gb + 0.5  # +0.5 GB запас
+
+        logger.warning(f"⚠️ Не хватает RAM для {model_name} ({new_size} GB). Нужно освободить {round(needed_gb, 1)} GB")
+        freed = await self._evict_idle_models(needed_gb)
+
+        if freed >= needed_gb or await self._can_fit_model(model_name):
+            logger.info(f"📥 Загружаем {model_name} после освобождения памяти")
+            success = await self.load_local_model(model_name)
+            if success:
+                self._touch_model_usage(model_name)
+            return success
+
+        logger.error(f"❌ Не удалось освободить достаточно RAM для {model_name}")
+        return False
+
+    async def get_memory_status(self) -> str:
+        """
+        Возвращает человекочитаемый статус памяти для команды !model memory.
+        """
+        sys_mem = await self._get_system_memory_gb()
+        loaded = await self._get_loaded_models_memory()
+        loaded_models = [m for m in loaded if m["loaded"]]
+        model_usage = sum(m["size_gb"] for m in loaded_models)
+
+        import time
+        lines = [
+            "🧠 **Smart Memory Planner**",
+            f"",
+            f"💻 Системная RAM: {sys_mem['used']}/{sys_mem['total']} GB (свободно: {sys_mem['free']} GB)",
+            f"🤖 Лимит LM Studio: {round(model_usage, 1)}/{self.lm_studio_max_ram_gb} GB",
+            f"⏱ Авто-выгрузка idle: {self.auto_unload_idle_min} мин",
+            f"",
+            f"**Загруженные модели:**",
+        ]
+
+        if not loaded_models:
+            lines.append("  └─ (нет загруженных)")
+        else:
+            for m in loaded_models:
+                last_used = self._model_last_used.get(m["id"], 0)
+                if last_used > 0:
+                    idle_min = int((time.time() - last_used) / 60)
+                    idle_str = f"{idle_min} мин назад"
+                else:
+                    idle_str = "нет данных"
+                active = " ⭐" if m["id"] == self.active_local_model else ""
+                lines.append(f"  └─ `{m['id']}` — ~{m['size_gb']} GB (idle: {idle_str}){active}")
+
+        return "\n".join(lines)
 
     async def list_cloud_models(self) -> List[str]:
         """Сканирует доступные Cloud модели (via OpenClaw)."""
@@ -946,8 +1241,14 @@ class ModelRouter:
                 system_msg = self.persona.get_current_prompt(chat_type, is_owner)
 
             # Выбираем URL в зависимости от движка
-            base_url = self.lm_studio_url if self.local_engine == 'lm-studio' else \
-                       self.ollama_url.replace('/api', '/v1')
+            if self.local_engine == 'lm-studio':
+                base_url = self.lm_studio_url
+            else:
+                base_url = self.ollama_url.replace('/api', '/v1')
+
+            if "/v1" not in base_url:
+                base_url = base_url.rstrip("/") + "/v1"
+            base_url = base_url.replace("/v1/v1", "/v1")
 
             # Формируем payload
             messages = [{"role": "system", "content": system_msg}]
@@ -1006,7 +1307,7 @@ class ModelRouter:
                                     )
                                     return content
                             
-                            logger.warning("Local LLM returned empty choices")
+                            logger.warning("Local LLM returned empty choices", raw_keys=list(data.keys()), choices_len=len(choices) if choices else 0)
                             return None 
                         else:
                             error_text = await response.text()
@@ -1046,6 +1347,14 @@ class ModelRouter:
             if tool_data:
                 prompt = f"### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n{tool_data}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
+        # Smart Memory Planner: перед health-check пытаемся подготовить preferred модель
+        if self.is_local_available or self.force_mode != "force_cloud":
+            preferred = preferred_model or self.local_preferred_model
+            if task_type == "coding" and self.local_coding_model:
+                preferred = self.local_coding_model
+            if preferred:
+                await self._smart_load(preferred, reason=task_type)
+
         await self.check_local_health()
 
         async def _run_local() -> Optional[str]:
@@ -1060,6 +1369,7 @@ class ModelRouter:
                 )
                 local_response = await self._call_local_llm(prompt, context, chat_type, is_owner)
                 if local_response:
+                    self._touch_model_usage(self.active_local_model or "local-model")
                     self._stats["local_calls"] += 1
                     local_model = self.active_local_model or "local-model"
                     self._remember_model_choice(profile, local_model, "local")
@@ -1133,8 +1443,8 @@ class ModelRouter:
         # Soft cap: при превышении лимита облака, не-критичные задачи уводим в локалку.
         force_local_due_cost = self.cloud_soft_cap_reached and not is_critical
         prefer_cloud = is_critical or task_type == "reasoning"
-        if recommendation.get("channel") == "cloud":
-            prefer_cloud = True
+        # НЕ перебиваем recommendation.channel: Local First стратегия
+        # уже зашита в _get_profile_recommendation
         if force_local_due_cost:
             prefer_cloud = False
 
@@ -1642,8 +1952,8 @@ class ModelRouter:
             chosen_channel = "cloud"
         else:
             prefer_cloud = is_critical or normalized_task_type == "reasoning"
-            if recommendation.get("channel") == "cloud":
-                prefer_cloud = True
+            # НЕ перебиваем recommendation.channel для non-critical:
+            # Local First стратегия уже зашита в _get_profile_recommendation
             if self.cloud_soft_cap_reached and not is_critical:
                 prefer_cloud = False
             chosen_channel = "cloud" if prefer_cloud else "local"
