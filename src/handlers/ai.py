@@ -23,14 +23,111 @@ from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from .auth import is_owner, is_authorized, is_superuser
+from ..core.markdown_sanitizer import sanitize_markdown_for_telegram, strip_backticks_from_content
 
 import structlog
 logger = structlog.get_logger(__name__)
 
+def _timeout_from_env(name: str, default_value: int) -> int:
+    """Возвращает таймаут из env с безопасным fallback."""
+    raw = os.getenv(name, str(default_value)).strip()
+    try:
+        parsed = int(raw)
+        return parsed if parsed > 0 else default_value
+    except Exception:
+        return default_value
+
+
+AUTO_REPLY_TIMEOUT_SECONDS = _timeout_from_env("AUTO_REPLY_TIMEOUT_SECONDS", 900)
+THINK_TIMEOUT_SECONDS = _timeout_from_env("THINK_TIMEOUT_SECONDS", 420)
+
+
+def _sanitize_model_output(text: str, router=None) -> str:
+    """Удаляет служебные маркеры модели перед отправкой в Telegram."""
+    if hasattr(router, "_sanitize_model_text"):
+        try:
+            return router._sanitize_model_text(text)
+        except Exception:
+            pass
+    if not text:
+        return ""
+    
+    import re
+    cleaned = str(text)
+    # Удаляем всё в формате <|...|>
+    cleaned = re.sub(r"<\|.*?\|>", "", cleaned)
+    # Удаляем классические токены
+    for token in ("</s>", "<s>", "<br>"):
+        cleaned = cleaned.replace(token, "")
+    return cleaned.strip()
+
+
+def _is_voice_reply_requested(text: str) -> bool:
+    """Определяет, просит ли пользователь голосовой ответ текстом."""
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return False
+    triggers = (
+        "ответь голосом",
+        "голосом ответь",
+        "скажи голосом",
+        "озвучь",
+        "voice reply",
+        "reply by voice",
+        "respond with voice",
+        "расскажи",
+        "сказку",
+        "спой",
+        "поговори со мной",
+    )
+    return any(token in lowered for token in triggers)
+
+
+def _message_content_hint(msg: Message) -> str:
+    """Возвращает короткий текстовый дескриптор любого типа сообщения."""
+    text = _sanitize_model_output(msg.text or msg.caption or "")
+    if text:
+        return text
+    if msg.voice:
+        return "[VOICE] Голосовое сообщение"
+    if msg.audio:
+        title = ""
+        if msg.audio and getattr(msg.audio, "title", None):
+            title = f" ({msg.audio.title})"
+        return f"[AUDIO] Аудио{title}"
+    if msg.sticker:
+        emoji = getattr(msg.sticker, "emoji", "") or ""
+        return f"[STICKER] {emoji}".strip()
+    if msg.animation:
+        return "[GIF] Анимация"
+    if msg.video:
+        return "[VIDEO] Видео"
+    if msg.photo:
+        return "[PHOTO] Изображение"
+    if msg.document:
+        name = getattr(msg.document, "file_name", "") or ""
+        return f"[DOCUMENT] {name}".strip()
+    if msg.poll:
+        question = getattr(msg.poll, "question", "") or ""
+        return f"[POLL] {question}".strip()
+    media_type = getattr(getattr(msg, "media", None), "value", "")
+    if media_type:
+        return f"[{str(media_type).upper()}] Медиа-сообщение"
+    return ""
+
+
+async def set_message_reaction(client, chat_id: int, message_id: int, emoji: str):
+    """Ставит реакцию (emoji) на сообщение."""
+    try:
+        # В Pyrogram v2+ send_reaction принимает emoji как строку
+        await client.send_reaction(chat_id, message_id, emoji)
+    except Exception as e:
+        logger.debug(f"Reaction failed: {e}")
+
+
 async def _process_auto_reply(client, message: Message, deps: dict):
     """
-    Умный автоответчик v2 (Omni-channel).
-    Вынесен из register_handlers для тестируемости.
+    Умный автоответчик v3 (Omni-channel + Reactions + Multimodal).
     """
     security = deps["security"]
     rate_limiter = deps["rate_limiter"]
@@ -43,15 +140,12 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     sender = message.from_user.username if message.from_user else "Unknown"
 
     # 1. Проверка через SecurityManager
-    # В ЛС больше НЕ требуем explicit authorization (кроме заблокированных)
     role = security.get_user_role(sender, message.from_user.id if message.from_user else 0)
     
     if role == "blocked":
-            logger.info(f"⛔ Blocked user {sender} tried to interact.")
             return
 
     if role == "stealth_restricted":
-        logger.info(f"🕶️ Stealth Mode: Ignored message from @{sender}")
         return
 
     # 2. Логика срабатывания (Smart Reply v2.0)
@@ -64,7 +158,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     
     me = await client.get_me()
     is_mentioned = False
-    text_content = message.text or message.caption or ""
+    text_content = _message_content_hint(message)
     
     if text_content:
         text_lower = text_content.lower()
@@ -73,14 +167,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             (me.username and f"@{me.username.lower()}" in text_lower)
         )
 
-    # Config: Allow group replies without mention?
     allow_group_replies = True
     if config_manager:
         allow_group_replies = config_manager.get("group_chat.allow_replies", True)
 
-    # Условие ответа:
-    # 1. ЛС (Private) -> Всегда отвечаем (если не заблокирован)
-    # 2. Группы -> Если упомянут ИЛИ (ответ на сообщение бота И разрешено в конфиге) ИЛИ (авторизован - owner/admin)
     should_reply = False
     if is_private:
         should_reply = True
@@ -90,110 +180,154 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         should_reply = True
 
     if not should_reply:
-        # В группах просто сохраняем в историю без ответа для контекста (Passive Learning)
-        logger.debug(f"🤫 Message from @{sender} in {message.chat.type} ignored (no mention/reply).")
         memory.save_message(message.chat.id, {"user": sender, "text": text_content})
         return
 
-    # Антиспам: игнорируем слишком короткие текстовые сообщения в группах, если это не реплай и не медиа
-    if not is_private and len(text_content) < 2 and not is_reply_to_me and not message.photo and not message.voice:
-        logger.debug(f"🔇 Anti-spam: Ignored too short message from @{sender}")
+    # Антиспам
+    has_rich_media = bool(
+        message.photo or message.voice or message.audio or 
+        message.sticker or message.animation or message.video or message.document
+    )
+    if not is_private and len(text_content) < 2 and not is_reply_to_me and not has_rich_media:
         return
 
     # Rate Limiting
     user_id = message.from_user.id if message.from_user else 0
     if not rate_limiter.is_allowed(user_id):
-        logger.warning(f"🚫 Rate limited: @{sender} ({user_id})")
         return
 
-    await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
-
-    # 2. Обработка мультимедиа (Vision / Voice)
+    # 2. Обработка мультимедиа (Vision / Voice / Video / Docs / Stickers)
     visual_context = ""
     transcribed_text = ""
-    is_voice_response_needed = False
+    is_voice_response_needed = _is_voice_reply_requested(text_content)
     temp_files = []
 
     try:
-        # --- PHOTO (Vision) ---
-        if message.photo:
-            if not perceptor:
-                await message.reply_text("❌ Vision module (Perceptor) недоступен.")
-                return
+        # --- STICKER ---
+        if message.sticker:
+            emoji = message.sticker.emoji or "🎨"
+            visual_context = f"[USER SENT A STICKER: {emoji}]"
+            # Для стикеров можно сразу поставить реакцию "глаза" или "сердце"
+            await set_message_reaction(client, message.chat.id, message.id, "👀")
 
+        # --- PHOTO (Vision) ---
+        elif message.photo:
+            if not perceptor:
+                await message.reply_text("❌ Vision module недоступен.")
+                return
             await client.send_chat_action(message.chat.id, action=enums.ChatAction.UPLOAD_PHOTO)
-            notif = await message.reply_text("👁️ **Смотрю...**")
-            
-            # Скачиваем фото (in-memory or temp file)
-            # Pyrogram method download() returns path
             photo_path = await message.download()
             temp_files.append(photo_path)
-            
-            # Анализируем через Perceptor (Gemini Vision)
-            await notif.edit_text("🧠 **Анализирую изображение через Vision Engine...**")
             vision_result = await perceptor.analyze_image(photo_path, router, prompt="Опиши это изображение подробно на русском языке.")
-            
+            vision_result = _sanitize_model_output(vision_result or "", router)
             if vision_result and not vision_result.startswith("Ошибка"):
                 visual_context = f"[VISION ANALYSIS]: User sent a photo. Description: {vision_result}"
-                await notif.edit_text("📝 **Формирую ответ...**")
-                await asyncio.sleep(0.5) # Маленькая пауза для плавности
-                await notif.delete()
             else:
-                await notif.edit_text(f"❌ Не удалось распознать изображение: {vision_result}")
                 visual_context = "[VISION ERROR]: Failed to analyze photo."
 
-        # --- VOICE (STT) ---
-        elif message.voice:
+        # --- VOICE / AUDIO (STT) ---
+        elif message.voice or message.audio:
             if not perceptor:
-                await message.reply_text("❌ Voice module (Perceptor) недоступен.")
+                await message.reply_text("❌ Voice module недоступен.")
+                return
+            await client.send_chat_action(message.chat.id, action=enums.ChatAction.RECORD_AUDIO)
+            audio_path = await message.download()
+            temp_files.append(audio_path)
+            transcribed_text = _sanitize_model_output(await perceptor.transcribe(audio_path, router), router)
+            if transcribed_text and not transcribed_text.startswith("Ошибка"):
+                if message.voice:
+                    is_voice_response_needed = True
+            else:
                 return
 
-            await client.send_chat_action(message.chat.id, action=enums.ChatAction.RECORD_AUDIO)
-            notif = await message.reply_text("👂 **Слушаю...**")
-            
-            voice_path = await message.download()
-            temp_files.append(voice_path)
-            
-            # Транскрибация (Whisper via Perceptor)
-            transcribed_text = await perceptor.transcribe(voice_path, router)
-            
-            if transcribed_text and not transcribed_text.startswith("Ошибка"):
-                is_voice_response_needed = True # Reply with voice if spoken to
+        # --- VIDEO / GIF (Deep Analysis) ---
+        elif message.video or message.animation:
+            if not perceptor:
+                await message.reply_text("❌ Vision module недоступен.")
+                return
+            await client.send_chat_action(message.chat.id, action=enums.ChatAction.UPLOAD_VIDEO)
+            notif = await message.reply_text("🎬 **Смотрю...**")
+            media_path = await message.download()
+            temp_files.append(media_path)
+            # Для GIF/Video используем Gemini Video Analysis
+            video_result = _sanitize_model_output(
+                await perceptor.analyze_video(
+                    media_path,
+                    router,
+                    prompt="Опиши очень кратко (1-2 предложения), что происходит на видео/гифке. Какой основной посыл или эмоция?",
+                ),
+                router,
+            )
+            if video_result and not video_result.startswith("Ошибка"):
+                visual_context = f"[MEDIA ANALYSIS]: {video_result}"
                 await notif.delete()
             else:
-                await notif.edit_text("❌ Не удалось распознать речь.")
+                await notif.edit_text(f"❌ Ошибка анализа: {video_result}")
+                visual_context = "[MEDIA ERROR]: Failed to analyze video/gif."
+
+        # --- DOCUMENT ---
+        elif message.document:
+            if not perceptor:
+                await message.reply_text("❌ Document module недоступен.")
                 return
+            await client.send_chat_action(message.chat.id, action=enums.ChatAction.UPLOAD_DOCUMENT)
+            notif = await message.reply_text("📄 **Читаю...**")
+            doc_path = await message.download()
+            temp_files.append(doc_path)
+            doc_result = _sanitize_model_output(
+                await perceptor.analyze_document(
+                    doc_path,
+                    router,
+                    prompt="Сделай краткий обзор документа на русском.",
+                ),
+                router,
+            )
+            if doc_result and not doc_result.startswith("Ошибка"):
+                visual_context = f"[DOCUMENT ANALYSIS]: {doc_result}"
+                await notif.delete()
+            else:
+                await notif.edit_text(f"❌ Ошибка: {doc_result}")
+                visual_context = "[DOCUMENT ERROR]: Failed to analyze document."
 
     except Exception as e:
         logger.error(f"Media processing error: {e}")
-        await message.reply_text(f"⚠️ Ошибка обработки медиа: {e}")
     finally:
-        # Cleanup temp files
         for p in temp_files:
             try:
                 if os.path.exists(p): os.remove(p)
             except: pass
 
-    # Формируем итоговый промпт
+    # Context gathering
+    reply_context = ""
+    if message.reply_to_message:
+        reply_author = "Unknown"
+        if message.reply_to_message.from_user:
+            reply_author = f"@{message.reply_to_message.from_user.username}" if message.reply_to_message.from_user.username else (message.reply_to_message.from_user.first_name or "User")
+        reply_text = _message_content_hint(message.reply_to_message)
+        if reply_text:
+            reply_context = f"[REPLY CONTEXT from {reply_author}]: {reply_text}"
+
+    # Final prompt
     final_prompt = text_content
     if transcribed_text:
-            final_prompt = f"{transcribed_text} (Voice Input)"
-    
+        final_prompt = f"{transcribed_text} (Voice Input)"
     if visual_context:
         final_prompt = f"{visual_context}\n\nUser Says: {final_prompt}"
+    if reply_context:
+        final_prompt = f"{reply_context}\n\n{final_prompt}"
 
-    # 3. Синхронизируем историю
-    synced = await memory.sync_telegram_history(client, message.chat.id, limit=30)
-    
-    # 4. Сохраняем текущее (обогащенное) сообщение
+    # Sync & Save
+    await memory.sync_telegram_history(client, message.chat.id, limit=30)
     memory.save_message(message.chat.id, {"user": sender, "text": final_prompt})
     
     if summarizer:
         asyncio.create_task(summarizer.auto_summarize(message.chat.id))
 
-    # 5. Маршрутизация
-    context = memory.get_recent_context(message.chat.id, limit=12)
+    # Routing
+    context = memory.get_token_aware_context(message.chat.id, max_tokens=3000)
     
+    # Typing indicator
+    await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
     reply_msg = await message.reply_text("🤔 **Думаю...**")
     
     full_response = ""
@@ -201,42 +335,56 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     
     async def run_streaming():
         nonlocal full_response, last_update
-        async for part in router.route_query_stream(
-            prompt=final_prompt,
-            task_type="chat",
-            context=context,
-            chat_type=message.chat.type.name.lower(),
-            is_owner=is_owner(message)
-        ):
-            full_response = part
-            curr_t = time.time()
-            if curr_t - last_update > 1.5:
-                try:
-                    # Используем message.chat.id для редактирования
-                    await reply_msg.edit_text(full_response + " ▌")
-                    last_update = curr_t
-                except Exception: pass
+        try:
+            async for part in router.route_stream(
+                prompt=final_prompt,
+                task_type="chat",
+                context=context,
+                chat_type=message.chat.type.name.lower(),
+                is_owner=is_owner(message)
+            ):
+                full_response += part
+                curr_t = time.time()
+                # Плавное обновление (раз в 1.8 сек)
+                if curr_t - last_update > 1.8:
+                    try:
+                        # Закрываем незакрытые блоки кода, чтобы Pyrogram не ругался
+                        safe_text = sanitize_markdown_for_telegram(full_response + " ▌")
+                        await reply_msg.edit_text(safe_text)
+                        last_update = curr_t
+                    except Exception: pass
+        except Exception as e:
+            logger.error(f"Streaming error occurred: {e}")
+            # Если у нас уже есть какой-то текст, мы не пробрасываем ошибку дальше,
+            # чтобы пользователь получил хотя бы часть ответа.
+            if not full_response:
+                raise e
+            else:
+                 full_response += f"\n\n⚠️ [Стрим прерван: {e}]"
 
     try:
-        # Защитный таймаут 300 секунд
-        await asyncio.wait_for(run_streaming(), timeout=300)
+        await asyncio.wait_for(run_streaming(), timeout=AUTO_REPLY_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        logger.error("Auto-reply timeout reached (300s)")
-        await reply_msg.edit_text("⏳ Превышено время ожидания ответа (300с). Попробуй еще раз.")
-        full_response = "Error: Timeout"
+        logger.warning(f"Timeout reaching model for chat {message.chat.id}")
+        if not full_response:
+             await reply_msg.edit_text("⌛ **Время ожидания истекло.** Попробуйте еще раз.")
+             return
     except Exception as e:
-        logger.error(f"Auto-reply stream failed: {e}")
-        await reply_msg.edit_text(f"❌ Ошибка: {e}")
-        full_response = f"Error: {e}"
+        logger.error(f"Auto-reply critical failure: {e}")
+        if not full_response:
+            await reply_msg.edit_text(f"❌ Ошибка: {e}")
+            return
 
     if full_response:
-        # Логируем размер и время (последнее берется из router логов обычно)
-        logger.info(f"Final AI response ready. Length: {len(full_response)} chars.")
+        clean_display_text = _sanitize_model_output(full_response, router)
         
-        # Убираем лишние теги для текста в Telegram, если они там остались
-        clean_display_text = full_response
+        # Интеллектуальная реакция: если ответ начинается с эмодзи, ставим его как реакцию
+        import re
+        emoji_match = re.match(r"^([\U00010000-\U0010ffff])", clean_display_text)
+        if emoji_match:
+            await set_message_reaction(client, message.chat.id, message.id, emoji_match.group(1))
         
-        # Разделение на части по 4000 символов (лимит Telegram ~4096)
+        # Отправка ответа
         MAX_LEN = 4000
         if len(clean_display_text) > MAX_LEN:
             chunks = [clean_display_text[i:i+MAX_LEN] for i in range(0, len(clean_display_text), MAX_LEN)]
@@ -246,32 +394,34 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         else:
             await reply_msg.edit_text(clean_display_text)
         
-        # --- TTS Response (Voice Mode) ---
+        # TTS Implementation
         if is_voice_response_needed and perceptor:
-            # Фильтруем технические отказы и ошибки, чтобы не озвучивать "Извини, я не могу..."
-            error_keywords = ["извини", "не могу", "ошибка", "error", "failed", "не удалось"]
-            clean_lower = full_response.lower()
-            is_error_response = any(kw in clean_lower for kw in error_keywords) and len(full_response) < 100
-
-            if not is_error_response:
+            error_keywords = ["извини", "не могу", "ошибка", "не удалось"]
+            if not any(kw in clean_display_text[:100].lower() for kw in error_keywords):
+                logger.info(f"🎤 Requesting TTS for chat {message.chat.id}")
                 await client.send_chat_action(message.chat.id, action=enums.ChatAction.RECORD_AUDIO)
-                # Generate speech
-                tts_file = await perceptor.speak(full_response)
                 
-                if tts_file and os.path.exists(tts_file):
-                    await message.reply_voice(tts_file, caption="🗣️ **AI Voice Reply**")
-                    # Clean up TTS file
-                    try:
-                        os.remove(tts_file)
-                    except: pass
+                try:
+                    tts_file = await perceptor.speak(clean_display_text)
+                    if tts_file and os.path.exists(tts_file):
+                        await message.reply_voice(tts_file, caption="🗣️ **Voice Reply**")
+                        logger.info(f"✅ Voice reply sent to {message.chat.id}")
+                        try: os.remove(tts_file)
+                        except: pass
+                    else:
+                        logger.warning(f"⚠️ TTS failed to generate file for {message.chat.id}")
+                        await message.reply_text("🗣️ *[Ошибка озвучки: не удалось сгенерировать аудио]*")
+                except Exception as tts_exc:
+                    logger.error(f"❌ TTS Error in ai.py: {tts_exc}")
+                    await message.reply_text(f"🗣️ *[Ошибка TTS: {str(tts_exc)[:100]}]*")
             else:
-                logger.info("🚫 TTS skipped: response looks like an error or refusal.")
+                logger.info("🔇 Skipping TTS for error message/refusal.")
     else:
-        await reply_msg.edit_text("❌ Извини, не удалось сформулировать ответ.")
+        await reply_msg.edit_text("❌ Пустой ответ.")
 
-    # 6. Сохраняем ответ
+    # Save Assistant Message
     memory.save_message(
-        message.chat.id, {"role": "assistant", "text": full_response}
+        message.chat.id, {"role": "assistant", "text": _sanitize_model_output(full_response, router)}
     )
 
 
@@ -348,32 +498,41 @@ def register_handlers(app, deps: dict):
             )
             return
 
-        notification = await message.reply_text("🧠 **Размышляю...** (Reasoning Mode)")
+        # notification = await message.reply_text("🧠 **Размышляю...** (Reasoning Mode)") # Убираем лишнее
 
-        context = memory.get_recent_context(message.chat.id, limit=5)
+        context = memory.get_token_aware_context(message.chat.id, max_tokens=10000)
+
+        full_response = ""
+        last_update = 0
+        
+        reply_msg = await message.reply_text("🤔 **Размышляю...**")
 
         try:
-            response = await asyncio.wait_for(
-                router.route_query(
-                    prompt=prompt,
-                    task_type="reasoning",
-                    context=context,
-                    chat_type=message.chat.type.name.lower(),
-                    is_owner=is_owner(message),
-                    confirm_expensive=confirm_expensive,
-                ),
-                timeout=180 # Для reasoning даем больше времени
+            async for chunk in router.route_stream(
+                prompt=prompt, # Changed from 'query' to 'prompt'
+                task_type="reasoning",
+                context=context,
+                chat_type=message.chat.type.name.lower(),
+                is_owner=is_owner(message),
+                confirm_expensive=confirm_expensive, # Added confirm_expensive
+            ):
+                full_response += chunk
+                curr_t = time.time()
+                if curr_t - last_update > 2.0:
+                    try:
+                        # Закрываем незакрытые блоки кода при стриминге reasoning
+                        safe_text = sanitize_markdown_for_telegram(full_response + " ▌")
+                        await reply_msg.edit_text(safe_text)
+                        last_update = curr_t
+                    except Exception: pass
+            
+            await reply_msg.edit_text(_sanitize_model_output(full_response, router)) # Sanitize here
+        except asyncio.TimeoutError: # Moved timeout handling here
+            full_response = (
+                f"⏳ Размышление заняло слишком много времени (>{THINK_TIMEOUT_SECONDS}с). "
+                "Попробуй упростить запрос."
             )
-            await notification.edit_text(response)
-        except asyncio.TimeoutError:
-            response = "⏳ Размышление заняло слишком много времени (более 3 мин). Попробуй упростить запрос."
-            await notification.edit_text(response)
-        except Exception as e:
-            response = f"❌ Ошибка размышления: {e}"
-            await notification.edit_text(response)
-
-        await notification.edit_text(response)
-        memory.save_message(message.chat.id, {"role": "assistant", "text": response})
+        memory.save_message(message.chat.id, {"role": "assistant", "text": _sanitize_model_output(full_response, router)})
 
     # --- !smart: Агентный цикл (Phase 6) ---
     @app.on_message(filters.command("smart", prefixes="!"))
@@ -688,32 +847,149 @@ def register_handlers(app, deps: dict):
     @app.on_message(filters.command(["img", "draw"], prefixes="!"))
     @safe_handler
     async def img_command(client, message: Message):
-        """Генерация изображения: !img <описание>"""
+        """Генерация изображения: !img <описание> (local/cloud + выбор модели)."""
         if not is_authorized(message): return
-        
-        prompt = " ".join(message.command[1:])
+
+        image_gen = deps.get("image_gen")
+        if not image_gen:
+            await message.reply_text("❌ Ошибка: Image Manager не инициализирован.")
+            return
+
+        try:
+            tokens = shlex.split(message.text or "")
+        except ValueError:
+            tokens = (message.text or "").split()
+
+        args = tokens[1:] if len(tokens) > 1 else []
+        if not args:
+            await message.reply_text(
+                "🎨 Использование:\n"
+                "`!img <промпт>`\n"
+                "`!img --model <alias> <промпт>`\n"
+                "`!img --local <промпт>` или `!img --cloud <промпт>`\n"
+                "`!img models` — список генераторов\n"
+                "`!img cost [alias]` — ориентировочная стоимость"
+            )
+            return
+
+        head = args[0].strip().lower()
+        if head in {"models", "list"}:
+            if not hasattr(image_gen, "list_models"):
+                await message.reply_text("⚠️ В этой версии image manager нет каталога моделей.")
+                return
+            rows = await image_gen.list_models()
+            lines = ["**🎨 Image Models:**", ""]
+            for row in rows:
+                icon = "🟢" if row.get("available") else "🔴"
+                cost = row.get("cost_per_image_usd")
+                cost_text = f"~${cost}/img" if cost is not None else "n/a"
+                reason = f" ({row.get('reason')})" if row.get("reason") else ""
+                lines.append(
+                    f"{icon} `{row.get('alias')}` — {row.get('title')} | {row.get('channel')}/{row.get('provider')} | {cost_text}{reason}"
+                )
+            lines.append("\n_Выбор модели:_ `!img --model <alias> <промпт>`")
+            await message.reply_text("\n".join(lines))
+            return
+
+        if head == "cost":
+            if not hasattr(image_gen, "estimate_cost"):
+                await message.reply_text("⚠️ В этой версии image manager нет калькулятора стоимости.")
+                return
+            if len(args) >= 2:
+                aliases = [args[1]]
+            else:
+                aliases = list(getattr(image_gen, "model_specs", {}).keys())
+            lines = ["**💸 Image Cost (ориентировочно):**", ""]
+            for alias in aliases:
+                info = image_gen.estimate_cost(alias, images=1)
+                if not info.get("ok"):
+                    lines.append(f"- `{alias}`: ❌ {info.get('error')}")
+                    continue
+                unit = info.get("unit_cost_usd")
+                if unit is None:
+                    lines.append(f"- `{alias}`: n/a")
+                else:
+                    lines.append(f"- `{alias}`: ~`${unit}` за изображение")
+            await message.reply_text("\n".join(lines))
+            return
+
+        model_alias = None
+        prefer_local = None
+        aspect_ratio = "1:1"
+        prompt_tokens: list[str] = []
+        idx = 0
+        while idx < len(args):
+            token = args[idx]
+            lowered = token.strip().lower()
+            if lowered in {"--model", "-m"} and idx + 1 < len(args):
+                model_alias = args[idx + 1].strip()
+                idx += 2
+                continue
+            if lowered == "--local":
+                prefer_local = True
+                idx += 1
+                continue
+            if lowered == "--cloud":
+                prefer_local = False
+                idx += 1
+                continue
+            if lowered in {"--ar", "--aspect"} and idx + 1 < len(args):
+                aspect_ratio = args[idx + 1].strip()
+                idx += 2
+                continue
+            prompt_tokens.append(token)
+            idx += 1
+
+        prompt = " ".join(prompt_tokens).strip()
         if not prompt:
             await message.reply_text("❌ Введи описание картинки: `!img котик в космосе`")
             return
-            
-        notification = await message.reply_text("🎨 **Генерирую шедевр...** (Imagen 3)")
-        
-        image_gen = deps.get("image_gen")
-        if not image_gen:
-             await notification.edit_text("❌ Ошибка: Image Manager не инициализирован.")
-             return
 
-        image_path = await image_gen.generate(prompt)
-        
-        if image_path and os.path.exists(image_path):
-            await notification.delete()
-            await message.reply_photo(
-                photo=image_path,
-                caption=f"🎨 **Запрос:** `{prompt}`\nEngine: `Imagen 3 / Cloud`"
+        notification = await message.reply_text("🎨 **Генерирую изображение...**")
+
+        if hasattr(image_gen, "generate_with_meta"):
+            result = await image_gen.generate_with_meta(
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                model_alias=model_alias,
+                prefer_local=prefer_local,
             )
-            os.remove(image_path)
+            image_path = result.get("path")
         else:
-            await notification.edit_text("❌ Не удалось сгенерировать изображение. Попробуй позже.")
+            result = {"ok": False, "error": "legacy_image_manager"}
+            image_path = await image_gen.generate(prompt, aspect_ratio=aspect_ratio)
+            if image_path:
+                result = {
+                    "ok": True,
+                    "path": image_path,
+                    "model_alias": model_alias or "legacy",
+                    "channel": "cloud",
+                    "provider": "legacy",
+                    "model_id": "legacy",
+                    "cost_estimate_usd": None,
+                }
+
+        if result.get("ok") and image_path and os.path.exists(image_path):
+            await notification.delete()
+            cost = result.get("cost_estimate_usd")
+            cost_text = f"~`${cost}`" if cost is not None else "n/a"
+            caption = (
+                f"🎨 **Запрос:** `{prompt}`\\n"
+                f"Model: `{result.get('model_alias', '-')}`\\n"
+                f"Channel: `{result.get('channel', '-')}` | Provider: `{result.get('provider', '-')}`\\n"
+                f"Cost est.: {cost_text}"
+            )
+            await message.reply_photo(photo=image_path, caption=caption)
+            os.remove(image_path)
+            return
+
+        details = result.get("details")
+        details_text = f"\n{details}" if details else ""
+        await notification.edit_text(
+            "❌ Не удалось сгенерировать изображение.\\n"
+            f"Причина: `{result.get('error', 'unknown')}`{details_text}\\n"
+            "_Проверь `!img models` и настройки ключей/workflow._"
+        )
 
     # --- !exec: Python REPL (Owner only, опасная команда) ---
     @app.on_message(filters.command("exec", prefixes="!"))
@@ -769,11 +1045,26 @@ def register_handlers(app, deps: dict):
         if len(output) > 4000:
             output = output[:3900] + "\n...[Truncated]..."
 
-        await notification.edit_text(f"🐍 **Результат:**\n\n```\n{output}\n```")
+        # Очищаем вывод от вложенных бэктиков, которые ломают markdown
+        safe_output = strip_backticks_from_content(output)
+        await notification.edit_text(f"🐍 **Результат:**\n\n```\n{safe_output}\n```")
         await _danger_audit(message, "exec", "ok", code[:300])
 
-    # --- Авто-ответ (самый последний, ловит все текстовые/фото/голосовые) ---
-    @app.on_message((filters.text | filters.photo | filters.voice) & ~filters.me & ~filters.bot)
+    # --- Авто-ответ (самый последний, ловит текст + медиа) ---
+    @app.on_message(
+        (
+            filters.text
+            | filters.photo
+            | filters.voice
+            | filters.audio
+            | filters.sticker
+            | filters.animation
+            | filters.video
+            | filters.document
+        )
+        & ~filters.me
+        & ~filters.bot
+    )
     @safe_handler
     async def auto_reply_logic(client, message: Message):
         """

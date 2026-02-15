@@ -19,7 +19,7 @@ from pathlib import Path
 import re
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from typing import Literal, Optional, Dict, Any, List, Set
+from typing import Literal, Optional, Dict, Any, List, Set, AsyncGenerator
 # from src.core.rag_engine import RAGEngine # Deprecated
 
 # Настройка логгера
@@ -28,6 +28,7 @@ logger = structlog.get_logger("ModelRouter")
 
 from src.core.openclaw_client import OpenClawClient
 from src.core.agent_swarm import SwarmManager
+from src.core.stream_client import OpenClawStreamClient
 
 class ModelRouter:
     def __init__(self, config: Dict[str, Any]):
@@ -53,7 +54,12 @@ class ModelRouter:
             base_url=config.get("OPENCLAW_BASE_URL", "http://localhost:18789"),
             api_key=config.get("OPENCLAW_API_KEY")
         )
-        logger.info("☁️ OpenClaw Client configured for Cloud Models")
+        # Stream Client для WebSocket/SSE
+        self.stream_client = OpenClawStreamClient(
+            base_url=self.lm_studio_url,
+            api_key="none"
+        )
+        logger.info("☁️ OpenClaw & Stream Clients configured")
 
         # RAG Engine (Deprecated, use OpenClaw)
         self.rag = None # RAGEngine()
@@ -67,10 +73,10 @@ class ModelRouter:
 
         # Пул моделей — читаем из .env, дефолты как fallback
         self.models = {
-            "chat": config.get("GEMINI_CHAT_MODEL", "google/gemini-1.5-flash"),
-            "thinking": config.get("GEMINI_THINKING_MODEL", "google/gemini-1.5-pro"),
-            "pro": config.get("GEMINI_PRO_MODEL", "google/gemini-1.5-pro"),
-            "coding": config.get("GEMINI_CODING_MODEL", "google/gemini-1.5-flash"),
+            "chat": config.get("GEMINI_CHAT_MODEL", "gemini-2.0-flash"),
+            "thinking": config.get("GEMINI_THINKING_MODEL", "gemini-2.0-flash-thinking-exp-01-21"),
+            "pro": config.get("GEMINI_PRO_MODEL", "gemini-1.5-pro"),
+            "coding": config.get("GEMINI_CODING_MODEL", "gemini-2.0-flash"),
         }
 
         # Счётчики (для диагностики)
@@ -86,8 +92,8 @@ class ModelRouter:
             "gemini-2.0-flash-lite-preview-02-05", # Flash Lite (User requested)
             "gemini-2.0-flash",         # Если основной занят
             "gemini-2.0-flash-001",     # Стабильная версия
-            "gemini-flash-latest",      # Алиас на актуальную flash
-            "gemini-pro-latest"         # Алиас на актуальную pro
+            "gemini-1.5-flash",         # Проверенный fallback
+            "gemini-1.5-pro"            # Стабильная pro
         ]
         
         # Предпочтительная локальная модель (из .env) — если указана,
@@ -98,6 +104,21 @@ class ModelRouter:
         self.local_coding_model = config.get("LOCAL_CODING_MODEL", "").strip()
 
         # ═══════════════════════════════════════════════════════════════
+        # [PHASE 15.1] Context Window Manager Metadata
+        # Лимиты токенов для разных моделей (входной контекст)
+        self.CONTEXT_WINDOWS = {
+            "gemini-2.0-flash": 1048576,
+            "gemini-2.0-pro-exp": 2097152,
+            "gemini-1.5-pro": 2097152,
+            "gemini-1.5-flash": 1048576,
+            "gpt-4": 128000,
+            "qwen": 32768,
+            "llama-3": 8192,
+            "mistral": 32768,
+            "deepseek": 64000,
+            "default": 8192
+        }
+
         # Smart Memory Planner: управление RAM и авто-загрузка/выгрузка
         # ═══════════════════════════════════════════════════════════════
         try:
@@ -155,14 +176,14 @@ class ModelRouter:
         self._local_heavy_slot = asyncio.Semaphore(1)
         self._local_light_slot = asyncio.Semaphore(1)
 
-        self.local_timeout_seconds = float(config.get("LOCAL_CHAT_TIMEOUT_SECONDS", 300))
+        self.local_timeout_seconds = float(config.get("LOCAL_CHAT_TIMEOUT_SECONDS", 900))
         self.last_cloud_error: Optional[str] = None
         self.last_cloud_model: Optional[str] = None
         self.last_local_load_error: Optional[str] = None
         self.lms_gpu_offload = str(config.get("LM_STUDIO_GPU_OFFLOAD", "")).strip().lower()
         self.cloud_priority_models = self._parse_cloud_priority(config.get(
             "MODEL_CLOUD_PRIORITY_LIST",
-            "google/gemini-2.0-flash,google/gemini-2.0-flash-lite-preview-02-05,openai/gpt-4o-mini,openai/gpt-4o-mini-standalone,wormgpt-1.0,kimi/k2-llama-mix"
+            "gemini-2.5-flash,gemini-2.5-pro,google/gemini-2.5-flash,google/gemini-2.5-pro,openai/gpt-4o-mini"
         ))
 
         # Память предпочтений моделей по профилям задач.
@@ -238,6 +259,21 @@ class ModelRouter:
         except Exception:
             return default
 
+    @staticmethod
+    def _normalize_chat_role(raw_role: str | None) -> str:
+        """
+        Нормализует произвольные роли контекста в допустимый набор OpenAI/LM Studio:
+        user | assistant | system | tool.
+        """
+        role = str(raw_role or "user").strip().lower()
+        if role in {"user", "assistant", "system", "tool"}:
+            return role
+        if role in {"model", "ai", "bot", "assistant_reply", "vision_analysis"}:
+            return "assistant"
+        if role in {"context", "memory", "note", "analysis"}:
+            return "system"
+        return "user"
+
     def _save_json(self, path: Path, payload: dict) -> None:
         """Безопасная запись JSON-файла."""
         try:
@@ -262,6 +298,48 @@ class ModelRouter:
             seen.add(token)
             result.append(token)
         return result
+
+    def _sanitize_model_text(self, text: Optional[str]) -> str:
+        """
+        Удаляет служебные маркеры модели и подчищает форматирование
+        перед отправкой ответа в Telegram/память.
+        """
+        if not text:
+            return ""
+        
+        cleaned = str(text)
+        # [HOTFIX v11.1] Агрессивная очистка тех-тегов через регулярки <|...|>
+        cleaned = re.sub(r"<\|.*?\|>", "", cleaned)
+        cleaned = cleaned.replace("</s>", "").replace("<s>", "")
+
+        # Схлопываем лишние пустые строки и края.
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        return cleaned
+
+    def _is_local_only_model_identifier(self, model_name: Optional[str]) -> bool:
+        """
+        Эвристика: определяет явно локальные ID, которые не стоит пробовать в cloud.
+        """
+        if not model_name:
+            return False
+        lowered = model_name.strip().lower()
+        if not lowered:
+            return False
+        local_markers = (
+            "-mlx",
+            "_mlx",
+            ".mlx",
+            ".gguf",
+            "gguf",
+            "q4_",
+            "q5_",
+            "q6_",
+            "q8_",
+            "lm-studio",
+            "ollama",
+            "local-model",
+        )
+        return any(marker in lowered for marker in local_markers)
 
     def _lm_studio_api_root(self) -> str:
         """
@@ -633,6 +711,9 @@ class ModelRouter:
             normalized = model_name.strip()
             if not normalized or normalized in seen:
                 return
+            if self._is_local_only_model_identifier(normalized):
+                logger.info("Пропускаю локальный model_id в cloud candidate list", model=normalized, profile=profile)
+                return
             seen.add(normalized)
             candidates.append(normalized)
 
@@ -956,8 +1037,17 @@ class ModelRouter:
                         return True
                     text = await resp.text()
                     last_rest_error_text = text
+                    
+                    # [HOTFIX v11.4.2] Распознавание фатальной ошибки LM Studio
+                    if "Utility process" in text or "snapshot of system resources failed" in text:
+                        self.last_local_load_error = "lms_resource_error"
+                        logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА LM STUDIO: Сбой системных ресурсов (Utility process). ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА LM STUDIO.")
+                        # Чтобы пользователь увидел это через !model status
+                        self.last_local_load_error_human = "⚠️ LM Studio зависла внутри (Utility process error). Пожалуйста, полностью ПЕРЕЗАПУСТИ LM Studio на компьютере."
+                    else:
+                        self.last_local_load_error = f"rest_load_failed:{resp.status}:{text[:220]}"
+                    
                     suggestions = self._suggest_local_model_ids(requested_model, available_ids)
-                    self.last_local_load_error = f"rest_load_failed:{resp.status}:{text[:220]}"
                     logger.warning(
                         "⚠️ REST API Load failed",
                         status=resp.status,
@@ -1064,7 +1154,6 @@ class ModelRouter:
         """
         Получает информацию о системной памяти через macOS sysctl / vm_stat.
         Возвращает: {"total": X, "used": Y, "free": Z} в гигабайтах.
-        Fallback: если не удалось — возвращает конфигурационные значения.
         """
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1357,15 +1446,14 @@ class ModelRouter:
 
     async def _call_local_llm(self, prompt: str, context: list = None, chat_type: str = "private", is_owner: bool = False) -> str:
         """
-        Вызов локальной модели через прямой HTTP запрос (aiohttp).
+        Вызов локальной модели через стриминг с программной отсечкой (Hard Truncation).
+        Это гарантирует защиту от бесконечной генерации, даже если сервер игнорирует max_tokens.
         """
         try:
-            # Динамический System Prompt для локалки
             system_msg = "You are a helpful assistant."
             if self.persona:
                 system_msg = self.persona.get_current_prompt(chat_type, is_owner)
 
-            # Выбираем URL в зависимости от движка
             if self.local_engine == 'lm-studio':
                 base_url = self.lm_studio_url
             else:
@@ -1375,71 +1463,76 @@ class ModelRouter:
                 base_url = base_url.rstrip("/") + "/v1"
             base_url = base_url.replace("/v1/v1", "/v1")
 
-            # Формируем payload
             messages = [{"role": "system", "content": system_msg}]
             if context:
                 for idx, msg in enumerate(context):
-                    if not isinstance(msg, dict):
-                        logger.debug("Skipping context entry (not dict) #%s: %s", idx, type(msg))
-                        continue
-                    mrole = str(msg.get("role") or "user")
+                    if not isinstance(msg, dict): continue
+                    mrole = self._normalize_chat_role(msg.get("role"))
                     content = msg.get("content") or msg.get("text") or msg.get("message")
-                    if isinstance(content, list):
-                        content = "\n".join(str(item) for item in content if item is not None)
-                    elif isinstance(content, dict):
-                        content = json.dumps(content, ensure_ascii=False)
-                    if content is None:
-                        logger.debug("Skipping context entry #%s due to missing content", idx)
-                        continue
-                    messages.append({"role": mrole, "content": str(content)})
+                    if content: messages.append({"role": mrole, "content": str(content)})
             messages.append({"role": "user", "content": prompt})
 
             payload = {
                 "model": self.active_local_model or "local-model",
                 "messages": messages,
                 "temperature": 0.7,
-                "include_reasoning": True  # User requested reasoning back
+                "max_tokens": 2048,
+                "stop": ["<|im_end|>", "###", "</s>"],
+                "stream": True,
+                "include_reasoning": True
             }
 
             headers = {"Content-Type": "application/json"}
+            timeout = aiohttp.ClientTimeout(total=300, sock_read=60) # Увеличиваем стабильность
             
-            # Таймаут 300с для тяжелых генераций
-            timeout = aiohttp.ClientTimeout(total=max(300, self.local_timeout_seconds))
+            full_content = []
+            collected_chars = 0
+            MAX_CHARS_LIMIT = 8000 # Примерно 2048 токенов
+            
             start_t = time.time()
-
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    f"{base_url}/chat/completions", 
-                    json=payload, 
-                    headers=headers
-                ) as response:
-                    
-                        if response.status == 200:
-                            data = await response.json()
-                            duration = time.time() - start_t
-                            
-                            choices = data.get('choices')
-                            if choices and len(choices) > 0:
-                                content = choices[0].get('message', {}).get('content')
-                                reasoning = choices[0].get('message', {}).get('reasoning_content')
-                                
+                async with session.post(f"{base_url}/chat/completions", json=payload, headers=headers) as response:
+                    if response.status != 200:
+                        err = await response.text()
+                        logger.error(f"Local LLM HTTP {response.status}: {err}")
+                        return None
+
+                    # Читаем чанки вручную для возможности разрыва
+                    async for line in response.content:
+                        line = line.decode("utf-8").strip()
+                        if not line or line == "data: [DONE]":
+                            continue
+                        
+                        if line.startswith("data: "):
+                            try:
+                                chunk_data = json.loads(line[6:])
+                                delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
                                 if content:
-                                    logger.info(
-                                        "Local LLM success",
-                                        duration_sec=round(duration, 2),
-                                        char_count=len(content),
-                                        has_reasoning=bool(reasoning)
-                                    )
-                                    return content
-                            
-                            logger.warning("Local LLM returned empty choices", raw_keys=list(data.keys()), choices_len=len(choices) if choices else 0)
-                            return None 
-                        else:
-                            error_text = await response.text()
-                            logger.error(f"Local LLM HTTP {response.status}: {error_text}")
-                            return None 
+                                    full_content.append(content)
+                                    collected_chars += len(content)
+                                    
+                                    # КРИТИЧЕСКАЯ ОТСЕЧКА
+                                    if collected_chars > MAX_CHARS_LIMIT:
+                                        logger.warning(f"⚠️ HARD TRUNCATION: Model {self.active_local_model} exceeded {MAX_CHARS_LIMIT} chars. Breaking stream.")
+                                        break
+                            except Exception:
+                                continue
+            
+            final_text = "".join(full_content)
+            duration = time.time() - start_t
+            
+            cleaned = self._sanitize_model_text(final_text)
+            if cleaned:
+                logger.info("Local LLM (Stream+Truncate) success", 
+                            duration=round(duration, 2), 
+                            chars=len(cleaned),
+                            truncated=collected_chars > MAX_CHARS_LIMIT)
+                return cleaned
+            return None
 
         except Exception as e:
+            logger.error(f"Local LLM Stream Error: {e}")
             self._stats["local_failures"] += 1
             return None  
 
@@ -1451,7 +1544,8 @@ class ModelRouter:
                           is_owner: bool = False,
                           use_rag: bool = True,
                           preferred_model: Optional[str] = None,
-                          confirm_expensive: bool = False):
+                          confirm_expensive: bool = False,
+                          skip_swarm: bool = False):
         """
         Главный метод маршрутизации запроса с Auto-Fallback, RAG и policy-роутингом.
         """
@@ -1466,9 +1560,10 @@ class ModelRouter:
             if rag_context:
                 prompt = f"### ДОПОЛНИТЕЛЬНЫЕ ДАННЫЕ ИЗ ТВОЕЙ ПАМЯТИ (RAG):\n{rag_context}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
-        # 0.1. Tool Orchestration (Phase 6)
-        if self.tools:
-            tool_data = await self.tools.execute_tool_chain(prompt)
+        # 0.1. Tool Orchestration (Phase 6/10)
+        # [v11.3] skip_swarm prevents infinite recursion
+        if self.tools and not skip_swarm:
+            tool_data = await self.tools.execute_tool_chain(prompt, skip_swarm=True)
             if tool_data:
                 prompt = f"### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n{tool_data}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
@@ -1493,7 +1588,7 @@ class ModelRouter:
                     tier=self._model_tier(self.active_local_model),
                 )
                 local_response = await self._call_local_llm(prompt, context, chat_type, is_owner)
-                if local_response:
+                if local_response and local_response.strip():
                     self._touch_model_usage(self.active_local_model or "local-model")
                     self._stats["local_calls"] += 1
                     local_model = self.active_local_model or "local-model"
@@ -1512,6 +1607,10 @@ class ModelRouter:
             if self.require_confirm_expensive and is_critical and not confirm_expensive:
                 return "confirm_needed", "⚠️ Для критичной задачи требуется подтверждение дорогого облачного прогона. Повтори команду с подтверждением."
             for i, candidate in enumerate(self._build_cloud_candidates(task_type, profile, preferred_model or recommendation.get("model"))):
+                # Фильтруем сломанный ID, если он просочился
+                if "-exp" in candidate and "gemini-2.0" in candidate:
+                    candidate = candidate.replace("-exp", "")
+                    
                 logger.info("Routing to CLOUD", model=candidate, profile=profile)
                 # Для первого кандидата делаем ретраи, для остальных - пробуем один раз и идем дальше
                 max_retries_cloud = 1 if i == 0 else 0
@@ -1625,11 +1724,73 @@ class ModelRouter:
             latest_cloud_error = self.last_cloud_error
         return latest_cloud_error or "❌ Не удалось получить ответ ни от локальной, ни от облачной модели."
 
+    async def route_stream(self,
+                          prompt: str,
+                          task_type: Literal['coding', 'chat', 'reasoning'] = 'chat',
+                          context: list = None,
+                          chat_type: str = "private",
+                          is_owner: bool = False,
+                          preferred_model: Optional[str] = None,
+                          confirm_expensive: bool = False) -> AsyncGenerator[str, None]:
+        """
+        [PHASE 15.2] Потоковая маршрутизация. 
+        Пока поддерживает только локальные модели (Streaming local first).
+        """
+        await self.check_local_health()
+        
+        if not self.is_local_available:
+            # Fallback на обычный route_query если стриминг недоступен для облака в данном контексте
+            res = await self.route_query(prompt, task_type, context, chat_type, is_owner, preferred_model, confirm_expensive)
+            yield res
+            return
+
+        # Подготовка системного промпта
+        system_msg = "You are a helpful assistant."
+        if hasattr(self, "persona") and self.persona:
+            system_msg = self.persona.get_current_prompt(chat_type, is_owner)
+
+        # Сборка сообщений
+        messages = [{"role": "system", "content": system_msg}]
+        if context:
+            from src.core.context_manager import ContextKeeper
+            for msg in context:
+                # Нормализация роли для предотвращения ошибок типа 'vision_analysis' в LM Studio
+                role = ContextKeeper._normalize_role(msg.get("role"))
+                content = msg.get("text") or msg.get("content") or ""
+                if content:
+                    messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self.active_local_model or "local-model",
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 2048,
+            "include_reasoning": False, # Отключаем, так как вызывает зацикливание в LM Studio
+            "stream": True,
+            "stop": ["<|endoftext|>", "<|user|>", "<|observation|>", "Observation:", "User:", "###", "---"],
+            "presence_penalty": 0.1,
+            "frequency_penalty": 0.1
+        }
+
+        try:
+            async for chunk in self.stream_client.stream_chat(payload):
+                yield chunk
+        except Exception as e:
+            logger.error(f"Streaming error in route_stream: {e}")
+            yield f"❌ Ошибка стриминга: {e}"
+
     async def _call_gemini(self, prompt: str, model_name: str, context: list = None,
                            chat_type: str = "private", is_owner: bool = False, max_retries: int = 2) -> str:
         """
         Вызов Cloud модели через OpenClaw Gateway.
         """
+        # [HOTFIX v11.4.2] Глобальный фильтер проблемных моделей (УСИЛЕННЫЙ)
+        if model_name and ("-exp" in model_name or "gemini-2.0-flash-exp" in model_name):
+            if "thinking" not in model_name: # Thinking пока только exp
+                logger.info(f"Filtering out problematic model: {model_name} -> gemini-1.5-flash")
+                model_name = "gemini-1.5-flash"
+        
         # Динамический System Prompt
         from src.core.prompts import get_system_prompt
         base_instructions = get_system_prompt(chat_type == "private")
@@ -1648,9 +1809,7 @@ class ModelRouter:
         if context:
             # Преобразуем контекст в формат сообщений
             for msg in context:
-                role = msg.get("role", "user")
-                # Маппинг ролей если нужно, но обычно user/model/assistant совпадают
-                if role == "model": role = "assistant"
+                role = self._normalize_chat_role(msg.get("role", "user"))
                 messages.append({"role": role, "content": msg.get("text", "")})
         
         messages.append({"role": "user", "content": prompt})
@@ -1658,8 +1817,8 @@ class ModelRouter:
         for attempt in range(max_retries + 1):
             try:
                 response_text = await self.openclaw_client.chat_completions(messages, model=model_name)
-
-                normalized = (response_text or "").strip()
+                cleaned_response = self._sanitize_model_text(response_text)
+                normalized = (cleaned_response or "").strip()
                 error_detected = self._is_cloud_error_message(normalized)
                 billing_issue = self._is_cloud_billing_error(normalized)
 
@@ -1675,7 +1834,7 @@ class ModelRouter:
                     return f"❌ Ошибка Cloud: {response_text}"
 
                 self._stats["cloud_calls"] += 1
-                return response_text
+                return cleaned_response
 
             except Exception as e:
                 logger.error(f"Cloud call failed: {e}")
@@ -1687,12 +1846,13 @@ class ModelRouter:
                 return f"❌ Ошибка Cloud: {e}"
 
     async def route_query_stream(self,
-                          prompt: str,
-                          task_type: Literal['coding', 'chat', 'reasoning', 'creative'] = 'chat',
-                          context: list = None,
-                          chat_type: str = "private",
-                          is_owner: bool = False,
-                          use_rag: bool = True):
+                                 prompt: str,
+                                 task_type: Literal['coding', 'chat', 'reasoning', 'creative'] = 'chat',
+                                 context: list = None,
+                                 chat_type: str = "private",
+                                 is_owner: bool = False,
+                                 use_rag: bool = True,
+                                 skip_swarm: bool = False):
         """
         Версия route_query с поддержкой стриминга (пока только для Cloud).
         """
@@ -1702,8 +1862,8 @@ class ModelRouter:
             if rag_context:
                 prompt = f"### ДОПОЛНИТЕЛЬНЫЕ ДАННЫЕ ИЗ ТВОЕЙ ПАМЯТИ (RAG):\n{rag_context}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
-        if self.tools:
-            tool_data = await self.tools.execute_tool_chain(prompt)
+        if self.tools and not skip_swarm:
+            tool_data = await self.tools.execute_tool_chain(prompt, skip_swarm=True)
             if tool_data:
                 prompt = f"### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n{tool_data}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
@@ -1723,7 +1883,11 @@ class ModelRouter:
         if self.force_mode == 'force_local' or (self.is_local_available and task_type in ['chat', 'coding']):
              try:
                  full_res = await self.route_query(prompt, task_type, context, chat_type, is_owner, use_rag=False)
-                 yield full_res
+                 if full_res and full_res.strip():
+                     yield full_res
+                 else:
+                     logger.warning("Local internal route returned empty content")
+                     yield "⚠️ Локальная модель вернула пустой ответ."
              except Exception as e:
                  logger.error(f"Fallback routing in stream failed: {e}")
                  yield f"❌ Ошибка маршрутизации: {e}"

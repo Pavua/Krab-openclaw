@@ -16,6 +16,7 @@ from pyrogram import filters, enums
 from pyrogram.types import Message
 
 from .auth import is_owner, is_superuser
+from ..core.markdown_sanitizer import strip_backticks_from_content
 
 import structlog
 logger = structlog.get_logger(__name__)
@@ -79,7 +80,9 @@ def register_handlers(app, deps: dict):
         if len(result) > 4000:
             result = result[:3900] + "\n...[Output Truncated]..."
 
-        await notification.edit_text(f"💻 **Результат:**\n\n```\n{result}\n```")
+        # Очищаем вывод от вложенных бэктиков (ломают markdown)
+        safe_result = strip_backticks_from_content(result)
+        await notification.edit_text(f"💻 **Результат:**\n\n```\n{safe_result}\n```")
         await _danger_audit(message, "sh", "ok", cmd[:300])
 
     # --- !commit: Git push ---
@@ -107,7 +110,10 @@ def register_handlers(app, deps: dict):
         result = await tools.run_shell(f'git commit -m "{commit_msg}"')
         push_result = await tools.run_shell("git push")
 
-        final = f"📦 **Git Push Complete:**\n\n```\n{result}\n{push_result}\n```"
+        # Очищаем от бэктиков в git-выводе
+        safe_result = strip_backticks_from_content(result)
+        safe_push = strip_backticks_from_content(push_result)
+        final = f"📦 **Git Push Complete:**\n\n```\n{safe_result}\n{safe_push}\n```"
         if len(final) > 4000:
             final = final[:3900] + "\n...[Truncated]..."
 

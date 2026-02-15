@@ -130,5 +130,5 @@ pytest tests/test_openclaw_client.py -v
 
 ---
 
-**Последнее обновление**: 2026-02-14
-**Версия**: v8.2 (Soul Edition)
+**Последнее обновление**: 2026-02-15
+**Версия**: v8.3 (Stability Edition)

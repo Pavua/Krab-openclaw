@@ -1,11 +1,57 @@
 # 🦀 Krab Project Handover (v8.0 Architecture Finish)
 
 **Project:** Krab AI Userbot
-**Current Status:** ✅ Phase 12 Completed (Project Handover Engine & Global Lint Hardening)
-**Date:** 13.02.2026
-**Version:** v8.0 (Ready for Migration)
+**Current Status:** ✅ Phase 17.7 Completed (Silent Failure Fixes & Streaming Stability)
+**Date:** 15.02.2026
+**Version:** v8.3 (Stability Edition)
 
 ---
+
+## ✅ v8 Sprint Update #19 (2026-02-15) — Streaming Stability & Silent Failure Fixes
+
+### Что реализовано
+
+1. **Phase 17.4: Streaming Stability & Hard Truncation**:
+   - Реализована жёсткая обрезка (Hard Truncation) в `src/core/stream_client.py` (4000 символов).
+   - Исправлена ошибка "Connection Error" в `ai.py`.
+   - Унифицированы streaming-маршруты в `model_manager.py`.
+
+2. **Phase 17.5: Loop & Repetition Protection**:
+   - Реализован `CircularRepetitionDetector` в `stream_client.py`.
+   - Добавлены stop-токены для GLM-4/локальных моделей.
+   - Добавлены `presence_penalty` и `frequency_penalty` (0.1).
+
+3. **Phase 17.6: Reasoning Loop Protection**:
+   - Поддержка `reasoning_content` в `stream_client.py`.
+   - `MAX_REASONING_LIMIT` (2000 символов) для reasoning-блока.
+   - `include_reasoning` отключен по дефолту для локальных моделей.
+
+4. **Phase 17.7: Silent Failure Fixes** (КРИТИЧЕСКОЕ):
+   - **`error_handler.py`**: Убран рекурсивный retry при FloodWait (вызывал `maximum recursion depth exceeded`). Добавлен перехват `RecursionError`.
+   - **`markdown_sanitizer.py`** (НОВЫЙ): Закрывает незакрытые ``` блоки перед `edit_text`, устраняя поток `Unclosed tags: <pre>` (~8/сек).
+   - **`ai.py`**: Streaming edit_text теперь использует `sanitize_markdown_for_telegram()`.
+   - **`system.py`**: `!sh`/`!commit` очищают вывод от вложенных бэктиков.
+   - **`notifier.py`**: Исправлен `parse_mode="markdown"` (невалидный → `None`).
+
+### Файлы
+
+| Файл | Действие | Описание |
+| :--- | :--- | :--- |
+| `src/core/error_handler.py` | **UPDATED** | Убрана рекурсия FloodWait, добавлен RecursionError catch |
+| `src/core/markdown_sanitizer.py` | **NEW** | Закрытие незакрытых ``` блоков |
+| `src/core/stream_client.py` | **UPDATED** | Hard truncation + CircularRepetitionDetector + reasoning support |
+| `src/core/model_manager.py` | **UPDATED** | Stop tokens, penalties, include_reasoning=False |
+| `src/core/notifier.py` | **UPDATED** | Исправлен parse_mode |
+| `src/handlers/ai.py` | **UPDATED** | Безопасный streaming markdown |
+| `src/handlers/system.py` | **UPDATED** | Безопасный вывод !sh/!commit |
+
+### Верификация
+
+- Бот перезапущен и принял сообщение «проверка связи» → `Local LLM success char_count=3804`.
+- **0 новых** `Unclosed tags: <pre>` ошибок после перезапуска.
+- **0 новых** `RecursionError` / `maximum recursion depth`.
+- **0 новых** `Invalid parse mode` ошибок.
+- Модель `glm-4.6v-flash` загружена и отвечает через LM Studio.---
 
 ## ✅ v8 Sprint Update #18 (2026-02-13) — Project Handover Engine & Global Polishing
 
