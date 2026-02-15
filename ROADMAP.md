@@ -33,12 +33,13 @@
 
 ---
 
+
 ## ✅ Phase 11: Omni-Presence (v5.2)
 
 - [x] 11.1: **Screen Awareness** — бот видит экран (через Gemini Vision)
 - [x] 11.2: **Neural Voice (TTS)** — генерация голоса (macOS `say` + future: ElevenLabs)
-- [ ] 11.3: **Interactive Voice Mode** — полный голосовой диалог (Speech-to-Speech)
-- [ ] 11.4: **Webcam Eyes** — анализ окружения через камеру
+- [x] 11.3: **Deployment Mastery** — скрипты `run_native.command` и `run_docker.command`
+- [x] 11.4: **Swarm Expansion** — добавлена команда `self_programming`
 
 ---
 
