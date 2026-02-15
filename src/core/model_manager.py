@@ -13,6 +13,7 @@ import os
 import time
 import asyncio
 import json
+import difflib
 import aiohttp
 from pathlib import Path
 import re
@@ -157,6 +158,8 @@ class ModelRouter:
         self.local_timeout_seconds = float(config.get("LOCAL_CHAT_TIMEOUT_SECONDS", 300))
         self.last_cloud_error: Optional[str] = None
         self.last_cloud_model: Optional[str] = None
+        self.last_local_load_error: Optional[str] = None
+        self.lms_gpu_offload = str(config.get("LM_STUDIO_GPU_OFFLOAD", "")).strip().lower()
         self.cloud_priority_models = self._parse_cloud_priority(config.get(
             "MODEL_CLOUD_PRIORITY_LIST",
             "google/gemini-2.0-flash,google/gemini-2.0-flash-lite-preview-02-05,openai/gpt-4o-mini,openai/gpt-4o-mini-standalone,wormgpt-1.0,kimi/k2-llama-mix"
@@ -840,50 +843,172 @@ class ModelRouter:
         # Удаляем дубли и сортируем в устойчивом порядке
         return sorted(set(ids))
 
+    def _suggest_local_model_ids(self, requested: str, available_ids: List[str], limit: int = 5) -> List[str]:
+        """Подбирает релевантные подсказки model_id по строке пользователя."""
+        if not requested or not available_ids:
+            return []
+
+        requested_lower = requested.lower()
+        substring_matches = [model_id for model_id in available_ids if requested_lower in model_id.lower()]
+        if substring_matches:
+            return substring_matches[:limit]
+
+        close = difflib.get_close_matches(requested, available_ids, n=limit, cutoff=0.35)
+        if close:
+            return close
+
+        return available_ids[:limit]
+
+    def _resolve_local_model_id(self, requested: str, available_ids: List[str]) -> Optional[str]:
+        """Возвращает канонический model_id, если он присутствует в скане LM Studio."""
+        if not requested:
+            return None
+
+        requested_clean = requested.strip()
+        if not requested_clean:
+            return None
+
+        if requested_clean in available_ids:
+            return requested_clean
+
+        lowered = requested_clean.lower()
+        for model_id in available_ids:
+            if model_id.lower() == lowered:
+                return model_id
+
+        # Допускаем однозначное совпадение по суффиксу/префиксу.
+        fuzzy_matches = [
+            model_id for model_id in available_ids
+            if model_id.lower().endswith(lowered) or model_id.lower().startswith(lowered)
+        ]
+        if len(fuzzy_matches) == 1:
+            return fuzzy_matches[0]
+
+        return None
+
+    def _build_lms_load_command(self, lms_path: str, model_name: str) -> List[str]:
+        """
+        Формирует совместимую с текущим lms CLI команду загрузки.
+        Допустимые значения --gpu: off|max|число от 0 до 1.
+        """
+        cmd = [lms_path, "load", model_name, "-y"]
+        gpu = self.lms_gpu_offload
+        if gpu in {"off", "max"}:
+            cmd.extend(["--gpu", gpu])
+            return cmd
+
+        if gpu:
+            try:
+                gpu_value = float(gpu)
+                if 0.0 <= gpu_value <= 1.0:
+                    cmd.extend(["--gpu", str(gpu_value)])
+                else:
+                    logger.warning("LM_STUDIO_GPU_OFFLOAD вне диапазона 0..1, опция игнорируется", value=gpu)
+            except ValueError:
+                logger.warning("LM_STUDIO_GPU_OFFLOAD имеет невалидный формат, опция игнорируется", value=gpu)
+
+        return cmd
+
     async def load_local_model(self, model_name: str) -> bool:
         """
         Загружает модель в LM Studio через REST API (0.3.x).
         """
+        requested_model = (model_name or "").strip()
+        self.last_local_load_error = None
+        if not requested_model:
+            self.last_local_load_error = "model_id_empty"
+            logger.warning("⚠️ Пустой model_id для load_local_model.")
+            return False
+
+        # Dry precheck: проверяем model_id по /api/v1/models до POST /load.
+        available_ids = await self.list_local_models()
+        resolved_model = self._resolve_local_model_id(requested_model, available_ids)
+        if not resolved_model:
+            suggestions = self._suggest_local_model_ids(requested_model, available_ids)
+            self.last_local_load_error = f"model_not_found_precheck:{requested_model}"
+            logger.warning(
+                "⚠️ Dry precheck: model_id отсутствует в LM Studio scan",
+                requested=requested_model,
+                suggestions=suggestions,
+                scanned_count=len(available_ids),
+            )
+            return False
+
         base = self._lm_studio_api_root()
         # В 0.3.x эндпоинт загрузки: POST /api/v1/models/load
         url = f"{base}/api/v1/models/load"
-        
+        last_rest_error_text = ""
+
         try:
-            logger.info(f"🚀 Loading model via REST API: {model_name}")
+            logger.info(f"🚀 Loading model via REST API: {resolved_model}")
             # LM Studio 0.3.x: POST /api/v1/models/load
             # Принимает {"model": "id"} — без gpu_offload (вызывает unrecognized_keys)
             timeout = aiohttp.ClientTimeout(total=120)  # Загрузка может быть долгой
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 payload = {
-                    "model": model_name
+                    "model": resolved_model
                 }
                 async with session.post(url, json=payload) as resp:
                     if resp.status == 200:
-                        logger.info(f"✅ REST API Load Success: {model_name}")
-                        self.active_local_model = model_name
+                        logger.info(f"✅ REST API Load Success: {resolved_model}")
+                        self.active_local_model = resolved_model
                         self.is_local_available = True
                         return True
-                    else:
-                        text = await resp.text()
-                        logger.warning(f"⚠️ REST API Load failed ({resp.status}): {text}")
+                    text = await resp.text()
+                    last_rest_error_text = text
+                    suggestions = self._suggest_local_model_ids(requested_model, available_ids)
+                    self.last_local_load_error = f"rest_load_failed:{resp.status}:{text[:220]}"
+                    logger.warning(
+                        "⚠️ REST API Load failed",
+                        status=resp.status,
+                        requested=requested_model,
+                        resolved=resolved_model,
+                        details=text[:1200],
+                        suggestions=suggestions,
+                    )
+                    lowered = text.lower()
+                    if "model_not_found" in lowered or "not found" in lowered:
+                        logger.warning(
+                            "❗ LM Studio вернул model_not_found. Используйте точный model_id из `!model scan`.",
+                            requested=requested_model,
+                            suggestions=suggestions,
+                        )
         except Exception as e:
+            self.last_local_load_error = f"rest_load_exception:{e}"
             logger.error(f"❌ REST API Load Exception: {e}")
 
         # Fallback to CLI for backwards compatibility
         lms_path = os.path.expanduser("~/.lmstudio/bin/lms")
         if os.path.exists(lms_path):
             try:
+                cmd = self._build_lms_load_command(lms_path, resolved_model)
                 proc = await asyncio.create_subprocess_exec(
-                    lms_path, "load", model_name, "--gpu", "auto", "-y"
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 await proc.communicate()
                 if proc.returncode == 0:
-                    self.active_local_model = model_name
+                    self.active_local_model = resolved_model
                     self.is_local_available = True
+                    logger.info("✅ CLI fallback load success", command=" ".join(cmd), model=resolved_model)
                     return True
-            except Exception:
-                pass
-        
+                self.last_local_load_error = f"cli_load_failed:{proc.returncode}"
+                logger.warning(
+                    "⚠️ CLI fallback load failed",
+                    command=" ".join(cmd),
+                    returncode=proc.returncode,
+                    requested=requested_model,
+                    resolved=resolved_model,
+                    rest_error=last_rest_error_text[:300] if last_rest_error_text else "",
+                )
+            except Exception as exc:
+                self.last_local_load_error = f"cli_load_exception:{exc}"
+                logger.warning("⚠️ CLI fallback load exception", error=str(exc), requested=requested_model)
+        else:
+            self.last_local_load_error = "lms_cli_not_found"
+            logger.warning("⚠️ CLI fallback недоступен: ~/.lmstudio/bin/lms не найден.")
+
         return False
 
     async def unload_local_model(self, model_name: str = None) -> bool:
