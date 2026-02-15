@@ -28,6 +28,107 @@ from src.core.ecosystem_health import EcosystemHealthService
 logger = structlog.get_logger(__name__)
 
 
+def parse_model_set_request(args: list[str], valid_slots: list[str]) -> dict[str, str | bool]:
+    """
+    Разбирает аргументы `!model set` в каноничном и legacy формате.
+
+    Контракт:
+    - канон: `!model set <slot> <model_id>`
+    - legacy: `!model set <model_id>` -> слот `chat` + предупреждение
+    """
+    slots_sorted = sorted({str(slot).strip().lower() for slot in valid_slots if str(slot).strip()})
+    slots_hint = ", ".join(slots_sorted) if slots_sorted else "chat"
+    usage = (
+        "⚠️ Формат команды:\n"
+        "`!model set <slot> <model_id>`\n"
+        "Пример: `!model set chat zai-org/glm-4.6v-flash`"
+    )
+
+    if len(args) < 3:
+        return {
+            "ok": False,
+            "error": usage,
+            "slot": "",
+            "model_name": "",
+            "legacy": False,
+            "warning": "",
+        }
+
+    # Legacy: !model set <model_id>
+    if len(args) == 3:
+        model_name = args[2].strip()
+        if model_name.lower() in slots_sorted:
+            return {
+                "ok": False,
+                "error": (
+                    "❌ После слота нужно указать model_id.\n"
+                    f"{usage}"
+                ),
+                "slot": model_name.lower(),
+                "model_name": "",
+                "legacy": False,
+                "warning": "",
+            }
+        if not model_name:
+            return {
+                "ok": False,
+                "error": usage,
+                "slot": "",
+                "model_name": "",
+                "legacy": False,
+                "warning": "",
+            }
+        return {
+            "ok": True,
+            "error": "",
+            "slot": "chat",
+            "model_name": model_name,
+            "legacy": True,
+            "warning": (
+                "⚠️ Legacy-формат `!model set <model_id>` устарел.\n"
+                "Команда интерпретирована как `!model set chat <model_id>`."
+            ),
+        }
+
+    slot = args[2].strip().lower()
+    if slot not in slots_sorted:
+        return {
+            "ok": False,
+            "error": (
+                f"❌ Неизвестный слот `{slot}`.\n"
+                f"Доступные слоты: {slots_hint}\n\n"
+                f"{usage}"
+            ),
+            "slot": slot,
+            "model_name": "",
+            "legacy": False,
+            "warning": "",
+        }
+
+    model_name = " ".join(args[3:]).strip()
+    if not model_name:
+        return {
+            "ok": False,
+            "error": (
+                "❌ После слота нужно указать model_id.\n"
+                f"{usage}"
+            ),
+            "slot": slot,
+            "model_name": "",
+            "legacy": False,
+            "warning": "",
+        }
+
+    return {
+        "ok": True,
+        "error": "",
+        "slot": slot,
+        "model_name": model_name,
+        "legacy": False,
+        "warning": "",
+    }
+
+
 def register_handlers(app, deps: dict):
     """Регистрирует обработчики базовых команд."""
     router = deps["router"]
@@ -510,15 +611,40 @@ def register_handlers(app, deps: dict):
             browser = report.get("browser", {})
             tools = report.get("tools", {})
             ready_sub = report.get("ready_for_subscriptions", False)
+            local_ok = await router.check_local_health(force=True)
+            local_models = await router.list_local_models()
+            local_reason = "ok" if local_ok else ("model_not_loaded" if local_models else "local_lm_unavailable")
+
+            auth_reason = str(auth.get("status_reason") or "unknown")
+            auth_human = {
+                "ok": "OK",
+                "auth_missing_lmstudio_profile": "AUTH_MISSING",
+                "gateway_route_unavailable": "ROUTE_UNAVAILABLE",
+                "required_auth_providers_missing": "PROVIDER_MISSING",
+                "required_auth_providers_unhealthy": "PROVIDER_UNHEALTHY",
+            }.get(auth_reason, auth_reason.upper())
+
+            triage_line = "✅ Контур в норме"
+            if auth_reason == "auth_missing_lmstudio_profile":
+                triage_line = "❗ Диагноз: отсутствует lmstudio auth profile"
+            elif auth_reason == "gateway_route_unavailable":
+                triage_line = "❗ Диагноз: route auth/providers/health недоступен или вернул невалидный payload"
+            elif local_reason == "model_not_loaded":
+                triage_line = "❗ Диагноз: LM Studio доступен, но локальная модель не загружена"
+
             text = (
                 "**🧩 OpenClaw Report:**\n\n"
                 f"• Gateway: `{'UP' if report.get('gateway') else 'DOWN'}`\n"
                 f"• Auth providers: `{'UP' if auth.get('available') else 'DOWN'}` ({auth.get('path', '-')})\n"
+                f"• Auth reason: `{auth_human}`\n"
                 f"• Auth readiness: `{'READY' if auth.get('ready_for_subscriptions') else 'NOT_READY'}`\n"
                 f"• Browser path: `{'UP' if browser.get('available') else 'DOWN'}` ({browser.get('path', '-')})\n"
                 f"• Tools registry: `{'UP' if tools.get('available') else 'DOWN'}` count=`{tools.get('tools_count', 0)}`\n"
+                f"• Local LM status: `{local_reason}`\n"
                 f"• Subscriptions flow: `{'READY' if ready_sub else 'PARTIAL'}`\n"
                 f"• Base URL: `{report.get('base_url', '-')}`\n\n"
+                f"{triage_line}\n"
+                "_Ремедиация auth:_ `repair_openclaw_lmstudio_auth.command`\n\n"
                 "_Подкоманды:_ `!openclaw auth`, `!openclaw browser`, `!openclaw tools`, `!openclaw deep`, `!openclaw plan`, `!openclaw smoke [url]`"
             )
             await notification.edit_text(text)
@@ -545,10 +671,15 @@ def register_handlers(app, deps: dict):
                 f"- available: `{auth.get('available')}`\n"
                 f"- path: `{auth.get('path')}`\n"
                 f"- tried: `{auth.get('tried')}`\n"
+                f"- status_reason: `{auth.get('status_reason')}`\n"
                 f"- ready_for_subscriptions: `{auth.get('ready_for_subscriptions')}`\n"
                 f"- required: `{required}`\n"
                 f"- missing_required: `{missing}`\n"
-                f"- unhealthy_required: `{unhealthy}`\n\n"
+                f"- unhealthy_required: `{unhealthy}`\n"
+                f"- lmstudio_profile: `{(auth.get('lmstudio_profile') or {}).get('present')}`\n"
+                f"- lmstudio_profile_path: `{(auth.get('lmstudio_profile') or {}).get('path')}`\n"
+                f"- lmstudio_profile_error: `{(auth.get('lmstudio_profile') or {}).get('error')}`\n\n"
+                "_Автофикс:_ `repair_openclaw_lmstudio_auth.command`\n\n"
                 "**Providers:**\n"
                 + "\n".join(provider_lines)
                 + "\n\n"
@@ -839,35 +970,6 @@ def register_handlers(app, deps: dict):
         # Обработка команд переключения режима
         subcommand = args[1].lower()
 
-        if subcommand == "set":
-            if len(args) < 3:
-                await message.reply_text("❌ Укажите ID модели.\nПример: `!model set qwen2.5-7b`")
-                return
-            
-            new_model = args[2] # !model set <name>
-            
-            # Проверяем, локальная это модель или облачная
-            is_local = any(x in new_model.lower() for x in ["qwen", "mistral", "llama", "phi", "gemma", "local"])
-            
-            if is_local:
-                 status_msg = await message.reply_text(f"🔄 Загружаю локальную модель **{new_model}** через LM Studio...")
-                 try:
-                     success = await router.load_local_model(new_model)
-                     if success:
-                         await status_msg.edit_text(f"✅ Локальная модель загружена: **{new_model}**")
-                     else:
-                         await status_msg.edit_text(f"❌ Ошибка загрузки **{new_model}**. Проверьте логи LM Studio.")
-                 except Exception as e:
-                     await status_msg.edit_text(f"❌ Ошибка вызова: {e}")
-            else:
-                # Cloud switch logic (Gemini/GPT) - just switching preference
-                if "gemini" in new_model.lower():
-                    router.force_mode = "force_cloud"
-                    await message.reply_text(f"☁️ Предпочтительная облачная модель: **{new_model}**")
-                else:
-                     await message.reply_text(f"📝 Модель **{new_model}** установлена как активная (Meta-only change).")
-            return
-
         if subcommand in ['local', 'cloud', 'auto']:
             res = router.set_force_mode(subcommand)
             await message.reply_text(f"✅ **Режим обновлен:**\n{res}")
@@ -1135,45 +1237,53 @@ def register_handlers(app, deps: dict):
                 await msg.edit_text("❌ Не удалось выгрузить модели (LM Studio не запущен или ошибка CLI).")
             return
 
-        if subcommand == "set" and len(args) >= 4:
-            slot = args[2].lower()
-            model_name = " ".join(args[3:])
-
-            if slot not in router.models:
-                await message.reply_text(
-                    f"❌ Слот `{slot}` не найден.\n"
-                    f"Доступные: {', '.join(router.models.keys())}"
-                )
+        if subcommand == "set":
+            parsed = parse_model_set_request(args, list(router.models.keys()))
+            if not parsed.get("ok"):
+                await message.reply_text(str(parsed.get("error") or "❌ Некорректный формат команды."))
                 return
 
-            old = router.models[slot]
+            slot = str(parsed["slot"])
+            model_name = str(parsed["model_name"])
+            old = router.models.get(slot, "—")
             router.models[slot] = model_name
-            
-            # Проактивная попытка загрузки, если мы в локальном режиме или модель похожа на локальную
-            is_probably_local = ("/" in model_name or "-" in model_name) and "gemini" not in model_name.lower()
-            
-            if is_probably_local and (router.force_mode == "local" or router.force_mode == "auto"):
+
+            # Проактивная попытка загрузки локальной модели.
+            lowered = model_name.lower()
+            is_probably_local = not any(marker in lowered for marker in ("gemini", "gpt", "claude", "google/"))
+            will_try_load = is_probably_local and router.force_mode in {"auto", "force_local"}
+            legacy_warning = str(parsed.get("warning") or "")
+
+            if will_try_load:
                 msg_load = await message.reply_text(f"⏳ **Устанавливаю `{slot}` и загружаю в LM Studio...**")
                 ok = await router.load_local_model(model_name)
                 if ok:
-                    await msg_load.edit_text(
+                    text = (
                         f"✅ **Модель готова:**\n"
                         f"  Слот: `{slot}`\n"
                         f"  Модель: `{model_name}`\n"
                         f"  Статус: *Загружена в VRAM*"
                     )
                 else:
-                    await msg_load.edit_text(
+                    text = (
                         f"⚠️ **Модель установлена в конфиг, но не загружена:**\n"
                         f"  Слот: `{slot}`\n"
                         f"  Модель: `{model_name}`\n"
                         f"  _Подсказка: проверьте LM Studio или используйте `!model scan`_"
                     )
-            else:
-                await message.reply_text(
-                    f"✅ **Модель обновлена:**\n"
-                    f"  `{slot}`: ~~{old}~~ → **{model_name}**"
-                )
+                if legacy_warning:
+                    text = f"{legacy_warning}\n\n{text}"
+                await msg_load.edit_text(text)
+                return
+
+            text = (
+                f"✅ **Модель обновлена:**\n"
+                f"  `{slot}`: ~~{old}~~ → **{model_name}**"
+            )
+            if legacy_warning:
+                text = f"{legacy_warning}\n\n{text}"
+            await message.reply_text(text)
+            return
         else:
             await message.reply_text(
                 "`!model` — статус\n"
