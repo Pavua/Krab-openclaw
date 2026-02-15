@@ -15,6 +15,7 @@ Krab v7.2 (Stable) — Core Orchestrator (Entry Point)
 import os
 import signal
 import asyncio
+import json
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -67,25 +68,84 @@ logger = setup_logger()
 # Переменные окружения
 load_dotenv(override=True)
 
+
+def _json_contains_lmstudio_provider(payload):
+    """Проверяет наличие provider=lmstudio в auth profiles."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_lower = str(key).strip().lower()
+            if key_lower == "lmstudio":
+                return True
+            if key_lower in {"provider", "provider_id", "name", "id"} and str(value).strip().lower() == "lmstudio":
+                return True
+            if _json_contains_lmstudio_provider(value):
+                return True
+        return False
+    if isinstance(payload, list):
+        return any(_json_contains_lmstudio_provider(item) for item in payload)
+    if isinstance(payload, str):
+        return payload.strip().lower() == "lmstudio"
+    return False
+
+
+def preflight_openclaw_auth_profile() -> None:
+    """
+    Проверяет наличие lmstudio auth profile до первого local-fallback.
+    Ничего не ломает, только даёт точный actionable warning.
+    """
+    auth_path = os.path.expanduser(
+        os.getenv("OPENCLAW_AUTH_PROFILES_PATH", "~/.openclaw/agents/main/agent/auth-profiles.json")
+    )
+    remediation_script = os.path.abspath("repair_openclaw_lmstudio_auth.command")
+
+    if not os.path.exists(auth_path):
+        logger.warning(
+            "OpenClaw auth profile store не найден",
+            auth_profiles_path=auth_path,
+            remediation=remediation_script,
+        )
+        return
+
+    try:
+        with open(auth_path, "r", encoding="utf-8") as fp:
+            payload = json.load(fp)
+    except Exception as exc:
+        logger.warning(
+            "OpenClaw auth profile store не читается",
+            auth_profiles_path=auth_path,
+            error=str(exc),
+            remediation=remediation_script,
+        )
+        return
+
+    if not _json_contains_lmstudio_provider(payload):
+        logger.warning(
+            "OpenClaw auth profile lmstudio отсутствует",
+            auth_profiles_path=auth_path,
+            remediation=remediation_script,
+        )
+    else:
+        logger.info("OpenClaw auth preflight OK: lmstudio profile найден", auth_profiles_path=auth_path)
+
+
+preflight_openclaw_auth_profile()
+
 # Telegram-конфигурация
 try:
     API_ID = int(os.getenv("TELEGRAM_API_ID"))
 except (ValueError, TypeError):
-    API_ID = os.getenv("TELEGRAM_API_ID") # Fallback to string if env is weird, but usually int
+    API_ID = os.getenv("TELEGRAM_API_ID")
 
 API_HASH = os.getenv("TELEGRAM_API_HASH")
-raw_session_name = os.getenv("TELEGRAM_SESSION_NAME", "krab_v2_session")
-SESSION_NAME = raw_session_name
+SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME", "nexus_session1")
 session_file = f"{SESSION_NAME}.session"
 
+logger.info(f"📂 Looking for session file: {os.path.abspath(session_file)}")
+
 if not os.path.exists(session_file):
-    for candidate in os.listdir("."):
-        if candidate.endswith(".session"):
-            SESSION_NAME = candidate.rsplit(".", 1)[0]
-            logger.info(f"Session file '{session_file}' missing, using '{candidate}' instead.")
-            break
-    else:
-        logger.warning(f"No session file found for '{session_file}'; interactive login may be required.")
+    logger.error(f"‼️ SESSION NOT FOUND: {session_file}. Pyrogram will fail in non-interactive mode.")
+else:
+    logger.info(f"✅ Session file '{session_file}' found. No interactive login should be needed.")
 
 # --- Компоненты ---
 
@@ -220,7 +280,31 @@ from src.modules.web_app import WebApp
 web_app = None
 
 # === PYROGRAM CLIENT ===
-app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH, workdir=".")
+# ФИНАЛЬНЫЙ ФИКС 'database is locked': новое имя файла и изолированный workdir
+session_workdir = "/tmp/krab_final"
+session_name = "nexus_last_hope"
+if not os.path.exists(session_workdir):
+    os.makedirs(session_workdir, exist_ok=True)
+
+# Синхронизация сессии из корня проекта в изолированную зону
+origin_session = "nexus_session1.session"
+if os.path.exists(origin_session):
+    import shutil
+    shutil.copy2(origin_session, os.path.join(session_workdir, f"{session_name}.session"))
+
+logger.info(f"🚀 Initializing Pyrogram Client | Session: {session_name} | Workdir: {session_workdir}")
+
+# Даем время ОС освободить дескрипторы (на всякий случай)
+import time
+time.sleep(2)
+
+app = Client(
+    name=session_name,
+    api_id=API_ID,
+    api_hash=API_HASH,
+    workdir=session_workdir,
+    plugins=None, 
+)
 
 # Plugin Manager (Phase 13)
 from src.core.plugin_manager import PluginManager

@@ -305,30 +305,49 @@ class OpenClawClient:
         ]
         result = await self._probe_first_available(paths)
         payload = result.get("data", {})
+        payload_valid = self._looks_like_auth_payload(payload)
         providers = self._normalize_auth_providers(payload)
         required = self._required_auth_providers()
         missing_required = [name for name in required if name not in providers]
         unhealthy_required = [
             name for name in required if name in providers and not bool(providers.get(name, {}).get("healthy", False))
         ]
+        lmstudio_profile = self._inspect_local_lmstudio_profile()
+        endpoint_available = bool(result.get("ok")) and payload_valid
+        status_reason = "ok"
+        if not result.get("ok"):
+            status_reason = "gateway_route_unavailable"
+        elif not payload_valid:
+            status_reason = "gateway_route_unavailable"
+        elif not lmstudio_profile.get("present"):
+            status_reason = "auth_missing_lmstudio_profile"
+        elif missing_required:
+            status_reason = "required_auth_providers_missing"
+        elif unhealthy_required:
+            status_reason = "required_auth_providers_unhealthy"
+
         ready_for_subscriptions = (
-            bool(result.get("ok"))
+            endpoint_available
             and not missing_required
             and not unhealthy_required
+            and bool(lmstudio_profile.get("present"))
         )
 
         return {
-            "available": bool(result.get("ok")),
+            "available": endpoint_available,
             "path": result.get("path"),
             "tried": result.get("tried", paths),
             "status": result.get("status", 0),
             "payload": payload,
+            "payload_valid": payload_valid,
             "providers": providers,
             "provider_count": len(providers),
             "required_providers": required,
             "missing_required": missing_required,
             "unhealthy_required": unhealthy_required,
             "ready_for_subscriptions": ready_for_subscriptions,
+            "status_reason": status_reason,
+            "lmstudio_profile": lmstudio_profile,
             "error": result.get("error"),
         }
 
@@ -508,6 +527,13 @@ class OpenClawClient:
         if not auth.get("available"):
             issues.append("auth_endpoint_unavailable")
             remediations.append("Проверь auth-plugin routes в OpenClaw и reverse-proxy.")
+        if auth.get("status_reason") == "auth_missing_lmstudio_profile":
+            issues.append("auth_missing_lmstudio_profile")
+            profile_path = ((auth.get("lmstudio_profile") or {}).get("path")) or "~/.openclaw/agents/main/agent/auth-profiles.json"
+            remediations.append(
+                "Профиль lmstudio отсутствует в auth store OpenClaw. "
+                f"Проверь/восстанови: {profile_path}."
+            )
 
         if auth.get("missing_required"):
             issues.append("required_auth_providers_missing")
@@ -603,6 +629,20 @@ class OpenClawClient:
                     "action": "Проверь, что OpenClaw экспортирует /v1/auth/providers/health или совместимый endpoint.",
                 }
             )
+        if "auth_missing_lmstudio_profile" in issues:
+            profile_path = ((auth.get("lmstudio_profile") or {}).get("path")) or "~/.openclaw/agents/main/agent/auth-profiles.json"
+            steps.append(
+                {
+                    "priority": "P0",
+                    "id": "restore_lmstudio_profile",
+                    "title": "Восстановить lmstudio auth profile",
+                    "done": False,
+                    "action": (
+                        "Добавь/восстанови профиль provider=lmstudio в auth store OpenClaw "
+                        f"({profile_path}) и перезапусти gateway."
+                    ),
+                }
+            )
 
         provider_guide = {
             "openai-codex": "Проверь авторизацию ChatGPT Plus path (openai-codex provider) и обнови сессию.",
@@ -677,6 +717,82 @@ class OpenClawClient:
             "steps": steps,
             "open_items": len(open_items),
         }
+
+    def _looks_like_auth_payload(self, payload: Any) -> bool:
+        """Эвристика: auth health должен быть структурированным JSON, а не HTML control UI."""
+        if not isinstance(payload, dict):
+            return False
+
+        if "providers" in payload:
+            providers = payload.get("providers")
+            return isinstance(providers, (dict, list))
+
+        known_keys = {"required", "missing_required", "unhealthy_required", "ready_for_subscriptions"}
+        if known_keys.intersection(set(payload.keys())):
+            return True
+
+        raw = str(payload.get("raw", "")).strip().lower()
+        if raw.startswith("<!doctype html") or raw.startswith("<html"):
+            return False
+
+        return False
+
+    def _inspect_local_lmstudio_profile(self) -> dict[str, Any]:
+        """
+        Локальная preflight-проверка профиля auth для provider=lmstudio.
+        Помогает отличать auth-missing от проблем сети/маршрута gateway.
+        """
+        profile_path = os.path.expanduser(
+            os.getenv(
+                "OPENCLAW_AUTH_PROFILES_PATH",
+                "~/.openclaw/agents/main/agent/auth-profiles.json",
+            )
+        )
+        info: dict[str, Any] = {
+            "path": profile_path,
+            "present": False,
+            "provider_hint": "lmstudio",
+            "error": "",
+        }
+
+        if not os.path.exists(profile_path):
+            info["error"] = "auth_profiles_file_missing"
+            return info
+
+        try:
+            with open(profile_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+        except Exception as exc:
+            info["error"] = f"auth_profiles_parse_error:{exc}"
+            return info
+
+        if self._json_contains_lmstudio(payload):
+            info["present"] = True
+            return info
+
+        info["error"] = "lmstudio_profile_missing"
+        return info
+
+    def _json_contains_lmstudio(self, payload: Any) -> bool:
+        """Рекурсивно проверяет наличие упоминания provider lmstudio в auth store."""
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                key_lower = str(key).strip().lower()
+                if key_lower == "lmstudio":
+                    return True
+                if key_lower in {"provider", "provider_id", "name", "id"} and str(value).strip().lower() == "lmstudio":
+                    return True
+                if self._json_contains_lmstudio(value):
+                    return True
+            return False
+
+        if isinstance(payload, list):
+            return any(self._json_contains_lmstudio(item) for item in payload)
+
+        if isinstance(payload, str):
+            return payload.strip().lower() == "lmstudio"
+
+        return False
 
     def _required_auth_providers(self) -> list[str]:
         """Возвращает обязательные auth-провайдеры из env или дефолтов."""

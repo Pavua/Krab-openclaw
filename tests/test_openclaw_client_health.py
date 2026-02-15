@@ -60,6 +60,14 @@ class FakeOpenClawClient(OpenClawClient):
             "data": {"error": "not_found"},
         }
 
+    def _inspect_local_lmstudio_profile(self):  # type: ignore[override]
+        return {
+            "path": "/tmp/auth-profiles.json",
+            "present": True,
+            "provider_hint": "lmstudio",
+            "error": "",
+        }
+
 
 class FakeBrowserToolFallbackClient(FakeOpenClawClient):
     async def _request_json(  # type: ignore[override]
@@ -78,6 +86,29 @@ class FakeBrowserToolFallbackClient(FakeOpenClawClient):
         if tool_name == "web_fetch":
             return {"content": [{"text": "ok"}], "details": {"title": "Fetched"}}
         return {"error": "tool_not_found"}
+
+
+class FakeHtmlAuthClient(FakeOpenClawClient):
+    async def _probe_first_available(self, paths, timeout=5):  # type: ignore[override]
+        if "/v1/auth/providers/health" in paths:
+            return {
+                "ok": True,
+                "path": "/v1/auth/providers/health",
+                "tried": ["/v1/auth/providers/health"],
+                "status": 200,
+                "data": {"raw": "<!doctype html><html>control</html>"},
+            }
+        return await super()._probe_first_available(paths, timeout=timeout)
+
+
+class FakeMissingLmstudioProfileClient(FakeOpenClawClient):
+    def _inspect_local_lmstudio_profile(self):  # type: ignore[override]
+        return {
+            "path": "/tmp/auth-profiles.json",
+            "present": False,
+            "provider_hint": "lmstudio",
+            "error": "lmstudio_profile_missing",
+        }
 
 
 class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
@@ -104,6 +135,7 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["missing_required"], [])
         self.assertEqual(payload["unhealthy_required"], [])
         self.assertTrue(payload["providers"]["openai-codex"]["healthy"])
+        self.assertEqual(payload["status_reason"], "ok")
 
     async def test_get_tools_overview_count(self):
         client = FakeOpenClawClient()
@@ -135,6 +167,23 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
             payload = await client.get_auth_provider_health()
         self.assertIn("qwen-portal-auth", payload["missing_required"])
         self.assertFalse(payload["ready_for_subscriptions"])
+
+    async def test_get_auth_provider_health_marks_route_unavailable_for_html_payload(self):
+        client = FakeHtmlAuthClient()
+        payload = await client.get_auth_provider_health()
+        self.assertFalse(payload["available"])
+        self.assertEqual(payload["status_reason"], "gateway_route_unavailable")
+
+    async def test_get_auth_provider_health_detects_missing_lmstudio_profile(self):
+        client = FakeMissingLmstudioProfileClient()
+        with patch.dict(
+            "os.environ",
+            {"OPENCLAW_REQUIRED_AUTH_PROVIDERS": "openai-codex,google-gemini-cli"},
+            clear=False,
+        ):
+            payload = await client.get_auth_provider_health()
+        self.assertFalse(payload["ready_for_subscriptions"])
+        self.assertEqual(payload["status_reason"], "auth_missing_lmstudio_profile")
 
     async def test_get_deep_health_report_ready(self):
         client = FakeOpenClawClient()
