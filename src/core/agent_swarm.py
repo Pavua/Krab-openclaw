@@ -173,6 +173,17 @@ class SwarmManager:
                        "Найди все слабости плана. Задай 5 самых неудобных вопросов. Если план выдержит — ОДОБРЕНО.")
         ]
 
+    def get_self_programming_team(self) -> List[SwarmAgent]:
+        """Команда само-программирования и рефакторинга (Phase 13.3)."""
+        return [
+            SwarmAgent("Architect", "System Architect", "Спроектировать изменения кода.", 
+                       "Проанализируй текущий код и составь план изменений для реализации новой фичи или исправления бага."),
+            SwarmAgent("Developer", "Python Core Developer", "Написать код изменений.", 
+                       "Реализуй изменения по плану архитектора. Используй только стандартные библиотеки или существующие зависимости."),
+            SwarmAgent("Reviewer", "Security & Quality Auditor", "Проверить код.", 
+                       "Проверь новый код на наличие багов, уязвимостей и соответствие стилю Krab. Выдай 'APPROVED' или список правок.")
+        ]
+
     async def run_team(self, team_type: str, task: str) -> str:
         """Метод-фабрика для запуска конкретной команды."""
         teams = {
@@ -184,6 +195,7 @@ class SwarmManager:
             "email": self.get_email_team(),
             "audit": self.get_audit_team(),
             "planning": self.get_planning_team(),
+            "self_programming": self.get_self_programming_team(),
         }
         
         if team_type not in teams:
