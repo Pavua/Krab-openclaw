@@ -11,6 +11,7 @@ from src.handlers.ai import (
     _build_reply_context,
     _drop_service_busy_phrases,
     _filter_context_for_group_author,
+    _looks_incomplete_response,
     _should_emit_stream_edit,
 )
 
@@ -143,3 +144,22 @@ def test_should_emit_stream_edit_respects_delta_threshold() -> None:
     assert _should_emit_stream_edit("abcd", "abcd", min_delta_chars=60) is False
     assert _should_emit_stream_edit("a" * 100, "b" * 120, min_delta_chars=60) is False
     assert _should_emit_stream_edit("a" * 100, "b" * 170, min_delta_chars=60) is True
+
+
+def test_looks_incomplete_response_detects_plan_intro_without_steps() -> None:
+    payload = (
+        "Отличный вопрос! Спасение на острове — это классическая задача выживания. "
+        "Вот пошаговый план, как спастись на обычном острове:"
+    )
+    assert _looks_incomplete_response(payload) is True
+
+
+def test_looks_incomplete_response_ignores_finished_answer() -> None:
+    payload = (
+        "Отличный вопрос. Вот короткий план:\n"
+        "1. Проверь воду.\n"
+        "2. Найди укрытие.\n"
+        "3. Подай сигнал SOS.\n"
+        "Удачи!"
+    )
+    assert _looks_incomplete_response(payload) is False

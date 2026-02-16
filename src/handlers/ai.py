@@ -74,6 +74,9 @@ REACTION_LEARNING_WEIGHT = float(str(os.getenv("REACTION_LEARNING_WEIGHT", "0.35
 AUTO_REPLY_STREAM_EDIT_INTERVAL_SECONDS = float(
     str(os.getenv("AUTO_REPLY_STREAM_EDIT_INTERVAL_SECONDS", "1.2")).strip() or "1.2"
 )
+AUTO_REPLY_CONTINUE_ON_INCOMPLETE = str(
+    os.getenv("AUTO_REPLY_CONTINUE_ON_INCOMPLETE", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 try:
     AUTO_REPLY_MAX_NUMBERED_LIST_ITEMS = max(
         0,
@@ -690,6 +693,42 @@ def _should_emit_stream_edit(previous_preview: str, next_preview: str, min_delta
     return abs(len(nxt) - len(prev)) >= int(max(1, min_delta_chars))
 
 
+def _looks_incomplete_response(text: str) -> bool:
+    """
+    Эвристика «обрезанного» ответа: модель обещала структуру/продолжение,
+    но завершилась на вводной фразе или на явном незавершённом конце.
+    """
+    payload = str(text or "").strip()
+    if not payload:
+        return False
+
+    low = payload.lower()
+    if len(payload) < 60:
+        return False
+
+    numbered_items = re.search(r"(?m)^\s*\d+[\.\)]\s+", payload) is not None
+    promised_plan = any(
+        marker in low
+        for marker in (
+            "пошаговый план",
+            "план действий",
+            "вот план",
+            "step-by-step",
+            "вот шаги",
+        )
+    )
+    unfinished_tail = payload.endswith((":", ",", "—", "-", "…", "..."))
+    no_final_punctuation = payload[-1] not in ".!?)»\"'"
+
+    if promised_plan and not numbered_items:
+        return True
+    if unfinished_tail:
+        return True
+    if no_final_punctuation and len(payload) >= 220:
+        return True
+    return False
+
+
 def _filter_context_for_group_author(
     context: list,
     current_author_id: int,
@@ -1103,6 +1142,40 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         if not full_response:
             await reply_msg.edit_text(f"❌ Ошибка: {e}")
             return
+
+    if (
+        full_response
+        and AUTO_REPLY_CONTINUE_ON_INCOMPLETE
+        and _looks_incomplete_response(full_response)
+    ):
+        try:
+            await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
+            continuation_prompt = (
+                "Продолжи предыдущий ответ с места обрыва. "
+                "Не повторяй уже написанное. "
+                "Если был обещан план/список — допиши его полностью и завершённо."
+            )
+            continuation_context = list(context or []) + [
+                {"role": "assistant", "text": str(full_response)},
+            ]
+            continuation = ""
+            async for part in router.route_stream(
+                prompt=continuation_prompt,
+                task_type="chat",
+                context=continuation_context,
+                chat_type=message.chat.type.name.lower(),
+                is_owner=is_owner_sender,
+            ):
+                continuation += part
+            continuation = _sanitize_model_output(continuation, router)
+            if continuation:
+                full_response = f"{full_response.rstrip()}\n\n{continuation.lstrip()}"
+        except Exception as continue_exc:
+            logger.debug(
+                "Автодопродолжение ответа пропущено после ошибки",
+                chat_id=message.chat.id,
+                error=str(continue_exc),
+            )
 
     persisted_response_text = _sanitize_model_output(full_response, router)
     if full_response:
