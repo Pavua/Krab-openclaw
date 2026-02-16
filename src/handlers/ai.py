@@ -1020,6 +1020,9 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     # Routing
     context = memory.get_token_aware_context(message.chat.id, max_tokens=AUTO_REPLY_CONTEXT_TOKENS)
+    user_context_before = sum(
+        1 for item in (context or []) if str((item or {}).get("role", "user")).strip().lower() == "user"
+    )
     context, group_author_context_trimmed = _filter_context_for_group_author(
         context=context,
         current_author_id=user_id,
@@ -1027,6 +1030,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         is_owner_sender=is_owner_sender,
         enabled=bool(ai_runtime and ai_runtime.group_author_isolation_enabled),
     )
+    user_context_after = sum(
+        1 for item in (context or []) if str((item or {}).get("role", "user")).strip().lower() == "user"
+    )
+    dropped_user_context_items = max(0, int(user_context_before - user_context_after))
     if ai_runtime:
         ai_runtime.set_context_snapshot(
             message.chat.id,
@@ -1037,7 +1044,11 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 "prompt_length_chars": len(final_prompt or ""),
                 "has_forward_context": bool(forward_context),
                 "has_reply_context": bool(reply_context),
+                "group_author_isolation_enabled": bool(ai_runtime.group_author_isolation_enabled),
                 "group_author_context_trimmed": bool(group_author_context_trimmed),
+                "group_author_context_user_messages_before": int(user_context_before),
+                "group_author_context_user_messages_after": int(user_context_after),
+                "group_author_context_dropped_user_messages": int(dropped_user_context_items),
                 "updated_at": int(time.time()),
             },
         )

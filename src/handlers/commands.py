@@ -371,6 +371,12 @@ def register_handlers(app, deps: dict):
             f"• Telegram chunks: `{int(snap.get('telegram_chunks_sent', 1))}`\n"
             f"• Forward context: `{bool(snap.get('has_forward_context', False))}`\n"
             f"• Reply context: `{bool(snap.get('has_reply_context', False))}`\n"
+            f"• Group author isolation: `{bool(snap.get('group_author_isolation_enabled', False))}`\n"
+            f"• Group context trimmed: `{bool(snap.get('group_author_context_trimmed', False))}`\n"
+            f"• Group user msgs before/after: "
+            f"`{int(snap.get('group_author_context_user_messages_before', 0))}`/"
+            f"`{int(snap.get('group_author_context_user_messages_after', 0))}`\n"
+            f"• Group user msgs dropped: `{int(snap.get('group_author_context_dropped_user_messages', 0))}`\n"
             f"• Updated: `{snap.get('updated_at', '-')}`"
         )
 

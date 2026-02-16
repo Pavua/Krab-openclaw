@@ -524,3 +524,55 @@ async def test_policy_show_displays_author_isolation():
     await handler(None, msg)
     sent = msg.reply_text.call_args.args[0]
     assert "Group author isolation" in sent
+
+
+def _build_ctx_handler(ai_runtime):
+    from src.handlers.commands import register_handlers as register_commands
+
+    router = MagicMock()
+    router.get_last_route = MagicMock(return_value={"channel": "cloud", "profile": "chat", "model": "gemini-2.5-flash"})
+    deps = {
+        "router": router,
+        "config_manager": MagicMock(),
+        "black_box": MagicMock(),
+        "safe_handler": lambda f: f,
+        "voice_gateway_client": MagicMock(),
+        "openclaw_client": MagicMock(),
+        "reminder_manager": MagicMock(),
+        "persona_manager": MagicMock(active_persona="default", personas={"default": {}}),
+        "ai_runtime": ai_runtime,
+    }
+    app = _DummyApp()
+    register_commands(app, deps)
+    return app.handlers["ctx_command"]
+
+
+@pytest.mark.asyncio
+async def test_ctx_shows_group_author_isolation_fields():
+    ai_runtime = MagicMock()
+    ai_runtime.get_context_snapshot = MagicMock(
+        return_value={
+            "context_messages": 12,
+            "prompt_length_chars": 777,
+            "response_length_chars": 1234,
+            "telegram_truncated": False,
+            "telegram_chunks_sent": 1,
+            "has_forward_context": True,
+            "has_reply_context": True,
+            "group_author_isolation_enabled": True,
+            "group_author_context_trimmed": True,
+            "group_author_context_user_messages_before": 8,
+            "group_author_context_user_messages_after": 3,
+            "group_author_context_dropped_user_messages": 5,
+            "updated_at": 1234567890,
+        }
+    )
+    handler = _build_ctx_handler(ai_runtime)
+    msg = _MockPolicyMessage("!ctx")
+
+    await handler(None, msg)
+
+    sent = msg.reply_text.call_args.args[0]
+    assert "Group author isolation" in sent
+    assert "Group context trimmed" in sent
+    assert "Group user msgs dropped" in sent
