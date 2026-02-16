@@ -372,6 +372,7 @@ def register_handlers(app, deps: dict):
             f"• Forward context: `{bool(snap.get('has_forward_context', False))}`\n"
             f"• Reply context: `{bool(snap.get('has_reply_context', False))}`\n"
             f"• Group author isolation: `{bool(snap.get('group_author_isolation_enabled', False))}`\n"
+            f"• Continue on incomplete: `{bool(snap.get('continue_on_incomplete_enabled', False))}`\n"
             f"• Group context trimmed: `{bool(snap.get('group_author_context_trimmed', False))}`\n"
             f"• Group user msgs before/after: "
             f"`{int(snap.get('group_author_context_user_messages_before', 0))}`/"
@@ -403,6 +404,7 @@ def register_handlers(app, deps: dict):
                 f"• Queue enabled: `{policy.get('queue_enabled')}`\n"
                 f"• Forward context enabled: `{policy.get('forward_context_enabled')}`\n"
                 f"• Group author isolation: `{policy.get('group_author_isolation_enabled')}`\n"
+                f"• Continue on incomplete: `{policy.get('continue_on_incomplete_enabled')}`\n"
                 f"• Reaction learning enabled: `{policy.get('reaction_learning_enabled')}`\n"
                 f"• Chat mood enabled: `{policy.get('chat_mood_enabled')}`\n"
                 f"• Auto reactions enabled: `{policy.get('auto_reactions_enabled')}`\n\n"
@@ -419,7 +421,7 @@ def register_handlers(app, deps: dict):
         if sub == "queue":
             if len(args) < 3:
                 await message.reply_text(
-                    "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off`"
+                    "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off|continue on|off`"
                 )
                 return
             act = args[2].strip().lower()
@@ -446,6 +448,25 @@ def register_handlers(app, deps: dict):
                     f"✅ Group author isolation: `{'on' if enabled else 'off'}`"
                 )
                 return
+            if act in {"continue", "incomplete_continue", "autocontinue"}:
+                if len(args) < 4 or args[3].strip().lower() not in {"on", "off"}:
+                    await message.reply_text("⚠️ Формат: `!policy queue continue on|off`")
+                    return
+                enabled = args[3].strip().lower() == "on"
+                ai_runtime.set_continue_on_incomplete_enabled(enabled)
+                config_manager = deps.get("config_manager")
+                if config_manager:
+                    try:
+                        config_manager.set(
+                            "AUTO_REPLY_CONTINUE_ON_INCOMPLETE",
+                            "1" if enabled else "0",
+                        )
+                    except Exception:
+                        pass
+                await message.reply_text(
+                    f"✅ Continue on incomplete: `{'on' if enabled else 'off'}`"
+                )
+                return
             if act == "max" and len(args) >= 4:
                 try:
                     max_n = int(args[3].strip())
@@ -456,7 +477,7 @@ def register_handlers(app, deps: dict):
                 await message.reply_text(f"✅ Queue max/chat: `{max(1, max_n)}`")
                 return
             await message.reply_text(
-                "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off`"
+                "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off|continue on|off`"
             )
             return
 

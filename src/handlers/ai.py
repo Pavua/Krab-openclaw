@@ -186,6 +186,7 @@ class AIRuntimeControl:
         self.chat_mood_enabled = CHAT_MOOD_ENABLED
         self.auto_reactions_enabled = AUTO_REACTIONS_ENABLED
         self.group_author_isolation_enabled = AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED
+        self.continue_on_incomplete_enabled = AUTO_REPLY_CONTINUE_ON_INCOMPLETE
         self.last_context_snapshot: dict[str, dict] = {}
 
     def set_queue_enabled(self, enabled: bool) -> None:
@@ -199,6 +200,9 @@ class AIRuntimeControl:
 
     def set_group_author_isolation_enabled(self, enabled: bool) -> None:
         self.group_author_isolation_enabled = bool(enabled)
+
+    def set_continue_on_incomplete_enabled(self, enabled: bool) -> None:
+        self.continue_on_incomplete_enabled = bool(enabled)
 
     def set_reaction_learning_enabled(self, enabled: bool) -> None:
         self.reaction_learning_enabled = bool(enabled)
@@ -239,6 +243,7 @@ class AIRuntimeControl:
             "queue_enabled": bool(self.queue_enabled),
             "forward_context_enabled": bool(self.forward_context_enabled),
             "group_author_isolation_enabled": bool(self.group_author_isolation_enabled),
+            "continue_on_incomplete_enabled": bool(self.continue_on_incomplete_enabled),
             "reaction_learning_enabled": bool(self.reaction_learning_enabled),
             "chat_mood_enabled": bool(self.chat_mood_enabled),
             "auto_reactions_enabled": bool(self.auto_reactions_enabled),
@@ -1084,6 +1089,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 "has_forward_context": bool(forward_context),
                 "has_reply_context": bool(reply_context),
                 "group_author_isolation_enabled": bool(ai_runtime.group_author_isolation_enabled),
+                "continue_on_incomplete_enabled": bool(ai_runtime.continue_on_incomplete_enabled),
                 "group_author_context_trimmed": bool(group_author_context_trimmed),
                 "group_author_context_user_messages_before": int(user_context_before),
                 "group_author_context_user_messages_after": int(user_context_after),
@@ -1145,7 +1151,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     if (
         full_response
-        and AUTO_REPLY_CONTINUE_ON_INCOMPLETE
+        and bool(ai_runtime and ai_runtime.continue_on_incomplete_enabled)
         and _looks_incomplete_response(full_response)
     ):
         try:

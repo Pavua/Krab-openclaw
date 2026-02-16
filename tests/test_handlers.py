@@ -499,6 +499,22 @@ async def test_policy_queue_author_isolation_toggle():
 
 
 @pytest.mark.asyncio
+async def test_policy_queue_continue_toggle():
+    ai_runtime = MagicMock()
+    ai_runtime.get_policy_snapshot = MagicMock(return_value={"queue": {}, "guardrails": {}})
+    ai_runtime.set_continue_on_incomplete_enabled = MagicMock()
+    config_manager = MagicMock()
+    handler = _build_policy_handler(ai_runtime, config_manager=config_manager)
+
+    msg = _MockPolicyMessage("!policy queue continue on")
+    await handler(None, msg)
+
+    ai_runtime.set_continue_on_incomplete_enabled.assert_called_once_with(True)
+    config_manager.set.assert_called_once_with("AUTO_REPLY_CONTINUE_ON_INCOMPLETE", "1")
+    msg.reply_text.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_policy_show_displays_author_isolation():
     ai_runtime = MagicMock()
     ai_runtime.get_policy_snapshot = MagicMock(
@@ -524,6 +540,7 @@ async def test_policy_show_displays_author_isolation():
     await handler(None, msg)
     sent = msg.reply_text.call_args.args[0]
     assert "Group author isolation" in sent
+    assert "Continue on incomplete" in sent
 
 
 def _build_ctx_handler(ai_runtime):
@@ -560,6 +577,7 @@ async def test_ctx_shows_group_author_isolation_fields():
             "has_forward_context": True,
             "has_reply_context": True,
             "group_author_isolation_enabled": True,
+            "continue_on_incomplete_enabled": True,
             "group_author_context_trimmed": True,
             "group_author_context_user_messages_before": 8,
             "group_author_context_user_messages_after": 3,
@@ -574,5 +592,6 @@ async def test_ctx_shows_group_author_isolation_fields():
 
     sent = msg.reply_text.call_args.args[0]
     assert "Group author isolation" in sent
+    assert "Continue on incomplete" in sent
     assert "Group context trimmed" in sent
     assert "Group user msgs dropped" in sent
