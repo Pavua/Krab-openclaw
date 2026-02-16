@@ -1535,6 +1535,94 @@ def register_handlers(app, deps: dict):
         memory.clear_history(message.chat.id)
         await message.reply_text("🧹 **Память чата очищена.**")
 
+    # --- !vision: Runtime-настройки локального vision ---
+    @app.on_message(filters.command("vision", prefixes="!"))
+    @safe_handler
+    async def vision_command(client, message: Message):
+        """Управление локальным vision-контуром: !vision local on|off|status|model <id>."""
+        if not is_authorized(message):
+            return
+
+        perceptor = deps.get("perceptor")
+        if not perceptor:
+            await message.reply_text("❌ Perceptor не инициализирован.")
+            return
+
+        config_manager = deps.get("config_manager")
+        parts = (message.text or "").split()
+        args = parts[1:] if len(parts) > 1 else []
+        action = (args[0].strip().lower() if args else "status")
+
+        def _status_text() -> str:
+            enabled = bool(getattr(perceptor, "local_vision_enabled", False))
+            pinned_model = str(getattr(perceptor, "local_vision_model", "") or "").strip()
+            resolved_model = ""
+            if hasattr(perceptor, "_resolve_local_vision_model"):
+                try:
+                    resolved_model = str(perceptor._resolve_local_vision_model(router) or "").strip()
+                except Exception:
+                    resolved_model = pinned_model
+            gemini_model = str(getattr(perceptor, "vision_model", "") or "").strip()
+            timeout_sec = int(float(getattr(perceptor, "local_vision_timeout_seconds", 90)))
+            max_tokens = int(getattr(perceptor, "local_vision_max_tokens", 1200))
+            return (
+                "**👁️ Vision Runtime:**\n\n"
+                f"• Local vision: `{'ON' if enabled else 'OFF'}`\n"
+                f"• Local model (pinned): `{pinned_model or '-'}`\n"
+                f"• Local model (resolved): `{resolved_model or '-'}`\n"
+                f"• Local timeout: `{timeout_sec}s`\n"
+                f"• Local max tokens: `{max_tokens}`\n"
+                f"• Gemini fallback model: `{gemini_model or '-'}`\n\n"
+                "Команды:\n"
+                "`!vision status`\n"
+                "`!vision local on`\n"
+                "`!vision local off`\n"
+                "`!vision model <lm_studio_model_id>`"
+            )
+
+        if action in {"status", "show"}:
+            await message.reply_text(_status_text())
+            return
+
+        if action == "local":
+            if len(args) < 2 or args[1].strip().lower() not in {"on", "off"}:
+                await message.reply_text("⚠️ Формат: `!vision local on` или `!vision local off`")
+                return
+            enabled = args[1].strip().lower() == "on"
+            perceptor.local_vision_enabled = enabled
+            os.environ["LOCAL_VISION_ENABLED"] = "1" if enabled else "0"
+            if config_manager:
+                try:
+                    config_manager.set("LOCAL_VISION_ENABLED", "1" if enabled else "0")
+                except Exception:
+                    pass
+            await message.reply_text(
+                f"✅ Local vision: `{'ON' if enabled else 'OFF'}`\n"
+                "_Изменение применено runtime. Для постоянного режима уже записано в config (если доступен)._"
+            )
+            return
+
+        if action == "model":
+            if len(args) < 2:
+                await message.reply_text("⚠️ Формат: `!vision model <lm_studio_model_id>`")
+                return
+            model_id = " ".join(args[1:]).strip()
+            perceptor.local_vision_model = model_id
+            os.environ["LOCAL_VISION_MODEL"] = model_id
+            if config_manager:
+                try:
+                    config_manager.set("LOCAL_VISION_MODEL", model_id)
+                except Exception:
+                    pass
+            await message.reply_text(
+                f"✅ Local vision model закреплён: `{model_id}`\n"
+                "_Совет: проверь точный id через `!model scan`._"
+            )
+            return
+
+        await message.reply_text("⚠️ Формат: `!vision status|local on|local off|model <lm_studio_model_id>`")
+        return
+
     # --- !img / !draw: Генерация изображений ---
     @app.on_message(filters.command(["img", "draw"], prefixes="!"))
     @safe_handler
