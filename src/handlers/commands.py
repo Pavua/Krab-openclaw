@@ -1847,6 +1847,8 @@ def register_handlers(app, deps: dict):
             "`!img` <промпт> — 🎨 Генерация картинки (local/cloud)\n"
             "`!img models` — список image-моделей и доступность\n"
             "`!img cost [alias]` — оценка стоимости изображения\n"
+            "`!img health` — health local/cloud image backend\n"
+            "`!img default ...` — закрепить дефолтные image-модели\n"
             "`!browser <запрос>` — 🌐 Gemini Web Portal (Pro/Advanced)\n"
             "`!translate` — Перевод RU↔EN\n"
             "`!say` — Голосовое (TTS)\n"
