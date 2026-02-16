@@ -366,6 +366,27 @@ class WebApp:
                 return {"ok": True, "report": router.get_cost_report(monthly_calls_forecast=monthly_calls_forecast)}
             return {"ok": False, "error": "cost_report_not_supported"}
 
+        @self.app.get("/api/ops/runway")
+        async def ops_runway(
+            credits_usd: float = Query(default=300.0, ge=0.0, le=1000000.0),
+            horizon_days: int = Query(default=80, ge=1, le=3650),
+            reserve_ratio: float = Query(default=0.1, ge=0.0, le=0.95),
+            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
+        ):
+            """План расхода кредитов: burn-rate, runway и safe calls/day."""
+            router = self.deps["router"]
+            if hasattr(router, "get_credit_runway_report"):
+                return {
+                    "ok": True,
+                    "runway": router.get_credit_runway_report(
+                        credits_usd=credits_usd,
+                        horizon_days=horizon_days,
+                        reserve_ratio=reserve_ratio,
+                        monthly_calls_forecast=monthly_calls_forecast,
+                    ),
+                }
+            return {"ok": False, "error": "ops_runway_not_supported"}
+
         @self.app.get("/api/ops/executive-summary")
         async def ops_executive_summary(monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000)):
             """Компактный ops executive summary: KPI + риски + рекомендации."""

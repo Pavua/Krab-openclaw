@@ -177,6 +177,20 @@ class ModelRouter:
             self.cloud_monthly_budget_usd = float(config.get("CLOUD_MONTHLY_BUDGET_USD", 25.0))
         except Exception:
             self.cloud_monthly_budget_usd = 25.0
+        # Точечные ориентиры стоимости по типам облачных моделей (для runway-планирования).
+        # Можно переопределять в .env для твоего реального тарифа.
+        try:
+            self.model_cost_flash_lite_usd = float(config.get("MODEL_COST_FLASH_LITE_USD", self.cloud_cost_per_call_usd * 0.7))
+        except Exception:
+            self.model_cost_flash_lite_usd = float(self.cloud_cost_per_call_usd * 0.7)
+        try:
+            self.model_cost_flash_usd = float(config.get("MODEL_COST_FLASH_USD", self.cloud_cost_per_call_usd))
+        except Exception:
+            self.model_cost_flash_usd = float(self.cloud_cost_per_call_usd)
+        try:
+            self.model_cost_pro_usd = float(config.get("MODEL_COST_PRO_USD", self.cloud_cost_per_call_usd * 3.0))
+        except Exception:
+            self.model_cost_pro_usd = float(self.cloud_cost_per_call_usd * 3.0)
         try:
             self.monthly_calls_forecast = int(config.get("MONTHLY_CALLS_FORECAST", 5000))
         except Exception:
@@ -2992,6 +3006,88 @@ class ModelRouter:
                 if float(self.cloud_monthly_budget_usd) > 0
                 else 0.0,
             },
+        }
+
+    def get_credit_runway_report(
+        self,
+        credits_usd: float = 300.0,
+        horizon_days: int = 80,
+        reserve_ratio: float = 0.1,
+        monthly_calls_forecast: int | None = None,
+    ) -> dict:
+        """
+        Считает «дорожку расхода» кредита:
+        - целевой бюджет в день (чтобы дожить до horizon_days),
+        - оценка текущего daily burn-rate,
+        - runway в днях при текущем профиле,
+        - сценарные лимиты вызовов/день по Flash Lite / Flash / Pro.
+        """
+        safe_credits = max(0.0, float(credits_usd))
+        safe_days = max(1, int(horizon_days))
+        safe_reserve = min(0.95, max(0.0, float(reserve_ratio)))
+        usable_budget = round(safe_credits * (1.0 - safe_reserve), 6)
+        daily_target_budget = round(usable_budget / safe_days, 6)
+
+        forecast_calls = (
+            int(monthly_calls_forecast)
+            if monthly_calls_forecast is not None
+            else int(self.monthly_calls_forecast)
+        )
+        cost_report = self.get_cost_report(monthly_calls_forecast=forecast_calls)
+        costs = cost_report.get("costs_usd", {})
+        monthly = cost_report.get("monthly_forecast", {})
+        pricing = cost_report.get("pricing", {})
+
+        current_avg_cost = max(0.0, float(costs.get("avg_cost_per_call", 0.0)))
+        # Если статистики пока нет — используем cloud baseline.
+        if current_avg_cost <= 0:
+            current_avg_cost = max(0.000001, float(pricing.get("cloud_cost_per_call_usd", self.cloud_cost_per_call_usd)))
+
+        forecast_monthly_total = max(0.0, float(monthly.get("forecast_total_cost", 0.0)))
+        estimated_daily_burn = round(forecast_monthly_total / 30.0, 6)
+        if estimated_daily_burn <= 0:
+            # Деградационный fallback: считаем от целевого бюджета.
+            estimated_daily_burn = daily_target_budget
+
+        runway_days_at_current = (
+            round(safe_credits / estimated_daily_burn, 2)
+            if estimated_daily_burn > 0
+            else float("inf")
+        )
+        recommended_calls_per_day = int(daily_target_budget / current_avg_cost) if current_avg_cost > 0 else 0
+
+        def _calls_per_day(unit_cost: float) -> int:
+            safe_unit = max(0.000001, float(unit_cost))
+            return int(daily_target_budget / safe_unit)
+
+        scenarios = {
+            "flash_lite": {
+                "unit_cost_usd": round(float(self.model_cost_flash_lite_usd), 6),
+                "max_calls_per_day": _calls_per_day(self.model_cost_flash_lite_usd),
+            },
+            "flash": {
+                "unit_cost_usd": round(float(self.model_cost_flash_usd), 6),
+                "max_calls_per_day": _calls_per_day(self.model_cost_flash_usd),
+            },
+            "pro": {
+                "unit_cost_usd": round(float(self.model_cost_pro_usd), 6),
+                "max_calls_per_day": _calls_per_day(self.model_cost_pro_usd),
+            },
+        }
+
+        return {
+            "credits_usd": safe_credits,
+            "horizon_days": safe_days,
+            "reserve_ratio": safe_reserve,
+            "usable_budget_usd": usable_budget,
+            "daily_target_budget_usd": daily_target_budget,
+            "estimated_daily_burn_usd": estimated_daily_burn,
+            "runway_days_at_current_burn": runway_days_at_current,
+            "current_avg_cost_per_call_usd": round(current_avg_cost, 6),
+            "recommended_calls_per_day": recommended_calls_per_day,
+            "forecast_calls_monthly": forecast_calls,
+            "scenarios": scenarios,
+            "cost_report": cost_report,
         }
 
     def acknowledge_ops_alert(self, code: str, actor: str = "owner", note: str = "") -> dict:

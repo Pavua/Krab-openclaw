@@ -757,6 +757,55 @@ def register_handlers(app, deps: dict):
             )
             return
 
+        if len(args) >= 2 and args[1].strip().lower() in {"runway", "burn", "budget"}:
+            if not hasattr(router, "get_credit_runway_report"):
+                await message.reply_text("❌ get_credit_runway_report недоступен.")
+                return
+            credits = 300.0
+            days = 80
+            reserve = 0.10
+            if len(args) >= 3:
+                try:
+                    credits = float(args[2])
+                except ValueError:
+                    credits = 300.0
+            if len(args) >= 4:
+                try:
+                    days = int(args[3])
+                except ValueError:
+                    days = 80
+            if len(args) >= 5:
+                try:
+                    reserve = float(args[4])
+                except ValueError:
+                    reserve = 0.10
+
+            report = router.get_credit_runway_report(
+                credits_usd=credits,
+                horizon_days=days,
+                reserve_ratio=reserve,
+            )
+            scenarios = report.get("scenarios", {})
+            fl = scenarios.get("flash_lite", {})
+            f = scenarios.get("flash", {})
+            p = scenarios.get("pro", {})
+            await message.reply_text(
+                "⛽ **Ops Runway (кредитный горизонт):**\n\n"
+                f"• Credits: `${report.get('credits_usd', 0)}`\n"
+                f"• Horizon: `{report.get('horizon_days', 0)}` days\n"
+                f"• Reserve ratio: `{report.get('reserve_ratio', 0)}`\n"
+                f"• Daily target budget: `${report.get('daily_target_budget_usd', 0)}`\n"
+                f"• Est. daily burn (current): `${report.get('estimated_daily_burn_usd', 0)}`\n"
+                f"• Runway @ current burn: `{report.get('runway_days_at_current_burn', 0)}` days\n"
+                f"• Recommended calls/day (current mix): `{report.get('recommended_calls_per_day', 0)}`\n\n"
+                "**Scenarios (max calls/day):**\n"
+                f"• Flash Lite (~${fl.get('unit_cost_usd', 0)}/call): `{fl.get('max_calls_per_day', 0)}`\n"
+                f"• Flash (~${f.get('unit_cost_usd', 0)}/call): `{f.get('max_calls_per_day', 0)}`\n"
+                f"• Pro (~${p.get('unit_cost_usd', 0)}/call): `{p.get('max_calls_per_day', 0)}`\n\n"
+                "_Формат:_ `!ops runway [credits_usd] [days] [reserve_ratio]`"
+            )
+            return
+
         if len(args) >= 2 and args[1].strip().lower() in {"executive", "execsum", "summary"}:
             if not hasattr(router, "get_ops_executive_summary"):
                 await message.reply_text("❌ get_ops_executive_summary недоступен.")
@@ -1822,6 +1871,7 @@ def register_handlers(app, deps: dict):
             "`!ops history [N]` — История ops snapshot\n"
             "`!ops prune [days] [keep]` — Очистка ops history по retention\n"
             "`!ops cost [monthly_calls]` — Оценка расходов local/cloud\n"
+            "`!ops runway [credits] [days] [reserve]` — План расхода кредита и daily лимиты\n"
             "`!ops executive [monthly_calls]` — KPI/риски/рекомендации (компактно)\n"
             "`!ops ack <code> [note]` — Подтвердить ops-alert\n"
             "`!ops unack <code>` — Снять подтверждение ops-alert\n"

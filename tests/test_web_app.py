@@ -221,6 +221,30 @@ class _DummyRouter:
             "recommendations": ["Контур стабильный: поддерживать текущую policy и мониторинг."],
         }
 
+    def get_credit_runway_report(
+        self,
+        credits_usd: float = 300.0,
+        horizon_days: int = 80,
+        reserve_ratio: float = 0.1,
+        monthly_calls_forecast: int = 5000,
+    ):
+        return {
+            "credits_usd": float(credits_usd),
+            "horizon_days": int(horizon_days),
+            "reserve_ratio": float(reserve_ratio),
+            "daily_target_budget_usd": 3.0,
+            "estimated_daily_burn_usd": 1.0,
+            "runway_days_at_current_burn": 300.0,
+            "recommended_calls_per_day": 100,
+            "scenarios": {
+                "flash_lite": {"unit_cost_usd": 0.007, "max_calls_per_day": 400},
+                "flash": {"unit_cost_usd": 0.01, "max_calls_per_day": 300},
+                "pro": {"unit_cost_usd": 0.03, "max_calls_per_day": 100},
+            },
+            "forecast_calls_monthly": int(monthly_calls_forecast),
+            "cost_report": self.get_cost_report(monthly_calls_forecast=monthly_calls_forecast),
+        }
+
     def get_ops_history(self, limit: int = 30):
         items = self._history[-max(1, int(limit)) :]
         return {
@@ -579,6 +603,16 @@ def test_ops_usage_and_alerts_endpoints() -> None:
     executive_payload = executive_response.json()
     assert executive_payload["ok"] is True
     assert executive_payload["summary"]["kpi"]["calls_total"] == 10
+
+    runway_response = client.get(
+        "/api/ops/runway?credits_usd=300&horizon_days=80&reserve_ratio=0.1&monthly_calls_forecast=9000"
+    )
+    assert runway_response.status_code == 200
+    runway_payload = runway_response.json()
+    assert runway_payload["ok"] is True
+    assert runway_payload["runway"]["credits_usd"] == 300.0
+    assert runway_payload["runway"]["horizon_days"] == 80
+    assert runway_payload["runway"]["forecast_calls_monthly"] == 9000
 
     report_response = client.get("/api/ops/report?history_limit=5&monthly_calls_forecast=9000")
     assert report_response.status_code == 200
