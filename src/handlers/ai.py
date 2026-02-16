@@ -58,6 +58,9 @@ AUTO_REPLY_QUEUE_NOTIFY_POSITION = str(
 AUTO_REPLY_FORWARD_CONTEXT_ENABLED = str(
     os.getenv("AUTO_REPLY_FORWARD_CONTEXT_ENABLED", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
+AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED = str(
+    os.getenv("AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
 REACTION_LEARNING_ENABLED = str(os.getenv("REACTION_LEARNING_ENABLED", "1")).strip().lower() in {
     "1", "true", "yes", "on"
 }
@@ -228,6 +231,7 @@ class AIRuntimeControl:
         return {
             "queue_enabled": bool(self.queue_enabled),
             "forward_context_enabled": bool(self.forward_context_enabled),
+            "group_author_isolation_enabled": bool(AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED),
             "reaction_learning_enabled": bool(self.reaction_learning_enabled),
             "chat_mood_enabled": bool(self.chat_mood_enabled),
             "auto_reactions_enabled": bool(self.auto_reactions_enabled),
@@ -666,6 +670,38 @@ def _build_stream_preview(text: str, max_chars: int = 3600) -> str:
     return f"…\n{tail}"
 
 
+def _filter_context_for_group_author(
+    context: list,
+    current_author_id: int,
+    is_private: bool,
+    is_owner_sender: bool,
+    enabled: bool = True,
+) -> tuple[list, bool]:
+    """
+    Для групповых чатов с участниками (не owner) оставляем в user-контексте
+    только сообщения текущего автора, чтобы снизить перенос «чужой личности».
+
+    Assistant/system/tool контекст сохраняется.
+    """
+    if not enabled or is_private or is_owner_sender or not current_author_id:
+        return context, False
+
+    marker = f"author_id={int(current_author_id)}"
+    filtered: list = []
+    trimmed = False
+    for item in context or []:
+        role = str((item or {}).get("role", "user")).strip().lower()
+        if role != "user":
+            filtered.append(item)
+            continue
+        text = str((item or {}).get("text", "") or "")
+        if marker in text:
+            filtered.append(item)
+        else:
+            trimmed = True
+    return filtered, trimmed
+
+
 async def _safe_stream_edit_text(reply_msg: Message, text: str) -> None:
     """
     Безопасное edit_text для стриминга:
@@ -964,6 +1000,13 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     # Routing
     context = memory.get_token_aware_context(message.chat.id, max_tokens=AUTO_REPLY_CONTEXT_TOKENS)
+    context, group_author_context_trimmed = _filter_context_for_group_author(
+        context=context,
+        current_author_id=user_id,
+        is_private=is_private,
+        is_owner_sender=is_owner_sender,
+        enabled=AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED,
+    )
     if ai_runtime:
         ai_runtime.set_context_snapshot(
             message.chat.id,
@@ -974,6 +1017,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 "prompt_length_chars": len(final_prompt or ""),
                 "has_forward_context": bool(forward_context),
                 "has_reply_context": bool(reply_context),
+                "group_author_context_trimmed": bool(group_author_context_trimmed),
                 "updated_at": int(time.time()),
             },
         )

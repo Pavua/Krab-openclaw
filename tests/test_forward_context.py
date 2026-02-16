@@ -10,6 +10,7 @@ from src.handlers.ai import (
     _build_forward_context,
     _build_reply_context,
     _drop_service_busy_phrases,
+    _filter_context_for_group_author,
 )
 
 
@@ -83,3 +84,53 @@ def test_drop_service_busy_phrases_removes_queue_artifacts() -> None:
     assert "обрабатываю предыдущий запрос" not in cleaned.lower()
     assert "отправь следующее сообщение" not in cleaned.lower()
     assert "итоговый анализ" in cleaned.lower()
+
+
+def test_filter_context_for_group_author_keeps_only_current_user_prompts() -> None:
+    """В группе для participant должны сохраняться user-реплики только текущего автора."""
+    context = [
+        {"role": "system", "text": "system note"},
+        {"role": "assistant", "text": "assistant answer"},
+        {"role": "user", "text": "[AUTHOR CONTEXT]:\nauthor_id=111\n...\nвопрос 1"},
+        {"role": "user", "text": "[AUTHOR CONTEXT]:\nauthor_id=222\n...\nчужой вопрос"},
+        {"role": "user", "text": "старый формат без author_id"},
+    ]
+    filtered, trimmed = _filter_context_for_group_author(
+        context=context,
+        current_author_id=111,
+        is_private=False,
+        is_owner_sender=False,
+        enabled=True,
+    )
+    assert trimmed is True
+    joined = "\n".join(str(item.get("text", "")) for item in filtered)
+    assert "author_id=111" in joined
+    assert "author_id=222" not in joined
+    assert "старый формат без author_id" not in joined
+
+
+def test_filter_context_for_group_author_skips_filter_for_owner_or_private() -> None:
+    """Для owner или приватного чата фильтрация не должна применяться."""
+    context = [
+        {"role": "user", "text": "[AUTHOR CONTEXT]:\nauthor_id=111\n..."},
+        {"role": "user", "text": "[AUTHOR CONTEXT]:\nauthor_id=222\n..."},
+    ]
+    same_private, trimmed_private = _filter_context_for_group_author(
+        context=context,
+        current_author_id=111,
+        is_private=True,
+        is_owner_sender=False,
+        enabled=True,
+    )
+    assert trimmed_private is False
+    assert same_private == context
+
+    same_owner, trimmed_owner = _filter_context_for_group_author(
+        context=context,
+        current_author_id=111,
+        is_private=False,
+        is_owner_sender=True,
+        enabled=True,
+    )
+    assert trimmed_owner is False
+    assert same_owner == context
