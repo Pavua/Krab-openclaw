@@ -182,6 +182,7 @@ class AIRuntimeControl:
         self.reaction_learning_enabled = REACTION_LEARNING_ENABLED
         self.chat_mood_enabled = CHAT_MOOD_ENABLED
         self.auto_reactions_enabled = AUTO_REACTIONS_ENABLED
+        self.group_author_isolation_enabled = AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED
         self.last_context_snapshot: dict[str, dict] = {}
 
     def set_queue_enabled(self, enabled: bool) -> None:
@@ -192,6 +193,9 @@ class AIRuntimeControl:
 
     def set_forward_context_enabled(self, enabled: bool) -> None:
         self.forward_context_enabled = bool(enabled)
+
+    def set_group_author_isolation_enabled(self, enabled: bool) -> None:
+        self.group_author_isolation_enabled = bool(enabled)
 
     def set_reaction_learning_enabled(self, enabled: bool) -> None:
         self.reaction_learning_enabled = bool(enabled)
@@ -231,7 +235,7 @@ class AIRuntimeControl:
         return {
             "queue_enabled": bool(self.queue_enabled),
             "forward_context_enabled": bool(self.forward_context_enabled),
-            "group_author_isolation_enabled": bool(AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED),
+            "group_author_isolation_enabled": bool(self.group_author_isolation_enabled),
             "reaction_learning_enabled": bool(self.reaction_learning_enabled),
             "chat_mood_enabled": bool(self.chat_mood_enabled),
             "auto_reactions_enabled": bool(self.auto_reactions_enabled),
@@ -670,6 +674,22 @@ def _build_stream_preview(text: str, max_chars: int = 3600) -> str:
     return f"…\n{tail}"
 
 
+def _should_emit_stream_edit(previous_preview: str, next_preview: str, min_delta_chars: int = 60) -> bool:
+    """
+    Решает, стоит ли отправлять очередной edit_text во время стриминга.
+    Уменьшает «шум» и риск FloodWait на длинных генерациях.
+    """
+    prev = str(previous_preview or "")
+    nxt = str(next_preview or "")
+    if not nxt:
+        return False
+    if not prev:
+        return True
+    if prev == nxt:
+        return False
+    return abs(len(nxt) - len(prev)) >= int(max(1, min_delta_chars))
+
+
 def _filter_context_for_group_author(
     context: list,
     current_author_id: int,
@@ -1005,7 +1025,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         current_author_id=user_id,
         is_private=is_private,
         is_owner_sender=is_owner_sender,
-        enabled=AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED,
+        enabled=bool(ai_runtime and ai_runtime.group_author_isolation_enabled),
     )
     if ai_runtime:
         ai_runtime.set_context_snapshot(
@@ -1028,9 +1048,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     
     full_response = ""
     last_update = 0
+    last_preview_sent = ""
     
     async def run_streaming():
-        nonlocal full_response, last_update
+        nonlocal full_response, last_update, last_preview_sent
         try:
             async for part in router.route_stream(
                 prompt=final_prompt,
@@ -1045,8 +1066,11 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 edit_interval = max(0.5, float(AUTO_REPLY_STREAM_EDIT_INTERVAL_SECONDS))
                 if curr_t - last_update > edit_interval:
                     preview = _build_stream_preview(full_response, max_chars=3600)
-                    await _safe_stream_edit_text(reply_msg, preview + " ▌")
-                    last_update = curr_t
+                    candidate = preview + " ▌"
+                    if _should_emit_stream_edit(last_preview_sent, candidate, min_delta_chars=80):
+                        await _safe_stream_edit_text(reply_msg, candidate)
+                        last_preview_sent = candidate
+                        last_update = curr_t
         except Exception as e:
             logger.error(f"Streaming error occurred: {e}")
             # Если у нас уже есть какой-то текст, мы не пробрасываем ошибку дальше,
@@ -1327,6 +1351,7 @@ def register_handlers(app, deps: dict):
 
         full_response = ""
         last_update = 0
+        last_preview_sent = ""
         
         reply_msg = await message.reply_text("🤔 **Размышляю...**")
 
@@ -1342,8 +1367,12 @@ def register_handlers(app, deps: dict):
                 full_response += chunk
                 curr_t = time.time()
                 if curr_t - last_update > 2.0:
-                    await _safe_stream_edit_text(reply_msg, full_response + " ▌")
-                    last_update = curr_t
+                    preview = _build_stream_preview(full_response, max_chars=3600)
+                    candidate = preview + " ▌"
+                    if _should_emit_stream_edit(last_preview_sent, candidate, min_delta_chars=120):
+                        await _safe_stream_edit_text(reply_msg, candidate)
+                        last_preview_sent = candidate
+                        last_update = curr_t
             
             await reply_msg.edit_text(_sanitize_model_output(full_response, router)) # Sanitize here
         except asyncio.TimeoutError: # Moved timeout handling here

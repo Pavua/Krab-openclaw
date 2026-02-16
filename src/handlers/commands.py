@@ -396,6 +396,7 @@ def register_handlers(app, deps: dict):
                 "**⚙️ Policy:**\n\n"
                 f"• Queue enabled: `{policy.get('queue_enabled')}`\n"
                 f"• Forward context enabled: `{policy.get('forward_context_enabled')}`\n"
+                f"• Group author isolation: `{policy.get('group_author_isolation_enabled')}`\n"
                 f"• Reaction learning enabled: `{policy.get('reaction_learning_enabled')}`\n"
                 f"• Chat mood enabled: `{policy.get('chat_mood_enabled')}`\n"
                 f"• Auto reactions enabled: `{policy.get('auto_reactions_enabled')}`\n\n"
@@ -411,12 +412,33 @@ def register_handlers(app, deps: dict):
 
         if sub == "queue":
             if len(args) < 3:
-                await message.reply_text("⚠️ Формат: `!policy queue on|off|max <N>`")
+                await message.reply_text(
+                    "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off`"
+                )
                 return
             act = args[2].strip().lower()
             if act in {"on", "off"}:
                 ai_runtime.set_queue_enabled(act == "on")
                 await message.reply_text(f"✅ Queue mode: `{act}`")
+                return
+            if act in {"author_isolation", "author", "isolation"}:
+                if len(args) < 4 or args[3].strip().lower() not in {"on", "off"}:
+                    await message.reply_text("⚠️ Формат: `!policy queue author_isolation on|off`")
+                    return
+                enabled = args[3].strip().lower() == "on"
+                ai_runtime.set_group_author_isolation_enabled(enabled)
+                config_manager = deps.get("config_manager")
+                if config_manager:
+                    try:
+                        config_manager.set(
+                            "AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED",
+                            "1" if enabled else "0",
+                        )
+                    except Exception:
+                        pass
+                await message.reply_text(
+                    f"✅ Group author isolation: `{'on' if enabled else 'off'}`"
+                )
                 return
             if act == "max" and len(args) >= 4:
                 try:
@@ -427,7 +449,9 @@ def register_handlers(app, deps: dict):
                 ai_runtime.set_queue_max(max_n)
                 await message.reply_text(f"✅ Queue max/chat: `{max(1, max_n)}`")
                 return
-            await message.reply_text("⚠️ Формат: `!policy queue on|off|max <N>`")
+            await message.reply_text(
+                "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off`"
+            )
             return
 
         if sub == "guardrails":

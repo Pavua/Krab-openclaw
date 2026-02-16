@@ -452,3 +452,75 @@ class TestAiOutputPostprocess:
         cleaned, removed = _prune_repetitive_numbered_items(payload, max_same_body=2)
         assert removed is False
         assert cleaned == payload.strip()
+
+
+class _MockPolicyMessage:
+    def __init__(self, text: str):
+        self.text = text
+        self.command = text.split()
+        self.from_user = SimpleNamespace(is_self=True, username="owner", id=1)
+        self.chat = SimpleNamespace(id=123, type=SimpleNamespace(name="PRIVATE"))
+        self.reply_text = AsyncMock()
+
+
+def _build_policy_handler(ai_runtime, config_manager=None):
+    from src.handlers.commands import register_handlers as register_commands
+
+    deps = {
+        "router": MagicMock(),
+        "config_manager": config_manager or MagicMock(),
+        "black_box": MagicMock(),
+        "safe_handler": lambda f: f,
+        "voice_gateway_client": MagicMock(),
+        "openclaw_client": MagicMock(),
+        "reminder_manager": MagicMock(),
+        "persona_manager": MagicMock(active_persona="default", personas={"default": {}}),
+        "ai_runtime": ai_runtime,
+    }
+    app = _DummyApp()
+    register_commands(app, deps)
+    return app.handlers["policy_command"]
+
+
+@pytest.mark.asyncio
+async def test_policy_queue_author_isolation_toggle():
+    ai_runtime = MagicMock()
+    ai_runtime.get_policy_snapshot = MagicMock(return_value={"queue": {}, "guardrails": {}})
+    ai_runtime.set_group_author_isolation_enabled = MagicMock()
+    config_manager = MagicMock()
+    handler = _build_policy_handler(ai_runtime, config_manager=config_manager)
+
+    msg = _MockPolicyMessage("!policy queue author_isolation off")
+    await handler(None, msg)
+
+    ai_runtime.set_group_author_isolation_enabled.assert_called_once_with(False)
+    config_manager.set.assert_called_once_with("AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED", "0")
+    msg.reply_text.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_policy_show_displays_author_isolation():
+    ai_runtime = MagicMock()
+    ai_runtime.get_policy_snapshot = MagicMock(
+        return_value={
+            "queue_enabled": True,
+            "forward_context_enabled": True,
+            "group_author_isolation_enabled": True,
+            "reaction_learning_enabled": True,
+            "chat_mood_enabled": True,
+            "auto_reactions_enabled": True,
+            "queue": {"max_per_chat": 50, "queued_total": 0, "active_chats": 0},
+            "guardrails": {
+                "local_include_reasoning": True,
+                "local_reasoning_max_chars": 2000,
+                "local_stream_total_timeout_seconds": 60.0,
+                "local_stream_sock_read_timeout_seconds": 20.0,
+            },
+        }
+    )
+    handler = _build_policy_handler(ai_runtime)
+
+    msg = _MockPolicyMessage("!policy show")
+    await handler(None, msg)
+    sent = msg.reply_text.call_args.args[0]
+    assert "Group author isolation" in sent

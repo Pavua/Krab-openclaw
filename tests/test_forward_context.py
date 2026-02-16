@@ -11,6 +11,7 @@ from src.handlers.ai import (
     _build_reply_context,
     _drop_service_busy_phrases,
     _filter_context_for_group_author,
+    _should_emit_stream_edit,
 )
 
 
@@ -134,3 +135,11 @@ def test_filter_context_for_group_author_skips_filter_for_owner_or_private() -> 
     )
     assert trimmed_owner is False
     assert same_owner == context
+
+
+def test_should_emit_stream_edit_respects_delta_threshold() -> None:
+    """Редактирование стрима не должно триггериться на микроскопические изменения."""
+    assert _should_emit_stream_edit("", "abc", min_delta_chars=60) is True
+    assert _should_emit_stream_edit("abcd", "abcd", min_delta_chars=60) is False
+    assert _should_emit_stream_edit("a" * 100, "b" * 120, min_delta_chars=60) is False
+    assert _should_emit_stream_edit("a" * 100, "b" * 170, min_delta_chars=60) is True
