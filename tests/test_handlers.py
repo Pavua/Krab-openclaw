@@ -421,3 +421,34 @@ async def test_status_degrades_when_blackbox_missing_get_uptime(mock_warning):
     handler = _build_status_handler(None, black_box=SimpleNamespace())
     await handler(None, _MockStatusMessage())
     assert mock_warning.call_count >= 1  # ensures status ran without AttributeError
+
+
+class TestAiOutputPostprocess:
+    """Точечные тесты постобработки AI-ответа."""
+
+    def test_prune_repetitive_numbered_items_removes_duplicates(self):
+        from src.handlers.ai import _prune_repetitive_numbered_items
+
+        payload = (
+            "1. Проверь окружение\n"
+            "2. Найди воду\n"
+            "3. Проверь окружение\n"
+            "4. Проверь окружение\n"
+            "5. Найди воду\n"
+        )
+        cleaned, removed = _prune_repetitive_numbered_items(payload, max_same_body=2)
+        assert removed is True
+        assert cleaned.count("Проверь окружение") == 2
+        assert cleaned.count("Найди воду") == 2
+
+    def test_prune_repetitive_numbered_items_keeps_unique_lines(self):
+        from src.handlers.ai import _prune_repetitive_numbered_items
+
+        payload = (
+            "1. Подготовь укрытие\n"
+            "2. Найди источник воды\n"
+            "3. Организуй сигнал SOS\n"
+        )
+        cleaned, removed = _prune_repetitive_numbered_items(payload, max_same_body=2)
+        assert removed is False
+        assert cleaned == payload.strip()
