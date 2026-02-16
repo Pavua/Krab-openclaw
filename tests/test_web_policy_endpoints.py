@@ -47,6 +47,19 @@ class _DummyAiRuntime:
             "guardrails": {},
         }
 
+    def get_context_snapshot(self, chat_id: int):
+        return {
+            "chat_id": int(chat_id),
+            "context_messages": 12,
+            "prompt_length_chars": 900,
+        }
+
+    def get_context_snapshots(self):
+        return {
+            "100": {"chat_id": 100, "context_messages": 7, "prompt_length_chars": 320},
+            "200": {"chat_id": 200, "context_messages": 4, "prompt_length_chars": 150},
+        }
+
 
 class _DummyReactionEngine:
     """Заглушка движка реакций."""
@@ -108,3 +121,23 @@ def test_mood_endpoint_returns_chat_profile() -> None:
     assert payload["ok"] is True
     assert payload["mood"]["chat_id"] == 12345
     assert payload["mood"]["label"] == "positive"
+
+
+def test_ctx_endpoint_returns_single_chat_snapshot() -> None:
+    client = _build_client()
+    response = client.get("/api/ctx", params={"chat_id": 77})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["context"]["chat_id"] == 77
+
+
+def test_ctx_endpoint_returns_all_snapshots() -> None:
+    client = _build_client()
+    response = client.get("/api/ctx")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert "100" in payload["contexts"]

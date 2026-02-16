@@ -180,6 +180,18 @@ class WebApp:
                 return {"ok": False, "error": "queue_not_configured"}
             return {"ok": True, "queue": ai_runtime.queue_manager.get_stats()}
 
+        @self.app.get("/api/ctx")
+        async def get_ctx(chat_id: int | None = Query(default=None)):
+            """Snapshot контекста последнего запроса (по чату или все чаты)."""
+            ai_runtime = self.deps.get("ai_runtime")
+            if not ai_runtime:
+                return {"ok": False, "error": "ai_runtime_not_configured"}
+            if chat_id is None:
+                if not hasattr(ai_runtime, "get_context_snapshots"):
+                    return {"ok": False, "error": "ctx_not_supported"}
+                return {"ok": True, "contexts": ai_runtime.get_context_snapshots()}
+            return {"ok": True, "context": ai_runtime.get_context_snapshot(int(chat_id))}
+
         @self.app.get("/api/reactions/stats")
         async def get_reactions_stats(chat_id: int | None = Query(default=None)):
             """Сводка по реакциям (общая или по чату)."""

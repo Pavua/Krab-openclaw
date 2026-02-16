@@ -220,6 +220,10 @@ class AIRuntimeControl:
     def get_context_snapshot(self, chat_id: int) -> dict:
         return dict(self.last_context_snapshot.get(str(chat_id), {}))
 
+    def get_context_snapshots(self) -> dict:
+        """Возвращает все накопленные snapshot-ы контекста по чатам."""
+        return {str(chat_id): dict(payload) for chat_id, payload in self.last_context_snapshot.items()}
+
     def get_policy_snapshot(self) -> dict:
         return {
             "queue_enabled": bool(self.queue_enabled),
@@ -1556,26 +1560,117 @@ def register_handlers(app, deps: dict):
                 "`!img --model <alias> <промпт>`\n"
                 "`!img --local <промпт>` или `!img --cloud <промпт>`\n"
                 "`!img models` — список генераторов\n"
-                "`!img cost [alias]` — ориентировочная стоимость"
+                "`!img cost [alias]` — ориентировочная стоимость\n"
+                "`!img health` — проверить local/cloud backend\n"
+                "`!img default show|local <alias>|cloud <alias>|mode local|cloud|auto`"
             )
             return
 
         head = args[0].strip().lower()
+        if head == "health":
+            rows = await image_gen.list_models()
+            local_ok = any(r.get("channel") == "local" and r.get("available") for r in rows)
+            cloud_ok = any(r.get("channel") == "cloud" and r.get("available") for r in rows)
+            defaults = image_gen.get_defaults() if hasattr(image_gen, "get_defaults") else {}
+            await message.reply_text(
+                "**🩺 Image Health:**\n\n"
+                f"• Local backend: {'🟢' if local_ok else '🔴'}\n"
+                f"• Cloud backend: {'🟢' if cloud_ok else '🔴'}\n"
+                f"• Default local: `{defaults.get('default_local_alias', '-')}`\n"
+                f"• Default cloud: `{defaults.get('default_cloud_alias', '-')}`\n"
+                f"• Prefer local: `{defaults.get('prefer_local', '-')}`"
+            )
+            return
+
+        if head == "default":
+            if not hasattr(image_gen, "set_default_alias") or not hasattr(image_gen, "set_prefer_mode"):
+                await message.reply_text("⚠️ В этой версии image manager нет runtime-настроек дефолтов.")
+                return
+
+            if len(args) < 2 or args[1].strip().lower() == "show":
+                defaults = image_gen.get_defaults() if hasattr(image_gen, "get_defaults") else {}
+                await message.reply_text(
+                    "**🎯 Image Defaults:**\n\n"
+                    f"• Local: `{defaults.get('default_local_alias', '-')}`\n"
+                    f"• Cloud: `{defaults.get('default_cloud_alias', '-')}`\n"
+                    f"• Prefer local: `{defaults.get('prefer_local', '-')}`"
+                )
+                return
+
+            action = args[1].strip().lower()
+            config_manager = deps.get("config_manager")
+
+            if action in {"local", "cloud"}:
+                if len(args) < 3:
+                    await message.reply_text("⚠️ Формат: `!img default local <alias>` или `!img default cloud <alias>`")
+                    return
+                alias = args[2].strip()
+                result = image_gen.set_default_alias(action, alias)
+                if not result.get("ok"):
+                    await message.reply_text(f"❌ {result.get('error')}")
+                    return
+                # Сохраняем и в config.yaml, чтобы переживало рестарт.
+                if config_manager:
+                    key = "IMAGE_DEFAULT_LOCAL_MODEL" if action == "local" else "IMAGE_DEFAULT_CLOUD_MODEL"
+                    try:
+                        config_manager.set(key, alias)
+                    except Exception:
+                        pass
+                await message.reply_text(
+                    f"✅ Default `{action}` model закреплён: `{alias}`\n"
+                    f"Теперь: local=`{result.get('default_local_alias')}`, cloud=`{result.get('default_cloud_alias')}`"
+                )
+                return
+
+            if action == "mode":
+                if len(args) < 3:
+                    await message.reply_text("⚠️ Формат: `!img default mode local|cloud|auto`")
+                    return
+                mode = args[2].strip().lower()
+                result = image_gen.set_prefer_mode(mode)
+                if not result.get("ok"):
+                    await message.reply_text(f"❌ {result.get('error')}")
+                    return
+                if config_manager:
+                    prefer_local = "1" if result.get("prefer_local") else "0"
+                    try:
+                        config_manager.set("IMAGE_PREFER_LOCAL", prefer_local)
+                    except Exception:
+                        pass
+                await message.reply_text(
+                    f"✅ Image mode: `{mode}` | prefer_local=`{result.get('prefer_local')}`"
+                )
+                return
+
+            await message.reply_text("⚠️ Формат: `!img default show|local <alias>|cloud <alias>|mode local|cloud|auto`")
+            return
+
         if head in {"models", "list"}:
             if not hasattr(image_gen, "list_models"):
                 await message.reply_text("⚠️ В этой версии image manager нет каталога моделей.")
                 return
             rows = await image_gen.list_models()
             lines = ["**🎨 Image Models:**", ""]
+            defaults = image_gen.get_defaults() if hasattr(image_gen, "get_defaults") else {}
+            def_local = defaults.get("default_local_alias")
+            def_cloud = defaults.get("default_cloud_alias")
             for row in rows:
                 icon = "🟢" if row.get("available") else "🔴"
                 cost = row.get("cost_per_image_usd")
                 cost_text = f"~${cost}/img" if cost is not None else "n/a"
                 reason = f" ({row.get('reason')})" if row.get("reason") else ""
+                alias = row.get("alias")
+                marks = []
+                if alias == def_local:
+                    marks.append("default-local")
+                if alias == def_cloud:
+                    marks.append("default-cloud")
+                marker = f" [{' | '.join(marks)}]" if marks else ""
                 lines.append(
-                    f"{icon} `{row.get('alias')}` — {row.get('title')} | {row.get('channel')}/{row.get('provider')} | {cost_text}{reason}"
+                    f"{icon} `{alias}`{marker} — {row.get('title')} | {row.get('channel')}/{row.get('provider')} | {cost_text}{reason}"
                 )
             lines.append("\n_Выбор модели:_ `!img --model <alias> <промпт>`")
+            lines.append("_Дефолты:_ `!img default show|local <alias>|cloud <alias>|mode local|cloud|auto`")
             await message.reply_text("\n".join(lines))
             return
 
