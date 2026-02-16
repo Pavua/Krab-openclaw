@@ -7,6 +7,55 @@
 
 ---
 
+## ✅ v8 Sprint Update #20 (2026-02-16) — Queue-first, Reaction Learning, Group Attribution
+
+### Что реализовано
+
+1. **Per-chat FIFO Queue (P0)**:
+   - `src/handlers/ai.py`: lock-отсечка заменена на `ChatWorkQueue`.
+   - Входящие сообщения в одном чате обрабатываются по очереди без потерь.
+   - Добавлено уведомление о позиции в очереди (опционально).
+
+2. **Forward/Reply/Author Context (P0)**:
+   - Добавлен явный `forward_context` для пересланных сообщений.
+   - Добавлен усиленный `reply_context`.
+   - Добавлен `author_context`, чтобы в группах Краб не путал владельца с другим участником.
+
+3. **Reaction Learning + Chat Mood (P0)**:
+   - Новый модуль: `src/core/reaction_learning.py`.
+   - Реакции сохраняются в `artifacts/reaction_feedback.json`.
+   - Реакции используются как weak-signal для `ModelRouter.submit_feedback(...)`.
+   - Добавлен rolling mood-профиль чата и авто-реакции с rate-limit/kill-switch.
+
+4. **Loop/Hallucination Guardrails (P0 hardening)**:
+   - `src/core/stream_client.py`: усилен детектор циклов (включая repeated-tail loop).
+   - `src/handlers/ai.py`: пост-очистка повторяющихся абзацев перед отправкой в Telegram.
+   - Добавлено безопасное live-превью стрима с хвостом текста, чтобы `edit_text` не падал на длинных ответах.
+
+5. **Ops/Policy UX (P0)**:
+   - Новые команды: `!ctx`, `!policy`, `!reactions`, `!mood`.
+   - `!brain` дополнен queue/reaction метриками.
+   - Web API: `/api/policy`, `/api/queue`, `/api/reactions/stats`, `/api/mood/{chat_id}`.
+
+6. **LM Studio model sizes (UX)**:
+   - `ModelRouter.list_local_models_verbose()` возвращает `size_bytes/size_human`.
+   - `!model scan` показывает размер локальных моделей.
+
+### Тесты
+
+- Добавлены:
+  - `tests/test_auto_reply_queue.py`
+  - `tests/test_forward_context.py`
+  - `tests/test_reaction_learning.py`
+  - `tests/test_web_policy_endpoints.py`
+  - расширение `tests/test_stream_client_failover.py`
+
+- Прогоны:
+  - `pytest -q tests/test_auto_reply_queue.py tests/test_forward_context.py tests/test_reaction_learning.py tests/test_stream_client_failover.py tests/test_web_policy_endpoints.py tests/test_model_router_stream_fallback.py tests/test_web_app.py`
+  - ✅ `50 passed`
+
+---
+
 ## ✅ v8 Sprint Update #19 (2026-02-15) — Streaming Stability & Silent Failure Fixes
 
 ### Что реализовано
