@@ -17,13 +17,19 @@ import time
 import asyncio
 import traceback
 import shlex
+import re
 from io import StringIO
+from dataclasses import dataclass
+from collections import deque
+from typing import Any
 
 from pyrogram import filters, enums
 from pyrogram.types import Message
+from pyrogram import raw, utils as pyro_utils
 
 from .auth import is_owner, is_authorized, is_superuser
 from ..core.markdown_sanitizer import sanitize_markdown_for_telegram, strip_backticks_from_content
+from ..core.reaction_learning import ReactionLearningEngine
 
 import structlog
 logger = structlog.get_logger(__name__)
@@ -40,6 +46,213 @@ def _timeout_from_env(name: str, default_value: int) -> int:
 
 AUTO_REPLY_TIMEOUT_SECONDS = _timeout_from_env("AUTO_REPLY_TIMEOUT_SECONDS", 900)
 THINK_TIMEOUT_SECONDS = _timeout_from_env("THINK_TIMEOUT_SECONDS", 420)
+AUTO_REPLY_CONTEXT_TOKENS = _timeout_from_env("AUTO_REPLY_CONTEXT_TOKENS", 3000)
+AUTO_REPLY_BUSY_NOTICE_SECONDS = _timeout_from_env("AUTO_REPLY_BUSY_NOTICE_SECONDS", 12)
+AUTO_REPLY_QUEUE_ENABLED = str(os.getenv("AUTO_REPLY_QUEUE_ENABLED", "1")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
+AUTO_REPLY_QUEUE_MAX_PER_CHAT = _timeout_from_env("AUTO_REPLY_QUEUE_MAX_PER_CHAT", 50)
+AUTO_REPLY_QUEUE_NOTIFY_POSITION = str(
+    os.getenv("AUTO_REPLY_QUEUE_NOTIFY_POSITION", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+AUTO_REPLY_FORWARD_CONTEXT_ENABLED = str(
+    os.getenv("AUTO_REPLY_FORWARD_CONTEXT_ENABLED", "1")
+).strip().lower() in {"1", "true", "yes", "on"}
+REACTION_LEARNING_ENABLED = str(os.getenv("REACTION_LEARNING_ENABLED", "1")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
+CHAT_MOOD_ENABLED = str(os.getenv("CHAT_MOOD_ENABLED", "1")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
+AUTO_REACTIONS_ENABLED = str(os.getenv("AUTO_REACTIONS_ENABLED", "1")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
+REACTION_LEARNING_WEIGHT = float(str(os.getenv("REACTION_LEARNING_WEIGHT", "0.35")).strip() or "0.35")
+AUTO_REPLY_STREAM_EDIT_INTERVAL_SECONDS = float(
+    str(os.getenv("AUTO_REPLY_STREAM_EDIT_INTERVAL_SECONDS", "1.2")).strip() or "1.2"
+)
+try:
+    AUTO_REPLY_MAX_NUMBERED_LIST_ITEMS = max(
+        0,
+        int(str(os.getenv("AUTO_REPLY_MAX_NUMBERED_LIST_ITEMS", "0")).strip() or "0"),
+    )
+except Exception:
+    AUTO_REPLY_MAX_NUMBERED_LIST_ITEMS = 0
+
+AUTO_SUMMARY_ENABLED = str(os.getenv("AUTO_SUMMARY_ENABLED", "0")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
+
+# Защита от дублей update.
+_LAST_BUSY_NOTICE_TS = {}
+_RECENT_MESSAGE_MARKERS = {}
+_RECENT_MESSAGE_TTL_SECONDS = 180
+
+
+@dataclass
+class ChatQueuedTask:
+    """Одна задача автоответа в очереди чата."""
+
+    chat_id: int
+    message_id: int
+    received_at: float
+    priority: int
+    runner: Any
+
+
+class ChatWorkQueue:
+    """
+    FIFO очередь задач по чатам.
+    Один worker на чат, без потери входящих сообщений.
+    """
+
+    def __init__(self, max_per_chat: int = 50):
+        self.max_per_chat = max(1, int(max_per_chat))
+        self._queues: dict[int, deque[ChatQueuedTask]] = {}
+        self._workers: dict[int, asyncio.Task] = {}
+        self._active_task: dict[int, ChatQueuedTask] = {}
+        self._processed = 0
+        self._failed = 0
+
+    def set_max_per_chat(self, value: int) -> None:
+        self.max_per_chat = max(1, int(value))
+
+    def enqueue(self, task: ChatQueuedTask) -> tuple[bool, int]:
+        queue = self._queues.setdefault(int(task.chat_id), deque())
+        if len(queue) >= self.max_per_chat:
+            return False, len(queue)
+        queue.append(task)
+        return True, len(queue)
+
+    def ensure_worker(self, chat_id: int) -> None:
+        worker = self._workers.get(int(chat_id))
+        if worker and not worker.done():
+            return
+        self._workers[int(chat_id)] = asyncio.create_task(self._worker_loop(int(chat_id)))
+
+    async def _worker_loop(self, chat_id: int) -> None:
+        while True:
+            queue = self._queues.get(chat_id)
+            if not queue:
+                self._workers.pop(chat_id, None)
+                return
+            task = queue.popleft()
+            self._active_task[chat_id] = task
+            should_stop = False
+            try:
+                await task.runner()
+                self._processed += 1
+            except Exception:
+                self._failed += 1
+                logger.exception("Ошибка обработки задачи в очереди", chat_id=chat_id, message_id=task.message_id)
+            finally:
+                self._active_task.pop(chat_id, None)
+                if not queue:
+                    # Если очередь пуста — снимаем ее, чтобы не держать лишнее состояние.
+                    self._queues.pop(chat_id, None)
+                    self._workers.pop(chat_id, None)
+                    should_stop = True
+            if should_stop:
+                return
+
+    def get_stats(self) -> dict:
+        queue_lengths = {str(chat_id): len(q) for chat_id, q in self._queues.items()}
+        return {
+            "processed": int(self._processed),
+            "failed": int(self._failed),
+            "active_chats": len(self._workers),
+            "queue_lengths": queue_lengths,
+            "queued_total": int(sum(queue_lengths.values())),
+            "max_per_chat": int(self.max_per_chat),
+        }
+
+
+class AIRuntimeControl:
+    """Runtime-контроллер политики AI-обработчика (очередь, guardrails, реакции)."""
+
+    def __init__(self, queue_manager: ChatWorkQueue, reaction_engine: ReactionLearningEngine, router):
+        self.queue_manager = queue_manager
+        self.reaction_engine = reaction_engine
+        self.router = router
+        self.queue_enabled = AUTO_REPLY_QUEUE_ENABLED
+        self.forward_context_enabled = AUTO_REPLY_FORWARD_CONTEXT_ENABLED
+        self.reaction_learning_enabled = REACTION_LEARNING_ENABLED
+        self.chat_mood_enabled = CHAT_MOOD_ENABLED
+        self.auto_reactions_enabled = AUTO_REACTIONS_ENABLED
+        self.last_context_snapshot: dict[str, dict] = {}
+
+    def set_queue_enabled(self, enabled: bool) -> None:
+        self.queue_enabled = bool(enabled)
+
+    def set_queue_max(self, max_per_chat: int) -> None:
+        self.queue_manager.set_max_per_chat(max_per_chat)
+
+    def set_forward_context_enabled(self, enabled: bool) -> None:
+        self.forward_context_enabled = bool(enabled)
+
+    def set_reaction_learning_enabled(self, enabled: bool) -> None:
+        self.reaction_learning_enabled = bool(enabled)
+        self.reaction_engine.set_enabled(enabled)
+
+    def set_auto_reactions_enabled(self, enabled: bool) -> None:
+        self.auto_reactions_enabled = bool(enabled)
+        self.reaction_engine.set_auto_reactions_enabled(enabled)
+
+    def set_guardrail(self, name: str, value: float) -> bool:
+        normalized = str(name).strip().lower()
+        if normalized == "reasoning_max_chars":
+            self.router.local_reasoning_max_chars = max(200, int(value))
+            return True
+        if normalized == "stream_total_timeout_seconds":
+            self.router.local_stream_total_timeout_seconds = max(5.0, float(value))
+            return True
+        if normalized == "stream_sock_read_timeout_seconds":
+            self.router.local_stream_sock_read_timeout_seconds = max(2.0, float(value))
+            return True
+        if normalized == "include_reasoning":
+            self.router.local_include_reasoning = bool(int(value))
+            return True
+        return False
+
+    def set_context_snapshot(self, chat_id: int, payload: dict) -> None:
+        self.last_context_snapshot[str(chat_id)] = dict(payload)
+
+    def get_context_snapshot(self, chat_id: int) -> dict:
+        return dict(self.last_context_snapshot.get(str(chat_id), {}))
+
+    def get_policy_snapshot(self) -> dict:
+        return {
+            "queue_enabled": bool(self.queue_enabled),
+            "forward_context_enabled": bool(self.forward_context_enabled),
+            "reaction_learning_enabled": bool(self.reaction_learning_enabled),
+            "chat_mood_enabled": bool(self.chat_mood_enabled),
+            "auto_reactions_enabled": bool(self.auto_reactions_enabled),
+            "queue": self.queue_manager.get_stats(),
+            "guardrails": {
+                "local_include_reasoning": bool(self.router.local_include_reasoning),
+                "local_reasoning_max_chars": int(self.router.local_reasoning_max_chars),
+                "local_stream_total_timeout_seconds": float(self.router.local_stream_total_timeout_seconds),
+                "local_stream_sock_read_timeout_seconds": float(self.router.local_stream_sock_read_timeout_seconds),
+            },
+        }
+
+
+def _is_duplicate_message(chat_id: int, message_id: int) -> bool:
+    """
+    Возвращает True, если это уже обработанный update.
+    Нужен для редких дублей апдейтов после reconnect.
+    """
+    now = time.time()
+    # Периодическая очистка старых маркеров.
+    stale_keys = [k for k, ts in _RECENT_MESSAGE_MARKERS.items() if (now - ts) > _RECENT_MESSAGE_TTL_SECONDS]
+    for key in stale_keys:
+        _RECENT_MESSAGE_MARKERS.pop(key, None)
+
+    marker = f"{chat_id}:{message_id}"
+    if marker in _RECENT_MESSAGE_MARKERS:
+        return True
+    _RECENT_MESSAGE_MARKERS[marker] = now
+    return False
 
 
 def _sanitize_model_output(text: str, router=None) -> str:
@@ -62,6 +275,92 @@ def _sanitize_model_output(text: str, router=None) -> str:
     return cleaned.strip()
 
 
+def _build_reply_context(message: Message) -> str:
+    """Формирует reply-контекст для prompt, если сообщение является ответом."""
+    if not getattr(message, "reply_to_message", None):
+        return ""
+    reply_author = "Unknown"
+    reply_from = getattr(message.reply_to_message, "from_user", None)
+    if reply_from:
+        reply_author = (
+            f"@{reply_from.username}"
+            if getattr(reply_from, "username", None)
+            else (getattr(reply_from, "first_name", None) or "User")
+        )
+    reply_text = _message_content_hint(message.reply_to_message)
+    if not reply_text:
+        return ""
+    return f"[REPLY CONTEXT from {reply_author}]: {reply_text}"
+
+
+def _build_forward_context(message: Message, enabled: bool = True) -> str:
+    """Формирует контекст форварда, чтобы модель не считала это позицией владельца."""
+    if not enabled:
+        return ""
+    forwarded_from = None
+    if getattr(message, "forward_from", None):
+        fwd_user = message.forward_from
+        forwarded_from = (
+            f"@{fwd_user.username}"
+            if getattr(fwd_user, "username", None)
+            else (getattr(fwd_user, "first_name", None) or "unknown_user")
+        )
+    if not forwarded_from and getattr(message, "forward_sender_name", None):
+        forwarded_from = str(message.forward_sender_name)
+    if not forwarded_from and getattr(message, "forward_from_chat", None):
+        fwd_chat = message.forward_from_chat
+        forwarded_from = (
+            getattr(fwd_chat, "title", None)
+            or getattr(fwd_chat, "username", None)
+            or "unknown_chat"
+        )
+    if not forwarded_from:
+        return ""
+
+    fwd_date = getattr(message, "forward_date", None)
+    fwd_date_text = str(fwd_date) if fwd_date else "n/a"
+    auto_fwd = bool(getattr(message, "is_automatic_forward", False))
+    return (
+        "[FORWARDED CONTEXT]: это пересланный материал для анализа, "
+        "не интерпретируй его как позицию владельца.\n"
+        f"Источник: {forwarded_from}\n"
+        f"Дата форварда: {fwd_date_text}\n"
+        f"Автофорвард: {auto_fwd}"
+    )
+
+
+def _build_author_context(message: Message, is_owner_sender: bool) -> str:
+    """
+    Формирует контекст авторства текущего запроса для групповых чатов.
+    Помогает модели не путать владельца с другими участниками.
+    """
+    user = getattr(message, "from_user", None)
+    username = ""
+    display_name = "unknown_user"
+    user_id = 0
+    if user:
+        username = str(getattr(user, "username", "") or "").strip()
+        display_name = str(getattr(user, "first_name", "") or "").strip() or "unknown_user"
+        user_id = int(getattr(user, "id", 0) or 0)
+
+    author = f"@{username}" if username else display_name
+    raw_chat_type = getattr(getattr(message, "chat", None), "type", "unknown")
+    if hasattr(raw_chat_type, "name"):
+        chat_type = str(getattr(raw_chat_type, "name", "unknown")).lower()
+    else:
+        chat_type = str(raw_chat_type).lower()
+
+    owner_marker = "owner" if is_owner_sender else "participant"
+    return (
+        "[AUTHOR CONTEXT]:\n"
+        f"author={author}\n"
+        f"author_id={user_id}\n"
+        f"author_role={owner_marker}\n"
+        f"chat_type={chat_type}\n"
+        "Отвечай только текущему author. Не подменяй автора владельцем, если author_role=participant."
+    )
+
+
 def _is_voice_reply_requested(text: str) -> bool:
     """Определяет, просит ли пользователь голосовой ответ текстом."""
     lowered = (text or "").strip().lower()
@@ -81,6 +380,236 @@ def _is_voice_reply_requested(text: str) -> bool:
         "поговори со мной",
     )
     return any(token in lowered for token in triggers)
+
+
+def _extract_code_prompt_flags(message_text: str) -> tuple[str, bool, bool]:
+    """
+    Разбирает !code команду и выделяет:
+    - prompt
+    - confirm_expensive
+    - raw_code_mode (если включен --raw-code)
+    """
+    raw = message_text or ""
+    try:
+        argv = shlex.split(raw)
+    except ValueError:
+        argv = raw.split()
+
+    if len(argv) < 2:
+        return "", False, False
+
+    confirm_expensive = False
+    raw_code_mode = False
+    payload_tokens: list[str] = []
+    for token in argv[1:]:
+        normalized = token.strip().lower()
+        if normalized in {"--confirm-expensive", "--confirm", "confirm"}:
+            confirm_expensive = True
+            continue
+        if normalized in {"--raw-code", "--raw"}:
+            raw_code_mode = True
+            continue
+        payload_tokens.append(token)
+
+    prompt = " ".join(payload_tokens).strip()
+    return prompt, confirm_expensive, raw_code_mode
+
+
+def _is_critical_code_request(prompt: str) -> bool:
+    """
+    Эвристика для критичных coding-задач:
+    деплой, прод, безопасность, платежи, миграции и т.п.
+    """
+    text = (prompt or "").lower()
+    markers = (
+        "prod", "production", "деплой", "релиз", "security", "безопас",
+        "auth", "oauth", "jwt", "billing", "платеж", "migration", "миграц",
+        "db", "database", "postgres", "rollback", "infra", "k8s", "kubernetes",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _build_safe_code_prompt(prompt: str, strict_mode: bool = False) -> str:
+    """
+    Формирует структурированный запрос для code-режима:
+    1) План
+    2) Код
+    3) Тесты
+    4) Риски
+    """
+    strict_clause = (
+        "Режим strict: учитывай production-ограничения, валидацию входных данных, "
+        "ошибки/rollback и безопасные значения по умолчанию.\n"
+        if strict_mode else ""
+    )
+    return (
+        "Ты senior-инженер. Отвечай строго на русском языке.\n"
+        f"{strict_clause}"
+        "Верни результат в формате:\n"
+        "1) PLAN — краткий пошаговый план (3-7 пунктов)\n"
+        "2) CODE — готовый код (fenced block)\n"
+        "3) TESTS — минимально достаточные тесты/проверки\n"
+        "4) RISKS — короткий список рисков и ограничений\n\n"
+        f"Задача пользователя:\n{prompt}"
+    )
+
+
+def _to_plain_stream_text(text: str) -> str:
+    """
+    Минимальная очистка markdown для безопасного plain-text edit.
+    Нужна как fallback, если Telegram отвергает markdown-парсинг в стриме.
+    """
+    if not text:
+        return "..."
+
+    plain = str(text)
+    replacements = {
+        "```": "",
+        "`": "",
+        "**": "",
+        "__": "",
+        "~~": "",
+    }
+    for source, target in replacements.items():
+        plain = plain.replace(source, target)
+    return plain.strip() or "..."
+
+
+def _prepare_tts_text(text: str) -> str:
+    """
+    Подготавливает текст для озвучки:
+    - убирает служебные/статусные строки и markdown-мусор,
+    - режет мета-вставки в квадратных скобках,
+    - оставляет компактный, «человеческий» текст.
+    """
+    if not text:
+        return ""
+
+    cleaned = _to_plain_stream_text(text)
+    cleaned = re.sub(r"\[[^\]]{1,160}\]", "", cleaned)
+
+    skip_prefixes = (
+        "связь установлена",
+        "я готов к работе",
+        "voice reply",
+        "llm error",
+        "ошибка",
+        "status:",
+        "system:",
+    )
+    lines = []
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip(" \t-•*")
+        if not line:
+            continue
+        low = line.lower()
+        if any(low.startswith(prefix) for prefix in skip_prefixes):
+            continue
+        lines.append(line)
+
+    compact = "\n".join(lines).strip()
+    compact = re.sub(r"\n{3,}", "\n\n", compact)
+    # Для TTS держим разумную длину, чтобы не читать полотно.
+    if len(compact) > 1800:
+        compact = compact[:1750].rstrip() + "..."
+    return compact
+
+
+def _collapse_repeated_paragraphs(text: str, max_consecutive_repeats: int = 2) -> tuple[str, bool]:
+    """
+    Схлопывает подряд идущие одинаковые абзацы.
+    Возвращает: (очищенный_текст, были_ли_удаления).
+    """
+    if not text:
+        return "", False
+    paragraphs = re.split(r"\n{2,}", str(text))
+    output: list[str] = []
+    removed = False
+    last_norm = ""
+    last_count = 0
+
+    for paragraph in paragraphs:
+        cleaned = paragraph.strip()
+        if not cleaned:
+            continue
+        normalized = re.sub(r"\s+", " ", cleaned).strip().lower()
+        if normalized == last_norm:
+            last_count += 1
+        else:
+            last_norm = normalized
+            last_count = 1
+        if last_count <= max_consecutive_repeats:
+            output.append(cleaned)
+        else:
+            removed = True
+    return ("\n\n".join(output).strip(), removed)
+
+
+def _cap_numbered_list_items(text: str, max_items: int = 20) -> tuple[str, bool]:
+    """
+    Ограничивает слишком длинные нумерованные списки.
+    Возвращает: (очищенный_текст, был_ли_trim).
+    """
+    if not text or max_items <= 0:
+        return text or "", False
+
+    lines = str(text).splitlines()
+    result: list[str] = []
+    numbered_count = 0
+    trimmed = False
+    pattern = re.compile(r"^\s*\d+[\.\)]\s+")
+
+    for line in lines:
+        if pattern.match(line):
+            numbered_count += 1
+            if numbered_count > max_items:
+                trimmed = True
+                continue
+        result.append(line)
+
+    if trimmed:
+        result.append("")
+        result.append(
+            f"⚠️ Список был ограничен до {max_items} пунктов, чтобы избежать зацикливания ответа."
+        )
+    return ("\n".join(result).strip(), trimmed)
+
+
+def _build_stream_preview(text: str, max_chars: int = 3600) -> str:
+    """
+    Готовит безопасный фрагмент для live-обновления в Telegram.
+    Показываем хвост длинного ответа, чтобы не упираться в лимит edit_text.
+    """
+    if not text:
+        return "..."
+    payload = str(text)
+    if len(payload) <= max_chars:
+        return payload
+    tail = payload[-max_chars:]
+    return f"…\n{tail}"
+
+
+async def _safe_stream_edit_text(reply_msg: Message, text: str) -> None:
+    """
+    Безопасное edit_text для стриминга:
+    1) пробуем markdown-саниtизированный вариант,
+    2) при провале пробуем plain text без parse_mode.
+    """
+    safe_text = sanitize_markdown_for_telegram(text)
+    try:
+        await reply_msg.edit_text(safe_text)
+        return
+    except Exception as markdown_error:
+        plain = _to_plain_stream_text(safe_text)
+        try:
+            await reply_msg.edit_text(plain, parse_mode=None)
+            return
+        except Exception as plain_error:
+            logger.debug(
+                "Stream edit_text skipped after markdown/plain fallback failures",
+                markdown_error=str(markdown_error),
+                plain_error=str(plain_error),
+            )
 
 
 def _message_content_hint(msg: Message) -> str:
@@ -136,8 +665,11 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     config_manager = deps.get("config_manager")
     perceptor = deps.get("perceptor")
     summarizer = deps.get("summarizer")
+    ai_runtime: AIRuntimeControl | None = deps.get("ai_runtime")
+    reaction_engine: ReactionLearningEngine | None = deps.get("reaction_engine")
     
     sender = message.from_user.username if message.from_user else "Unknown"
+    is_owner_sender = bool(is_owner(message))
 
     # 1. Проверка через SecurityManager
     role = security.get_user_role(sender, message.from_user.id if message.from_user else 0)
@@ -230,14 +762,33 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             if not perceptor:
                 await message.reply_text("❌ Voice module недоступен.")
                 return
+            status_msg = None
             await client.send_chat_action(message.chat.id, action=enums.ChatAction.RECORD_AUDIO)
+            try:
+                status_msg = await message.reply_text("👂 Распознаю голос...")
+            except Exception:
+                status_msg = None
             audio_path = await message.download()
             temp_files.append(audio_path)
-            transcribed_text = _sanitize_model_output(await perceptor.transcribe(audio_path, router), router)
+            raw_transcription = await perceptor.transcribe(audio_path, router)
+            transcribed_text = _sanitize_model_output(raw_transcription, router)
             if transcribed_text and not transcribed_text.startswith("Ошибка"):
                 if message.voice:
                     is_voice_response_needed = True
+                if status_msg:
+                    try:
+                        await status_msg.delete()
+                    except Exception:
+                        pass
             else:
+                human_error = transcribed_text or "Не удалось распознать голосовое сообщение."
+                if status_msg:
+                    try:
+                        await status_msg.edit_text(f"⚠️ {human_error[:450]}")
+                    except Exception:
+                        pass
+                else:
+                    await message.reply_text(f"⚠️ {human_error[:450]}")
                 return
 
         # --- VIDEO / GIF (Deep Analysis) ---
@@ -298,33 +849,57 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             except: pass
 
     # Context gathering
-    reply_context = ""
-    if message.reply_to_message:
-        reply_author = "Unknown"
-        if message.reply_to_message.from_user:
-            reply_author = f"@{message.reply_to_message.from_user.username}" if message.reply_to_message.from_user.username else (message.reply_to_message.from_user.first_name or "User")
-        reply_text = _message_content_hint(message.reply_to_message)
-        if reply_text:
-            reply_context = f"[REPLY CONTEXT from {reply_author}]: {reply_text}"
+    reply_context = _build_reply_context(message)
+    forward_context = _build_forward_context(
+        message,
+        enabled=bool(ai_runtime and ai_runtime.forward_context_enabled),
+    )
 
     # Final prompt
-    final_prompt = text_content
-    if transcribed_text:
-        final_prompt = f"{transcribed_text} (Voice Input)"
+    final_prompt = f"{transcribed_text} (Voice Input)" if transcribed_text else text_content
+    author_context = _build_author_context(message, is_owner_sender=is_owner_sender)
+    if author_context:
+        final_prompt = f"{author_context}\n\n{final_prompt}"
     if visual_context:
         final_prompt = f"{visual_context}\n\nUser Says: {final_prompt}"
     if reply_context:
         final_prompt = f"{reply_context}\n\n{final_prompt}"
+    if forward_context:
+        final_prompt = f"{forward_context}\n\n{final_prompt}"
+    if reaction_engine and ai_runtime and ai_runtime.chat_mood_enabled:
+        mood_line = reaction_engine.build_mood_context_line(message.chat.id)
+        if mood_line:
+            final_prompt = f"{mood_line}\n\n{final_prompt}"
+    if is_voice_response_needed:
+        final_prompt = (
+            "Ответь строго на русском языке, дружелюбно и естественно.\n"
+            "Без служебных фраз, без статусов, без мета-комментариев в скобках.\n"
+            "Если это сказка/история — дай цельный литературный текст.\n\n"
+            f"{final_prompt}"
+        )
 
     # Sync & Save
     await memory.sync_telegram_history(client, message.chat.id, limit=30)
     memory.save_message(message.chat.id, {"user": sender, "text": final_prompt})
     
-    if summarizer:
+    if summarizer and AUTO_SUMMARY_ENABLED:
         asyncio.create_task(summarizer.auto_summarize(message.chat.id))
 
     # Routing
-    context = memory.get_token_aware_context(message.chat.id, max_tokens=3000)
+    context = memory.get_token_aware_context(message.chat.id, max_tokens=AUTO_REPLY_CONTEXT_TOKENS)
+    if ai_runtime:
+        ai_runtime.set_context_snapshot(
+            message.chat.id,
+            {
+                "chat_id": int(message.chat.id),
+                "message_id": int(message.id),
+                "context_messages": len(context or []),
+                "prompt_length_chars": len(final_prompt or ""),
+                "has_forward_context": bool(forward_context),
+                "has_reply_context": bool(reply_context),
+                "updated_at": int(time.time()),
+            },
+        )
     
     # Typing indicator
     await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
@@ -341,18 +916,16 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 task_type="chat",
                 context=context,
                 chat_type=message.chat.type.name.lower(),
-                is_owner=is_owner(message)
+                is_owner=is_owner_sender
             ):
                 full_response += part
                 curr_t = time.time()
-                # Плавное обновление (раз в 1.8 сек)
-                if curr_t - last_update > 1.8:
-                    try:
-                        # Закрываем незакрытые блоки кода, чтобы Pyrogram не ругался
-                        safe_text = sanitize_markdown_for_telegram(full_response + " ▌")
-                        await reply_msg.edit_text(safe_text)
-                        last_update = curr_t
-                    except Exception: pass
+                # Плавное обновление превью, чтобы пользователь видел прогресс в реальном времени.
+                edit_interval = max(0.5, float(AUTO_REPLY_STREAM_EDIT_INTERVAL_SECONDS))
+                if curr_t - last_update > edit_interval:
+                    preview = _build_stream_preview(full_response, max_chars=3600)
+                    await _safe_stream_edit_text(reply_msg, preview + " ▌")
+                    last_update = curr_t
         except Exception as e:
             logger.error(f"Streaming error occurred: {e}")
             # Если у нас уже есть какой-то текст, мы не пробрасываем ошибку дальше,
@@ -377,6 +950,20 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     if full_response:
         clean_display_text = _sanitize_model_output(full_response, router)
+        clean_display_text, removed_repeats = _collapse_repeated_paragraphs(
+            clean_display_text,
+            max_consecutive_repeats=2,
+        )
+        clean_display_text, trimmed_numbered = _cap_numbered_list_items(
+            clean_display_text,
+            max_items=AUTO_REPLY_MAX_NUMBERED_LIST_ITEMS,
+        )
+        if removed_repeats:
+            clean_display_text = (
+                f"{clean_display_text}\n\n⚠️ Автоочистка: убраны повторяющиеся фрагменты ответа."
+            ).strip()
+        if trimmed_numbered:
+            logger.warning("Ответ был ограничен по длине нумерованного списка", chat_id=message.chat.id)
         
         # Интеллектуальная реакция: если ответ начинается с эмодзи, ставим его как реакцию
         import re
@@ -386,23 +973,51 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         
         # Отправка ответа
         MAX_LEN = 4000
+        truncated_for_telegram = len(clean_display_text) > MAX_LEN
+        chunks_sent = 1
         if len(clean_display_text) > MAX_LEN:
             chunks = [clean_display_text[i:i+MAX_LEN] for i in range(0, len(clean_display_text), MAX_LEN)]
             await reply_msg.edit_text(chunks[0])
             for chunk in chunks[1:]:
                 await message.reply_text(chunk)
+            chunks_sent = len(chunks)
         else:
             await reply_msg.edit_text(clean_display_text)
+
+        # Привязка ответа к маршруту для weak reaction feedback.
+        if reaction_engine:
+            try:
+                last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+                if isinstance(last_route, dict) and last_route:
+                    reaction_engine.bind_assistant_message(
+                        chat_id=message.chat.id,
+                        message_id=reply_msg.id,
+                        route=last_route,
+                    )
+            except Exception as bind_exc:
+                logger.debug("Не удалось привязать ответ для reaction learning", error=str(bind_exc))
         
         # TTS Implementation
         if is_voice_response_needed and perceptor:
-            error_keywords = ["извини", "не могу", "ошибка", "не удалось"]
+            error_keywords = [
+                "извини",
+                "не могу",
+                "ошибка",
+                "не удалось",
+                "llm error",
+                "not_found",
+                "status\": \"not_found\"",
+            ]
             if not any(kw in clean_display_text[:100].lower() for kw in error_keywords):
                 logger.info(f"🎤 Requesting TTS for chat {message.chat.id}")
                 await client.send_chat_action(message.chat.id, action=enums.ChatAction.RECORD_AUDIO)
                 
                 try:
-                    tts_file = await perceptor.speak(clean_display_text)
+                    tts_text = _prepare_tts_text(clean_display_text)
+                    if not tts_text:
+                        logger.warning("⚠️ TTS skipped: empty prepared text", chat_id=message.chat.id)
+                        return
+                    tts_file = await perceptor.speak(tts_text)
                     if tts_file and os.path.exists(tts_file):
                         await message.reply_voice(tts_file, caption="🗣️ **Voice Reply**")
                         logger.info(f"✅ Voice reply sent to {message.chat.id}")
@@ -424,6 +1039,23 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         message.chat.id, {"role": "assistant", "text": _sanitize_model_output(full_response, router)}
     )
 
+    if ai_runtime:
+        current = ai_runtime.get_context_snapshot(message.chat.id)
+        current["response_length_chars"] = len(_sanitize_model_output(full_response, router) or "")
+        current["telegram_truncated"] = bool(locals().get("truncated_for_telegram", False))
+        current["telegram_chunks_sent"] = int(locals().get("chunks_sent", 1))
+        current["updated_at"] = int(time.time())
+        ai_runtime.set_context_snapshot(message.chat.id, current)
+
+    # Optional: авто-реакция Краба на запрос пользователя.
+    if reaction_engine and ai_runtime and ai_runtime.auto_reactions_enabled:
+        try:
+            if reaction_engine.can_send_auto_reaction(message.chat.id):
+                reaction_emoji = reaction_engine.choose_auto_reaction(full_response, message.chat.id)
+                await set_message_reaction(client, message.chat.id, message.id, reaction_emoji)
+        except Exception as react_exc:
+            logger.debug("Auto reaction skipped", error=str(react_exc))
+
 
 
 def register_handlers(app, deps: dict):
@@ -434,6 +1066,59 @@ def register_handlers(app, deps: dict):
     agent = deps["agent"]
     rate_limiter = deps["rate_limiter"]
     safe_handler = deps["safe_handler"]
+    queue_manager = ChatWorkQueue(max_per_chat=AUTO_REPLY_QUEUE_MAX_PER_CHAT)
+    reaction_engine = ReactionLearningEngine(
+        store_path=os.getenv("REACTION_FEEDBACK_PATH", "artifacts/reaction_feedback.json"),
+        enabled=REACTION_LEARNING_ENABLED,
+        weight=REACTION_LEARNING_WEIGHT,
+        mood_enabled=CHAT_MOOD_ENABLED,
+        auto_reactions_enabled=AUTO_REACTIONS_ENABLED,
+        auto_reaction_rate_seconds=_timeout_from_env("AUTO_REACTIONS_MIN_INTERVAL_SECONDS", 6),
+        mood_window=_timeout_from_env("CHAT_MOOD_WINDOW", 120),
+    )
+    ai_runtime = AIRuntimeControl(queue_manager=queue_manager, reaction_engine=reaction_engine, router=router)
+    deps["ai_runtime"] = ai_runtime
+    deps["reaction_engine"] = reaction_engine
+    deps["chat_work_queue"] = queue_manager
+
+    @app.on_raw_update()
+    async def reaction_learning_raw_handler(client, update, users, chats):
+        """
+        Обработка raw updates реакций на сообщения.
+        Используется как weak-signal для адаптации модели/тона.
+        """
+        if not isinstance(update, raw.types.UpdateMessageReactions):
+            return
+        if not ai_runtime.reaction_learning_enabled:
+            return
+        try:
+            chat_id = int(pyro_utils.get_peer_id(update.peer))
+            message_id = int(update.msg_id)
+            reactions = getattr(update, "reactions", None)
+            if not reactions:
+                return
+
+            recent = getattr(reactions, "recent_reactions", None) or []
+            for item in recent:
+                reaction_obj = getattr(item, "reaction", None)
+                emoji = ""
+                if isinstance(reaction_obj, raw.types.ReactionEmoji):
+                    emoji = str(getattr(reaction_obj, "emoticon", "") or "")
+                elif isinstance(reaction_obj, raw.types.ReactionCustomEmoji):
+                    emoji = f"custom:{getattr(reaction_obj, 'document_id', '')}"
+                if not emoji:
+                    continue
+                actor_id = int(pyro_utils.get_peer_id(getattr(item, "peer_id", None))) if getattr(item, "peer_id", None) else 0
+                reaction_engine.register_reaction(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    actor_id=actor_id,
+                    emoji=emoji,
+                    action="added",
+                    router=router,
+                )
+        except Exception as exc:
+            logger.debug("Reaction raw update parse skipped", error=str(exc))
 
     def _extract_prompt_and_confirm_flag(message_text: str) -> tuple[str, bool]:
         """
@@ -519,12 +1204,8 @@ def register_handlers(app, deps: dict):
                 full_response += chunk
                 curr_t = time.time()
                 if curr_t - last_update > 2.0:
-                    try:
-                        # Закрываем незакрытые блоки кода при стриминге reasoning
-                        safe_text = sanitize_markdown_for_telegram(full_response + " ▌")
-                        await reply_msg.edit_text(safe_text)
-                        last_update = curr_t
-                    except Exception: pass
+                    await _safe_stream_edit_text(reply_msg, full_response + " ▌")
+                    last_update = curr_t
             
             await reply_msg.edit_text(_sanitize_model_output(full_response, router)) # Sanitize here
         except asyncio.TimeoutError: # Moved timeout handling here
@@ -629,20 +1310,27 @@ def register_handlers(app, deps: dict):
     @safe_handler
     async def code_command(client, message: Message):
         """Генерация кода: !code <описание>"""
-        prompt, confirm_expensive = _extract_prompt_and_confirm_flag(message.text or "")
+        prompt, confirm_expensive, raw_code_mode = _extract_code_prompt_flags(message.text or "")
         if not prompt:
             await message.reply_text(
-                "💻 Опиши задачу: `!code Напиши FastAPI сервер с эндпоинтом /health`"
+                "💻 Опиши задачу: `!code Напиши FastAPI сервер с эндпоинтом /health`\n"
+                "Флаги: `--confirm-expensive`, `--raw-code`"
             )
             return
 
         notification = await message.reply_text("💻 **Генерирую код...**")
 
-        code_prompt = (
-            f"Напиши код по запросу: {prompt}\n\n"
-            "Формат: только код с комментариями, без лишних объяснений. "
-            "Язык программирования — определи из контекста."
-        )
+        if raw_code_mode:
+            code_prompt = (
+                f"Напиши код по запросу: {prompt}\n\n"
+                "Формат: только код с комментариями, без лишних объяснений. "
+                "Язык программирования — определи из контекста."
+            )
+        else:
+            code_prompt = _build_safe_code_prompt(
+                prompt=prompt,
+                strict_mode=_is_critical_code_request(prompt),
+            )
 
         response = await router.route_query(
             prompt=code_prompt,
@@ -1071,4 +1759,45 @@ def register_handlers(app, deps: dict):
         Умный автоответчик v2 (Omni-channel).
         Делегирует исполнение в _process_auto_reply.
         """
-        await _process_auto_reply(client, message, deps)
+        chat_id = message.chat.id
+        message_id = message.id
+        if _is_duplicate_message(chat_id, message_id):
+            logger.debug("Skipping duplicate update in auto_reply_logic", chat_id=chat_id, message_id=message_id)
+            return
+
+        async def _runner():
+            await _process_auto_reply(client, message, deps)
+
+        if not ai_runtime.queue_enabled:
+            await _runner()
+            return
+
+        queued_task = ChatQueuedTask(
+            chat_id=int(chat_id),
+            message_id=int(message_id),
+            received_at=time.time(),
+            priority=0,
+            runner=_runner,
+        )
+        accepted, queue_size = queue_manager.enqueue(queued_task)
+        if not accepted:
+            if message.chat.type == enums.ChatType.PRIVATE:
+                await message.reply_text(
+                    "⚠️ Очередь переполнена для этого чата. Подожди пару секунд и повтори."
+                )
+            return
+
+        queue_manager.ensure_worker(chat_id)
+        now = time.time()
+        last_notice = _LAST_BUSY_NOTICE_TS.get(chat_id, 0.0)
+        if (
+            AUTO_REPLY_QUEUE_NOTIFY_POSITION
+            and message.chat.type == enums.ChatType.PRIVATE
+            and queue_size > 1
+            and (now - last_notice) >= AUTO_REPLY_BUSY_NOTICE_SECONDS
+        ):
+            _LAST_BUSY_NOTICE_TS[chat_id] = now
+            try:
+                await message.reply_text(f"🧾 Добавил в очередь обработки (позиция: {queue_size}).")
+            except Exception:
+                pass

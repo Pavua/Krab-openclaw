@@ -1,16 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-[PHASE 15.2] OpenClaw WebSocket Stream Client
-Обеспечивает потоковую передачу данных через WebSocket для мгновенных ответов.
+[PHASE 17.8] Local Stream Client с guardrails и структурированными причинами сбоев.
+
+Зачем:
+1. Защитить Telegram-диалог от зацикленных reasoning/content чанков.
+2. Останавливать зависшие потоки по таймауту и лимитам.
+3. Возвращать машиночитаемую причину сбоя для fallback на cloud в ModelRouter.
 """
+
 import json
 import asyncio
+import os
+import time
 import aiohttp
-from typing import AsyncGenerator, Optional, Dict, Any
+import re
+from typing import AsyncGenerator, Dict, Any
 import structlog
 import collections
 
 logger = structlog.get_logger(__name__)
+
 
 class CircularRepetitionDetector:
     """
@@ -45,56 +54,168 @@ class CircularRepetitionDetector:
             # Более строгая реализация потребовала бы более сложного управления self.repetitions
         return False
 
+
+class StreamFailure(RuntimeError):
+    """
+    Ошибка потока с типизированной причиной.
+
+    reason:
+    - connection_error
+    - reasoning_limit
+    - reasoning_loop
+    - content_loop
+    - stream_timeout
+    """
+
+    def __init__(self, reason: str, technical_message: str):
+        self.reason = reason
+        self.technical_message = technical_message
+        super().__init__(f"{reason}: {technical_message}")
+
+
 class OpenClawStreamClient:
     """
     WebSocket клиент для стриминга ответов из OpenClaw / LM Studio.
     """
+
     def __init__(self, base_url: str, api_key: str = "none"):
         self.base_url = base_url.replace("http://", "ws://").replace("https://", "wss://")
         if "/v1" not in self.base_url:
             self.base_url = self.base_url.rstrip("/") + "/v1"
         self.ws_url = f"{self.base_url}/chat/completions"
         self.api_key = api_key
+        self.default_max_chars = self._read_int_env("LOCAL_STREAM_MAX_CHARS", 20000)
+        self.default_max_reasoning_chars = self._read_int_env("LOCAL_REASONING_MAX_CHARS", 2000)
+        self.default_total_timeout_seconds = self._read_float_env("LOCAL_STREAM_TOTAL_TIMEOUT_SECONDS", 75.0)
+        self.default_sock_read_timeout_seconds = self._read_float_env("LOCAL_STREAM_SOCK_READ_TIMEOUT_SECONDS", 20.0)
+
+    @staticmethod
+    def _read_int_env(name: str, default: int) -> int:
+        raw = str(os.getenv(name, default)).strip()
+        try:
+            value = int(raw)
+            return value if value > 0 else default
+        except Exception:
+            return default
+
+    @staticmethod
+    def _read_float_env(name: str, default: float) -> float:
+        raw = str(os.getenv(name, default)).strip()
+        try:
+            value = float(raw)
+            return value if value > 0 else default
+        except Exception:
+            return default
+
+    @staticmethod
+    def _pop_positive_int(payload: Dict[str, Any], key: str, default: int) -> int:
+        raw = payload.pop(key, default)
+        try:
+            value = int(raw)
+            return value if value > 0 else default
+        except Exception:
+            return default
+
+    @staticmethod
+    def _pop_positive_float(payload: Dict[str, Any], key: str, default: float) -> float:
+        raw = payload.pop(key, default)
+        try:
+            value = float(raw)
+            return value if value > 0 else default
+        except Exception:
+            return default
+
+    @staticmethod
+    def _normalize_for_loop(text: str) -> str:
+        """Нормализует текст для устойчивой проверки циклических повторов."""
+        if not text:
+            return ""
+        normalized = re.sub(r"\s+", " ", str(text)).strip().lower()
+        return normalized
+
+    @classmethod
+    def _has_repeated_tail_loop(cls, content: str) -> bool:
+        """
+        Проверяет повтор хвоста контента, чтобы ловить циклы,
+        когда модель повторяет абзац с другими чанк-границами.
+        """
+        normalized = cls._normalize_for_loop(content)
+        if len(normalized) < 360:
+            return False
+
+        # Несколько длин блока, чтобы поймать и короткие, и длинные повторы.
+        for block_len in (80, 120, 160, 220):
+            tail = normalized[-block_len:]
+            if len(tail) < block_len:
+                continue
+            if normalized.endswith(tail * 3):
+                return True
+        return False
 
     async def stream_chat(self, payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
         """
         Открывает WebSocket соединение и возвращает генератор чанков текста.
         """
-        # Гарантируем, что стриминг включен в payload
-        payload["stream"] = True
-        
+        request_payload = dict(payload)
+        # Внутренние поля не должны уходить в LM Studio.
+        max_chars_limit = self._pop_positive_int(
+            request_payload, "_krab_max_chars", self.default_max_chars
+        )
+        max_reasoning_limit = self._pop_positive_int(
+            request_payload, "_krab_max_reasoning_chars", self.default_max_reasoning_chars
+        )
+        total_timeout_seconds = self._pop_positive_float(
+            request_payload, "_krab_total_timeout_seconds", self.default_total_timeout_seconds
+        )
+        sock_read_timeout_seconds = self._pop_positive_float(
+            request_payload, "_krab_sock_read_timeout_seconds", self.default_sock_read_timeout_seconds
+        )
+
+        request_payload["stream"] = True
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
 
+        timeout = aiohttp.ClientTimeout(
+            total=max(total_timeout_seconds + 5.0, sock_read_timeout_seconds + 5.0),
+            sock_read=sock_read_timeout_seconds,
+        )
+
         try:
-            async with aiohttp.ClientSession() as session:
+            started_at = time.monotonic()
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 logger.info("📡 Starting stream request", url=self.ws_url, model=payload.get("model"))
-                
+
                 async with session.post(
                     self.ws_url.replace("ws://", "http://").replace("wss://", "https://"),
-                    json=payload,
+                    json=request_payload,
                     headers=headers
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        logger.error(f"Stream error {response.status}: {error_text}")
-                        yield f"❌ Ошибка API ({response.status})"
-                        return
+                        raise StreamFailure(
+                            "connection_error",
+                            f"HTTP {response.status}: {error_text[:250]}",
+                        )
 
                     collected_chars = 0
                     collected_reasoning = 0
-                    MAX_CHARS_LIMIT = 4000 
-                    MAX_REASONING_LIMIT = 2000 # Лимит на скрытые размышления
                     detector = CircularRepetitionDetector(window_size=10, threshold=3)
+                    collected_content = ""
 
-                    # Читаем SSE поток
                     async for line in response.content:
+                        if (time.monotonic() - started_at) > total_timeout_seconds:
+                            raise StreamFailure(
+                                "stream_timeout",
+                                f"total timeout>{total_timeout_seconds:.1f}s",
+                            )
+
                         line = line.decode('utf-8').strip()
                         if not line or line == "data: [DONE]":
                             continue
-                        
+
                         if line.startswith("data: "):
                             try:
                                 data = json.loads(line[6:])
@@ -106,37 +227,56 @@ class OpenClawStreamClient:
                                     reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                                     if reasoning:
                                         if detector.is_repeating(reasoning):
-                                            logger.warning("⚠️ REASONING LOOP DETECTED. Breaking stream.")
-                                            yield "\n\n⚠️ [Обнаружено зацикливание в размышлениях — генерация остановлена]"
-                                            return
-                                            
+                                            raise StreamFailure(
+                                                "reasoning_loop",
+                                                "detected repetitive reasoning chunks",
+                                            )
+
                                         collected_reasoning += len(reasoning)
-                                        if collected_reasoning > MAX_REASONING_LIMIT:
-                                            logger.warning(f"⚠️ REASONING TRUNCATION: Exceeded {MAX_REASONING_LIMIT}. Stopping stream.")
-                                            yield "\n\n⚠️ [Превышен лимит размышлений — поток остановлен]"
-                                            return
+                                        if collected_reasoning > max_reasoning_limit:
+                                            raise StreamFailure(
+                                                "reasoning_limit",
+                                                f"reasoning>{max_reasoning_limit}",
+                                            )
 
                                     # Обработка основного контента
                                     chunk = delta.get("content")
                                     if chunk:
                                         if detector.is_repeating(chunk):
-                                            logger.warning(f"⚠️ CONTENT LOOP DETECTED: Repetitive chunk found. Breaking.")
-                                            yield "\n\n⚠️ [Обнаружено зацикливание — генерация остановлена]"
-                                            return
+                                            raise StreamFailure(
+                                                "content_loop",
+                                                "detected repetitive content chunks",
+                                            )
+
+                                        collected_content += chunk
+                                        if self._has_repeated_tail_loop(collected_content):
+                                            raise StreamFailure(
+                                                "content_loop",
+                                                "detected repetitive content tail loop",
+                                            )
 
                                         yield chunk
                                         collected_chars += len(chunk)
-                                        
-                                        if collected_chars > MAX_CHARS_LIMIT:
-                                            logger.warning(f"⚠️ HARD TRUNCATION: Stream exceeded {MAX_CHARS_LIMIT} chars. Breaking.")
-                                            yield "\n\n⚠️ [Генерация прервана лимитом символов]"
+
+                                        if collected_chars > max_chars_limit:
+                                            logger.warning(
+                                                "⚠️ HARD TRUNCATION: stream exceeded char limit",
+                                                max_chars=max_chars_limit,
+                                            )
                                             return
+                            except StreamFailure:
+                                raise
                             except Exception as e:
                                 logger.debug(f"Failed to parse SSE line: {line} | Error: {e}")
 
         except asyncio.CancelledError:
             logger.info("Stream cancelled by user/client")
             raise
+        except StreamFailure:
+            raise
+        except asyncio.TimeoutError as e:
+            raise StreamFailure("stream_timeout", f"{type(e).__name__}: {e}") from e
+        except aiohttp.ClientError as e:
+            raise StreamFailure("connection_error", f"{type(e).__name__}: {e}") from e
         except Exception as e:
-            logger.error(f"WebSocket/Stream connection failed: {e}")
-            yield f"⚠️ Ошибка соединения: {str(e)}"
+            raise StreamFailure("connection_error", f"{type(e).__name__}: {e}") from e
