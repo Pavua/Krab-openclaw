@@ -19,12 +19,15 @@ import asyncio
 import logging
 import time
 import uuid
+import base64
+import mimetypes
 import edge_tts
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from io import BytesIO
 from PIL import Image
 from pillow_heif import register_heif_opener
 from pathlib import Path
+import aiohttp
 
 # Регистрируем поддержку HEIC для Pillow
 register_heif_opener()
@@ -47,8 +50,30 @@ class Perceptor:
         self.whisper_model = config.get("WHISPER_MODEL", os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo"))
         # Vision-модель из .env (убрали хардкод gemini-2.0-flash)
         self.vision_model = os.getenv("GEMINI_VISION_MODEL", "gemini-2.0-flash")
+        # Локальный vision через LM Studio (опционально).
+        self.local_vision_enabled = str(
+            os.getenv("LOCAL_VISION_ENABLED", str(config.get("LOCAL_VISION_ENABLED", "0")))
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.local_vision_model = str(
+            os.getenv("LOCAL_VISION_MODEL", str(config.get("LOCAL_VISION_MODEL", "")))
+        ).strip()
+        self.local_vision_timeout_seconds = float(
+            os.getenv(
+                "LOCAL_VISION_TIMEOUT_SECONDS",
+                str(config.get("LOCAL_VISION_TIMEOUT_SECONDS", "90")),
+            )
+        )
+        self.local_vision_max_tokens = int(
+            os.getenv(
+                "LOCAL_VISION_MAX_TOKENS",
+                str(config.get("LOCAL_VISION_MAX_TOKENS", "1200")),
+            )
+        )
         
         self.gemini_key = config.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        # MLX Whisper может падать на параллельных вызовах (Metal/AGX assert),
+        # поэтому сериализуем все STT-задачи одним локом.
+        self._transcribe_lock = asyncio.Lock()
         
         logger.info(f"👂 Perceptor initialized. Audio: {self.whisper_model}, Vision: {self.vision_model}")
         
@@ -72,31 +97,32 @@ class Perceptor:
         Транскрибирует аудио с помощью MLX Whisper (Local).
         """
         try:
-            logger.info(f"🎤 Transcribing: {file_path}")
-            import mlx_whisper
-            
-            start_time = time.time()
-            
-            # Промпт-подсказка для Whisper
-            punctuation_prompt = "Привет, я транскрибирую этот текст с правильной пунктуацией, заглавными буквами и форматированием."
-            
-            # Запускаем в executor, чтобы не блокировать event loop (MLX тяжелый)
-            # Хотя mlx_whisper может быть оптимизирован, лучше перестраховаться
-            result = await asyncio.to_thread(
-                mlx_whisper.transcribe,
-                file_path, 
-                path_or_hf_repo=self.whisper_model,
-                initial_prompt=punctuation_prompt,
-                language="ru",       # Форсируем русский
-                temperature=0.0,     # Убираем галлюцинации
-                verbose=False
-            )
-            
-            text = result.get("text", "").strip()
-            duration = time.time() - start_time
-            
-            logger.info(f"✅ Transcribed in {duration:.2f}s: {text[:50]}...")
-            return text
+            async with self._transcribe_lock:
+                logger.info(f"🎤 Transcribing: {file_path}")
+                import mlx_whisper
+
+                start_time = time.time()
+
+                # Промпт-подсказка для Whisper
+                punctuation_prompt = "Привет, я транскрибирую этот текст с правильной пунктуацией, заглавными буквами и форматированием."
+
+                # Запускаем в executor, чтобы не блокировать event loop (MLX тяжелый)
+                # Хотя mlx_whisper может быть оптимизирован, лучше перестраховаться
+                result = await asyncio.to_thread(
+                    mlx_whisper.transcribe,
+                    file_path,
+                    path_or_hf_repo=self.whisper_model,
+                    initial_prompt=punctuation_prompt,
+                    language="ru",       # Форсируем русский
+                    temperature=0.0,     # Убираем галлюцинации
+                    verbose=False
+                )
+
+                text = result.get("text", "").strip()
+                duration = time.time() - start_time
+
+                logger.info(f"✅ Transcribed in {duration:.2f}s: {text[:50]}...")
+                return text
 
         except Exception as e:
             logger.error(f"❌ Local Transcription Failed: {e}")
@@ -119,6 +145,22 @@ class Perceptor:
                 logger.info(f"Converted HEIC to JPG: {converted_path}")
 
             # 2. Vision Request via Gemini SDK
+            if self.local_vision_enabled:
+                local_result = await self._analyze_image_local_lm_studio(
+                    file_path=converted_path,
+                    router=router,
+                    prompt=prompt,
+                )
+                if local_result.get("ok"):
+                    duration = time.time() - start_time
+                    logger.info(
+                        "✅ Local Vision (LM Studio) success in %.2fs (model=%s)",
+                        duration,
+                        local_result.get("model", "-"),
+                    )
+                    return str(local_result.get("text", "")).strip()
+                logger.warning("⚠️ Local Vision failed, fallback to Gemini: %s", local_result.get("error"))
+
             if not _GENAI_AVAILABLE:
                 logger.error("❌ Google GenAI SDK not found.")
                 return "Ошибка: Google GenAI SDK не установлен."
@@ -194,6 +236,106 @@ class Perceptor:
         except Exception as e:
             logger.error(f"❌ Visual analysis error: {e}", exc_info=True)
             return f"Ошибка зрения: {e}"
+
+    def _resolve_local_vision_model(self, router) -> str:
+        """
+        Выбирает локальную vision-модель:
+        1) LOCAL_VISION_MODEL
+        2) active_local_model роутера
+        3) LOCAL_PREFERRED_MODEL роутера
+        """
+        if self.local_vision_model:
+            return self.local_vision_model
+
+        active_model = str(getattr(router, "active_local_model", "") or "").strip()
+        if active_model:
+            return active_model
+
+        preferred_model = str(getattr(router, "local_preferred_model", "") or "").strip()
+        if preferred_model:
+            return preferred_model
+
+        return ""
+
+    def _build_image_data_url(self, file_path: str) -> str:
+        """Кодирует файл изображения в data-url для OpenAI-compatible API LM Studio."""
+        mime_type = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+        image_bytes = Path(file_path).read_bytes()
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    def _extract_lm_studio_vision_text(self, payload: Dict[str, Any]) -> str:
+        """Извлекает текст ответа из разных форматов message.content."""
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        if not isinstance(choices, list) or not choices:
+            return ""
+        message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    text = str(item.get("text", "")).strip()
+                    if text:
+                        parts.append(text)
+            return "\n".join(parts).strip()
+        return ""
+
+    async def _analyze_image_local_lm_studio(self, file_path: str, router, prompt: str) -> Dict[str, Any]:
+        """
+        Локальный vision-запрос в LM Studio через OpenAI-compatible /chat/completions.
+        Возвращает {"ok": bool, "text": "...", "error": "...", "model": "..."}.
+        """
+        model_name = self._resolve_local_vision_model(router)
+        if not model_name:
+            return {"ok": False, "error": "local_vision_model_not_set", "model": ""}
+
+        lm_base = str(getattr(router, "lm_studio_url", "") or "").rstrip("/")
+        if not lm_base:
+            lm_base = str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1")).rstrip("/")
+            if "/v1" not in lm_base:
+                lm_base = f"{lm_base}/v1"
+        chat_url = f"{lm_base}/chat/completions"
+
+        data_url = self._build_image_data_url(file_path)
+        payload = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            "temperature": 0.2,
+            "max_tokens": max(200, int(self.local_vision_max_tokens)),
+        }
+
+        timeout = aiohttp.ClientTimeout(total=max(10, int(self.local_vision_timeout_seconds)))
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(chat_url, json=payload) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        return {
+                            "ok": False,
+                            "error": f"lmstudio_http_{resp.status}:{body[:240]}",
+                            "model": model_name,
+                        }
+                    data = await resp.json()
+        except Exception as exc:
+            return {"ok": False, "error": f"lmstudio_vision_request_failed:{exc}", "model": model_name}
+
+        text = self._extract_lm_studio_vision_text(data)
+        if not text:
+            return {"ok": False, "error": "lmstudio_vision_empty_response", "model": model_name}
+        return {"ok": True, "text": text, "model": model_name}
 
     async def analyze_video(self, file_path: str, router, prompt: str) -> str:
         """
@@ -319,66 +461,110 @@ class Perceptor:
         text = re.sub(r'\s+', ' ', text).strip()
         return text
 
-    async def speak(self, text: str, voice: str = "ru-RU-SvetlanaNeural") -> str:
+    async def speak(self, text: str, voice: str = "ru-RU-SvetlanaNeural", method: str = "auto") -> str:
         """
-        Генерирует голосовое сообщение (TTS) через edge-tts + ffmpeg.
+        Генерирует голосовое сообщение (TTS).
+        Поддерживает edge-tts (бесплатно) и OpenAI (платно, качественнее).
         Возвращает путь к .ogg файлу.
         """
         file_id = str(uuid.uuid4())
-        # Убеждаемся, что директория существует
         os.makedirs("artifacts/downloads", exist_ok=True)
         
         mp3_path = f"artifacts/downloads/{file_id}.mp3"
         ogg_path = f"artifacts/downloads/{file_id}.ogg"
         
-        # Если голос не указан или стандартный от macOS, меняем на качественный
-        if voice in ["Milena", "Yuri", "Katya", "default"]:
-            voice = "ru-RU-SvetlanaNeural"
-
         # Очищаем текст перед озвучкой
         clean_text = self._clean_text_for_tts(text)
         if not clean_text:
             logger.warning("TTS text is empty after cleaning. Skipping speech synthesis.")
             return None
 
+        # 1. Выбор метода
+        use_openai = False
+        if method == "openai":
+            use_openai = True
+        elif method == "auto":
+            # В будущем тут можно добавить логику выбора
+            pass
+
         try:
-            logger.info(f"🗣️ Speaking via edge-tts: {clean_text[:40]}... (Voice: {voice})")
+            if use_openai:
+                return await self._speak_openai(clean_text, mp3_path, ogg_path)
             
-            # 1. Генерация MP3 через edge-tts
-            communicate = edge_tts.Communicate(clean_text, voice)
+            # Попытка через edge-tts
+            res = await self._speak_edge(clean_text, voice, mp3_path, ogg_path)
+            if res:
+                return res
+            
+            # Fallback на openai если edge-tts упал
+            logger.warning("⚠️ edge-tts failed, falling back to OpenAI TTS...")
+            return await self._speak_openai(clean_text, mp3_path, ogg_path)
+
+        except Exception as e:
+            logger.error(f"TTS Master Error: {e}")
+            return None
+
+    async def _speak_edge(self, text: str, voice: str, mp3_path: str, ogg_path: str) -> Optional[str]:
+        """Озвучка через бесплатный edge-tts."""
+        try:
+            # Если голос не указан или стандартный от macOS, меняем на качественный
+            if voice in ["Milena", "Yuri", "Katya", "default"]:
+                voice = "ru-RU-SvetlanaNeural"
+
+            logger.info(f"🗣️ Speaking via edge-tts: {text[:40]}... (Voice: {voice})")
+            communicate = edge_tts.Communicate(text, voice)
             await communicate.save(mp3_path)
 
             if not os.path.exists(mp3_path) or os.path.getsize(mp3_path) < 100:
-                logger.error(f"TTS (edge-tts) failed: file missing or too small {mp3_path}")
                 return None
             
-            # 2. Конвертация в OGG (Opus) для Telegram (Voice Note format)
+            return await self._convert_to_ogg(mp3_path, ogg_path)
+        except Exception as e:
+            logger.error(f"edge-tts error: {e}")
+            return None
+
+    async def _speak_openai(self, text: str, mp3_path: str, ogg_path: str) -> Optional[str]:
+        """Озвучка через платный OpenAI API."""
+        try:
+            from openai import AsyncOpenAI
+            api_key = os.getenv("OPENAI_API_KEY") or self.gemini_key # Иногда ключи совместимы в шлюзах
+            if not api_key or "sk-" not in api_key:
+                logger.error("❌ OpenAI API Key missing for TTS fallback.")
+                return None
+
+            logger.info(f"🎙️ Speaking via OpenAI TTS: {text[:40]}...")
+            client = AsyncOpenAI(api_key=api_key)
+            
+            # Используем модель tts-1 (быстрая) и голос nova/shimmer
+            response = await client.audio.speech.create(
+                model="tts-1",
+                voice="nova",
+                input=text
+            )
+            await asyncio.to_thread(response.stream_to_file, mp3_path)
+            
+            return await self._convert_to_ogg(mp3_path, ogg_path)
+        except Exception as e:
+            logger.error(f"OpenAI TTS error: {e}")
+            return None
+
+    async def _convert_to_ogg(self, mp3_path: str, ogg_path: str) -> Optional[str]:
+        """Конвертация MP3 -> OGG Opus через ffmpeg."""
+        try:
             proc_ffmpeg = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-i", mp3_path, "-c:a", "libopus", "-b:a", "24k", "-vbr", "on", "-y", ogg_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await proc_ffmpeg.communicate()
+            await proc_ffmpeg.communicate()
             
-            if proc_ffmpeg.returncode != 0:
-                 logger.error(f"ffmpeg conversion failed: {stderr.decode().strip()}")
-                 return None
-
             if os.path.exists(mp3_path):
-                 os.remove(mp3_path)
+                os.remove(mp3_path)
             
-            if os.path.exists(ogg_path):
-                # Финальная проверка размера OGG
-                if os.path.getsize(ogg_path) < 200:
-                    logger.error(f"Generated OGG is too small ({os.path.getsize(ogg_path)} bytes), likely silent.")
-                    os.remove(ogg_path)
-                    return None
-                    
-                logger.info(f"✅ TTS Generated: {ogg_path} ({os.path.getsize(ogg_path)} bytes)")
+            if os.path.exists(ogg_path) and os.path.getsize(ogg_path) > 200:
+                logger.info(f"✅ TTS Generated: {ogg_path}")
                 return ogg_path
             return None
-            
         except Exception as e:
-            logger.error(f"TTS Error (edge-tts): {e}")
-            if os.path.exists(mp3_path): os.remove(mp3_path)
+            logger.error(f"FFmpeg error: {e}")
             return None

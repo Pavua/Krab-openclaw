@@ -2,6 +2,8 @@
 import pytest
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from PIL import Image
 from src.modules.perceptor import Perceptor
 
 @pytest.mark.asyncio
@@ -34,3 +36,51 @@ async def test_perceptor_tts_logic():
             assert res is not None
             assert ".ogg" in res
 
+
+def test_local_vision_model_resolution_priority():
+    with patch.dict(os.environ, {"LOCAL_VISION_MODEL": "env-vision-model"}):
+        with patch.object(Perceptor, "_warmup_audio"):
+            perceptor = Perceptor({})
+    router = MagicMock()
+    router.active_local_model = "active-model"
+    router.local_preferred_model = "preferred-model"
+    assert perceptor._resolve_local_vision_model(router) == "env-vision-model"
+
+
+def test_extract_lm_studio_vision_text_from_list_content():
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({})
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Описание кадра."},
+                        {"type": "text", "text": "Дополнительная деталь."},
+                    ]
+                }
+            }
+        ]
+    }
+    text = perceptor._extract_lm_studio_vision_text(payload)
+    assert "Описание кадра." in text
+    assert "Дополнительная деталь." in text
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_prefers_local_vision_success(tmp_path: Path):
+    with patch.dict(os.environ, {"LOCAL_VISION_ENABLED": "1"}):
+        with patch.object(Perceptor, "_warmup_audio"):
+            perceptor = Perceptor({})
+
+    image_path = tmp_path / "sample.jpg"
+    Image.new("RGB", (8, 8), color=(120, 10, 10)).save(image_path)
+
+    with patch.object(
+        perceptor,
+        "_analyze_image_local_lm_studio",
+        new=AsyncMock(return_value={"ok": True, "text": "Локальный vision ответ", "model": "vision-local"}),
+    ) as local_mock:
+        result = await perceptor.analyze_image(str(image_path), router=MagicMock(), prompt="Опиши картинку")
+        assert result == "Локальный vision ответ"
+        local_mock.assert_awaited_once()
