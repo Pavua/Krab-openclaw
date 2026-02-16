@@ -188,6 +188,22 @@ def register_handlers(app, deps: dict):
         voice_status = "🟢 Ready" if voice_ok else "🟡 Offline"
         local_model = router.active_local_model or "—"
         cloud_model = router.models.get("chat", "—")
+        last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+        if isinstance(last_route, dict) and last_route:
+            last_route_text = (
+                f"{last_route.get('channel', '-')}/{last_route.get('profile', '-')}: "
+                f"{last_route.get('model', '-')}"
+            )
+        else:
+            last_route_text = "—"
+        last_stream_route = router.get_last_stream_route() if hasattr(router, "get_last_stream_route") else {}
+        if isinstance(last_stream_route, dict) and last_stream_route:
+            last_stream_text = (
+                f"{last_stream_route.get('channel', '-')}/{last_stream_route.get('profile', '-')}: "
+                f"{last_stream_route.get('model', '-')}"
+            )
+        else:
+            last_stream_text = "—"
         rag_docs = router.rag.get_total_documents() if router.rag else 0
         rag_status = "🟢 Active" if router.rag else "⚪ Disabled (OpenClaw)"
         web_panel_url = _resolve_web_panel_url()
@@ -206,9 +222,11 @@ def register_handlers(app, deps: dict):
             f"   └ Engine: `{router.local_engine or '—'}`\n"
             f"   └ Model: `{local_model}`\n"
             f"☁️  **Cloud (OpenClaw):** {cloud_status}\n"
-            f"   └ Model: `{cloud_model}`\n"
+            f"   └ Config chat: `{cloud_model}`\n"
             f"🎧 **Voice Gateway:** {voice_status}\n"
             f"🧠 **RAG:** {rag_status} ({rag_docs} docs)\n"
+            f"🧭 **Last route:** `{last_route_text}`\n"
+            f"🌊 **Last stream:** `{last_stream_text}`\n"
             f"📊 **Uptime:** {uptime_str}\n"
             f"⏰ **Reminders:** {reminders_active} active\n"
             f"📂 **Config:** Hot-reload {'🟢' if config_manager else '⚪'}\n"
@@ -220,6 +238,329 @@ def register_handlers(app, deps: dict):
         )
 
         await notification.edit_text(report)
+
+    # --- !cost: Быстрый отчёт по расходам ---
+    @app.on_message(filters.command("cost", prefixes="!"))
+    @safe_handler
+    async def cost_command(client, message: Message):
+        """Быстрый cost-отчёт без префикса !ops."""
+        if not is_owner(message):
+            return
+        if not hasattr(router, "get_cost_report"):
+            await message.reply_text("❌ get_cost_report недоступен.")
+            return
+
+        forecast = 5000
+        if len(message.command) >= 2:
+            try:
+                forecast = int(message.command[1])
+            except ValueError:
+                forecast = 5000
+
+        report = router.get_cost_report(monthly_calls_forecast=forecast)
+        costs = report.get("costs_usd", {})
+        pricing = report.get("pricing", {})
+        monthly = report.get("monthly_forecast", {})
+        budget = report.get("budget", {})
+        await message.reply_text(
+            "💵 **Cost Report (USD):**\n\n"
+            f"• Cloud cost/call: `{pricing.get('cloud_cost_per_call_usd', 0)}`\n"
+            f"• Local cost/call: `{pricing.get('local_cost_per_call_usd', 0)}`\n"
+            f"• Current total cost: `{costs.get('total_cost', 0)}`\n"
+            f"• Current avg cost/call: `{costs.get('avg_cost_per_call', 0)}`\n\n"
+            "**Monthly forecast:**\n"
+            f"• Calls: `{monthly.get('forecast_calls', 0)}`\n"
+            f"• Cloud calls: `{monthly.get('forecast_cloud_calls', 0)}`\n"
+            f"• Local calls: `{monthly.get('forecast_local_calls', 0)}`\n"
+            f"• Forecast total: `{monthly.get('forecast_total_cost', 0)}`\n"
+            f"• Budget: `{budget.get('cloud_monthly_budget_usd', 0)}`\n"
+            f"• Budget ratio: `{budget.get('forecast_ratio', 0)}`\n\n"
+            "_Подсказка: `!cost 12000` — прогноз на 12k вызовов/мес._"
+        )
+
+    # --- !brain: Единая сводка маршрутизации/стоимости ---
+    @app.on_message(filters.command("brain", prefixes="!"))
+    @safe_handler
+    async def brain_command(client, message: Message):
+        """Короткая сводка по мозгу роутера: режимы, маршруты, usage, расходы."""
+        if not is_owner(message):
+            return
+        if not hasattr(router, "get_usage_summary") or not hasattr(router, "get_cost_report"):
+            await message.reply_text("❌ Brain report недоступен: router API неполный.")
+            return
+
+        usage = router.get_usage_summary()
+        cost = router.get_cost_report(monthly_calls_forecast=router.monthly_calls_forecast)
+        totals = usage.get("totals", {})
+        ratios = usage.get("ratios", {})
+        soft_cap = usage.get("soft_cap", {})
+        last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+        last_stream = router.get_last_stream_route() if hasattr(router, "get_last_stream_route") else {}
+        costs_usd = cost.get("costs_usd", {})
+        monthly = cost.get("monthly_forecast", {})
+        budget = cost.get("budget", {})
+        top_models = usage.get("top_models", [])
+        ai_runtime = deps.get("ai_runtime")
+        reaction_engine = deps.get("reaction_engine")
+        queue_stats = ai_runtime.queue_manager.get_stats() if ai_runtime and hasattr(ai_runtime, "queue_manager") else {}
+        reaction_stats = reaction_engine.get_reaction_stats() if reaction_engine else {}
+
+        top_lines = []
+        for item in top_models[:3]:
+            top_lines.append(f"• `{item.get('model', '-')}`: `{item.get('count', 0)}`")
+        top_text = "\n".join(top_lines) if top_lines else "• _(нет данных)_"
+
+        last_route_text = (
+            f"{last_route.get('channel', '-')}/{last_route.get('profile', '-')}: {last_route.get('model', '-')}"
+            if isinstance(last_route, dict) and last_route else "—"
+        )
+        last_stream_text = (
+            f"{last_stream.get('channel', '-')}/{last_stream.get('profile', '-')}: {last_stream.get('model', '-')}"
+            if isinstance(last_stream, dict) and last_stream else "—"
+        )
+
+        await message.reply_text(
+            "**🧠 Brain Report:**\n\n"
+            f"• Force mode: `{getattr(router, 'force_mode', 'auto')}`\n"
+            f"• Policy: `{getattr(router, 'routing_policy', 'n/a')}`\n"
+            f"• Last route: `{last_route_text}`\n"
+            f"• Last stream: `{last_stream_text}`\n\n"
+            f"• Calls L/C/T: `{int(totals.get('local_calls', 0))}` / "
+            f"`{int(totals.get('cloud_calls', 0))}` / `{int(totals.get('all_calls', 0))}`\n"
+            f"• Cloud share: `{float(ratios.get('cloud_share', 0.0))}`\n"
+            f"• Soft cap: `{soft_cap.get('cloud_remaining_calls', 0)}` remaining\n\n"
+            f"• Cost total (USD): `{float(costs_usd.get('total_cost', 0.0))}`\n"
+            f"• Avg cost/call (USD): `{float(costs_usd.get('avg_cost_per_call', 0.0))}`\n"
+            f"• Forecast (USD): `{float(monthly.get('forecast_total_cost', 0.0))}`\n"
+            f"• Budget ratio: `{float(budget.get('forecast_ratio', 0.0))}`\n\n"
+            f"• Queue active chats: `{int(queue_stats.get('active_chats', 0))}`\n"
+            f"• Queue total: `{int(queue_stats.get('queued_total', 0))}`\n"
+            f"• Reactions total: `{int(reaction_stats.get('total', 0))}`\n"
+            f"• Reactions +/-: `{int(reaction_stats.get('positive', 0))}` / `{int(reaction_stats.get('negative', 0))}`\n\n"
+            "**Top models:**\n"
+            f"{top_text}"
+        )
+
+    # --- !ctx: Диагностика контекста последнего запроса ---
+    @app.on_message(filters.command("ctx", prefixes="!"))
+    @safe_handler
+    async def ctx_command(client, message: Message):
+        """Показывает контекстный snapshot последнего авто-ответа."""
+        if not is_owner(message):
+            return
+        ai_runtime = deps.get("ai_runtime")
+        if not ai_runtime:
+            await message.reply_text("⚠️ AI runtime пока не инициализирован.")
+            return
+        snap = ai_runtime.get_context_snapshot(message.chat.id)
+        if not snap:
+            await message.reply_text("ℹ️ Контекстный snapshot ещё не накоплен.")
+            return
+        last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+        route_text = (
+            f"{last_route.get('channel', '-')}/{last_route.get('profile', '-')}: {last_route.get('model', '-')}"
+            if isinstance(last_route, dict) and last_route else "—"
+        )
+        await message.reply_text(
+            "**🧾 Context Snapshot:**\n\n"
+            f"• Last route: `{route_text}`\n"
+            f"• Context messages: `{int(snap.get('context_messages', 0))}`\n"
+            f"• Prompt chars: `{int(snap.get('prompt_length_chars', 0))}`\n"
+            f"• Response chars: `{int(snap.get('response_length_chars', 0))}`\n"
+            f"• Telegram truncated: `{bool(snap.get('telegram_truncated', False))}`\n"
+            f"• Telegram chunks: `{int(snap.get('telegram_chunks_sent', 1))}`\n"
+            f"• Forward context: `{bool(snap.get('has_forward_context', False))}`\n"
+            f"• Reply context: `{bool(snap.get('has_reply_context', False))}`\n"
+            f"• Updated: `{snap.get('updated_at', '-')}`"
+        )
+
+    # --- !policy: Runtime-политика AI ---
+    @app.on_message(filters.command("policy", prefixes="!"))
+    @safe_handler
+    async def policy_command(client, message: Message):
+        """Управление runtime-политикой: queue/guardrails/reactions."""
+        if not is_owner(message):
+            return
+        ai_runtime = deps.get("ai_runtime")
+        if not ai_runtime:
+            await message.reply_text("⚠️ AI runtime недоступен.")
+            return
+        args = message.command
+        sub = args[1].strip().lower() if len(args) > 1 else "show"
+
+        if sub == "show":
+            policy = ai_runtime.get_policy_snapshot()
+            queue = policy.get("queue", {})
+            guardrails = policy.get("guardrails", {})
+            await message.reply_text(
+                "**⚙️ Policy:**\n\n"
+                f"• Queue enabled: `{policy.get('queue_enabled')}`\n"
+                f"• Forward context enabled: `{policy.get('forward_context_enabled')}`\n"
+                f"• Reaction learning enabled: `{policy.get('reaction_learning_enabled')}`\n"
+                f"• Chat mood enabled: `{policy.get('chat_mood_enabled')}`\n"
+                f"• Auto reactions enabled: `{policy.get('auto_reactions_enabled')}`\n\n"
+                f"• Queue max/chat: `{queue.get('max_per_chat', 0)}`\n"
+                f"• Queue total: `{queue.get('queued_total', 0)}`\n"
+                f"• Queue active chats: `{queue.get('active_chats', 0)}`\n\n"
+                f"• include_reasoning: `{guardrails.get('local_include_reasoning')}`\n"
+                f"• reasoning_max_chars: `{guardrails.get('local_reasoning_max_chars')}`\n"
+                f"• stream_total_timeout_seconds: `{guardrails.get('local_stream_total_timeout_seconds')}`\n"
+                f"• stream_sock_read_timeout_seconds: `{guardrails.get('local_stream_sock_read_timeout_seconds')}`"
+            )
+            return
+
+        if sub == "queue":
+            if len(args) < 3:
+                await message.reply_text("⚠️ Формат: `!policy queue on|off|max <N>`")
+                return
+            act = args[2].strip().lower()
+            if act in {"on", "off"}:
+                ai_runtime.set_queue_enabled(act == "on")
+                await message.reply_text(f"✅ Queue mode: `{act}`")
+                return
+            if act == "max" and len(args) >= 4:
+                try:
+                    max_n = int(args[3].strip())
+                except Exception:
+                    await message.reply_text("❌ N должен быть числом.")
+                    return
+                ai_runtime.set_queue_max(max_n)
+                await message.reply_text(f"✅ Queue max/chat: `{max(1, max_n)}`")
+                return
+            await message.reply_text("⚠️ Формат: `!policy queue on|off|max <N>`")
+            return
+
+        if sub == "guardrails":
+            if len(args) < 3:
+                await message.reply_text(
+                    "⚠️ Формат: `!policy guardrails set <name> <value>`\n"
+                    "Доступно: `reasoning_max_chars`, `stream_total_timeout_seconds`, "
+                    "`stream_sock_read_timeout_seconds`, `include_reasoning`"
+                )
+                return
+            action = args[2].strip().lower()
+            if action != "set" or len(args) < 5:
+                await message.reply_text("⚠️ Формат: `!policy guardrails set <name> <value>`")
+                return
+            name = args[3].strip().lower()
+            raw_value = args[4].strip()
+            try:
+                numeric_value = float(raw_value)
+            except Exception:
+                await message.reply_text("❌ Значение должно быть числом.")
+                return
+            ok = ai_runtime.set_guardrail(name, numeric_value)
+            if not ok:
+                await message.reply_text("❌ Неизвестный guardrail name.")
+                return
+            await message.reply_text(f"✅ Guardrail `{name}` обновлён на `{raw_value}`.")
+            return
+
+        if sub == "reactions":
+            if len(args) >= 3 and args[2].strip().lower() in {"on", "off"}:
+                enabled = args[2].strip().lower() == "on"
+                ai_runtime.set_reaction_learning_enabled(enabled)
+                ai_runtime.set_auto_reactions_enabled(enabled)
+                await message.reply_text(f"✅ Reactions mode: `{'on' if enabled else 'off'}`")
+                return
+            if len(args) >= 3 and args[2].strip().lower() == "show":
+                snap = ai_runtime.get_policy_snapshot()
+                await message.reply_text(
+                    "**😀 Reactions Policy:**\n\n"
+                    f"• learning: `{snap.get('reaction_learning_enabled')}`\n"
+                    f"• auto reactions: `{snap.get('auto_reactions_enabled')}`\n"
+                    f"• mood: `{snap.get('chat_mood_enabled')}`"
+                )
+                return
+            await message.reply_text("⚠️ Формат: `!policy reactions on|off|show` или `!policy show`")
+            return
+
+        await message.reply_text("⚠️ Подкоманда не распознана. Используй `!policy show`.")
+
+    # --- !reactions: управление реакциями ---
+    @app.on_message(filters.command("reactions", prefixes="!"))
+    @safe_handler
+    async def reactions_command(client, message: Message):
+        """Управление реактивным контуром."""
+        if not is_owner(message):
+            return
+        reaction_engine = deps.get("reaction_engine")
+        ai_runtime = deps.get("ai_runtime")
+        if not reaction_engine or not ai_runtime:
+            await message.reply_text("⚠️ Reaction engine недоступен.")
+            return
+        args = message.command
+        sub = args[1].strip().lower() if len(args) > 1 else "stats"
+        if sub in {"on", "off"}:
+            enabled = sub == "on"
+            ai_runtime.set_reaction_learning_enabled(enabled)
+            ai_runtime.set_auto_reactions_enabled(enabled)
+            await message.reply_text(f"✅ Reaction learning: `{'on' if enabled else 'off'}`")
+            return
+        if sub == "stats":
+            target_chat_id = message.chat.id
+            if len(args) >= 3:
+                try:
+                    target_chat_id = int(args[2].strip())
+                except Exception:
+                    target_chat_id = message.chat.id
+            stats = reaction_engine.get_reaction_stats(chat_id=target_chat_id)
+            top = stats.get("top_emojis", [])
+            top_text = "\n".join(f"• {item.get('emoji')} — `{item.get('count')}`" for item in top) if top else "• _(пока пусто)_"
+            await message.reply_text(
+                "**😀 Reaction Stats:**\n\n"
+                f"• Chat: `{target_chat_id}`\n"
+                f"• Total: `{stats.get('total', 0)}`\n"
+                f"• Positive: `{stats.get('positive', 0)}`\n"
+                f"• Negative: `{stats.get('negative', 0)}`\n"
+                f"• Neutral: `{stats.get('neutral', 0)}`\n\n"
+                f"{top_text}"
+            )
+            return
+        await message.reply_text("⚠️ Формат: `!reactions on|off|stats [chat_id]`")
+
+    # --- !mood: профиль настроения чата ---
+    @app.on_message(filters.command("mood", prefixes="!"))
+    @safe_handler
+    async def mood_command(client, message: Message):
+        """Показывает и сбрасывает chat mood."""
+        if not is_owner(message):
+            return
+        reaction_engine = deps.get("reaction_engine")
+        if not reaction_engine:
+            await message.reply_text("⚠️ Mood engine недоступен.")
+            return
+        args = message.command
+        sub = args[1].strip().lower() if len(args) > 1 else "show"
+        target_chat_id = message.chat.id
+        if sub not in {"reset", "show"} and len(args) >= 2:
+            try:
+                target_chat_id = int(args[1].strip())
+            except Exception:
+                target_chat_id = message.chat.id
+            sub = "show"
+        if sub == "reset":
+            if len(args) >= 3:
+                try:
+                    target_chat_id = int(args[2].strip())
+                except Exception:
+                    target_chat_id = message.chat.id
+            result = reaction_engine.reset_chat_mood(target_chat_id)
+            await message.reply_text(
+                f"✅ Mood reset: chat `{result.get('chat_id')}`, removed=`{result.get('removed')}`"
+            )
+            return
+        mood = reaction_engine.get_chat_mood(target_chat_id)
+        top = mood.get("top_emojis", [])
+        top_text = "\n".join(f"• {item.get('emoji')} — `{item.get('count')}`" for item in top) if top else "• _(нет данных)_"
+        await message.reply_text(
+            "**🌡️ Chat Mood:**\n\n"
+            f"• Chat: `{target_chat_id}`\n"
+            f"• Label: `{mood.get('label', 'neutral')}`\n"
+            f"• Avg: `{mood.get('avg', 0.0)}`\n"
+            f"• Events: `{mood.get('events', 0)}`\n\n"
+            f"{top_text}"
+        )
 
     # --- !web: ссылки и health web-панели / экосистемы ---
     @app.on_message(filters.command("web", prefixes="!"))
@@ -798,6 +1139,13 @@ def register_handlers(app, deps: dict):
                 emoji = "ℹ️"
                 status = str(val)
             lines.append(f"{emoji} **{key}**: {status}")
+        last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+        if isinstance(last_route, dict) and last_route:
+            lines.append(
+                "ℹ️ **Last Route**: "
+                f"{last_route.get('channel', '-')}/{last_route.get('profile', '-')} "
+                f"→ {last_route.get('model', '-')}"
+            )
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Обновить", callback_data="diag_full")]
@@ -823,6 +1171,13 @@ def register_handlers(app, deps: dict):
                 emoji = "ℹ️"
                 status = str(val)
             lines.append(f"{emoji} **{key}**: {status}")
+        last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+        if isinstance(last_route, dict) and last_route:
+            lines.append(
+                "ℹ️ **Last Route**: "
+                f"{last_route.get('channel', '-')}/{last_route.get('profile', '-')} "
+                f"→ {last_route.get('model', '-')}"
+            )
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Обновить", callback_data="diag_full")]
@@ -921,6 +1276,15 @@ def register_handlers(app, deps: dict):
                 pass
 
             text += f"\n**🖥️ Local:**\n  {local_line}\n"
+            last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+            if isinstance(last_route, dict) and last_route:
+                text += (
+                    "\n**🧭 Последний фактический маршрут:**\n"
+                    f"  Канал: `{last_route.get('channel', '-')}`\n"
+                    f"  Профиль: `{last_route.get('profile', '-')}`\n"
+                    f"  Модель: `{last_route.get('model', '-')}`\n"
+                    f"  Время: `{last_route.get('ts', '-')}`\n"
+                )
             soft_cap_state = "⚠️ достигнут" if info.get("cloud_soft_cap_reached") else "✅ в норме"
             text += (
                 f"\n**📐 Routing Policy:** `{info.get('routing_policy', 'auto')}`\n"
@@ -1191,6 +1555,17 @@ def register_handlers(app, deps: dict):
             
             # --- Сканирование Local ---
             local_list = await router.list_local_models()
+            local_verbose = []
+            if hasattr(router, "list_local_models_verbose"):
+                try:
+                    local_verbose = await router.list_local_models_verbose()
+                except Exception:
+                    local_verbose = []
+            verbose_map = {
+                str(item.get("id")): item
+                for item in local_verbose
+                if isinstance(item, dict) and item.get("id")
+            }
             
             # --- Сканирование Cloud ---
             cloud_list = []
@@ -1209,7 +1584,10 @@ def register_handlers(app, deps: dict):
                 for m in local_list:
                     # Помечаем текущую активную
                     star = " ⭐" if m == router.active_local_model else ""
-                    text += f"  • `{m}`{star}\n"
+                    item = verbose_map.get(str(m), {})
+                    size_human = str(item.get("size_human", "n/a"))
+                    type_label = str(item.get("type", "llm"))
+                    text += f"  • `{m}` — `{size_human}` [{type_label}]{star}\n"
 
             text += "\n**☁️ Cloud (Gemini/OpenClaw):**\n"
             if not cloud_list:
@@ -1429,6 +1807,12 @@ def register_handlers(app, deps: dict):
             "**🦀 Krab v7.2 — Команды:**\n\n"
             "**📋 Основные:**\n"
             "`!status` — Здоровье AI\n"
+            "`!brain` — Сводка роутинга/стоимости\n"
+            "`!ctx` — Snapshot контекста последнего запроса\n"
+            "`!policy` — Runtime policy (queue/guardrails/reactions)\n"
+            "`!reactions` — Управление реактивным контуром\n"
+            "`!mood` — Профиль настроения чата\n"
+            "`!cost [monthly_calls]` — Быстрый отчёт расходов\n"
             "`!diagnose` — Полная диагностика\n"
             "`!web` — Ссылки на web-панель и API\n"
             "`!ops` — Usage/alerts по моделям и расходам\n"
@@ -1453,14 +1837,16 @@ def register_handlers(app, deps: dict):
             "**🧠 AI & Agents:**\n"
             "`!think <тема> [--confirm-expensive]` — Deep Reasoning\n"
             "`!smart <задача> [--confirm-expensive]` — Агентный цикл (Plan → Gen)\n"
-            "`!code <описание> [--confirm-expensive]` — Генерация кода\n"
+            "`!code <описание> [--confirm-expensive] [--raw-code]` — Генерация кода\n"
             "`!learn` / `!remember` — 🧠 Обучение RAG-памяти\n"
             "`!personality` — 🎭 Смена личности\n"
             "`!forget` — 🧹 Сброс контекста чата\n"
             "`!scout <тема>` — Deep Research (Web)\n\n"
             "**🛠️ AI Tools (Advanced):**\n"
             "`!wallet` — 💰 Финансовый терминал (Monero)\n"
-            "`!img` <промпт> — 🎨 Генерация картинки (Imagen 3)\n"
+            "`!img` <промпт> — 🎨 Генерация картинки (local/cloud)\n"
+            "`!img models` — список image-моделей и доступность\n"
+            "`!img cost [alias]` — оценка стоимости изображения\n"
             "`!browser <запрос>` — 🌐 Gemini Web Portal (Pro/Advanced)\n"
             "`!translate` — Перевод RU↔EN\n"
             "`!say` — Голосовое (TTS)\n"

@@ -164,6 +164,38 @@ class WebApp:
                 "chain": report["chain"],
             }
 
+        @self.app.get("/api/policy")
+        async def get_policy():
+            """Возвращает runtime-политику AI (queue/guardrails/reactions)."""
+            ai_runtime = self.deps.get("ai_runtime")
+            if not ai_runtime:
+                return {"ok": False, "error": "ai_runtime_not_configured"}
+            return {"ok": True, "policy": ai_runtime.get_policy_snapshot()}
+
+        @self.app.get("/api/queue")
+        async def get_queue():
+            """Возвращает состояние per-chat очередей автообработки."""
+            ai_runtime = self.deps.get("ai_runtime")
+            if not ai_runtime or not hasattr(ai_runtime, "queue_manager"):
+                return {"ok": False, "error": "queue_not_configured"}
+            return {"ok": True, "queue": ai_runtime.queue_manager.get_stats()}
+
+        @self.app.get("/api/reactions/stats")
+        async def get_reactions_stats(chat_id: int | None = Query(default=None)):
+            """Сводка по реакциям (общая или по чату)."""
+            reaction_engine = self.deps.get("reaction_engine")
+            if not reaction_engine:
+                return {"ok": False, "error": "reaction_engine_not_configured"}
+            return {"ok": True, "stats": reaction_engine.get_reaction_stats(chat_id=chat_id)}
+
+        @self.app.get("/api/mood/{chat_id}")
+        async def get_chat_mood(chat_id: int):
+            """Возвращает mood-профиль конкретного чата."""
+            reaction_engine = self.deps.get("reaction_engine")
+            if not reaction_engine:
+                return {"ok": False, "error": "reaction_engine_not_configured"}
+            return {"ok": True, "mood": reaction_engine.get_chat_mood(chat_id)}
+
         @self.app.get("/api/links")
         async def get_links():
             """Ссылки по экосистеме в одном месте."""

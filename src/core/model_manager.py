@@ -28,7 +28,7 @@ logger = structlog.get_logger("ModelRouter")
 
 from src.core.openclaw_client import OpenClawClient
 from src.core.agent_swarm import SwarmManager
-from src.core.stream_client import OpenClawStreamClient
+from src.core.stream_client import OpenClawStreamClient, StreamFailure
 
 class ModelRouter:
     def __init__(self, config: Dict[str, Any]):
@@ -75,9 +75,19 @@ class ModelRouter:
         self.models = {
             "chat": config.get("GEMINI_CHAT_MODEL", "gemini-2.0-flash"),
             "thinking": config.get("GEMINI_THINKING_MODEL", "gemini-2.0-flash-thinking-exp-01-21"),
-            "pro": config.get("GEMINI_PRO_MODEL", "gemini-1.5-pro"),
+            "pro": config.get("GEMINI_PRO_MODEL", "gemini-3-pro-preview"),
             "coding": config.get("GEMINI_CODING_MODEL", "gemini-2.0-flash"),
         }
+        # Контекстные cloud-модели (опционально).
+        # Если переменная пустая — используем базовые self.models[*].
+        self.chat_model_group = str(config.get("GEMINI_CHAT_MODEL_GROUP", "")).strip()
+        self.chat_model_owner_private = str(config.get("GEMINI_CHAT_MODEL_OWNER_PRIVATE", "")).strip()
+        self.chat_model_owner_private_important = str(
+            config.get("GEMINI_CHAT_MODEL_OWNER_PRIVATE_IMPORTANT", "")
+        ).strip()
+        self.owner_private_always_pro = str(
+            config.get("MODEL_OWNER_PRIVATE_ALWAYS_PRO", "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
         # Счётчики (для диагностики)
         self._stats = {
@@ -177,6 +187,34 @@ class ModelRouter:
         self._local_light_slot = asyncio.Semaphore(1)
 
         self.local_timeout_seconds = float(config.get("LOCAL_CHAT_TIMEOUT_SECONDS", 900))
+        self.local_include_reasoning = str(config.get("LOCAL_INCLUDE_REASONING", "1")).strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        try:
+            self.local_reasoning_max_chars = int(config.get("LOCAL_REASONING_MAX_CHARS", 2000))
+            if self.local_reasoning_max_chars < 200:
+                self.local_reasoning_max_chars = 200
+        except Exception:
+            self.local_reasoning_max_chars = 2000
+        try:
+            self.local_stream_total_timeout_seconds = float(
+                config.get("LOCAL_STREAM_TOTAL_TIMEOUT_SECONDS", 75.0)
+            )
+            if self.local_stream_total_timeout_seconds <= 0:
+                self.local_stream_total_timeout_seconds = 75.0
+        except Exception:
+            self.local_stream_total_timeout_seconds = 75.0
+        try:
+            self.local_stream_sock_read_timeout_seconds = float(
+                config.get("LOCAL_STREAM_SOCK_READ_TIMEOUT_SECONDS", 20.0)
+            )
+            if self.local_stream_sock_read_timeout_seconds <= 0:
+                self.local_stream_sock_read_timeout_seconds = 20.0
+        except Exception:
+            self.local_stream_sock_read_timeout_seconds = 20.0
+        self.local_stream_fallback_to_cloud = str(
+            config.get("LOCAL_STREAM_FALLBACK_TO_CLOUD", "1")
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self.last_cloud_error: Optional[str] = None
         self.last_cloud_model: Optional[str] = None
         self.last_local_load_error: Optional[str] = None
@@ -218,6 +256,8 @@ class ModelRouter:
             self._feedback_path,
             default={"profiles": {}, "events": [], "last_route": {}, "updated_at": None},
         )
+        # Последний успешный stream-маршрут (отдельно от route_query/route_tool).
+        self._last_stream_route: Dict[str, Any] = {}
         if not isinstance(self._feedback_store.get("profiles"), dict):
             self._feedback_store["profiles"] = {}
         if not isinstance(self._feedback_store.get("events"), list):
@@ -298,6 +338,28 @@ class ModelRouter:
             seen.add(token)
             result.append(token)
         return result
+
+    def _normalize_cloud_model_name(self, model_name: Optional[str]) -> str:
+        """
+        Нормализует cloud model id:
+        - снимает префикс `models/`,
+        - убирает нестабильные `-exp` (кроме thinking),
+        - подставляет стабильный chat-маршрут по умолчанию.
+        """
+        if not model_name:
+            return ""
+        normalized = str(model_name).strip()
+        if not normalized:
+            return ""
+
+        if normalized.startswith("models/"):
+            normalized = normalized.split("models/", 1)[1].strip()
+
+        lowered = normalized.lower()
+        if "-exp" in lowered and "thinking" not in lowered:
+            return self.models.get("chat", "gemini-2.5-flash")
+
+        return normalized
 
     def _sanitize_model_text(self, text: Optional[str]) -> str:
         """
@@ -397,7 +459,19 @@ class ModelRouter:
         if not text:
             return True
         lowered = text.strip().lower()
-        return lowered.startswith("❌") or lowered.startswith("⚠️")
+        if lowered.startswith("❌") or lowered.startswith("⚠️"):
+            return True
+        if lowered.startswith("llm error"):
+            return True
+        if lowered.startswith("error:"):
+            return True
+        if lowered.startswith("{") and "\"error\"" in lowered:
+            return True
+        if "\"status\": \"not_found\"" in lowered:
+            return True
+        if "is not found for api version" in lowered:
+            return True
+        return False
 
     def _is_cloud_billing_error(self, text: str) -> bool:
         """
@@ -486,6 +560,27 @@ class ModelRouter:
         store["updated_at"] = self._now_iso()
         self._save_json(self._feedback_path, store)
 
+    def _remember_last_stream_route(
+        self,
+        profile: str,
+        task_type: str,
+        channel: str,
+        model_name: str,
+        prompt: str = "",
+    ) -> None:
+        """
+        Сохраняет метаданные последнего успешного stream-ответа.
+        Нужен для быстрой диагностики в !status без чтения логов.
+        """
+        self._last_stream_route = {
+            "ts": self._now_iso(),
+            "profile": (profile or "chat").strip().lower() or "chat",
+            "task_type": (task_type or "chat").strip().lower() or "chat",
+            "channel": self._normalize_channel(channel),
+            "model": (model_name or "unknown").strip() or "unknown",
+            "prompt_preview": (prompt or "").strip()[:160],
+        }
+
     def _get_model_feedback_stats(self, profile: str, model_name: str) -> dict:
         """Возвращает сводку feedback по модели в конкретном профиле."""
         store = self._ensure_feedback_store()
@@ -525,6 +620,42 @@ class ModelRouter:
     def _is_critical_profile(self, profile: str) -> bool:
         """Критичные профили, где по умолчанию выше приоритет качества."""
         return profile in {"security", "infra", "review"}
+
+    def _should_use_pro_for_owner_private(self, prompt: str, chat_type: str, is_owner: bool) -> bool:
+        """
+        Политика качества для владельца в личке:
+        если обсуждение про проект/планирование/критичную работу,
+        в cloud-ветке поднимаем приоритет PRO-модели.
+        """
+        if not is_owner:
+            return False
+        if (chat_type or "").strip().lower() != "private":
+            return False
+
+        text = (prompt or "").lower()
+        pro_markers = (
+            "проект",
+            "план",
+            "roadmap",
+            "архитект",
+            "важн",
+            "критич",
+            "прод",
+            "production",
+            "миграц",
+            "рефактор",
+            "стратег",
+            "бюджет",
+        )
+        return any(marker in text for marker in pro_markers)
+
+    @staticmethod
+    def _is_group_chat(chat_type: str) -> bool:
+        """
+        Определяет групповые типы чатов для отдельной бюджетной модели.
+        """
+        normalized = (chat_type or "").strip().lower()
+        return normalized in {"group", "supergroup"}
 
     def _model_tier(self, model_name: Optional[str]) -> str:
         """
@@ -685,7 +816,15 @@ class ModelRouter:
             },
         }
 
-    def _resolve_cloud_model(self, task_type: str, profile: str, preferred_model: Optional[str] = None) -> str:
+    def _resolve_cloud_model(
+        self,
+        task_type: str,
+        profile: str,
+        preferred_model: Optional[str] = None,
+        chat_type: str = "private",
+        is_owner: bool = False,
+        prompt: str = "",
+    ) -> str:
         """Выбирает облачную модель с учетом профиля и предпочтений."""
         if preferred_model and "gemini" in preferred_model:
             return preferred_model
@@ -695,20 +834,50 @@ class ModelRouter:
             return self.models.get("coding", self.models["chat"])
         if task_type == "reasoning":
             return self.models.get("thinking", self.models["chat"])
+        # Для owner/private держим приоритет качества:
+        # - важные запросы в pro,
+        # - при явном флаге always_pro — всегда pro в личке владельца.
+        if is_owner and (chat_type or "").strip().lower() == "private":
+            if self.owner_private_always_pro:
+                return self.models.get("pro", self.models["chat"])
+            if self._should_use_pro_for_owner_private(prompt, chat_type, is_owner):
+                return self.chat_model_owner_private_important or self.models.get("pro", self.models["chat"])
+            if self.chat_model_owner_private:
+                return self.chat_model_owner_private
+
+        # Для групповых чатов можно выделить отдельную более бюджетную модель.
+        if self._is_group_chat(chat_type) and self.chat_model_group:
+            return self.chat_model_group
+
         return self.models.get(task_type, self.models["chat"])
 
-    def _build_cloud_candidates(self, task_type: str, profile: str, preferred_model: Optional[str] = None) -> List[str]:
+    def _build_cloud_candidates(
+        self,
+        task_type: str,
+        profile: str,
+        preferred_model: Optional[str] = None,
+        chat_type: str = "private",
+        is_owner: bool = False,
+        prompt: str = "",
+    ) -> List[str]:
         """
         Формирует последовательность моделей для cloud-подсистемы.
         """
-        base = self._resolve_cloud_model(task_type, profile, preferred_model)
+        base = self._resolve_cloud_model(
+            task_type=task_type,
+            profile=profile,
+            preferred_model=preferred_model,
+            chat_type=chat_type,
+            is_owner=is_owner,
+            prompt=prompt,
+        )
         candidates: list[str] = []
         seen: Set[str] = set()
 
         def add(model_name: Optional[str]) -> None:
             if not model_name:
                 return
-            normalized = model_name.strip()
+            normalized = self._normalize_cloud_model_name(model_name)
             if not normalized or normalized in seen:
                 return
             if self._is_local_only_model_identifier(normalized):
@@ -828,7 +997,14 @@ class ModelRouter:
                                 "id": identifier,
                                 "type": mtype,
                                 "name": m.get("display_name", m.get("name", identifier)),
-                                "loaded": is_loaded
+                                "loaded": is_loaded,
+                                # Размер берём из наиболее вероятных полей LM Studio/OpenAI-совместимого ответа.
+                                "size_bytes": (
+                                    m.get("size_on_disk")
+                                    or m.get("size_bytes")
+                                    or m.get("size")
+                                    or 0
+                                ),
                             })
                         return models
         except Exception:
@@ -923,6 +1099,49 @@ class ModelRouter:
                 ids.append(identifier)
         # Удаляем дубли и сортируем в устойчивом порядке
         return sorted(set(ids))
+
+    @staticmethod
+    def _format_size_gb(size_bytes: int) -> str:
+        """Форматирует размер модели в гигабайты для UI-команд."""
+        try:
+            value = float(size_bytes)
+        except Exception:
+            return "n/a"
+        if value <= 0:
+            return "n/a"
+        return f"{round(value / (1024 ** 3), 2)} GB"
+
+    async def list_local_models_verbose(self) -> List[Dict[str, Any]]:
+        """
+        Возвращает расширенный список локальных моделей:
+        id, loaded, type, size_bytes, size_human.
+        """
+        raw = await self._scan_local_models()
+        result: list[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in raw:
+            model_id = self._extract_model_id(entry) if isinstance(entry, dict) else None
+            if not model_id:
+                continue
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            size_bytes = 0
+            if isinstance(entry, dict):
+                try:
+                    size_bytes = int(entry.get("size_bytes") or entry.get("size_on_disk") or entry.get("size") or 0)
+                except Exception:
+                    size_bytes = 0
+            result.append(
+                {
+                    "id": model_id,
+                    "loaded": bool(entry.get("loaded", False)) if isinstance(entry, dict) else False,
+                    "type": str(entry.get("type", "llm")) if isinstance(entry, dict) else "llm",
+                    "size_bytes": int(size_bytes),
+                    "size_human": self._format_size_gb(size_bytes),
+                }
+            )
+        return sorted(result, key=lambda item: item["id"])
 
     def _suggest_local_model_ids(self, requested: str, available_ids: List[str], limit: int = 5) -> List[str]:
         """Подбирает релевантные подсказки model_id по строке пользователя."""
@@ -1479,7 +1698,7 @@ class ModelRouter:
                 "max_tokens": 2048,
                 "stop": ["<|im_end|>", "###", "</s>"],
                 "stream": True,
-                "include_reasoning": True
+                "include_reasoning": self.local_include_reasoning
             }
 
             headers = {"Content-Type": "application/json"}
@@ -1553,6 +1772,11 @@ class ModelRouter:
         profile = self.classify_task_profile(prompt, task_type)
         recommendation = self._get_profile_recommendation(profile)
         is_critical = recommendation["critical"]
+        prefer_pro_for_owner_private = self._should_use_pro_for_owner_private(
+            prompt=prompt,
+            chat_type=chat_type,
+            is_owner=is_owner,
+        )
 
         # 0. RAG Lookup
         if use_rag and self.rag:
@@ -1606,7 +1830,19 @@ class ModelRouter:
         async def _run_cloud():
             if self.require_confirm_expensive and is_critical and not confirm_expensive:
                 return "confirm_needed", "⚠️ Для критичной задачи требуется подтверждение дорогого облачного прогона. Повтори команду с подтверждением."
-            for i, candidate in enumerate(self._build_cloud_candidates(task_type, profile, preferred_model or recommendation.get("model"))):
+            cloud_preferred = preferred_model or recommendation.get("model")
+            if prefer_pro_for_owner_private:
+                cloud_preferred = self.models.get("pro", cloud_preferred)
+            for i, candidate in enumerate(
+                self._build_cloud_candidates(
+                    task_type=task_type,
+                    profile=profile,
+                    preferred_model=cloud_preferred,
+                    chat_type=chat_type,
+                    is_owner=is_owner,
+                    prompt=prompt,
+                )
+            ):
                 # Фильтруем сломанный ID, если он просочился
                 if "-exp" in candidate and "gemini-2.0" in candidate:
                     candidate = candidate.replace("-exp", "")
@@ -1733,14 +1969,171 @@ class ModelRouter:
                           preferred_model: Optional[str] = None,
                           confirm_expensive: bool = False) -> AsyncGenerator[str, None]:
         """
-        [PHASE 15.2] Потоковая маршрутизация. 
-        Пока поддерживает только локальные модели (Streaming local first).
+        [PHASE 17.8] Потоковая маршрутизация с защитой local stream и cloud fallback.
         """
         await self.check_local_health()
-        
+        profile = self.classify_task_profile(prompt, task_type)
+        recommendation = self._get_profile_recommendation(profile)
+        force_cloud_mode = self.force_mode == "force_cloud"
+        prefer_pro_for_owner_private = self._should_use_pro_for_owner_private(
+            prompt=prompt,
+            chat_type=chat_type,
+            is_owner=is_owner,
+        )
+
+        async def _stream_cloud_fallback(failure_reason: str, failure_detail: str) -> AsyncGenerator[str, None]:
+            """
+            Fallback при сбое local stream.
+            Важный контракт: reasoning и внутренние причины не публикуем как пользовательский ответ.
+            """
+            async def _try_local_recovery_without_reasoning() -> Optional[str]:
+                """
+                Аварийный локальный recovery:
+                повторяем запрос без reasoning, чтобы избежать cloud-зависимости,
+                если LM Studio доступна, но stream-фаза сорвалась guardrail-детектором.
+                """
+                prev_reasoning_flag = self.local_include_reasoning
+                try:
+                    self.local_include_reasoning = False
+                    recovered = await self._call_local_llm(
+                        prompt=prompt,
+                        context=context,
+                        chat_type=chat_type,
+                        is_owner=is_owner,
+                    )
+                    cleaned = self._sanitize_model_text(recovered or "")
+                    return cleaned or None
+                except Exception as local_exc:
+                    logger.warning("Local recovery (reasoning-off) failed", error=str(local_exc))
+                    return None
+                finally:
+                    self.local_include_reasoning = prev_reasoning_flag
+
+            # В force_cloud локальный recovery запрещён по контракту.
+            allow_local_recovery = not force_cloud_mode
+
+            if allow_local_recovery and failure_reason in {"reasoning_loop", "reasoning_limit", "stream_timeout"}:
+                recovered_local = await _try_local_recovery_without_reasoning()
+                if recovered_local:
+                    logger.info(
+                        "Local stream recovery succeeded without reasoning",
+                        reason=failure_reason,
+                        model=self.active_local_model,
+                    )
+                    yield recovered_local
+                    return
+
+            if not self.local_stream_fallback_to_cloud:
+                logger.warning(
+                    "Local stream failed, cloud fallback disabled by config",
+                    reason=failure_reason,
+                    detail=failure_detail,
+                )
+                yield (
+                    f"⚠️ Локальный стрим остановлен ({failure_reason}). "
+                    "Cloud fallback отключён конфигурацией."
+                )
+                return
+
+            logger.warning(
+                "Local stream failed, switching to cloud fallback",
+                reason=failure_reason,
+                detail=failure_detail,
+                profile=profile,
+                model=self.active_local_model,
+            )
+
+            cloud_preferred = preferred_model or recommendation.get("model")
+            if prefer_pro_for_owner_private:
+                cloud_preferred = self.models.get("pro", cloud_preferred)
+            for candidate in self._build_cloud_candidates(
+                task_type=task_type,
+                profile=profile,
+                preferred_model=cloud_preferred,
+                chat_type=chat_type,
+                is_owner=is_owner,
+                prompt=prompt,
+            ):
+                response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=1)
+                normalized = (response or "").strip()
+                if not normalized:
+                    continue
+                if self._is_cloud_error_message(normalized) or self._is_cloud_billing_error(normalized):
+                    self.last_cloud_error = normalized
+                    self.last_cloud_model = candidate
+                    self._mark_cloud_soft_cap_if_needed(normalized)
+                    logger.warning("Cloud fallback candidate failed", model=candidate, error=normalized[:200])
+
+                    lowered = normalized.lower()
+                    provider_model_error = (
+                        "models/gemini-2.0-flash-exp is not found" in lowered
+                        or "not supported for generatecontent" in lowered
+                        or "\"status\": \"not_found\"" in lowered
+                    )
+                    if provider_model_error:
+                        logger.error(
+                            "OpenClaw provider model mapping is misconfigured; aborting cloud candidate loop",
+                            candidate=candidate,
+                        )
+                        if allow_local_recovery:
+                            recovered_local = await _try_local_recovery_without_reasoning()
+                            if recovered_local:
+                                yield recovered_local
+                                return
+                        yield (
+                            "❌ Cloud fallback недоступен: шлюз OpenClaw возвращает устаревшую модель "
+                            "`gemini-2.0-flash-exp` (NOT_FOUND). Проверьте конфиг провайдера OpenClaw."
+                        )
+                        return
+                    continue
+
+                cleaned = self._sanitize_model_text(normalized)
+                if not cleaned:
+                    continue
+
+                self.last_cloud_error = None
+                self.last_cloud_model = candidate
+                self._remember_model_choice(profile, candidate, "cloud")
+                self._update_usage_report(profile, candidate, "cloud")
+                self._remember_last_route(
+                    profile=profile,
+                    task_type=task_type,
+                    channel="cloud",
+                    model_name=candidate,
+                    prompt=prompt,
+                )
+                self._remember_last_stream_route(
+                    profile=profile,
+                    task_type=task_type,
+                    channel="cloud",
+                    model_name=candidate,
+                    prompt=prompt,
+                )
+                yield cleaned
+                return
+
+            yield self.last_cloud_error or "❌ Не удалось получить ответ ни от локальной, ни от облачной модели."
+
+        # Жёсткий cloud-only режим: локальный стрим полностью пропускаем.
+        if force_cloud_mode:
+            async for chunk in _stream_cloud_fallback(
+                failure_reason="force_cloud",
+                failure_detail="local stream bypassed by force_cloud mode",
+            ):
+                yield chunk
+            return
+
         if not self.is_local_available:
             # Fallback на обычный route_query если стриминг недоступен для облака в данном контексте
-            res = await self.route_query(prompt, task_type, context, chat_type, is_owner, preferred_model, confirm_expensive)
+            res = await self.route_query(
+                prompt=prompt,
+                task_type=task_type,
+                context=context,
+                chat_type=chat_type,
+                is_owner=is_owner,
+                preferred_model=preferred_model,
+                confirm_expensive=confirm_expensive,
+            )
             yield res
             return
 
@@ -1766,19 +2159,49 @@ class ModelRouter:
             "messages": messages,
             "temperature": 0.7,
             "max_tokens": 2048,
-            "include_reasoning": False, # Отключаем, так как вызывает зацикливание в LM Studio
+            "include_reasoning": self.local_include_reasoning,
             "stream": True,
             "stop": ["<|endoftext|>", "<|user|>", "<|observation|>", "Observation:", "User:", "###", "---"],
             "presence_penalty": 0.1,
-            "frequency_penalty": 0.1
+            "frequency_penalty": 0.1,
+            # Внутренние поля клиента стрима (не отправляются в LM Studio).
+            "_krab_max_chars": 4000,
+            "_krab_max_reasoning_chars": self.local_reasoning_max_chars,
+            "_krab_total_timeout_seconds": self.local_stream_total_timeout_seconds,
+            "_krab_sock_read_timeout_seconds": self.local_stream_sock_read_timeout_seconds,
         }
 
+        emitted_chunks = 0
         try:
             async for chunk in self.stream_client.stream_chat(payload):
+                emitted_chunks += 1
                 yield chunk
+            if emitted_chunks > 0:
+                local_model = self.active_local_model or payload.get("model") or "local-model"
+                self._remember_last_stream_route(
+                    profile=profile,
+                    task_type=task_type,
+                    channel="local",
+                    model_name=str(local_model),
+                    prompt=prompt,
+                )
+            return
+        except StreamFailure as e:
+            logger.warning(
+                "Local stream guardrail/failure triggered",
+                reason=e.reason,
+                detail=e.technical_message,
+                emitted_chunks=emitted_chunks,
+                model=self.active_local_model,
+            )
+            async for cloud_chunk in _stream_cloud_fallback(e.reason, e.technical_message):
+                yield cloud_chunk
+            return
         except Exception as e:
-            logger.error(f"Streaming error in route_stream: {e}")
-            yield f"❌ Ошибка стриминга: {e}"
+            logger.error("Streaming error in route_stream", error=f"{type(e).__name__}: {e}")
+            async for cloud_chunk in _stream_cloud_fallback("connection_error", f"{type(e).__name__}: {e}"):
+                yield cloud_chunk
+            return
 
     async def _call_gemini(self, prompt: str, model_name: str, context: list = None,
                            chat_type: str = "private", is_owner: bool = False, max_retries: int = 2) -> str:
@@ -1788,8 +2211,9 @@ class ModelRouter:
         # [HOTFIX v11.4.2] Глобальный фильтер проблемных моделей (УСИЛЕННЫЙ)
         if model_name and ("-exp" in model_name or "gemini-2.0-flash-exp" in model_name):
             if "thinking" not in model_name: # Thinking пока только exp
-                logger.info(f"Filtering out problematic model: {model_name} -> gemini-1.5-flash")
-                model_name = "gemini-1.5-flash"
+                stable_chat_model = self.models.get("chat", "gemini-2.5-flash")
+                logger.info(f"Filtering out problematic model: {model_name} -> {stable_chat_model}")
+                model_name = stable_chat_model
         
         # Динамический System Prompt
         from src.core.prompts import get_system_prompt
@@ -2006,6 +2430,10 @@ class ModelRouter:
         store = self._ensure_feedback_store()
         last_route = store.get("last_route", {})
         return dict(last_route) if isinstance(last_route, dict) else {}
+
+    def get_last_stream_route(self) -> dict:
+        """Возвращает метаданные последнего успешного stream-ответа."""
+        return dict(self._last_stream_route) if isinstance(self._last_stream_route, dict) else {}
 
     def submit_feedback(
         self,
@@ -2249,9 +2677,12 @@ class ModelRouter:
 
         if chosen_channel == "cloud":
             chosen_model = self._resolve_cloud_model(
-                normalized_task_type,
-                profile,
-                preferred_model or recommendation.get("model"),
+                task_type=normalized_task_type,
+                profile=profile,
+                preferred_model=preferred_model or recommendation.get("model"),
+                chat_type="private",
+                is_owner=False,
+                prompt=normalized_prompt,
             )
         else:
             chosen_model = self.active_local_model or "local-auto"
