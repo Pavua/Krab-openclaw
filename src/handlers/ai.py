@@ -622,6 +622,36 @@ def _prune_repetitive_numbered_items(
     return ("\n".join(cleaned_lines).strip(), removed)
 
 
+def _drop_service_busy_phrases(text: str) -> tuple[str, bool]:
+    """
+    Удаляет из ответа служебные «очередные» и технические фразы,
+    которые не должны попадать пользователю.
+    """
+    if not text:
+        return "", False
+
+    blocked_patterns = (
+        "обрабатываю предыдущий запрос",
+        "отправь следующее сообщение через пару секунд",
+        "подожди пару секунд и повтори",
+        "добавил в очередь обработки",
+        "позиция:",
+    )
+
+    output_lines: list[str] = []
+    removed = False
+    for line in str(text).splitlines():
+        low = line.strip().lower()
+        if any(pattern in low for pattern in blocked_patterns):
+            removed = True
+            continue
+        output_lines.append(line)
+
+    normalized = "\n".join(output_lines).strip()
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized, removed
+
+
 def _build_stream_preview(text: str, max_chars: int = 3600) -> str:
     """
     Готовит безопасный фрагмент для live-обновления в Telegram.
@@ -995,8 +1025,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             await reply_msg.edit_text(f"❌ Ошибка: {e}")
             return
 
+    persisted_response_text = _sanitize_model_output(full_response, router)
     if full_response:
         clean_display_text = _sanitize_model_output(full_response, router)
+        clean_display_text, removed_service_phrases = _drop_service_busy_phrases(clean_display_text)
         clean_display_text, removed_repeats = _collapse_repeated_paragraphs(
             clean_display_text,
             max_consecutive_repeats=2,
@@ -1013,12 +1045,18 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             clean_display_text = (
                 f"{clean_display_text}\n\n⚠️ Автоочистка: убраны повторяющиеся фрагменты ответа."
             ).strip()
+        if removed_service_phrases:
+            clean_display_text = (
+                f"{clean_display_text}\n\n⚠️ Автоочистка: удалены служебные строки очереди/ожидания."
+            ).strip()
         if removed_numbered_duplicates:
             clean_display_text = (
                 f"{clean_display_text}\n\n⚠️ Автоочистка: убраны дубли пунктов в нумерованном списке."
             ).strip()
         if trimmed_numbered:
             logger.warning("Ответ был ограничен по длине нумерованного списка", chat_id=message.chat.id)
+        if not clean_display_text:
+            clean_display_text = "⚠️ Ответ очищен от служебных артефактов. Повтори запрос, если нужен полный ответ."
         
         # Интеллектуальная реакция: если ответ начинается с эмодзи, ставим его как реакцию
         import re
@@ -1038,6 +1076,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             chunks_sent = len(chunks)
         else:
             await reply_msg.edit_text(clean_display_text)
+        persisted_response_text = clean_display_text
 
         # Привязка ответа к маршруту для weak reaction feedback.
         if reaction_engine:
@@ -1091,12 +1130,12 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     # Save Assistant Message
     memory.save_message(
-        message.chat.id, {"role": "assistant", "text": _sanitize_model_output(full_response, router)}
+        message.chat.id, {"role": "assistant", "text": persisted_response_text}
     )
 
     if ai_runtime:
         current = ai_runtime.get_context_snapshot(message.chat.id)
-        current["response_length_chars"] = len(_sanitize_model_output(full_response, router) or "")
+        current["response_length_chars"] = len(persisted_response_text or "")
         current["telegram_truncated"] = bool(locals().get("truncated_for_telegram", False))
         current["telegram_chunks_sent"] = int(locals().get("chunks_sent", 1))
         current["updated_at"] = int(time.time())
@@ -1106,7 +1145,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     if reaction_engine and ai_runtime and ai_runtime.auto_reactions_enabled:
         try:
             if reaction_engine.can_send_auto_reaction(message.chat.id):
-                reaction_emoji = reaction_engine.choose_auto_reaction(full_response, message.chat.id)
+                reaction_emoji = reaction_engine.choose_auto_reaction(persisted_response_text, message.chat.id)
                 await set_message_reaction(client, message.chat.id, message.id, reaction_emoji)
         except Exception as react_exc:
             logger.debug("Auto reaction skipped", error=str(react_exc))

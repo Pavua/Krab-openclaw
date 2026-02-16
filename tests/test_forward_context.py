@@ -5,7 +5,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from src.handlers.ai import _build_author_context, _build_forward_context, _build_reply_context
+from src.handlers.ai import (
+    _build_author_context,
+    _build_forward_context,
+    _build_reply_context,
+    _drop_service_busy_phrases,
+)
 
 
 class _Msg(SimpleNamespace):
@@ -63,3 +68,18 @@ def test_build_author_context_marks_participant_in_group() -> None:
     assert "author=@guest_user" in context
     assert "author_role=participant" in context
     assert "chat_type=group" in context
+    assert "цитатой/материалом для анализа" in context
+
+
+def test_drop_service_busy_phrases_removes_queue_artifacts() -> None:
+    """Служебные строки очереди должны отфильтровываться из пользовательского ответа."""
+    payload = (
+        "Обрабатываю предыдущий запрос. Отправь следующее сообщение через пару секунд.\n"
+        "Вот итоговый анализ:\n"
+        "Все в порядке."
+    )
+    cleaned, removed = _drop_service_busy_phrases(payload)
+    assert removed is True
+    assert "обрабатываю предыдущий запрос" not in cleaned.lower()
+    assert "отправь следующее сообщение" not in cleaned.lower()
+    assert "итоговый анализ" in cleaned.lower()
