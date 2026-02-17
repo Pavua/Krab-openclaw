@@ -419,6 +419,29 @@ def _build_author_context(message: Message, is_owner_sender: bool) -> str:
     )
 
 
+def _build_user_memory_payload(
+    message: Message,
+    sender: str,
+    text: str,
+    is_owner_sender: bool,
+) -> dict:
+    """
+    Формирует единый payload для записи user-сообщения в память.
+    Нужен, чтобы и отвеченные, и неотвеченные сообщения имели одинаковые поля автора.
+    """
+    chat_type_value = str(getattr(getattr(message.chat, "type", None), "name", message.chat.type)).lower()
+    user_id = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+    return {
+        "role": "user",
+        "user": sender,
+        "text": str(text or ""),
+        "author_id": user_id,
+        "author_username": str(sender or ""),
+        "author_role": "owner" if is_owner_sender else "participant",
+        "chat_type": chat_type_value,
+    }
+
+
 def _is_voice_reply_requested(text: str) -> bool:
     """Определяет, просит ли пользователь голосовой ответ текстом."""
     lowered = (text or "").strip().lower()
@@ -1044,7 +1067,15 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         should_reply = True
 
     if not should_reply:
-        memory.save_message(message.chat.id, {"user": sender, "text": text_content})
+        memory.save_message(
+            message.chat.id,
+            _build_user_memory_payload(
+                message=message,
+                sender=sender,
+                text=text_content,
+                is_owner_sender=is_owner_sender,
+            ),
+        )
         return
 
     # Антиспам
@@ -1215,15 +1246,12 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     chat_type_value = str(getattr(message.chat.type, "name", message.chat.type)).lower()
     memory.save_message(
         message.chat.id,
-        {
-            "role": "user",
-            "user": sender,
-            "text": final_prompt,
-            "author_id": int(user_id or 0),
-            "author_username": str(sender or ""),
-            "author_role": "owner" if is_owner_sender else "participant",
-            "chat_type": chat_type_value,
-        },
+        _build_user_memory_payload(
+            message=message,
+            sender=sender,
+            text=final_prompt,
+            is_owner_sender=is_owner_sender,
+        ),
     )
     
     if summarizer and AUTO_SUMMARY_ENABLED:

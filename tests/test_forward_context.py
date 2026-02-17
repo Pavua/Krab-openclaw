@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from src.handlers.ai import (
     _build_author_context,
     _build_forward_context,
+    _build_user_memory_payload,
     _build_reply_context,
     _drop_service_busy_context_items,
     _drop_service_busy_phrases,
@@ -75,6 +76,23 @@ def test_build_author_context_marks_participant_in_group() -> None:
     assert "chat_type=group" in context
     assert "Целевой получатель ответа: @guest_user (author_id=777)." in context
     assert "цитатой/материалом для анализа" in context
+
+
+def test_build_user_memory_payload_keeps_author_metadata() -> None:
+    msg = _Msg(
+        chat=SimpleNamespace(type=SimpleNamespace(name="GROUP")),
+        from_user=SimpleNamespace(id=777),
+    )
+    payload = _build_user_memory_payload(
+        message=msg,
+        sender="guest_user",
+        text="тест",
+        is_owner_sender=False,
+    )
+    assert payload["role"] == "user"
+    assert payload["author_id"] == 777
+    assert payload["author_role"] == "participant"
+    assert payload["chat_type"] == "group"
 
 
 def test_drop_service_busy_phrases_removes_queue_artifacts() -> None:
