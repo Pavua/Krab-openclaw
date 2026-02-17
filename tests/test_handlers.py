@@ -595,3 +595,24 @@ async def test_ctx_shows_group_author_isolation_fields():
     assert "Continue on incomplete" in sent
     assert "Group context trimmed" in sent
     assert "Group user msgs dropped" in sent
+
+
+@pytest.mark.asyncio
+async def test_ctx_all_lists_recent_snapshots():
+    ai_runtime = MagicMock()
+    ai_runtime.get_context_snapshot = MagicMock(return_value={})
+    ai_runtime.get_context_snapshots = MagicMock(
+        return_value={
+            "100": {"context_messages": 7, "group_author_context_dropped_user_messages": 0, "updated_at": 1000},
+            "200": {"context_messages": 9, "group_author_context_dropped_user_messages": 3, "updated_at": 2000},
+        }
+    )
+    handler = _build_ctx_handler(ai_runtime)
+    msg = _MockPolicyMessage("!ctx all")
+
+    await handler(None, msg)
+
+    sent = msg.reply_text.call_args.args[0]
+    assert "Context Snapshot (all chats)" in sent
+    assert "chat `200`" in sent
+    assert "dropped=`3`" in sent

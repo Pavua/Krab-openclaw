@@ -352,7 +352,39 @@ def register_handlers(app, deps: dict):
         if not ai_runtime:
             await message.reply_text("⚠️ AI runtime пока не инициализирован.")
             return
-        snap = ai_runtime.get_context_snapshot(message.chat.id)
+        args = message.command
+        if len(args) >= 2 and args[1].strip().lower() in {"all", "list"}:
+            if not hasattr(ai_runtime, "get_context_snapshots"):
+                await message.reply_text("⚠️ Сводка snapshot-ов недоступна.")
+                return
+            snapshots = ai_runtime.get_context_snapshots() or {}
+            if not snapshots:
+                await message.reply_text("ℹ️ Контекстные snapshot-ы ещё не накоплены.")
+                return
+            rows = []
+            for chat_id, snap_item in sorted(
+                snapshots.items(),
+                key=lambda kv: int((kv[1] or {}).get("updated_at", 0)),
+                reverse=True,
+            )[:10]:
+                rows.append(
+                    f"• chat `{chat_id}` | ctx=`{int((snap_item or {}).get('context_messages', 0))}` "
+                    f"| dropped=`{int((snap_item or {}).get('group_author_context_dropped_user_messages', 0))}` "
+                    f"| updated=`{(snap_item or {}).get('updated_at', '-')}`"
+                )
+            await message.reply_text(
+                "**🧾 Context Snapshot (all chats):**\n\n" + "\n".join(rows)
+            )
+            return
+
+        target_chat_id = message.chat.id
+        if len(args) >= 2:
+            try:
+                target_chat_id = int(args[1].strip())
+            except Exception:
+                target_chat_id = message.chat.id
+
+        snap = ai_runtime.get_context_snapshot(target_chat_id)
         if not snap:
             await message.reply_text("ℹ️ Контекстный snapshot ещё не накоплен.")
             return
@@ -378,6 +410,7 @@ def register_handlers(app, deps: dict):
             f"`{int(snap.get('group_author_context_user_messages_before', 0))}`/"
             f"`{int(snap.get('group_author_context_user_messages_after', 0))}`\n"
             f"• Group user msgs dropped: `{int(snap.get('group_author_context_dropped_user_messages', 0))}`\n"
+            f"• Snapshot chat id: `{int(snap.get('chat_id', target_chat_id))}`\n"
             f"• Updated: `{snap.get('updated_at', '-')}`"
         )
 
