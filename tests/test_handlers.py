@@ -531,11 +531,28 @@ async def test_policy_queue_retries_toggle():
 
 
 @pytest.mark.asyncio
+async def test_policy_queue_notify_toggle():
+    ai_runtime = MagicMock()
+    ai_runtime.get_policy_snapshot = MagicMock(return_value={"queue": {}, "guardrails": {}})
+    ai_runtime.set_queue_notify_position_enabled = MagicMock()
+    config_manager = MagicMock()
+    handler = _build_policy_handler(ai_runtime, config_manager=config_manager)
+
+    msg = _MockPolicyMessage("!policy queue notify off")
+    await handler(None, msg)
+
+    ai_runtime.set_queue_notify_position_enabled.assert_called_once_with(False)
+    config_manager.set.assert_called_once_with("AUTO_REPLY_QUEUE_NOTIFY_POSITION", "0")
+    msg.reply_text.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_policy_show_displays_author_isolation():
     ai_runtime = MagicMock()
     ai_runtime.get_policy_snapshot = MagicMock(
         return_value={
             "queue_enabled": True,
+            "queue_notify_position_enabled": True,
             "forward_context_enabled": True,
             "group_author_isolation_enabled": True,
             "reaction_learning_enabled": True,
@@ -557,6 +574,7 @@ async def test_policy_show_displays_author_isolation():
     sent = msg.reply_text.call_args.args[0]
     assert "Group author isolation" in sent
     assert "Continue on incomplete" in sent
+    assert "Queue notify position" in sent
     assert "Queue retried" in sent
 
 
@@ -601,6 +619,7 @@ async def test_ctx_shows_group_author_isolation_fields():
             "group_author_context_user_messages_before": 8,
             "group_author_context_user_messages_after": 3,
             "group_author_context_dropped_user_messages": 5,
+            "service_artifact_context_items_dropped": 2,
             "updated_at": 1234567890,
         }
     )
@@ -615,6 +634,7 @@ async def test_ctx_shows_group_author_isolation_fields():
     assert "Continue triggered/applied" in sent
     assert "Group context trimmed" in sent
     assert "Group user msgs dropped" in sent
+    assert "Service ctx artifacts dropped" in sent
 
 
 @pytest.mark.asyncio

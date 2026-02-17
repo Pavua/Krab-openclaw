@@ -207,6 +207,7 @@ class AIRuntimeControl:
         self.reaction_engine = reaction_engine
         self.router = router
         self.queue_enabled = AUTO_REPLY_QUEUE_ENABLED
+        self.queue_notify_position_enabled = AUTO_REPLY_QUEUE_NOTIFY_POSITION
         self.forward_context_enabled = AUTO_REPLY_FORWARD_CONTEXT_ENABLED
         self.reaction_learning_enabled = REACTION_LEARNING_ENABLED
         self.chat_mood_enabled = CHAT_MOOD_ENABLED
@@ -217,6 +218,9 @@ class AIRuntimeControl:
 
     def set_queue_enabled(self, enabled: bool) -> None:
         self.queue_enabled = bool(enabled)
+
+    def set_queue_notify_position_enabled(self, enabled: bool) -> None:
+        self.queue_notify_position_enabled = bool(enabled)
 
     def set_queue_max(self, max_per_chat: int) -> None:
         self.queue_manager.set_max_per_chat(max_per_chat)
@@ -270,6 +274,7 @@ class AIRuntimeControl:
     def get_policy_snapshot(self) -> dict:
         return {
             "queue_enabled": bool(self.queue_enabled),
+            "queue_notify_position_enabled": bool(self.queue_notify_position_enabled),
             "forward_context_enabled": bool(self.forward_context_enabled),
             "group_author_isolation_enabled": bool(self.group_author_isolation_enabled),
             "continue_on_incomplete_enabled": bool(self.continue_on_incomplete_enabled),
@@ -695,6 +700,39 @@ def _drop_service_busy_phrases(text: str) -> tuple[str, bool]:
     normalized = "\n".join(output_lines).strip()
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
     return normalized, removed
+
+
+def _is_service_busy_artifact_text(text: str) -> bool:
+    """
+    Определяет, что строка является служебным артефактом очереди/ожидания,
+    который не должен попадать обратно в модельный контекст.
+    """
+    payload = str(text or "").strip().lower()
+    if not payload:
+        return False
+    markers = (
+        "обрабатываю предыдущий запрос",
+        "отправь следующее сообщение через пару секунд",
+        "подожди пару секунд и повтори",
+        "добавил в очередь обработки",
+    )
+    return any(marker in payload for marker in markers)
+
+
+def _drop_service_busy_context_items(context: list) -> tuple[list, int]:
+    """
+    Удаляет из контекста элементы с техфразами очереди (любой роли),
+    чтобы модель не копировала устаревшие служебные ответы.
+    """
+    cleaned: list = []
+    dropped = 0
+    for item in context or []:
+        text = str((item or {}).get("text", "") or "")
+        if _is_service_busy_artifact_text(text):
+            dropped += 1
+            continue
+        cleaned.append(item)
+    return cleaned, dropped
 
 
 def _build_stream_preview(text: str, max_chars: int = 3600) -> str:
@@ -1126,6 +1164,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         is_owner_sender=is_owner_sender,
         enabled=bool(ai_runtime and ai_runtime.group_author_isolation_enabled),
     )
+    context, dropped_service_context_items = _drop_service_busy_context_items(context)
     user_context_after = sum(
         1 for item in (context or []) if str((item or {}).get("role", "user")).strip().lower() == "user"
     )
@@ -1146,6 +1185,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 "group_author_context_user_messages_before": int(user_context_before),
                 "group_author_context_user_messages_after": int(user_context_after),
                 "group_author_context_dropped_user_messages": int(dropped_user_context_items),
+                "service_artifact_context_items_dropped": int(dropped_service_context_items),
                 "continue_on_incomplete_triggered": False,
                 "continue_on_incomplete_applied": False,
                 "updated_at": int(time.time()),
@@ -2300,7 +2340,7 @@ def register_handlers(app, deps: dict):
         now = time.time()
         last_notice = _LAST_BUSY_NOTICE_TS.get(chat_id, 0.0)
         if (
-            AUTO_REPLY_QUEUE_NOTIFY_POSITION
+            bool(ai_runtime and ai_runtime.queue_notify_position_enabled)
             and message.chat.type == enums.ChatType.PRIVATE
             and queue_size > 1
             and (now - last_notice) >= AUTO_REPLY_BUSY_NOTICE_SECONDS

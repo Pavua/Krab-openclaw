@@ -437,6 +437,7 @@ def register_handlers(app, deps: dict):
             f"`{int(snap.get('group_author_context_user_messages_before', 0))}`/"
             f"`{int(snap.get('group_author_context_user_messages_after', 0))}`\n"
             f"• Group user msgs dropped: `{int(snap.get('group_author_context_dropped_user_messages', 0))}`\n"
+            f"• Service ctx artifacts dropped: `{int(snap.get('service_artifact_context_items_dropped', 0))}`\n"
             f"• Snapshot chat id: `{int(snap.get('chat_id', target_chat_id))}`\n"
             f"• Updated: `{snap.get('updated_at', '-')}`"
         )
@@ -462,6 +463,7 @@ def register_handlers(app, deps: dict):
             await message.reply_text(
                 "**⚙️ Policy:**\n\n"
                 f"• Queue enabled: `{policy.get('queue_enabled')}`\n"
+                f"• Queue notify position: `{policy.get('queue_notify_position_enabled')}`\n"
                 f"• Forward context enabled: `{policy.get('forward_context_enabled')}`\n"
                 f"• Group author isolation: `{policy.get('group_author_isolation_enabled')}`\n"
                 f"• Continue on incomplete: `{policy.get('continue_on_incomplete_enabled')}`\n"
@@ -483,13 +485,32 @@ def register_handlers(app, deps: dict):
         if sub == "queue":
             if len(args) < 3:
                 await message.reply_text(
-                    "⚠️ Формат: `!policy queue on|off|max <N>|retries <N>|author_isolation on|off|continue on|off`"
+                    "⚠️ Формат: `!policy queue on|off|max <N>|retries <N>|notify on|off|author_isolation on|off|continue on|off`"
                 )
                 return
             act = args[2].strip().lower()
             if act in {"on", "off"}:
                 ai_runtime.set_queue_enabled(act == "on")
                 await message.reply_text(f"✅ Queue mode: `{act}`")
+                return
+            if act in {"notify", "position_notify", "position"}:
+                if len(args) < 4 or args[3].strip().lower() not in {"on", "off"}:
+                    await message.reply_text("⚠️ Формат: `!policy queue notify on|off`")
+                    return
+                enabled = args[3].strip().lower() == "on"
+                ai_runtime.set_queue_notify_position_enabled(enabled)
+                config_manager = deps.get("config_manager")
+                if config_manager:
+                    try:
+                        config_manager.set(
+                            "AUTO_REPLY_QUEUE_NOTIFY_POSITION",
+                            "1" if enabled else "0",
+                        )
+                    except Exception:
+                        pass
+                await message.reply_text(
+                    f"✅ Queue notify position: `{'on' if enabled else 'off'}`"
+                )
                 return
             if act in {"author_isolation", "author", "isolation"}:
                 if len(args) < 4 or args[3].strip().lower() not in {"on", "off"}:
@@ -555,7 +576,7 @@ def register_handlers(app, deps: dict):
                 await message.reply_text(f"✅ Queue max retries: `{retries_n}`")
                 return
             await message.reply_text(
-                "⚠️ Формат: `!policy queue on|off|max <N>|retries <N>|author_isolation on|off|continue on|off`"
+                "⚠️ Формат: `!policy queue on|off|max <N>|retries <N>|notify on|off|author_isolation on|off|continue on|off`"
             )
             return
 

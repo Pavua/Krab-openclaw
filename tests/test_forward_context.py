@@ -9,8 +9,10 @@ from src.handlers.ai import (
     _build_author_context,
     _build_forward_context,
     _build_reply_context,
+    _drop_service_busy_context_items,
     _drop_service_busy_phrases,
     _filter_context_for_group_author,
+    _is_service_busy_artifact_text,
     _looks_incomplete_response,
     _should_emit_stream_edit,
 )
@@ -86,6 +88,23 @@ def test_drop_service_busy_phrases_removes_queue_artifacts() -> None:
     assert "обрабатываю предыдущий запрос" not in cleaned.lower()
     assert "отправь следующее сообщение" not in cleaned.lower()
     assert "итоговый анализ" in cleaned.lower()
+
+
+def test_service_busy_artifact_detector_matches_known_markers() -> None:
+    assert _is_service_busy_artifact_text("⏳ Обрабатываю предыдущий запрос.") is True
+    assert _is_service_busy_artifact_text("Обычный пользовательский текст без техфраз.") is False
+
+
+def test_drop_service_busy_context_items_filters_queue_lines() -> None:
+    context = [
+        {"role": "assistant", "text": "⏳ Обрабатываю предыдущий запрос. Отправь следующее сообщение через пару секунд."},
+        {"role": "assistant", "text": "Нормальный ответ по задаче."},
+        {"role": "user", "text": "Подожди пару секунд и повтори."},
+    ]
+    cleaned, dropped = _drop_service_busy_context_items(context)
+    assert dropped == 2
+    assert len(cleaned) == 1
+    assert cleaned[0]["text"] == "Нормальный ответ по задаче."
 
 
 def test_filter_context_for_group_author_keeps_only_current_user_prompts() -> None:
