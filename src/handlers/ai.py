@@ -221,6 +221,9 @@ class AIRuntimeControl:
     def set_queue_max(self, max_per_chat: int) -> None:
         self.queue_manager.set_max_per_chat(max_per_chat)
 
+    def set_queue_max_retries(self, max_retries: int) -> None:
+        self.queue_manager.max_retries = max(0, int(max_retries))
+
     def set_forward_context_enabled(self, enabled: bool) -> None:
         self.forward_context_enabled = bool(enabled)
 
@@ -1143,6 +1146,8 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 "group_author_context_user_messages_before": int(user_context_before),
                 "group_author_context_user_messages_after": int(user_context_after),
                 "group_author_context_dropped_user_messages": int(dropped_user_context_items),
+                "continue_on_incomplete_triggered": False,
+                "continue_on_incomplete_applied": False,
                 "updated_at": int(time.time()),
             },
         )
@@ -1203,6 +1208,11 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         and bool(ai_runtime and ai_runtime.continue_on_incomplete_enabled)
         and _looks_incomplete_response(full_response)
     ):
+        if ai_runtime:
+            current = ai_runtime.get_context_snapshot(message.chat.id)
+            current["continue_on_incomplete_triggered"] = True
+            current["updated_at"] = int(time.time())
+            ai_runtime.set_context_snapshot(message.chat.id, current)
         try:
             await client.send_chat_action(message.chat.id, action=enums.ChatAction.TYPING)
             continuation_prompt = (
@@ -1225,6 +1235,11 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             continuation = _sanitize_model_output(continuation, router)
             if continuation:
                 full_response = f"{full_response.rstrip()}\n\n{continuation.lstrip()}"
+                if ai_runtime:
+                    current = ai_runtime.get_context_snapshot(message.chat.id)
+                    current["continue_on_incomplete_applied"] = True
+                    current["updated_at"] = int(time.time())
+                    ai_runtime.set_context_snapshot(message.chat.id, current)
         except Exception as continue_exc:
             logger.debug(
                 "Автодопродолжение ответа пропущено после ошибки",

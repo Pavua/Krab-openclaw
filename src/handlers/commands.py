@@ -429,6 +429,9 @@ def register_handlers(app, deps: dict):
             f"• Reply context: `{bool(snap.get('has_reply_context', False))}`\n"
             f"• Group author isolation: `{bool(snap.get('group_author_isolation_enabled', False))}`\n"
             f"• Continue on incomplete: `{bool(snap.get('continue_on_incomplete_enabled', False))}`\n"
+            f"• Continue triggered/applied: "
+            f"`{bool(snap.get('continue_on_incomplete_triggered', False))}`/"
+            f"`{bool(snap.get('continue_on_incomplete_applied', False))}`\n"
             f"• Group context trimmed: `{bool(snap.get('group_author_context_trimmed', False))}`\n"
             f"• Group user msgs before/after: "
             f"`{int(snap.get('group_author_context_user_messages_before', 0))}`/"
@@ -480,7 +483,7 @@ def register_handlers(app, deps: dict):
         if sub == "queue":
             if len(args) < 3:
                 await message.reply_text(
-                    "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off|continue on|off`"
+                    "⚠️ Формат: `!policy queue on|off|max <N>|retries <N>|author_isolation on|off|continue on|off`"
                 )
                 return
             act = args[2].strip().lower()
@@ -535,8 +538,24 @@ def register_handlers(app, deps: dict):
                 ai_runtime.set_queue_max(max_n)
                 await message.reply_text(f"✅ Queue max/chat: `{max(1, max_n)}`")
                 return
+            if act == "retries" and len(args) >= 4:
+                try:
+                    retries_n = int(args[3].strip())
+                except Exception:
+                    await message.reply_text("❌ N должен быть числом.")
+                    return
+                retries_n = max(0, retries_n)
+                ai_runtime.set_queue_max_retries(retries_n)
+                config_manager = deps.get("config_manager")
+                if config_manager:
+                    try:
+                        config_manager.set("AUTO_REPLY_QUEUE_MAX_RETRIES", str(retries_n))
+                    except Exception:
+                        pass
+                await message.reply_text(f"✅ Queue max retries: `{retries_n}`")
+                return
             await message.reply_text(
-                "⚠️ Формат: `!policy queue on|off|max <N>|author_isolation on|off|continue on|off`"
+                "⚠️ Формат: `!policy queue on|off|max <N>|retries <N>|author_isolation on|off|continue on|off`"
             )
             return
 
