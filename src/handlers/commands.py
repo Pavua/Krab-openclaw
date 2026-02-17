@@ -129,6 +129,30 @@ def parse_model_set_request(args: list[str], valid_slots: list[str]) -> dict[str
     }
 
 
+def resolve_local_model_size_human(router, model_id: str, verbose_map: dict) -> str:
+    """
+    Возвращает человекочитаемый размер модели.
+    Приоритет:
+    1) size_human из list_local_models_verbose
+    2) эвристика router._estimate_model_size_gb(model_id)
+    3) n/a
+    """
+    item = verbose_map.get(str(model_id), {}) if isinstance(verbose_map, dict) else {}
+    size_human = str(item.get("size_human", "") or "").strip()
+    if size_human and size_human.lower() != "n/a":
+        return size_human
+
+    if hasattr(router, "_estimate_model_size_gb"):
+        try:
+            size_gb = float(router._estimate_model_size_gb(model_id))
+            if size_gb > 0:
+                return f"{size_gb:.1f} GB"
+        except Exception:
+            pass
+
+    return "n/a"
+
+
 def register_handlers(app, deps: dict):
     """Регистрирует обработчики базовых команд."""
     router = deps["router"]
@@ -1718,7 +1742,7 @@ def register_handlers(app, deps: dict):
                     # Помечаем текущую активную
                     star = " ⭐" if m == router.active_local_model else ""
                     item = verbose_map.get(str(m), {})
-                    size_human = str(item.get("size_human", "n/a"))
+                    size_human = resolve_local_model_size_human(router, m, verbose_map)
                     type_label = str(item.get("type", "llm"))
                     text += f"  • `{m}` — `{size_human}` [{type_label}]{star}\n"
 
