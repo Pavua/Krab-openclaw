@@ -794,6 +794,38 @@ def _build_stream_preview(text: str, max_chars: int = 3600) -> str:
     return f"…\n{tail}"
 
 
+def _split_text_chunks_for_telegram(text: str, max_len: int = 3900) -> list[str]:
+    """
+    Делит длинный текст на безопасные куски для Telegram.
+    Предпочитает границы абзацев/строк, чтобы не рубить мысль посередине.
+    """
+    payload = str(text or "")
+    limit = int(max(500, max_len))
+    if len(payload) <= limit:
+        return [payload]
+
+    chunks: list[str] = []
+    rest = payload
+    while len(rest) > limit:
+        window = rest[:limit]
+        cut = window.rfind("\n\n")
+        if cut < int(limit * 0.45):
+            cut = window.rfind("\n")
+        if cut < int(limit * 0.35):
+            cut = window.rfind(". ")
+        if cut < int(limit * 0.25):
+            cut = limit
+        part = rest[:cut].rstrip()
+        if not part:
+            part = rest[:limit]
+            cut = len(part)
+        chunks.append(part)
+        rest = rest[cut:].lstrip()
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
 def _should_emit_stream_edit(previous_preview: str, next_preview: str, min_delta_chars: int = 60) -> bool:
     """
     Решает, стоит ли отправлять очередной edit_text во время стриминга.
@@ -1380,17 +1412,21 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             await set_message_reaction(client, message.chat.id, message.id, emoji_match.group(1))
         
         # Отправка ответа
-        MAX_LEN = 4000
-        truncated_for_telegram = len(clean_display_text) > MAX_LEN
+        MAX_LEN = 3900
+        chunks = _split_text_chunks_for_telegram(clean_display_text, max_len=MAX_LEN)
+        truncated_for_telegram = len(chunks) > 1
         chunks_sent = 1
-        if len(clean_display_text) > MAX_LEN:
-            chunks = [clean_display_text[i:i+MAX_LEN] for i in range(0, len(clean_display_text), MAX_LEN)]
-            await reply_msg.edit_text(chunks[0])
-            for chunk in chunks[1:]:
-                await message.reply_text(chunk)
+        if len(chunks) > 1:
+            await _safe_stream_edit_text(reply_msg, chunks[0])
+            for idx, chunk in enumerate(chunks[1:], start=2):
+                suffix = f"\n\n— Часть {idx}/{len(chunks)} —"
+                safe_chunk = chunk
+                if len(safe_chunk) + len(suffix) <= MAX_LEN:
+                    safe_chunk = f"{safe_chunk}{suffix}"
+                await message.reply_text(safe_chunk, parse_mode=None)
             chunks_sent = len(chunks)
         else:
-            await reply_msg.edit_text(clean_display_text)
+            await _safe_stream_edit_text(reply_msg, clean_display_text)
         persisted_response_text = clean_display_text
 
         # Привязка ответа к маршруту для weak reaction feedback.

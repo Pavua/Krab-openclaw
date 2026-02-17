@@ -493,6 +493,27 @@ class TestAiOutputPostprocess:
         assert cleaned.lower().count("это означает, что вы описываете своего спасителя") == 2
         assert "Вывод: уточните факты." in cleaned
 
+    def test_split_text_chunks_prefers_paragraph_boundaries(self):
+        from src.handlers.ai import _split_text_chunks_for_telegram
+
+        payload = (
+            "Абзац 1.\n\n"
+            + ("Абзац 2 очень длинный. " * 180)
+            + "\n\nАбзац 3 финальный."
+        )
+        chunks = _split_text_chunks_for_telegram(payload, max_len=900)
+        assert len(chunks) >= 2
+        assert all(len(chunk) <= 900 for chunk in chunks)
+        assert "Абзац 1." in chunks[0]
+
+    def test_split_text_chunks_fallback_for_single_long_line(self):
+        from src.handlers.ai import _split_text_chunks_for_telegram
+
+        payload = "x" * 4200
+        chunks = _split_text_chunks_for_telegram(payload, max_len=1000)
+        assert len(chunks) == 5
+        assert "".join(chunks) == payload
+
 
 class _MockPolicyMessage:
     def __init__(self, text: str):
