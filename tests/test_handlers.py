@@ -525,7 +525,7 @@ async def test_policy_show_displays_author_isolation():
             "reaction_learning_enabled": True,
             "chat_mood_enabled": True,
             "auto_reactions_enabled": True,
-            "queue": {"max_per_chat": 50, "queued_total": 0, "active_chats": 0},
+            "queue": {"max_per_chat": 50, "queued_total": 0, "active_chats": 0, "retried": 2, "max_retries": 1},
             "guardrails": {
                 "local_include_reasoning": True,
                 "local_reasoning_max_chars": 2000,
@@ -541,6 +541,7 @@ async def test_policy_show_displays_author_isolation():
     sent = msg.reply_text.call_args.args[0]
     assert "Group author isolation" in sent
     assert "Continue on incomplete" in sent
+    assert "Queue retried" in sent
 
 
 def _build_ctx_handler(ai_runtime):
