@@ -479,6 +479,20 @@ class TestAiOutputPostprocess:
         assert removed is False
         assert cleaned == payload
 
+    def test_collapse_repeated_paragraphs_normalizes_punctuation(self):
+        from src.handlers.ai import _collapse_repeated_paragraphs
+
+        payload = (
+            "Это означает, что вы описываете своего спасителя как \"хорошего\" человека.\n\n"
+            "Это означает, что вы описываете своего спасителя как *хорошего* человека!\n\n"
+            "Это означает, что вы описываете своего спасителя как хорошего человека...\n\n"
+            "Вывод: уточните факты."
+        )
+        cleaned, removed = _collapse_repeated_paragraphs(payload, max_consecutive_repeats=2)
+        assert removed is True
+        assert cleaned.lower().count("это означает, что вы описываете своего спасителя") == 2
+        assert "Вывод: уточните факты." in cleaned
+
 
 class _MockPolicyMessage:
     def __init__(self, text: str):

@@ -73,6 +73,7 @@ def test_build_author_context_marks_participant_in_group() -> None:
     assert "author=@guest_user" in context
     assert "author_role=participant" in context
     assert "chat_type=group" in context
+    assert "Целевой получатель ответа: @guest_user (author_id=777)." in context
     assert "цитатой/материалом для анализа" in context
 
 
