@@ -601,6 +601,45 @@ def _collapse_repeated_paragraphs(text: str, max_consecutive_repeats: int = 2) -
     return ("\n\n".join(output).strip(), removed)
 
 
+def _collapse_repeated_lines(text: str, max_consecutive_repeats: int = 2) -> tuple[str, bool]:
+    """
+    Схлопывает подряд идущие одинаковые строки (с мягкой нормализацией),
+    чтобы гасить зацикливание в обычном абзацном тексте без пустых строк.
+    """
+    if not text:
+        return "", False
+
+    lines = str(text).splitlines()
+    output: list[str] = []
+    removed = False
+    last_norm = ""
+    last_count = 0
+
+    for raw in lines:
+        line = str(raw or "")
+        if not line.strip():
+            output.append(line)
+            last_norm = ""
+            last_count = 0
+            continue
+        normalized = line.strip().lower()
+        normalized = re.sub(r"[\"'`*_~]+", "", normalized)
+        normalized = re.sub(r"\s+", " ", normalized)
+        if normalized == last_norm:
+            last_count += 1
+        else:
+            last_norm = normalized
+            last_count = 1
+        if last_count <= max_consecutive_repeats:
+            output.append(line)
+        else:
+            removed = True
+
+    payload = "\n".join(output).strip()
+    payload = re.sub(r"\n{3,}", "\n\n", payload)
+    return payload, removed
+
+
 def _cap_numbered_list_items(text: str, max_items: int = 20) -> tuple[str, bool]:
     """
     Ограничивает слишком длинные нумерованные списки.
@@ -1291,6 +1330,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     if full_response:
         clean_display_text = _sanitize_model_output(full_response, router)
         clean_display_text, removed_service_phrases = _drop_service_busy_phrases(clean_display_text)
+        clean_display_text, removed_repeated_lines = _collapse_repeated_lines(
+            clean_display_text,
+            max_consecutive_repeats=2,
+        )
         clean_display_text, removed_repeats = _collapse_repeated_paragraphs(
             clean_display_text,
             max_consecutive_repeats=2,
@@ -1306,6 +1349,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         if removed_repeats:
             clean_display_text = (
                 f"{clean_display_text}\n\n⚠️ Автоочистка: убраны повторяющиеся фрагменты ответа."
+            ).strip()
+        if removed_repeated_lines:
+            clean_display_text = (
+                f"{clean_display_text}\n\n⚠️ Автоочистка: убраны повторяющиеся строки ответа."
             ).strip()
         if removed_service_phrases:
             clean_display_text = (

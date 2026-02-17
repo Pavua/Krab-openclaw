@@ -453,6 +453,32 @@ class TestAiOutputPostprocess:
         assert removed is False
         assert cleaned == payload.strip()
 
+    def test_collapse_repeated_lines_removes_looped_plain_text(self):
+        from src.handlers.ai import _collapse_repeated_lines
+
+        payload = (
+            "Это означает, что вы описываете своего спасителя как хорошего человека.\n"
+            "Это означает, что вы описываете своего спасителя как \"хорошего\" человека.\n"
+            "Это означает, что вы описываете своего спасителя как *хорошего* человека.\n"
+            "Итог: нужно сверить факты и не делать поспешных выводов."
+        )
+        cleaned, removed = _collapse_repeated_lines(payload, max_consecutive_repeats=2)
+        assert removed is True
+        assert cleaned.count("Это означает, что вы описываете своего спасителя") == 2
+        assert "Итог: нужно сверить факты" in cleaned
+
+    def test_collapse_repeated_lines_keeps_non_repeating_flow(self):
+        from src.handlers.ai import _collapse_repeated_lines
+
+        payload = (
+            "Шаг 1: Проверь факты.\n"
+            "Шаг 2: Уточни источник.\n"
+            "Шаг 3: Сделай вывод."
+        )
+        cleaned, removed = _collapse_repeated_lines(payload, max_consecutive_repeats=2)
+        assert removed is False
+        assert cleaned == payload
+
 
 class _MockPolicyMessage:
     def __init__(self, text: str):
