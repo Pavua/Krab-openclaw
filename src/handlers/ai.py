@@ -58,6 +58,10 @@ AUTO_REPLY_QUEUE_NOTIFY_POSITION = str(
 AUTO_REPLY_FORWARD_CONTEXT_ENABLED = str(
     os.getenv("AUTO_REPLY_FORWARD_CONTEXT_ENABLED", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
+AUTO_REPLY_QUEUE_MAX_RETRIES = max(
+    0,
+    int(str(os.getenv("AUTO_REPLY_QUEUE_MAX_RETRIES", "1")).strip() or "1"),
+)
 AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED = str(
     os.getenv("AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
@@ -104,6 +108,7 @@ class ChatQueuedTask:
     received_at: float
     priority: int
     runner: Any
+    attempt: int = 0
 
 
 class ChatWorkQueue:
@@ -112,13 +117,15 @@ class ChatWorkQueue:
     Один worker на чат, без потери входящих сообщений.
     """
 
-    def __init__(self, max_per_chat: int = 50):
+    def __init__(self, max_per_chat: int = 50, max_retries: int = 1):
         self.max_per_chat = max(1, int(max_per_chat))
+        self.max_retries = max(0, int(max_retries))
         self._queues: dict[int, deque[ChatQueuedTask]] = {}
         self._workers: dict[int, asyncio.Task] = {}
         self._active_task: dict[int, ChatQueuedTask] = {}
         self._processed = 0
         self._failed = 0
+        self._retried = 0
 
     def set_max_per_chat(self, value: int) -> None:
         self.max_per_chat = max(1, int(value))
@@ -149,8 +156,25 @@ class ChatWorkQueue:
                 await task.runner()
                 self._processed += 1
             except Exception:
-                self._failed += 1
-                logger.exception("Ошибка обработки задачи в очереди", chat_id=chat_id, message_id=task.message_id)
+                if task.attempt < self.max_retries:
+                    task.attempt += 1
+                    queue.appendleft(task)
+                    self._retried += 1
+                    logger.warning(
+                        "Повтор задачи в очереди после ошибки",
+                        chat_id=chat_id,
+                        message_id=task.message_id,
+                        attempt=task.attempt,
+                        max_retries=self.max_retries,
+                    )
+                else:
+                    self._failed += 1
+                    logger.exception(
+                        "Ошибка обработки задачи в очереди",
+                        chat_id=chat_id,
+                        message_id=task.message_id,
+                        attempt=task.attempt,
+                    )
             finally:
                 self._active_task.pop(chat_id, None)
                 if not queue:
@@ -166,10 +190,12 @@ class ChatWorkQueue:
         return {
             "processed": int(self._processed),
             "failed": int(self._failed),
+            "retried": int(self._retried),
             "active_chats": len(self._workers),
             "queue_lengths": queue_lengths,
             "queued_total": int(sum(queue_lengths.values())),
             "max_per_chat": int(self.max_per_chat),
+            "max_retries": int(self.max_retries),
         }
 
 
@@ -1347,7 +1373,10 @@ def register_handlers(app, deps: dict):
     agent = deps["agent"]
     rate_limiter = deps["rate_limiter"]
     safe_handler = deps["safe_handler"]
-    queue_manager = ChatWorkQueue(max_per_chat=AUTO_REPLY_QUEUE_MAX_PER_CHAT)
+    queue_manager = ChatWorkQueue(
+        max_per_chat=AUTO_REPLY_QUEUE_MAX_PER_CHAT,
+        max_retries=AUTO_REPLY_QUEUE_MAX_RETRIES,
+    )
     reaction_engine = ReactionLearningEngine(
         store_path=os.getenv("REACTION_FEEDBACK_PATH", "artifacts/reaction_feedback.json"),
         enabled=REACTION_LEARNING_ENABLED,

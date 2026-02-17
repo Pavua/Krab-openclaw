@@ -59,3 +59,31 @@ async def test_queue_respects_max_per_chat_limit() -> None:
 
     assert first is True
     assert second is False
+
+
+@pytest.mark.asyncio
+async def test_queue_retries_once_then_succeeds() -> None:
+    """При временной ошибке задача должна быть автоматически повторена."""
+    queue = ChatWorkQueue(max_per_chat=10, max_retries=1)
+    attempts = {"n": 0}
+    processed: list[int] = []
+
+    async def _runner() -> None:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("transient")
+        processed.append(1)
+
+    accepted, _ = queue.enqueue(
+        ChatQueuedTask(chat_id=99, message_id=1, received_at=0.0, priority=0, runner=_runner)
+    )
+    assert accepted is True
+
+    queue.ensure_worker(99)
+    await asyncio.sleep(0.2)
+
+    assert processed == [1]
+    stats = queue.get_stats()
+    assert stats["processed"] == 1
+    assert stats["failed"] == 0
+    assert stats["retried"] == 1
