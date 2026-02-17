@@ -758,6 +758,17 @@ def _filter_context_for_group_author(
         if role != "user":
             filtered.append(item)
             continue
+        # Предпочитаем явную метку автора в payload (более надежно, чем парсить текст).
+        try:
+            item_author_id = int((item or {}).get("author_id") or 0)
+        except Exception:
+            item_author_id = 0
+        if item_author_id:
+            if item_author_id == int(current_author_id):
+                filtered.append(item)
+            else:
+                trimmed = True
+            continue
         text = str((item or {}).get("text", "") or "")
         if marker in text:
             filtered.append(item)
@@ -1057,7 +1068,19 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     # Sync & Save
     await memory.sync_telegram_history(client, message.chat.id, limit=30)
-    memory.save_message(message.chat.id, {"user": sender, "text": final_prompt})
+    chat_type_value = str(getattr(message.chat.type, "name", message.chat.type)).lower()
+    memory.save_message(
+        message.chat.id,
+        {
+            "role": "user",
+            "user": sender,
+            "text": final_prompt,
+            "author_id": int(user_id or 0),
+            "author_username": str(sender or ""),
+            "author_role": "owner" if is_owner_sender else "participant",
+            "chat_type": chat_type_value,
+        },
+    )
     
     if summarizer and AUTO_SUMMARY_ENABLED:
         asyncio.create_task(summarizer.auto_summarize(message.chat.id))
@@ -1288,7 +1311,13 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     # Save Assistant Message
     memory.save_message(
-        message.chat.id, {"role": "assistant", "text": persisted_response_text}
+        message.chat.id,
+        {
+            "role": "assistant",
+            "text": persisted_response_text,
+            "chat_type": chat_type_value,
+            "reply_to_author_id": int(user_id or 0),
+        },
     )
 
     if ai_runtime:

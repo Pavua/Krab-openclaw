@@ -111,6 +111,26 @@ def test_filter_context_for_group_author_keeps_only_current_user_prompts() -> No
     assert "старый формат без author_id" not in joined
 
 
+def test_filter_context_for_group_author_prefers_explicit_author_id_field() -> None:
+    """Если в контексте есть author_id в payload, фильтрация должна идти по нему."""
+    context = [
+        {"role": "user", "text": "вопрос текущего", "author_id": 111},
+        {"role": "user", "text": "чужой вопрос", "author_id": 222},
+        {"role": "assistant", "text": "ответ ассистента"},
+    ]
+    filtered, trimmed = _filter_context_for_group_author(
+        context=context,
+        current_author_id=111,
+        is_private=False,
+        is_owner_sender=False,
+        enabled=True,
+    )
+    assert trimmed is True
+    assert len(filtered) == 2
+    assert filtered[0]["text"] == "вопрос текущего"
+    assert filtered[1]["role"] == "assistant"
+
+
 def test_filter_context_for_group_author_skips_filter_for_owner_or_private() -> None:
     """Для owner или приватного чата фильтрация не должна применяться."""
     context = [
