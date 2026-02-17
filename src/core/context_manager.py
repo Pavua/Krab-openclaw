@@ -28,13 +28,58 @@ class ContextKeeper:
         chat_dir.mkdir(exist_ok=True)
         return chat_dir
 
+    @staticmethod
+    def _normalize_role(role: str | None) -> str:
+        """Приводит роль к совместимому набору user/assistant/system/tool."""
+        normalized = str(role or "user").strip().lower()
+        if normalized in {"user", "assistant", "system", "tool"}:
+            return normalized
+        if normalized in {"model", "bot", "ai", "vision_analysis"}:
+            return "assistant"
+        if normalized in {"memory", "analysis", "context", "note"}:
+            return "system"
+        return "user"
+
+    @classmethod
+    def _normalize_message_payload(cls, message_data: dict) -> dict:
+        """Нормализует сообщение перед сохранением/выдачей контекста."""
+        if not isinstance(message_data, dict):
+            return {"role": "user", "text": str(message_data)}
+        normalized = dict(message_data)
+        normalized["role"] = cls._normalize_role(normalized.get("role"))
+        # Выравниваем поле content/text для старых форматов.
+        if not normalized.get("text") and normalized.get("content"):
+            normalized["text"] = str(normalized.get("content"))
+        return normalized
+
+    @staticmethod
+    def _is_service_artifact_text(text: str) -> bool:
+        """
+        Определяет служебные фразы, которые не должны попадать в AI-контекст.
+        """
+        payload = str(text or "").strip().lower()
+        if not payload:
+            return False
+        patterns = (
+            "обрабатываю предыдущий запрос",
+            "отправь следующее сообщение через пару секунд",
+            "добавил в очередь обработки",
+            "подожди пару секунд и повтори",
+            "очередь переполнена для этого чата",
+        )
+        return any(p in payload for p in patterns)
+
     def save_message(self, chat_id: int, message_data: dict):
         """Сохраняет сообщение в историю чата (Append-only log для скорости)."""
         chat_dir = self.get_chat_storage_path(chat_id)
         history_file = chat_dir / "history.jsonl"
+        payload = self._normalize_message_payload(message_data)
+        if self._is_service_artifact_text(payload.get("text", "")):
+            return False
 
         with open(history_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(message_data, ensure_ascii=False) + "\n")
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        return True
 
     def get_recent_context(self, chat_id: int, limit: int = 50):
         """Получает последние N сообщений для контекста."""
@@ -49,8 +94,8 @@ class ContextKeeper:
                 lines = f.readlines()
                 # If limit is 0 or None, return ALL lines (careful with memory)
                 if not limit:
-                    return [json.loads(line) for line in lines]
-                return [json.loads(line) for line in lines[-limit:]]
+                    return [self._normalize_message_payload(json.loads(line)) for line in lines]
+                return [self._normalize_message_payload(json.loads(line)) for line in lines[-limit:]]
         except Exception as e:
             # logger.error(f"Error reading context: {e}")
             return []
@@ -108,6 +153,48 @@ class ContextKeeper:
         if summary_file.exists():
             return summary_file.read_text(encoding="utf-8")
         return ""
+
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Грубая оценка количества токенов.
+        Для кириллицы и латиницы в среднем 1 токен ≈ 4 символа.
+        """
+        if not text:
+            return 0
+        return len(text) // 4 + 1
+
+    def get_token_aware_context(self, chat_id: int, max_tokens: int = 4000) -> list:
+        """
+        Получает контекст, не превышающий лимит токенов.
+        Идет по истории с конца, пока не наберет нужный объем.
+        """
+        chat_dir = self.get_chat_storage_path(chat_id)
+        history_file = chat_dir / "history.jsonl"
+
+        if not history_file.exists():
+            return []
+
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            
+            context = []
+            current_tokens = 0
+            
+            # Читаем с конца (свежие сообщения важнее)
+            for line in reversed(lines):
+                msg = self._normalize_message_payload(json.loads(line))
+                msg_tokens = self._estimate_tokens(msg.get("text", ""))
+                
+                if current_tokens + msg_tokens > max_tokens:
+                    break
+                
+                context.insert(0, msg)
+                current_tokens += msg_tokens
+                
+            return context
+        except Exception as e:
+            return []
 
     def clear_history(self, chat_id: int):
         """Полная очистка истории конкретного чата."""

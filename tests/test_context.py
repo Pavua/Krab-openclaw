@@ -59,3 +59,25 @@ def test_limit_context(context_keeper):
     history = context_keeper.get_recent_context(chat_id, limit=5)
     assert len(history) == 5
     assert history[-1]['msg_id'] == 19
+
+
+def test_service_artifact_messages_are_not_saved(context_keeper):
+    """Служебные фразы очереди не должны попадать в историю контекста."""
+    chat_id = 777
+    saved = context_keeper.save_message(
+        chat_id,
+        {"role": "assistant", "text": "⏳ Обрабатываю предыдущий запрос. Отправь следующее сообщение через пару секунд."},
+    )
+    assert saved is False
+    history = context_keeper.get_recent_context(chat_id, limit=10)
+    assert history == []
+
+
+def test_normal_messages_are_saved(context_keeper):
+    """Обычные пользовательские/ассистентские сообщения сохраняются как раньше."""
+    chat_id = 778
+    saved = context_keeper.save_message(chat_id, {"role": "assistant", "text": "Готово, вот ответ."})
+    assert saved is True
+    history = context_keeper.get_recent_context(chat_id, limit=10)
+    assert len(history) == 1
+    assert history[0]["text"] == "Готово, вот ответ."
