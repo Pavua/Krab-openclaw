@@ -896,3 +896,35 @@ OPENCLAW_API_KEY=sk-...                  # Your OpenClaw API Key
    - Скрипт верификации подтвердил корректное распознавание 41 модели и отделение `text-embedding-nomic-embed-text-v1.5` как embedding.
 2. Тесты:
    - `pytest -q tests/test_model_router_phase_d.py` → ✅ `18 passed`.
+
+---
+
+## ✅ v8 Sprint Update #18 (2026-02-19) — Cloud Scan Reliability + Daemon Control
+
+### Что реализовано (Update #18)
+
+1. Усилен cloud scan моделей в `src/core/model_manager.py`:
+   - `list_cloud_models()` теперь использует `openclaw models list --all --json` как основной источник.
+   - Добавлен fallback на HTTP `openclaw_client.get_models()` для совместимости.
+   - Убрана проблема, когда через HTTP `/v1/models` приходил HTML shell и список cloud-моделей был пустым/неполным.
+
+2. Добавлен контролируемый daemon-рантайм для Krab Core (macOS launchd):
+   - `/Users/pablito/Antigravity_AGENTS/Краб/krab_core_daemon_start.command`
+   - `/Users/pablito/Antigravity_AGENTS/Краб/krab_core_daemon_stop.command`
+   - `/Users/pablito/Antigravity_AGENTS/Краб/krab_core_daemon_status.command`
+
+3. Зафиксирована диагностика ключей cloud-провайдеров:
+   - Gemini: `403 PERMISSION_DENIED (key reported as leaked)` в прямом API-вызове.
+   - OpenAI: `401 Incorrect API key provided` в прямом API-вызове.
+   - Это подтверждает, что проблема не в каналах, а именно в ключах/провайдерах.
+
+### Верификация (Update #18)
+
+1. Локальная проверка cloud-catalog через OpenClaw CLI:
+   - обнаружено `available_count=62` cloud-моделей.
+
+2. Проверка Python-компиляции:
+   - `python3 -m compileall -q src/core/model_manager.py src/handlers/commands.py` → ✅
+
+3. Тесты:
+   - `pytest -q tests/test_model_set_parser.py tests/test_model_local_health_probe.py` → ✅ `10 passed`.

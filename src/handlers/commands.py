@@ -129,6 +129,76 @@ def parse_model_set_request(args: list[str], valid_slots: list[str]) -> dict[str
     }
 
 
+MODEL_FRIENDLY_ALIASES: dict[str, str] = {
+    # Gemini
+    "gemini-flash": "google/gemini-2.5-flash",
+    "gemini-2.5-flash": "google/gemini-2.5-flash",
+    "gemini-flash-latest": "google/gemini-2.5-flash",
+    "gemini-3-pro": "google/gemini-3-pro-preview",
+    "gemini-3-pro-latest": "google/gemini-3-pro-preview",
+    "gemini-pro": "google/gemini-3-pro-preview",
+    "gemini-pro-latest": "google/gemini-3-pro-preview",
+    "gemini-2.5-pro": "google/gemini-2.5-pro",
+    # OpenAI
+    "gpt-4o-mini": "openai/gpt-4o-mini",
+    "gpt-4.1-mini": "openai/gpt-4.1-mini",
+    "gpt-5-mini": "openai/gpt-5-mini",
+    "gpt-5": "openai/gpt-5",
+    "gpt-5-chat": "openai/gpt-5-chat-latest",
+    "gpt-5-codex": "openai/gpt-5-codex",
+    "o3": "openai/o3",
+    "o4-mini": "openai/o4-mini",
+}
+
+
+def normalize_model_alias(raw_model_name: str) -> tuple[str, str]:
+    """
+    Нормализует "человеческие" алиасы model_id в каноничный вид.
+
+    Примеры:
+    - gemini-3-pro-latest -> google/gemini-3-pro-preview
+    - gpt-4o-mini -> openai/gpt-4o-mini
+    """
+    original = str(raw_model_name or "").strip()
+    if not original:
+        return "", ""
+
+    canonical = "-".join(original.lower().replace("_", "-").split())
+    resolved = MODEL_FRIENDLY_ALIASES.get(canonical, original)
+
+    # Удобный shorthand без provider-префикса.
+    if "/" not in resolved:
+        lowered = resolved.lower()
+        if lowered.startswith("gemini"):
+            resolved = f"google/{resolved}"
+        elif lowered.startswith(("gpt", "o1", "o3", "o4", "o5", "codex")):
+            resolved = f"openai/{resolved}"
+
+    if resolved == original:
+        return resolved, ""
+    return resolved, f"ℹ️ Алиас: `{original}` → `{resolved}`"
+
+
+def render_model_presets_text() -> str:
+    """Формирует user-friendly пресеты для быстрого переключения моделей."""
+    return (
+        "🧩 **Быстрые пресеты моделей:**\n\n"
+        "**Cloud (Gemini):**\n"
+        "• `!model set chat gemini-flash` → `google/gemini-2.5-flash`\n"
+        "• `!model set pro gemini-3-pro-latest` → `google/gemini-3-pro-preview`\n"
+        "• `!model set thinking gemini-2.5-pro` → `google/gemini-2.5-pro`\n\n"
+        "**Cloud (OpenAI):**\n"
+        "• `!model set chat gpt-4o-mini` → `openai/gpt-4o-mini`\n"
+        "• `!model set chat gpt-5-mini` → `openai/gpt-5-mini`\n"
+        "• `!model set coding gpt-5-codex` → `openai/gpt-5-codex`\n\n"
+        "**Local (LM Studio):**\n"
+        "• `!model set chat zai-org/glm-4.6v-flash`\n\n"
+        "После смены — проверка:\n"
+        "• `!model`\n"
+        "• `!model preflight chat Тест маршрута`\n"
+    )
+
+
 def resolve_local_model_size_human(router, model_id: str, verbose_map: dict) -> str:
     """
     Возвращает человекочитаемый размер модели.
@@ -1594,6 +1664,7 @@ def register_handlers(app, deps: dict):
                 f"`!model feedback <1-5> [note]` — оценить последний прогон\n"
                 f"`!model feedback <1-5> <profile> <model> [channel] [note]` — явная оценка\n"
                 f"`!model stats [profile]` — качество по feedback\n"
+                f"`!model presets` — быстрые пресеты/алиасы\n"
                 f"\n_Смена модели:_\n"
                 f"`!model set chat <name>`"
             )
@@ -1602,6 +1673,10 @@ def register_handlers(app, deps: dict):
 
         # Обработка команд переключения режима
         subcommand = args[1].lower()
+
+        if subcommand in {"presets", "catalog", "quick"}:
+            await message.reply_text(render_model_presets_text())
+            return
 
         if subcommand in ['local', 'cloud', 'auto']:
             res = router.set_force_mode(subcommand)
@@ -1821,6 +1896,7 @@ def register_handlers(app, deps: dict):
 
         if subcommand == "scan":
             msg = await message.reply_text("🔍 **Сканирую модели (Local + Cloud)...**")
+            show_all = len(args) >= 3 and str(args[2]).strip().lower() in {"all", "full", "max"}
             
             # --- Сканирование Local ---
             local_list = await router.list_local_models()
@@ -1863,15 +1939,19 @@ def register_handlers(app, deps: dict):
                 text += "  _(Нет моделей)_\n"
             else:
                 # Ограничим список облака, их может быть много
-                limit_cloud = 15
+                limit_cloud = len(cloud_list) if show_all else 20
                 for m in cloud_list[:limit_cloud]:
                     text += f"  • `{m}`\n"
                 if len(cloud_list) > limit_cloud:
                     text += f"  _...и еще {len(cloud_list) - limit_cloud}_\n"
+                text += f"  _Показано: {min(limit_cloud, len(cloud_list))} из {len(cloud_list)}_\n"
             if getattr(router, "last_cloud_error", None):
                 text += f"  ❗ Последняя cloud-ошибка: `{router.last_cloud_error}`\n"
             
-            text += "\n_Используйте:_ `!model set chat <ID>` или `!model set reasoning <ID>`"
+            text += (
+                "\n_Используйте:_ `!model set chat <ID>` или `!model set reasoning <ID>`\n"
+                "_Для полного списка:_ `!model scan all`"
+            )
             await msg.edit_text(text)
             return
 
@@ -1891,7 +1971,8 @@ def register_handlers(app, deps: dict):
                 return
 
             slot = str(parsed["slot"])
-            model_name = str(parsed["model_name"])
+            model_name_raw = str(parsed["model_name"])
+            model_name, alias_note = normalize_model_alias(model_name_raw)
             old = router.models.get(slot, "—")
             router.models[slot] = model_name
 
@@ -1920,6 +2001,8 @@ def register_handlers(app, deps: dict):
                     )
                 if legacy_warning:
                     text = f"{legacy_warning}\n\n{text}"
+                if alias_note:
+                    text = f"{alias_note}\n\n{text}"
                 await msg_load.edit_text(text)
                 return
 
@@ -1929,6 +2012,8 @@ def register_handlers(app, deps: dict):
             )
             if legacy_warning:
                 text = f"{legacy_warning}\n\n{text}"
+            if alias_note:
+                text = f"{alias_note}\n\n{text}"
             await message.reply_text(text)
             return
         else:
@@ -1943,6 +2028,7 @@ def register_handlers(app, deps: dict):
                 "`!model feedback <1-5> [note]` — оценка"
                 "`!model feedback <1-5> <profile> <model> [channel] [note]` — явная оценка\n"
                 "`!model stats [profile]` — сводка feedback\n"
+                "`!model presets` — готовые пресеты/алиасы\n"
                 "`!model scan` — поиск\n"
                 "`!model set <slot> <name>` — модель\n"
                 "Слоты: chat, thinking, pro, coding"

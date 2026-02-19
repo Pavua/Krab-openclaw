@@ -12,8 +12,9 @@
 ## 2. Что уже есть (по факту аудита)
 
 1. OpenClaw gateway работает локально.
-2. Каналы OpenClaw пока не активированы (это нормально для userbot-сценария Krab).
-3. Часть полезных skills уже ready (включая `coding-agent`, `summarize`, `github`, `gh-issues`, `openai-whisper-api`).
+2. Активированы каналы: `telegram`, `discord`, `slack`, `imessage`, `signal` (Signal требует отдельной регистрации номера/daemon).
+3. `whatsapp` включён, но требует линковки QR (пока не linked).
+4. Часть полезных skills уже ready (включая `coding-agent`, `summarize`, `github`, `gh-issues`, `openai-whisper-api`).
 
 ## 3. Must-have skills для текущего этапа
 
@@ -72,6 +73,19 @@
    - `./openclaw_channels_skills_bootstrap.command apply imessage,discord`
 4. Проверить: `openclaw channels status --probe --json` — iMessage/Discord должны быть в списке.
 
+### 6.2 Signal (без конфликта с WEB_PORT=8080)
+1. В `.env` использовать выделенный порт daemon:
+   - `OPENCLAW_SIGNAL_HTTP_URL=http://127.0.0.1:18080`
+2. Зарегистрировать номер в `signal-cli`:
+   - `./openclaw_signal_register.command`
+3. Запустить daemon:
+   - `./openclaw_signal_daemon.command`
+4. Проверить канал:
+   - `openclaw channels status --probe`
+5. Если видишь `probe failed`:
+   - проверь, что daemon реально слушает `18080`;
+   - убедись, что номер зарегистрирован (`signal-cli listAccounts`).
+
 ## 7. Safe baseline policy
 
 Скрипт в режиме `apply` применяет только безопасные настройки:
@@ -94,3 +108,17 @@
 1. `/Users/pablito/Antigravity_AGENTS/Краб/docs/OPENCLAW_DASHBOARD_PLAYBOOK_RU.md`
 2. `/Users/pablito/Antigravity_AGENTS/Краб/ROADMAP_ECOSYSTEM.md`
 3. `/Users/pablito/Antigravity_AGENTS/Краб/MIGRATION.md`
+
+## 10. Быстрый troubleshooting
+
+1. `LLM error ... "API key was reported as leaked"`:
+   - это ошибка cloud-провайдера ключа, не канала мессенджера;
+   - замени ключ у провайдера и перезапусти gateway/бот;
+   - до ротации ключа используй local-first маршрут.
+2. В Web Panel строка вида `!model set ...`:
+   - должна идти через командный режим (`!model/.model`), а не как обычный prompt;
+   - проверка: после команды выполни `!model` или `!model preflight`.
+3. `!model scan` показывает только 1 cloud-модель или пусто:
+   - проверь `openclaw models list --all --json` (истинный каталог OpenClaw);
+   - если каталог нормальный, а в панели пусто — перезапусти Krab Core daemon:
+     `./krab_core_daemon_stop.command` → `./krab_core_daemon_start.command`.

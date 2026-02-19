@@ -1763,30 +1763,109 @@ class ModelRouter:
 
         return "\n".join(lines)
 
+    async def _scan_cloud_models_via_openclaw_cli(self, all_catalog: bool = True) -> List[Dict[str, Any]]:
+        """
+        Сканирует Cloud-каталог через `openclaw models list`.
+
+        Почему так:
+        - HTTP endpoint Gateway в некоторых сборках отдаёт SPA HTML для `/v1/models`,
+          из-за чего прямой REST-скан возвращает пусто.
+        - CLI использует нативный транспорт OpenClaw и корректно отдаёт JSON-каталог.
+        """
+        cmd = ["openclaw", "models", "list"]
+        if all_catalog:
+            cmd.append("--all")
+        cmd.append("--json")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            return []
+        except Exception:
+            return []
+
+        if proc.returncode != 0:
+            err = (stderr or b"").decode("utf-8", errors="ignore").strip()
+            if err:
+                self.last_cloud_error = err
+            return []
+
+        raw = (stdout or b"").decode("utf-8", errors="ignore").strip()
+        if not raw:
+            return []
+
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return []
+
+        items = payload.get("models", []) if isinstance(payload, dict) else []
+        if not isinstance(items, list):
+            return []
+        return [item for item in items if isinstance(item, dict)]
+
     async def list_cloud_models(self) -> List[str]:
-        """Сканирует доступные Cloud модели (via OpenClaw)."""
+        """Сканирует Cloud-модели (OpenClaw) с приоритетом CLI-каталога."""
         if not self.openclaw_client:
             return ["Ошибка: OpenClaw клиент не инициализирован"]
-        
+
         try:
+            # 1) Основной путь: OpenClaw CLI каталог (устойчивее чем HTTP /v1/models).
+            cli_models = await self._scan_cloud_models_via_openclaw_cli(all_catalog=True)
+            available: List[str] = []
+            configured: List[str] = []
+
+            for item in cli_models:
+                model_id = str(item.get("key") or item.get("id") or "").strip()
+                if not model_id:
+                    continue
+                # Local модели не относим к cloud-списку.
+                if bool(item.get("local")):
+                    continue
+                if bool(item.get("missing")):
+                    continue
+
+                tags = item.get("tags", []) if isinstance(item.get("tags"), list) else []
+                if bool(item.get("available")):
+                    available.append(model_id)
+                elif "configured" in tags or "default" in tags:
+                    # Если available пуст (например, ключ невалиден), показываем хотя бы
+                    # реально сконфигурированные cloud-model_id.
+                    configured.append(model_id)
+
+            result = sorted(set(available))
+            if not result and configured:
+                result = sorted(set(configured))
+            if result:
+                self.last_cloud_error = None
+                return result
+
+            # 2) Fallback: прямой HTTP get_models (для совместимости).
             raw_models = await self.openclaw_client.get_models()
-            models = []
+            models: List[str] = []
             for m in raw_models:
-                # OpenAI format: {"id": "foo", "object": "model"}
                 if isinstance(m, dict) and "id" in m:
-                    models.append(m["id"])
-                # Fallback: simple string list
+                    mid = str(m["id"]).strip()
+                    if mid:
+                        models.append(mid)
                 elif isinstance(m, str):
-                    models.append(m)
-            
-            self.last_cloud_error = None  # Сбрасываем старую ошибку при успехе
-            return sorted(models)
+                    mid = m.strip()
+                    if mid:
+                        models.append(mid)
+
+            self.last_cloud_error = None
+            return sorted(set(models))
         except Exception as e:
             err_msg = str(e)
             logger.error(f"Cloud scan error: {err_msg}")
             # Если это ошибка биллинга, помечаем soft cap
             self._mark_cloud_soft_cap_if_needed(err_msg)
-            
+
             # Возвращаем понятное сообщение об ошибке для команды !model scan
             if self._is_cloud_billing_error(err_msg):
                 return [f"❌ Ошибка биллинга (Cloud): Оплатите счет или замените API ключ в .env"]
