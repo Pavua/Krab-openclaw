@@ -7,6 +7,51 @@
 
 ---
 
+## ✅ v8 Sprint Update #21 (2026-02-19) — Web Assistant UX, Model Catalog API, Attachments, Stable Startup
+
+### Что реализовано
+
+1. **Web Assistant Model Control API (P0)**:
+   - `GET /api/model/catalog` — полный каталог слотов, cloud/local моделей и режима.
+   - `POST /api/model/apply` — смена режима (`auto/local/cloud`), модели слота и быстрых пресетов.
+   - Привязка к alias-нормализации моделей для предсказуемого выбора в UI.
+
+2. **Web Panel UX без ручных команд (P0)**:
+   - В `src/web/index.html` добавлены:
+     - селекторы режима/пресета/слота/модели,
+     - кнопки применения (`режим`, `пресет`, `слот`),
+     - быстрые сценарии (`Web Search`, `Deep Research`, `Разобрать URL`),
+     - поддержка `reasoning depth` и `RAG` через UI-элементы.
+
+3. **Вложения в web-assistant (P0)**:
+   - Новый endpoint: `POST /api/assistant/attachment`.
+   - Поддержка `text/pdf/docx` с best-effort извлечением текста.
+   - Для `image/video/archive` — сохранение + метаданные + prompt-snippet.
+   - Фронтенд-кнопка «Добавить файл» переведена на серверную загрузку.
+
+4. **Стабилизация старта ядра / устранение 404 каталога (P0)**:
+   - Причина: warmup MLX мог валить процесс до подъёма web API.
+   - `src/modules/perceptor.py`: `PERCEPTOR_AUDIO_WARMUP` оставлен опциональным, но
+     дефолт переключён на `0` (безопасный startup-first режим).
+   - `.env.example` дополнен явным флагом и комментариями.
+
+### Верификация
+
+1. Локальный smoke:
+   - запуск `python -m src.main` без override-переменных,
+   - `GET /api/model/catalog` → `200` (подъём ~6 сек),
+   - web-панель стартует стабильно.
+
+2. Автотесты:
+   - расширен `tests/test_web_app.py`:
+     - проверка `attachment_endpoint` в capabilities,
+     - новый тест загрузки `POST /api/assistant/attachment`.
+   - прогон:
+     - `pytest -q tests/test_web_app.py tests/test_model_set_parser.py`
+     - ✅ `34 passed`.
+
+---
+
 ## ✅ v8 Sprint Update #20 (2026-02-16) — Queue-first, Reaction Learning, Group Attribution
 
 ### Что реализовано

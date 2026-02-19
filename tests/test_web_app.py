@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Тесты WebApp: базовые API и устойчивость при rag=None."""
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
@@ -12,6 +14,16 @@ class _DummyRouter:
         self._ack = {}
         self._feedback_events = []
         self._feedback_counter = 0
+        self.models = {
+            "chat": "google/gemini-2.5-flash",
+            "thinking": "google/gemini-2.5-pro",
+            "pro": "google/gemini-3-pro-preview",
+            "coding": "openai/gpt-5-codex",
+        }
+        self.force_mode = "auto"
+        self.local_engine = "lmstudio"
+        self.active_local_model = "zai-org/glm-4.6v-flash"
+        self.is_local_available = True
         self._history = [
             {
                 "ts": "2026-02-12T10:00:00+00:00",
@@ -28,9 +40,37 @@ class _DummyRouter:
 
     def get_model_info(self):
         return {
-            "local_model": "qwen2.5-7b",
-            "cloud_models": {"chat": "gemini-2.5-flash"},
+            "local_model": self.active_local_model,
+            "cloud_models": self.models.copy(),
+            "force_mode": self.force_mode,
+            "local_engine": self.local_engine,
+            "local_available": self.is_local_available,
         }
+
+    def set_force_mode(self, mode: str):
+        if mode == "local":
+            self.force_mode = "force_local"
+        elif mode == "cloud":
+            self.force_mode = "force_cloud"
+        else:
+            self.force_mode = "auto"
+        return f"ok:{self.force_mode}"
+
+    async def list_local_models_verbose(self):
+        return [
+            {
+                "id": "zai-org/glm-4.6v-flash",
+                "loaded": True,
+                "type": "llm",
+                "size_human": "7.09 GB",
+            },
+            {
+                "id": "qwen/qwen3-coder-30b",
+                "loaded": False,
+                "type": "llm",
+                "size_human": "18.2 GB",
+            },
+        ]
 
     def get_profile_recommendation(self, profile: str = "chat"):
         return {
@@ -743,6 +783,90 @@ def test_assistant_capabilities_endpoint() -> None:
     assert payload["mode"] == "web_native"
     assert payload["endpoint"] == "/api/assistant/query"
     assert payload["feedback_endpoint"] == "/api/model/feedback"
+    assert payload["model_catalog_endpoint"] == "/api/model/catalog"
+    assert payload["model_apply_endpoint"] == "/api/model/apply"
+    assert payload["attachment_endpoint"] == "/api/assistant/attachment"
+
+
+def test_assistant_attachment_upload(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client = _build_client()
+
+    denied = client.post(
+        "/api/assistant/attachment",
+        files={"file": ("note.txt", "Привет, Краб!".encode("utf-8"), "text/plain")},
+    )
+    assert denied.status_code == 403
+
+    ok = client.post(
+        "/api/assistant/attachment",
+        files={"file": ("note.txt", "Привет, Краб!".encode("utf-8"), "text/plain")},
+        headers={"X-Krab-Web-Key": "secret123"},
+    )
+    assert ok.status_code == 200
+    payload = ok.json()
+    assert payload["ok"] is True
+    attachment = payload["attachment"]
+    assert attachment["kind"] == "text"
+    assert attachment["has_extracted_text"] is True
+    assert "Контекст из файла `note.txt`" in attachment["prompt_snippet"]
+    assert str(attachment["stored_path"]).startswith("artifacts/web_uploads/")
+
+    stored_path = Path(str(attachment["stored_path"]))
+    if stored_path.exists():
+        stored_path.unlink()
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+
+def test_model_catalog_endpoint() -> None:
+    client = _build_client()
+    response = client.get("/api/model/catalog")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    catalog = payload["catalog"]
+    assert catalog["force_mode"] == "auto"
+    assert "chat" in catalog["slots"]
+    assert len(catalog["local_models"]) >= 1
+
+
+def test_model_apply_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client = _build_client()
+
+    denied = client.post("/api/model/apply", json={"action": "set_mode", "mode": "local"})
+    assert denied.status_code == 403
+
+    set_mode = client.post(
+        "/api/model/apply",
+        json={"action": "set_mode", "mode": "local"},
+        headers={"X-Krab-Web-Key": "secret123"},
+    )
+    assert set_mode.status_code == 200
+    set_mode_payload = set_mode.json()
+    assert set_mode_payload["ok"] is True
+    assert set_mode_payload["catalog"]["force_mode"] == "local"
+
+    set_slot = client.post(
+        "/api/model/apply",
+        json={"action": "set_slot_model", "slot": "chat", "model": "gpt-5-mini"},
+        headers={"X-Krab-Web-Key": "secret123"},
+    )
+    assert set_slot.status_code == 200
+    set_slot_payload = set_slot.json()
+    assert set_slot_payload["ok"] is True
+    assert set_slot_payload["catalog"]["cloud_slots"]["chat"] == "openai/gpt-5-mini"
+
+    apply_preset = client.post(
+        "/api/model/apply",
+        json={"action": "apply_preset", "preset": "balanced_auto"},
+        headers={"X-Krab-Web-Key": "secret123"},
+    )
+    assert apply_preset.status_code == 200
+    preset_payload = apply_preset.json()
+    assert preset_payload["ok"] is True
+    assert preset_payload["catalog"]["force_mode"] == "auto"
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
 
 
 def test_assistant_rate_limit(monkeypatch) -> None:

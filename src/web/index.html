@@ -176,6 +176,27 @@
             margin-bottom: 10px;
         }
 
+        .assistant-top {
+            grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(220px, 1fr);
+        }
+
+        .control-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .control-grid .meta {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        select.field option {
+            color: #e5ecff;
+            background: #0f1521;
+        }
+
         .assistant-actions {
             display: flex;
             gap: 10px;
@@ -301,12 +322,80 @@
         <div class="row">
             <div class="card">
                 <p class="k">Web Assistant (без Telegram)</p>
-                <div class="row-inline">
-                    <input id="assistantTaskType" class="field" value="chat" placeholder="task_type: chat/reasoning/coding/...">
-                    <input id="assistantUseRag" class="field" value="off" placeholder="RAG: on/off">
+                <div class="control-grid">
+                    <div>
+                        <span class="meta">Режим роутинга</span>
+                        <select id="modelModeSelect" class="field">
+                            <option value="auto">auto (local-first)</option>
+                            <option value="local">local (force_local)</option>
+                            <option value="cloud">cloud (force_cloud)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <span class="meta">Быстрый пресет</span>
+                        <select id="modelPresetSelect" class="field">
+                            <option value="balanced_auto">Balanced Auto</option>
+                            <option value="local_focus">Local Focus</option>
+                            <option value="cloud_reasoning">Cloud Reasoning</option>
+                        </select>
+                    </div>
+                    <div>
+                        <span class="meta">Слот</span>
+                        <select id="modelSlotSelect" class="field">
+                            <option value="chat">chat</option>
+                        </select>
+                    </div>
+                    <div>
+                        <span class="meta">Модель для слота</span>
+                        <select id="modelChoiceSelect" class="field">
+                            <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="assistant-actions">
+                    <button id="modelCatalogReloadBtn" class="refresh">Обновить каталог</button>
+                    <button id="modelApplyModeBtn" class="refresh">Применить режим</button>
+                    <button id="modelApplyPresetBtn" class="refresh">Применить пресет</button>
+                    <button id="modelApplySlotBtn" class="refresh">Сохранить слот</button>
+                    <span class="meta" id="modelControlMeta">Каталог моделей загружается...</span>
+                </div>
+                <div class="row-inline assistant-top">
+                    <select id="assistantTaskType" class="field">
+                        <option value="chat">chat</option>
+                        <option value="reasoning">reasoning</option>
+                        <option value="coding">coding</option>
+                        <option value="security">security</option>
+                        <option value="infra">infra</option>
+                        <option value="review">review</option>
+                        <option value="creative">creative</option>
+                        <option value="moderation">moderation</option>
+                    </select>
+                    <select id="assistantReasoningDepth" class="field">
+                        <option value="auto">Рассуждение: auto</option>
+                        <option value="fast">Рассуждение: fast</option>
+                        <option value="balanced">Рассуждение: balanced</option>
+                        <option value="deep">Рассуждение: deep</option>
+                    </select>
+                    <select id="assistantUseRag" class="field">
+                        <option value="off">RAG: off</option>
+                        <option value="on">RAG: on</option>
+                    </select>
                     <input id="assistantApiKey" class="field" placeholder="WEB_API_KEY (если включен)">
                 </div>
                 <textarea id="assistantPrompt" class="field" rows="4" placeholder="Введите задачу для Краба..."></textarea>
+                <div class="control-grid" style="margin-top:10px;">
+                    <input id="quickWebQuery" class="field" placeholder="Запрос для web-search (новости, факты, рынки...)">
+                    <input id="quickDeepTopic" class="field" placeholder="Тема для deep research (детальный анализ)">
+                    <input id="quickSourceUrl" class="field" placeholder="URL для разбора (YouTube/статья/документация)">
+                    <input id="assistantFileInput" class="field" type="file" accept=".txt,.md,.json,.csv,.py,.js,.ts,.tsx,.html,.xml,.yaml,.yml">
+                </div>
+                <div class="assistant-actions">
+                    <button id="quickWebBtn" class="refresh">Web Search</button>
+                    <button id="quickDeepBtn" class="refresh">Deep Research</button>
+                    <button id="quickUrlBtn" class="refresh">Разобрать URL</button>
+                    <button id="assistantAttachBtn" class="refresh">Добавить файл</button>
+                    <span class="meta" id="quickActionMeta">Быстрые сценарии: без ручных команд</span>
+                </div>
                 <div class="assistant-actions">
                     <button id="assistantPlanBtn" class="refresh">Preflight</button>
                     <button id="assistantRunBtn" class="refresh">Выполнить</button>
@@ -370,6 +459,270 @@
             return payload;
         }
 
+        let modelCatalogState = null;
+
+        function normalizedForceMode(rawMode) {
+            const normalized = String(rawMode || '').trim().toLowerCase();
+            if (normalized === 'force_local' || normalized === 'local') return 'local';
+            if (normalized === 'force_cloud' || normalized === 'cloud') return 'cloud';
+            return 'auto';
+        }
+
+        function fillSelect(nodeId, options, selectedValue = '') {
+            const node = document.getElementById(nodeId);
+            if (!node) return;
+            const current = String(selectedValue || '');
+            const html = options.map((item) => {
+                const value = String(item.value ?? '');
+                const label = String(item.label ?? value);
+                const selected = value === current ? ' selected' : '';
+                return `<option value="${value}"${selected}>${label}</option>`;
+            }).join('');
+            node.innerHTML = html || '<option value="">(пусто)</option>';
+        }
+
+        function getModelOptionsFromCatalog(catalog) {
+            const result = [];
+            const localModels = Array.isArray(catalog?.local_models) ? catalog.local_models : [];
+            const cloudPresets = Array.isArray(catalog?.cloud_presets) ? catalog.cloud_presets : [];
+            const cloudSlots = catalog?.cloud_slots || {};
+
+            for (const item of localModels) {
+                const modelId = String(item?.id || '').trim();
+                if (!modelId) continue;
+                const loadedSuffix = item?.loaded ? ' • loaded' : '';
+                const sizeSuffix = item?.size_human ? ` • ${item.size_human}` : '';
+                result.push({
+                    value: modelId,
+                    label: `LOCAL • ${modelId}${loadedSuffix}${sizeSuffix}`,
+                });
+            }
+
+            for (const item of cloudPresets) {
+                const modelId = String(item?.id || '').trim();
+                if (!modelId) continue;
+                result.push({
+                    value: modelId,
+                    label: `CLOUD • ${modelId}`,
+                });
+            }
+
+            for (const modelId of Object.values(cloudSlots)) {
+                const text = String(modelId || '').trim();
+                if (!text) continue;
+                result.push({
+                    value: text,
+                    label: `CURRENT • ${text}`,
+                });
+            }
+
+            const dedup = [];
+            const seen = new Set();
+            for (const item of result) {
+                if (seen.has(item.value)) continue;
+                seen.add(item.value);
+                dedup.push(item);
+            }
+            return dedup;
+        }
+
+        function syncSlotModelSelection() {
+            const slotNode = document.getElementById('modelSlotSelect');
+            const modelNode = document.getElementById('modelChoiceSelect');
+            if (!slotNode || !modelNode || !modelCatalogState) return;
+            const slot = String(slotNode.value || '').trim();
+            const currentModel = String((modelCatalogState.cloud_slots || {})[slot] || '').trim();
+            if (!currentModel) return;
+            const found = Array.from(modelNode.options).some((option) => option.value === currentModel);
+            if (found) {
+                modelNode.value = currentModel;
+            }
+        }
+
+        function syncModelControls(catalog) {
+            modelCatalogState = catalog || {};
+            const mode = normalizedForceMode(catalog?.force_mode);
+            const slotNames = Array.isArray(catalog?.slots) ? catalog.slots : [];
+            const quickPresets = Array.isArray(catalog?.quick_presets) ? catalog.quick_presets : [];
+            const selectedSlot = String(document.getElementById('modelSlotSelect')?.value || '');
+
+            fillSelect(
+                'modelModeSelect',
+                [
+                    { value: 'auto', label: 'auto (local-first)' },
+                    { value: 'local', label: 'local (force_local)' },
+                    { value: 'cloud', label: 'cloud (force_cloud)' },
+                ],
+                mode
+            );
+            fillSelect(
+                'modelPresetSelect',
+                quickPresets.length
+                    ? quickPresets.map((item) => ({
+                        value: item.id,
+                        label: `${item.title} — ${item.description}`,
+                    }))
+                    : [{ value: 'balanced_auto', label: 'Balanced Auto' }],
+                String(document.getElementById('modelPresetSelect')?.value || 'balanced_auto')
+            );
+            fillSelect(
+                'modelSlotSelect',
+                slotNames.length
+                    ? slotNames.map((slot) => ({ value: slot, label: slot }))
+                    : [{ value: 'chat', label: 'chat' }],
+                selectedSlot && slotNames.includes(selectedSlot) ? selectedSlot : (slotNames[0] || 'chat')
+            );
+
+            const modelOptions = getModelOptionsFromCatalog(catalog);
+            fillSelect(
+                'modelChoiceSelect',
+                modelOptions.length ? modelOptions : [{ value: '', label: '(модели не обнаружены)' }],
+                ''
+            );
+            syncSlotModelSelection();
+
+            const localState = catalog?.local_available ? 'local=online' : 'local=offline';
+            const active = catalog?.local_active_model ? ` • active=${catalog.local_active_model}` : '';
+            setText('modelControlMeta', `Каталог обновлен • mode=${mode} • ${localState}${active}`);
+        }
+
+        async function loadModelCatalog(showStatus = true) {
+            try {
+                const payload = await fetchJson('/api/model/catalog');
+                if (!payload?.ok) {
+                    throw new Error(payload?.error || 'model_catalog_failed');
+                }
+                syncModelControls(payload.catalog || {});
+                if (showStatus) {
+                    setText('modelControlMeta', 'Каталог моделей готов.');
+                }
+            } catch (error) {
+                setText('modelControlMeta', `Ошибка каталога моделей: ${error.message}`);
+            }
+        }
+
+        async function applyModelAction(action, extraPayload = {}) {
+            try {
+                setText('modelControlMeta', 'Применяю изменения...');
+                const payload = await postJson('/api/model/apply', { action, ...extraPayload }, true, 'POST');
+                if (!payload?.ok) {
+                    throw new Error(payload?.error || 'model_apply_failed');
+                }
+                syncModelControls(payload.catalog || {});
+                if (payload.message) {
+                    document.getElementById('assistantOutput').textContent = String(payload.message);
+                }
+                setText('modelControlMeta', payload.message || 'Изменения применены.');
+                await updateStats();
+            } catch (error) {
+                setText('modelControlMeta', `Ошибка применения: ${error.message}`);
+            }
+        }
+
+        function appendPromptChunk(chunk) {
+            const node = document.getElementById('assistantPrompt');
+            const existing = String(node.value || '').trim();
+            const incoming = String(chunk || '').trim();
+            if (!incoming) return;
+            node.value = existing ? `${existing}\n\n${incoming}` : incoming;
+        }
+
+        async function attachSelectedFileToPrompt() {
+            const input = document.getElementById('assistantFileInput');
+            const files = input?.files || [];
+            if (!files.length) {
+                setText('quickActionMeta', 'Выбери файл перед добавлением в prompt.');
+                return;
+            }
+            const file = files[0];
+            try {
+                setText('quickActionMeta', `Загружаю файл: ${file.name}...`);
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const headers = {};
+                const webApiKey = readWebApiKey();
+                if (webApiKey) {
+                    headers['X-Krab-Web-Key'] = webApiKey;
+                }
+
+                const response = await fetch('/api/assistant/attachment', {
+                    method: 'POST',
+                    headers,
+                    body: formData,
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload?.detail || `HTTP ${response.status}`);
+                }
+                const attachment = payload?.attachment || {};
+                appendPromptChunk(String(attachment.prompt_snippet || ''));
+                setText(
+                    'quickActionMeta',
+                    `Файл добавлен: ${attachment.file_name || file.name} • ${attachment.kind || 'attachment'}`
+                );
+            } catch (error) {
+                setText('quickActionMeta', `Ошибка загрузки файла: ${error.message}`);
+            }
+        }
+
+        async function runQuickWebSearch() {
+            const query = (document.getElementById('quickWebQuery').value || '').trim();
+            if (!query) {
+                setText('quickActionMeta', 'Введи запрос для web-search.');
+                return;
+            }
+            document.getElementById('assistantTaskType').value = 'chat';
+            document.getElementById('assistantReasoningDepth').value = 'balanced';
+            appendPromptChunk(
+`Сделай web-search по теме: "${query}".
+Нужен краткий отчет: ключевые факты, 3-5 надежных источников и практические выводы.`
+            );
+            setText('quickActionMeta', 'Шаблон web-search подготовлен. Запускаю...');
+            await assistantQuery();
+        }
+
+        async function runQuickDeepResearch() {
+            const topic = (document.getElementById('quickDeepTopic').value || '').trim();
+            if (!topic) {
+                setText('quickActionMeta', 'Введи тему для deep research.');
+                return;
+            }
+            document.getElementById('assistantTaskType').value = 'reasoning';
+            document.getElementById('assistantReasoningDepth').value = 'deep';
+            appendPromptChunk(
+`Deep research по теме: "${topic}".
+Собери структурированный отчет:
+1) краткое резюме,
+2) ключевые риски/возможности,
+3) сравнение подходов,
+4) пошаговый план действий,
+5) ссылки на проверяемые источники.`
+            );
+            setText('quickActionMeta', 'Шаблон deep research подготовлен. Запускаю...');
+            await assistantQuery();
+        }
+
+        async function runQuickUrlReview() {
+            const sourceUrl = (document.getElementById('quickSourceUrl').value || '').trim();
+            if (!sourceUrl) {
+                setText('quickActionMeta', 'Введи URL для разбора.');
+                return;
+            }
+            document.getElementById('assistantTaskType').value = 'reasoning';
+            document.getElementById('assistantReasoningDepth').value = 'balanced';
+            appendPromptChunk(
+`Разбери материал по ссылке: ${sourceUrl}
+Нужно:
+- краткое содержание;
+- ключевые тезисы/факты;
+- что это значит practically для меня;
+- если это YouTube: выдели главные выводы и тайм-коды (если доступны).`
+            );
+            setText('quickActionMeta', 'Шаблон URL-анализа подготовлен. Запускаю...');
+            await assistantQuery();
+        }
+
         async function opsAckAction(isAck) {
             const code = (document.getElementById('opsAlertCode').value || '').trim();
             const note = (document.getElementById('opsAlertNote').value || '').trim();
@@ -394,9 +747,17 @@
 
         async function assistantQuery() {
             const prompt = (document.getElementById('assistantPrompt').value || '').trim();
-            const taskType = (document.getElementById('assistantTaskType').value || 'chat').trim();
+            const taskTypeRaw = (document.getElementById('assistantTaskType').value || 'chat').trim();
+            const depthRaw = (document.getElementById('assistantReasoningDepth').value || 'auto').trim().toLowerCase();
             const ragRaw = (document.getElementById('assistantUseRag').value || 'off').trim().toLowerCase();
             const webApiKey = (document.getElementById('assistantApiKey').value || '').trim();
+            let taskType = taskTypeRaw || 'chat';
+            const confirmExpensive = depthRaw === 'deep';
+
+            // UX: depth=deep автоматически переводит chat -> reasoning.
+            if (taskType === 'chat' && depthRaw === 'deep') {
+                taskType = 'reasoning';
+            }
 
             if (!prompt) {
                 setText('assistantMeta', 'Ошибка: пустой prompt');
@@ -419,7 +780,8 @@
                     body: JSON.stringify({
                         prompt,
                         task_type: taskType || 'chat',
-                        use_rag: useRag
+                        use_rag: useRag,
+                        confirm_expensive: confirmExpensive
                     })
                 });
                 const payload = await response.json();
@@ -428,7 +790,10 @@
                 }
 
                 document.getElementById('assistantOutput').textContent = payload.reply || '(пустой ответ)';
-                setText('assistantMeta', `OK • профиль: ${payload.profile || '-'} • task: ${payload.task_type || '-'}`);
+                setText(
+                    'assistantMeta',
+                    `OK • профиль: ${payload.profile || '-'} • task: ${payload.task_type || '-'} • depth: ${depthRaw}`
+                );
                 const lastRoute = payload.last_route || {};
                 if (lastRoute.profile) {
                     document.getElementById('feedbackProfile').value = String(lastRoute.profile);
@@ -447,8 +812,17 @@
 
         async function assistantPreflight() {
             const prompt = (document.getElementById('assistantPrompt').value || '').trim();
-            const taskType = (document.getElementById('assistantTaskType').value || 'chat').trim();
+            const taskTypeRaw = (document.getElementById('assistantTaskType').value || 'chat').trim();
+            const depthRaw = (document.getElementById('assistantReasoningDepth').value || 'auto').trim().toLowerCase();
             const webApiKey = (document.getElementById('assistantApiKey').value || '').trim();
+            const selectedModel = (document.getElementById('modelChoiceSelect').value || '').trim();
+            let taskType = taskTypeRaw || 'chat';
+            const confirmExpensive = depthRaw === 'deep';
+
+            if (taskType === 'chat' && depthRaw === 'deep') {
+                taskType = 'reasoning';
+            }
+
             if (!prompt) {
                 setText('assistantMeta', 'Ошибка: пустой prompt');
                 return;
@@ -468,7 +842,9 @@
                     headers,
                     body: JSON.stringify({
                         prompt,
-                        task_type: taskType || 'chat'
+                        task_type: taskType || 'chat',
+                        preferred_model: selectedModel || null,
+                        confirm_expensive: confirmExpensive
                     })
                 });
                 const payload = await response.json();
@@ -504,7 +880,10 @@ warnings:
 ${warningText}
 
 next_step: ${plan.next_step || 'Можно запускать задачу.'}`;
-                setText('assistantMeta', `Preflight OK • профиль: ${plan.profile || '-'} • канал: ${execution.channel || '-'}`);
+                setText(
+                    'assistantMeta',
+                    `Preflight OK • профиль: ${plan.profile || '-'} • канал: ${execution.channel || '-'} • depth: ${depthRaw}`
+                );
             } catch (error) {
                 document.getElementById('assistantOutput').textContent = `Ошибка preflight: ${error.message}`;
                 setText('assistantMeta', 'Preflight завершился с ошибкой');
@@ -678,15 +1057,40 @@ ${channelsText}`;
             }
         }
 
-        document.getElementById('refreshBtn').addEventListener('click', updateStats);
+        async function refreshAll() {
+            await updateStats();
+            await loadModelCatalog(false);
+        }
+
+        document.getElementById('refreshBtn').addEventListener('click', refreshAll);
         document.getElementById('assistantRunBtn').addEventListener('click', assistantQuery);
         document.getElementById('assistantPlanBtn').addEventListener('click', assistantPreflight);
         document.getElementById('feedbackSendBtn').addEventListener('click', submitModelFeedback);
         document.getElementById('feedbackStatsBtn').addEventListener('click', loadModelFeedbackStats);
         document.getElementById('opsAckBtn').addEventListener('click', () => opsAckAction(true));
         document.getElementById('opsUnackBtn').addEventListener('click', () => opsAckAction(false));
+        document.getElementById('modelCatalogReloadBtn').addEventListener('click', () => loadModelCatalog(true));
+        document.getElementById('modelApplyModeBtn').addEventListener('click', async () => {
+            const mode = (document.getElementById('modelModeSelect').value || 'auto').trim();
+            await applyModelAction('set_mode', { mode });
+        });
+        document.getElementById('modelApplyPresetBtn').addEventListener('click', async () => {
+            const preset = (document.getElementById('modelPresetSelect').value || '').trim();
+            const localModel = (document.getElementById('modelChoiceSelect').value || '').trim();
+            await applyModelAction('apply_preset', { preset, local_model: localModel });
+        });
+        document.getElementById('modelApplySlotBtn').addEventListener('click', async () => {
+            const slot = (document.getElementById('modelSlotSelect').value || '').trim();
+            const model = (document.getElementById('modelChoiceSelect').value || '').trim();
+            await applyModelAction('set_slot_model', { slot, model });
+        });
+        document.getElementById('modelSlotSelect').addEventListener('change', syncSlotModelSelection);
+        document.getElementById('assistantAttachBtn').addEventListener('click', attachSelectedFileToPrompt);
+        document.getElementById('quickWebBtn').addEventListener('click', runQuickWebSearch);
+        document.getElementById('quickDeepBtn').addEventListener('click', runQuickDeepResearch);
+        document.getElementById('quickUrlBtn').addEventListener('click', runQuickUrlReview);
         setInterval(updateStats, 8000);
-        updateStats();
+        refreshAll();
     </script>
 </body>
 

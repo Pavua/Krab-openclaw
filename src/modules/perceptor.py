@@ -22,6 +22,7 @@ import uuid
 import base64
 import mimetypes
 import re
+import threading
 import edge_tts
 from typing import Dict, Any, Optional
 from io import BytesIO
@@ -85,9 +86,21 @@ class Perceptor:
         }
         
         logger.info(f"👂 Perceptor initialized. Audio: {self.whisper_model}, Vision: {self.vision_model}")
-        
-        # Warmup MLX
-        self._warmup_audio()
+
+        # Warmup MLX в фоне.
+        # По умолчанию выключен, т.к. на части macOS/MLX-конфигураций
+        # прогрев может аварийно завершать процесс (AGX assert) до старта Web API.
+        warmup_enabled = str(
+            config.get("PERCEPTOR_AUDIO_WARMUP", os.getenv("PERCEPTOR_AUDIO_WARMUP", "0"))
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if warmup_enabled:
+            threading.Thread(
+                target=self._warmup_audio,
+                name="perceptor-mlx-warmup",
+                daemon=True,
+            ).start()
+        else:
+            logger.info("Perceptor MLX warmup disabled by PERCEPTOR_AUDIO_WARMUP=0")
 
     def _warmup_audio(self):
         """Прогрев Neural Engine для MLX Whisper."""

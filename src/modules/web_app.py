@@ -11,11 +11,16 @@ import os
 from pathlib import Path
 import time
 import json
+import shlex
+import hashlib
+import io
+import mimetypes
+import re
 from datetime import datetime, timezone
 
 import structlog
 import uvicorn
-from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.core.ecosystem_health import EcosystemHealthService
@@ -118,6 +123,129 @@ class WebApp:
             return
         lookup_key = f"{namespace}:{key}"
         self._idempotency_state[lookup_key] = (time.time(), dict(payload))
+
+    def _web_attachment_max_bytes(self) -> int:
+        """Максимальный размер вложения web-панели в байтах."""
+        raw = os.getenv("WEB_ATTACHMENT_MAX_MB", "12").strip()
+        try:
+            value_mb = float(raw)
+        except Exception:
+            value_mb = 12.0
+        value_mb = max(1.0, min(value_mb, 200.0))
+        return int(value_mb * 1024 * 1024)
+
+    @staticmethod
+    def _sanitize_attachment_name(name: str) -> str:
+        """Очищает имя файла до безопасного ASCII-вида."""
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or "").strip())
+        safe = safe.strip("._")
+        return safe or "attachment.bin"
+
+    @staticmethod
+    def _trim_prompt_text(text: str, max_chars: int = 24000) -> tuple[str, bool]:
+        """Обрезает текст для prompt-контекста, чтобы не перегружать запрос."""
+        content = str(text or "")
+        if len(content) <= max_chars:
+            return content, False
+        return content[:max_chars], True
+
+    def _extract_pdf_text(self, raw_bytes: bytes) -> str:
+        """Извлекает текст из PDF (если установлен pypdf)."""
+        try:
+            import pypdf  # type: ignore
+        except Exception:
+            return ""
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+            parts: list[str] = []
+            for page in reader.pages[:20]:
+                try:
+                    page_text = page.extract_text() or ""
+                except Exception:
+                    page_text = ""
+                if page_text:
+                    parts.append(page_text)
+            return "\n\n".join(parts).strip()
+        except Exception:
+            return ""
+
+    def _extract_docx_text(self, raw_bytes: bytes) -> str:
+        """Извлекает текст из DOCX (если установлен python-docx)."""
+        try:
+            from docx import Document  # type: ignore
+        except Exception:
+            return ""
+        try:
+            document = Document(io.BytesIO(raw_bytes))
+            lines = [str(p.text).strip() for p in document.paragraphs if str(p.text).strip()]
+            return "\n".join(lines).strip()
+        except Exception:
+            return ""
+
+    def _build_attachment_prompt(self, *, file_name: str, content_type: str, raw_bytes: bytes, stored_path: Path) -> dict:
+        """
+        Преобразует загруженный файл в prompt-совместимый контекст.
+        Поддержка:
+        - text/* и популярные текстовые расширения;
+        - PDF / DOCX -> извлечение текста (best effort);
+        - image/video/archive -> метаданные + путь к сохранённому файлу.
+        """
+        ext = Path(file_name).suffix.lower()
+        size_bytes = int(len(raw_bytes))
+        size_kb = round(size_bytes / 1024.0, 2)
+        fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
+
+        text_extensions = {
+            ".txt", ".md", ".json", ".csv", ".tsv", ".py", ".js", ".ts", ".tsx",
+            ".yaml", ".yml", ".xml", ".html", ".htm", ".log", ".ini", ".toml", ".env",
+        }
+        is_text_like = content_type.startswith("text/") or ext in text_extensions
+
+        extracted = ""
+        kind = "metadata"
+        if is_text_like:
+            extracted = raw_bytes.decode("utf-8", errors="replace")
+            kind = "text"
+        elif ext == ".pdf":
+            extracted = self._extract_pdf_text(raw_bytes)
+            kind = "pdf_text" if extracted else "pdf_metadata"
+        elif ext == ".docx":
+            extracted = self._extract_docx_text(raw_bytes)
+            kind = "docx_text" if extracted else "docx_metadata"
+        elif content_type.startswith("image/"):
+            kind = "image_metadata"
+        elif content_type.startswith("video/"):
+            kind = "video_metadata"
+        elif ext in {".zip", ".rar", ".7z", ".tar", ".gz"}:
+            kind = "archive_metadata"
+
+        if extracted:
+            trimmed, was_trimmed = self._trim_prompt_text(extracted, max_chars=24000)
+            suffix = (
+                "\n\n[...контент обрезан для стабильности web-prompt]"
+                if was_trimmed else ""
+            )
+            prompt_snippet = (
+                f"Контекст из файла `{file_name}`:\n"
+                f"```text\n{trimmed}{suffix}\n```"
+            )
+        else:
+            prompt_snippet = (
+                f"Вложение `{file_name}` ({content_type}, {size_kb} KB, sha256:{fingerprint}) "
+                f"сохранено локально по пути `{stored_path}`.\n"
+                "Если нужно, сначала попроси извлечь/проанализировать содержимое этого типа файла."
+            )
+
+        return {
+            "kind": kind,
+            "file_name": file_name,
+            "content_type": content_type,
+            "size_bytes": size_bytes,
+            "sha256_short": fingerprint,
+            "stored_path": str(stored_path),
+            "prompt_snippet": prompt_snippet,
+            "has_extracted_text": bool(extracted),
+        }
 
     def _setup_routes(self):
         @self.app.get("/", response_class=HTMLResponse)
@@ -293,6 +421,296 @@ class WebApp:
                 confirm_expensive=confirm_expensive,
             )
             return {"ok": True, "preflight": preflight}
+
+        def _normalize_force_mode(force_mode: str) -> str:
+            """Нормализует внутренние force_* режимы в UI-вид: auto/local/cloud."""
+            normalized = str(force_mode or "").strip().lower()
+            if normalized in {"force_local", "local"}:
+                return "local"
+            if normalized in {"force_cloud", "cloud"}:
+                return "cloud"
+            return "auto"
+
+        async def _build_model_catalog(router_obj) -> dict:
+            """
+            Собирает каталог моделей и текущих настроек для web-панели.
+            Нужен для кнопочного UX без ручных `!model` команд.
+            """
+            cloud_slots_raw = getattr(router_obj, "models", {}) or {}
+            cloud_slots = (
+                {str(k): str(v) for k, v in cloud_slots_raw.items()}
+                if isinstance(cloud_slots_raw, dict)
+                else {}
+            )
+            slot_list = sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
+            force_mode = _normalize_force_mode(getattr(router_obj, "force_mode", "auto"))
+            local_engine = str(getattr(router_obj, "local_engine", "") or "")
+            local_active_model = str(getattr(router_obj, "active_local_model", "") or "")
+            local_available = bool(getattr(router_obj, "is_local_available", False))
+
+            local_models: list[dict] = []
+            local_models_error = ""
+            if hasattr(router_obj, "list_local_models_verbose"):
+                try:
+                    raw_local_models = await router_obj.list_local_models_verbose()
+                    if isinstance(raw_local_models, list):
+                        for item in raw_local_models:
+                            if not isinstance(item, dict):
+                                continue
+                            model_id = str(item.get("id", "")).strip()
+                            if not model_id:
+                                continue
+                            local_models.append(
+                                {
+                                    "id": model_id,
+                                    "loaded": bool(item.get("loaded", False)),
+                                    "type": str(item.get("type", "llm")),
+                                    "size_human": str(item.get("size_human", "n/a")),
+                                }
+                            )
+                except Exception as exc:  # noqa: BLE001
+                    local_models_error = str(exc)
+
+            if local_active_model and not any(str(item.get("id")) == local_active_model for item in local_models):
+                local_models.insert(
+                    0,
+                    {
+                        "id": local_active_model,
+                        "loaded": True,
+                        "type": "llm",
+                        "size_human": "n/a",
+                    },
+                )
+
+            cloud_presets: list[dict[str, str]] = []
+            alias_items: list[dict[str, str]] = []
+            try:
+                from src.handlers.commands import MODEL_FRIENDLY_ALIASES, normalize_model_alias
+
+                canonical_cloud_models = sorted(
+                    {
+                        str(model_id).strip()
+                        for model_id in MODEL_FRIENDLY_ALIASES.values()
+                        if str(model_id).strip()
+                    }
+                )
+                for model_id in canonical_cloud_models:
+                    provider = "openai" if model_id.startswith("openai/") else (
+                        "google" if model_id.startswith("google/") else "other"
+                    )
+                    cloud_presets.append(
+                        {
+                            "id": model_id,
+                            "provider": provider,
+                            "label": model_id.replace("google/", "Gemini • ").replace("openai/", "OpenAI • "),
+                        }
+                    )
+
+                for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
+                    resolved_id, _ = normalize_model_alias(alias_key)
+                    alias_items.append(
+                        {
+                            "alias": alias_key,
+                            "model": resolved_id,
+                        }
+                    )
+            except Exception:
+                cloud_presets = []
+                alias_items = []
+
+            if not cloud_presets:
+                cloud_presets = [
+                    {"id": "google/gemini-2.5-flash", "provider": "google", "label": "Gemini • gemini-2.5-flash"},
+                    {"id": "google/gemini-3-pro-preview", "provider": "google", "label": "Gemini • gemini-3-pro-preview"},
+                    {"id": "openai/gpt-5-mini", "provider": "openai", "label": "OpenAI • gpt-5-mini"},
+                    {"id": "openai/gpt-5-codex", "provider": "openai", "label": "OpenAI • gpt-5-codex"},
+                ]
+
+            quick_presets = [
+                {
+                    "id": "balanced_auto",
+                    "title": "Balanced Auto",
+                    "description": "Авто-режим: local-first с сильными cloud-слотами.",
+                },
+                {
+                    "id": "local_focus",
+                    "title": "Local Focus",
+                    "description": "Force local + локальная модель в ключевых слотах.",
+                },
+                {
+                    "id": "cloud_reasoning",
+                    "title": "Cloud Reasoning",
+                    "description": "Force cloud + усиленный reasoning/coding профиль.",
+                },
+            ]
+
+            return {
+                "force_mode": force_mode,
+                "slots": slot_list,
+                "cloud_slots": cloud_slots,
+                "local_engine": local_engine,
+                "local_available": local_available,
+                "local_active_model": local_active_model,
+                "local_models": local_models,
+                "local_models_error": local_models_error,
+                "cloud_presets": cloud_presets,
+                "aliases": alias_items,
+                "quick_presets": quick_presets,
+            }
+
+        @self.app.get("/api/model/catalog")
+        async def model_catalog():
+            """Каталог моделей/режимов для web-панели с кнопочным управлением."""
+            router = self.deps["router"]
+            return {"ok": True, "catalog": await _build_model_catalog(router)}
+
+        @self.app.post("/api/model/apply")
+        async def model_apply(
+            payload: dict = Body(...),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Применяет изменения модели/режима из web UI без ручных команд."""
+            self._assert_write_access(x_krab_web_key, token)
+            router = self.deps["router"]
+            black_box = self.deps.get("black_box")
+
+            action = str(payload.get("action", "")).strip().lower()
+            if not action:
+                raise HTTPException(status_code=400, detail="model_apply_action_required")
+
+            try:
+                from src.handlers.commands import normalize_model_alias
+            except Exception:
+                def normalize_model_alias(raw_model_name: str) -> tuple[str, str]:
+                    text = str(raw_model_name or "").strip()
+                    return text, ""
+
+            result_payload: dict[str, object] = {}
+            message_text = "✅ Изменения применены."
+
+            if action == "set_mode":
+                mode = str(payload.get("mode", "auto")).strip().lower() or "auto"
+                if mode not in {"auto", "local", "cloud"}:
+                    raise HTTPException(status_code=400, detail="model_apply_invalid_mode")
+                if not hasattr(router, "set_force_mode"):
+                    raise HTTPException(status_code=400, detail="model_apply_set_mode_not_supported")
+                update_result = router.set_force_mode(mode)
+                result_payload = {
+                    "mode": _normalize_force_mode(getattr(router, "force_mode", "auto")),
+                    "router_response": str(update_result),
+                }
+                message_text = f"✅ Режим обновлен: {result_payload['mode']}"
+
+            elif action == "set_slot_model":
+                slot = str(payload.get("slot", "")).strip().lower()
+                raw_model = str(payload.get("model", "")).strip()
+                if not slot or not raw_model:
+                    raise HTTPException(status_code=400, detail="model_apply_slot_and_model_required")
+                if not hasattr(router, "models") or not isinstance(getattr(router, "models"), dict):
+                    raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
+                if slot not in router.models:
+                    available = ", ".join(sorted(router.models.keys()))
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"model_apply_unknown_slot: {slot}; available={available}",
+                    )
+                resolved_model, alias_note = normalize_model_alias(raw_model)
+                old_model = str(router.models.get(slot, ""))
+                router.models[slot] = resolved_model
+                result_payload = {
+                    "slot": slot,
+                    "old_model": old_model,
+                    "new_model": resolved_model,
+                    "alias_note": alias_note,
+                }
+                message_text = f"✅ Слот `{slot}`: `{old_model}` → `{resolved_model}`"
+
+            elif action == "apply_preset":
+                preset_id = str(payload.get("preset", "")).strip().lower()
+                if not preset_id:
+                    raise HTTPException(status_code=400, detail="model_apply_preset_required")
+                if not hasattr(router, "models") or not isinstance(getattr(router, "models"), dict):
+                    raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
+
+                local_override = str(payload.get("local_model", "")).strip() or str(
+                    getattr(router, "active_local_model", "") or ""
+                )
+                if not local_override:
+                    local_override = "zai-org/glm-4.6v-flash"
+
+                presets: dict[str, dict[str, object]] = {
+                    "balanced_auto": {
+                        "mode": "auto",
+                        "slots": {
+                            "chat": "google/gemini-2.5-flash",
+                            "thinking": "google/gemini-2.5-pro",
+                            "pro": "google/gemini-3-pro-preview",
+                            "coding": "openai/gpt-5-codex",
+                        },
+                    },
+                    "local_focus": {
+                        "mode": "local",
+                        "slots": {
+                            "chat": local_override,
+                            "thinking": local_override,
+                            "pro": local_override,
+                            "coding": local_override,
+                        },
+                    },
+                    "cloud_reasoning": {
+                        "mode": "cloud",
+                        "slots": {
+                            "chat": "google/gemini-2.5-flash",
+                            "thinking": "google/gemini-2.5-pro",
+                            "pro": "google/gemini-3-pro-preview",
+                            "coding": "openai/gpt-5-codex",
+                        },
+                    },
+                }
+                chosen = presets.get(preset_id)
+                if not chosen:
+                    raise HTTPException(status_code=400, detail=f"model_apply_unknown_preset: {preset_id}")
+
+                applied_changes: list[dict[str, str]] = []
+                for slot, model_id in dict(chosen.get("slots", {})).items():
+                    if slot not in router.models:
+                        continue
+                    resolved_model, _ = normalize_model_alias(str(model_id))
+                    previous = str(router.models.get(slot, ""))
+                    router.models[slot] = resolved_model
+                    applied_changes.append(
+                        {
+                            "slot": str(slot),
+                            "old_model": previous,
+                            "new_model": resolved_model,
+                        }
+                    )
+
+                target_mode = str(chosen.get("mode", "auto")).strip().lower() or "auto"
+                if hasattr(router, "set_force_mode"):
+                    router.set_force_mode(target_mode)
+
+                result_payload = {
+                    "preset": preset_id,
+                    "mode": _normalize_force_mode(getattr(router, "force_mode", "auto")),
+                    "changes": applied_changes,
+                }
+                message_text = f"✅ Пресет `{preset_id}` применён ({len(applied_changes)} слотов)."
+
+            else:
+                raise HTTPException(status_code=400, detail=f"model_apply_unknown_action: {action}")
+
+            if black_box and hasattr(black_box, "log_event"):
+                black_box.log_event("web_model_apply", f"action={action} result={message_text}")
+
+            return {
+                "ok": True,
+                "action": action,
+                "message": message_text,
+                "result": result_payload,
+                "catalog": await _build_model_catalog(router),
+            }
 
         @self.app.get("/api/model/feedback")
         async def model_feedback_summary(
@@ -578,6 +996,64 @@ class WebApp:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"ok": True, "result": result}
 
+        @self.app.post("/api/assistant/attachment")
+        async def assistant_attachment_upload(
+            file: UploadFile = File(...),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Загружает вложение для web-assistant и возвращает prompt-snippet.
+            Поддерживает текст/PDF/DOCX (извлечение текста best effort),
+            а также изображения/видео/архивы (метаданные + локальный путь).
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            black_box = self.deps.get("black_box")
+
+            if not file:
+                raise HTTPException(status_code=400, detail="assistant_attachment_file_required")
+            original_name = str(file.filename or "").strip()
+            if not original_name:
+                raise HTTPException(status_code=400, detail="assistant_attachment_filename_required")
+
+            raw = await file.read()
+            if not raw:
+                raise HTTPException(status_code=400, detail="assistant_attachment_empty_file")
+
+            max_bytes = self._web_attachment_max_bytes()
+            if len(raw) > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"assistant_attachment_too_large: max={max_bytes} bytes",
+                )
+
+            safe_name = self._sanitize_attachment_name(original_name)
+            guessed_type = mimetypes.guess_type(safe_name)[0] or ""
+            content_type = str(file.content_type or guessed_type or "application/octet-stream")
+
+            uploads_dir = Path("artifacts/web_uploads")
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            short_hash = hashlib.sha256(raw).hexdigest()[:10]
+            stored_name = f"{ts}_{short_hash}_{safe_name}"
+            stored_path = uploads_dir / stored_name
+            stored_path.write_bytes(raw)
+
+            attachment = self._build_attachment_prompt(
+                file_name=safe_name,
+                content_type=content_type,
+                raw_bytes=raw,
+                stored_path=stored_path,
+            )
+
+            if black_box and hasattr(black_box, "log_event"):
+                black_box.log_event(
+                    "web_assistant_attachment",
+                    f"name={safe_name} type={content_type} size={len(raw)} kind={attachment.get('kind')}",
+                )
+
+            return {"ok": True, "attachment": attachment}
+
         @self.app.get("/api/assistant/capabilities")
         async def assistant_capabilities():
             """Возвращает возможности web-native assistant режима."""
@@ -586,6 +1062,9 @@ class WebApp:
                 "endpoint": "/api/assistant/query",
                 "preflight_endpoint": "/api/model/preflight",
                 "feedback_endpoint": "/api/model/feedback",
+                "model_catalog_endpoint": "/api/model/catalog",
+                "model_apply_endpoint": "/api/model/apply",
+                "attachment_endpoint": "/api/assistant/attachment",
                 "auth": "X-Krab-Web-Key header or token query (if WEB_API_KEY configured)",
                 "task_types": ["chat", "coding", "reasoning", "creative", "moderation", "security", "infra", "review"],
                 "notes": [
@@ -593,6 +1072,8 @@ class WebApp:
                     "Использует тот же роутер моделей и policy, что и Telegram-бот.",
                     "Для критичных задач можно передать `confirm_expensive=true`.",
                     "Оценки качества 1-5 можно отправлять через /api/model/feedback.",
+                    "Модельные слоты и режимы можно менять через /api/model/apply.",
+                    "Файлы можно загружать через /api/assistant/attachment.",
                 ],
             }
 
@@ -631,6 +1112,104 @@ class WebApp:
             preferred_model_str = str(preferred_model).strip() if preferred_model else None
             confirm_expensive = bool(payload.get("confirm_expensive", False))
 
+            # Web UX-хелпер: поддержка команд вида `.model ...` и `!model ...`
+            # прямо из web-assistant input. Иначе команда уходила в LLM как обычный prompt.
+            command_prompt = prompt
+            if command_prompt.startswith(".model"):
+                command_prompt = f"!{command_prompt[1:]}"
+
+            if command_prompt.startswith("!model"):
+                try:
+                    from src.handlers.commands import (
+                        parse_model_set_request,
+                        normalize_model_alias,
+                        render_model_presets_text,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"assistant_command_import_failed: {exc}",
+                    ) from exc
+
+                try:
+                    tokens = shlex.split(command_prompt[1:])
+                except Exception:
+                    tokens = command_prompt[1:].split()
+
+                if not tokens or tokens[0].lower() != "model":
+                    raise HTTPException(status_code=400, detail="assistant_model_command_invalid")
+
+                subcommand = tokens[1].strip().lower() if len(tokens) >= 2 else ""
+                if subcommand in {"presets", "catalog", "quick"}:
+                    response_payload = {
+                        "ok": True,
+                        "mode": "web_native",
+                        "task_type": task_type,
+                        "profile": "chat",
+                        "command_mode": True,
+                        "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                        "reply": render_model_presets_text(),
+                    }
+                    self._idempotency_set("assistant_query", idem_key, response_payload)
+                    return response_payload
+
+                if subcommand in {"local", "cloud", "auto"} and hasattr(router, "set_force_mode"):
+                    result = router.set_force_mode(subcommand)
+                    response_payload = {
+                        "ok": True,
+                        "mode": "web_native",
+                        "task_type": task_type,
+                        "profile": "chat",
+                        "command_mode": True,
+                        "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                        "reply": f"✅ Режим обновлен: {result}",
+                    }
+                    self._idempotency_set("assistant_query", idem_key, response_payload)
+                    return response_payload
+
+                if subcommand == "set":
+                    parsed = parse_model_set_request(tokens, list(router.models.keys()))
+                    if not parsed.get("ok"):
+                        response_payload = {
+                            "ok": True,
+                            "mode": "web_native",
+                            "task_type": task_type,
+                            "profile": "chat",
+                            "command_mode": True,
+                            "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                            "reply": str(parsed.get("error") or "❌ Некорректная команда"),
+                        }
+                        self._idempotency_set("assistant_query", idem_key, response_payload)
+                        return response_payload
+
+                    slot = str(parsed["slot"])
+                    model_raw = str(parsed["model_name"])
+                    model_resolved, alias_note = normalize_model_alias(model_raw)
+                    old_value = str(router.models.get(slot, "—"))
+                    router.models[slot] = model_resolved
+
+                    reply_lines = []
+                    if parsed.get("warning"):
+                        reply_lines.append(str(parsed["warning"]))
+                    if alias_note:
+                        reply_lines.append(alias_note)
+                    reply_lines.append(
+                        f"✅ Slot `{slot}` обновлен: `{old_value}` → `{model_resolved}`"
+                    )
+                    reply_lines.append("Подсказка: `!model` или `!model preflight chat Тест`")
+
+                    response_payload = {
+                        "ok": True,
+                        "mode": "web_native",
+                        "task_type": task_type,
+                        "profile": "chat",
+                        "command_mode": True,
+                        "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                        "reply": "\n".join(reply_lines),
+                    }
+                    self._idempotency_set("assistant_query", idem_key, response_payload)
+                    return response_payload
+
             try:
                 reply = await router.route_query(
                     prompt=prompt,
@@ -642,6 +1221,38 @@ class WebApp:
                     preferred_model=preferred_model_str,
                     confirm_expensive=confirm_expensive,
                 )
+
+                # Local-first аварийная деградация:
+                # если cloud-ключ скомпрометирован/отклонён, пробуем принудительный local.
+                leaked_key_marker = "reported as leaked"
+                if (
+                    isinstance(reply, str)
+                    and leaked_key_marker in reply.lower()
+                    and hasattr(router, "check_local_health")
+                ):
+                    local_ok = bool(await router.check_local_health(force=True))
+                    if local_ok:
+                        previous_mode = str(getattr(router, "force_mode", "auto"))
+                        try:
+                            router.force_mode = "force_local"
+                            local_reply = await router.route_query(
+                                prompt=prompt,
+                                task_type=task_type,
+                                context=[],
+                                chat_type="private",
+                                is_owner=True,
+                                use_rag=use_rag,
+                                preferred_model=None,
+                                confirm_expensive=confirm_expensive,
+                            )
+                            if isinstance(local_reply, str) and local_reply.strip():
+                                reply = (
+                                    "⚠️ Cloud API key отклонён (`reported as leaked`). "
+                                    "Переключился на local-first ответ.\n\n"
+                                    f"{local_reply}"
+                                )
+                        finally:
+                            router.force_mode = previous_mode
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"assistant_query_failed: {exc}") from exc
 
