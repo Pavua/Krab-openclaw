@@ -122,3 +122,6 @@
    - проверь `openclaw models list --all --json` (истинный каталог OpenClaw);
    - если каталог нормальный, а в панели пусто — перезапусти Krab Core daemon:
      `./krab_core_daemon_stop.command` → `./krab_core_daemon_start.command`.
+4. Подозрение, что OpenClaw подхватывает «не те» ключи:
+   - запусти `./openclaw_sync_model_keys.command`;
+   - скрипт синхронизирует ключи из `.env` в `~/.openclaw/.../models.json` и перезапустит gateway.
