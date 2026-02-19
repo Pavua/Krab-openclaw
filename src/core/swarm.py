@@ -1,117 +1,132 @@
 # -*- coding: utf-8 -*-
 """
-Swarm Orchestrator v1.0 (Phase 10).
-Система "Роя" для параллельного выполнения задач несколькими инструментами и моделями.
-Позволяет ускорить получение контекста и объединить результаты из разных источников.
+src/core/swarm.py
+~~~~~~~~~~~~~~~~~
+Оркестратор для параллельного выполнения задач (Swarm Intelligence).
+Реализован в рамках Фазы 10.
+
+Обеспечивает:
+1. Параллельный вызов инструментов (parallel_exec).
+2. Автономное принятие решений (autonomous_decision).
 """
 
 import asyncio
+import inspect
 import structlog
 from typing import List, Dict, Any, Callable
 
-logger = structlog.get_logger("SwarmOrchestrator")
+logger = structlog.get_logger("Swarm")
 
 class SwarmTask:
+    """Описание отдельной задачи для выполнения в рое."""
     def __init__(self, name: str, func: Callable, *args, **kwargs):
         self.name = name
         self.func = func
         self.args = args
         self.kwargs = kwargs
-        self.result = None
-        self.error = None
 
 class SwarmOrchestrator:
     def __init__(self, tool_handler, router=None):
         self.tools = tool_handler
         self.router = router
-        # PersonaManager is available via self.router.persona (set in main.py)
+        logger.info("🐝 SwarmOrchestrator v2.1 initialized")
 
     async def execute_parallel(self, tasks: List[SwarmTask]) -> Dict[str, Any]:
-        """
-        Запускает список задач параллельно и собирает результаты.
-        """
-        logger.info(f"🐝 Swarm Activated: Executing {len(tasks)} tasks in parallel")
+        """Запускает задачи параллельно и собирает результаты."""
+        logger.info(f"🚀 Running {len(tasks)} tasks in parallel")
         
-        async def _run_task(task: SwarmTask):
+        async def _run_safe(task: SwarmTask):
             try:
-                if asyncio.iscoroutinefunction(task.func):
-                    task.result = await task.func(*task.args, **task.kwargs)
-                else:
-                    task.result = task.func(*task.args, **task.kwargs)
+                result = task.func(*task.args, **task.kwargs)
+                return task.name, await self._resolve_maybe_awaitable(result)
             except Exception as e:
-                task.error = str(e)
-                logger.error(f"🐝 Swarm Task Error ({task.name}): {e}")
+                logger.error(f"Task {task.name} failed", error=str(e))
+                return task.name, f"Error: {e}"
 
-        # Запускаем все задачи одновременно
-        await asyncio.gather(*[_run_task(t) for t in tasks])
+        coroutines = [_run_safe(t) for t in tasks]
+        results = await asyncio.gather(*coroutines)
+        return dict(results)
+
+    @staticmethod
+    async def _resolve_maybe_awaitable(value: Any) -> Any:
+        """Возвращает значение, дожидаясь awaitable только при необходимости."""
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    async def autonomous_decision(self, query: str, **kwargs) -> str:
+        """
+        [PHASE 10] Автономно решает, какие инструменты нужны, 
+        запускает их и объединяет ответ.
+        [v11.3] Добавлена защита от рекурсии через skip_swarm.
+        """
+        if kwargs.get("skip_swarm"):
+            logger.info("⏩ Swarm skipping (recursion guard active)")
+            if self.router:
+                routed = await self._resolve_maybe_awaitable(
+                    self.router.route_query(query, skip_swarm=True)
+                )
+                if isinstance(routed, str) and routed.strip():
+                    return routed
+            return "Swarm skipped: recursion guard."
+
+        logger.info("🧠 Swarm Autonomous Decision", query=query)
         
-        # Формируем отчет
-        results = {}
-        for t in tasks:
-            results[t.name] = t.result if not t.error else f"Error: {t.error}"
+        # Если роутер доступен, мы можем спросить его о плане
+        plan = None
+        # ... (логика планирования может быть расширена здесь)
+
+        # Имитируем параллельный сбор данных (Search + RAG)
+        tasks = []
+        lowered = query.lower()
+        
+        # Helper for calling tools
+        async def call_tool(name, **tool_kwargs):
+            if hasattr(self.tools, "execute_named_tool"):
+                return await self._resolve_maybe_awaitable(
+                    self.tools.execute_named_tool(name, **tool_kwargs)
+                )
             
-        return results
+            # Legacy/Mock Fallback
+            if name == "web_search" and hasattr(self.tools, "scout"):
+                return await self._resolve_maybe_awaitable(
+                    self.tools.scout.search(tool_kwargs.get("query", ""))
+                )
+            if name == "rag_search" and hasattr(self.tools, "rag"):
+                return self.tools.rag.query(tool_kwargs.get("query", ""))
+            return f"Error: Tool {name} not found in handler"
 
-    async def consilium_reasoning(self, query: str) -> str:
-        """
-        [PHASE 4.1] Consilium Mode: Multi-agent debate.
-        1. Architect: Designs solution.
-        2. Coder/Expert: Implements.
-        3. Critic: Checks for flaws.
-        """
-        if not self.router or not getattr(self.router, "persona", None):
-            return "⚠️ Consilium недоступен: router/persona не инициализированы."
-
-        logger.info("🏛️ Entering Consilium Mode", query=query[:50])
-        
-        # Step 1: Architect Plan
-        architect_prompt = f"{self.router.persona.get_role_prompt('architect')}\n\nЗАДАЧА: {query}\n\nРазработай верхнеуровневый план решения."
-        plan = await self.router.route_query(architect_prompt, task_type='reasoning')
-        
-        # Step 2: Expert Implementation
-        expert_prompt = f"{self.router.persona.get_role_prompt('coder')}\n\nПЛАН: {plan}\n\nРеализуй решение согласно плану."
-        solution = await self.router.route_query(expert_prompt, task_type='chat')
-        
-        # Step 3: Critic Review
-        critic_prompt = f"{self.router.persona.get_role_prompt('critic')}\n\nРЕШЕНИЕ: {solution}\n\nНайди ошибки или предложи улучшения."
-        feedback = await self.router.route_query(critic_prompt, task_type='reasoning')
-        
-        # Final Consolidation
-        final_prompt = f"### ARCHITECT PLAN:\n{plan}\n\n### EXPERT SOLUTION:\n{solution}\n\n### CRITIC FEEDBACK:\n{feedback}\n\n### TASK:\nНа основе дискуссии выше, выдай финальный идеальный результат."
-        final_result = await self.router.route_query(final_prompt, task_type='chat')
-        
-        return f"🌟 **Consilium Result:**\n\n{final_result}\n\n--- \n🏛️ *Agents involved: Architect, Coder, Critic*"
-
-    async def autonomous_decision(self, query: str) -> str:
-        # ... (rest of the code same or improved)
-        lower_query = query.lower()
-        if "подумай глубоко" in lower_query or "консилиум" in lower_query:
-            return await self.consilium_reasoning(query)
-        
-        tasks_to_run = []
-        # ... existing logic ...
-        if "поищи" in lower_query or "найди" in lower_query:
-             if hasattr(self.tools, "scout") and getattr(self.tools, "scout", None):
-                 tasks_to_run.append(SwarmTask("WebSearch", self.tools.scout.search, query))
+        if any(w in lowered for w in ["найди", "поищи", "новости", "гугл", "интернет"]):
+             tasks.append(SwarmTask("WebSearch", call_tool, "web_search", query=query))
              
-        if "вспомни" in lower_query or "память" in lower_query:
-             if hasattr(self.tools, "rag") and getattr(self.tools, "rag", None):
-                 tasks_to_run.append(SwarmTask("RAG", self.tools.rag.query, query))
-             
-        if "файл" in lower_query or "папк" in lower_query:
-            if self.tools.mcp:
-                tasks_to_run.append(SwarmTask("Filesystem", self.tools.call_mcp_tool, "filesystem", "list_directory", {"path": "."}))
+        if any(w in lowered for w in ["вспомни", "память", "архив", "говорил"]):
+             tasks.append(SwarmTask("Memory", call_tool, "rag_search", query=query))
 
-        if not tasks_to_run:
-            return None
+        if not tasks:
+            # Если ничего не выбрали, спросим роутер напрямую, запрещая повторный вход в Swarm
+            if self.router:
+                return await self.router.route_query(query, skip_swarm=True)
+            return "Недостаточно контекста для Swarm."
 
-        results = await self.execute_parallel(tasks_to_run)
+        # Выполняем параллельно
+        results = await self.execute_parallel(tasks)
         
-        formatted = []
+        # Формируем обогащенный контекст
+        context = "[SWARM]\n"
         for name, res in results.items():
-            if name == "WebSearch":
-                if hasattr(self.tools, "scout") and getattr(self.tools, "scout", None) and hasattr(self.tools.scout, "format_results"):
-                    res = self.tools.scout.format_results(res)
-            formatted.append(f"### [SWARM] {name}:\n{res}")
-            
-        return "\n\n".join(formatted)
+            context += f"--- Source: {name} ---\n{res}\n"
+        
+        final_prompt = f"Данные из роя инструментов:\n{context}\n\nОригинальный запрос: {query}\n\nСформулируй финальный ответ."
+        
+        if self.router:
+            # Передаем skip_swarm=True, чтобы роутер не пытался снова запустить execute_tool_chain
+            try:
+                routed = await self._resolve_maybe_awaitable(
+                    self.router.route_query(final_prompt, skip_swarm=True)
+                )
+                if isinstance(routed, str) and routed.strip():
+                    return routed
+            except Exception as e:
+                logger.warning("Swarm router fallback to raw context", error=str(e))
+        
+        return f"✅ Собранные данные из роя:\n{context}"

@@ -17,6 +17,7 @@ Tool Handler v2.0 (Phase 8).
 
 import structlog
 import json
+import inspect
 from typing import Any
 # from src.utils.web_scout import WebScout # Deprecated
 from src.core.swarm import SwarmOrchestrator
@@ -99,12 +100,13 @@ class ToolHandler:
                 logger.warning("System Monitor недоступен")
         return self._system_monitor
 
-    async def execute_tool_chain(self, query: str) -> str:
+    async def execute_tool_chain(self, query: str, **kwargs) -> str:
         """
         AI-driven Tool Selection (Phase 10):
         Использует SwarmOrchestrator для параллельного выполнения задач.
+        [v11.3] Поддержка проброса флагов (skip_swarm).
         """
-        return await self.swarm.autonomous_decision(query)
+        return await self.swarm.autonomous_decision(query, **kwargs)
 
     async def run_shell(self, command: str) -> str:
         """Выполнение системных команд (Owner only)."""
@@ -195,11 +197,24 @@ class ToolHandler:
         logger.info(f"🛠️ Executing tool: {name}", args=kwargs)
         try:
             if name == "web_search":
-                if self.openclaw and hasattr(self.openclaw, "invoke_tool"):
-                    response = await self.openclaw.invoke_tool("web_search", {
-                        "query": kwargs.get("query", ""),
-                        "count": 5
-                    })
+                response = None
+                invoke_tool = getattr(self.openclaw, "invoke_tool", None) if self.openclaw else None
+                if callable(invoke_tool):
+                    try:
+                        response = await self._await_maybe(
+                            invoke_tool(
+                                "web_search",
+                                {
+                                    "query": kwargs.get("query", ""),
+                                    "count": 5,
+                                },
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning("OpenClaw web_search failed, fallback to scout", error=str(exc))
+                        response = None
+
+                if isinstance(response, dict):
                     results = response.get("details", {}).get("results", [])
 
                     # Fallback parse
@@ -212,18 +227,22 @@ class ToolHandler:
                             pass
 
                     if not results:
-                        return "❌ No results found via OpenClaw."
+                        # Если OpenClaw вернул пусто, разрешаем fallback к scout.
+                        response = None
+                    else:
+                        start_text = "🔎 **OpenClaw Search Results:**\n"
+                        for i, r in enumerate(results, 1):
+                            if isinstance(r, dict):
+                                start_text += f"{i}. [{r.get('title')}]({r.get('url')})\n"
+                            else:
+                                start_text += f"{i}. {r}\n"
+                        return start_text
 
-                    start_text = "🔎 **OpenClaw Search Results:**\n"
-                    for i, r in enumerate(results, 1):
-                        if isinstance(r, dict):
-                            start_text += f"{i}. [{r.get('title')}]({r.get('url')})\n"
-                        else:
-                            start_text += f"{i}. {r}\n"
-                    return start_text
+                if response is not None and not isinstance(response, dict):
+                    logger.warning("OpenClaw web_search вернул неожиданный формат", response_type=type(response).__name__)
 
                 if self.scout and hasattr(self.scout, "search"):
-                    result = await self.scout.search(kwargs.get("query", ""))
+                    result = await self._await_maybe(self.scout.search(kwargs.get("query", "")))
                     if hasattr(self.scout, "format_results"):
                         return self.scout.format_results(result)
                     return str(result)
@@ -242,8 +261,15 @@ class ToolHandler:
             elif name == "browse":
                 url = kwargs.get("url", "")
                 # OpenClaw-first
-                fetched = await self.openclaw.invoke_tool("web_fetch", {"url": url})
-                if not fetched.get("error"):
+                fetched = None
+                invoke_tool = getattr(self.openclaw, "invoke_tool", None) if self.openclaw else None
+                if callable(invoke_tool):
+                    try:
+                        fetched = await self._await_maybe(invoke_tool("web_fetch", {"url": url}))
+                    except Exception as exc:
+                        logger.warning("OpenClaw web_fetch failed, fallback to BrowserAgent", error=str(exc))
+                        fetched = None
+                if isinstance(fetched, dict) and not fetched.get("error"):
                     try:
                         details = fetched.get("details", {})
                         title = details.get("title", url)
@@ -299,6 +325,13 @@ class ToolHandler:
         except Exception as e:
             logger.error(f"Tool execution failed: {name}", error=str(e))
             return f"❌ Error: {e}"
+
+    @staticmethod
+    async def _await_maybe(value: Any) -> Any:
+        """Ожидает корутину/таск только если значение awaitable."""
+        if inspect.isawaitable(value):
+            return await value
+        return value
 
     def get_available_tools(self) -> list:
         """Список доступных инструментов для !help и диагностики."""
