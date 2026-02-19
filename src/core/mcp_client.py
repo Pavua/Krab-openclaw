@@ -59,6 +59,17 @@ class MCPManager:
                 env_var = v[2:-1]
                 env[k] = os.getenv(env_var, "")
 
+        # Мягкая валидация обязательных ключей окружения.
+        # Если ключ пустой, не считаем это аварией старта ядра: просто пропускаем
+        # конкретный MCP-сервер и продолжаем поднимать остальные.
+        missing_env = [k for k, v in env.items() if str(v).strip() == ""]
+        if missing_env:
+            logger.warning(
+                f"MCP '{name}' skipped: missing env keys {missing_env}. "
+                "Задай значения в .env или окружении и перезапусти ядро."
+            )
+            return False
+
         params = StdioServerParameters(
             command=conf["command"],
             args=conf.get("args", []),

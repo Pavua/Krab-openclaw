@@ -45,9 +45,29 @@ class ModelRouter:
         self.local_engine = None  # 'lm-studio' or 'ollama'
         self.active_local_model = None
 
-        # Кеш для health-check (чтобы не дёргать API на каждый запрос)
+        # Кеш для health-check (чтобы не дёргать API на каждый запрос).
+        # Важно: слишком частый опрос `/api/v1/models` может сбивать idle-TTL LM Studio.
         self._health_cache_ts = 0
-        self._health_cache_ttl = 30  # секунд
+        try:
+            self._health_cache_ttl = max(5, int(config.get("LOCAL_HEALTH_CACHE_TTL_SEC", 30)))
+        except (ValueError, TypeError):
+            self._health_cache_ttl = 30
+
+        # Режим health-check:
+        # - "light": фоново проверяем только доступность сервера (без скана моделей),
+        #            а полный скан моделей делаем редко.
+        # - "models": всегда проверяем через /api/v1/models (старое поведение).
+        self._health_probe_mode = str(config.get("LOCAL_HEALTH_PROBE_MODE", "light")).strip().lower()
+        if self._health_probe_mode not in {"light", "models"}:
+            self._health_probe_mode = "light"
+        self._health_full_scan_ts = 0
+        try:
+            self._health_full_scan_interval = max(
+                60,
+                int(config.get("LOCAL_HEALTH_FULL_SCAN_SECONDS", 3600)),
+            )
+        except (ValueError, TypeError):
+            self._health_full_scan_interval = 3600
 
         # OpenClaw Client (Cloud Model Gateway)
         self.openclaw_client = OpenClawClient(
@@ -232,6 +252,7 @@ class ModelRouter:
         self.last_cloud_error: Optional[str] = None
         self.last_cloud_model: Optional[str] = None
         self.last_local_load_error: Optional[str] = None
+        self.last_local_load_error_human: Optional[str] = None
         self.lms_gpu_offload = str(config.get("LM_STUDIO_GPU_OFFLOAD", "")).strip().lower()
         self.cloud_priority_models = self._parse_cloud_priority(config.get(
             "MODEL_CLOUD_PRIORITY_LIST",
@@ -549,6 +570,9 @@ class ModelRouter:
         channel: str,
         model_name: str,
         prompt: str = "",
+        route_reason: str = "",
+        route_detail: str = "",
+        force_mode: Optional[str] = None,
     ) -> None:
         """
         Сохраняет метаданные последнего успешного прогона,
@@ -562,6 +586,10 @@ class ModelRouter:
             "channel": self._normalize_channel(channel),
             "model": (model_name or "unknown").strip() or "unknown",
             "prompt_preview": (prompt or "").strip()[:160],
+            "route_reason": (route_reason or "").strip()[:80],
+            "route_detail": (route_detail or "").strip()[:240],
+            "force_mode": str(force_mode or self.force_mode or "auto").strip() or "auto",
+            "local_available": bool(self.is_local_available),
         }
         store["last_route"] = route
         history = store.setdefault("route_history", [])
@@ -581,6 +609,9 @@ class ModelRouter:
         channel: str,
         model_name: str,
         prompt: str = "",
+        route_reason: str = "",
+        route_detail: str = "",
+        force_mode: Optional[str] = None,
     ) -> None:
         """
         Сохраняет метаданные последнего успешного stream-ответа.
@@ -593,6 +624,10 @@ class ModelRouter:
             "channel": self._normalize_channel(channel),
             "model": (model_name or "unknown").strip() or "unknown",
             "prompt_preview": (prompt or "").strip()[:160],
+            "route_reason": (route_reason or "").strip()[:80],
+            "route_detail": (route_detail or "").strip()[:240],
+            "force_mode": str(force_mode or self.force_mode or "auto").strip() or "auto",
+            "local_available": bool(self.is_local_available),
         }
 
     def _get_model_feedback_stats(self, profile: str, model_name: str) -> dict:
@@ -921,6 +956,25 @@ class ModelRouter:
         if not base_root:
             base_root = self.lm_studio_url.rstrip("/")
 
+        # В light-режиме не трогаем /models на каждом health-check,
+        # чтобы не мешать idle-unload в LM Studio.
+        need_full_scan = (
+            force
+            or self._health_probe_mode == "models"
+            or self._health_full_scan_ts <= 0
+            or (now - self._health_full_scan_ts) >= self._health_full_scan_interval
+        )
+        if not need_full_scan and self._health_probe_mode == "light":
+            lm_server_alive = await self._light_ping_local_server(base_root)
+            if lm_server_alive:
+                # Сервер жив — сохраняем предыдущее состояние локалки без скана моделей.
+                # Детальный пересчёт loaded-моделей произойдёт на force-check или редком full-scan.
+                return self.is_local_available
+            logger.warning("Light health probe: LM Studio server недоступен, делаю fallback-проверку.")
+
+        if need_full_scan:
+            self._health_full_scan_ts = now
+
         # Сначала проверяем, есть ли РЕАЛЬНО загруженная модель через /api/v1/models
         # (в 0.3.x загруженные модели имеют специфические поля или это единственный способ)
         try:
@@ -931,6 +985,8 @@ class ModelRouter:
                 self.local_engine = "lm-studio"
                 self.is_local_available = True
                 self.active_local_model = loaded_models[0]["id"]
+                self.last_local_load_error = None
+                self.last_local_load_error_human = None
                 logger.info(f"✅ Local AI active: {self.active_local_model} (LM Studio)")
                 return True
             
@@ -942,6 +998,8 @@ class ModelRouter:
                         self.local_engine = "lm-studio"
                         self.is_local_available = False # Но модель не загружена!
                         self.active_local_model = None
+                        self.last_local_load_error = "no_model_loaded"
+                        self.last_local_load_error_human = "⚠️ LM Studio доступна, но ни одна модель не загружена."
                         logger.info("📡 LM Studio server alive, but no models loaded.")
                         return False
         except Exception:
@@ -959,6 +1017,8 @@ class ModelRouter:
                             self.active_local_model = self._extract_model_id(models[0]) or models[0].get("id")
                             self.local_engine = "ollama"
                             self.is_local_available = True
+                            self.last_local_load_error = None
+                            self.last_local_load_error_human = None
                             return True
         except Exception:
             pass
@@ -966,6 +1026,36 @@ class ModelRouter:
         self.is_local_available = False
         self.local_engine = None
         self.active_local_model = None
+        if not self.last_local_load_error:
+            self.last_local_load_error = "local_engine_unreachable"
+        if not self.last_local_load_error_human:
+            self.last_local_load_error_human = "⚠️ Локальный движок недоступен (LM Studio/Ollama unreachable)."
+        return False
+
+    async def _light_ping_local_server(self, base_root: str) -> bool:
+        """
+        Лёгкий probe доступности LM Studio без сканирования списка моделей.
+
+        Почему так:
+        - `/api/v1/models` полезен для диагностики, но слишком частый вызов
+          может мешать авто-выгрузке по idle TTL;
+        - здесь проверяем только «сервер жив / сервер мёртв».
+        """
+        timeout = aiohttp.ClientTimeout(total=2)
+        # LM Studio может отвечать 200 даже на "unexpected endpoint",
+        # что нам подходит как признак живого сервера.
+        probe_paths = ("/health", "/")
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                for path in probe_paths:
+                    try:
+                        async with session.get(f"{base_root}{path}") as resp:
+                            if resp.status < 500:
+                                return True
+                    except Exception:
+                        continue
+        except Exception:
+            return False
         return False
 
     async def _scan_local_models(self) -> List[Dict[str, Any]]:
@@ -1229,8 +1319,10 @@ class ModelRouter:
         """
         requested_model = (model_name or "").strip()
         self.last_local_load_error = None
+        self.last_local_load_error_human = None
         if not requested_model:
             self.last_local_load_error = "model_id_empty"
+            self.last_local_load_error_human = "⚠️ Не указан model_id для загрузки в LM Studio."
             logger.warning("⚠️ Пустой model_id для load_local_model.")
             return False
 
@@ -1240,6 +1332,10 @@ class ModelRouter:
         if not resolved_model:
             suggestions = self._suggest_local_model_ids(requested_model, available_ids)
             self.last_local_load_error = f"model_not_found_precheck:{requested_model}"
+            self.last_local_load_error_human = (
+                f"⚠️ Модель `{requested_model}` не найдена в LM Studio scan. "
+                "Проверь точный id через !model scan."
+            )
             logger.warning(
                 "⚠️ Dry precheck: model_id отсутствует в LM Studio scan",
                 requested=requested_model,
@@ -1267,6 +1363,8 @@ class ModelRouter:
                         logger.info(f"✅ REST API Load Success: {resolved_model}")
                         self.active_local_model = resolved_model
                         self.is_local_available = True
+                        self.last_local_load_error = None
+                        self.last_local_load_error_human = None
                         return True
                     text = await resp.text()
                     last_rest_error_text = text
@@ -1276,9 +1374,16 @@ class ModelRouter:
                         self.last_local_load_error = "lms_resource_error"
                         logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА LM STUDIO: Сбой системных ресурсов (Utility process). ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА LM STUDIO.")
                         # Чтобы пользователь увидел это через !model status
-                        self.last_local_load_error_human = "⚠️ LM Studio зависла внутри (Utility process error). Пожалуйста, полностью ПЕРЕЗАПУСТИ LM Studio на компьютере."
+                        self.last_local_load_error_human = (
+                            "⚠️ LM Studio: ошибка Utility process / snapshot resources. "
+                            "Полностью перезапусти LM Studio и повтори загрузку модели."
+                        )
                     else:
                         self.last_local_load_error = f"rest_load_failed:{resp.status}:{text[:220]}"
+                        self.last_local_load_error_human = (
+                            f"⚠️ LM Studio load failed (HTTP {resp.status}). "
+                            "Проверь логи LM Studio и корректность model_id."
+                        )
                     
                     suggestions = self._suggest_local_model_ids(requested_model, available_ids)
                     logger.warning(
@@ -1298,6 +1403,7 @@ class ModelRouter:
                         )
         except Exception as e:
             self.last_local_load_error = f"rest_load_exception:{e}"
+            self.last_local_load_error_human = "⚠️ Ошибка запроса к LM Studio во время загрузки модели."
             logger.error(f"❌ REST API Load Exception: {e}")
 
         # Fallback to CLI for backwards compatibility
@@ -1314,9 +1420,14 @@ class ModelRouter:
                 if proc.returncode == 0:
                     self.active_local_model = resolved_model
                     self.is_local_available = True
+                    self.last_local_load_error = None
+                    self.last_local_load_error_human = None
                     logger.info("✅ CLI fallback load success", command=" ".join(cmd), model=resolved_model)
                     return True
                 self.last_local_load_error = f"cli_load_failed:{proc.returncode}"
+                self.last_local_load_error_human = (
+                    f"⚠️ CLI fallback загрузки завершился с кодом {proc.returncode}."
+                )
                 logger.warning(
                     "⚠️ CLI fallback load failed",
                     command=" ".join(cmd),
@@ -1327,9 +1438,13 @@ class ModelRouter:
                 )
             except Exception as exc:
                 self.last_local_load_error = f"cli_load_exception:{exc}"
+                self.last_local_load_error_human = "⚠️ Исключение во время CLI fallback загрузки LM Studio."
                 logger.warning("⚠️ CLI fallback load exception", error=str(exc), requested=requested_model)
         else:
-            self.last_local_load_error = "lms_cli_not_found"
+            if not self.last_local_load_error:
+                self.last_local_load_error = "lms_cli_not_found"
+            if not self.last_local_load_error_human:
+                self.last_local_load_error_human = "⚠️ LM Studio CLI не найден по пути ~/.lmstudio/bin/lms."
             logger.warning("⚠️ CLI fallback недоступен: ~/.lmstudio/bin/lms не найден.")
 
         return False
@@ -1815,7 +1930,7 @@ class ModelRouter:
 
         await self.check_local_health()
 
-        async def _run_local() -> Optional[str]:
+        async def _run_local(route_reason: str = "local_primary", route_detail: str = "") -> Optional[str]:
             if not self.is_local_available:
                 return None
             async with self._acquire_local_slot(self.active_local_model):
@@ -1838,6 +1953,9 @@ class ModelRouter:
                         channel="local",
                         model_name=local_model,
                         prompt=prompt,
+                        route_reason=route_reason,
+                        route_detail=route_detail,
+                        force_mode=self.force_mode,
                     )
                 return local_response
 
@@ -1884,12 +2002,17 @@ class ModelRouter:
         if self.force_mode == "force_local":
             if not self.is_local_available:
                 return "❌ Режим 'Force Local' включен, но локальная модель недоступна (LM Studio/Ollama offline)."
-            forced_local = await _run_local()
+            forced_local = await _run_local(route_reason="force_local", route_detail="forced by router mode")
             if forced_local:
                 return forced_local
             return "❌ Ошибка генерации локальной модели (Force Local active)."
 
-        def _finalize_cloud(candidate: str, response_text: str) -> Optional[str]:
+        def _finalize_cloud(
+            candidate: str,
+            response_text: str,
+            route_reason: str = "",
+            route_detail: str = "",
+        ) -> Optional[str]:
             if not response_text:
                 return None
             self._remember_model_choice(profile, candidate, "cloud")
@@ -1900,6 +2023,9 @@ class ModelRouter:
                 channel="cloud",
                 model_name=candidate,
                 prompt=prompt,
+                route_reason=route_reason,
+                route_detail=route_detail,
+                force_mode=self.force_mode,
             )
             return response_text
 
@@ -1909,7 +2035,12 @@ class ModelRouter:
                 return cloud_result
             if cloud_result:
                 candidate, response = cloud_result
-                finalized = _finalize_cloud(candidate, response)
+                finalized = _finalize_cloud(
+                    candidate,
+                    response,
+                    route_reason="force_cloud",
+                    route_detail="forced by router mode",
+                )
                 if finalized:
                     return finalized
             return self.last_cloud_error or "❌ Не удалось получить ответ ни от облачной, ни от локальной модели."
@@ -1924,7 +2055,7 @@ class ModelRouter:
 
         local_response: Optional[str] = None
         if not prefer_cloud and self.is_local_available:
-            local_response = await _run_local()
+            local_response = await _run_local(route_reason="local_primary")
             if local_response:
                 return local_response
 
@@ -1938,7 +2069,22 @@ class ModelRouter:
             cloud_response = cloud_result
 
         if isinstance(cloud_result, tuple):
-            finalized = _finalize_cloud(response_model, cloud_response or "")
+            cloud_route_reason = "cloud_selected"
+            cloud_route_detail = ""
+            if not self.is_local_available:
+                cloud_route_reason = "local_unavailable"
+            elif prefer_cloud:
+                cloud_route_reason = "policy_prefer_cloud"
+            else:
+                cloud_route_reason = "local_failed_cloud_fallback"
+                cloud_route_detail = str(latest_cloud_error or self.last_cloud_error or "").strip()[:240]
+
+            finalized = _finalize_cloud(
+                response_model,
+                cloud_response or "",
+                route_reason=cloud_route_reason,
+                route_detail=cloud_route_detail,
+            )
             if finalized:
                 return finalized
         elif isinstance(cloud_result, str):
@@ -1946,7 +2092,10 @@ class ModelRouter:
 
         # Если облако не дало ответа, пытаемся локальный fallback.
         if self.is_local_available and not local_response:
-            local_response = await _run_local()
+            local_response = await _run_local(
+                route_reason="cloud_failed_local_fallback",
+                route_detail=str(latest_cloud_error or self.last_cloud_error or "").strip()[:240],
+            )
             if local_response:
                 if is_critical and self.enable_cloud_review_for_critical and self.gemini_client:
                     review_model = self._resolve_cloud_model("reasoning", "review", self.models.get("pro"))
@@ -1966,6 +2115,9 @@ class ModelRouter:
                             channel="cloud",
                             model_name=review_model,
                             prompt=review_prompt,
+                            route_reason="critical_cloud_review",
+                            route_detail="post-local quality review",
+                            force_mode=self.force_mode,
                         )
                         return reviewed
                 return local_response
@@ -2115,6 +2267,13 @@ class ModelRouter:
                     channel="cloud",
                     model_name=candidate,
                     prompt=prompt,
+                    route_reason=(
+                        "force_cloud"
+                        if failure_reason == "force_cloud"
+                        else "local_stream_failed_cloud_fallback"
+                    ),
+                    route_detail=f"{failure_reason}: {failure_detail}".strip()[:240],
+                    force_mode=self.force_mode,
                 )
                 self._remember_last_stream_route(
                     profile=profile,
@@ -2122,6 +2281,13 @@ class ModelRouter:
                     channel="cloud",
                     model_name=candidate,
                     prompt=prompt,
+                    route_reason=(
+                        "force_cloud"
+                        if failure_reason == "force_cloud"
+                        else "local_stream_failed_cloud_fallback"
+                    ),
+                    route_detail=f"{failure_reason}: {failure_detail}".strip()[:240],
+                    force_mode=self.force_mode,
                 )
                 yield cleaned
                 return
@@ -2198,6 +2364,9 @@ class ModelRouter:
                     channel="local",
                     model_name=str(local_model),
                     prompt=prompt,
+                    route_reason="local_stream_primary",
+                    route_detail="stream completed on local model",
+                    force_mode=self.force_mode,
                 )
             return
         except StreamFailure as e:

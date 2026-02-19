@@ -57,13 +57,23 @@ def main() -> int:
     openclaw_base = os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789").rstrip("/")
     voice_base = os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090").rstrip("/")
     lm_studio_url = os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234")
-    krab_ear_base = os.getenv("KRAB_EAR_BACKEND_URL", "http://127.0.0.1:8765").rstrip("/")
+    # Krab Ear в нативной версии использует IPC сокет, а не HTTP.
+    # Проверяем наличие процесса или сокета.
+    ear_proc_check = CheckResult(name="KrabEarAgent", ok=False, status="Not running")
+    try:
+        # Простой способ: ищем процесс через pgrep
+        import subprocess
+        pids = subprocess.check_output(["pgrep", "-f", "KrabEarAgent"]).decode().strip()
+        if pids:
+            ear_proc_check = CheckResult(name="KrabEarAgent", ok=True, status="Running (Process found)")
+    except Exception:
+        pass
 
     checks = {
         "openclaw": _check_json(urljoin(openclaw_base + "/", "health")),
         "local_lm": _check_json(_normalize_lm_url(lm_studio_url)),
         "voice_gateway": _check_json(urljoin(voice_base + "/", "health")),
-        "krab_ear": _check_json(urljoin(krab_ear_base + "/", "health")),
+        "krab_ear": ear_proc_check,
     }
 
     cloud_ok = checks["openclaw"].ok

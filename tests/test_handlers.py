@@ -340,6 +340,28 @@ class _MockStatusMessage:
         )
 
 
+class _StatusSink:
+    """Накопитель текста edit_text для проверки итогового отчета."""
+
+    def __init__(self):
+        self.last_text = ""
+        self.edit_text = AsyncMock(side_effect=self._store)
+
+    async def _store(self, text):
+        self.last_text = str(text)
+
+
+class _MockStatusMessageWithSink:
+    """Сообщение !status с перехватом финального текста отчета."""
+
+    def __init__(self):
+        self.command = ["!status"]
+        self.from_user = SimpleNamespace(is_self=True, username="owner", id=1)
+        self.chat = SimpleNamespace(id=123, title="test")
+        self.sink = _StatusSink()
+        self.reply_text = AsyncMock(return_value=self.sink)
+
+
 def _build_status_handler(reminder_manager, black_box=None):
     from src.handlers.commands import register_handlers as register_commands
 
@@ -423,8 +445,158 @@ async def test_status_degrades_when_blackbox_missing_get_uptime(mock_warning):
     assert mock_warning.call_count >= 1  # ensures status ran without AttributeError
 
 
+@pytest.mark.asyncio
+async def test_status_shows_local_degradation_reason_and_cloud_fallback() -> None:
+    from src.handlers.commands import register_handlers as register_commands
+
+    router = MagicMock()
+    router.check_local_health = AsyncMock(return_value=False)
+    router.rag = None
+    router.local_engine = "lm-studio"
+    router.active_local_model = None
+    router.last_local_load_error_human = "⚠️ LM Studio доступна, но ни одна модель не загружена."
+    router.last_local_load_error = "no_model_loaded"
+    router.models = {"chat": "gemini-2.5-flash-lite"}
+    router._stats = {"local_calls": 0, "cloud_calls": 2, "local_failures": 0, "cloud_failures": 0}
+    router.get_last_route = MagicMock(
+        return_value={"channel": "cloud", "profile": "communication", "model": "gemini-2.5-flash-lite"}
+    )
+    router.get_last_stream_route = MagicMock(return_value={})
+
+    voice_gateway_client = MagicMock()
+    voice_gateway_client.health_check = AsyncMock(return_value=False)
+    openclaw_client = MagicMock()
+    openclaw_client.health_check = AsyncMock(return_value=True)
+    config_manager = MagicMock()
+    config_manager.get = MagicMock(side_effect=lambda key, default=None: default or 8080)
+
+    deps = {
+        "router": router,
+        "config_manager": config_manager,
+        "black_box": MagicMock(get_uptime=MagicMock(return_value="0h 0m 1s")),
+        "safe_handler": lambda f: f,
+        "voice_gateway_client": voice_gateway_client,
+        "openclaw_client": openclaw_client,
+        "reminder_manager": None,
+        "persona_manager": MagicMock(active_persona="default", personas={"default": {}}),
+    }
+    app = _DummyApp()
+    register_commands(app, deps)
+    handler = app.handlers["status_command"]
+
+    msg = _MockStatusMessageWithSink()
+    await handler(None, msg)
+
+    assert "Reason:" in msg.sink.last_text
+    assert "LM Studio доступна" in msg.sink.last_text
+    assert "Cloud reason" in msg.sink.last_text
+    assert "local_unavailable" in msg.sink.last_text
+
+
+@pytest.mark.asyncio
+async def test_status_shows_explicit_cloud_route_reason() -> None:
+    from src.handlers.commands import register_handlers as register_commands
+
+    router = MagicMock()
+    router.check_local_health = AsyncMock(return_value=True)
+    router.rag = None
+    router.local_engine = "lm-studio"
+    router.active_local_model = "zai-org/glm-4.6v-flash"
+    router.last_local_load_error_human = ""
+    router.last_local_load_error = ""
+    router.models = {"chat": "gemini-2.5-flash-lite"}
+    router._stats = {"local_calls": 3, "cloud_calls": 4, "local_failures": 0, "cloud_failures": 0}
+    router.get_last_route = MagicMock(
+        return_value={
+            "channel": "cloud",
+            "profile": "communication",
+            "model": "gemini-2.5-pro",
+            "route_reason": "force_cloud",
+            "route_detail": "forced by router mode",
+        }
+    )
+    router.get_last_stream_route = MagicMock(return_value={})
+
+    voice_gateway_client = MagicMock()
+    voice_gateway_client.health_check = AsyncMock(return_value=True)
+    openclaw_client = MagicMock()
+    openclaw_client.health_check = AsyncMock(return_value=True)
+    config_manager = MagicMock()
+    config_manager.get = MagicMock(side_effect=lambda key, default=None: default or 8080)
+
+    deps = {
+        "router": router,
+        "config_manager": config_manager,
+        "black_box": MagicMock(get_uptime=MagicMock(return_value="0h 0m 2s")),
+        "safe_handler": lambda f: f,
+        "voice_gateway_client": voice_gateway_client,
+        "openclaw_client": openclaw_client,
+        "reminder_manager": None,
+        "persona_manager": MagicMock(active_persona="default", personas={"default": {}}),
+    }
+    app = _DummyApp()
+    register_commands(app, deps)
+    handler = app.handlers["status_command"]
+
+    msg = _MockStatusMessageWithSink()
+    await handler(None, msg)
+
+    assert "Cloud reason" in msg.sink.last_text
+    assert "force_cloud" in msg.sink.last_text
+    assert "forced by router mode" in msg.sink.last_text
+
+
 class TestAiOutputPostprocess:
     """Точечные тесты постобработки AI-ответа."""
+
+    def test_is_voice_reply_requested_requires_explicit_voice_marker(self):
+        from src.handlers.ai import _is_voice_reply_requested
+
+        assert _is_voice_reply_requested("Ответь голосом, пожалуйста") is True
+        assert _is_voice_reply_requested("Отвечай, пожалуйста, голосом") is True
+        assert _is_voice_reply_requested("Голосом отвечай, мне сложно читать") is True
+        assert _is_voice_reply_requested("voice reply with summary") is True
+        assert _is_voice_reply_requested("Расскажи подробнее про почту") is False
+        assert _is_voice_reply_requested("Можешь проанализировать письма?") is False
+
+    def test_should_force_russian_reply_respects_explicit_english_request(self):
+        from src.handlers.ai import _should_force_russian_reply
+
+        assert (
+            _should_force_russian_reply(
+                user_text="Please answer in English",
+                is_private=True,
+                is_owner_sender=True,
+                is_voice_response_needed=False,
+            )
+            is False
+        )
+        assert (
+            _should_force_russian_reply(
+                user_text="Сделай обзор статуса",
+                is_private=True,
+                is_owner_sender=True,
+                is_voice_response_needed=False,
+            )
+            is True
+        )
+
+    def test_drop_english_scaffold_when_russian_expected(self):
+        from src.handlers.ai import _drop_english_scaffold_when_russian_expected
+
+        payload = (
+            "The apple-mail skill can be configured and used via shell scripts located in the scripts directory. "
+            "Here is the setup process with prerequisites, commands and output examples for every step.\n\n"
+            "Отлично, продолжаем на русском. Ниже краткий практический план и следующие шаги для настройки."
+        )
+        cleaned, removed = _drop_english_scaffold_when_russian_expected(
+            payload,
+            prefer_russian=True,
+            min_paragraph_len=120,
+        )
+        assert removed is True
+        assert "The apple-mail skill can be configured" not in cleaned
+        assert "продолжаем на русском" in cleaned
 
     def test_prune_repetitive_numbered_items_removes_duplicates(self):
         from src.handlers.ai import _prune_repetitive_numbered_items
@@ -513,6 +685,77 @@ class TestAiOutputPostprocess:
         chunks = _split_text_chunks_for_telegram(payload, max_len=1000)
         assert len(chunks) == 5
         assert "".join(chunks) == payload
+
+    def test_split_tts_chunks_splits_long_text_without_loss(self):
+        from src.handlers.ai import _split_tts_chunks
+
+        payload = ("Первый блок. " * 140) + "\n\n" + ("Второй блок. " * 140)
+        chunks = _split_tts_chunks(payload, max_chars=500, max_chunks=10)
+        assert len(chunks) >= 2
+        assert all(len(chunk) <= 500 for chunk in chunks[:-1])
+        merged = " ".join(chunks)
+        assert "Первый блок" in merged
+        assert "Второй блок" in merged
+
+    def test_split_tts_chunks_respects_max_chunks(self):
+        from src.handlers.ai import _split_tts_chunks
+
+        payload = " ".join(["слово"] * 8000)
+        chunks = _split_tts_chunks(payload, max_chars=220, max_chunks=4)
+        assert len(chunks) <= 4
+        assert any(chunk.strip() for chunk in chunks)
+
+    def test_dedupe_repeated_long_paragraphs_removes_nonconsecutive_duplicates(self):
+        from src.handlers.ai import _dedupe_repeated_long_paragraphs
+
+        repeated = (
+            "Этот длинный абзац нужен для теста удаления не подряд идущих повторов. "
+            "Он содержит много слов, чтобы пройти порог нормализации."
+        )
+        payload = (
+            f"{repeated}\n\n"
+            "Короткая вставка между блоками.\n\n"
+            f"{repeated}\n\n"
+            "Финал без дубликатов."
+        )
+        cleaned, removed = _dedupe_repeated_long_paragraphs(payload, min_normalized_len=80, max_occurrences=1)
+        assert removed is True
+        assert cleaned.count("Этот длинный абзац нужен для теста") == 1
+        assert "Финал без дубликатов." in cleaned
+
+    def test_build_vision_route_fact_line_reports_cloud_fallback(self):
+        from src.handlers.ai import _build_vision_route_fact_line
+
+        line = _build_vision_route_fact_line(
+            {
+                "route": "cloud_gemini",
+                "model": "gemini-2.0-flash",
+                "fallback_used": True,
+                "error": "local_vision_model_not_set",
+            }
+        )
+        assert "cloud через Gemini" in line
+        assert "неуспешной попытки локального vision" in line
+
+    def test_enforce_vision_route_consistency_strips_local_only_claims_for_cloud(self):
+        from src.handlers.ai import _enforce_vision_route_consistency
+
+        payload = (
+            "ℹ️ Факт vision: cloud через Gemini (gemini-2.0-flash).\n\n"
+            "Мы полностью перешли к локальной обработке данных.\n\n"
+            "Никакие данные не передаются в интернет.\n\n"
+            "Короткий полезный вывод по изображению."
+        )
+        cleaned, changed = _enforce_vision_route_consistency(
+            payload,
+            {"route": "cloud_gemini", "model": "gemini-2.0-flash", "fallback_used": True},
+        )
+        lowered = cleaned.lower()
+        assert changed is True
+        assert "полностью перешли к локальной" not in lowered
+        assert "не передаются в интернет" not in lowered
+        assert "vision-запрос выполнен через cloud" in lowered
+        assert "полезный вывод по изображению" in lowered
 
 
 class _MockPolicyMessage:
@@ -717,3 +960,68 @@ async def test_ctx_all_lists_recent_snapshots():
     assert "Context Snapshot (all chats)" in sent
     assert "chat `200`" in sent
     assert "dropped=`3`" in sent
+
+
+class _BrowserSink:
+    """Перехватчик финального текста для !browser."""
+
+    def __init__(self):
+        self.last_text = ""
+        self.edit_text = AsyncMock(side_effect=self._store)
+
+    async def _store(self, text, *args, **kwargs):
+        self.last_text = str(text)
+
+
+class _MockBrowserMessage:
+    def __init__(self, text: str):
+        self.text = text
+        self.command = text.split()
+        self.from_user = SimpleNamespace(is_self=True, username="owner", id=1)
+        self.chat = SimpleNamespace(id=123, type=SimpleNamespace(name="PRIVATE"))
+        self.sink = _BrowserSink()
+        self.reply_text = AsyncMock(return_value=self.sink)
+
+
+def _build_browser_handler(openclaw_client):
+    from src.handlers.commands import register_handlers as register_commands
+
+    deps = {
+        "router": MagicMock(),
+        "config_manager": MagicMock(),
+        "black_box": MagicMock(),
+        "safe_handler": lambda f: f,
+        "voice_gateway_client": MagicMock(),
+        "openclaw_client": openclaw_client,
+        "reminder_manager": MagicMock(),
+        "persona_manager": MagicMock(active_persona="default", personas={"default": {}}),
+    }
+    app = _DummyApp()
+    register_commands(app, deps)
+    return app.handlers["browser_command"]
+
+
+@pytest.mark.asyncio
+async def test_browser_command_fast_mode_uses_research_fast():
+    openclaw = MagicMock()
+    openclaw.execute_agent_task = AsyncMock(return_value="Короткий web-ответ")
+    handler = _build_browser_handler(openclaw)
+    msg = _MockBrowserMessage("!browser fast проверка сети")
+
+    await handler(None, msg)
+
+    openclaw.execute_agent_task.assert_called_once_with("проверка сети", agent_id="research_fast")
+    assert "OpenClaw Web Response (fast)" in msg.sink.last_text
+
+
+@pytest.mark.asyncio
+async def test_browser_command_default_mode_uses_research_deep():
+    openclaw = MagicMock()
+    openclaw.execute_agent_task = AsyncMock(return_value="Глубокий web-ответ")
+    handler = _build_browser_handler(openclaw)
+    msg = _MockBrowserMessage("!browser проверка маршрута")
+
+    await handler(None, msg)
+
+    openclaw.execute_agent_task.assert_called_once_with("проверка маршрута", agent_id="research_deep")
+    assert "OpenClaw Web Response (deep)" in msg.sink.last_text

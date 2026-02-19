@@ -83,7 +83,7 @@ class ReminderManager:
             return
 
         try:
-            await self.scheduler.client.send_message(
+            await self.scheduler.telegram_client.send_message(
                 reminder["chat_id"],
                 f"⏰ **НАПОМИНАНИЕ**\n\n{reminder['text']}"
             )

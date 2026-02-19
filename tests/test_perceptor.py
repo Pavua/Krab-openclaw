@@ -21,20 +21,13 @@ async def test_perceptor_stt_mock():
 
 @pytest.mark.asyncio
 async def test_perceptor_tts_logic():
-    perceptor = Perceptor({})
-    # Проверяем структуру генерации путей (не запуская say)
-    with patch('asyncio.create_subprocess_exec') as mock_exec:
-        # Мокаем успех обоих процессов
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_exec.return_value = mock_proc
-        
-        # Мокаем наличие файлов
-        with patch('os.path.exists', return_value=True),              patch('os.remove'):
-            res = await perceptor.speak("Hello", voice="Milena")
-            assert res is not None
-            assert ".ogg" in res
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({})
+    # Проверяем orchestration speak без реального edge/openai вызова.
+    with patch.object(perceptor, "_speak_edge", new=AsyncMock(return_value="artifacts/downloads/test.ogg")):
+        res = await perceptor.speak("Hello", voice="Milena")
+        assert res is not None
+        assert ".ogg" in res
 
 
 def test_local_vision_model_resolution_priority():
@@ -84,3 +77,37 @@ async def test_analyze_image_prefers_local_vision_success(tmp_path: Path):
         result = await perceptor.analyze_image(str(image_path), router=MagicMock(), prompt="Опиши картинку")
         assert result == "Локальный vision ответ"
         local_mock.assert_awaited_once()
+
+
+def test_infer_vision_support_from_capabilities_tokens():
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({})
+    support, reason = perceptor._infer_vision_support_from_entry(
+        {"capabilities": ["vision", "reasoning"], "type": "llm"},
+        model_name="custom-model",
+    )
+    assert support is True
+    assert reason in {"capability_keys", "token_hint"}
+
+
+@pytest.mark.asyncio
+async def test_local_vision_precheck_blocks_text_only_model(tmp_path: Path):
+    with patch.dict(os.environ, {"LOCAL_VISION_ENABLED": "1", "LOCAL_VISION_MODEL": "text-only-model"}):
+        with patch.object(Perceptor, "_warmup_audio"):
+            perceptor = Perceptor({})
+
+    image_path = tmp_path / "sample.jpg"
+    Image.new("RGB", (8, 8), color=(10, 120, 10)).save(image_path)
+
+    with patch.object(
+        perceptor,
+        "_check_local_vision_support",
+        new=AsyncMock(return_value={"supported": False, "reason": "text_only_tokens", "model": "text-only-model"}),
+    ):
+        result = await perceptor._analyze_image_local_lm_studio(
+            file_path=str(image_path),
+            router=MagicMock(lm_studio_url="http://127.0.0.1:1234/v1"),
+            prompt="Опиши изображение",
+        )
+    assert result.get("ok") is False
+    assert str(result.get("error", "")).startswith("local_model_not_vision_capability")

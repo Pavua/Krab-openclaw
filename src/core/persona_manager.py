@@ -64,8 +64,23 @@ class PersonaManager:
         self.bb = black_box
         self.personas_file = Path(data_dir) / "custom_personas.json"
         self.personas = DEFAULT_PERSONAS.copy()
+        self.soul_content = ""
         self._load_custom()
+        self._load_soul()
         self.active_persona = self.cfg.get("personality.active_persona", "default")
+    
+    def _load_soul(self):
+        """Загрузка 'Души' Краба из конфигурационного файла."""
+        soul_path = Path("config/soul.md")
+        if soul_path.exists():
+            try:
+                self.soul_content = soul_path.read_text(encoding='utf-8')
+                logger.info("Soul of Krab successfully injected", path=str(soul_path))
+            except Exception as e:
+                logger.error("Failed to load soul.md", error=str(e))
+        else:
+            logger.warning("soul.md not found, using generic identity")
+            self.soul_content = "Ты — Krab AI, элитный ассистент."
     
     def _load_custom(self):
         if self.personas_file.exists():
@@ -87,7 +102,9 @@ class PersonaManager:
         chat_type: 'private' или 'group' / 'supergroup'
         """
         persona = self.personas.get(self.active_persona, self.personas["default"])
-        base_prompt = persona["prompt"]
+        
+        # Инъекция Души + Короткий контекст роли
+        base_prompt = f"{self.soul_content}\n\n### ТВОЯ ТЕКУЩАЯ РОЛЬ:\n{persona['prompt']}"
         
         # Динамические добавки
         modifiers = []

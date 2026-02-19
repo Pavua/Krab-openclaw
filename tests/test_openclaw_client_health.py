@@ -111,6 +111,33 @@ class FakeMissingLmstudioProfileClient(FakeOpenClawClient):
         }
 
 
+class FakeResearchWorkflowClient(OpenClawClient):
+    """Фейковый клиент для проверки web-research пайплайна без сети."""
+
+    def __init__(self, search_payload):
+        super().__init__(base_url="http://localhost:18789", api_key="")
+        self.search_payload = search_payload
+        self.invocations = []
+        self.last_messages = []
+        self.last_model = ""
+
+    async def invoke_tool(self, tool_name: str, args: dict):  # type: ignore[override]
+        self.invocations.append((tool_name, args))
+        if tool_name == "web_search":
+            return self.search_payload
+        if tool_name == "web_fetch":
+            return {
+                "details": {"title": "Fetched title"},
+                "content": [{"text": "Детальный контент страницы для уточнения фактов."}],
+            }
+        return {"error": "unsupported_tool"}
+
+    async def chat_completions(self, messages, model: str = "google/gemini-1.5-flash"):  # type: ignore[override]
+        self.last_messages = messages
+        self.last_model = model
+        return "REPORT_OK"
+
+
 class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_json_network_error_is_safe(self):
         client = OpenClawClient(base_url="http://127.0.0.1:1", api_key="")
@@ -253,6 +280,44 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("base", report)
         self.assertIn("browser_smoke", report)
         self.assertTrue(report["browser_smoke"]["ok"])
+
+    async def test_execute_agent_task_deep_fetches_pages_for_top_sources(self):
+        client = FakeResearchWorkflowClient(
+            {
+                "details": {
+                    "results": [
+                        {"title": "A", "url": "https://a.example", "description": "desc-a", "published": "2026-02-18"},
+                        {"title": "B", "url": "https://b.example", "description": "desc-b", "published": "2026-02-18"},
+                        {"title": "C", "url": "https://c.example", "description": "desc-c", "published": "2026-02-18"},
+                    ]
+                }
+            }
+        )
+        result = await client.execute_agent_task("проверка deep режима", agent_id="deep")
+        self.assertEqual(result, "REPORT_OK")
+        fetch_calls = [call for call in client.invocations if call[0] == "web_fetch"]
+        self.assertEqual(len(fetch_calls), 2)  # deep-профиль ограничен двумя fetch-запросами
+        prompt = client.last_messages[1]["content"]
+        self.assertIn("Подробности страницы", prompt)
+        self.assertIn("[A](https://a.example)", prompt)
+
+    async def test_execute_agent_task_parses_results_from_content_wrapper(self):
+        client = FakeResearchWorkflowClient(
+            {
+                "content": [
+                    {
+                        "text": (
+                            "{\"results\": [{\"title\": \"Wrapped\", \"url\": \"https://wrapped.example\", "
+                            "\"description\": \"wrapped-desc\", \"published\": \"2026-02-18\"}]}"
+                        )
+                    }
+                ]
+            }
+        )
+        result = await client.execute_agent_task("обернутый ответ web_search", agent_id="research_fast")
+        self.assertEqual(result, "REPORT_OK")
+        prompt = client.last_messages[1]["content"]
+        self.assertIn("[Wrapped](https://wrapped.example)", prompt)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,54 @@ class SwarmManager:
     
     def __init__(self, model_router=None):
         self.router = model_router
-        logger.info("Native SwarmManager initialized")
+        logger.info("Native SwarmManager v5.5 (Unified) initialized")
+
+    async def consilium_reasoning(self, query: str) -> str:
+        """
+        [PHASE 14.5] Consilium Mode: Дискуссия между агентами.
+        1. Architect: План решения.
+        2. Coder/Expert: Реализация.
+        3. Critic: Проверка ошибок.
+        """
+        if not self.router or not hasattr(self.router, "persona"):
+            return "⚠️ Consilium недоступен: router/persona не инициализированы."
+
+        logger.info("🏛️ Entering Consilium Mode", query=query[:50])
+        
+        # Шаг 1: План Архитектора
+        architect_prompt = f"ЗАДАЧА: {query}\n\nРазработай верхнеуровневый план решения."
+        # Мы явно используем роли из PersonaManager через анонимных агентов или внутренние промпты
+        
+        plan_results = await self.execute_task(
+            task_description=architect_prompt,
+            agents=[SwarmAgent("Architect", "Principal Architect", "Проектирование идеального плана.", "Пиши только план, без вступлений.")],
+            mode="sequential"
+        )
+        plan = plan_results.get("Architect", "Ошибка планирования.")
+        
+        # Шаг 2: Реализация Эксперта
+        expert_prompt = f"ПЛАН: {plan}\n\nРеализуй решение согласно плану."
+        dev_results = await self.execute_task(
+            task_description=expert_prompt,
+            agents=[SwarmAgent("Coder", "Senior Developer", "Реализация по плану.", "Пиши чистый код или подробный ответ.")],
+            mode="sequential"
+        )
+        solution = dev_results.get("Coder", "Ошибка реализации.")
+        
+        # Шаг 3: Критика
+        critic_prompt = f"РЕШЕНИЕ: {solution}\n\nНайди ошибки или предложи улучшения."
+        critic_results = await self.execute_task(
+            task_description=critic_prompt,
+            agents=[SwarmAgent("Critic", "Ruthless Critic", "Поиск уязвимостей и ошибок.", "Будь строгим, но конструктивным.")],
+            mode="sequential"
+        )
+        feedback = critic_results.get("Critic", "Ошибка проверки.")
+        
+        # Финальный результат
+        final_prompt = f"### АРХИТЕКТУРА:\n{plan}\n\n### РЕШЕНИЕ:\n{solution}\n\n### КРИТИКА:\n{feedback}\n\n### ЗАДАЧА:\nНа основе дискуссии выше, выдай финальный идеальный результат."
+        final_res = await self.router.route_query(final_prompt, task_type='chat')
+        
+        return f"🌟 **Consilium Result:**\n\n{final_res}\n\n--- \n🏛️ *Рой агентов: Architect, Coder, Critic*"
 
     async def execute_task(self, 
                            task_description: str, 

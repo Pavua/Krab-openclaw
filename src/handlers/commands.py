@@ -211,6 +211,18 @@ def register_handlers(app, deps: dict):
         cloud_status = "🟢 Ready" if cloud_ok else "🟡 Offline (OpenClaw)"
         voice_status = "🟢 Ready" if voice_ok else "🟡 Offline"
         local_model = router.active_local_model or "—"
+        local_diag_reason = ""
+        if not local_ok:
+            local_error_human = str(getattr(router, "last_local_load_error_human", "") or "").strip()
+            local_error_tech = str(getattr(router, "last_local_load_error", "") or "").strip()
+            if local_error_human:
+                local_diag_reason = local_error_human
+            elif getattr(router, "local_engine", None) == "lm-studio":
+                local_diag_reason = "⚠️ LM Studio доступна, но модель не загружена."
+            elif local_error_tech:
+                local_diag_reason = f"⚠️ Последняя ошибка загрузки: {local_error_tech}"
+            else:
+                local_diag_reason = "⚠️ Локальный контур недоступен."
         cloud_model = router.models.get("chat", "—")
         last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
         if isinstance(last_route, dict) and last_route:
@@ -220,6 +232,16 @@ def register_handlers(app, deps: dict):
             )
         else:
             last_route_text = "—"
+        last_route_reason = (
+            str(last_route.get("route_reason", "")).strip()
+            if isinstance(last_route, dict)
+            else ""
+        )
+        last_route_detail = (
+            str(last_route.get("route_detail", "")).strip()
+            if isinstance(last_route, dict)
+            else ""
+        )
         last_stream_route = router.get_last_stream_route() if hasattr(router, "get_last_stream_route") else {}
         if isinstance(last_stream_route, dict) and last_stream_route:
             last_stream_text = (
@@ -228,6 +250,23 @@ def register_handlers(app, deps: dict):
             )
         else:
             last_stream_text = "—"
+        last_stream_reason = (
+            str(last_stream_route.get("route_reason", "")).strip()
+            if isinstance(last_stream_route, dict)
+            else ""
+        )
+        last_stream_detail = (
+            str(last_stream_route.get("route_detail", "")).strip()
+            if isinstance(last_stream_route, dict)
+            else ""
+        )
+        fallback_route_text = ""
+        if isinstance(last_route, dict) and str(last_route.get("channel", "")).strip().lower() == "cloud":
+            cloud_reason = last_route_reason or ("local_unavailable" if not local_ok else "")
+            if cloud_reason:
+                fallback_route_text += f"☁️ **Cloud reason:** `{cloud_reason}`\n"
+            if last_route_detail:
+                fallback_route_text += f"   └ Detail: `{last_route_detail}`\n"
         rag_docs = router.rag.get_total_documents() if router.rag else 0
         rag_status = "🟢 Active" if router.rag else "⚪ Disabled (OpenClaw)"
         web_panel_url = _resolve_web_panel_url()
@@ -245,12 +284,17 @@ def register_handlers(app, deps: dict):
             f"🤖 **Local AI:** {local_status}\n"
             f"   └ Engine: `{router.local_engine or '—'}`\n"
             f"   └ Model: `{local_model}`\n"
+            f"{f'   └ Reason: `{local_diag_reason}`\\n' if local_diag_reason else ''}"
             f"☁️  **Cloud (OpenClaw):** {cloud_status}\n"
             f"   └ Config chat: `{cloud_model}`\n"
             f"🎧 **Voice Gateway:** {voice_status}\n"
             f"🧠 **RAG:** {rag_status} ({rag_docs} docs)\n"
             f"🧭 **Last route:** `{last_route_text}`\n"
+            f"{f'   └ Route reason: `{last_route_reason}`\\n' if last_route_reason else ''}"
             f"🌊 **Last stream:** `{last_stream_text}`\n"
+            f"{f'   └ Stream reason: `{last_stream_reason}`\\n' if last_stream_reason else ''}"
+            f"{f'   └ Stream detail: `{last_stream_detail}`\\n' if last_stream_detail else ''}"
+            f"{fallback_route_text}"
             f"📊 **Uptime:** {uptime_str}\n"
             f"⏰ **Reminders:** {reminders_active} active\n"
             f"📂 **Config:** Hot-reload {'🟢' if config_manager else '⚪'}\n"
@@ -338,9 +382,19 @@ def register_handlers(app, deps: dict):
             f"{last_route.get('channel', '-')}/{last_route.get('profile', '-')}: {last_route.get('model', '-')}"
             if isinstance(last_route, dict) and last_route else "—"
         )
+        last_route_reason = (
+            str(last_route.get("route_reason", "")).strip()
+            if isinstance(last_route, dict) and last_route
+            else ""
+        )
         last_stream_text = (
             f"{last_stream.get('channel', '-')}/{last_stream.get('profile', '-')}: {last_stream.get('model', '-')}"
             if isinstance(last_stream, dict) and last_stream else "—"
+        )
+        last_stream_reason = (
+            str(last_stream.get("route_reason", "")).strip()
+            if isinstance(last_stream, dict) and last_stream
+            else ""
         )
 
         await message.reply_text(
@@ -348,7 +402,9 @@ def register_handlers(app, deps: dict):
             f"• Force mode: `{getattr(router, 'force_mode', 'auto')}`\n"
             f"• Policy: `{getattr(router, 'routing_policy', 'n/a')}`\n"
             f"• Last route: `{last_route_text}`\n"
+            f"• Last route reason: `{last_route_reason or '-'}`\n"
             f"• Last stream: `{last_stream_text}`\n\n"
+            f"• Last stream reason: `{last_stream_reason or '-'}`\n\n"
             f"• Calls L/C/T: `{int(totals.get('local_calls', 0))}` / "
             f"`{int(totals.get('cloud_calls', 0))}` / `{int(totals.get('all_calls', 0))}`\n"
             f"• Cloud share: `{float(ratios.get('cloud_share', 0.0))}`\n"
@@ -1092,6 +1148,17 @@ def register_handlers(app, deps: dict):
         monthly = cost_report.get("monthly_forecast", {})
         top_models = usage.get("top_models", [])
         top_profiles = usage.get("top_profiles", [])
+        last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+        last_route_text = (
+            f"{last_route.get('channel', '-')}/{last_route.get('profile', '-')}: {last_route.get('model', '-')}"
+            if isinstance(last_route, dict) and last_route
+            else "—"
+        )
+        last_route_reason = (
+            str(last_route.get("route_reason", "")).strip()
+            if isinstance(last_route, dict) and last_route
+            else ""
+        )
 
         top_models_text = (
             "\n".join(f"- `{item.get('model')}`: {item.get('count')}" for item in top_models[:3])
@@ -1114,6 +1181,9 @@ def register_handlers(app, deps: dict):
             f"• Calls total: `{totals.get('all_calls', 0)}`\n"
             f"• Local calls: `{totals.get('local_calls', 0)}`\n"
             f"• Cloud calls: `{totals.get('cloud_calls', 0)}`\n"
+            f"• Force mode: `{getattr(router, 'force_mode', 'auto')}`\n"
+            f"• Last route: `{last_route_text}`\n"
+            f"• Last route reason: `{last_route_reason or '-'}`\n"
             f"• Cloud share: `{ratios.get('cloud_share', 0)}`\n"
             f"• Soft cap: `{soft_cap.get('cloud_soft_cap_calls', 0)}`\n"
             f"• Remaining: `{soft_cap.get('cloud_remaining_calls', 0)}`\n"
@@ -1958,44 +2028,64 @@ def register_handlers(app, deps: dict):
             f"```\n{output}\n```"
         )
 
-    # --- !browser: Портал подписок (Gemini Pro/Advanced) ---
+    # --- !browser: web-задачи через OpenClaw ---
     @app.on_message(filters.command("browser", prefixes="!"))
     @safe_handler
     async def browser_command(client, message: Message):
         """
-        Универсальный browser-запрос:
-        1) OpenClaw-first (предпочтительно),
-        2) fallback на локальный SubscriptionPortal.
+        Универсальный web-запрос через OpenClaw без локального скрейпинга.
+        Поддерживает режимы:
+        - !browser fast <запрос>
+        - !browser deep <запрос>
+        - !browser <запрос> (по умолчанию deep)
         """
-        if not is_owner(message): return
-        
-        if len(message.command) < 2:
-            await message.reply_text("❓ Использование: `!browser <запрос>`")
+        if not is_owner(message):
             return
-            
-        prompt = " ".join(message.command[1:])
-        msg = await message.reply_text("🌐 **Browser task: OpenClaw-first...**")
-        
+        if not openclaw_client:
+            await message.reply_text("❌ OpenClaw client не инициализирован.")
+            return
+
+        if len(message.command) < 2:
+            await message.reply_text("❓ Использование: `!browser [fast|deep] <запрос>`")
+            return
+
+        mode_token = str(message.command[1] or "").strip().lower()
+        mode_map = {
+            "fast": ("research_fast", "fast"),
+            "quick": ("research_fast", "fast"),
+            "deep": ("research_deep", "deep"),
+            "full": ("research_deep", "deep"),
+            "std": ("research", "standard"),
+            "standard": ("research", "standard"),
+        }
+        agent_id, mode_label = mode_map.get(mode_token, ("research_deep", "deep"))
+        query_start = 2 if mode_token in mode_map else 1
+        prompt = " ".join(message.command[query_start:]).strip()
+        if not prompt:
+            await message.reply_text("⚠️ После режима нужен текст запроса. Пример: `!browser deep рынок ИИ 2026`")
+            return
+
+        msg = await message.reply_text(f"🌐 **Web task via OpenClaw ({mode_label})...**")
         try:
-            if openclaw_client:
-                response = await openclaw_client.execute_agent_task(prompt, agent_id="research_deep")
-                if response and "⚠️" not in response and "❌" not in response:
-                    await msg.edit_text(f"🌐 **OpenClaw Browser/Web Response:**\n\n{response}")
-                    return
+            response = await openclaw_client.execute_agent_task(prompt, agent_id=agent_id)
+            response = str(response or "").strip()
+            if not response:
+                await msg.edit_text("⚠️ OpenClaw вернул пустой ответ.")
+                return
 
-            await msg.edit_text("🟡 OpenClaw path не дал ответ, включаю локальный fallback...")
+            if response.startswith(("⚠️", "❌")):
+                await msg.edit_text(
+                    "⚠️ Web-запрос завершился с ошибкой:\n\n"
+                    f"{response}\n\n"
+                    "_Проверь OpenClaw:_ `!openclaw deep` или `!openclaw smoke`"
+                )
+                return
 
-            from src.modules.subscription_portal import SubscriptionPortal
-            portal = SubscriptionPortal(headless=True)
-            response = await portal.query_gemini(prompt)
-            await portal.close()
-
-            await msg.edit_text(f"🌐 **Portal Fallback Response:**\n\n{response}")
-
-        except ImportError:
-            await msg.edit_text("❌ Ошибка: `playwright` не установлен для fallback пути.")
+            if len(response) > 3600:
+                response = response[:3550].rstrip() + "\n\n...[truncated]..."
+            await msg.edit_text(f"🌐 **OpenClaw Web Response ({mode_label}):**\n\n{response}")
         except Exception as e:
-            await msg.edit_text(f"❌ Browser Error: {e}")
+            await msg.edit_text(f"❌ Browser/Web Error: {e}")
 
     # --- !help: Справка ---
     @app.on_message(filters.command("help", prefixes="!"))
@@ -2050,7 +2140,7 @@ def register_handlers(app, deps: dict):
             "`!img health` — health local/cloud image backend\n"
             "`!img default ...` — закрепить дефолтные image-модели\n"
             "`!vision ...` — runtime-настройка local vision (LM Studio + fallback)\n"
-            "`!browser <запрос>` — 🌐 Gemini Web Portal (Pro/Advanced)\n"
+            "`!browser [fast|deep] <запрос>` — 🌐 Web research через OpenClaw\n"
             "`!translate` — Перевод RU↔EN\n"
             "`!say` — Голосовое (TTS)\n"
             "`!callstart ...` — Старт voice-сессии (mode/source/notify/tts)\n"

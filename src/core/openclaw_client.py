@@ -110,29 +110,6 @@ class OpenClawClient:
             return json.dumps(payload, ensure_ascii=False)
         return str(payload)
 
-    def _format_error_detail(self, payload: Any) -> str:
-        """Подготавливает понятное описание ошибки из разнообразных ответов."""
-        if not payload:
-            return "нет дополнительных данных"
-        if isinstance(payload, dict):
-            candidates = [
-                payload.get("error"),
-                payload.get("message"),
-                payload.get("detail"),
-                payload.get("description"),
-            ]
-            for candidate in candidates:
-                if not candidate:
-                    continue
-                if isinstance(candidate, dict):
-                    nested = candidate.get("message") or candidate.get("detail")
-                    if nested:
-                        return str(nested)
-                    return json.dumps(candidate, ensure_ascii=False)
-                return str(candidate)
-            return json.dumps(payload, ensure_ascii=False)
-        return str(payload)
-
     async def _probe_first_available(self, paths: list[str], timeout: int = 5) -> dict[str, Any]:
         """Пробует список endpoint'ов и возвращает первый успешный ответ."""
         tried: list[str] = []
@@ -172,12 +149,13 @@ class OpenClawClient:
             return {"error": str(data.get("error", "Unknown Error"))}
         return {"error": "Invalid OpenClaw response"}
 
-    async def chat_completions(self, messages: list, model: str = "google/gemini-2.0-flash-exp") -> str:
+    async def chat_completions(self, messages: list, model: str = "google/gemini-1.5-flash") -> str:
         """Отправляет chat-completion в OpenClaw Gateway."""
         payload = {
             "model": model,
             "messages": messages,
             "stream": False,
+            "max_tokens": 2048,  # Защита от бесконечного выхлопа
         }
         response = await self._request_json("POST", "/v1/chat/completions", payload=payload, timeout=60)
         if not response.get("ok"):
@@ -219,81 +197,263 @@ class OpenClawClient:
         """
         Выполняет исследовательскую задачу через web_search + синтез ответа.
         """
-        count = 5 if agent_id == "research_fast" else 10
+        query_text = str(query or "").strip()
+        if not query_text:
+            return "⚠️ Пустой web-запрос. Передай тему после команды."
 
-        logger.info("OpenClawClient: searching query=%s count=%s", query, count)
-        search_results = await self.invoke_tool("web_search", {"query": query, "count": count})
-
-        if "error" in search_results:
-            return f"⚠️ Search Failed: {search_results['error']}"
-
-        results_data = search_results.get("details", {}).get("results", [])
-
-        if not results_data and "content" in search_results:
-            try:
-                # Пытаемся извлечь текст если это обертка
-                text = ""
-                if isinstance(search_results.get("content"), list):
-                    text = search_results["content"][0].get("text", "")
-                elif isinstance(search_results.get("content"), str):
-                    text = search_results["content"]
-                
-                if text:
-                    parsed = json.loads(text)
-                    results_data = parsed.get("results", [])
-            except Exception:
-                pass
-
-        if not results_data:
-            return "⚠️ No search results found."
-
-        context = "Search Results (Articles & News):\n"
-        for i, result in enumerate(results_data, 1):
-            if isinstance(result, dict):
-                title = (
-                    result.get("title", "No Title")
-                    .replace("<<<EXTERNAL_UNTRUSTED_CONTENT>>>", "")
-                    .replace("<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>", "")
-                    .replace("Source: Web Search", "")
-                    .replace("---", "")
-                    .strip()
-                )
-                url = result.get("url", "#")
-                description = (
-                    result.get("description", "No description")
-                    .replace("<<<EXTERNAL_UNTRUSTED_CONTENT>>>", "")
-                    .replace("<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>", "")
-                    .replace("Source: Web Search", "")
-                    .replace("---", "")
-                    .strip()
-                )
-                date = result.get("published") or result.get("date") or "Stable date"
-                context += f"{i}. [{title}]({url}) — {date}\n"
-                context += f"   Snippet: {description}\n\n"
-            else:
-                context += f"{i}. {str(result)}\n"
-
-        prompt = (
-            f"User Query: {query}\n\n"
-            f"{context}\n"
-            "INSTRUCTIONS:\n"
-            "1. Analyze the search results above carefully. Do NOT ignore articles or deep-dive content.\n"
-            "2. Provide a COMPREHENSIVE and DETAILED answer based on all available information.\n"
-            "3. Cite sources naturally using the [Title](URL) format.\n"
-            "4. If multiple points of view or complex details are present in articles, summarize them thoroughly.\n"
-            "5. Answer in the language of the user query (Russian unless specified otherwise)."
+        profile = self._resolve_research_profile(agent_id)
+        logger.info(
+            "OpenClawClient: web research start query=%s count=%s profile=%s",
+            query_text,
+            profile["count"],
+            profile["id"],
+        )
+        search_results = await self.invoke_tool(
+            "web_search",
+            {
+                "query": query_text,
+                "count": profile["count"],
+            },
         )
 
+        if "error" in search_results:
+            return f"⚠️ Web search failed: {search_results['error']}"
+
+        results_data = self._extract_search_results(
+            search_results,
+            limit=int(profile["count"]),
+        )
+        if not results_data:
+            return "⚠️ По запросу не найдено релевантных источников."
+
+        fetch_limit = int(profile["web_fetch_limit"])
+        if fetch_limit > 0:
+            results_data = await self._enrich_results_with_web_fetch(results_data, max_fetch=fetch_limit)
+
+        context = self._build_research_context(results_data)
+        instruction_block = (
+            "Сделай глубокий аналитический разбор: ключевые факты, риски, противоречия, выводы.\n"
+            "Если есть расхождения в источниках — явно укажи их.\n"
+        ) if profile["id"] == "research_deep" else (
+            "Сделай компактный и практичный разбор: 4-7 пунктов по сути.\n"
+        )
+
+        prompt = (
+            f"Запрос пользователя: {query_text}\n\n"
+            f"{context}\n"
+            "Требования к ответу:\n"
+            "1) Отвечай на русском языке.\n"
+            f"2) {instruction_block}"
+            "3) Ссылайся на источники в формате [Название](URL).\n"
+            "4) Не выдумывай факты, которых нет в источниках.\n"
+        )
         messages = [
-            {"role": "system", "content": "You are a Senior Research Analyst. You specialize in deep content analysis and comprehensive reporting. You never skip relevant details or skip articles."},
+            {
+                "role": "system",
+                "content": (
+                    "Ты Senior Research Analyst. "
+                    "Делаешь фактологичный анализ только по источникам из контекста."
+                ),
+            },
             {"role": "user", "content": prompt},
         ]
-
-        return await self.chat_completions(messages)
+        research_model = (
+            str(os.getenv("OPENCLAW_RESEARCH_MODEL", "google/gemini-1.5-flash")).strip()
+            or "google/gemini-1.5-flash"
+        )
+        return await self.chat_completions(messages, model=research_model)
 
     async def search(self, query: str) -> str:
         """Shortcut для research-задач."""
         return await self.execute_agent_task(query, agent_id="research")
+
+    def _resolve_research_profile(self, agent_id: str) -> dict[str, Any]:
+        """
+        Нормализует профиль research-задачи.
+        Почему отдельный метод: чтобы команды могли передавать алиасы (`fast/deep`)
+        без размазывания логики по хендлерам.
+        """
+        mode = str(agent_id or "").strip().lower()
+        if mode in {"fast", "research_fast"}:
+            return {"id": "research_fast", "count": 5, "web_fetch_limit": 0}
+        if mode in {"deep", "research_deep", "browser_deep"}:
+            return {"id": "research_deep", "count": 14, "web_fetch_limit": 2}
+        return {"id": "research", "count": 10, "web_fetch_limit": 1}
+
+    def _sanitize_external_text(self, value: Any, max_chars: int = 1200) -> str:
+        """Очищает внешние web-данные от служебных маркеров и шумовых хвостов."""
+        text = str(value or "")
+        text = (
+            text.replace("<<<EXTERNAL_UNTRUSTED_CONTENT>>>", "")
+            .replace("<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>", "")
+            .replace("Source: Web Search", "")
+            .replace("---", "")
+            .strip()
+        )
+        if len(text) > max_chars:
+            return text[: max_chars - 1].rstrip() + "…"
+        return text
+
+    def _parse_results_from_content(self, content: Any) -> list[Any]:
+        """Пытается извлечь список результатов из content-обёртки tool-ответа."""
+        chunks: list[str] = []
+        if isinstance(content, str):
+            chunks.append(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, str):
+                    chunks.append(item)
+                elif isinstance(item, dict):
+                    for key in ("text", "content", "raw"):
+                        piece = item.get(key)
+                        if isinstance(piece, str) and piece.strip():
+                            chunks.append(piece)
+                            break
+
+        extracted: list[Any] = []
+        for raw_chunk in chunks:
+            try:
+                parsed = json.loads(raw_chunk)
+            except Exception:
+                continue
+            if isinstance(parsed, list):
+                extracted.extend(parsed)
+                continue
+            if isinstance(parsed, dict):
+                for key in ("results", "items", "data"):
+                    candidate = parsed.get(key)
+                    if isinstance(candidate, list):
+                        extracted.extend(candidate)
+                        break
+        return extracted
+
+    def _extract_search_results(self, payload: Any, limit: int = 10) -> list[dict[str, str]]:
+        """
+        Нормализует результаты web_search в стабильный список словарей.
+        Поддерживает разные формы OpenClaw/tool payload (details/results/content wrapper).
+        """
+        raw_results: list[Any] = []
+        if isinstance(payload, dict):
+            details = payload.get("details")
+            if isinstance(details, dict):
+                for key in ("results", "items", "data"):
+                    candidate = details.get(key)
+                    if isinstance(candidate, list):
+                        raw_results.extend(candidate)
+                        break
+            for key in ("results", "items"):
+                candidate = payload.get(key)
+                if isinstance(candidate, list):
+                    raw_results.extend(candidate)
+            raw_results.extend(self._parse_results_from_content(payload.get("content")))
+
+        if not raw_results:
+            return []
+
+        normalized: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in raw_results:
+            if isinstance(item, dict):
+                title = self._sanitize_external_text(item.get("title") or item.get("name") or item.get("headline") or "Без названия", max_chars=180)
+                url = self._sanitize_external_text(item.get("url") or item.get("link") or item.get("href") or "", max_chars=500)
+                description = self._sanitize_external_text(
+                    item.get("description") or item.get("snippet") or item.get("summary") or item.get("text") or "",
+                    max_chars=900,
+                )
+                published = self._sanitize_external_text(
+                    item.get("published") or item.get("date") or item.get("updated_at") or "дата не указана",
+                    max_chars=80,
+                )
+            else:
+                title = self._sanitize_external_text(item, max_chars=180) or "Без названия"
+                url = ""
+                description = ""
+                published = "дата не указана"
+
+            dedup_key = f"{url}|{title}".strip().lower()
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            normalized.append(
+                {
+                    "title": title or "Без названия",
+                    "url": url,
+                    "description": description,
+                    "published": published,
+                }
+            )
+            if len(normalized) >= max(1, int(limit)):
+                break
+        return normalized
+
+    def _extract_web_fetch_excerpt(self, payload: Any) -> str:
+        """Извлекает короткий читаемый фрагмент из web_fetch payload."""
+        if not isinstance(payload, dict):
+            return ""
+        content = payload.get("content")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            first = content[0] if content else None
+            if isinstance(first, dict):
+                text = str(first.get("text") or first.get("content") or "")
+            elif isinstance(first, str):
+                text = first
+
+        if not text and isinstance(payload.get("details"), dict):
+            details = payload.get("details", {})
+            text = str(details.get("content") or details.get("summary") or "")
+
+        return self._sanitize_external_text(text, max_chars=850)
+
+    async def _enrich_results_with_web_fetch(
+        self,
+        results: list[dict[str, str]],
+        max_fetch: int = 1,
+    ) -> list[dict[str, str]]:
+        """
+        Подтягивает 1-2 страницы через web_fetch для более точного deep-анализа.
+        Если fetch недоступен, silently продолжаем на сниппетах поиска.
+        """
+        fetch_budget = max(0, int(max_fetch))
+        if fetch_budget == 0:
+            return results
+
+        enriched: list[dict[str, str]] = []
+        for item in results:
+            item_copy = dict(item)
+            target_url = str(item_copy.get("url") or "").strip()
+            if fetch_budget > 0 and target_url:
+                fetched = await self.invoke_tool("web_fetch", {"url": target_url})
+                if isinstance(fetched, dict) and not fetched.get("error"):
+                    excerpt = self._extract_web_fetch_excerpt(fetched)
+                    if excerpt:
+                        item_copy["page_excerpt"] = excerpt
+                    details = fetched.get("details")
+                    if isinstance(details, dict):
+                        fetched_title = self._sanitize_external_text(details.get("title") or "", max_chars=180)
+                        if fetched_title and item_copy.get("title", "").lower() in {"", "без названия"}:
+                            item_copy["title"] = fetched_title
+                fetch_budget -= 1
+            enriched.append(item_copy)
+        return enriched
+
+    def _build_research_context(self, results: list[dict[str, str]]) -> str:
+        """Собирает контекст источников для последующего синтеза LLM."""
+        lines = ["Источники web_search:"]
+        for idx, item in enumerate(results, 1):
+            title = item.get("title") or "Без названия"
+            url = item.get("url") or "#"
+            date = item.get("published") or "дата не указана"
+            description = item.get("description") or ""
+            page_excerpt = item.get("page_excerpt") or ""
+            lines.append(f"{idx}. [{title}]({url}) — {date}")
+            if description:
+                lines.append(f"   Сниппет: {description}")
+            if page_excerpt:
+                lines.append(f"   Подробности страницы: {page_excerpt}")
+        return "\n".join(lines).strip()
 
     async def get_auth_provider_health(self) -> dict[str, Any]:
         """Проверяет доступность auth-provider endpoint'ов OpenClaw."""

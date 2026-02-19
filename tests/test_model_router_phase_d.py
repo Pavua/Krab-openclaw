@@ -79,6 +79,24 @@ def test_feedback_influences_recommendation(tmp_path: Path) -> None:
     assert recommendation["feedback_hint"]["count"] == 3
 
 
+def test_last_route_keeps_reason_metadata(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    router._remember_last_route(
+        profile="communication",
+        task_type="chat",
+        channel="cloud",
+        model_name="gemini-2.5-pro",
+        prompt="критичный запрос",
+        route_reason="force_cloud",
+        route_detail="forced by router mode",
+        force_mode="force_cloud",
+    )
+    last_route = router.get_last_route()
+    assert last_route["route_reason"] == "force_cloud"
+    assert last_route["route_detail"] == "forced by router mode"
+    assert last_route["force_mode"] == "force_cloud"
+
+
 def test_heavy_light_tier_detection(tmp_path: Path) -> None:
     router = _router(tmp_path)
 

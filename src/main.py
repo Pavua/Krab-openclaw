@@ -16,10 +16,12 @@ import os
 import signal
 import asyncio
 import json
+import atexit
 from datetime import datetime
 
 from dotenv import load_dotenv
 from pyrogram import Client, filters, idle
+from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.types import (
     Message,
     InlineKeyboardMarkup,
@@ -55,6 +57,10 @@ from src.core.provisioning_service import ProvisioningService
 from src.core.ai_guardian_client import AIGuardianClient
 from src.core.group_moderation_engine import GroupModerationEngine
 from src.core.agent_loop import ProjectAgent
+from src.core.scheduler import krab_scheduler
+from src.core.notifier import krab_notifier
+from src.core.watchdog import krab_watchdog
+from src.core.process_lock import SingleInstanceProcessLock, DuplicateInstanceError
 
 # Handler-модули (новая модульная система)
 from src.handlers import register_all_handlers
@@ -67,6 +73,64 @@ logger = setup_logger()
 
 # Переменные окружения
 load_dotenv(override=True)
+
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+CORE_LOCK_PATH = os.path.join(PROJECT_ROOT, ".runtime", "krab_core.lock")
+CORE_PID_PATH = os.path.join(PROJECT_ROOT, "krab_core.pid")
+core_singleton_lock: SingleInstanceProcessLock | None = None
+
+
+def acquire_core_singleton_lock() -> None:
+    """
+    Захватывает межпроцессный lock ядра.
+
+    Почему так:
+    - защита от случайного двойного запуска (ручной запуск + watchdog/оркестратор);
+    - исключение дублирующих ответов в Telegram из двух конкурирующих процессов.
+    """
+    global core_singleton_lock
+    if core_singleton_lock is not None:
+        return
+
+    lock = SingleInstanceProcessLock(lock_path=CORE_LOCK_PATH, pid_path=CORE_PID_PATH)
+    try:
+        lock.acquire()
+    except DuplicateInstanceError as exc:
+        logger.critical(
+            "Второй запуск ядра отклонён: активный экземпляр уже работает.",
+            lock_file=CORE_LOCK_PATH,
+            active_pid=exc.holder_pid,
+            active_started_at=exc.holder_started_at,
+            holder_payload=exc.info.raw_payload[:300],
+        )
+        raise SystemExit(2) from None
+
+    core_singleton_lock = lock
+    atexit.register(release_core_singleton_lock)
+    logger.info("✅ Singleton-lock ядра захвачен.", lock_file=CORE_LOCK_PATH, pid=os.getpid())
+
+
+def release_core_singleton_lock() -> None:
+    """Освобождает межпроцессный lock ядра при штатном/аварийном завершении."""
+    global core_singleton_lock
+    if core_singleton_lock is None:
+        return
+
+    try:
+        core_singleton_lock.release()
+    finally:
+        core_singleton_lock = None
+
+
+def _int_env(name: str, default: int) -> int:
+    """Безопасно читает целое значение из env."""
+    raw = str(os.getenv(name, str(default))).strip()
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except Exception:
+        return default
 
 
 def _json_contains_lmstudio_provider(payload):
@@ -256,7 +320,7 @@ except ImportError:
     archiver = None
 
 # Summary Manager (для сжатия контекста)
-summarizer = SummaryManager(router, memory, min_messages=cfg.get("ai.summary_threshold", 40))
+summarizer = SummaryManager(router, memory, max_tokens=cfg.get("ai.summary_token_threshold", 3000))
 
 # Image Manager (генерация картинок)
 image_gen = ImageManager(cfg.get_all())
@@ -314,9 +378,11 @@ plugin_manager = PluginManager()
 from src.core.task_queue import TaskQueue
 task_queue = TaskQueue(app)
 
-# Планировщик (будет инициализирован в main())
-scheduler = None
-reminder_manager = None
+# Планировщик и Инфраструктура Автономности
+scheduler = krab_scheduler
+notifier = krab_notifier
+watchdog = krab_watchdog
+reminder_manager = None 
 
 
 # === DEBUG LOGGER (group=-1, срабатывает первым на каждое сообщение) ===
@@ -433,6 +499,101 @@ _deps = {
 register_all_handlers(app, _deps)
 
 
+def _collect_registered_handler_names(client: Client) -> set[str]:
+    """
+    Возвращает множество имён callback-функций, зарегистрированных в dispatcher.
+    Нужен для диагностики «тихих» проблем, когда хендлеры не поднялись.
+    """
+    names: set[str] = set()
+    try:
+        groups = getattr(client.dispatcher, "groups", {}) or {}
+        for handlers in groups.values():
+            for handler in handlers:
+                callback = getattr(handler, "callback", None)
+                if callback is None:
+                    continue
+                callback_name = getattr(callback, "__name__", "")
+                if callback_name:
+                    names.add(str(callback_name))
+    except Exception as exc:
+        logger.warning("Не удалось собрать список зарегистрированных хендлеров", error=str(exc))
+    return names
+
+
+def _collect_handler_groups(client: Client, target_names: set[str]) -> dict[str, int]:
+    """
+    Возвращает словарь {имя_хендлера: группа}, чтобы видеть приоритет маршрутизации.
+    """
+    found: dict[str, int] = {}
+    try:
+        groups = getattr(client.dispatcher, "groups", {}) or {}
+        for group_id, handlers in groups.items():
+            for handler in handlers:
+                callback = getattr(handler, "callback", None)
+                callback_name = getattr(callback, "__name__", "") if callback else ""
+                if callback_name in target_names:
+                    found[str(callback_name)] = int(group_id)
+    except Exception as exc:
+        logger.warning("Не удалось собрать группы хендлеров", error=str(exc))
+    return found
+
+
+async def _ensure_critical_handlers(client: Client, deps: dict) -> None:
+    """
+    Стартовая самодиагностика критичных хендлеров.
+    Если auto-reply отсутствует, выполняем точечную повторную регистрацию ai-модуля.
+    """
+    # Даём loop шанс выполнить отложенные add_handler задачи.
+    await asyncio.sleep(0.25)
+
+    names = _collect_registered_handler_names(client)
+    required = {"debug_logger", "handle_callbacks", "auto_reply_logic"}
+    missing = sorted(required - names)
+    if not missing:
+        groups_info = _collect_handler_groups(client, required)
+        logger.info(
+            "Стартовая проверка хендлеров: ок",
+            handlers_total=len(names),
+            required=list(required),
+            groups=groups_info,
+        )
+        return
+
+    logger.warning(
+        "Обнаружены отсутствующие критичные хендлеры, запускаю самовосстановление",
+        missing=missing,
+        handlers_total=len(names),
+    )
+
+    # Гарантируем presence базовых системных хендлеров.
+    if "debug_logger" in missing:
+        client.add_handler(MessageHandler(debug_logger, filters.all), group=-1)
+    if "handle_callbacks" in missing:
+        client.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
+
+    # Точечно перерегистрируем AI-модуль, если выпал auto_reply.
+    if "auto_reply_logic" in missing:
+        from src.handlers.ai import register_handlers as register_ai_handlers
+        register_ai_handlers(client, deps)
+
+    await asyncio.sleep(0.25)
+    names_after = _collect_registered_handler_names(client)
+    missing_after = sorted(required - names_after)
+    if missing_after:
+        logger.error(
+            "Самовосстановление хендлеров не завершилось успешно",
+            missing=missing_after,
+            handlers_total=len(names_after),
+        )
+    else:
+        groups_info = _collect_handler_groups(client, required)
+        logger.info(
+            "Самовосстановление хендлеров выполнено успешно",
+            handlers_total=len(names_after),
+            groups=groups_info,
+        )
+
+
 # === MAIN LOOP ===
 
 async def main():
@@ -440,7 +601,37 @@ async def main():
     global scheduler
 
     logger.info("🦀 Starting Krab v7.2 (Stable)...")
-    await app.start()
+    pyrogram_start_max_retries = _int_env("PYROGRAM_START_MAX_RETRIES", 10)
+    pyrogram_start_retry_delay_seconds = _int_env("PYROGRAM_START_RETRY_DELAY_SECONDS", 3)
+    last_start_error = None
+    for attempt in range(1, pyrogram_start_max_retries + 1):
+        try:
+            await app.start()
+            last_start_error = None
+            break
+        except Exception as exc:
+            last_start_error = exc
+            if attempt >= pyrogram_start_max_retries:
+                logger.critical(
+                    "Не удалось запустить Pyrogram после всех попыток",
+                    attempts=pyrogram_start_max_retries,
+                    error=str(exc),
+                )
+                raise
+            sleep_seconds = min(30, pyrogram_start_retry_delay_seconds * attempt)
+            logger.warning(
+                "Ошибка запуска Pyrogram, повтор через паузу",
+                attempt=attempt,
+                max_attempts=pyrogram_start_max_retries,
+                sleep_seconds=sleep_seconds,
+                error=str(exc),
+            )
+            await asyncio.sleep(sleep_seconds)
+    if last_start_error is not None:
+        raise last_start_error
+
+    # Самовосстановление критичных обработчиков сообщений.
+    await _ensure_critical_handlers(app, _deps)
 
     # MCP Initialization
     logger.info("🔌 Initializing MCP Servers...")
@@ -460,13 +651,110 @@ async def main():
     me = await app.get_me()
     logger.info(f"Logged in as {me.first_name} (@{me.username})")
 
-    # Планировщик
-    scheduler = KrabScheduler(app, router, black_box, archiver=archiver)
-    reminder_manager = ReminderManager(scheduler)
+    # Планировщик и Автономные операции (v11.0)
+    scheduler.telegram_client = app
+    notifier.set_client(app, me.id)
+    watchdog.notifier = notifier
+
+    async def send_daily_cost_report():
+        """
+        Ежедневный отчёт по расходам/маршрутизации.
+        Нужен, чтобы владелец видел реальный burn-rate и мог оперативно
+        подкручивать политику моделей.
+        """
+        try:
+            if not hasattr(router, "get_cost_report") or not hasattr(router, "get_usage_summary"):
+                logger.warning("Daily cost report skipped: router cost API unavailable.")
+                return
+
+            forecast_calls = int(os.getenv("COST_DAILY_FORECAST_CALLS", "5000"))
+            cost = router.get_cost_report(monthly_calls_forecast=forecast_calls)
+            usage = router.get_usage_summary()
+            report_format = os.getenv("COST_DAILY_REPORT_FORMAT", "full").strip().lower()
+            totals = usage.get("totals", {})
+            ratios = usage.get("ratios", {})
+            top_models = usage.get("top_models", [])
+            monthly = cost.get("monthly_forecast", {})
+            budget = cost.get("budget", {})
+            costs_usd = cost.get("costs_usd", {})
+
+            top_lines = []
+            for item in top_models[:3]:
+                model_name = str(item.get("model", "-"))
+                model_calls = int(item.get("count", 0))
+                top_lines.append(f"• `{model_name}`: `{model_calls}`")
+            top_text = "\n".join(top_lines) if top_lines else "• _(нет данных)_"
+
+            if report_format in {"brief", "short", "compact"}:
+                report = (
+                    "💵 **Daily Cost Report (Brief)**\n\n"
+                    f"• Calls L/C/T: `{int(totals.get('local_calls', 0))}` / "
+                    f"`{int(totals.get('cloud_calls', 0))}` / `{int(totals.get('all_calls', 0))}`\n"
+                    f"• Cost total (USD): `{float(costs_usd.get('total_cost', 0.0))}`\n"
+                    f"• Forecast (USD): `{float(monthly.get('forecast_total_cost', 0.0))}`\n"
+                    f"• Budget ratio: `{float(budget.get('forecast_ratio', 0.0))}`\n"
+                    f"• Cloud share: `{float(ratios.get('cloud_share', 0.0))}`"
+                )
+            else:
+                report = (
+                    "💵 **Daily Cost Report**\n\n"
+                    f"• Local calls: `{int(totals.get('local_calls', 0))}`\n"
+                    f"• Cloud calls: `{int(totals.get('cloud_calls', 0))}`\n"
+                    f"• Total calls: `{int(totals.get('all_calls', 0))}`\n"
+                    f"• Cloud share: `{float(ratios.get('cloud_share', 0.0))}`\n\n"
+                    f"• Current total cost (USD): `{float(costs_usd.get('total_cost', 0.0))}`\n"
+                    f"• Avg cost/call (USD): `{float(costs_usd.get('avg_cost_per_call', 0.0))}`\n\n"
+                    f"• Forecast calls: `{int(monthly.get('forecast_calls', 0))}`\n"
+                    f"• Forecast total (USD): `{float(monthly.get('forecast_total_cost', 0.0))}`\n"
+                    f"• Budget (USD): `{float(budget.get('cloud_monthly_budget_usd', 0.0))}`\n"
+                    f"• Budget ratio: `{float(budget.get('forecast_ratio', 0.0))}`\n\n"
+                    "**Top models:**\n"
+                    f"{top_text}"
+                )
+            await notifier.notify(report)
+            logger.info("✅ Daily cost report sent to owner.")
+        except Exception as exc:
+            logger.error(f"❌ Daily cost report failed: {exc}")
+    
+    # Регистрация системных задач
     scheduler.start()
+    asyncio.create_task(watchdog.start_monitoring())
+    
+    # Задача обновления пульса каждые 30 секунд
+    scheduler.add_interval_task(lambda: watchdog.update_pulse("CoreMainLoop"), minutes=1, task_id="system_watchdog_pulse")
+    
+    # Мониторинг ресурсов каждые 15 минут
+    scheduler.add_interval_task(notifier.check_resources, minutes=15, task_id="system_resource_monitor")
+
+    # Ежедневный отчёт по расходам (вкл/выкл и время через .env)
+    daily_cost_enabled = os.getenv("COST_DAILY_REPORT_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    if daily_cost_enabled:
+        try:
+            report_hour = int(os.getenv("COST_DAILY_REPORT_HOUR", "23"))
+            report_minute = int(os.getenv("COST_DAILY_REPORT_MINUTE", "55"))
+            cron_expr = f"{report_minute} {report_hour} * * *"
+            scheduler.add_cron_task(
+                send_daily_cost_report,
+                cron_string=cron_expr,
+                task_id="system_daily_cost_report",
+            )
+            logger.info(f"💵 Daily cost report scheduled at {report_hour:02d}:{report_minute:02d}.")
+        except Exception as exc:
+            logger.error(f"❌ Failed to schedule daily cost report: {exc}")
     
     _deps["scheduler"] = scheduler
-    _deps["reminder_manager"] = reminder_manager
+    _deps["notifier"] = notifier
+    _deps["watchdog"] = watchdog
+    
+    # Reminder Manager (Legacy compatibility)
+    try:
+        from src.modules.reminder_pro import ReminderManager
+        reminder_manager = ReminderManager(scheduler)
+        _deps["reminder_manager"] = reminder_manager
+    except Exception as e:
+        logger.warning(f"ReminderManager init failed: {e}")
+
+    await notifier.notify_system("Krab v11.0 Online", "Все системы автономности (Scheduler, Watchdog, Notifier) запущены и готовы к работе.")
 
     # 10. Загрузка плагинов (Phase 13)
     await plugin_manager.load_all(app, _deps)
@@ -485,7 +773,11 @@ async def main():
     async def graceful_shutdown():
         logger.info("🛑 Graceful shutdown in progress...")
         if scheduler:
-            scheduler.shutdown()
+            # У KrabScheduler публичный API = stop(), не shutdown().
+            if hasattr(scheduler, "stop"):
+                scheduler.stop()
+            elif hasattr(scheduler, "shutdown"):
+                scheduler.shutdown()
         # Отменяем активные напоминания
         for task in get_active_reminders():
             task.cancel()
@@ -540,8 +832,11 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        acquire_core_singleton_lock()
         app.run(main())
     except KeyboardInterrupt:
         pass
     except Exception as e:
         logger.critical(f"🔥 Critical Crash in main loop: {e}", exc_info=True)
+    finally:
+        release_core_singleton_lock()

@@ -19,7 +19,7 @@
                 "/Users/pablito/Antigravity_AGENTS/Краб/mcp-servers/node_modules/@modelcontextprotocol/server-brave-search/dist/index.js"
             ],
             "env": {
-                "BRAVE_API_KEY": ""
+                "BRAVE_API_KEY": "${BRAVE_API_KEY}"
             }
         },
         "github": {

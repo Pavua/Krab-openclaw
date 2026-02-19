@@ -13,6 +13,7 @@
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
+setopt null_glob
 
 PROJECT_ROOT="/Users/pablito/Antigravity_AGENTS/Краб"
 DRY_RUN="${FULL_RESTART_DRY_RUN:-0}"

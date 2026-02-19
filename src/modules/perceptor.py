@@ -21,6 +21,7 @@ import time
 import uuid
 import base64
 import mimetypes
+import re
 import edge_tts
 from typing import Dict, Any, Optional
 from io import BytesIO
@@ -74,6 +75,14 @@ class Perceptor:
         # MLX Whisper может падать на параллельных вызовах (Metal/AGX assert),
         # поэтому сериализуем все STT-задачи одним локом.
         self._transcribe_lock = asyncio.Lock()
+        # Последний фактический маршрут vision для прозрачной диагностики.
+        self.last_vision_meta: Dict[str, Any] = {
+            "route": "unknown",
+            "model": "",
+            "fallback_used": False,
+            "local_enabled": bool(self.local_vision_enabled),
+            "error": "",
+        }
         
         logger.info(f"👂 Perceptor initialized. Audio: {self.whisper_model}, Vision: {self.vision_model}")
         
@@ -134,6 +143,13 @@ class Perceptor:
         """
         converted_path = file_path
         start_time = time.time()
+        self.last_vision_meta = {
+            "route": "unknown",
+            "model": "",
+            "fallback_used": False,
+            "local_enabled": bool(self.local_vision_enabled),
+            "error": "",
+        }
 
         try:
             logger.info(f"📸 Starting Vision Analysis: {file_path}")
@@ -153,21 +169,49 @@ class Perceptor:
                 )
                 if local_result.get("ok"):
                     duration = time.time() - start_time
+                    self.last_vision_meta = {
+                        "route": "local_lm_studio",
+                        "model": str(local_result.get("model") or ""),
+                        "fallback_used": False,
+                        "local_enabled": True,
+                        "error": "",
+                    }
                     logger.info(
                         "✅ Local Vision (LM Studio) success in %.2fs (model=%s)",
                         duration,
                         local_result.get("model", "-"),
                     )
                     return str(local_result.get("text", "")).strip()
+                self.last_vision_meta = {
+                    "route": "cloud_gemini",
+                    "model": str(self.vision_model or ""),
+                    "fallback_used": True,
+                    "local_enabled": True,
+                    "error": str(local_result.get("error") or ""),
+                }
                 logger.warning("⚠️ Local Vision failed, fallback to Gemini: %s", local_result.get("error"))
 
             if not _GENAI_AVAILABLE:
                 logger.error("❌ Google GenAI SDK not found.")
+                self.last_vision_meta = {
+                    "route": "error",
+                    "model": "",
+                    "fallback_used": bool(self.local_vision_enabled),
+                    "local_enabled": bool(self.local_vision_enabled),
+                    "error": "google_genai_sdk_missing",
+                }
                 return "Ошибка: Google GenAI SDK не установлен."
                 
             api_key = (router.gemini_key if hasattr(router, 'gemini_key') else None) or self.gemini_key
             if not api_key:
                 logger.error("❌ Gemini API Key missing.")
+                self.last_vision_meta = {
+                    "route": "error",
+                    "model": "",
+                    "fallback_used": bool(self.local_vision_enabled),
+                    "local_enabled": bool(self.local_vision_enabled),
+                    "error": "gemini_api_key_missing",
+                }
                 return "Ошибка: Нет ключа Gemini API."
 
             # Инициализация клиента
@@ -186,14 +230,35 @@ class Perceptor:
             
             if response and response.text:
                  duration = time.time() - start_time
+                 self.last_vision_meta = {
+                     "route": "cloud_gemini",
+                     "model": str(self.vision_model or ""),
+                     "fallback_used": bool(self.local_vision_enabled),
+                     "local_enabled": bool(self.local_vision_enabled),
+                     "error": "",
+                 }
                  logger.info(f"✅ Vision Success in {duration:.2f}s")
                  return response.text
             
             logger.warning("⚠️ Gemini returned empty text.")
+            self.last_vision_meta = {
+                "route": "cloud_gemini",
+                "model": str(self.vision_model or ""),
+                "fallback_used": bool(self.local_vision_enabled),
+                "local_enabled": bool(self.local_vision_enabled),
+                "error": "gemini_empty_response",
+            }
             return "Не удалось проанализировать изображение (пустой ответ)."
 
         except Exception as e:
             logger.error(f"❌ Vision error: {e}", exc_info=True)
+            self.last_vision_meta = {
+                "route": "error",
+                "model": "",
+                "fallback_used": bool(self.local_vision_enabled),
+                "local_enabled": bool(self.local_vision_enabled),
+                "error": str(e),
+            }
             return f"Я ослеп, По. Ошибка: {e}"
         finally:
             # Чистим конвертированный файл если он создавался
@@ -202,6 +267,10 @@ class Perceptor:
                     os.remove(converted_path)
                 except Exception:
                     pass
+
+    def get_last_vision_meta(self) -> Dict[str, Any]:
+        """Возвращает фактический маршрут последнего vision-запроса."""
+        return dict(self.last_vision_meta)
 
     async def analyze_visual(self, file_path: str, prompt: str) -> str:
         """
@@ -257,6 +326,177 @@ class Perceptor:
 
         return ""
 
+    def _resolve_lm_studio_http_base(self, router) -> str:
+        """
+        Возвращает базовый HTTP URL LM Studio без суффиксов endpoint'ов.
+        Поддерживает формы:
+        - http://host:1234
+        - http://host:1234/v1
+        - ws://host:1234/v1/chat/completions
+        """
+        lm_raw = str(getattr(router, "lm_studio_url", "") or "").strip()
+        if not lm_raw:
+            lm_raw = str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1")).strip()
+        lm_raw = lm_raw.rstrip("/")
+        if lm_raw.startswith("ws://"):
+            lm_raw = "http://" + lm_raw[len("ws://") :]
+        elif lm_raw.startswith("wss://"):
+            lm_raw = "https://" + lm_raw[len("wss://") :]
+
+        suffixes = (
+            "/v1/chat/completions",
+            "/chat/completions",
+            "/api/v1",
+            "/v1",
+        )
+        lowered = lm_raw.lower()
+        for suffix in suffixes:
+            if lowered.endswith(suffix):
+                lm_raw = lm_raw[: -len(suffix)]
+                lowered = lm_raw.lower()
+        return lm_raw.rstrip("/")
+
+    def _extract_model_entries(self, payload: Any) -> list[dict[str, Any]]:
+        """Нормализует ответ каталога моделей LM Studio в список словарей."""
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+
+        for key in ("models", "data", "items", "result"):
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                return [item for item in candidate if isinstance(item, dict)]
+        return []
+
+    async def _collect_lm_studio_models(self, router) -> list[dict[str, Any]]:
+        """
+        Читает каталог моделей LM Studio.
+        Если endpoint недоступен/формат неизвестен, возвращает пустой список.
+        """
+        base = self._resolve_lm_studio_http_base(router)
+        if not base:
+            return []
+        endpoints = [
+            f"{base}/api/v1/models",
+            f"{base}/v1/models",
+        ]
+        timeout = aiohttp.ClientTimeout(total=6)
+        for endpoint in endpoints:
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(endpoint) as resp:
+                        if resp.status != 200:
+                            continue
+                        payload = await resp.json(content_type=None)
+                        entries = self._extract_model_entries(payload)
+                        if entries:
+                            return entries
+            except Exception:
+                continue
+        return []
+
+    def _find_model_entry(self, entries: list[dict[str, Any]], model_name: str) -> Optional[dict[str, Any]]:
+        """Ищет запись модели по key/id/name/model в каталоге LM Studio."""
+        target = str(model_name or "").strip().lower()
+        if not target:
+            return None
+        for entry in entries:
+            for key in ("key", "id", "model", "name"):
+                candidate = str(entry.get(key) or "").strip().lower()
+                if not candidate:
+                    continue
+                if candidate == target:
+                    return entry
+        for entry in entries:
+            for key in ("key", "id", "model", "name"):
+                candidate = str(entry.get(key) or "").strip().lower()
+                if not candidate:
+                    continue
+                if target in candidate or candidate in target:
+                    return entry
+        return None
+
+    def _infer_vision_support_from_entry(
+        self,
+        entry: Optional[dict[str, Any]],
+        model_name: str,
+    ) -> tuple[Optional[bool], str]:
+        """
+        Определяет поддержку vision.
+        Возвращает (True|False|None, reason), где None = не удалось достоверно определить.
+        """
+        lower_name = str(model_name or "").strip().lower()
+        explicit_true_tokens = {"vision", "image", "image_input", "multimodal", "vlm", "mm"}
+        explicit_text_tokens = {"text", "text_only", "text-only"}
+
+        # 1) Эвристика по имени (полезна, когда каталог бедный по метаданным).
+        if any(token in lower_name for token in ("glm-4.6v", "glm-4v", "vision", "vlm", "llava", "qwen2-vl", "internvl", "minicpm-v", "phi-3.5-vision")):
+            return True, "name_hint"
+
+        if not isinstance(entry, dict):
+            return None, "catalog_entry_missing"
+
+        for key in ("vision", "supports_vision", "image_input", "multimodal"):
+            if key in entry and isinstance(entry.get(key), bool):
+                return bool(entry.get(key)), f"field:{key}"
+
+        capabilities = entry.get("capabilities")
+        if isinstance(capabilities, dict):
+            for key in ("vision", "image", "image_input", "multimodal"):
+                if key in capabilities and isinstance(capabilities.get(key), bool):
+                    return bool(capabilities.get(key)), f"capability:{key}"
+            normalized_keys = {str(k).strip().lower() for k in capabilities.keys()}
+            if normalized_keys.intersection(explicit_true_tokens):
+                return True, "capability_keys"
+
+        def _normalize_tokens(value: Any) -> set[str]:
+            if isinstance(value, str):
+                return {token for token in re.split(r"[\s,;/|]+", value.strip().lower()) if token}
+            if isinstance(value, list):
+                tokens: set[str] = set()
+                for item in value:
+                    if isinstance(item, str):
+                        tokens.update(_normalize_tokens(item))
+                    elif isinstance(item, dict):
+                        for item_key in ("name", "id", "type", "kind"):
+                            raw = item.get(item_key)
+                            if isinstance(raw, str):
+                                tokens.update(_normalize_tokens(raw))
+                return tokens
+            return set()
+
+        modality_tokens = _normalize_tokens(entry.get("modalities")) | _normalize_tokens(entry.get("modality"))
+        capability_tokens = _normalize_tokens(capabilities)
+        domain_tokens = _normalize_tokens(entry.get("domain")) | _normalize_tokens(entry.get("type"))
+        all_tokens = modality_tokens | capability_tokens | domain_tokens
+
+        if all_tokens.intersection(explicit_true_tokens):
+            return True, "token_hint"
+        if all_tokens and all_tokens.issubset(explicit_text_tokens):
+            return False, "text_only_tokens"
+
+        return None, "unknown_capabilities"
+
+    async def _check_local_vision_support(self, router, model_name: str) -> dict[str, Any]:
+        """
+        Проверяет, поддерживает ли выбранная модель local vision.
+        supported:
+        - True  -> модель явно поддерживает vision
+        - False -> модель явно text-only
+        - None  -> не удалось определить (продолжаем попытку запроса)
+        """
+        entries = await self._collect_lm_studio_models(router)
+        entry = self._find_model_entry(entries, model_name)
+        supported, reason = self._infer_vision_support_from_entry(entry, model_name)
+        return {
+            "supported": supported,
+            "reason": reason,
+            "model": model_name,
+            "catalog_entries": len(entries),
+            "entry_found": bool(entry),
+        }
+
     def _build_image_data_url(self, file_path: str) -> str:
         """Кодирует файл изображения в data-url для OpenAI-compatible API LM Studio."""
         mime_type = mimetypes.guess_type(file_path)[0] or "image/jpeg"
@@ -294,12 +534,19 @@ class Perceptor:
         if not model_name:
             return {"ok": False, "error": "local_vision_model_not_set", "model": ""}
 
-        lm_base = str(getattr(router, "lm_studio_url", "") or "").rstrip("/")
+        precheck = await self._check_local_vision_support(router, model_name)
+        if precheck.get("supported") is False:
+            return {
+                "ok": False,
+                "error": f"local_model_not_vision_capability:{precheck.get('reason', 'text_only')}",
+                "model": model_name,
+                "precheck": precheck,
+            }
+
+        lm_base = self._resolve_lm_studio_http_base(router)
         if not lm_base:
-            lm_base = str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1")).rstrip("/")
-            if "/v1" not in lm_base:
-                lm_base = f"{lm_base}/v1"
-        chat_url = f"{lm_base}/chat/completions"
+            return {"ok": False, "error": "lmstudio_base_url_missing", "model": model_name}
+        chat_url = f"{lm_base}/v1/chat/completions"
 
         data_url = self._build_image_data_url(file_path)
         payload = {
@@ -327,15 +574,26 @@ class Perceptor:
                             "ok": False,
                             "error": f"lmstudio_http_{resp.status}:{body[:240]}",
                             "model": model_name,
+                            "precheck": precheck,
                         }
                     data = await resp.json()
         except Exception as exc:
-            return {"ok": False, "error": f"lmstudio_vision_request_failed:{exc}", "model": model_name}
+            return {
+                "ok": False,
+                "error": f"lmstudio_vision_request_failed:{exc}",
+                "model": model_name,
+                "precheck": precheck,
+            }
 
         text = self._extract_lm_studio_vision_text(data)
         if not text:
-            return {"ok": False, "error": "lmstudio_vision_empty_response", "model": model_name}
-        return {"ok": True, "text": text, "model": model_name}
+            return {
+                "ok": False,
+                "error": "lmstudio_vision_empty_response",
+                "model": model_name,
+                "precheck": precheck,
+            }
+        return {"ok": True, "text": text, "model": model_name, "precheck": precheck}
 
     async def analyze_video(self, file_path: str, router, prompt: str) -> str:
         """

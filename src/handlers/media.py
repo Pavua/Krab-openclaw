@@ -206,8 +206,10 @@ def register_handlers(app, deps: dict):
         if not media:
             return
 
-        is_private = message.chat.type == enums.ChatType.PRIVATE
-        if not (is_private or (message.caption and "!txt" in message.caption)):
+        # В личке голос уже обрабатывает ai.auto_reply_logic.
+        # Этот хендлер оставляем только для явного режима `!txt`,
+        # чтобы не дублировать STT/ответы и не провоцировать гонки.
+        if not (message.caption and "!txt" in message.caption):
             return
 
         logger.info(f"Processing audio from {message.chat.id}")
@@ -307,7 +309,11 @@ def register_handlers(app, deps: dict):
             file_path, router, prompt="Что на изображении? Опиши подробно."
         )
         memory.save_message(
-            message.chat.id, {"role": "vision_analysis", "content": description}
+            message.chat.id,
+            {
+                "role": "assistant",
+                "text": f"[VISION] {description}",
+            },
         )
 
         # Индексируем в RAG (если доступен)

@@ -54,6 +54,14 @@ def _build_handlers() -> tuple[dict, dict]:
     perceptor.local_vision_max_tokens = 1200
     perceptor.vision_model = "gemini-2.0-flash"
     perceptor._resolve_local_vision_model = MagicMock(return_value="vision-live-model")
+    perceptor.get_last_vision_meta = MagicMock(
+        return_value={
+            "route": "cloud_gemini",
+            "model": "gemini-2.0-flash",
+            "fallback_used": True,
+            "error": "local_model_not_vision_capability:text_only_tokens",
+        }
+    )
 
     config_manager = MagicMock()
 
@@ -99,3 +107,4 @@ async def test_vision_status_returns_snapshot() -> None:
     text = msg.reply_text.await_args_list[-1].args[0]
     assert "Vision Runtime" in text
     assert "Local vision" in text
+    assert "Last vision route" in text
