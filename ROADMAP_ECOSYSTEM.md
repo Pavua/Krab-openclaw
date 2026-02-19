@@ -1,7 +1,31 @@
 # ROADMAP_ECOSYSTEM.md
 
-Обновлено: 2026-02-16
-Статус: In Progress
+Обновлено: 2026-02-19
+Статус: Active (Source-of-Truth Consolidation R0)
+
+## Source of Truth (R0)
+
+Эта дорожная карта — экосистемный оркестратор.  
+Каноничные файлы по сервисам:
+
+1. Krab Core:
+   - `/Users/pablito/Antigravity_AGENTS/Краб/ROADMAP.md`
+   - `/Users/pablito/Antigravity_AGENTS/Краб/HANDOVER.md`
+2. Krab Ear:
+   - `/Users/pablito/Antigravity_AGENTS/Krab Ear/ROADMAP_KRAB_EAR.md`
+   - `/Users/pablito/Antigravity_AGENTS/Krab Ear/docs/ROADMAP.md`
+3. Krab Voice Gateway:
+   - `/Users/pablito/Antigravity_AGENTS/Krab Voice Gateway/ROADMAP_KRAB_VOICE_GATEWAY.md`
+   - `/Users/pablito/Antigravity_AGENTS/Krab Voice Gateway/README.md`
+4. OpenClaw operational policy:
+   - `/Users/pablito/Antigravity_AGENTS/Краб/docs/OPENCLAW_DASHBOARD_PLAYBOOK_RU.md`
+   - `/Users/pablito/Antigravity_AGENTS/Краб/docs/OPENCLAW_CHANNELS_SKILLS_BASELINE_RU.md`
+
+Важно:
+1. Файлы `/Users/pablito/Antigravity_AGENTS/Краб/ROADMAP_KRAB_EAR.md` и
+   `/Users/pablito/Antigravity_AGENTS/Краб/ROADMAP_KRAB_VOICE_GATEWAY.md`
+   считаются зеркалами для навигации из Krab-репозитория.
+2. Правки статусов Ear/Voice делаются в их собственных репозиториях.
 
 ## Цель
 Синхронизировать развитие `Krab`, `OpenClaw`, `Krab Ear`, `Krab Voice Gateway` без жёсткой связки рантаймов и без дублей функционала.
@@ -12,8 +36,10 @@
 - `Krab Voice Gateway`: отдельный сервис, интеграция только по API.
 
 ## Отдельные дорожные карты сервисов
-- `ROADMAP_KRAB_EAR.md` — полный трек STT/аудио-предобработки.
-- `ROADMAP_KRAB_VOICE_GATEWAY.md` — полный трек TTS/звонков/перевода.
+1. `Krab Ear`:
+   - `/Users/pablito/Antigravity_AGENTS/Krab Ear/ROADMAP_KRAB_EAR.md`
+2. `Krab Voice Gateway`:
+   - `/Users/pablito/Antigravity_AGENTS/Krab Voice Gateway/ROADMAP_KRAB_VOICE_GATEWAY.md`
 
 ## Фазы
 
@@ -36,6 +62,11 @@
 - [ ] Контракт событий STT/TTS и унифицированные payload schema.
 - [ ] E2E сценарий `voice input -> chat reasoning -> voice output`.
 - [ ] API-bridge для удалённого режима (вне локальной сети).
+
+Уточнение статуса:
+1. В Ear и Voice уже реализованы значимые части runtime.
+2. Для экосистемы незавершён именно единый контракт и единый E2E
+   через три проекта под одним smoke-runner.
 
 ### E5. iOS Companion Track (P1)
 - [ ] Отдельный roadmap для PSTN-перевода на iOS.
@@ -91,7 +122,7 @@
 - [ ] Контрактные API между Krab <-> Ear <-> Voice Gateway (versioned schemas).
 - [ ] Единый интеграционный smoke-пайплайн по трём сервисам.
 - [ ] Подготовка трека iOS companion (PSTN translation) без слияния рантаймов.
-- [ ] Архивировать устаревшие roadmap-ветки и дубли.
+- [x] Архивировать устаревшие roadmap-ветки и дубли (R0: source-of-truth зафиксирован).
 - [ ] Automation layer decision:
   - определить, где нужен n8n (интеграции/cron/webhook),
   - где достаточно встроенного scheduler/commands в Krab,
