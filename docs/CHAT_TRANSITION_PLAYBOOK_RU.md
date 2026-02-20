@@ -20,8 +20,10 @@
 
 1. Запусти:
    - `./prepare_next_chat_context.command`
+   - `./build_transition_pack.command` (соберет полный anti-413 пакет в `artifacts/context_transition/`)
 2. Скопируй в новый диалог:
    - содержимое сгенерированного `artifacts/context/next_chat_context_*.md`
+   - или `TRANSFER_PROMPT_RU.md` из свежего `pack_*`
 3. Добавь одну строку с приоритетом:
    - `Продолжаем с приоритетом: Signal link/pairing + стабилизация ответов каналов.`
 
@@ -46,4 +48,3 @@
 - Runtime: удерживать local-first + cloud fallback;
 - Ответы каналов: без мусорных служебных блоков и без "простыней";
 - Документация: поддерживать HANDOVER/ROADMAP в компактном актуальном виде.
-
