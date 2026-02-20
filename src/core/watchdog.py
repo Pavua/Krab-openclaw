@@ -12,6 +12,7 @@ import subprocess
 from typing import Dict, Any
 
 import aiohttp
+import psutil
 logger = logging.getLogger(__name__)
 
 class KrabWatchdog:
@@ -26,6 +27,11 @@ class KrabWatchdog:
             10,
             int(str(os.getenv("WATCHDOG_RECOVERY_COOLDOWN_SECONDS", "180")).strip() or "180"),
         )
+        self.router = None # Назначается в main.py
+        try:
+            self.ram_threshold = int(os.getenv("WATCHDOG_RAM_THRESHOLD", "90"))
+        except (ValueError, TypeError):
+            self.ram_threshold = 90
 
     def update_pulse(self, component: str):
         """Обновить метку времени работы компонента."""
@@ -55,7 +61,10 @@ class KrabWatchdog:
                 logger.critical(f"💀 COMPONENT HANG DETECTED: {component} (Idle for {idle_time:.0f}s)")
                 await self._handle_failure(component)
 
-        # 2. Проверка OpenClaw Gateway (HTTP)
+        # 2. Проверка ресурсов (RAM) - Soft Healing
+        await self._check_resources()
+
+        # 3. Проверка OpenClaw Gateway (HTTP)
         await self._check_gateway_health()
 
     async def _check_gateway_health(self):
@@ -115,6 +124,22 @@ class KrabWatchdog:
                 logger.error(f"Failed to execute self-healing: {e}")
         else:
             logger.error(f"Ecosystem script not found at {ecosystem_script}")
+
+    async def _check_resources(self):
+        """[R11] Проверка потребления RAM и применение Soft Healing."""
+        ram_percent = psutil.virtual_memory().percent
+        if ram_percent > self.ram_threshold:
+            logger.warning(f"🚨 CRITICAL RAM USAGE: {ram_percent}% (Threshold: {self.ram_threshold}%)")
+            if self.router:
+                logger.info("🧠 Soft Healing: Requesting model unload to free up memory...")
+                success = await self.router.unload_models_manual()
+                if success and self.notifier:
+                    await self.notifier.notify_system(
+                        "SOFT HEALING",
+                        f"CRITICAL RAM detected ({ram_percent}%). Local models have been unloaded to prevent system hang."
+                    )
+            else:
+                logger.error("❌ Soft Healing failed: ModelRouter not linked to Watchdog.")
 
 # Синглтон
 krab_watchdog = KrabWatchdog()

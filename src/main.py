@@ -655,6 +655,7 @@ async def main():
     scheduler.telegram_client = app
     notifier.set_client(app, me.id)
     watchdog.notifier = notifier
+    watchdog.router = router
 
     async def send_daily_cost_report():
         """

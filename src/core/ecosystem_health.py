@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import time
+import psutil
 from datetime import datetime, timezone
 from typing import Any
 
@@ -49,6 +50,10 @@ class EcosystemHealthService:
         local_check = await self._check_local_health()
         voice_check = await self._check_client_health(self.voice_gateway_client, "voice_gateway")
         ear_check = await self._check_krab_ear_health()
+        
+        # [R11] Сбор системных метрик и бюджета
+        resources = self._collect_resource_metrics()
+        budget = self.router.cost_engine.get_budget_status() if hasattr(self.router, "cost_engine") else {}
 
         cloud_ok = bool(openclaw_check["ok"])
         local_ok = bool(local_check["ok"])
@@ -100,8 +105,22 @@ class EcosystemHealthService:
                 "fallback_ready": local_ok,
                 "voice_assist_ready": voice_assist_ready,
             },
+            "resources": resources,
+            "budget": budget,
             "recommendations": recommendations[:6],
         }
+
+    def _collect_resource_metrics(self) -> dict[str, Any]:
+        """[R11] Метрики потребления ресурсов macOS."""
+        try:
+            return {
+                "cpu_percent": psutil.cpu_percent(),
+                "ram_percent": psutil.virtual_memory().percent,
+                "ram_available_gb": round(psutil.virtual_memory().available / (1024**3), 1),
+                "load_avg": os.getloadavg() if hasattr(os, "getloadavg") else [0,0,0]
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     async def _check_local_health(self) -> dict[str, Any]:
         """Проверка локального AI канала через ModelRouter."""

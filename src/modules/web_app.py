@@ -557,18 +557,51 @@ class WebApp:
 
         @self.app.get("/api/ecosystem/health")
         async def ecosystem_health():
-            """Расширенный health-отчет 3-проектной экосистемы."""
-            router = self.deps["router"]
-            openclaw = self.deps.get("openclaw_client")
-            voice_gateway = self.deps.get("voice_gateway_client")
-            krab_ear = self.deps.get("krab_ear_client")
-            report = await EcosystemHealthService(
-                router=router,
-                openclaw_client=openclaw,
-                voice_gateway_client=voice_gateway,
-                krab_ear_client=krab_ear,
-            ).collect()
+            """[R11] Расширенный health-отчет 3-проектной экосистемы с метриками ресурсов."""
+            health_service = self.deps.get("health_service")
+            if not health_service:
+                # Fallback для совместимости, если сервис не в депсах
+                router = self.deps["router"]
+                openclaw = self.deps.get("openclaw_client")
+                voice_gateway = self.deps.get("voice_gateway_client")
+                krab_ear = self.deps.get("krab_ear_client")
+                health_service = EcosystemHealthService(
+                    router=router,
+                    openclaw_client=openclaw,
+                    voice_gateway_client=voice_gateway,
+                    krab_ear_client=krab_ear,
+                )
+            report = await health_service.collect()
             return {"ok": True, "report": report}
+
+        @self.app.get("/api/system/diagnostics")
+        async def system_diagnostics():
+            """[R11] Глубокая диагностика сервера (RAM, CPU, Бюджет, Локальные LLM)."""
+            router = self.deps.get("router")
+            if not router:
+                 return {"ok": False, "error": "router_not_found"}
+            
+            # Получаем свежие данные через health_service
+            health_service = self.deps.get("health_service")
+            if not health_service:
+                health_service = EcosystemHealthService(router=router)
+            
+            health_data = await health_service.collect()
+            
+            return {
+                "ok": True,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "resources": health_data.get("resources", {}),
+                "budget": health_data.get("budget", {}),
+                "local_ai": {
+                    "engine": router.local_engine,
+                    "model": router.active_local_model,
+                    "available": router.is_local_available
+                },
+                "watchdog": {
+                    "last_recoveries": getattr(self.deps.get("watchdog"), "last_recovery_attempt", {})
+                }
+            }
 
         @self.app.get("/api/ecosystem/health/export")
         async def ecosystem_health_export():
@@ -626,6 +659,66 @@ class WebApp:
                 confirm_expensive=confirm_expensive,
             )
             return {"ok": True, "preflight": preflight}
+
+        @self.app.get("/api/model/local/status")
+        async def model_local_status():
+            """Возвращает статус локального рантайма LLM."""
+            router = self.deps["router"]
+            is_available = bool(getattr(router, "is_local_available", False))
+            active_model = str(getattr(router, "active_local_model", "") or "")
+            engine = str(getattr(router, "local_engine", "unknown"))
+            
+            return {
+                "ok": True,
+                "status": {
+                    "available": is_available,
+                    "engine": engine,
+                    "active_model": active_model,
+                    "is_loaded": bool(active_model and is_available),
+                    "url": getattr(router, "lm_studio_url" if engine == "lm-studio" else "ollama_url", "n/a")
+                }
+            }
+
+        @self.app.post("/api/model/local/load-default")
+        async def model_local_load_default(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Загружает предпочтительную локальную модель (write endpoint)."""
+            self._assert_write_access(x_krab_web_key, token)
+            router = self.deps["router"]
+            preferred = getattr(router, "local_preferred_model", None)
+            if not preferred:
+                return {"ok": False, "error": "no_preferred_model_configured"}
+            
+            # Используем существующий механизм smart_load
+            success = await router._smart_load(preferred, reason="web_forced")
+            return {"ok": success, "model": preferred}
+
+        @self.app.post("/api/model/local/unload")
+        async def model_local_unload(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Выгружает все локальные модели для освобождения памяти (write endpoint)."""
+            self._assert_write_access(x_krab_web_key, token)
+            router = self.deps["router"]
+            
+            freed_gb = 0.0
+            if hasattr(router, "_evict_idle_models"):
+                # Вызываем с огромным нужным объемом или просто через unload_local_model
+                # Но проще через unload_local_model если мы знаем active_model
+                active = getattr(router, "active_local_model", None)
+                if active:
+                    success = await router.unload_local_model(active)
+                    if success:
+                        router.active_local_model = None
+                        return {"ok": True, "unloaded": active}
+                
+                # Если активной нет, но есть загруженные (по данным _evict_idle_models)
+                freed_gb = await router._evict_idle_models(needed_gb=100.0) # Попытаемся выгрузить всё
+            
+            return {"ok": True, "freed_gb_estimate": round(freed_gb, 1)}
 
         @self.app.get("/api/model/explain")
         async def model_explain(

@@ -29,6 +29,7 @@ logger = structlog.get_logger("ModelRouter")
 from src.core.openclaw_client import OpenClawClient
 from src.core.agent_swarm import SwarmManager
 from src.core.stream_client import OpenClawStreamClient, StreamFailure
+from src.core.cost_engine import CostEngine
 
 class ModelRouter:
     def __init__(self, config: Dict[str, Any]):
@@ -108,6 +109,9 @@ class ModelRouter:
         self.owner_private_always_pro = str(
             config.get("MODEL_OWNER_PRIVATE_ALWAYS_PRO", "0")
         ).strip().lower() in {"1", "true", "yes", "on"}
+
+        # [R11] Cost Engine для контроля бюджета
+        self.cost_engine = CostEngine(config)
 
         # Счётчики (для диагностики)
         self._stats = {
@@ -578,9 +582,9 @@ class ModelRouter:
 
         return False
 
-    def _is_cloud_error_message(self, text: Optional[str]) -> bool:
+    def _is_runtime_error_message(self, text: Optional[str]) -> bool:
         """
-        Определяет, является ли ответ OpenClaw явной ошибкой.
+        Определяет, является ли ответ (от Cloud или Local) явной ошибкой рантайма.
         """
         if not text:
             return True
@@ -597,7 +601,10 @@ class ModelRouter:
             return True
         if "the model has crashed without additional information" in lowered:
             return True
+        # LM Studio error format
         if lowered.startswith("400 ") and "model" in lowered and "loaded" in lowered:
+            return True
+        if "connection refused" in lowered or "failed to fetch" in lowered:
             return True
         if lowered.startswith("{") and "\"error\"" in lowered:
             return True
@@ -606,6 +613,10 @@ class ModelRouter:
         if "is not found for api version" in lowered:
             return True
         return False
+
+    def _is_cloud_error_message(self, text: Optional[str]) -> bool:
+        """Обратная совместимость для существующих вызовов."""
+        return self._is_runtime_error_message(text)
 
     def _is_cloud_billing_error(self, text: str) -> bool:
         """
@@ -1040,6 +1051,28 @@ class ModelRouter:
             add(extra)
 
         return candidates
+
+    async def unload_models_manual(self) -> bool:
+        """
+        [R11] Принудительная выгрузка всех локальных моделей (для освобождения RAM).
+        Используется Watchdog-ом при критической нехватке памяти.
+        """
+        logger.warning("🚨 Manual model unload requested (Soft Healing)")
+        base_root = self._lm_studio_api_root()
+        url = f"{base_root}/api/v1/models/unload"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json={"all": True}, timeout=10) as resp:
+                    if resp.status == 200:
+                        logger.info("✅ All local models unloaded successfully")
+                        self.active_local_model = None
+                        self.is_local_available = False
+                        return True
+                    else:
+                        logger.error(f"❌ Failed to unload models: status {resp.status}")
+        except Exception as e:
+            logger.error(f"❌ Error during model unload: {e}")
+        return False
 
     async def check_local_health(self, force: bool = False) -> bool:
         """
@@ -2056,9 +2089,15 @@ class ModelRouter:
             return None
 
         except Exception as e:
+            err_msg = str(e).lower()
             logger.error(f"Local LLM Stream Error: {e}")
             self._stats["local_failures"] += 1
-            return None  
+            
+            # Если это явная ошибка рантайма (Connection Refused),
+            # возвращаем её как текст ошибки для детектора в роутере
+            if "connection refused" in err_msg or "failed to connect" in err_msg:
+                return f"Error: Local engine connection refused ({e})"
+            return None
 
     async def route_query(self,
                           prompt: str,
@@ -2117,6 +2156,18 @@ class ModelRouter:
                     tier=self._model_tier(self.active_local_model),
                 )
                 local_response = await self._call_local_llm(prompt, context, chat_type, is_owner)
+                
+                # [R10] Детекция ошибок локального рантайма
+                if self._is_runtime_error_message(local_response):
+                    logger.warning(
+                        "Local LLM Runtime Error detected",
+                        model=self.active_local_model,
+                        error=local_response
+                    )
+                    # Если ошибка рантайма — НЕ считаем это успешным вызовом,
+                    # чтобы сработал cloud fallback ниже. Возвращаем кортеж.
+                    return "runtime_error", local_response
+
                 if local_response and local_response.strip():
                     self._touch_model_usage(self.active_local_model or "local-model")
                     self._stats["local_calls"] += 1
@@ -2133,12 +2184,20 @@ class ModelRouter:
                         route_detail=route_detail,
                         force_mode=self.force_mode,
                     )
-                return local_response
+                return "ok", local_response
+            return "unavailable", None
 
-        async def _run_cloud():
+        async def _run_cloud(route_reason: str = "", route_detail: str = ""):
             if self.require_confirm_expensive and is_critical and not confirm_expensive:
                 return "confirm_needed", "⚠️ Для критичной задачи требуется подтверждение дорогого облачного прогона. Повтори команду с подтверждением."
             cloud_preferred = preferred_model or recommendation.get("model")
+            
+            # [R11] Проверка бюджета и коррекция модели
+            if self.cost_engine:
+                task_profile = self.classify_task_profile(prompt, task_type)
+                cloud_preferred = self.cost_engine.get_recommended_model(task_profile, cloud_preferred)
+                logger.debug(f"💰 CostEngine recommendation: {cloud_preferred}")
+
             if prefer_pro_for_owner_private:
                 cloud_preferred = self.models.get("pro", cloud_preferred)
             for i, candidate in enumerate(
@@ -2173,15 +2232,15 @@ class ModelRouter:
                 self.last_cloud_error = None
                 self.last_cloud_model = candidate
                 return candidate, response or ""
-            return None
+            return "all_candidates_failed", self.last_cloud_error or "Cloud API failure"
 
         if self.force_mode == "force_local":
             if not self.is_local_available:
                 return "❌ Режим 'Force Local' включен, но локальная модель недоступна (LM Studio/Ollama offline)."
-            forced_local = await _run_local(route_reason="force_local", route_detail="forced by router mode")
-            if forced_local:
+            l_status, forced_local = await _run_local(route_reason="force_local", route_detail="forced by router mode")
+            if l_status == "ok" and forced_local:
                 return forced_local
-            return "❌ Ошибка генерации локальной модели (Force Local active)."
+            return f"❌ Ошибка генерации локальной модели (Force Local active): {forced_local or 'unknown error'}"
 
         def _finalize_cloud(
             candidate: str,
@@ -2230,21 +2289,33 @@ class ModelRouter:
             prefer_cloud = False
 
         local_response: Optional[str] = None
+        local_status: str = "unavailable"
         if not prefer_cloud and self.is_local_available:
-            local_response = await _run_local(route_reason="local_primary")
-            if local_response:
+            local_status, local_response = await _run_local(route_reason="local_primary")
+            if local_status == "ok" and local_response:
                 return local_response
+
+        # [R10] Если локалка упала с ошибкой рантайма, передаем это в детали облачногоFallback
+        fallback_r_reason = "local_unavailable"
+        fallback_r_detail = ""
+        if local_status == "runtime_error":
+            fallback_r_reason = "local_failed_cloud_fallback"
+            fallback_r_detail = str(local_response or "").strip()[:240]
 
         latest_cloud_error: Optional[str] = None
         cloud_result = await _run_cloud()
         cloud_response = None
         response_model = None
+        
         if isinstance(cloud_result, tuple):
             response_model, cloud_response = cloud_result
+            if response_model == "all_candidates_failed":
+                latest_cloud_error = cloud_response
+                cloud_result = None
         elif isinstance(cloud_result, str):
             cloud_response = cloud_result
 
-        if isinstance(cloud_result, tuple):
+        if isinstance(cloud_result, tuple) and response_model != "all_candidates_failed":
             cloud_route_reason = "cloud_selected"
             cloud_route_detail = ""
             if not self.is_local_available:
@@ -2252,8 +2323,8 @@ class ModelRouter:
             elif prefer_cloud:
                 cloud_route_reason = "policy_prefer_cloud"
             else:
-                cloud_route_reason = "local_failed_cloud_fallback"
-                cloud_route_detail = str(latest_cloud_error or self.last_cloud_error or "").strip()[:240]
+                cloud_route_reason = fallback_r_reason
+                cloud_route_detail = fallback_r_detail
 
             finalized = _finalize_cloud(
                 response_model,
@@ -2266,37 +2337,15 @@ class ModelRouter:
         elif isinstance(cloud_result, str):
             return cloud_result
 
-        # Если облако не дало ответа, пытаемся локальный fallback.
-        if self.is_local_available and not local_response:
-            local_response = await _run_local(
+        # Если облако не дало ответа, пытаемся локальный fallback (если еще не пробовали или хотим переповторить).
+        if self.is_local_available and local_status != "ok":
+            l_status, final_local = await _run_local(
                 route_reason="cloud_failed_local_fallback",
                 route_detail=str(latest_cloud_error or self.last_cloud_error or "").strip()[:240],
             )
-            if local_response:
-                if is_critical and self.enable_cloud_review_for_critical and self.gemini_client:
-                    review_model = self._resolve_cloud_model("reasoning", "review", self.models.get("pro"))
-                    review_prompt = (
-                        "Проведи строгую проверку и улучшение ответа локальной модели.\n\n"
-                        f"Запрос:\n{prompt}\n\n"
-                        f"Черновой ответ:\n{local_response}\n\n"
-                        "Верни исправленный финальный ответ."
-                    )
-                    reviewed = await self._call_gemini(review_prompt, review_model, None, chat_type, is_owner)
-                    if reviewed and not reviewed.startswith("❌"):
-                        self._remember_model_choice("review", review_model, "cloud")
-                        self._update_usage_report("review", review_model, "cloud")
-                        self._remember_last_route(
-                            profile="review",
-                            task_type="reasoning",
-                            channel="cloud",
-                            model_name=review_model,
-                            prompt=review_prompt,
-                            route_reason="critical_cloud_review",
-                            route_detail="post-local quality review",
-                            force_mode=self.force_mode,
-                        )
-                        return reviewed
-                return local_response
+            if l_status == "ok" and final_local:
+                # [R10] Пропускаем Critical review если это повтор
+                return final_local
 
         if not latest_cloud_error:
             latest_cloud_error = self.last_cloud_error
