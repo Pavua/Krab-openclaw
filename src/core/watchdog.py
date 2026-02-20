@@ -20,12 +20,17 @@ class KrabWatchdog:
         self.notifier = notifier
         self.components_pulse: Dict[str, float] = {}
         self.last_recovery_attempt: Dict[str, float] = {}
+        self.last_soft_heal_attempt: float = 0.0
         self.running = False
         self.check_interval = 30  # секунд
         self.threshold = 120      # секунд до признания "мертвым"
         self.recovery_cooldown_seconds = max(
             10,
             int(str(os.getenv("WATCHDOG_RECOVERY_COOLDOWN_SECONDS", "180")).strip() or "180"),
+        )
+        self.soft_heal_cooldown_seconds = max(
+            15,
+            int(str(os.getenv("WATCHDOG_SOFT_HEAL_COOLDOWN_SECONDS", "180")).strip() or "180"),
         )
         self.router = None # Назначается в main.py
         try:
@@ -136,15 +141,38 @@ class KrabWatchdog:
         # Пороги (можно вынести в env)
         SOFT_THRESHOLD = self.ram_threshold  # По умолчанию 90%
         HARD_THRESHOLD = 95.0
+        now = time.time()
         
         if ram_percent > SOFT_THRESHOLD:
             logger.warning(f"🚨 RAM USAGE HIGH: {ram_percent}% (Soft Threshold: {SOFT_THRESHOLD}%)")
             
             if self.router:
+                since_soft_heal = now - float(self.last_soft_heal_attempt or 0.0)
+                cooldown_left = self.soft_heal_cooldown_seconds - since_soft_heal
+                if cooldown_left > 0:
+                    logger.warning(
+                        "🧠 Soft-heal cooldown активен: пропускаю выгрузку моделей еще на %.0fs",
+                        cooldown_left,
+                    )
+                    if ram_percent > HARD_THRESHOLD:
+                        logger.critical(
+                            "💀 RAM CRITICAL во время soft-heal cooldown: %.1f%%",
+                            ram_percent,
+                        )
+                        await self._handle_failure("CriticalResourcePressure")
+                    return
+
                 # [Stage 1] Soft Healing: Выгрузка моделей
                 logger.info("🧠 RAM [Soft Healing]: Requesting model unload...")
-                # unload_models_manual - асинхронный метод
-                await self.router.unload_models_manual()
+                self.last_soft_heal_attempt = now
+                try:
+                    # unload_models_manual - асинхронный метод
+                    await self.router.unload_models_manual()
+                except Exception as unload_error:
+                    logger.error("Soft healing unload failed: %s", unload_error)
+                    if ram_percent > HARD_THRESHOLD:
+                        await self._handle_failure("CriticalResourcePressure")
+                    return
                 
                 if self.notifier:
                     await self.notifier.notify_system(

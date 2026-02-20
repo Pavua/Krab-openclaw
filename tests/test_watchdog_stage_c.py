@@ -61,6 +61,29 @@ async def test_watchdog_ram_hard_heal(watchdog):
         watchdog.router.unload_models_manual.assert_awaited_once()
         watchdog._handle_failure.assert_awaited_with("CriticalResourcePressure")
 
+
+@pytest.mark.asyncio
+async def test_watchdog_soft_heal_cooldown_blocks_repeat_unload(watchdog):
+    """Повторный soft-heal в пределах cooldown не должен повторно выгружать модели."""
+    watchdog.soft_heal_cooldown_seconds = 180
+    with (
+        patch("src.core.watchdog.psutil.virtual_memory") as mock_mem,
+        patch("src.core.watchdog.time.time", return_value=1000.0),
+        patch("src.core.watchdog.asyncio.sleep", new=AsyncMock()),
+    ):
+        # 1-й вызов: RAM высокая -> unload + повторная проверка после sleep
+        # 2-й вызов: RAM всё ещё высокая, но cooldown еще активен
+        mock_mem.side_effect = [
+            MagicMock(percent=92.0),
+            MagicMock(percent=85.0),
+            MagicMock(percent=93.0),
+        ]
+
+        await watchdog._check_resources()
+        await watchdog._check_resources()
+
+    watchdog.router.unload_models_manual.assert_awaited_once()
+
 if __name__ == "__main__":
     import sys
     import pytest
