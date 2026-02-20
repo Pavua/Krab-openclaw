@@ -134,6 +134,13 @@
 
 <body>
     <div class="container">
+        <div id="fileProtocolWarning" class="card" style="display:none; border-color: var(--state-warn); margin-bottom: 16px;">
+            <h4 class="card-title" style="color: var(--state-warn);">Неверный режим открытия</h4>
+            <p class="card-meta">
+                Панель открыта как файл (`file://`). Для корректной работы API открой через `http://127.0.0.1:8080`.
+            </p>
+        </div>
+
         <header>
             <div class="header-titles">
                 <h1>Krab Web Panel V2</h1>
@@ -254,6 +261,25 @@
             <div id="ocChannelsList" class="ops-history empty">
                 <div class="empty-state" style="padding: 16px 0;">
                     Каналы будут отображены после обновления статуса.
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 16px;">
+                <h4 class="card-title">Local Model Lifecycle</h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <div>
+                        <div class="card-meta">Status</div>
+                        <div id="ocLocalLifecycleStatus" class="card-value break-word">—</div>
+                    </div>
+                    <div>
+                        <div class="card-meta">Model</div>
+                        <div id="ocLocalLifecycleModel" class="card-value break-word">—</div>
+                    </div>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+                    <button id="ocLocalLoadBtn">Load Local</button>
+                    <button id="ocLocalUnloadBtn">Unload Local</button>
+                    <button id="ocLocalRefreshBtn">Refresh Local Status</button>
                 </div>
             </div>
 
