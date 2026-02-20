@@ -154,8 +154,39 @@ def register_handlers(app, deps: dict):
                 f"Update existing: `{'да' if preview.get('exists') else 'нет'}`\n\n"
                 f"```diff\n{diff_text}\n```\n\n"
                 f"**Что делать дальше:**\n"
-                f"Если всё верно: `!provision apply {draft_id} confirm`"
+                f"1) `!provision validate {draft_id}`\n"
+                f"2) Если всё верно: `!provision apply {draft_id} confirm`"
             )
+            return
+
+        if subcommand == "validate":
+            if len(args) < 3:
+                await message.reply_text("❌ Формат: `!provision validate <draft_id>`")
+                return
+
+            draft_id = args[2].strip()
+            try:
+                report = provisioning.validate_draft(draft_id)
+            except Exception as exc:
+                await message.reply_text(f"❌ Ошибка валидации: {exc}")
+                return
+
+            status_emoji = "✅ PASS" if report["ok"] else "❌ FAIL"
+            text = f"🛡️ **Provisioning Validation: {status_emoji}**\n"
+            text += f"Draft: `{draft_id}`\n"
+            
+            if report["errors"]:
+                text += "\n🛑 **Ошибки:**\n"
+                for err in report["errors"]:
+                    text += f"- {err}\n"
+            
+            if report["warnings"]:
+                text += "\n⚠️ **Предупреждения:**\n"
+                for warn in report["warnings"]:
+                    text += f"- {warn}\n"
+            
+            text += f"\n👉 **Следующий шаг:** {report.get('next_step', '-')}"
+            await message.reply_text(text)
             return
 
         if subcommand == "apply":

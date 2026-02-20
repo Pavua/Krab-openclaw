@@ -217,13 +217,85 @@ def register_handlers(app, deps: dict):
             logger.error(f"TTS error: {e}")
             await notification.edit_text(f"❌ Ошибка TTS: {e}")
 
+    async def _reply_voice_gateway_error(message: Message, error_type: str, details: str = None):
+        """
+        Внутренний хелпер для формирования стандартизированных ответов об ошибках Voice Gateway (UX v2).
+        Поддерживает коды VGW_* для операторской диагностики.
+        """
+        if details:
+            # Безопасное экранирование: заменяем ` на ', чтобы не ломать Markdown блоки.
+            details = str(details).replace("`", "'")
+
+        # Маппинг внутренних типов на операторские коды и подсказки
+        vgw_map = {
+            "unavailable": {
+                "code": "VGW_UNAVAILABLE",
+                "text": "Voice Gateway недоступен (Connection Refused).",
+                "tip": "Убедитесь, что сервис voice-gateway запущен и порт 8090 проброшен."
+            },
+            "no_session": {
+                "code": "VGW_SESSION_ERR",
+                "text": "Активная voice-сессия не найдена.",
+                "tip": "Используйте `!callstart` для инициализации новой сессии."
+            },
+            "http_401": {
+                "code": "VGW_AUTH_FAIL",
+                "text": "Ошибка авторизации (Invalid API Key).",
+                "tip": "Проверьте VOICE_GATEWAY_API_KEY в конфигурации."
+            },
+            "http_404": {
+                "code": "VGW_NOT_FOUND",
+                "text": "Ресурс или сессия не найдены на стороне шлюза.",
+                "tip": "Возможно, сессия была завершена по таймауту на сервере."
+            },
+            "timeout": {
+                "code": "VGW_TIMEOUT",
+                "text": "Превышено время ожидания ответа от Voice Gateway.",
+                "tip": "Проверьте нагрузку на сервис или сетевое соединение."
+            },
+            "update_fail": {
+                "code": "VGW_UPDATE_ERR",
+                "text": "Не удалось обновить параметры сессии.",
+                "tip": "Проверьте валидность передаваемых параметров (mode/notify)."
+            },
+            "generic": {
+                "code": "VGW_INTERNAL",
+                "text": "Внутренняя ошибка шлюза или неожиданный ответ.",
+                "tip": "Изучите логи Voice Gateway для уточнения причины."
+            }
+        }
+
+        # Определяем ключ для маппинга
+        map_key = error_type
+        if error_type.startswith("http_"):
+            if error_type == "http_401" or error_type == "http_403":
+                map_key = "http_401"
+            elif error_type == "http_404":
+                map_key = "http_404"
+            else:
+                map_key = "generic"
+        elif "timeout" in str(error_type).lower() or "connect" in str(error_type).lower():
+            map_key = "timeout"
+        
+        entry = vgw_map.get(map_key, vgw_map["generic"])
+        
+        res_details = f"\n🛡️ **Детали:** `{details}`" if details else ""
+        
+        text = (
+            f"❌ **Ошибка: {entry['code']}**\n"
+            f"📝 {entry['text']}{res_details}\n\n"
+            f"💡 **Подсказка:** {entry['tip']}"
+        )
+            
+        await message.reply_text(text)
+
     # --- !callstart: запуск звонковой сессии через Voice Gateway ---
     @app.on_message(filters.command("callstart", prefixes="!"))
     @safe_handler
     async def callstart_command(client, message: Message):
         """Запускает сессию звонкового ассистента."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
 
         mode = "auto_to_ru"
@@ -256,7 +328,11 @@ def register_handlers(app, deps: dict):
             source=source,
         )
         if not result.get("ok"):
-            await notification.edit_text(f"❌ Не удалось запустить сессию: {result.get('error', 'unknown')}")
+            error_details = f"Не удалось запустить сессию. 🛡️ Детали: `{result.get('error', 'unknown')}`"
+            await notification.edit_text(
+                f"❌ **Ошибка:** {error_details}\n\n"
+                "💡 **Подсказка:** Проверьте логи Voice Gateway. Сервис может быть offline."
+            )
             return
 
         payload = result.get("result", {})
@@ -280,15 +356,15 @@ def register_handlers(app, deps: dict):
     async def callstop_command(client, message: Message):
         """Останавливает активную звонковую сессию."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Используй `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
         result = await voice_gateway.stop_session(session_id)
         if not result.get("ok"):
-            await message.reply_text(f"❌ Ошибка остановки: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "update_fail", details=result.get("error"))
             return
         active_call_sessions.pop(message.chat.id, None)
         await message.reply_text(f"🛑 Сессия остановлена: `{session_id}`")
@@ -299,15 +375,15 @@ def register_handlers(app, deps: dict):
     async def callstatus_command(client, message: Message):
         """Показывает статус текущей звонковой сессии."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("ℹ️ Активной сессии нет.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
         result = await voice_gateway.get_session(session_id)
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось получить статус: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "generic", details=f"Не удалось получить статус. 🛡️ Детали: `{result.get('error', 'unknown')}`")
             return
         state = result.get("result", {})
         # Добавляем детали состояния
@@ -341,14 +417,14 @@ def register_handlers(app, deps: dict):
     async def notify_command(client, message: Message):
         """Меняет notify-mode активной сессии: !notify on|off."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
         if len(message.command) < 2:
             await message.reply_text("ℹ️ Использование: `!notify on` или `!notify off`")
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Сначала `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
         raw = message.command[1].strip().lower()
         if raw not in {"on", "off"}:
@@ -357,7 +433,7 @@ def register_handlers(app, deps: dict):
         notify_mode = "auto_on" if raw == "on" else "auto_off"
         result = await voice_gateway.set_notify_mode(session_id, notify_mode=notify_mode)
         if not result.get("ok"):
-            await message.reply_text(f"❌ Ошибка обновления: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "update_fail", details=result.get("error"))
             return
         await message.reply_text(f"✅ notify_mode обновлён: `{notify_mode}`")
 
@@ -367,14 +443,14 @@ def register_handlers(app, deps: dict):
     async def calllang_command(client, message: Message):
         """Меняет translation mode: !calllang auto_to_ru|ru_es_duplex."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
         if len(message.command) < 2:
             await message.reply_text("ℹ️ Использование: `!calllang auto_to_ru` или `!calllang ru_es_duplex`")
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Сначала `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
         mode = message.command[1].strip().lower()
         if mode not in {"auto_to_ru", "ru_es_duplex"}:
@@ -382,7 +458,7 @@ def register_handlers(app, deps: dict):
             return
         result = await voice_gateway.set_translation_mode(session_id, translation_mode=mode)
         if not result.get("ok"):
-            await message.reply_text(f"❌ Ошибка обновления: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "update_fail", details=result.get("error"))
             return
         await message.reply_text(f"✅ translation_mode обновлён: `{mode}`")
 
@@ -392,7 +468,7 @@ def register_handlers(app, deps: dict):
     async def callcost_command(client, message: Message):
         """Считает бюджет звонков: !callcost [country] [inbound] [landline] [mobile] [media] [live|offline]."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
 
         country = "ES"
@@ -441,7 +517,7 @@ def register_handlers(app, deps: dict):
             use_live_pricing=use_live,
         )
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось получить оценку: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "generic", details=f"Не удалось получить оценку. 🛡️ Детали: `{result.get('error', 'unknown')}`")
             return
 
         payload = result.get("result", {})
@@ -470,17 +546,17 @@ def register_handlers(app, deps: dict):
     async def calldiag_command(client, message: Message):
         """Показывает диагностику звонковой сессии (latency/counters/fallback/cache)."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Сначала `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
         result = await voice_gateway.get_diagnostics(session_id)
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось получить диагностику: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "generic", details=f"Не удалось получить диагностику. 🛡️ Детали: `{result.get('error', 'unknown')}`")
             return
-
+        
         payload = result.get("result", {})
         pipeline = payload.get("pipeline", {}) if isinstance(payload.get("pipeline"), dict) else {}
         counters = payload.get("counters", {}) if isinstance(payload.get("counters"), dict) else {}
@@ -511,11 +587,11 @@ def register_handlers(app, deps: dict):
     async def callsummary_command(client, message: Message):
         """Генерирует краткую сводку звонка: !callsummary [max_items]."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await _reply_voice_gateway_error(message, "unavailable")
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Сначала `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
 
         max_items = 30
@@ -528,7 +604,7 @@ def register_handlers(app, deps: dict):
 
         result = await voice_gateway.build_summary(session_id, max_items=max_items)
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось собрать summary: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "generic", details=f"Не удалось собрать summary. 🛡️ Детали: `{result.get('error', 'unknown')}`")
             return
 
         payload = result.get("result", {})
@@ -555,11 +631,14 @@ def register_handlers(app, deps: dict):
     async def callphrase_command(client, message: Message):
         """Быстрая фраза: !callphrase <текст> [ru->es|es->ru]."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await message.reply_text(
+                "❌ **Ошибка:** Voice Gateway недоступен.\n\n"
+                "💡 **Подсказка:** Убедитесь, что сервис voice-gateway запущен."
+            )
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Сначала `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
         if len(message.command) < 2:
             await message.reply_text("ℹ️ Использование: `!callphrase <текст> [ru->es|es->ru]`")
@@ -592,7 +671,7 @@ def register_handlers(app, deps: dict):
             style="chat",
         )
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось отправить фразу: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "generic", details=f"Не удалось отправить фразу. 🛡️ Детали: `{result.get('error', 'unknown')}`")
             return
 
         payload = result.get("result", {})
@@ -611,7 +690,10 @@ def register_handlers(app, deps: dict):
     async def callphrases_command(client, message: Message):
         """Показывает библиотеку быстрых фраз: !callphrases [ru->es|es->ru]."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await message.reply_text(
+                "❌ **Ошибка:** Voice Gateway недоступен.\n\n"
+                "💡 **Подсказка:** Убедитесь, что сервис voice-gateway запущен."
+            )
             return
         direction = "ru->es"
         if len(message.command) >= 2 and message.command[1].strip().lower() in {"ru->es", "es->ru"}:
@@ -626,7 +708,7 @@ def register_handlers(app, deps: dict):
             limit=12,
         )
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось загрузить библиотеку фраз: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "update_fail", details=result.get("error"))
             return
         payload = result.get("result", {})
         items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
@@ -652,16 +734,19 @@ def register_handlers(app, deps: dict):
     async def callwhy_command(client, message: Message):
         """Объясняет причину отсутствия перевода в активной сессии."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await message.reply_text(
+                "❌ **Ошибка:** Voice Gateway недоступен.\n\n"
+                "💡 **Подсказка:** Убедитесь, что сервис voice-gateway запущен."
+            )
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Сначала `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
 
         result = await voice_gateway.get_diagnostics_why(session_id)
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось получить explain-диагностику: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "generic", details=f"Не удалось получить explain-диагностику. 🛡️ Детали: `{result.get('error', 'unknown')}`")
             return
         payload = result.get("result", {})
         why = payload.get("why", {}) if isinstance(payload.get("why"), dict) else {}
@@ -685,11 +770,14 @@ def register_handlers(app, deps: dict):
     async def calltune_command(client, message: Message):
         """Тюнинг runtime: !calltune [adaptive|low|stable] [latency_ms] [vad]."""
         if not voice_gateway:
-            await message.reply_text("❌ Voice Gateway client не инициализирован.")
+            await message.reply_text(
+                "❌ **Ошибка:** Voice Gateway недоступен.\n\n"
+                "💡 **Подсказка:** Убедитесь, что сервис voice-gateway запущен."
+            )
             return
         session_id = active_call_sessions.get(message.chat.id)
         if not session_id:
-            await message.reply_text("⚠️ Нет активной сессии. Сначала `!callstart`.")
+            await _reply_voice_gateway_error(message, "no_session")
             return
 
         mode_raw = message.command[1].strip().lower() if len(message.command) >= 2 else "adaptive"
@@ -719,7 +807,7 @@ def register_handlers(app, deps: dict):
             vad_sensitivity=vad,
         )
         if not result.get("ok"):
-            await message.reply_text(f"❌ Не удалось применить runtime tune: {result.get('error', 'unknown')}")
+            await _reply_voice_gateway_error(message, "update_fail", details=result.get("error"))
             return
         runtime = result.get("result", {}).get("runtime", {})
         await message.reply_text(

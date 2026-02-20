@@ -115,6 +115,25 @@ class GroupModerationEngine:
 
         return result
 
+    def get_policy_debug_snapshot(self, chat_id: int) -> dict[str, Any]:
+        """
+        [R7] Возвращает диагностический снимок политики.
+        Включает эффективную политику и версию шаблона (если есть).
+        """
+        policy = self.get_policy(chat_id)
+        chat_key = self._chat_key(chat_id)
+        
+        # Поиск маркеров шаблона (template)
+        template_name = self._store.get("chats", {}).get(chat_key, {}).get("template_name", "custom/none")
+        
+        return {
+            "chat_id": chat_id,
+            "template": template_name,
+            "effective_policy": policy,
+            "is_dry_run": policy.get("dry_run", False),
+            "engine_version": "v3.2-r7"
+        }
+
     def update_policy(self, chat_id: int, patch: dict[str, Any]) -> dict[str, Any]:
         """Частично обновляет policy и сохраняет на диск."""
         if not isinstance(patch, dict):
@@ -164,6 +183,8 @@ class GroupModerationEngine:
                 "block_links": True,
                 "max_links": 0,
                 "max_caps_ratio": 0.40,
+                "min_caps_chars": 10,
+                "max_repeated_chars": 6,
                 "actions": {
                     "link": "ban",
                     "banned_word": "ban",
@@ -175,7 +196,9 @@ class GroupModerationEngine:
                 "dry_run": True,
                 "block_links": True,
                 "max_links": 1,
-                "max_caps_ratio": 0.72,
+                "max_caps_ratio": 0.70,
+                "min_caps_chars": 15,
+                "max_repeated_chars": 12,
                 "actions": {
                     "link": "delete",
                     "banned_word": "delete",
@@ -186,7 +209,10 @@ class GroupModerationEngine:
             "lenient": {
                 "dry_run": True,
                 "block_links": False,
+                "max_links": 5,
                 "max_caps_ratio": 0.90,
+                "min_caps_chars": 20,
+                "max_repeated_chars": 20,
                 "actions": {
                     "link": "none",
                     "banned_word": "warn",
@@ -199,6 +225,8 @@ class GroupModerationEngine:
                 "block_links": True,
                 "max_links": 0,
                 "max_caps_ratio": 0.60,
+                "min_caps_chars": 10,
+                "max_repeated_chars": 8,
                 "actions": {
                     "link": "ban",
                     "banned_word": "delete",
@@ -206,16 +234,46 @@ class GroupModerationEngine:
                     "repeated_chars": "delete",
                 },
             },
+            "flood": {
+                "dry_run": False,
+                "block_links": False,
+                "max_links": 3,
+                "max_caps_ratio": 0.50,
+                "min_caps_chars": 10,
+                "max_repeated_chars": 5,
+                "actions": {
+                    "link": "none",
+                    "banned_word": "warn",
+                    "caps": "mute",
+                    "repeated_chars": "mute",
+                },
+            },
             "abuse": {
                 "dry_run": False,
                 "block_links": True,
-                "max_links": 2,
+                "max_links": 1,
                 "max_caps_ratio": 0.50,
+                "min_caps_chars": 10,
+                "max_repeated_chars": 8,
                 "actions": {
                     "link": "delete",
                     "banned_word": "ban",
                     "caps": "mute",
                     "repeated_chars": "warn",
+                },
+            },
+            "links": {
+                "dry_run": False,
+                "block_links": True,
+                "max_links": 0,
+                "max_caps_ratio": 0.80,
+                "min_caps_chars": 15,
+                "max_repeated_chars": 12,
+                "actions": {
+                    "link": "delete",
+                    "banned_word": "warn",
+                    "caps": "none",
+                    "repeated_chars": "none",
                 },
             },
         }
@@ -297,23 +355,40 @@ class GroupModerationEngine:
                 "primary_rule": None,
                 "violations": [],
                 "policy": policy,
+                "explain": {
+                    "matched_rules": [],
+                    "source": "AutoMod",
+                    "dry_run_reason": "No violations",
+                },
             }
 
         # Приоритет правил: бан-слова, ссылки и AI выше caps/повторов.
         priority = {"banned_word": 100, "ai_guardian": 95, "link": 90, "repeated_chars": 60, "caps": 50}
+        
+        # Список всех сработавших правил
+        all_rules = sorted(list(set(v.get("rule") for v in violations if v.get("rule"))))
+        
         primary = sorted(violations, key=lambda item: priority.get(item.get("rule", ""), 1), reverse=True)[0]
         primary_rule = primary.get("rule", "caps")
         action = policy.get("actions", {}).get(primary_rule, "warn")
         if not self._is_valid_action(action):
             action = "warn"
 
+        dry_run = bool(policy.get("dry_run", True))
+        
         return {
             "matched": True,
-            "dry_run": bool(policy.get("dry_run", True)),
+            "dry_run": dry_run,
             "action": action,
             "primary_rule": primary_rule,
             "violations": violations,
             "policy": policy,
+            "explain": {
+                "matched_rules": all_rules,
+                "primary_rule": primary_rule,
+                "source": "AutoMod",
+                "dry_run_reason": "Enabled in policy" if dry_run else None,
+            },
         }
 
     async def _evaluate_with_ai(
@@ -367,12 +442,16 @@ class GroupModerationEngine:
         return count
 
     def _find_banned_words(self, lowered_text: str, words: list[str]) -> list[str]:
-        """Ищет banned words (case-insensitive)."""
+        """Ищет banned words (case-insensitive) с учетом границ слов."""
         matches: list[str] = []
         for word in self._normalize_words(words):
             if not word:
                 continue
-            if word in lowered_text:
+            # Экранируем спецсимволы, чтобы не было ошибок регулярки
+            escaped_word = re.escape(word)
+            # Ищем как целое слово или отделенный токен
+            pattern = rf"(?:\b|\s|^){escaped_word}(?:\b|\s|$|[^\wа-яА-ЯёЁ])"
+            if re.search(pattern, lowered_text, flags=re.IGNORECASE):
                 matches.append(word)
         return sorted(set(matches))
 

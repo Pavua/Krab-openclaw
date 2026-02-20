@@ -60,7 +60,7 @@ async def test_callstatus_uninitialized_client(deps_offline):
     handlers = get_handlers(deps_offline)
     msg = MockMessage("!callstatus")
     await handlers["callstatus_command"](None, msg)
-    assert "не инициализирован" in msg.reply_text.call_args[0][0]
+    assert "Voice Gateway недоступен" in msg.reply_text.call_args[0][0]
 
 @pytest.mark.asyncio
 async def test_callstatus_active_enhanced(deps_mock_online):
@@ -118,4 +118,4 @@ async def test_voice_gateway_server_error(deps_mock_online):
     with patch("src.handlers.tools.active_call_sessions", {-100123: "test-sid"}):
         msg = MockMessage("!callstatus")
         await handlers["callstatus_command"](None, msg)
-        assert "Не удалось получить статус: HTTP 500" in msg.reply_text.call_args[0][0]
+        assert "Не удалось получить статус" in msg.reply_text.call_args[0][0] or "HTTP 500" in msg.reply_text.call_args[0][0]

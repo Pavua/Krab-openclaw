@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Проверка пересечений зон ответственности Codex и Antigravity.
+Проверка пересечений зон ответственности между всеми workstream-потоками.
 
 Что делает:
-1) Читает ownership-паттерны из config/workstreams/*.txt.
-2) Ищет файлы репозитория, попавшие одновременно в обе зоны.
+1) Читает ownership-паттерны из config/workstreams/*_paths.txt.
+2) Ищет файлы репозитория, попавшие одновременно в несколько потоков.
 3) Отдельно проверяет текущие измененные файлы (git status --porcelain),
    чтобы заранее ловить коллизии в параллельной разработке.
 """
@@ -12,14 +12,14 @@
 from __future__ import annotations
 
 import fnmatch
+import itertools
 import subprocess
 import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CODEX_PATHS = ROOT / "config" / "workstreams" / "codex_paths.txt"
-ANTIGRAVITY_PATHS = ROOT / "config" / "workstreams" / "antigravity_paths.txt"
+WORKSTREAM_DIR = ROOT / "config" / "workstreams"
 
 
 def _read_patterns(path: Path) -> list[str]:
@@ -35,6 +35,14 @@ def _read_patterns(path: Path) -> list[str]:
 
 def _match_any(rel_path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(rel_path, pattern) for pattern in patterns)
+
+
+def _read_workstreams() -> dict[str, list[str]]:
+    streams: dict[str, list[str]] = {}
+    for path in sorted(WORKSTREAM_DIR.glob("*_paths.txt")):
+        name = path.stem.replace("_paths", "")
+        streams[name] = _read_patterns(path)
+    return streams
 
 
 def _git_files() -> list[str]:
@@ -71,42 +79,55 @@ def _changed_files() -> list[str]:
     return files
 
 
-def main() -> int:
-    codex_patterns = _read_patterns(CODEX_PATHS)
-    antigravity_patterns = _read_patterns(ANTIGRAVITY_PATHS)
+def _matched_streams(rel_path: str, streams: dict[str, list[str]]) -> list[str]:
+    matched: list[str] = []
+    for stream_name, patterns in streams.items():
+        if _match_any(rel_path, patterns):
+            matched.append(stream_name)
+    return matched
 
-    if not codex_patterns or not antigravity_patterns:
-        print("❌ Паттерны ownership не заполнены.")
+
+def _build_overlap_entries(files: list[str], streams: dict[str, list[str]]) -> list[tuple[str, list[str]]]:
+    overlaps: list[tuple[str, list[str]]] = []
+    for path in files:
+        matched = _matched_streams(path, streams)
+        if len(matched) > 1:
+            overlaps.append((path, matched))
+    return overlaps
+
+
+def main() -> int:
+    streams = _read_workstreams()
+    if len(streams) < 2:
+        print("❌ Нужно минимум два файла *_paths.txt в config/workstreams.")
+        return 2
+    empty_streams = [name for name, patterns in streams.items() if not patterns]
+    if empty_streams:
+        print(f"❌ Пустые ownership-потоки: {', '.join(empty_streams)}")
         return 2
 
     repo_files = _git_files()
-    overlap_all = [
-        path
-        for path in repo_files
-        if _match_any(path, codex_patterns) and _match_any(path, antigravity_patterns)
-    ]
+    overlap_all = _build_overlap_entries(repo_files, streams)
     changed = _changed_files()
-    overlap_changed = [
-        path
-        for path in changed
-        if _match_any(path, codex_patterns) and _match_any(path, antigravity_patterns)
-    ]
+    overlap_changed = _build_overlap_entries(changed, streams)
 
     print("🧭 Workstream Overlap Check")
-    print(f"- Codex patterns: {len(codex_patterns)}")
-    print(f"- Antigravity patterns: {len(antigravity_patterns)}")
+    for stream_name, patterns in streams.items():
+        print(f"- {stream_name} patterns: {len(patterns)}")
+    pair_count = len(list(itertools.combinations(streams.keys(), 2)))
+    print(f"- Stream pairs: {pair_count}")
     print(f"- Repo overlaps: {len(overlap_all)}")
     print(f"- Changed-file overlaps: {len(overlap_changed)}")
 
     if overlap_all:
         print("\n⚠️ Пересечения ownership (repo-level):")
-        for path in overlap_all[:100]:
-            print(f"  - {path}")
+        for path, matched in overlap_all[:100]:
+            print(f"  - {path}  <- {', '.join(matched)}")
 
     if overlap_changed:
         print("\n🚨 Конфликт в текущих изменениях:")
-        for path in overlap_changed[:100]:
-            print(f"  - {path}")
+        for path, matched in overlap_changed[:100]:
+            print(f"  - {path}  <- {', '.join(matched)}")
         return 1
 
     print("\n✅ Конфликтов в измененных файлах не обнаружено.")
@@ -115,4 +136,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

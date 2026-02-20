@@ -24,6 +24,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -65,6 +67,7 @@ CHANNEL_ENV_HINTS: dict[str, list[str]] = {
     "signal": ["OPENCLAW_SIGNAL_NUMBER", "OPENCLAW_SIGNAL_HTTP_URL"],
     "imessage": ["OPENCLAW_IMSG_CLI_PATH"],
 }
+BRAVE_ENV_HINTS = ["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"]
 
 
 @dataclass
@@ -84,6 +87,37 @@ class JsonResult:
     ok: bool
     payload: dict[str, Any]
     error: str
+
+
+def _load_env_file(path: Path) -> int:
+    """
+    Загружает .env в process environment.
+    Возвращает количество применённых переменных.
+    """
+    if not path.exists():
+        return 0
+    applied = 0
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        # Снимаем внешние кавычки, если есть.
+        if len(value) >= 2 and (
+            (value.startswith('"') and value.endswith('"'))
+            or (value.startswith("'") and value.endswith("'"))
+        ):
+            value = value[1:-1]
+        # Не перетираем переменные, уже заданные в окружении.
+        if key in os.environ:
+            continue
+        os.environ[key] = value
+        applied += 1
+    return applied
 
 
 def _run(cmd: list[str], timeout: int = 25) -> CmdResult:
@@ -184,6 +218,73 @@ def _format_missing_reqs(item: dict[str, Any]) -> str:
     if os_req:
         parts.append(f"os: {os_req}")
     return "; ".join(parts) if parts else "требования не указаны"
+
+
+def _check_brave_search_key() -> dict[str, Any]:
+    """
+    Проверяет Brave Search API ключ без вывода секрета в логи.
+    Возвращает структурированный статус для отчёта.
+    """
+    api_key = (
+        os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+        or os.getenv("BRAVE_API_KEY", "").strip()
+    )
+    if not api_key:
+        return {
+            "state": "missing",
+            "detail": "нет BRAVE_SEARCH_API_KEY/BRAVE_API_KEY",
+            "http_status": None,
+            "results_count": 0,
+        }
+
+    query = urllib.parse.quote_plus("openclaw")
+    url = f"https://api.search.brave.com/res/v1/web/search?q={query}&count=1"
+    req = urllib.request.Request(
+        url=url,
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": api_key,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            body_raw = resp.read().decode("utf-8", errors="replace")
+            status = int(resp.getcode() or 0)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "state": "error",
+            "detail": f"request_failed: {exc}",
+            "http_status": None,
+            "results_count": 0,
+        }
+
+    try:
+        payload = json.loads(body_raw) if body_raw else {}
+    except Exception:
+        payload = {}
+
+    results = []
+    if isinstance(payload, dict):
+        results = payload.get("web", {}).get("results", []) or []
+
+    if status == 200:
+        return {
+            "state": "ok",
+            "detail": "ключ валиден",
+            "http_status": status,
+            "results_count": len(results) if isinstance(results, list) else 0,
+        }
+
+    detail = "invalid_or_insufficient_rights"
+    if isinstance(payload, dict) and payload.get("error"):
+        detail = str(payload.get("error"))
+    return {
+        "state": "error",
+        "detail": detail,
+        "http_status": status,
+        "results_count": 0,
+    }
 
 
 def _apply_safe_baseline(openclaw_bin: str, profile: str) -> list[str]:
@@ -294,6 +395,7 @@ def main() -> int:
 
     profile = (args.profile or "main").strip()
     enabled_channels = [x.strip().lower() for x in (args.enable or "").split(",") if x.strip()]
+    loaded_env_count = _load_env_file(ROOT / ".env")
 
     version = _run(_openclaw_cmd(openclaw_bin, profile, "--version"))
     skills = _run_json(_openclaw_cmd(openclaw_bin, profile, "skills", "check", "--json"), timeout=45)
@@ -310,6 +412,11 @@ def main() -> int:
         timeout=20,
     )
     models = _run_json(_openclaw_cmd(openclaw_bin, profile, "models", "list", "--json"), timeout=20)
+    browser_status = _run_json(
+        _openclaw_cmd(openclaw_bin, profile, "browser", "status", "--json"),
+        timeout=20,
+    )
+    brave_check = _check_brave_search_key()
 
     baseline_lines: list[str] = []
     if args.apply_safe:
@@ -385,6 +492,7 @@ def main() -> int:
         f"- macOS: `{os_name}`",
         f"- Архитектура: `{machine}`",
         f"- RAM: `{ram}`",
+        f"- .env загружено переменных: `{loaded_env_count}`",
         "",
         "## Сводка skills check",
         f"- total: `{skills_summary.get('total', 'n/a')}`",
@@ -405,6 +513,44 @@ def main() -> int:
             report_lines.append(f"- `{ch}`")
     else:
         report_lines.append("- `(нет активных каналов)`")
+    report_lines.append("")
+
+    report_lines.append("## Browser (OpenClaw)")
+    if browser_status.ok:
+        browser_payload = browser_status.payload
+        report_lines.append(f"- enabled: `{browser_payload.get('enabled')}`")
+        report_lines.append(f"- running: `{browser_payload.get('running')}`")
+        report_lines.append(f"- profile: `{browser_payload.get('profile', 'n/a')}`")
+        report_lines.append(
+            f"- detected browser: `{browser_payload.get('detectedBrowser', 'n/a')}`"
+        )
+        report_lines.append(
+            f"- cdp url: `{browser_payload.get('cdpUrl', 'n/a')}`"
+        )
+        if not bool(browser_payload.get("running")):
+            report_lines.append(
+                "- ⚠️ Browser relay не привязан к вкладке. Открой Chrome и кликни иконку OpenClaw extension."
+            )
+    else:
+        report_lines.append(f"- ⚠️ Не удалось прочитать browser status: {browser_status.error}")
+    report_lines.append("")
+
+    report_lines.append("## Brave Search")
+    brave_state = str(brave_check.get("state", "unknown"))
+    brave_status = brave_check.get("http_status")
+    brave_count = brave_check.get("results_count", 0)
+    brave_detail = str(brave_check.get("detail", "n/a"))
+    if brave_state == "ok":
+        report_lines.append(
+            f"- ✅ API key рабочий (HTTP `{brave_status}`, results `{brave_count}`)"
+        )
+    elif brave_state == "missing":
+        report_lines.append("- ⚪ Ключ не задан.")
+        report_lines.append(f"- env hints: `{', '.join(BRAVE_ENV_HINTS)}`")
+    else:
+        report_lines.append(
+            f"- ❌ Проверка неуспешна (HTTP `{brave_status}`): {brave_detail}"
+        )
     report_lines.append("")
 
     report_lines.append("## Доступные модели OpenClaw")

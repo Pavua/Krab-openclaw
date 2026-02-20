@@ -73,3 +73,38 @@ def test_policy_persistence_between_instances(tmp_path: Path) -> None:
     policy = engine2.get_policy(chat_id)
     assert policy["dry_run"] is False
     assert policy["actions"]["link"] == "mute"
+
+def test_false_positive_banned_words(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    chat_id = -100444
+    engine.add_banned_word(chat_id, "scam")
+    
+    # Should flag
+    d1 = engine.evaluate_message(chat_id, "This is a scam!")
+    assert d1["matched"] is True, "Exact match should be flagged"
+    
+    # Should NOT flag false positives
+    d2 = engine.evaluate_message(chat_id, "The word scammer contains it")
+    assert d2["matched"] is False, "Substring 'scammer' should NOT be flagged as 'scam'"
+    
+    # Should flag with Russian punctuation
+    d3 = engine.evaluate_message(chat_id, "Это scam, понимаешь?")
+    assert d3["matched"] is True
+
+def test_dry_run_flag_from_template(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    chat_id = -100555
+    
+    # Apply balanced template where dry_run is True and it checks links
+    engine.apply_template(chat_id, "balanced")
+    d1 = engine.evaluate_message(chat_id, "some violating LINK http://example.com/spam " * 10)
+    # Balanced allows 1 link, so 10 links will match
+    assert d1["matched"] is True
+    assert d1["dry_run"] is True  # Template balanced has dry_run=True
+
+    # Apply strict template where dry_run is False
+    engine.apply_template(chat_id, "strict")
+    d2 = engine.evaluate_message(chat_id, "https://example.com")
+    assert d2["matched"] is True
+    assert d2["dry_run"] is False
+

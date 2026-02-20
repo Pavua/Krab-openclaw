@@ -66,7 +66,7 @@ async def test_summaryx_picker_private(deps):
     
     msg.reply_text.assert_called_once()
     args, kwargs = msg.reply_text.call_args
-    assert "Выбери чат" in args[0]
+    assert "Выберите чат" in args[0]
     assert "reply_markup" in kwargs
     assert len(handler.picker_state) == 1
 
@@ -108,7 +108,7 @@ async def test_summaryx_access_denied(deps):
     await handler.summaryx_command(client, msg)
     
     args, _ = msg.reply_text.call_args
-    assert "❌ Чат `Private` недоступен" in args[0]
+    assert "Ошибка доступа к чату `Private`" in args[0]
 
 @pytest.mark.asyncio
 async def test_summaryx_invalid_args(deps):

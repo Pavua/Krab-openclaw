@@ -104,6 +104,26 @@ def test_heavy_light_tier_detection(tmp_path: Path) -> None:
     assert router._model_tier("qwen2.5-coder-7b") == "light"
 
 
+def test_lmstudio_loaded_detection_by_loaded_instances(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    assert router._is_lmstudio_model_loaded({"loaded_instances": [{"id": "proc1"}]}) is True
+    assert router._is_lmstudio_model_loaded({"loaded_instances": []}) is False
+
+
+def test_lmstudio_loaded_detection_by_state_fields(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    assert router._is_lmstudio_model_loaded({"state": "READY"}) is True
+    assert router._is_lmstudio_model_loaded({"status": "loaded"}) is True
+    assert router._is_lmstudio_model_loaded({"availability": "running"}) is True
+    assert router._is_lmstudio_model_loaded({"state": "unloaded"}) is False
+
+
+def test_cloud_error_detection_no_models_loaded_signature(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    assert router._is_cloud_error_message("400 No models loaded. Please load a model in the developer page.") is True
+    assert router._is_cloud_error_message("The model has crashed without additional information. (Exit code: null)") is True
+
+
 def test_cloud_soft_cap_switch(tmp_path: Path) -> None:
     router = _router(tmp_path, soft_cap=2)
 
@@ -304,3 +324,32 @@ def test_task_preflight_can_run_when_confirm_provided(tmp_path: Path) -> None:
     assert plan["execution"]["requires_confirm_expensive"] is False
     assert plan["execution"]["can_run_now"] is True
     assert plan["execution"]["confirm_expensive_received"] is True
+
+
+def test_route_explain_contains_last_route_reason(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    router._remember_last_route(
+        profile="chat",
+        task_type="chat",
+        channel="local",
+        model_name="qwen2.5-7b",
+        route_reason="force_local",
+        route_detail="forced by router mode",
+    )
+    explain = router.get_route_explain()
+    assert explain["reason"]["code"] == "force_local"
+    assert "принудительного режима" in explain["reason"]["human"]
+    assert explain["explainability_score"] >= 70
+    assert explain["transparency_level"] in {"medium", "high"}
+
+
+def test_route_explain_includes_preflight_when_prompt_given(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    explain = router.get_route_explain(
+        prompt="Проведи security audit API",
+        task_type="security",
+        confirm_expensive=True,
+    )
+    assert isinstance(explain["preflight"], dict)
+    assert explain["preflight"]["task_type"] == "security"
+    assert explain["explainability_score"] >= 20

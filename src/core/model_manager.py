@@ -403,13 +403,65 @@ class ModelRouter:
         """
         if not text:
             return ""
-        
+
         cleaned = str(text)
-        # [HOTFIX v11.1] Агрессивная очистка тех-тегов через регулярки <|...|>
-        cleaned = re.sub(r"<\|.*?\|>", "", cleaned)
+
+        # Удаляем только служебные маркеры box, но не полезный текст внутри.
+        cleaned = cleaned.replace("<|begin_of_box|>", "")
+        cleaned = cleaned.replace("<|end_of_box|>", "")
+        # [HOTFIX] Удаляем оставшиеся тех-теги формата <|...|>.
+        cleaned = re.sub(r"<\|[^|>]+?\|>", "", cleaned)
         cleaned = cleaned.replace("</s>", "").replace("<s>", "")
 
-        # Схлопываем лишние пустые строки и края.
+        # Точечная фильтрация строк с утечкой служебных артефактов.
+        blocked_fragments = (
+            "begin_of_box",
+            "end_of_box",
+            "no_reply",
+            "heartbeat_ok",
+            "i will now call the",
+            "memory_get",
+            "memory_search",
+            "sessions_spawn",
+            "session_send",
+            "sessions_send",
+            "\"action\": \"sessions_send\"",
+            "\"action\":\"sessions_send\"",
+            "\"sessionkey\"",
+            "\"default channel",
+            "## /users/",
+            "# agents.md - workspace agents",
+            "## agent list",
+            "### default agents",
+            "</tool_call>",
+            "```json",
+        )
+        filtered_lines: list[str] = []
+        for line in cleaned.splitlines():
+            low = line.strip().lower()
+            if low in {"```", "```json", "```text", "```yaml"}:
+                continue
+            if any(fragment in low for fragment in blocked_fragments):
+                continue
+            filtered_lines.append(line)
+        cleaned = "\n".join(filtered_lines)
+
+        # Схлопываем подряд идущие дубли строк.
+        deduped_lines: list[str] = []
+        last_norm = ""
+        repeat_count = 0
+        for line in cleaned.splitlines():
+            normalized = re.sub(r"\s+", " ", line).strip().lower()
+            if normalized and normalized == last_norm:
+                repeat_count += 1
+            else:
+                last_norm = normalized
+                repeat_count = 1
+            if repeat_count <= 2:
+                deduped_lines.append(line)
+        cleaned = "\n".join(deduped_lines)
+
+        # Финальная нормализация пустых строк и краёв.
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
         return cleaned
 
@@ -487,6 +539,45 @@ class ModelRouter:
                 return str(value)
         return None
 
+    def _is_lmstudio_model_loaded(self, entry: Dict[str, Any]) -> bool:
+        """
+        Определяет признак загруженной модели LM Studio.
+
+        Почему так:
+        В разных версиях LM Studio loaded-статус приходит в разных полях
+        (`loaded_instances`, `loaded`, `state`, `status`, `availability`).
+        Если читать только одно поле, !status может ошибочно показывать
+        `no_model_loaded`, хотя модель уже отвечает в /chat/completions.
+        """
+        if not isinstance(entry, dict):
+            return False
+
+        loaded_instances = entry.get("loaded_instances")
+        if isinstance(loaded_instances, list) and len(loaded_instances) > 0:
+            return True
+
+        explicit_bool = entry.get("loaded")
+        if isinstance(explicit_bool, bool):
+            return explicit_bool
+
+        state_fields = []
+        for key in ("state", "status", "availability"):
+            raw = entry.get(key)
+            if raw is None:
+                continue
+            state_fields.append(str(raw).strip().lower())
+
+        positive_tokens = {"ready", "loaded", "active", "running", "online"}
+        negative_tokens = {"unloaded", "not_loaded", "not loaded", "idle_unloaded", "evicted", "offline"}
+
+        for state in state_fields:
+            if state in positive_tokens:
+                return True
+            if state in negative_tokens:
+                return False
+
+        return False
+
     def _is_cloud_error_message(self, text: Optional[str]) -> bool:
         """
         Определяет, является ли ответ OpenClaw явной ошибкой.
@@ -499,6 +590,14 @@ class ModelRouter:
         if lowered.startswith("llm error"):
             return True
         if lowered.startswith("error:"):
+            return True
+        if "no models loaded" in lowered:
+            return True
+        if "please load a model" in lowered:
+            return True
+        if "the model has crashed without additional information" in lowered:
+            return True
+        if lowered.startswith("400 ") and "model" in lowered and "loaded" in lowered:
             return True
         if lowered.startswith("{") and "\"error\"" in lowered:
             return True
@@ -1039,12 +1138,12 @@ class ModelRouter:
         Почему так:
         - `/api/v1/models` полезен для диагностики, но слишком частый вызов
           может мешать авто-выгрузке по idle TTL;
-        - здесь проверяем только «сервер жив / сервер мёртв».
+        - здесь проверяем только «сервер жив / сервер мёртв» через штатные endpoint.
         """
         timeout = aiohttp.ClientTimeout(total=2)
-        # LM Studio может отвечать 200 даже на "unexpected endpoint",
-        # что нам подходит как признак живого сервера.
-        probe_paths = ("/health", "/")
+        # Не используем /health: в ряде версий LM Studio это шумит в логах
+        # сообщением "Unexpected endpoint or method".
+        probe_paths = ("/v1/models", "/api/v1/models", "/")
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 for path in probe_paths:
@@ -1085,10 +1184,8 @@ class ModelRouter:
                             identifier = m.get("key") or self._extract_model_id(m) or m.get("id", "")
                             if not identifier: continue
                             
-                            # В LM Studio 0.3.x загруженная модель имеет
-                            # loaded_instances: [{...}] (не пустой массив)
-                            loaded_instances = m.get("loaded_instances", [])
-                            is_loaded = isinstance(loaded_instances, list) and len(loaded_instances) > 0
+                            # В LM Studio поля loaded-статуса зависят от версии API.
+                            is_loaded = self._is_lmstudio_model_loaded(m)
                             
                             # Определяем тип по полю "type" из API или по имени
                             model_type = m.get("type", "")
@@ -3026,6 +3123,102 @@ class ModelRouter:
                 if requires_confirm
                 else "Можно запускать задачу."
             ),
+        }
+
+    @staticmethod
+    def _humanize_route_reason(route_reason: str, route_channel: str = "") -> str:
+        """Возвращает человекочитаемое объяснение кода причины роутинга."""
+        code = str(route_reason or "").strip().lower()
+        channel = str(route_channel or "").strip().lower()
+        reason_map = {
+            "force_local": "Выбран локальный канал из-за принудительного режима force_local.",
+            "force_cloud": "Выбран облачный канал из-за принудительного режима force_cloud.",
+            "local_primary": "Сработала стратегия local-first: локальная модель доступна.",
+            "local_stream_primary": "Потоковый ответ завершён локально (stream local-primary).",
+            "local_unavailable": "Локальный канал недоступен, выполнен fallback в cloud.",
+            "local_failed_cloud_fallback": "Локальный запуск завершился ошибкой, выполнен fallback в cloud.",
+            "policy_prefer_cloud": "Политика роутинга выбрала cloud для текущего профиля задачи.",
+            "cloud_selected": "Выбран облачный канал по рекомендации роутера.",
+            "cloud_failed_local_fallback": "Cloud-запуск завершился ошибкой, выполнен fallback в local.",
+            "critical_cloud_review": "Для критичного профиля включён cloud-review для качества результата.",
+        }
+        if code in reason_map:
+            return reason_map[code]
+        if channel == "local":
+            return "Маршрут выполнен через local-канал по текущей policy."
+        if channel == "cloud":
+            return "Маршрут выполнен через cloud-канал по текущей policy."
+        return "Причина маршрутизации не была явно зафиксирована."
+
+    def get_route_explain(
+        self,
+        *,
+        prompt: str = "",
+        task_type: str = "chat",
+        preferred_model: str | None = None,
+        confirm_expensive: bool = False,
+    ) -> dict:
+        """
+        Возвращает explainability-срез по выбору модели/канала.
+
+        Что внутри:
+        1) last_route с route_reason/route_detail;
+        2) policy snapshot (force_mode, soft-cap, доступность local);
+        3) preflight (если передан prompt);
+        4) explainability_score — насколько прозрачен маршрут.
+        """
+        last_route = self.get_last_route()
+        route_reason = str(last_route.get("route_reason", "")).strip() if isinstance(last_route, dict) else ""
+        route_detail = str(last_route.get("route_detail", "")).strip() if isinstance(last_route, dict) else ""
+        route_channel = str(last_route.get("channel", "")).strip() if isinstance(last_route, dict) else ""
+
+        policy_snapshot = {
+            "routing_policy": self.routing_policy,
+            "force_mode": self.force_mode,
+            "cloud_soft_cap_reached": bool(self.cloud_soft_cap_reached),
+            "local_available": bool(self.is_local_available),
+        }
+
+        preflight_payload: dict[str, Any] | None = None
+        normalized_prompt = str(prompt or "").strip()
+        if normalized_prompt:
+            preflight_payload = self.get_task_preflight(
+                prompt=normalized_prompt,
+                task_type=task_type,
+                preferred_model=preferred_model,
+                confirm_expensive=confirm_expensive,
+            )
+
+        explainability_score = 0
+        if isinstance(last_route, dict) and last_route:
+            explainability_score += 40
+        if route_reason:
+            explainability_score += 30
+        if route_detail:
+            explainability_score += 10
+        if preflight_payload is not None:
+            explainability_score += 20
+        explainability_score = max(0, min(100, explainability_score))
+
+        if explainability_score >= 80:
+            transparency_level = "high"
+        elif explainability_score >= 50:
+            transparency_level = "medium"
+        else:
+            transparency_level = "low"
+
+        return {
+            "generated_at": self._now_iso(),
+            "last_route": last_route if isinstance(last_route, dict) else {},
+            "reason": {
+                "code": route_reason or "unknown",
+                "detail": route_detail or "",
+                "human": self._humanize_route_reason(route_reason, route_channel),
+            },
+            "policy": policy_snapshot,
+            "preflight": preflight_payload,
+            "explainability_score": explainability_score,
+            "transparency_level": transparency_level,
         }
 
     def get_usage_summary(self) -> dict:

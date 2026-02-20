@@ -50,6 +50,9 @@ class TelegramControlHandler:
             "telegram_summary_service"
         ) or TelegramSummaryService(deps["router"])
         self.picker_state: dict[str, dict[str, Any]] = {}
+        # [R8] In-memory кулдауны для !summaryx (user_id -> last_success_timestamp)
+        self._summary_cooldowns: dict[int, int] = {}
+        self.summary_cooldown_sec = int(os.getenv("SUMMARYX_COOLDOWN_SEC", "30"))
 
     def _is_target_allowed(self, chat_id: int) -> bool:
         raw = os.getenv("SUMMARYX_ALLOWED_CHATS", "").strip()
@@ -83,6 +86,19 @@ class TelegramControlHandler:
             i += 1
         return limit, target, focus
 
+    async def _reply_control_error(
+        self,
+        message: Message,
+        error_code: str,
+        explanation: str,
+        next_step: str | None = None,
+    ):
+        """Отправляет унифицированный ответ об ошибке управления."""
+        text = f"❌ **Ошибка [{error_code}]**\n\n{explanation}"
+        if next_step:
+            text += f"\n\n💡 **Что делать:**\n{next_step}"
+        await message.reply_text(text)
+
     async def _run_summary(
         self,
         client: Client,
@@ -94,20 +110,33 @@ class TelegramControlHandler:
     ):
         """Общий контур генерации summary."""
         if not self._is_target_allowed(target_chat_id):
-            await message.reply_text("⛔ Этот чат недоступен (not allowed).")
+            await self._reply_control_error(
+                message=message,
+                error_code="CTRL_ACCESS_DENIED",
+                explanation=f"Доступ к чату `{target_title}` (ID: `{target_chat_id}`) запрещен политикой безопасности.",
+                next_step="Проверьте список разрешенных чатов в переменной `SUMMARYX_ALLOWED_CHATS`."
+            )
             return
 
         # Валидация прав доступа через get_chat (быстрый чек)
         try:
             await client.get_chat(target_chat_id)
-        except (ChannelPrivate, PeerIdInvalid):
-            await message.reply_text(
-                f"❌ Чат `{target_title}` недоступен (Private/Invalid).\n"
-                "Бот должен быть участником или админом."
+        except (ChannelPrivate, PeerIdInvalid, KeyError, ValueError) as exc:
+            logger.warning("get_chat failed check", error=str(exc))
+            await self._reply_control_error(
+                message=message,
+                error_code="CTRL_RESOLVE_FAIL",
+                explanation=(
+                    f"Ошибка доступа к чату `{target_title}`.\n"
+                    f"Боту не удалось получить доступ к чату `{target_title}`."
+                ),
+                next_step="1. Убедитесь, что бот или юзербот добавлен в чат.\n"
+                          "2. Для закрытых каналов требуются права подписчика/админа.\n"
+                          "3. Проверьте правильность ID/username."
             )
             return
         except Exception as exc:
-            logger.warning("get_chat failed check", error=str(exc))
+            logger.warning("get_chat failed check with unknown error", error=str(exc))
             # Пробуем продолжить, вдруг get_chat_history сработает
 
         req = SummaryRequest(
@@ -126,18 +155,35 @@ class TelegramControlHandler:
             
             # Если вернулась строка ошибки (начинается с ❌)
             if summary.startswith("❌"):
-                await notification.edit_text(summary)
+                await notification.edit_text(
+                    f"❌ **Ошибка [CTRL_PROVIDER_ERROR]**\n\n{summary}\n\n"
+                    "💡 **Подсказка:** Попробуйте указать больший лимит или выберите другой чат."
+                )
                 return
 
             focus_line = f"\n🎯 Фокус: `{focus}`\n" if focus else ""
+
+            # [R7] Добавление тех-блока для оператора
+            tech_info = (
+                f"\n\n--- [Tech] "
+                f"ID: `{target_chat_id}` | "
+                f"Limit: `{limit}` | "
+                f"Focus: `{focus or '-'}` | "
+                f"Prov: `AI.Router`"
+            )
+
             await notification.edit_text(
                 f"✅ **Summary** ({target_title})\n"
                 f"{focus_line}\n"
                 f"{summary}"
+                f"{tech_info}"
             )
         except Exception as exc:
             logger.error("summaryx failed", error=str(exc), chat_id=target_chat_id)
-            await notification.edit_text(f"❌ Ошибка: {exc}")
+            await notification.edit_text(
+                f"❌ **Ошибка [CTRL_SYSTEM_ERROR]**\n\nСистемный сбой при анализе: {exc}\n\n"
+                "💡 **Подсказка:** Попробуйте уменьшить лимит сообщений."
+            )
 
     async def chatid_command(self, client: Client, message: Message):
         """Показывает технический ID и тип текущего чата."""
@@ -152,14 +198,41 @@ class TelegramControlHandler:
 
     async def summaryx_command(self, client: Client, message: Message):
         """Summary последних X сообщений выбранного чата."""
-        if not is_superuser(message):
-            return
+        is_admin = is_superuser(message)
+        if not is_admin and not message.from_user:
+            return  # Анонимные юзеры в группах без прав не могут
+
+        # [R8] Anti-spam cooldown check (bypass for superusers)
+        user_id = message.from_user.id if message.from_user else 0
+        if not is_admin and user_id in self._summary_cooldowns:
+            elapsed = int(time.time()) - self._summary_cooldowns[user_id]
+            if elapsed < self.summary_cooldown_sec:
+                remaining = self.summary_cooldown_sec - elapsed
+                await self._reply_control_error(
+                    message=message,
+                    error_code="CTRL_THROTTLED",
+                    explanation=f"Команда временно ограничена для защиты от спама.",
+                    next_step=f"Попробуйте снова через `{remaining}` сек."
+                )
+                return
+
+        if not is_admin:
+            # Сразу ставим метку, чтобы не начали спамить пока идет генерация первого
+            self._summary_cooldowns[user_id] = int(time.time())
 
         try:
             limit, raw_target, focus = self._parse_summary_args(message.text or "")
             limit = self.summary_service.clamp_limit(limit)
         except ValueError as exc:
-            await message.reply_text(f"⚠️ {exc}")
+            await self._reply_control_error(
+                message=message,
+                error_code="CTRL_INVALID_PARAMS",
+                explanation=f"Ошибка параметров: {exc}",
+                next_step="Правильный формат — `!summaryx <число> [id_или_юзернейм] [--focus тема]`"
+            )
+            # При ошибке параметров сбрасываем кулдаун, чтобы не наказывать за опечатку
+            if not is_admin:
+                self._summary_cooldowns.pop(user_id, None)
             return
 
         # Если target не указан:
@@ -177,9 +250,13 @@ class TelegramControlHandler:
                 limit=self.resolver.max_picker_items
             )
             if not recent:
-                await message.reply_text(
-                    "⚠️ Нет недавних чатов.\n"
-                    "Используй `!summaryx 100 @username` или `!summaryx 100 -100...`"
+                await self._reply_control_error(
+                    message=message,
+                    error_code="CTRL_EMPTY_HISTORY",
+                    explanation="Нет истории недавних чатов для быстрого выбора.",
+                    next_step="Укажите цель явно. Например:\n"
+                              "• `!summaryx 100 @some_group`\n"
+                              "• `!summaryx 50 -10012345678`"
                 )
                 return
 
@@ -219,7 +296,7 @@ class TelegramControlHandler:
             )
 
             await message.reply_text(
-                f"Выбери чат (последние {limit} msg):",
+                f"Выберите чат для сводки (последние {limit} сообщений):",
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
             return
@@ -228,13 +305,28 @@ class TelegramControlHandler:
         try:
             target = await self.resolver.resolve(client, raw_target)
         except (UsernameInvalid, UsernameNotOccupied):
-            await message.reply_text(f"❌ Чат `{raw_target}` не существует.")
+            await self._reply_control_error(
+                message=message,
+                error_code="CTRL_RESOLVE_FAIL",
+                explanation=f"В Telegram нет чата или пользователя `{raw_target}`.",
+                next_step="Проверьте правильность написания username или укажите числовой ID."
+            )
             return
         except ValueError as exc:
-            await message.reply_text(f"⚠️ {exc}")
+            await self._reply_control_error(
+                message=message,
+                error_code="CTRL_RESOLVE_INVALID",
+                explanation=f"Некорректный формат цели: {exc}",
+                next_step="Убедитесь, что ID передан в корректном формате (например, начинается с -100 для супергрупп)."
+            )
             return
         except Exception as exc:
-            await message.reply_text(f"❌ Target Error: {exc}")
+            await self._reply_control_error(
+                message=message,
+                error_code="CTRL_RESOLVE_ERROR",
+                explanation=f"Системная ошибка разрешения адресата: {exc}",
+                next_step="Попробуйте использовать числовой ID, если юзернейм недоступен."
+            )
             return
 
         await self._run_summary(

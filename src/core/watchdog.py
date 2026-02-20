@@ -18,9 +18,14 @@ class KrabWatchdog:
     def __init__(self, notifier=None):
         self.notifier = notifier
         self.components_pulse: Dict[str, float] = {}
+        self.last_recovery_attempt: Dict[str, float] = {}
         self.running = False
         self.check_interval = 30  # секунд
         self.threshold = 120      # секунд до признания "мертвым"
+        self.recovery_cooldown_seconds = max(
+            10,
+            int(str(os.getenv("WATCHDOG_RECOVERY_COOLDOWN_SECONDS", "180")).strip() or "180"),
+        )
 
     def update_pulse(self, component: str):
         """Обновить метку времени работы компонента."""
@@ -70,6 +75,19 @@ class KrabWatchdog:
 
     async def _handle_failure(self, component: str):
         """Реакция на сбой компонента."""
+        now = time.time()
+        last_attempt = float(self.last_recovery_attempt.get(component, 0.0) or 0.0)
+        cooldown_left = self.recovery_cooldown_seconds - (now - last_attempt)
+        if cooldown_left > 0:
+            logger.warning(
+                "⏳ Watchdog cooldown активен для %s. Пропускаю self-heal еще на %.0fs",
+                component,
+                cooldown_left,
+            )
+            return
+        # Ставим отметку ДО запуска рестарта, чтобы исключить шторм при частых циклах.
+        self.last_recovery_attempt[component] = now
+
         if self.notifier:
             await self.notifier.notify_system(
                 "CRITICAL FAILURE", 

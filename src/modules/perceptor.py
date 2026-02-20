@@ -24,6 +24,8 @@ import mimetypes
 import re
 import json
 import threading
+import subprocess
+import sys
 import edge_tts
 from typing import Dict, Any, Optional
 from io import BytesIO
@@ -116,6 +118,24 @@ class Perceptor:
         # MLX Whisper может падать на параллельных вызовах (Metal/AGX assert),
         # поэтому сериализуем все STT-задачи одним локом.
         self._transcribe_lock = asyncio.Lock()
+        # Дополнительная защита: запуск STT в отдельном процессе.
+        # Если MLX/Metal падает (SIGABRT), упадет только воркер, а не весь Krab.
+        isolated_default = "1"
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            # В тестах по умолчанию оставляем in-process путь для стабильных моков.
+            isolated_default = "0"
+        self.stt_isolated_worker = str(
+            config.get(
+                "STT_ISOLATED_WORKER",
+                os.getenv("STT_ISOLATED_WORKER", isolated_default),
+            )
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.stt_worker_timeout_seconds = int(
+            config.get(
+                "STT_WORKER_TIMEOUT_SECONDS",
+                os.getenv("STT_WORKER_TIMEOUT_SECONDS", "240"),
+            )
+        )
         # Последний фактический маршрут vision для прозрачной диагностики.
         self.last_vision_meta: Dict[str, Any] = {
             "route": "unknown",
@@ -161,17 +181,25 @@ class Perceptor:
         try:
             async with self._transcribe_lock:
                 logger.info(f"🎤 Transcribing: {file_path}")
-                import mlx_whisper
 
                 start_time = time.time()
 
-                # Запускаем в executor, чтобы не блокировать event loop (MLX тяжелый).
-                # Часть аргументов может не поддерживаться конкретной версией mlx_whisper,
-                # поэтому сначала пробуем расширенный профиль, затем безопасный fallback.
-                result = await self._run_mlx_transcribe_with_fallback(
-                    mlx_whisper=mlx_whisper,
-                    file_path=file_path,
-                )
+                if self.stt_isolated_worker:
+                    result = await self._run_mlx_transcribe_isolated(file_path=file_path)
+                else:
+                    import mlx_whisper
+                    # Запускаем в executor, чтобы не блокировать event loop (MLX тяжелый).
+                    # Часть аргументов может не поддерживаться конкретной версией mlx_whisper,
+                    # поэтому сначала пробуем расширенный профиль, затем безопасный fallback.
+                    result = await self._run_mlx_transcribe_with_fallback(
+                        mlx_whisper=mlx_whisper,
+                        file_path=file_path,
+                    )
+
+                worker_error = str(result.get("_worker_error", "")).strip()
+                if worker_error:
+                    raise RuntimeError(worker_error)
+
                 raw_text = str(result.get("text", "")).strip()
                 text = self._postprocess_transcript(raw_text)
                 duration = time.time() - start_time
@@ -249,6 +277,58 @@ class Perceptor:
             "temperature": self.stt_temperature,
             "verbose": False,
         }
+
+    async def _run_mlx_transcribe_isolated(self, file_path: str) -> dict[str, Any]:
+        """
+        Запускает MLX Whisper в отдельном процессе.
+        Это защищает основной процесс Krab от аварий Metal/AGX (SIGABRT).
+        """
+        payload = {
+            "primary_kwargs": self._build_primary_stt_kwargs(),
+            "fallback_kwargs": self._build_fallback_stt_kwargs(),
+        }
+        cmd = [
+            sys.executable,
+            "-m",
+            "src.modules.perceptor_stt_worker",
+            file_path,
+            self.whisper_model,
+            json.dumps(payload, ensure_ascii=False),
+        ]
+
+        try:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=max(30, self.stt_worker_timeout_seconds),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {"_worker_error": f"stt_worker_timeout:{self.stt_worker_timeout_seconds}s"}
+        except Exception as exc:
+            return {"_worker_error": f"stt_worker_spawn_failed:{exc}"}
+
+        if completed.returncode != 0:
+            stderr = (completed.stderr or "").strip()
+            stdout = (completed.stdout or "").strip()
+            reason = stderr or stdout or f"exit_code={completed.returncode}"
+            return {"_worker_error": f"stt_worker_failed:{reason}"}
+
+        output = (completed.stdout or "").strip()
+        if not output:
+            return {"_worker_error": "stt_worker_failed:empty_stdout"}
+        last_line = output.splitlines()[-1]
+        try:
+            payload_obj = json.loads(last_line)
+        except Exception:
+            return {"_worker_error": f"stt_worker_failed:invalid_json:{last_line[:200]}"}
+        if not isinstance(payload_obj, dict):
+            return {"_worker_error": "stt_worker_failed:invalid_payload_type"}
+        if payload_obj.get("ok") is False:
+            return {"_worker_error": str(payload_obj.get("error", "stt_worker_failed:unknown"))}
+        return {"text": str(payload_obj.get("text", "")).strip()}
 
     async def _run_mlx_transcribe_with_fallback(self, mlx_whisper: Any, file_path: str) -> dict[str, Any]:
         """Пробует расширенный STT-профиль, при несовместимости откатывается на базовый."""

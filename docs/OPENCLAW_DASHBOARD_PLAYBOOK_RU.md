@@ -90,3 +90,57 @@ openclaw logs --follow
 - Убрана критичная security-позиция (`groupPolicy=open` -> `allowlist`).
 - Исправлены права на `auth-profiles.json` до `600`.
 - Добавлены one-click `.command` для prod/lab режима.
+
+## 10. Runtime-конфиг, который чаще всего “слетает”
+Ключевой момент: часть настроек живёт не в проекте, а в runtime OpenClaw:
+- `~/.openclaw/openclaw.json`
+
+Из-за этого после wizard/update/profile-switch можно увидеть:
+- пустые fallback-модели;
+- возврат дефолтных лимитов;
+- неожиданные ошибки `No models loaded` / деградацию каналов.
+
+### Быстрое восстановление (one-click)
+Используй:
+- `/Users/pablito/Antigravity_AGENTS/Краб/openclaw_runtime_repair.command`
+
+Что он гарантированно восстанавливает:
+- primary: `lmstudio/local`
+- fallbacks: `google/gemini-2.5-flash` -> `openai/gpt-4o-mini`
+- `session.dmScope=per-channel-peer`
+- безопасные лимиты токенов для каналов и local/cloud
+
+### Autoswitch local/cloud (новое)
+Если модель в LM Studio выгружена, а каналы должны продолжать отвечать без `No models loaded`, используй:
+- `/Users/pablito/Antigravity_AGENTS/Краб/openclaw_model_autoswitch.command`
+
+Логика:
+1. Если `lms ps` показывает загруженную модель -> default = `lmstudio/local`.
+2. Если `lms ps` показывает, что моделей нет -> default = `google/gemini-2.5-flash`.
+3. Fallback-цепочка обновляется автоматически.
+
+Для web-панели доступны endpoint:
+- `GET /api/openclaw/model-autoswitch/status`
+- `POST /api/openclaw/model-autoswitch/apply`
+
+## 11. Signal: что считается “нормальной” ошибкой и что делать
+Если в логах видишь цикл:
+- `Signal SSE stream error: TypeError: fetch failed`
+- `Signal SSE connection lost, reconnecting...`
+
+обычно это означает, что `signal-cli` номер не зарегистрирован (или daemon не поднят).
+
+### Шаги восстановления Signal
+1. Запусти регистрацию:
+   - `/Users/pablito/Antigravity_AGENTS/Краб/openclaw_signal_register.command`
+2. После успешного `verify` запусти daemon:
+   - `/Users/pablito/Antigravity_AGENTS/Краб/openclaw_signal_daemon.command`
+3. Проверь статус:
+   - `/Users/pablito/Antigravity_AGENTS/Краб/openclaw_signal_daemon_status.command`
+
+### Если Signal вернул `429 Rate Limited`
+Это внешний лимит Signal (не баг Krab/OpenClaw).
+Практика:
+- подождать 30-60 минут;
+- повторить с новой captcha-ссылкой;
+- при длительном лимите ждать до 24 часов.

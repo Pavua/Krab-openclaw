@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-_TME_RE = re.compile(r"^https?://t\.me/(?P<slug>[A-Za-z0-9_]{5,})/?$", re.IGNORECASE)
+_TME_RE = re.compile(r"(?:https?://)?t\.me/(?P<slug>[^/?#]+).*", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -38,16 +38,19 @@ class TelegramChatResolver:
     @staticmethod
     def normalize_target(raw_target: str) -> str:
         """Нормализует пользовательский target в строковый идентификатор."""
-        text = (raw_target or "").strip()
+        # Очистка от кавычек и лишних пробелов
+        text = (raw_target or "").strip().strip("'\"").strip()
         if not text:
             return ""
 
+        # Улучшенный Regex для t.me (поддержка trailing slash и разных протоколов)
         m = _TME_RE.match(text)
         if m:
             return f"@{m.group('slug')}"
 
+        # Удаляем множественные префиксы @ (например, @@user -> @user)
         if text.startswith("@"):
-            return text
+            return "@" + text.lstrip("@")
 
         if text.lstrip("-").isdigit():
             return text

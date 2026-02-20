@@ -2,7 +2,10 @@
 # Krab Ear — MacWhisper Analog
 cd "$(dirname "$0")"
 clear
-echo "👂 Krab Ear v1.0 — Desktop Transcription"
+echo "👂 Krab Ear v1.0 — Desktop Transcription (FILE MODE)"
+echo "----------------------------------------"
+echo "⚠️  Важно: этот скрипт НЕ запускает backend Krab Ear Agent."
+echo "    Каноничный backend-старт: ./start_krab_ear_backend.command"
 echo "----------------------------------------"
 
 if [ -z "$1" ]; then

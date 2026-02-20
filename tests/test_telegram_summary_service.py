@@ -47,3 +47,26 @@ def test_summary_limit_clamp():
     assert svc.clamp_limit(1) == 20
     assert svc.clamp_limit(3000) == 2000
     assert svc.clamp_limit(150) == 150
+
+
+@pytest.mark.asyncio
+async def test_summary_empty():
+    svc = TelegramSummaryService(router=_MockRouter())
+    client = _MockClient(messages=[])
+    res = await svc.summarize(client, SummaryRequest(chat_id=1, limit=50))
+    assert res.startswith("❌")
+
+
+@pytest.mark.asyncio
+async def test_summary_only_media():
+    from datetime import datetime
+    
+    class EmptyMessage(_MockMessage):
+        def __init__(self):
+            super().__init__("", "u", datetime(2026, 2, 12, 12, 0))
+            
+    messages = [EmptyMessage() for _ in range(5)]
+    svc = TelegramSummaryService(router=_MockRouter())
+    client = _MockClient(messages=messages)
+    res = await svc.summarize(client, SummaryRequest(chat_id=1, limit=5))
+    assert res.startswith("❌")

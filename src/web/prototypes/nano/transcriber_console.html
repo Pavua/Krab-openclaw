@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Console V2</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="nano_theme.css">
+    <style>
+        /* ----- PAGE SPECIFIC (Transcriber) ----- */
+        .layout {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 24px;
+        }
+
+        /* Status LED */
+        .status-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 32px;
+            padding: 16px;
+            background: var(--bg-surface);
+            border-radius: 12px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .led {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            box-shadow: 0 0 0 transparent;
+        }
+
+        .status-text {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        /* States Mapping (utilizing nano_theme.css) */
+        .state-idle .led {
+            background: var(--text-muted);
+        }
+
+        .state-idle .status-text {
+            color: var(--text-muted);
+        }
+
+        .state-idle .status-text::after {
+            content: ' IDLE / READY';
+        }
+
+        .state-listening .led {
+            background: var(--state-ok);
+        }
+
+        .state-listening .status-text {
+            color: var(--state-ok);
+        }
+
+        .state-listening .status-text::after {
+            content: ' LISTENING...';
+        }
+
+        .state-transcribing .led {
+            background: var(--state-purple);
+        }
+
+        .state-transcribing .status-text {
+            color: var(--state-purple);
+        }
+
+        .state-transcribing .status-text::after {
+            content: ' PROCESSING AI...';
+        }
+
+        .state-error .led {
+            background: var(--state-bad);
+        }
+
+        .state-error .status-text {
+            color: var(--state-bad);
+        }
+
+        .state-error .status-text::after {
+            content: ' CONNECTION ERROR';
+        }
+
+        /* Forms specific to panel */
+        .field {
+            margin-bottom: 16px;
+        }
+
+        .card button {
+            width: 100%;
+            padding: 14px;
+            border-radius: 12px;
+            border: none;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            color: #fff;
+        }
+
+        .btn-start {
+            background: linear-gradient(135deg, var(--accent-cyan), #0284c7);
+            box-shadow: 0 4px 15px rgba(14, 165, 233, 0.3);
+        }
+
+        .btn-start:hover {
+            box-shadow: 0 6px 20px rgba(14, 165, 233, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .btn-stop {
+            background: linear-gradient(135deg, #ef4444, #b91c1c);
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+            display: none;
+        }
+
+        /* Output Window */
+        .transcript-window {
+            height: calc(100vh - 220px);
+            background: #090a0c;
+            border: 1px solid var(--border-card);
+            border-radius: 12px;
+            padding: 24px;
+            overflow-y: auto;
+            font-family: var(--font-main);
+            font-size: 1.1rem;
+            line-height: 1.6;
+        }
+
+        .t-chunk {
+            margin-bottom: 12px;
+            display: flex;
+            gap: 16px;
+        }
+
+        .t-time {
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            padding-top: 4px;
+        }
+
+        .t-text {
+            color: var(--text-main);
+        }
+
+        .t-final {
+            color: var(--text-main);
+        }
+
+        .t-partial {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        @media (max-width: 900px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            .transcript-window {
+                height: 400px;
+            }
+        }
+
+        @media (max-width: 420px) {
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 16px;
+            }
+
+            .layout {
+                gap: 16px;
+            }
+
+            .transcript-window {
+                height: 300px;
+                padding: 16px;
+            }
+
+            .status-container {
+                margin-bottom: 24px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Voice Console</h1>
+            <p class="subtitle">Real-time Speech Recognition Interface</p>
+        </header>
+
+        <div class="layout">
+            <div class="card">
+                <h3 class="card-title">Controller</h3>
+
+                <div id="statusIndicator" class="status-container state-idle" tabindex="0" aria-live="polite"
+                    aria-atomic="true">
+                    <div class="led" aria-hidden="true"></div>
+                    <div class="status-text"></div>
+                </div>
+
+                <label
+                    style="font-size:0.8rem; color:var(--text-muted); display:block; margin-bottom:4px;">Engine</label>
+                <select class="field" aria-label="Выбор движка распознавания (STT Engine)">
+                    <option>Local Whisper (fast)</option>
+                    <option>Cloud API (accurate)</option>
+                </select>
+
+                <label
+                    style="font-size:0.8rem; color:var(--text-muted); display:block; margin-bottom:4px;">Language</label>
+                <select class="field" style="margin-bottom: 32px;" aria-label="Выбор языка распознавания">
+                    <option>Auto-detect</option>
+                    <option>Russian (ru)</option>
+                    <option>English (en)</option>
+                </select>
+
+                <button id="btnStart" class="btn-start" aria-label="Начать распознавание голоса">Start
+                    Recording</button>
+                <button id="btnStop" class="btn-stop" aria-label="Остановить распознавание голоса">Stop
+                    Recording</button>
+            </div>
+
+            <div class="card" style="padding: 0; background: transparent; border: none; box-shadow: none;">
+                <div id="transcriptBox" class="transcript-window">
+                    <div class="t-chunk">
+                        <div class="t-time" aria-label="Время: 00:00">[00:00]</div>
+                        <div class="t-text t-partial break-word">Waiting for voice input...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- UI Mock state transitions -->
+    <script>
+        const statusEl = document.getElementById('statusIndicator');
+        const led = statusEl.querySelector('.led');
+        const btnStart = document.getElementById('btnStart');
+        const btnStop = document.getElementById('btnStop');
+        const tBox = document.getElementById('transcriptBox');
+
+        function setClass(cls) {
+            statusEl.className = 'status-container ' + cls;
+
+            // Manage util pulse classes
+            led.className = 'led';
+            if (cls === 'state-listening') led.classList.add('pulse-ok');
+            if (cls === 'state-transcribing') led.classList.add('pulse-ai');
+            if (cls === 'state-error') led.classList.add('pulse-error');
+        }
+
+        btnStart.addEventListener('click', () => {
+            btnStart.style.display = 'none';
+            btnStop.style.display = 'block';
+            setClass('state-listening');
+
+            statusEl.classList.add('state-success'); // Demo background state
+            setTimeout(() => statusEl.classList.remove('state-success'), 300);
+
+            tBox.innerHTML = '';
+
+            // Mock sequence
+            setTimeout(() => {
+                tBox.innerHTML += `<div class="t-chunk"><div class="t-time">[00:02]</div><div class="t-text t-partial">Инициализация контура...</div></div>`;
+                setClass('state-transcribing');
+            }, 1000);
+
+            setTimeout(() => {
+                tBox.innerHTML = `<div class="t-chunk"><div class="t-time">[00:04]</div><div class="t-text t-final">Инициализация контура завершена. Слушаю.</div></div>`;
+                setClass('state-listening');
+            }, 2500);
+
+            setTimeout(() => {
+                tBox.innerHTML += `<div class="t-chunk"><div class="t-time">[00:06]</div><div class="t-text text-error">Произошла ошибка соединения с сервером AI.</div></div>`;
+                setClass('state-error');
+                statusEl.classList.add('state-error');
+                btnStop.innerText = "Retry Connection";
+            }, 4500);
+        });
+
+        btnStop.addEventListener('click', () => {
+            btnStop.style.display = 'none';
+            btnStart.style.display = 'block';
+            btnStop.innerText = "Stop Recording";
+            setClass('state-idle');
+            statusEl.classList.remove('state-error');
+        });
+
+        // Initial empty state
+        tBox.innerHTML = `
+            <div class="empty-state" style="height: 100%;">
+                <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="margin-bottom:16px; color: var(--text-placeholder)"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"></path></svg>
+                <div style="font-weight: 500; color: var(--text-main); margin-bottom: 8px;">Waiting for audio stream</div>
+                <div style="font-size: 0.9rem">Press "Start Recording" to begin transcription.</div>
+            </div>
+        `;
+    </script>
+</body>
+
+</html>

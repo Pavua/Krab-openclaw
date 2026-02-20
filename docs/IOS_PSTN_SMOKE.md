@@ -20,36 +20,36 @@
 ## Сценарии smoke
 
 1. Webhook intake:
-- Отправить тестовый `voice` webhook.
-- Ожидаемо: HTTP 200, session создана/связана, лог без traceback.
+   - Отправить тестовый `voice` webhook.
+   - Ожидаемо: HTTP 200, session создана/связана, лог без traceback.
 
 2. Status callback:
-- Отправить `status` webhook (ringing -> in-progress -> completed).
-- Ожидаемо: статус сессии обновляется корректно.
+   - Отправить `status` webhook (ringing -> in-progress -> completed).
+   - Ожидаемо: статус сессии обновляется корректно.
 
 3. Media WS reconnect:
-- Оборвать WS media поток и восстановить.
-- Ожидаемо: reconnect без падения процесса, события продолжают поступать.
+   - Оборвать WS media поток и восстановить.
+   - Ожидаемо: reconnect без падения процесса, события продолжают поступать.
 
 4. Consent policy:
-- Запустить с `notify_mode=auto_on`, затем переключить на `auto_off`.
-- Ожидаемо: изменение видно в `!callstatus`/диагностике и в session payload.
+   - Запустить с `notify_mode=auto_on`, затем переключить на `auto_off`.
+   - Ожидаемо: изменение видно в `!callstatus`/диагностике и в session payload.
 
 5. Degradation:
-- Временно остановить OpenClaw.
-- Ожидаемо: AI деградация `degraded_to_local_fallback` (при доступной локалке), команда не падает.
+   - Временно остановить OpenClaw.
+   - Ожидаемо: AI деградация `degraded_to_local_fallback` (при доступной локалке), команда не падает.
 
 ## Артефакты
 
 1. Health snapshot:
-- `python scripts/health_dashboard.py`
+   - `python scripts/health_dashboard.py`
 
 2. Live E2E:
-- `scripts/run_live_ecosystem_e2e.command`
-- отчет: `artifacts/ops/live_ecosystem_e2e_<UTC>.json`
+   - `scripts/run_live_ecosystem_e2e.command`
+   - отчет: `artifacts/ops/live_ecosystem_e2e_<UTC>.json`
 
 3. Event schema:
-- `scripts/check_voice_event_schema.command`
+   - `scripts/check_voice_event_schema.command`
 
 ## Критерий PASS
 

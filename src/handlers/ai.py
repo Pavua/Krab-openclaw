@@ -59,6 +59,15 @@ AUTO_REPLY_QUEUE_NOTIFY_POSITION = str(
 AUTO_REPLY_FORWARD_CONTEXT_ENABLED = str(
     os.getenv("AUTO_REPLY_FORWARD_CONTEXT_ENABLED", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
+try:
+    AUTO_REPLY_FORWARD_BURST_WINDOW_SECONDS = float(
+        str(os.getenv("AUTO_REPLY_FORWARD_BURST_WINDOW_SECONDS", "1.8")).strip() or "1.8"
+    )
+    if AUTO_REPLY_FORWARD_BURST_WINDOW_SECONDS < 0.4:
+        AUTO_REPLY_FORWARD_BURST_WINDOW_SECONDS = 0.4
+except Exception:
+    AUTO_REPLY_FORWARD_BURST_WINDOW_SECONDS = 1.8
+AUTO_REPLY_FORWARD_BURST_MAX_ITEMS = _timeout_from_env("AUTO_REPLY_FORWARD_BURST_MAX_ITEMS", 8)
 AUTO_REPLY_QUEUE_MAX_RETRIES = max(
     0,
     int(str(os.getenv("AUTO_REPLY_QUEUE_MAX_RETRIES", "1")).strip() or "1"),
@@ -95,6 +104,11 @@ try:
     )
 except Exception:
     AUTO_REPLY_MAX_NUMBERED_LIST_ITEMS = 0
+AUTO_REPLY_MAX_RESPONSE_CHARS = _timeout_from_env("AUTO_REPLY_MAX_RESPONSE_CHARS", 1800)
+AUTO_REPLY_MAX_RESPONSE_CHARS_PRIVATE = _timeout_from_env(
+    "AUTO_REPLY_MAX_RESPONSE_CHARS_PRIVATE",
+    2400,
+)
 
 AUTO_SUMMARY_ENABLED = str(os.getenv("AUTO_SUMMARY_ENABLED", "0")).strip().lower() in {
     "1", "true", "yes", "on"
@@ -104,6 +118,7 @@ AUTO_SUMMARY_ENABLED = str(os.getenv("AUTO_SUMMARY_ENABLED", "0")).strip().lower
 _LAST_BUSY_NOTICE_TS = {}
 _RECENT_MESSAGE_MARKERS = {}
 _RECENT_MESSAGE_TTL_SECONDS = 180
+_FORWARD_BURST_CONTEXT_MAP: dict[str, str] = {}
 
 
 @dataclass
@@ -329,6 +344,33 @@ def _is_duplicate_message(chat_id: int, message_id: int) -> bool:
     return False
 
 
+def _append_forward_to_burst_state(state: dict, message: Message, max_items: int) -> bool:
+    """
+    Добавляет пересланное сообщение в burst-буфер без дублей.
+
+    Возвращает:
+    - True: сообщение добавлено;
+    - False: это дубликат (тот же chat_id + message_id), буфер не менялся.
+    """
+    messages = list(state.get("messages") or [])
+    chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+    message_id = int(getattr(message, "id", 0) or 0)
+
+    if chat_id and message_id:
+        for item in messages:
+            if int(getattr(getattr(item, "chat", None), "id", 0) or 0) != chat_id:
+                continue
+            if int(getattr(item, "id", 0) or 0) == message_id:
+                return False
+
+    messages.append(message)
+    limit = int(max(2, max_items * 2))
+    if len(messages) > limit:
+        messages = messages[-limit:]
+    state["messages"] = messages
+    return True
+
+
 def _is_self_private_message(message: Message) -> bool:
     """
     Определяет, что сообщение отправлено из этого же аккаунта
@@ -435,6 +477,12 @@ def _build_forward_context(message: Message, enabled: bool = True) -> str:
     """Формирует контекст форварда, чтобы модель не считала это позицией владельца."""
     if not enabled:
         return ""
+
+    chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+    message_id = int(getattr(message, "id", 0) or 0)
+    burst_key = f"{chat_id}:{message_id}"
+    burst_context = _FORWARD_BURST_CONTEXT_MAP.pop(burst_key, "")
+
     forwarded_from = None
     if getattr(message, "forward_from", None):
         fwd_user = message.forward_from
@@ -453,17 +501,72 @@ def _build_forward_context(message: Message, enabled: bool = True) -> str:
             or "unknown_chat"
         )
     if not forwarded_from:
-        return ""
+        return burst_context
 
     fwd_date = getattr(message, "forward_date", None)
     fwd_date_text = str(fwd_date) if fwd_date else "n/a"
     auto_fwd = bool(getattr(message, "is_automatic_forward", False))
-    return (
+    base_context = (
         "[FORWARDED CONTEXT]: это пересланный материал для анализа, "
         "не интерпретируй его как позицию владельца.\n"
         f"Источник: {forwarded_from}\n"
         f"Дата форварда: {fwd_date_text}\n"
         f"Автофорвард: {auto_fwd}"
+    )
+    if burst_context:
+        return f"{base_context}\n\n{burst_context}"
+    return base_context
+
+
+def _is_forwarded_message(message: Message) -> bool:
+    """
+    Проверяет, что сообщение является пересланным (любой тип форварда).
+    """
+    return bool(
+        getattr(message, "forward_date", None)
+        or getattr(message, "forward_from", None)
+        or getattr(message, "forward_sender_name", None)
+        or getattr(message, "forward_from_chat", None)
+        or getattr(message, "forward_from_message_id", None)
+    )
+
+
+def _compose_forward_burst_context(messages: list[Message], max_items: int = 8) -> str:
+    """
+    Формирует контекст «пачки форвардов», чтобы модель видела связность
+    и не отвечала на каждое пересланное сообщение отдельно.
+    """
+    if not messages:
+        return ""
+    safe_max = max(1, int(max_items))
+    tail = messages[-safe_max:]
+    lines: list[str] = []
+    for idx, msg in enumerate(tail, start=1):
+        source = "unknown_source"
+        if getattr(msg, "forward_from", None):
+            fwd_user = msg.forward_from
+            source = (
+                f"@{fwd_user.username}"
+                if getattr(fwd_user, "username", None)
+                else (getattr(fwd_user, "first_name", None) or "unknown_user")
+            )
+        elif getattr(msg, "forward_sender_name", None):
+            source = str(msg.forward_sender_name)
+        elif getattr(msg, "forward_from_chat", None):
+            fwd_chat = msg.forward_from_chat
+            source = (
+                getattr(fwd_chat, "title", None)
+                or getattr(fwd_chat, "username", None)
+                or "unknown_chat"
+            )
+        payload = _message_content_hint(msg)
+        if not payload:
+            payload = "[empty]"
+        lines.append(f"{idx}. [{source}] {payload}")
+    return (
+        "[FORWARDED BATCH CONTEXT]: это часть одной пачки пересланных сообщений. "
+        "Проанализируй их как единый контекст:\n"
+        + "\n".join(lines)
     )
 
 
@@ -1057,6 +1160,130 @@ def _drop_service_busy_phrases(text: str) -> tuple[str, bool]:
     normalized = "\n".join(output_lines).strip()
     normalized = re.sub(r"\n{3,}", "\n\n", normalized)
     return normalized, removed
+
+
+def _drop_tool_artifact_blocks(text: str) -> tuple[str, bool]:
+    """
+    Удаляет утечки внутреннего tool/scaffold вывода модели:
+    - begin/end_of_box, NO_REPLY, HEARTBEAT_OK
+    - JSON-схемы sessions_send/action/parameters
+    - дампы AGENTS.md и повторяющиеся блоки Default Channel.
+    """
+    payload = str(text or "").strip()
+    if not payload:
+        return "", False
+
+    original = payload
+    # Удаляем маркеры box, сохраняя потенциально полезный текст.
+    payload = payload.replace("<|begin_of_box|>", "")
+    payload = payload.replace("<|end_of_box|>", "")
+
+    blocked_fragments = (
+        "begin_of_box",
+        "end_of_box",
+        "no_reply",
+        "heartbeat_ok",
+        "i will now call the",
+        "memory_get",
+        "memory_search",
+        "sessions_spawn",
+        "sessions_send",
+        "\"action\": \"sessions_send\"",
+        "\"action\":\"sessions_send\"",
+        "\"sessionkey\"",
+        "\"default channel",
+        "default channel id",
+        "## /users/",
+        "# agents.md - workspace agents",
+        "## agent list",
+        "### default agents",
+        "</tool_call>",
+    )
+    noisy_line_patterns = (
+        r"^\s*\"?(name|description|icon|color|sound|volume|timeout|type|id)\"?\s*:\s*\"?whatsapp\"?",
+        r"^\s*-\s*\"default channel",
+    )
+
+    filtered_lines: list[str] = []
+    removed = False
+    for line in payload.splitlines():
+        low = line.strip().lower()
+        if low in {"```", "```json", "```text", "```yaml"}:
+            removed = True
+            continue
+        if any(fragment in low for fragment in blocked_fragments):
+            removed = True
+            continue
+        if any(re.search(pattern, low) for pattern in noisy_line_patterns):
+            removed = True
+            continue
+        filtered_lines.append(line)
+
+    payload = "\n".join(filtered_lines)
+    payload = re.sub(r"\n{3,}", "\n\n", payload).strip()
+    if not payload:
+        return "", original != ""
+    return payload, (removed or payload != original)
+
+
+def _looks_like_internal_dump(text: str) -> bool:
+    """
+    Эвристика для распознавания «протекшего» внутреннего вывода:
+    schema-дампы, системные markdown-блоки, тех. теги и однотипные JSON-строки.
+    """
+    payload = str(text or "").strip()
+    if not payload:
+        return False
+
+    low = payload.lower()
+    suspicious_markers = (
+        "begin_of_box",
+        "end_of_box",
+        "sessions_send",
+        "sessionkey",
+        "default channel",
+        "agents.md",
+        "## agent list",
+        "no_reply",
+        "heartbeat_ok",
+    )
+    marker_hits = sum(1 for marker in suspicious_markers if marker in low)
+
+    jsonish_line_count = 0
+    for line in payload.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r'^\s*"?[A-Za-z_][A-Za-z0-9_ ]*"?\s*:\s*', stripped):
+            jsonish_line_count += 1
+
+    if marker_hits >= 2:
+        return True
+    if marker_hits >= 1 and jsonish_line_count >= 10:
+        return True
+    if jsonish_line_count >= 24:
+        return True
+    return False
+
+
+def _clamp_auto_reply_text(text: str, *, is_private: bool) -> tuple[str, bool]:
+    """
+    Ограничивает длину ответа для каналов автоответа, чтобы избежать
+    огромных «простыней» и зацикленного вывода.
+    """
+    payload = str(text or "").strip()
+    if not payload:
+        return "", False
+
+    max_chars = (
+        AUTO_REPLY_MAX_RESPONSE_CHARS_PRIVATE
+        if is_private
+        else AUTO_REPLY_MAX_RESPONSE_CHARS
+    )
+    if len(payload) <= max_chars:
+        return payload, False
+    trimmed = payload[: max(200, max_chars)].rstrip()
+    return f"{trimmed}\n\n…(ответ сокращен автоматически)", True
 
 
 def _drop_english_scaffold_when_russian_expected(
@@ -1658,6 +1885,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         message,
         enabled=bool(ai_runtime and ai_runtime.forward_context_enabled),
     )
+    is_forwarded_input = _is_forwarded_message(message)
 
     # Final prompt
     final_prompt = f"{transcribed_text} (Voice Input)" if transcribed_text else text_content
@@ -1681,7 +1909,13 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     if reply_context:
         final_prompt = f"{reply_context}\n\n{final_prompt}"
     if forward_context:
-        final_prompt = f"{forward_context}\n\n{final_prompt}"
+        forward_guard = (
+            "Ниже пересланный контент. Отвечай строго по нему.\n"
+            "Не продолжай старую тему из предыдущих сообщений, если пользователь этого явно не просил.\n"
+            "Если в пересланном тексте нет явного вопроса/задачи — коротко уточни, что именно сделать:"
+            " суммаризировать, проанализировать, ответить на него или извлечь факты."
+        )
+        final_prompt = f"{forward_context}\n\n{forward_guard}\n\n{final_prompt}"
     if reaction_engine and ai_runtime and ai_runtime.chat_mood_enabled:
         mood_line = reaction_engine.build_mood_context_line(message.chat.id)
         if mood_line:
@@ -1737,6 +1971,9 @@ async def _process_auto_reply(client, message: Message, deps: dict):
 
     # Routing
     context = memory.get_token_aware_context(message.chat.id, max_tokens=AUTO_REPLY_CONTEXT_TOKENS)
+    if is_forwarded_input:
+        # Для форвардов не тащим длинный хвост старого диалога, чтобы не «залипать» в прошлую тему.
+        context = []
     user_context_before = sum(
         1 for item in (context or []) if str((item or {}).get("role", "user")).strip().lower() == "user"
     )
@@ -1761,6 +1998,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 "context_messages": len(context or []),
                 "prompt_length_chars": len(final_prompt or ""),
                 "has_forward_context": bool(forward_context),
+                "is_forwarded_input": bool(is_forwarded_input),
                 "has_reply_context": bool(reply_context),
                 "group_author_isolation_enabled": bool(ai_runtime.group_author_isolation_enabled),
                 "continue_on_incomplete_enabled": bool(ai_runtime.continue_on_incomplete_enabled),
@@ -1928,6 +2166,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         )
         clean_display_text = _sanitize_model_output(full_response, router)
         clean_display_text, removed_service_phrases = _drop_service_busy_phrases(clean_display_text)
+        clean_display_text, removed_tool_artifacts = _drop_tool_artifact_blocks(clean_display_text)
         clean_display_text, removed_english_scaffold = _drop_english_scaffold_when_russian_expected(
             clean_display_text,
             prefer_russian=prefer_russian_response,
@@ -1978,6 +2217,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             clean_display_text = (
                 f"{clean_display_text}\n\n⚠️ Автоочистка: удалены служебные строки очереди/ожидания."
             ).strip()
+        if removed_tool_artifacts:
+            clean_display_text = (
+                f"{clean_display_text}\n\n⚠️ Автоочистка: удалены внутренние служебные блоки модели."
+            ).strip()
         if removed_english_scaffold:
             clean_display_text = (
                 f"{clean_display_text}\n\n⚠️ Автоочистка: убраны длинные англоязычные вставки (сохранён русский вариант ответа)."
@@ -1986,6 +2229,23 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             clean_display_text = (
                 f"{clean_display_text}\n\n⚠️ Автоочистка: убраны дубли пунктов в нумерованном списке."
             ).strip()
+        if _looks_like_internal_dump(clean_display_text):
+            clean_display_text = (
+                "⚠️ Поймал внутренний служебный вывод модели и скрыл его.\n"
+                "Попробуй повторить запрос короче, без пересылки слишком длинного технического контента."
+            )
+        clean_display_text, response_trimmed = _clamp_auto_reply_text(
+            clean_display_text,
+            is_private=is_private,
+        )
+        if response_trimmed:
+            logger.warning(
+                "auto_reply: ответ ограничен по длине",
+                chat_id=message.chat.id,
+                message_id=message.id,
+                limit_private=AUTO_REPLY_MAX_RESPONSE_CHARS_PRIVATE,
+                limit_public=AUTO_REPLY_MAX_RESPONSE_CHARS,
+            )
         if trimmed_numbered:
             logger.warning("Ответ был ограничен по длине нумерованного списка", chat_id=message.chat.id)
         if not clean_display_text:
@@ -2155,6 +2415,7 @@ def register_handlers(app, deps: dict):
     deps["ai_runtime"] = ai_runtime
     deps["reaction_engine"] = reaction_engine
     deps["chat_work_queue"] = queue_manager
+    forward_burst_buffers: dict[str, dict] = {}
 
     @app.on_raw_update()
     async def reaction_learning_raw_handler(client, update, users, chats):
@@ -3040,10 +3301,10 @@ def register_handlers(app, deps: dict):
         await notification.edit_text(f"🐍 **Результат:**\n\n```\n{safe_output}\n```")
         await _danger_audit(message, "exec", "ok", code[:300])
 
-    async def _enqueue_auto_reply_task(client, message: Message) -> None:
+    async def _enqueue_direct_auto_reply_task(client, message: Message) -> None:
         """
-        Унифицированная постановка auto-reply задачи в очередь.
-        Нужна, чтобы основной и failsafe-хендлеры использовали один и тот же путь.
+        Постановка одной конкретной задачи в очередь/прямой ран.
+        Используется и напрямую, и после burst-склейки форвардов.
         """
         chat_id = int(message.chat.id)
         message_id = int(message.id)
@@ -3099,6 +3360,72 @@ def register_handlers(app, deps: dict):
                 await message.reply_text(f"🧾 Добавил в очередь обработки (позиция: {queue_size}).")
             except Exception:
                 pass
+
+    async def _flush_forward_burst(client, burst_key: str) -> None:
+        """
+        Флашит накопленную пачку форвардов одним заданием.
+        """
+        await asyncio.sleep(AUTO_REPLY_FORWARD_BURST_WINDOW_SECONDS)
+        payload = forward_burst_buffers.pop(burst_key, None)
+        if not payload:
+            return
+
+        messages = list(payload.get("messages") or [])
+        if not messages:
+            return
+        tail = messages[-max(1, int(AUTO_REPLY_FORWARD_BURST_MAX_ITEMS)) :]
+        anchor_message = tail[-1]
+        if len(tail) > 1:
+            context_text = _compose_forward_burst_context(
+                tail[:-1],
+                max_items=AUTO_REPLY_FORWARD_BURST_MAX_ITEMS,
+            )
+            if context_text:
+                context_key = f"{int(anchor_message.chat.id)}:{int(anchor_message.id)}"
+                _FORWARD_BURST_CONTEXT_MAP[context_key] = context_text
+        await _enqueue_direct_auto_reply_task(client, anchor_message)
+
+    async def _enqueue_auto_reply_task(client, message: Message) -> None:
+        """
+        Унифицированная постановка auto-reply задачи в очередь.
+        Для пересланной «пачки» включает короткое окно склейки.
+        """
+        if _is_forwarded_message(message):
+            sender_id = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+            burst_key = f"{int(message.chat.id)}:{sender_id}"
+            state = forward_burst_buffers.get(burst_key)
+            if not state:
+                state = {"messages": [], "task": None}
+                forward_burst_buffers[burst_key] = state
+            added = _append_forward_to_burst_state(
+                state,
+                message,
+                max_items=AUTO_REPLY_FORWARD_BURST_MAX_ITEMS,
+            )
+            if not added:
+                logger.debug(
+                    "auto_reply_logic: дубликат форварда пропущен в burst-буфере",
+                    chat_id=message.chat.id,
+                    message_id=message.id,
+                    burst_key=burst_key,
+                    burst_size=len(state.get("messages") or []),
+                )
+                return
+            pending_task = state.get("task")
+            if pending_task and not pending_task.done():
+                pending_task.cancel()
+            state["task"] = asyncio.create_task(_flush_forward_burst(client, burst_key))
+            logger.debug(
+                "auto_reply_logic: форвард добавлен в burst-буфер",
+                chat_id=message.chat.id,
+                message_id=message.id,
+                burst_key=burst_key,
+                burst_size=len(state["messages"]),
+                window_sec=AUTO_REPLY_FORWARD_BURST_WINDOW_SECONDS,
+            )
+            return
+
+        await _enqueue_direct_auto_reply_task(client, message)
 
     # --- Авто-ответ (самый последний, ловит текст + медиа) ---
     @app.on_message(

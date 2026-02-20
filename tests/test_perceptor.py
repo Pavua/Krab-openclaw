@@ -146,3 +146,45 @@ async def test_perceptor_transcribe_fallback_on_unsupported_kwargs(tmp_path: Pat
 
     assert mocked_transcribe.call_count == 2
     assert result.startswith("Привет мир")
+
+
+@pytest.mark.asyncio
+async def test_perceptor_transcribe_isolated_worker_success(tmp_path: Path):
+    with patch.dict(os.environ, {"STT_ISOLATED_WORKER": "1"}):
+        with patch.object(Perceptor, "_warmup_audio"):
+            perceptor = Perceptor({})
+
+    test_file = tmp_path / "iso_audio.ogg"
+    test_file.write_text("dummy", encoding="utf-8")
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = '{"ok": true, "text": "привет из воркера"}\n'
+    completed.stderr = ""
+
+    with patch("subprocess.run", return_value=completed) as mocked_run:
+        result = await perceptor.transcribe(str(test_file), MagicMock())
+
+    mocked_run.assert_called_once()
+    assert result.startswith("Привет из воркера")
+
+
+@pytest.mark.asyncio
+async def test_perceptor_transcribe_isolated_worker_failure(tmp_path: Path):
+    with patch.dict(os.environ, {"STT_ISOLATED_WORKER": "1"}):
+        with patch.object(Perceptor, "_warmup_audio"):
+            perceptor = Perceptor({})
+
+    test_file = tmp_path / "iso_audio_fail.ogg"
+    test_file.write_text("dummy", encoding="utf-8")
+
+    completed = MagicMock()
+    completed.returncode = 134
+    completed.stdout = ""
+    completed.stderr = "AGX command buffer assertion"
+
+    with patch("subprocess.run", return_value=completed):
+        result = await perceptor.transcribe(str(test_file), MagicMock())
+
+    assert "Ошибка транскрибации" in result
+    assert "AGX command buffer assertion" in result

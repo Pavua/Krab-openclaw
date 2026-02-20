@@ -7,7 +7,34 @@
 
 ---
 
-## ✅ v8 Sprint Update #22 (2026-02-20) — STT Quality Upgrade + Signal/WhatsApp Channel Ops
+## ✅ v8 Sprint Update #23 (2026-02-20) — Telegram Control & Call UX + Group Moderation v2
+
+### Что реализовано
+
+1. **Telegram Control UX Hardening (`!summaryx`)**:
+   - Усилены ответы об ошибках для `!summaryx` (отказы в доступе к чатам, некорректные ID/usernames, пустые выборки).
+   - Формат ошибок стандартизирован до пользовательских подсказок (actionable next-steps) с эмодзи.
+   - Добавлены негативные unit/mock тесты на права и доступы к Summaryflow.
+
+2. **Group Moderation v2 (Stabilization)**:
+   - Шаблоны правил (spam, flood, abuse, links) перебалансированы и улучшены для лучшей точности.
+   - Устранена ошибка ложных срабатываний фильтра запрещенных слов (False Positives) за счет перехода на regex с учетом границ слов (`\\b`).
+   - Добавлены интегрированные e2e тесты на false-positive срабатывания и поведение флага `dry-run`. 
+
+3. **Voice Command Telegram UX (`!call*`)**:
+   - Приведены к единому стилю формата ответы команд `!callstart`, `!callstop`, `!callstatus`, `!callsummary`, `!callphrase`, `!callphrases`, `!callwhy`, `!calltune`.
+   - Усилена детальная диагностика при offline-состоянии Voice Gateway и missing-sessions. Выводу ошибок добавлены actionable hints (конкретные шаги вроде запуска `calldiag`).
+   - Исходный код команд-утилит очищен от шумных/длинных неструктурированных ответов.
+   - Добавлены/обновлены coverage-тесты на проверку форматов обрывов звонков.
+
+### Верификация
+
+1. Workstream Overlap Check:
+   - `scripts/check_workstream_overlap.py` → ✅ Нет конфликтов с зоной Codex.
+2. Общий прогон тестов:
+   - `pytest tests/` → ✅ `323 passed`.
+
+---
 
 ### Что реализовано
 
@@ -33,11 +60,62 @@
    - добавлены one-click скрипты:
      - `openclaw_signal_daemon_stop.command`
      - `openclaw_signal_daemon_status.command`
+     - `openclaw_signal_link.command` (линковка secondary device при `429 Rate Limited` на register)
 
 3. **WhatsApp link flow**:
    - добавлен one-click скрипт `openclaw_whatsapp_link.command`:
      - запускает `openclaw channels login --channel whatsapp`,
      - после QR-link сразу показывает probe-статус.
+
+4. **Runtime Recovery для OpenClaw (anti-regression)**:
+   - добавлен one-click скрипт `openclaw_runtime_repair.command`:
+     - восстанавливает `primary + fallbacks` (local-first с cloud fallback),
+     - фиксирует `session.dmScope=per-channel-peer`,
+     - применяет безопасные лимиты токенов для каналов/моделей,
+     - выводит итоговый `models status` + `channels status --probe`.
+   - зафиксировано, что runtime-настройки OpenClaw живут в `~/.openclaw/openclaw.json` и могут частично сбрасываться после wizard/update/profile-switch.
+
+5. **Signal Register UX hardening**:
+   - `openclaw_signal_register.command` улучшен:
+     - автоподхват `signalcaptcha://...` из буфера (до 120 секунд ожидания),
+     - поддержка чтения ссылки из файла (`@/path/to/file`),
+     - нормализация длинной ссылки (удаление пробелов/переносов),
+     - явная диагностика `429 Rate Limited` с корректными next steps.
+
+6. **Anti-413 переход между чатами (операционная устойчивость)**:
+   - добавлен документ `docs/CHAT_TRANSITION_PLAYBOOK_RU.md`:
+     - компактный протокол переноса контекста в новый диалог,
+     - минимальный обязательный набор данных для continuity.
+   - добавлен one-click скрипт `prepare_next_chat_context.command`:
+     - собирает branch/commit/status/diff summary в `artifacts/context/next_chat_context_*.md`,
+     - копирует контекст в буфер обмена для мгновенной вставки в новый чат.
+
+7. **Параллельные потоки (расширение до multi-stream)**:
+   - `scripts/check_workstream_overlap.py` обновлён с 2 потоков на N потоков (`*_paths.txt`), теперь ловит коллизии между всеми ownership-группами.
+   - добавлены ownership-файлы:
+     - `config/workstreams/gemini_design_paths.txt`
+     - `config/workstreams/nanobanana_ui_paths.txt`
+   - добавлен тест:
+     - `tests/test_check_workstream_overlap.py` (✅ `2 passed`).
+
+8. **Signal Recovery one-click**:
+   - добавлен `openclaw_signal_recover.command`:
+     - проверка регистрации номера,
+     - выбор `register+verify` или `link secondary device`,
+     - автоматический повтор запуска daemon и status-check после recovery.
+   - улучшен `openclaw_signal_link.command`:
+     - автоматическое копирование `sgnl://` ссылки в буфер обмена,
+     - автогенерация QR (`artifacts/signal/signal_link_qr.png`) при доступном `qrencode`/`python qrcode`.
+   - добавлен `openclaw_signal_daemon_logs.command`:
+     - быстрый просмотр последних out/err логов daemon,
+     - optional follow-режим (`follow` / `-f`).
+
+### Текущий операционный статус (на момент обновления)
+
+- Telegram / Discord / Slack / iMessage / WhatsApp: `works` (probe ок).
+- Signal: `probe failed`, так как номер `signal-cli` ещё не зарегистрирован (daemon не поднимается на `:18080` без успешного register+verify).
+- В логах Signal устойчиво: `Signal SSE stream error: TypeError: fetch failed` -> `reconnecting`.
+- Это ожидаемо до завершения регистрации номера в `signal-cli`.
 
 ### Верификация
 

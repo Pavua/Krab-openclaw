@@ -242,6 +242,33 @@ def register_handlers(app, deps: dict):
             await message.reply_text("✅ Приветствие обновлено." if text else "🗑 Приветствие удалено.")
             return
 
+        if sub == "debug":
+            if not moderation_engine:
+                await message.reply_text("❌ Group Moderation Engine не инициализирован.")
+                return
+            if len(args) < 3 or args[2].lower() != "policy":
+                await message.reply_text("ℹ️ Использование: `!group debug policy`")
+                return
+            
+            snapshot = moderation_engine.get_policy_debug_snapshot(chat_id)
+            # Формируем компактный вывод
+            policy = snapshot.get("effective_policy", {})
+            actions = policy.get("actions", {})
+            
+            text = (
+                f"🔍 **Debug Policy Snapshot**\n"
+                f"🆔 CID: `{snapshot['chat_id']}`\n"
+                f"🏷 Template: `{snapshot['template']}`\n"
+                f"🧪 Dry-run: `{'ON' if snapshot['is_dry_run'] else 'OFF'}`\n"
+                f"⚙️ Engine: `{snapshot['engine_version']}`\n\n"
+                f"📊 **Effective Settings:**\n"
+                f"- Max links: `{policy.get('max_links')}`\n"
+                f"- Max caps: `{policy.get('max_caps_ratio')}`\n"
+                f"- Actions: `{json.dumps(actions)}`"
+            )
+            await message.reply_text(text)
+            return
+
         if sub == "on":
             black_box.set_group_setting(chat_id, "is_active", 1)
             await message.reply_text("✅ Бот активирован в этой группе.")
@@ -306,15 +333,19 @@ def register_handlers(app, deps: dict):
         reason = "; ".join(v.get("reason", "") for v in evaluation.get("violations", [])[:2])
 
         if evaluation.get("dry_run", True):
+            explain = evaluation.get("explain", {})
+            matched_rules = ", ".join(explain.get("matched_rules", []))
             await _send_temporary_notice(
                 client,
                 chat_id,
-                f"🧪 **AutoMod DRY-RUN**: @{username} rule=`{primary_rule}` action=`{action}`\n{reason}",
+                f"🧪 **AutoMod DRY-RUN**: @{username}\n"
+                f"🎯 **Rule:** `{primary_rule}` | 🧩 **All:** `[{matched_rules}]` | ⚡ **Action:** `{action}`\n"
+                f"📝 **Reason:** {reason}",
                 ttl_sec=int(policy.get("warn_ttl_sec", 8)),
             )
             black_box.log_event(
                 "group_mod_dry_run",
-                f"chat={chat_id} user={username} rule={primary_rule} action={action} reason={reason}",
+                f"chat={chat_id} user={username} primary={primary_rule} rules=[{matched_rules}] action={action} reason={reason}",
             )
             return
 

@@ -1,0 +1,5 @@
+# Nano Banana Pro ownership (UI implementation prototypes)
+docs/frontend_ui_polish/**
+artifacts/frontend_ui_polish/**
+src/web/prototypes/nano/**
+

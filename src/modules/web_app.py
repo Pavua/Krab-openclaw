@@ -16,6 +16,8 @@ import hashlib
 import io
 import mimetypes
 import re
+import subprocess
+import sys
 from datetime import datetime, timezone
 
 import structlog
@@ -38,7 +40,9 @@ class WebApp:
         self.host = host
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task | None = None
-        self._index_path = Path(__file__).resolve().parents[1] / "web" / "index.html"
+        self._web_root = Path(__file__).resolve().parents[1] / "web"
+        self._index_path = self._web_root / "index.html"
+        self._nano_theme_path = self._web_root / "prototypes" / "nano" / "nano_theme.css"
         self._assistant_rate_state: dict[str, list[float]] = {}
         self._idempotency_state: dict[str, tuple[float, dict]] = {}
         self._setup_routes()
@@ -254,6 +258,19 @@ class WebApp:
                 return FileResponse(self._index_path)
             return HTMLResponse("<h1>Krab Web Panel</h1><p>index.html не найден</p>")
 
+        @self.app.get("/nano_theme.css")
+        @self.app.get("/prototypes/nano/nano_theme.css")
+        async def nano_theme_css():
+            """
+            Отдает основной CSS web-панели.
+
+            Дублируем оба URL, чтобы панель стабильно работала и при открытии
+            через локальный HTTP, и при старых ссылках после обновлений.
+            """
+            if self._nano_theme_path.exists():
+                return FileResponse(self._nano_theme_path, media_type="text/css")
+            raise HTTPException(status_code=404, detail="nano_theme_css_not_found")
+
         @self.app.get("/api/stats")
         async def get_stats():
             router = self.deps["router"]
@@ -290,6 +307,67 @@ class WebApp:
                 "degradation": str(report["degradation"]),
                 "risk_level": str(report["risk_level"]),
                 "chain": report["chain"],
+            }
+
+        @self.app.get("/api/transcriber/status")
+        async def transcriber_status():
+            """
+            Операционный статус транскрибатора.
+            Нужен для быстрого понимания: жив ли voice-контур и включена ли crash-защита STT.
+            """
+            openclaw = self.deps.get("openclaw_client")
+            voice_gateway = self.deps.get("voice_gateway_client")
+            krab_ear = self.deps.get("krab_ear_client")
+            perceptor = self.deps.get("perceptor")
+
+            openclaw_ok = False
+            voice_gateway_ok = False
+            krab_ear_ok = False
+            try:
+                openclaw_ok = bool(await openclaw.health_check()) if openclaw else False
+            except Exception:
+                openclaw_ok = False
+            try:
+                voice_gateway_ok = bool(await voice_gateway.health_check()) if voice_gateway else False
+            except Exception:
+                voice_gateway_ok = False
+            try:
+                krab_ear_ok = bool(await krab_ear.health_check()) if krab_ear else False
+            except Exception:
+                krab_ear_ok = False
+
+            def _env_on(key: str, default: str = "0") -> bool:
+                return str(os.getenv(key, default)).strip().lower() in {"1", "true", "yes", "on"}
+
+            stt_isolated_worker = _env_on("STT_ISOLATED_WORKER", "1")
+            perceptor_isolated_worker = bool(getattr(perceptor, "stt_isolated_worker", stt_isolated_worker))
+            stt_worker_timeout = int(str(os.getenv("STT_WORKER_TIMEOUT_SECONDS", "240")).strip() or "240")
+
+            readiness = "ready" if (voice_gateway_ok and perceptor_isolated_worker) else (
+                "degraded" if voice_gateway_ok else "down"
+            )
+            recommendations: list[str] = []
+            if not voice_gateway_ok:
+                recommendations.append("Запусти ./transcriber_doctor.command --heal")
+            if not perceptor_isolated_worker:
+                recommendations.append("Включи STT_ISOLATED_WORKER=1 и перезапусти Krab")
+            if not recommendations:
+                recommendations.append("Система транскрибации в рабочем режиме")
+
+            return {
+                "ok": True,
+                "status": {
+                    "readiness": readiness,
+                    "openclaw_ok": openclaw_ok,
+                    "voice_gateway_ok": voice_gateway_ok,
+                    "krab_ear_ok": krab_ear_ok,
+                    "stt_isolated_worker": perceptor_isolated_worker,
+                    "stt_worker_timeout_seconds": stt_worker_timeout,
+                    "voice_gateway_url": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
+                    "whisper_model": str(getattr(perceptor, "whisper_model", "")),
+                    "audio_warmup_enabled": _env_on("PERCEPTOR_AUDIO_WARMUP", "0"),
+                    "recommendations": recommendations,
+                },
             }
 
         @self.app.get("/api/policy")
@@ -349,6 +427,133 @@ class WebApp:
                 "voice_gateway": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
                 "openclaw": os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"),
             }
+
+        @self.app.get("/api/openclaw/channels/status")
+        async def openclaw_channels_status():
+            """
+            Выполняет 'openclaw channels status --probe' и возвращает
+            сырой вывод + распарсенные предупреждения.
+            """
+            try:
+                # [R9] Безопасный запуск через asyncio subprocess с таймаутом.
+                proc = await asyncio.create_subprocess_exec(
+                    "openclaw", "channels", "status", "--probe",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)
+                except asyncio.TimeoutError:
+                    if proc.returncode is None:
+                        try:
+                            proc.terminate()
+                        except ProcessLookupError:
+                            pass
+                    return {
+                        "ok": False,
+                        "error": "openclaw_timeout",
+                        "detail": "Запрос статуса каналов превысил 45 сек.",
+                    }
+
+                raw_output = stdout.decode("utf-8", errors="replace")
+                
+                # Поиск варнингов в выводе (обычно в блоке 'Warnings:' или строки с 'WARN')
+                warnings = []
+                capture_warnings = False
+                for line in raw_output.splitlines():
+                    clean_line = line.strip()
+                    if not clean_line:
+                        continue
+                    if "Warnings:" in clean_line:
+                        capture_warnings = True
+                        continue
+                    if capture_warnings and clean_line.startswith("-"):
+                        warnings.append(clean_line.lstrip("- ").strip())
+                    elif capture_warnings and clean_line and not clean_line.startswith("-"):
+                        # Если пошел другой блок, прекращаем захват (упрощенно)
+                        if ":" in clean_line and not clean_line.startswith("http"):
+                           capture_warnings = False
+
+                # Дополнительно ищем строки с WARN вне блока Warnings
+                if not warnings:
+                    for line in raw_output.splitlines():
+                        if "WARN" in line.upper():
+                            warnings.append(line.strip())
+
+                return {
+                    "ok": proc.returncode == 0,
+                    "raw": raw_output,
+                    "warnings": warnings,
+                    "exit_code": proc.returncode,
+                }
+            except Exception as exc:
+                logger.error("openclaw_status_failed", error=str(exc))
+                return {
+                    "ok": False,
+                    "error": "system_error",
+                    "detail": f"Не удалось выполнить openclaw: {exc}",
+                }
+
+        @self.app.post("/api/openclaw/channels/runtime-repair")
+        async def openclaw_runtime_repair(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Запуск скрипта восстановления рантайма OpenClaw.
+            Требует WEB_API_KEY.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            script_path = "/Users/pablito/Antigravity_AGENTS/Краб/openclaw_runtime_repair.command"
+            
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    script_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+                output = stdout.decode("utf-8", errors="replace")
+                return {
+                    "ok": proc.returncode == 0,
+                    "output": output,
+                    "exit_code": proc.returncode,
+                }
+            except asyncio.TimeoutError:
+                return {"ok": False, "error": "timeout", "detail": "Скрипт выполнялся слишком долго (60с)"}
+            except Exception as exc:
+                return {"ok": False, "error": "system_error", "detail": str(exc)}
+
+        @self.app.post("/api/openclaw/channels/signal-guard-run")
+        async def openclaw_signal_guard_run(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Однократный запуск Ops Guard для проверки сигналов.
+            Требует WEB_API_KEY.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            script_path = "/Users/pablito/Antigravity_AGENTS/Краб/scripts/signal_ops_guard.command"
+            
+            try:
+                # Запускаем с флагом --once для разовой проверки
+                proc = await asyncio.create_subprocess_exec(
+                    script_path, "--once",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+                output = stdout.decode("utf-8", errors="replace")
+                return {
+                    "ok": proc.returncode == 0,
+                    "output": output,
+                    "exit_code": proc.returncode,
+                }
+            except asyncio.TimeoutError:
+                return {"ok": False, "error": "timeout", "detail": "Signal Guard выполнялся слишком долго (60с)"}
+            except Exception as exc:
+                return {"ok": False, "error": "system_error", "detail": str(exc)}
 
         @self.app.get("/api/ecosystem/health")
         async def ecosystem_health():
@@ -421,6 +626,67 @@ class WebApp:
                 confirm_expensive=confirm_expensive,
             )
             return {"ok": True, "preflight": preflight}
+
+        @self.app.get("/api/model/explain")
+        async def model_explain(
+            task_type: str = Query(default="chat", description="Тип задачи для preflight"),
+            prompt: str = Query(default="", description="Опциональный prompt для preflight explain"),
+            preferred_model: str = Query(default="", description="Опциональная предпочтительная модель"),
+            confirm_expensive: bool = Query(default=False, description="Флаг подтверждения дорогого cloud пути"),
+        ):
+            """
+            Explainability endpoint: почему выбран канал/модель.
+
+            Возвращает:
+            - last route (route_reason/route_detail);
+            - policy snapshot;
+            - preflight (если передан prompt).
+            """
+            router = self.deps["router"]
+            normalized_prompt = str(prompt or "").strip()
+            normalized_task_type = str(task_type or "chat").strip().lower() or "chat"
+            preferred_model_str = str(preferred_model or "").strip() or None
+
+            if hasattr(router, "get_route_explain"):
+                explain = router.get_route_explain(
+                    prompt=normalized_prompt,
+                    task_type=normalized_task_type,
+                    preferred_model=preferred_model_str,
+                    confirm_expensive=bool(confirm_expensive),
+                )
+                return {"ok": True, "explain": explain}
+
+            # Fallback для старого роутера без get_route_explain.
+            last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
+            preflight = None
+            if normalized_prompt and hasattr(router, "get_task_preflight"):
+                preflight = router.get_task_preflight(
+                    prompt=normalized_prompt,
+                    task_type=normalized_task_type,
+                    preferred_model=preferred_model_str,
+                    confirm_expensive=bool(confirm_expensive),
+                )
+            return {
+                "ok": True,
+                "explain": {
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "last_route": last_route if isinstance(last_route, dict) else {},
+                    "reason": {
+                        "code": str(last_route.get("route_reason", "")).strip() or "unknown",
+                        "detail": str(last_route.get("route_detail", "")).strip(),
+                        "human": "Роутер не поддерживает расширенный explain; показан базовый срез.",
+                    },
+                    "policy": {
+                        "force_mode": str(getattr(router, "force_mode", "auto")),
+                        "routing_policy": str(getattr(router, "routing_policy", "unknown")),
+                        "cloud_soft_cap_reached": bool(getattr(router, "cloud_soft_cap_reached", False)),
+                        "local_available": bool(getattr(router, "is_local_available", False)),
+                    },
+                    "preflight": preflight,
+                    "explainability_score": 40 if last_route else 0,
+                    "transparency_level": "low" if not last_route else "medium",
+                },
+            }
 
         def _normalize_force_mode(force_mode: str) -> str:
             """Нормализует внутренние force_* режимы в UI-вид: auto/local/cloud."""
@@ -1320,6 +1586,69 @@ class WebApp:
                 return {"available": False, "error": "openclaw_client_not_configured"}
             report = await openclaw.get_browser_smoke_report(url=url)
             return {"available": True, "report": report}
+
+        def _run_openclaw_model_autoswitch(*, dry_run: bool) -> dict:
+            """
+            Запускает autoswitch-утилиту OpenClaw.
+            dry_run=True: только диагностика, без изменения конфигурации.
+            """
+            project_root = Path(__file__).resolve().parents[2]
+            script_path = project_root / "scripts" / "openclaw_model_autoswitch.py"
+            if not script_path.exists():
+                raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_script_missing")
+
+            python_bin = project_root / ".venv" / "bin" / "python"
+            if not python_bin.exists():
+                python_bin = Path(sys.executable or "python3")
+
+            cmd = [str(python_bin), str(script_path)]
+            if dry_run:
+                cmd.append("--dry-run")
+
+            proc = subprocess.run(
+                cmd,
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            stdout = (proc.stdout or "").strip()
+            stderr = (proc.stderr or "").strip()
+            if proc.returncode != 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"openclaw_model_autoswitch_failed: {stderr or stdout or proc.returncode}",
+                )
+
+            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+            if not lines:
+                raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_empty_output")
+            try:
+                payload = json.loads(lines[-1])
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"openclaw_model_autoswitch_invalid_json: {exc}",
+                ) from exc
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_invalid_payload")
+            return payload
+
+        @self.app.get("/api/openclaw/model-autoswitch/status")
+        async def openclaw_model_autoswitch_status():
+            """Статус autoswitch без изменения runtime-конфига."""
+            payload = _run_openclaw_model_autoswitch(dry_run=True)
+            return {"ok": True, "autoswitch": payload}
+
+        @self.app.post("/api/openclaw/model-autoswitch/apply")
+        async def openclaw_model_autoswitch_apply(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Применяет autoswitch runtime-конфига OpenClaw (write endpoint)."""
+            self._assert_write_access(x_krab_web_key, token)
+            payload = _run_openclaw_model_autoswitch(dry_run=False)
+            return {"ok": True, "autoswitch": payload}
 
         @self.app.get("/api/provisioning/templates")
         async def provisioning_templates(entity: str = Query(default="agent")):

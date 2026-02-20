@@ -1,876 +1,1292 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Krab Web Panel</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Krab Web Panel V2</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/nano_theme.css" />
     <style>
-        :root {
-            --bg: #0c1016;
-            --card-bg: rgba(255, 255, 255, 0.06);
-            --accent: #1fb6ff;
-            --text: #ecf2ff;
-            --muted: #a7b5cc;
-            --ok: #22c55e;
-            --warn: #f59e0b;
-            --bad: #ef4444;
+      /* ----- GRID SYSTEM (Page Specific) ----- */
+      .grid-metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .grid-middle {
+        display: grid;
+        grid-template-columns: 1fr 2fr;
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+
+      /* ----- SPECIFIC COMPONENTS ----- */
+      /* Assistant Section */
+      .assistant-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px dashed var(--border-subtle);
+      }
+
+      .assistant-output {
+        margin-top: 20px;
+        white-space: pre-wrap;
+        line-height: 1.6;
+        font-size: 0.95rem;
+        font-family: var(--font-mono);
+        min-height: 180px;
+        max-height: 500px;
+        overflow-y: auto;
+        border: 1px solid var(--border-card);
+        border-radius: var(--radius-md);
+        padding: 20px;
+        background: #090a0c;
+        /* Scrollbar styling */
+        scrollbar-width: thin;
+        scrollbar-color: var(--border-subtle) transparent;
+      }
+
+      .assistant-output::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .assistant-output::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .assistant-output::-webkit-scrollbar-thumb {
+        background: var(--border-subtle);
+        border-radius: 4px;
+      }
+
+      .assistant-output::-webkit-scrollbar-thumb:hover {
+        background: var(--text-muted);
+      }
+
+      /* Links & Lists (Card Specific) */
+      .link-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .link-list a {
+        color: var(--accent-cyan);
+        text-decoration: none;
+        font-size: 0.9rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .link-list a:hover {
+        color: var(--text-main);
+      }
+
+      .link-list a::before {
+        content: "→";
+        opacity: 0.5;
+        transition: transform 0.2s;
+      }
+
+      .link-list a:hover::before {
+        transform: translateX(3px);
+        color: var(--accent-cyan);
+        opacity: 1;
+      }
+
+      /* Ops Alerts List */
+      .ops-history {
+        margin-top: 16px;
+        max-height: 200px;
+        overflow-y: auto;
+        border-radius: var(--radius-sm);
+        background: rgba(0, 0, 0, 0.3);
+        padding: 12px;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        word-break: break-word;
+        line-height: 1.4;
+      }
+
+      @media (max-width: 900px) {
+        .grid-middle {
+          grid-template-columns: 1fr;
         }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            min-height: 100vh;
-            font-family: 'Outfit', sans-serif;
-            background: radial-gradient(circle at 10% 20%, #152336 0%, var(--bg) 42%);
-            color: var(--text);
-            padding: 24px;
-        }
-
-        .container {
-            max-width: 1100px;
-            margin: 0 auto;
-        }
-
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            gap: 12px;
-            margin-bottom: 18px;
-            flex-wrap: wrap;
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 2rem;
-            letter-spacing: 0.03em;
-        }
-
-        .subtitle {
-            margin: 0;
-            color: var(--muted);
-            font-size: 0.95rem;
-        }
-
-        .row {
-            display: grid;
-            gap: 14px;
-            margin-bottom: 14px;
-        }
-
-        .row.metrics {
-            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-        }
-
-        .row.wide {
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        }
-
-        .card {
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 16px;
-            padding: 16px;
-            background: var(--card-bg);
-            backdrop-filter: blur(10px);
-        }
-
-        .k {
-            margin: 0 0 8px;
-            color: var(--muted);
-            font-size: 0.86rem;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-        }
-
-        .v {
-            margin: 0;
-            font-size: 1.6rem;
-            font-weight: 700;
-            line-height: 1.2;
-            word-break: break-word;
-        }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 10px;
-            border-radius: 999px;
-            font-size: 0.82rem;
-            border: 1px solid;
-            margin-right: 8px;
-        }
-
-        .ok {
-            color: var(--ok);
-            border-color: var(--ok);
-            background: rgba(34, 197, 94, 0.15);
-        }
-
-        .warn {
-            color: var(--warn);
-            border-color: var(--warn);
-            background: rgba(245, 158, 11, 0.16);
-        }
-
-        .bad {
-            color: var(--bad);
-            border-color: var(--bad);
-            background: rgba(239, 68, 68, 0.16);
-        }
-
-        .links a {
-            display: block;
-            color: #9ed5ff;
-            text-decoration: none;
-            margin-bottom: 8px;
-            word-break: break-all;
-        }
-
-        .links a:hover {
-            color: var(--accent);
-            text-decoration: underline;
-        }
-
-        .meta {
-            color: var(--muted);
-            font-size: 0.84rem;
-        }
-
-        .refresh {
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.06);
-            color: var(--text);
-            padding: 8px 12px;
-            cursor: pointer;
-        }
-
-        .refresh:hover {
-            border-color: var(--accent);
-        }
-
-        .field {
-            width: 100%;
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text);
-            padding: 10px 12px;
-            font-family: 'Outfit', sans-serif;
-            font-size: 0.95rem;
-        }
-
-        .field::placeholder {
-            color: var(--muted);
-        }
-
-        .row-inline {
-            display: grid;
-            grid-template-columns: 1fr 160px 150px;
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-
-        .assistant-top {
-            grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(220px, 1fr);
-        }
-
-        .control-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-
-        .control-grid .meta {
-            display: block;
-            margin-bottom: 4px;
-        }
-
-        select.field option {
-            color: #e5ecff;
-            background: #0f1521;
-        }
-
-        .assistant-actions {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            margin: 10px 0;
-        }
-
-        .assistant-output {
-            white-space: pre-wrap;
-            line-height: 1.45;
-            font-size: 0.95rem;
-            min-height: 120px;
-            max-height: 340px;
-            overflow: auto;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 10px;
-            padding: 10px;
-            background: rgba(8, 12, 18, 0.5);
-        }
-
-        .ops-list {
-            margin: 0;
-            padding-left: 18px;
-            line-height: 1.4;
-            color: var(--text);
-        }
-
-        .ops-actions {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-top: 10px;
-        }
-
-        .ops-history {
-            margin-top: 10px;
-            max-height: 140px;
-            overflow: auto;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 10px;
-            padding: 8px;
-            background: rgba(8, 12, 18, 0.5);
-            font-size: 0.84rem;
-            line-height: 1.35;
-            color: var(--muted);
-        }
-
-        @media (max-width: 700px) {
-            body {
-                padding: 14px;
-            }
-
-            .v {
-                font-size: 1.3rem;
-            }
-
-            .row-inline {
-                grid-template-columns: 1fr;
-            }
-        }
+      }
     </style>
-</head>
+  </head>
 
-<body>
+  <body>
     <div class="container">
-        <header>
-            <div>
-                <h1>🦀 Krab Web Panel</h1>
-                <p class="subtitle">Единый обзор экосистемы: Krab + OpenClaw + Voice Gateway + Local LM</p>
-            </div>
-            <button id="refreshBtn" class="refresh">Обновить</button>
-        </header>
+      <header>
+        <div class="header-titles">
+          <h1>Krab Web Panel V2</h1>
+          <p class="subtitle">Nexus Orchestration & Local LM Gateway</p>
+        </div>
+        <button
+          id="refreshBtn"
+          class="primary"
+          aria-label="Синхронизировать данные"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 1.95-10.42L2 7" />
+          </svg>
+          Sync Data
+        </button>
+      </header>
 
-        <div class="row metrics">
-            <div class="card">
-                <p class="k">Система</p>
-                <p class="v" id="degradation">—</p>
+      <!-- --- METRICS --- -->
+      <div class="grid-metrics">
+        <div class="card">
+          <h3 class="card-title">Система</h3>
+          <p class="card-value break-word" id="degradation">—</p>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Black Box</h3>
+          <p class="card-value" id="bb_total">—</p>
+        </div>
+        <div class="card">
+          <h3 class="card-title">RAG Docs</h3>
+          <p class="card-value" id="rag_total">—</p>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Local Model</h3>
+          <p class="card-value break-word" id="local_model">—</p>
+        </div>
+      </div>
+
+      <!-- --- SERVICES & OPS --- -->
+      <div class="grid-middle">
+        <div class="form-group" style="gap: 20px">
+          <div class="card">
+            <h3 class="card-title">Контекст и Сервисы</h3>
+            <div id="checks" style="margin-bottom: 12px">—</div>
+            <div class="card-meta" id="updated_at">Waiting for sync...</div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">Рекомендовано</h3>
+            <p
+              class="card-value"
+              id="recommended_model"
+              style="font-size: 1.4rem"
+            >
+              —
+            </p>
+            <p class="card-meta" id="recommended_meta"></p>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">Ссылки</h3>
+            <div class="link-list" id="links">
+              <a href="#">OpenClaw Dashboard</a>
+              <a href="#">LM Studio API</a>
             </div>
-            <div class="card">
-                <p class="k">Black Box</p>
-                <p class="v" id="bb_total">—</p>
-            </div>
-            <div class="card">
-                <p class="k">RAG Docs</p>
-                <p class="v" id="rag_total">—</p>
-            </div>
-            <div class="card">
-                <p class="k">Local Model</p>
-                <p class="v" id="local_model">—</p>
-            </div>
+          </div>
         </div>
 
-        <div class="row wide">
-            <div class="card">
-                <p class="k">Сервисы</p>
-                <div id="checks">—</div>
-                <p class="meta" id="updated_at"></p>
+        <div class="card">
+          <h3 class="card-title" style="color: var(--state-warn)">
+            Ops Alerts & Guardrails
+          </h3>
+          <div id="opsAlerts" class="card-meta">—</div>
+          <p class="card-meta" id="opsUsageMeta"></p>
+
+          <div
+            style="
+              margin-top: 16px;
+              padding-top: 16px;
+              border-top: 1px solid var(--border-subtle);
+            "
+          >
+            <div class="form-grid" style="grid-template-columns: 1fr 1fr">
+              <input
+                id="opsAlertCode"
+                class="field"
+                placeholder="Alert Code (ex: cloud_share)"
+              />
+              <input id="opsAlertNote" class="field" placeholder="Note (opt)" />
             </div>
-            <div class="card links">
-                <p class="k">Ссылки</p>
-                <div id="links">—</div>
+            <div style="display: flex; gap: 10px">
+              <button id="opsAckBtn" class="primary">Acknowledge</button>
+              <button id="opsUnackBtn">Revoke Ack</button>
             </div>
-            <div class="card">
-                <p class="k">Рекомендованная модель</p>
-                <p class="v" id="recommended_model">—</p>
-                <p class="meta" id="recommended_meta"></p>
+          </div>
+          <p class="card-meta" id="opsActionMeta">
+            Управление alert-ами через Web API
+          </p>
+          <div id="opsHistory" class="ops-history empty">
+            <div class="empty-state" style="padding: 24px 0">
+              <svg
+                width="32"
+                height="32"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                viewBox="0 0 24 24"
+                style="margin-bottom: 12px; color: var(--text-placeholder)"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
+                ></path>
+              </svg>
+              <div style="font-size: 0.85rem">
+                Operations history will appear here.
+              </div>
             </div>
-            <div class="card">
-                <p class="k">Ops Alerts</p>
-                <div id="opsAlerts" class="meta">—</div>
-                <p class="meta" id="opsUsageMeta"></p>
-                <div class="ops-actions">
-                    <input id="opsAlertCode" class="field" placeholder="alert code (например cloud_share_high)">
-                    <input id="opsAlertNote" class="field" placeholder="note (опционально)">
-                    <button id="opsAckBtn" class="refresh">Ack</button>
-                    <button id="opsUnackBtn" class="refresh">Unack</button>
-                </div>
-                <p class="meta" id="opsActionMeta">Управление alert-ами через Web API</p>
-                <div id="opsHistory" class="ops-history">История ops: —</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- --- OPENCLAW CONTROL CENTER --- -->
+      <div
+        class="card"
+        style="
+          border-top: 2px solid var(--accent-orange);
+          padding: 32px;
+          margin-bottom: 24px;
+        "
+      >
+        <h3
+          class="card-title"
+          style="
+            margin-bottom: 24px;
+            color: var(--text-main);
+            font-size: 1.1rem;
+          "
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            style="color: var(--accent-orange)"
+          >
+            <path
+              d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"
+            />
+          </svg>
+          OpenClaw Control Center
+        </h3>
+
+        <div
+          class="grid-metrics"
+          style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))"
+        >
+          <!-- Status & Mode -->
+          <div
+            class="form-group"
+            style="
+              background: var(--bg-surface);
+              padding: 16px;
+              border-radius: var(--radius-md);
+              border: 1px solid var(--border-subtle);
+            "
+          >
+            <h4 class="form-label" style="margin-bottom: 12px">Model Status</h4>
+            <div style="display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; justify-content: space-between">
+                <span class="card-meta">Force Mode:</span>
+                <span
+                  id="ocForceMode"
+                  class="card-value"
+                  style="font-size: 0.9rem"
+                  >—</span
+                >
+              </div>
+              <div style="display: flex; justify-content: space-between">
+                <span class="card-meta">Local Model:</span>
+                <span
+                  id="ocLocalModel"
+                  class="card-value"
+                  style="font-size: 0.9rem"
+                  >—</span
+                >
+              </div>
+              <div style="display: flex; justify-content: space-between">
+                <span class="card-meta">Cloud Slots:</span>
+                <span
+                  id="ocCloudSlots"
+                  class="card-value"
+                  style="font-size: 0.9rem"
+                  >—</span
+                >
+              </div>
             </div>
+          </div>
+
+          <!-- Autoswitch -->
+          <div
+            class="form-group"
+            style="
+              background: var(--bg-surface);
+              padding: 16px;
+              border-radius: var(--radius-md);
+              border: 1px solid var(--border-subtle);
+            "
+          >
+            <h4 class="form-label" style="margin-bottom: 12px">
+              Autoswitch Status
+            </h4>
+            <div style="display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; justify-content: space-between">
+                <span class="card-meta">Status:</span>
+                <span
+                  id="ocAutoswitchStatus"
+                  class="card-value"
+                  style="font-size: 0.9rem"
+                  >—</span
+                >
+              </div>
+              <div style="display: flex; justify-content: space-between">
+                <span class="card-meta">Last Switch:</span>
+                <span
+                  id="ocLastSwitch"
+                  class="card-value"
+                  style="font-size: 0.9rem"
+                  >—</span
+                >
+              </div>
+              <div style="display: flex; justify-content: space-between">
+                <span class="card-meta">Reason:</span>
+                <span
+                  id="ocSwitchReason"
+                  class="card-value"
+                  style="font-size: 0.9rem"
+                  >—</span
+                >
+              </div>
+            </div>
+          </div>
+
+          <!-- Channels -->
+          <div
+            class="form-group"
+            style="
+              background: var(--bg-surface);
+              padding: 16px;
+              border-radius: var(--radius-md);
+              border: 1px solid var(--border-subtle);
+            "
+          >
+            <h4 class="form-label" style="margin-bottom: 12px">
+              Channels Health
+            </h4>
+            <div
+              id="ocChannelsList"
+              style="display: flex; flex-direction: column; gap: 8px"
+            >
+              <span class="card-meta">—</span>
+            </div>
+          </div>
         </div>
 
-        <div class="row">
-            <div class="card">
-                <p class="k">Web Assistant (без Telegram)</p>
-                <div class="control-grid">
-                    <div>
-                        <span class="meta">Режим роутинга</span>
-                        <select id="modelModeSelect" class="field">
-                            <option value="auto">auto (local-first)</option>
-                            <option value="local">local (force_local)</option>
-                            <option value="cloud">cloud (force_cloud)</option>
-                        </select>
-                    </div>
-                    <div>
-                        <span class="meta">Быстрый пресет</span>
-                        <select id="modelPresetSelect" class="field">
-                            <option value="balanced_auto">Balanced Auto</option>
-                            <option value="local_focus">Local Focus</option>
-                            <option value="cloud_reasoning">Cloud Reasoning</option>
-                        </select>
-                    </div>
-                    <div>
-                        <span class="meta">Слот</span>
-                        <select id="modelSlotSelect" class="field">
-                            <option value="chat">chat</option>
-                        </select>
-                    </div>
-                    <div>
-                        <span class="meta">Модель для слота</span>
-                        <select id="modelChoiceSelect" class="field">
-                            <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="assistant-actions">
-                    <button id="modelCatalogReloadBtn" class="refresh">Обновить каталог</button>
-                    <button id="modelApplyModeBtn" class="refresh">Применить режим</button>
-                    <button id="modelApplyPresetBtn" class="refresh">Применить пресет</button>
-                    <button id="modelApplySlotBtn" class="refresh">Сохранить слот</button>
-                    <span class="meta" id="modelControlMeta">Каталог моделей загружается...</span>
-                </div>
-                <div class="row-inline assistant-top">
-                    <select id="assistantTaskType" class="field">
-                        <option value="chat">chat</option>
-                        <option value="reasoning">reasoning</option>
-                        <option value="coding">coding</option>
-                        <option value="security">security</option>
-                        <option value="infra">infra</option>
-                        <option value="review">review</option>
-                        <option value="creative">creative</option>
-                        <option value="moderation">moderation</option>
-                    </select>
-                    <select id="assistantReasoningDepth" class="field">
-                        <option value="auto">Рассуждение: auto</option>
-                        <option value="fast">Рассуждение: fast</option>
-                        <option value="balanced">Рассуждение: balanced</option>
-                        <option value="deep">Рассуждение: deep</option>
-                    </select>
-                    <select id="assistantUseRag" class="field">
-                        <option value="off">RAG: off</option>
-                        <option value="on">RAG: on</option>
-                    </select>
-                    <input id="assistantApiKey" class="field" placeholder="WEB_API_KEY (если включен)">
-                </div>
-                <textarea id="assistantPrompt" class="field" rows="4" placeholder="Введите задачу для Краба..."></textarea>
-                <div class="control-grid" style="margin-top:10px;">
-                    <input id="quickWebQuery" class="field" placeholder="Запрос для web-search (новости, факты, рынки...)">
-                    <input id="quickDeepTopic" class="field" placeholder="Тема для deep research (детальный анализ)">
-                    <input id="quickSourceUrl" class="field" placeholder="URL для разбора (YouTube/статья/документация)">
-                    <input id="assistantFileInput" class="field" type="file" accept=".txt,.md,.json,.csv,.py,.js,.ts,.tsx,.html,.xml,.yaml,.yml">
-                </div>
-                <div class="assistant-actions">
-                    <button id="quickWebBtn" class="refresh">Web Search</button>
-                    <button id="quickDeepBtn" class="refresh">Deep Research</button>
-                    <button id="quickUrlBtn" class="refresh">Разобрать URL</button>
-                    <button id="assistantAttachBtn" class="refresh">Добавить файл</button>
-                    <span class="meta" id="quickActionMeta">Быстрые сценарии: без ручных команд</span>
-                </div>
-                <div class="assistant-actions">
-                    <button id="assistantPlanBtn" class="refresh">Preflight</button>
-                    <button id="assistantRunBtn" class="refresh">Выполнить</button>
-                    <span class="meta" id="assistantMeta">Готов к запросам</span>
-                </div>
-                <div id="assistantOutput" class="assistant-output">—</div>
-                <div class="row-inline" style="margin-top:10px;">
-                    <input id="feedbackScore" class="field" value="5" placeholder="Оценка 1-5">
-                    <input id="feedbackProfile" class="field" placeholder="profile (опционально)">
-                    <input id="feedbackNote" class="field" placeholder="Комментарий (опционально)">
-                </div>
-                <div class="assistant-actions">
-                    <button id="feedbackSendBtn" class="refresh">Оценить ответ</button>
-                    <button id="feedbackStatsBtn" class="refresh">Показать Feedback Stats</button>
-                    <span class="meta" id="feedbackMeta">Оценка применяется к последнему прогону роутера, если profile/model не указаны</span>
-                </div>
-            </div>
+        <div class="assistant-actions" style="margin-top: 24px">
+          <button id="ocApplyAutoswitchBtn" class="primary">
+            Apply Autoswitch
+          </button>
+          <div style="display: flex; gap: 8px">
+            <button id="ocModeLocalBtn">Set Local</button>
+            <button id="ocModeAutoBtn">Set Auto</button>
+            <button id="ocModeCloudBtn">Set Cloud</button>
+          </div>
+          <button id="ocRefreshBtn">Refresh Status</button>
+          <span
+            class="card-meta"
+            id="ocMeta"
+            style="margin-left: auto; color: var(--text-main)"
+            >Ready</span
+          >
         </div>
+      </div>
+
+      <!-- --- AI ASSISTANT --- -->
+      <div
+        class="card"
+        style="border-top: 2px solid var(--accent-cyan); padding: 32px"
+      >
+        <h3
+          class="card-title"
+          style="
+            margin-bottom: 24px;
+            color: var(--text-main);
+            font-size: 1.1rem;
+          "
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            style="color: var(--accent-cyan)"
+          >
+            <path
+              d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"
+            />
+          </svg>
+          AI Assistant Interface
+        </h3>
+
+        <!-- AI Engine Config -->
+        <div class="form-grid">
+          <div class="form-group">
+            <span class="form-label">Режим Роутинга</span>
+            <select id="modelModeSelect" class="field">
+              <option value="auto">Auto (Local-First)</option>
+              <option value="local">Local (Force)</option>
+              <option value="cloud">Cloud (Force)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <span class="form-label">Пресет</span>
+            <select id="modelPresetSelect" class="field">
+              <option value="balanced_auto">Balanced Auto</option>
+              <option value="local_focus">Local Focus</option>
+              <option value="cloud_reasoning">Cloud Reasoning</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <span class="form-label">Слот / Модель</span>
+            <div style="display: flex; gap: 8px">
+              <select id="modelSlotSelect" class="field" style="flex: 1">
+                <option value="chat">Chat</option>
+              </select>
+              <select id="modelChoiceSelect" class="field" style="flex: 2">
+                <option value="google/gemini-2.5-flash">
+                  gemini-2.5-flash
+                </option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="assistant-actions">
+          <button id="modelCatalogReloadBtn">Reload Catalog</button>
+          <button id="modelApplyModeBtn">Apply Mode</button>
+          <button id="modelApplyPresetBtn">Apply Preset</button>
+          <button id="modelApplySlotBtn">Save Slot</button>
+          <span
+            class="card-meta"
+            id="modelControlMeta"
+            style="margin-left: auto"
+            >Model catalog loaded.</span
+          >
+        </div>
+
+        <!-- Task Parameters -->
+        <div
+          class="form-grid"
+          style="
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border-subtle);
+          "
+        >
+          <div class="form-group">
+            <span class="form-label">Тип Задачи</span>
+            <select id="assistantTaskType" class="field">
+              <option value="chat">Chat</option>
+              <option value="reasoning">Reasoning</option>
+              <option value="coding">Coding</option>
+              <option value="review">Review</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <span class="form-label">Глубина</span>
+            <select id="assistantReasoningDepth" class="field">
+              <option value="auto">Auto</option>
+              <option value="fast">Fast</option>
+              <option value="deep">Deep</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <span class="form-label">RAG Контекст</span>
+            <select id="assistantUseRag" class="field">
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <span class="form-label">API Key</span>
+            <input
+              id="assistantApiKey"
+              class="field"
+              placeholder="API Key (optional)"
+            />
+          </div>
+        </div>
+
+        <textarea
+          id="assistantPrompt"
+          class="field"
+          placeholder="Enter task, prompt, or code snippet here..."
+        ></textarea>
+
+        <div class="assistant-actions" style="margin-top: 16px">
+          <button
+            id="assistantRunBtn"
+            class="primary"
+            aria-label="Запустить ассистента"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            Run Assistant
+          </button>
+          <button id="assistantPlanBtn" aria-label="Собрать preflight-план">
+            Preflight Plan
+          </button>
+          <span class="card-meta" id="assistantMeta" style="margin-left: auto"
+            >Ready for execution</span
+          >
+        </div>
+
+        <div id="assistantOutput" class="assistant-output empty">
+          <div class="empty-state" style="height: 100%">
+            <svg
+              width="48"
+              height="48"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              viewBox="0 0 24 24"
+              style="margin-bottom: 16px; color: var(--text-placeholder)"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
+              ></path>
+            </svg>
+            <div
+              style="
+                font-weight: 500;
+                color: var(--text-main);
+                margin-bottom: 8px;
+              "
+            >
+              Awaiting Input
+            </div>
+            <div style="font-size: 0.9rem">
+              Run assistant or use quick tools to generate content.
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Actions Tools -->
+        <div style="margin-top: 32px">
+          <h4 class="form-label" style="margin-bottom: 12px; font-size: 0.9rem">
+            Quick Utilities
+          </h4>
+          <div
+            class="form-grid"
+            style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr))"
+          >
+            <div class="form-group">
+              <input
+                id="quickWebQuery"
+                class="field"
+                placeholder="Web search query..."
+              />
+              <button
+                id="quickWebBtn"
+                style="width: 100%"
+                aria-label="Искать в вебе"
+              >
+                Search
+              </button>
+            </div>
+            <div class="form-group">
+              <input
+                id="quickDeepTopic"
+                class="field"
+                placeholder="Deep research topic..."
+              />
+              <button
+                id="quickDeepBtn"
+                style="width: 100%"
+                aria-label="Начать глубокое исследование"
+              >
+                Deep Research
+              </button>
+            </div>
+            <div class="form-group">
+              <input
+                id="quickSourceUrl"
+                class="field"
+                placeholder="URL for context..."
+              />
+              <button
+                id="quickUrlBtn"
+                style="width: 100%"
+                aria-label="Анализировать ссылку"
+              >
+                Analyze URL
+              </button>
+            </div>
+            <div class="form-group">
+              <input
+                id="assistantFileInput"
+                class="field"
+                type="file"
+                style="padding: 6px"
+                aria-label="Выбрать файл для загрузки"
+              />
+              <button
+                id="assistantAttachBtn"
+                style="width: 100%"
+                aria-label="Прикрепить файл"
+              >
+                Attach File
+              </button>
+            </div>
+          </div>
+          <p class="card-meta" id="quickActionMeta">
+            Use quick tools to automatically generate tailored prompts.
+          </p>
+        </div>
+
+        <!-- Feedback -->
+        <div
+          class="form-grid"
+          style="
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border-card);
+            grid-template-columns: 80px 140px 1fr auto auto;
+            align-items: center;
+            gap: 8px;
+          "
+        >
+          <input
+            id="feedbackScore"
+            class="field"
+            type="number"
+            min="1"
+            max="5"
+            value="5"
+            placeholder="1-5"
+          />
+          <input
+            id="feedbackProfile"
+            class="field"
+            placeholder="Profile (opt)"
+          />
+          <input
+            id="feedbackNote"
+            class="field"
+            placeholder="Feedback notes..."
+          />
+          <button id="feedbackSendBtn" class="primary">Submit Feedback</button>
+          <button id="feedbackStatsBtn">Show Stats</button>
+        </div>
+        <p class="card-meta" id="feedbackMeta">
+          Score is applied to the latest engine run profile.
+        </p>
+      </div>
     </div>
 
+    <!-- Legacy API JS integration stays intact to ensure 0 regression with the backend -->
     <script>
-        function badge(ok, label) {
-            const cls = ok ? 'ok' : 'warn';
-            return `<span class="badge ${cls}">${ok ? 'ON' : 'OFF'} ${label}</span>`;
+      function badge(ok, label) {
+        const cls = ok ? "ok" : "warn";
+        return `<span class="badge ${cls}">${ok ? "ON" : "OFF"} ${label}</span>`;
+      }
+
+      function setText(id, value) {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value;
+      }
+
+      async function fetchJson(url) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.json();
+      }
+
+      function readWebApiKey() {
+        return (document.getElementById("assistantApiKey").value || "").trim();
+      }
+
+      async function postJson(url, body, withKey = true, method = "POST") {
+        const headers = { "Content-Type": "application/json" };
+        if (withKey) {
+          const webApiKey = readWebApiKey();
+          if (webApiKey) {
+            headers["X-Krab-Web-Key"] = webApiKey;
+          }
+        }
+        const response = await fetch(url, {
+          method,
+          headers,
+          body: method === "DELETE" ? undefined : JSON.stringify(body || {}),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.detail || `HTTP ${response.status}`);
+        }
+        return payload;
+      }
+
+      let modelCatalogState = null;
+
+      function normalizedForceMode(rawMode) {
+        const normalized = String(rawMode || "")
+          .trim()
+          .toLowerCase();
+        if (normalized === "force_local" || normalized === "local")
+          return "local";
+        if (normalized === "force_cloud" || normalized === "cloud")
+          return "cloud";
+        return "auto";
+      }
+
+      function fillSelect(nodeId, options, selectedValue = "") {
+        const node = document.getElementById(nodeId);
+        if (!node) return;
+        const current = String(selectedValue || "");
+        const html = options
+          .map((item) => {
+            const value = String(item.value ?? "");
+            const label = String(item.label ?? value);
+            const selected = value === current ? " selected" : "";
+            return `<option value="${value}"${selected}>${label}</option>`;
+          })
+          .join("");
+        node.innerHTML = html || '<option value="">(пусто)</option>';
+      }
+
+      function getModelOptionsFromCatalog(catalog) {
+        const result = [];
+        const localModels = Array.isArray(catalog?.local_models)
+          ? catalog.local_models
+          : [];
+        const cloudPresets = Array.isArray(catalog?.cloud_presets)
+          ? catalog.cloud_presets
+          : [];
+        const cloudSlots = catalog?.cloud_slots || {};
+
+        for (const item of localModels) {
+          const modelId = String(item?.id || "").trim();
+          if (!modelId) continue;
+          const loadedSuffix = item?.loaded ? " • loaded" : "";
+          const sizeSuffix = item?.size_human ? ` • ${item.size_human}` : "";
+          result.push({
+            value: modelId,
+            label: `LOCAL • ${modelId}${loadedSuffix}${sizeSuffix}`,
+          });
         }
 
-        function setText(id, value) {
-            const node = document.getElementById(id);
-            if (node) node.textContent = value;
+        for (const item of cloudPresets) {
+          const modelId = String(item?.id || "").trim();
+          if (!modelId) continue;
+          result.push({
+            value: modelId,
+            label: `CLOUD • ${modelId}`,
+          });
         }
 
-        async function fetchJson(url) {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            return response.json();
+        for (const modelId of Object.values(cloudSlots)) {
+          const text = String(modelId || "").trim();
+          if (!text) continue;
+          result.push({
+            value: text,
+            label: `CURRENT • ${text}`,
+          });
         }
 
-        function readWebApiKey() {
-            return (document.getElementById('assistantApiKey').value || '').trim();
+        const dedup = [];
+        const seen = new Set();
+        for (const item of result) {
+          if (seen.has(item.value)) continue;
+          seen.add(item.value);
+          dedup.push(item);
         }
+        return dedup;
+      }
 
-        async function postJson(url, body, withKey = true, method = 'POST') {
-            const headers = { 'Content-Type': 'application/json' };
-            if (withKey) {
-                const webApiKey = readWebApiKey();
-                if (webApiKey) {
-                    headers['X-Krab-Web-Key'] = webApiKey;
-                }
-            }
-            const response = await fetch(url, {
-                method,
-                headers,
-                body: method === 'DELETE' ? undefined : JSON.stringify(body || {})
-            });
-            const payload = await response.json();
-            if (!response.ok) {
-                throw new Error(payload?.detail || `HTTP ${response.status}`);
-            }
-            return payload;
+      function syncSlotModelSelection() {
+        const slotNode = document.getElementById("modelSlotSelect");
+        const modelNode = document.getElementById("modelChoiceSelect");
+        if (!slotNode || !modelNode || !modelCatalogState) return;
+        const slot = String(slotNode.value || "").trim();
+        const currentModel = String(
+          (modelCatalogState.cloud_slots || {})[slot] || "",
+        ).trim();
+        if (!currentModel) return;
+        const found = Array.from(modelNode.options).some(
+          (option) => option.value === currentModel,
+        );
+        if (found) {
+          modelNode.value = currentModel;
         }
+      }
 
-        let modelCatalogState = null;
+      function syncModelControls(catalog) {
+        modelCatalogState = catalog || {};
+        const mode = normalizedForceMode(catalog?.force_mode);
+        const slotNames = Array.isArray(catalog?.slots) ? catalog.slots : [];
+        const quickPresets = Array.isArray(catalog?.quick_presets)
+          ? catalog.quick_presets
+          : [];
+        const selectedSlot = String(
+          document.getElementById("modelSlotSelect")?.value || "",
+        );
 
-        function normalizedForceMode(rawMode) {
-            const normalized = String(rawMode || '').trim().toLowerCase();
-            if (normalized === 'force_local' || normalized === 'local') return 'local';
-            if (normalized === 'force_cloud' || normalized === 'cloud') return 'cloud';
-            return 'auto';
+        fillSelect(
+          "modelModeSelect",
+          [
+            { value: "auto", label: "auto (local-first)" },
+            { value: "local", label: "local (force_local)" },
+            { value: "cloud", label: "cloud (force_cloud)" },
+          ],
+          mode,
+        );
+        fillSelect(
+          "modelPresetSelect",
+          quickPresets.length
+            ? quickPresets.map((item) => ({
+                value: item.id,
+                label: `${item.title} — ${item.description}`,
+              }))
+            : [{ value: "balanced_auto", label: "Balanced Auto" }],
+          String(
+            document.getElementById("modelPresetSelect")?.value ||
+              "balanced_auto",
+          ),
+        );
+        fillSelect(
+          "modelSlotSelect",
+          slotNames.length
+            ? slotNames.map((slot) => ({ value: slot, label: slot }))
+            : [{ value: "chat", label: "chat" }],
+          selectedSlot && slotNames.includes(selectedSlot)
+            ? selectedSlot
+            : slotNames[0] || "chat",
+        );
+
+        const modelOptions = getModelOptionsFromCatalog(catalog);
+        fillSelect(
+          "modelChoiceSelect",
+          modelOptions.length
+            ? modelOptions
+            : [{ value: "", label: "(модели не обнаружены)" }],
+          "",
+        );
+        syncSlotModelSelection();
+
+        const localState = catalog?.local_available
+          ? "local=online"
+          : "local=offline";
+        const active = catalog?.local_active_model
+          ? ` • active=${catalog.local_active_model}`
+          : "";
+        setText(
+          "modelControlMeta",
+          `Каталог обновлен • mode=${mode} • ${localState}${active}`,
+        );
+      }
+
+      async function loadModelCatalog(showStatus = true) {
+        try {
+          const payload = await fetchJson("/api/model/catalog");
+          if (!payload?.ok) {
+            throw new Error(payload?.error || "model_catalog_failed");
+          }
+          syncModelControls(payload.catalog || {});
+          if (showStatus) {
+            setText("modelControlMeta", "Каталог моделей готов.");
+          }
+        } catch (error) {
+          setText(
+            "modelControlMeta",
+            `Ошибка каталога моделей: ${error.message}`,
+          );
         }
+      }
 
-        function fillSelect(nodeId, options, selectedValue = '') {
-            const node = document.getElementById(nodeId);
-            if (!node) return;
-            const current = String(selectedValue || '');
-            const html = options.map((item) => {
-                const value = String(item.value ?? '');
-                const label = String(item.label ?? value);
-                const selected = value === current ? ' selected' : '';
-                return `<option value="${value}"${selected}>${label}</option>`;
-            }).join('');
-            node.innerHTML = html || '<option value="">(пусто)</option>';
-        }
-
-        function getModelOptionsFromCatalog(catalog) {
-            const result = [];
-            const localModels = Array.isArray(catalog?.local_models) ? catalog.local_models : [];
-            const cloudPresets = Array.isArray(catalog?.cloud_presets) ? catalog.cloud_presets : [];
-            const cloudSlots = catalog?.cloud_slots || {};
-
-            for (const item of localModels) {
-                const modelId = String(item?.id || '').trim();
-                if (!modelId) continue;
-                const loadedSuffix = item?.loaded ? ' • loaded' : '';
-                const sizeSuffix = item?.size_human ? ` • ${item.size_human}` : '';
-                result.push({
-                    value: modelId,
-                    label: `LOCAL • ${modelId}${loadedSuffix}${sizeSuffix}`,
-                });
-            }
-
-            for (const item of cloudPresets) {
-                const modelId = String(item?.id || '').trim();
-                if (!modelId) continue;
-                result.push({
-                    value: modelId,
-                    label: `CLOUD • ${modelId}`,
-                });
-            }
-
-            for (const modelId of Object.values(cloudSlots)) {
-                const text = String(modelId || '').trim();
-                if (!text) continue;
-                result.push({
-                    value: text,
-                    label: `CURRENT • ${text}`,
-                });
-            }
-
-            const dedup = [];
-            const seen = new Set();
-            for (const item of result) {
-                if (seen.has(item.value)) continue;
-                seen.add(item.value);
-                dedup.push(item);
-            }
-            return dedup;
-        }
-
-        function syncSlotModelSelection() {
-            const slotNode = document.getElementById('modelSlotSelect');
-            const modelNode = document.getElementById('modelChoiceSelect');
-            if (!slotNode || !modelNode || !modelCatalogState) return;
-            const slot = String(slotNode.value || '').trim();
-            const currentModel = String((modelCatalogState.cloud_slots || {})[slot] || '').trim();
-            if (!currentModel) return;
-            const found = Array.from(modelNode.options).some((option) => option.value === currentModel);
-            if (found) {
-                modelNode.value = currentModel;
-            }
-        }
-
-        function syncModelControls(catalog) {
-            modelCatalogState = catalog || {};
-            const mode = normalizedForceMode(catalog?.force_mode);
-            const slotNames = Array.isArray(catalog?.slots) ? catalog.slots : [];
-            const quickPresets = Array.isArray(catalog?.quick_presets) ? catalog.quick_presets : [];
-            const selectedSlot = String(document.getElementById('modelSlotSelect')?.value || '');
-
-            fillSelect(
-                'modelModeSelect',
-                [
-                    { value: 'auto', label: 'auto (local-first)' },
-                    { value: 'local', label: 'local (force_local)' },
-                    { value: 'cloud', label: 'cloud (force_cloud)' },
-                ],
-                mode
+      async function applyModelAction(action, extraPayload = {}) {
+        try {
+          setText("modelControlMeta", "Применяю изменения...");
+          const payload = await postJson(
+            "/api/model/apply",
+            { action, ...extraPayload },
+            true,
+            "POST",
+          );
+          if (!payload?.ok) {
+            throw new Error(payload?.error || "model_apply_failed");
+          }
+          syncModelControls(payload.catalog || {});
+          if (payload.message) {
+            document.getElementById("assistantOutput").textContent = String(
+              payload.message,
             );
-            fillSelect(
-                'modelPresetSelect',
-                quickPresets.length
-                    ? quickPresets.map((item) => ({
-                        value: item.id,
-                        label: `${item.title} — ${item.description}`,
-                    }))
-                    : [{ value: 'balanced_auto', label: 'Balanced Auto' }],
-                String(document.getElementById('modelPresetSelect')?.value || 'balanced_auto')
-            );
-            fillSelect(
-                'modelSlotSelect',
-                slotNames.length
-                    ? slotNames.map((slot) => ({ value: slot, label: slot }))
-                    : [{ value: 'chat', label: 'chat' }],
-                selectedSlot && slotNames.includes(selectedSlot) ? selectedSlot : (slotNames[0] || 'chat')
-            );
-
-            const modelOptions = getModelOptionsFromCatalog(catalog);
-            fillSelect(
-                'modelChoiceSelect',
-                modelOptions.length ? modelOptions : [{ value: '', label: '(модели не обнаружены)' }],
-                ''
-            );
-            syncSlotModelSelection();
-
-            const localState = catalog?.local_available ? 'local=online' : 'local=offline';
-            const active = catalog?.local_active_model ? ` • active=${catalog.local_active_model}` : '';
-            setText('modelControlMeta', `Каталог обновлен • mode=${mode} • ${localState}${active}`);
+          }
+          setText(
+            "modelControlMeta",
+            payload.message || "Изменения применены.",
+          );
+          await updateStats();
+        } catch (error) {
+          setText("modelControlMeta", `Ошибка применения: ${error.message}`);
         }
+      }
 
-        async function loadModelCatalog(showStatus = true) {
-            try {
-                const payload = await fetchJson('/api/model/catalog');
-                if (!payload?.ok) {
-                    throw new Error(payload?.error || 'model_catalog_failed');
-                }
-                syncModelControls(payload.catalog || {});
-                if (showStatus) {
-                    setText('modelControlMeta', 'Каталог моделей готов.');
-                }
-            } catch (error) {
-                setText('modelControlMeta', `Ошибка каталога моделей: ${error.message}`);
-            }
+      function appendPromptChunk(chunk) {
+        const node = document.getElementById("assistantPrompt");
+        const existing = String(node.value || "").trim();
+        const incoming = String(chunk || "").trim();
+        if (!incoming) return;
+        node.value = existing ? `${existing}\n\n${incoming}` : incoming;
+      }
+
+      async function attachSelectedFileToPrompt() {
+        const input = document.getElementById("assistantFileInput");
+        const files = input?.files || [];
+        if (!files.length) {
+          setText("quickActionMeta", "Выбери файл перед добавлением в prompt.");
+          return;
         }
+        const file = files[0];
+        try {
+          setText("quickActionMeta", `Загружаю файл: ${file.name}...`);
+          const formData = new FormData();
+          formData.append("file", file);
 
-        async function applyModelAction(action, extraPayload = {}) {
-            try {
-                setText('modelControlMeta', 'Применяю изменения...');
-                const payload = await postJson('/api/model/apply', { action, ...extraPayload }, true, 'POST');
-                if (!payload?.ok) {
-                    throw new Error(payload?.error || 'model_apply_failed');
-                }
-                syncModelControls(payload.catalog || {});
-                if (payload.message) {
-                    document.getElementById('assistantOutput').textContent = String(payload.message);
-                }
-                setText('modelControlMeta', payload.message || 'Изменения применены.');
-                await updateStats();
-            } catch (error) {
-                setText('modelControlMeta', `Ошибка применения: ${error.message}`);
-            }
+          const headers = {};
+          const webApiKey = readWebApiKey();
+          if (webApiKey) {
+            headers["X-Krab-Web-Key"] = webApiKey;
+          }
+
+          const response = await fetch("/api/assistant/attachment", {
+            method: "POST",
+            headers,
+            body: formData,
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload?.detail || `HTTP ${response.status}`);
+          }
+          const attachment = payload?.attachment || {};
+          appendPromptChunk(String(attachment.prompt_snippet || ""));
+          setText(
+            "quickActionMeta",
+            `Файл добавлен: ${attachment.file_name || file.name} • ${attachment.kind || "attachment"}`,
+          );
+        } catch (error) {
+          setText("quickActionMeta", `Ошибка загрузки файла: ${error.message}`);
         }
+      }
 
-        function appendPromptChunk(chunk) {
-            const node = document.getElementById('assistantPrompt');
-            const existing = String(node.value || '').trim();
-            const incoming = String(chunk || '').trim();
-            if (!incoming) return;
-            node.value = existing ? `${existing}\n\n${incoming}` : incoming;
+      async function runQuickWebSearch() {
+        const query = (
+          document.getElementById("quickWebQuery").value || ""
+        ).trim();
+        if (!query) {
+          setText("quickActionMeta", "Введи запрос для web-search.");
+          return;
         }
+        document.getElementById("assistantTaskType").value = "chat";
+        document.getElementById("assistantReasoningDepth").value = "balanced";
+        appendPromptChunk(
+          `Сделай web-search по теме: "${query}".
+Нужен краткий отчет: ключевые факты, 3-5 надежных источников и практические выводы.`,
+        );
+        setText(
+          "quickActionMeta",
+          "Шаблон web-search подготовлен. Запускаю...",
+        );
+        await assistantQuery();
+      }
 
-        async function attachSelectedFileToPrompt() {
-            const input = document.getElementById('assistantFileInput');
-            const files = input?.files || [];
-            if (!files.length) {
-                setText('quickActionMeta', 'Выбери файл перед добавлением в prompt.');
-                return;
-            }
-            const file = files[0];
-            try {
-                setText('quickActionMeta', `Загружаю файл: ${file.name}...`);
-                const formData = new FormData();
-                formData.append('file', file);
-
-                const headers = {};
-                const webApiKey = readWebApiKey();
-                if (webApiKey) {
-                    headers['X-Krab-Web-Key'] = webApiKey;
-                }
-
-                const response = await fetch('/api/assistant/attachment', {
-                    method: 'POST',
-                    headers,
-                    body: formData,
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload?.detail || `HTTP ${response.status}`);
-                }
-                const attachment = payload?.attachment || {};
-                appendPromptChunk(String(attachment.prompt_snippet || ''));
-                setText(
-                    'quickActionMeta',
-                    `Файл добавлен: ${attachment.file_name || file.name} • ${attachment.kind || 'attachment'}`
-                );
-            } catch (error) {
-                setText('quickActionMeta', `Ошибка загрузки файла: ${error.message}`);
-            }
+      async function runQuickDeepResearch() {
+        const topic = (
+          document.getElementById("quickDeepTopic").value || ""
+        ).trim();
+        if (!topic) {
+          setText("quickActionMeta", "Введи тему для deep research.");
+          return;
         }
-
-        async function runQuickWebSearch() {
-            const query = (document.getElementById('quickWebQuery').value || '').trim();
-            if (!query) {
-                setText('quickActionMeta', 'Введи запрос для web-search.');
-                return;
-            }
-            document.getElementById('assistantTaskType').value = 'chat';
-            document.getElementById('assistantReasoningDepth').value = 'balanced';
-            appendPromptChunk(
-`Сделай web-search по теме: "${query}".
-Нужен краткий отчет: ключевые факты, 3-5 надежных источников и практические выводы.`
-            );
-            setText('quickActionMeta', 'Шаблон web-search подготовлен. Запускаю...');
-            await assistantQuery();
-        }
-
-        async function runQuickDeepResearch() {
-            const topic = (document.getElementById('quickDeepTopic').value || '').trim();
-            if (!topic) {
-                setText('quickActionMeta', 'Введи тему для deep research.');
-                return;
-            }
-            document.getElementById('assistantTaskType').value = 'reasoning';
-            document.getElementById('assistantReasoningDepth').value = 'deep';
-            appendPromptChunk(
-`Deep research по теме: "${topic}".
+        document.getElementById("assistantTaskType").value = "reasoning";
+        document.getElementById("assistantReasoningDepth").value = "deep";
+        appendPromptChunk(
+          `Deep research по теме: "${topic}".
 Собери структурированный отчет:
 1) краткое резюме,
 2) ключевые риски/возможности,
 3) сравнение подходов,
 4) пошаговый план действий,
-5) ссылки на проверяемые источники.`
-            );
-            setText('quickActionMeta', 'Шаблон deep research подготовлен. Запускаю...');
-            await assistantQuery();
-        }
+5) ссылки на проверяемые источники.`,
+        );
+        setText(
+          "quickActionMeta",
+          "Шаблон deep research подготовлен. Запускаю...",
+        );
+        await assistantQuery();
+      }
 
-        async function runQuickUrlReview() {
-            const sourceUrl = (document.getElementById('quickSourceUrl').value || '').trim();
-            if (!sourceUrl) {
-                setText('quickActionMeta', 'Введи URL для разбора.');
-                return;
-            }
-            document.getElementById('assistantTaskType').value = 'reasoning';
-            document.getElementById('assistantReasoningDepth').value = 'balanced';
-            appendPromptChunk(
-`Разбери материал по ссылке: ${sourceUrl}
+      async function runQuickUrlReview() {
+        const sourceUrl = (
+          document.getElementById("quickSourceUrl").value || ""
+        ).trim();
+        if (!sourceUrl) {
+          setText("quickActionMeta", "Введи URL для разбора.");
+          return;
+        }
+        document.getElementById("assistantTaskType").value = "reasoning";
+        document.getElementById("assistantReasoningDepth").value = "balanced";
+        appendPromptChunk(
+          `Разбери материал по ссылке: ${sourceUrl}
 Нужно:
 - краткое содержание;
 - ключевые тезисы/факты;
 - что это значит practically для меня;
-- если это YouTube: выдели главные выводы и тайм-коды (если доступны).`
+- если это YouTube: выдели главные выводы и тайм-коды (если доступны).`,
+        );
+        setText(
+          "quickActionMeta",
+          "Шаблон URL-анализа подготовлен. Запускаю...",
+        );
+        await assistantQuery();
+      }
+
+      async function opsAckAction(isAck) {
+        const code = (
+          document.getElementById("opsAlertCode").value || ""
+        ).trim();
+        const note = (
+          document.getElementById("opsAlertNote").value || ""
+        ).trim();
+        if (!code) {
+          setText("opsActionMeta", "Ошибка: укажи alert code");
+          return;
+        }
+        setText("opsActionMeta", `${isAck ? "Ack" : "Unack"} в процессе...`);
+        try {
+          if (isAck) {
+            await postJson(`/api/ops/ack/${encodeURIComponent(code)}`, {
+              actor: "web_panel",
+              note,
+            });
+            setText("opsActionMeta", `OK: alert ${code} подтвержден`);
+          } else {
+            await postJson(
+              `/api/ops/ack/${encodeURIComponent(code)}`,
+              {},
+              true,
+              "DELETE",
             );
-            setText('quickActionMeta', 'Шаблон URL-анализа подготовлен. Запускаю...');
-            await assistantQuery();
+            setText("opsActionMeta", `OK: alert ${code} снят с подтверждения`);
+          }
+          await updateStats();
+        } catch (error) {
+          setText("opsActionMeta", `Ошибка: ${error.message}`);
+        }
+      }
+
+      async function assistantQuery() {
+        const prompt = (
+          document.getElementById("assistantPrompt").value || ""
+        ).trim();
+        const taskTypeRaw = (
+          document.getElementById("assistantTaskType").value || "chat"
+        ).trim();
+        const depthRaw = (
+          document.getElementById("assistantReasoningDepth").value || "auto"
+        )
+          .trim()
+          .toLowerCase();
+        const ragRaw = (
+          document.getElementById("assistantUseRag").value || "off"
+        )
+          .trim()
+          .toLowerCase();
+        const webApiKey = (
+          document.getElementById("assistantApiKey").value || ""
+        ).trim();
+        let taskType = taskTypeRaw || "chat";
+        const confirmExpensive = depthRaw === "deep";
+
+        // UX: depth=deep автоматически переводит chat -> reasoning.
+        if (taskType === "chat" && depthRaw === "deep") {
+          taskType = "reasoning";
         }
 
-        async function opsAckAction(isAck) {
-            const code = (document.getElementById('opsAlertCode').value || '').trim();
-            const note = (document.getElementById('opsAlertNote').value || '').trim();
-            if (!code) {
-                setText('opsActionMeta', 'Ошибка: укажи alert code');
-                return;
-            }
-            setText('opsActionMeta', `${isAck ? 'Ack' : 'Unack'} в процессе...`);
-            try {
-                if (isAck) {
-                    await postJson(`/api/ops/ack/${encodeURIComponent(code)}`, { actor: 'web_panel', note });
-                    setText('opsActionMeta', `OK: alert ${code} подтвержден`);
-                } else {
-                    await postJson(`/api/ops/ack/${encodeURIComponent(code)}`, {}, true, 'DELETE');
-                    setText('opsActionMeta', `OK: alert ${code} снят с подтверждения`);
-                }
-                await updateStats();
-            } catch (error) {
-                setText('opsActionMeta', `Ошибка: ${error.message}`);
-            }
+        if (!prompt) {
+          setText("assistantMeta", "Ошибка: пустой prompt");
+          return;
         }
 
-        async function assistantQuery() {
-            const prompt = (document.getElementById('assistantPrompt').value || '').trim();
-            const taskTypeRaw = (document.getElementById('assistantTaskType').value || 'chat').trim();
-            const depthRaw = (document.getElementById('assistantReasoningDepth').value || 'auto').trim().toLowerCase();
-            const ragRaw = (document.getElementById('assistantUseRag').value || 'off').trim().toLowerCase();
-            const webApiKey = (document.getElementById('assistantApiKey').value || '').trim();
-            let taskType = taskTypeRaw || 'chat';
-            const confirmExpensive = depthRaw === 'deep';
-
-            // UX: depth=deep автоматически переводит chat -> reasoning.
-            if (taskType === 'chat' && depthRaw === 'deep') {
-                taskType = 'reasoning';
-            }
-
-            if (!prompt) {
-                setText('assistantMeta', 'Ошибка: пустой prompt');
-                return;
-            }
-
-            const useRag = ['1', 'on', 'true', 'yes', 'y'].includes(ragRaw);
-            const headers = { 'Content-Type': 'application/json' };
-            if (webApiKey) {
-                headers['X-Krab-Web-Key'] = webApiKey;
-            }
-
-            setText('assistantMeta', 'Выполняю запрос...');
-            document.getElementById('assistantOutput').textContent = '⏳ Выполнение...';
-
-            try {
-                const response = await fetch('/api/assistant/query', {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({
-                        prompt,
-                        task_type: taskType || 'chat',
-                        use_rag: useRag,
-                        confirm_expensive: confirmExpensive
-                    })
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload?.detail || `HTTP ${response.status}`);
-                }
-
-                document.getElementById('assistantOutput').textContent = payload.reply || '(пустой ответ)';
-                setText(
-                    'assistantMeta',
-                    `OK • профиль: ${payload.profile || '-'} • task: ${payload.task_type || '-'} • depth: ${depthRaw}`
-                );
-                const lastRoute = payload.last_route || {};
-                if (lastRoute.profile) {
-                    document.getElementById('feedbackProfile').value = String(lastRoute.profile);
-                }
-                if (lastRoute.model || lastRoute.channel) {
-                    setText(
-                        'feedbackMeta',
-                        `Последний прогон: ${lastRoute.model || '-'} (${lastRoute.channel || '-'})`
-                    );
-                }
-            } catch (error) {
-                document.getElementById('assistantOutput').textContent = `Ошибка: ${error.message}`;
-                setText('assistantMeta', 'Запрос завершился с ошибкой');
-            }
+        const useRag = ["1", "on", "true", "yes", "y"].includes(ragRaw);
+        const headers = { "Content-Type": "application/json" };
+        if (webApiKey) {
+          headers["X-Krab-Web-Key"] = webApiKey;
         }
 
-        async function assistantPreflight() {
-            const prompt = (document.getElementById('assistantPrompt').value || '').trim();
-            const taskTypeRaw = (document.getElementById('assistantTaskType').value || 'chat').trim();
-            const depthRaw = (document.getElementById('assistantReasoningDepth').value || 'auto').trim().toLowerCase();
-            const webApiKey = (document.getElementById('assistantApiKey').value || '').trim();
-            const selectedModel = (document.getElementById('modelChoiceSelect').value || '').trim();
-            let taskType = taskTypeRaw || 'chat';
-            const confirmExpensive = depthRaw === 'deep';
+        setText("assistantMeta", "Выполняю запрос...");
+        document.getElementById("assistantOutput").textContent =
+          "⏳ Выполнение...";
 
-            if (taskType === 'chat' && depthRaw === 'deep') {
-                taskType = 'reasoning';
-            }
+        try {
+          const response = await fetch("/api/assistant/query", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              prompt,
+              task_type: taskType || "chat",
+              use_rag: useRag,
+              confirm_expensive: confirmExpensive,
+            }),
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload?.detail || `HTTP ${response.status}`);
+          }
 
-            if (!prompt) {
-                setText('assistantMeta', 'Ошибка: пустой prompt');
-                return;
-            }
+          document.getElementById("assistantOutput").textContent =
+            payload.reply || "(пустой ответ)";
+          setText(
+            "assistantMeta",
+            `OK • профиль: ${payload.profile || "-"} • task: ${payload.task_type || "-"} • depth: ${depthRaw}`,
+          );
+          const lastRoute = payload.last_route || {};
+          if (lastRoute.profile) {
+            document.getElementById("feedbackProfile").value = String(
+              lastRoute.profile,
+            );
+          }
+          if (lastRoute.model || lastRoute.channel) {
+            setText(
+              "feedbackMeta",
+              `Последний прогон: ${lastRoute.model || "-"} (${lastRoute.channel || "-"})`,
+            );
+          }
+        } catch (error) {
+          document.getElementById("assistantOutput").textContent =
+            `Ошибка: ${error.message}`;
+          setText("assistantMeta", "Запрос завершился с ошибкой");
+        }
+      }
 
-            const headers = { 'Content-Type': 'application/json' };
-            if (webApiKey) {
-                headers['X-Krab-Web-Key'] = webApiKey;
-            }
+      async function assistantPreflight() {
+        const prompt = (
+          document.getElementById("assistantPrompt").value || ""
+        ).trim();
+        const taskTypeRaw = (
+          document.getElementById("assistantTaskType").value || "chat"
+        ).trim();
+        const depthRaw = (
+          document.getElementById("assistantReasoningDepth").value || "auto"
+        )
+          .trim()
+          .toLowerCase();
+        const webApiKey = (
+          document.getElementById("assistantApiKey").value || ""
+        ).trim();
+        const selectedModel = (
+          document.getElementById("modelChoiceSelect").value || ""
+        ).trim();
+        let taskType = taskTypeRaw || "chat";
+        const confirmExpensive = depthRaw === "deep";
 
-            setText('assistantMeta', 'Собираю preflight-план...');
-            document.getElementById('assistantOutput').textContent = '⏳ Анализ маршрута...';
+        if (taskType === "chat" && depthRaw === "deep") {
+          taskType = "reasoning";
+        }
 
-            try {
-                const response = await fetch('/api/model/preflight', {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({
-                        prompt,
-                        task_type: taskType || 'chat',
-                        preferred_model: selectedModel || null,
-                        confirm_expensive: confirmExpensive
-                    })
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload?.detail || `HTTP ${response.status}`);
-                }
-                if (!payload?.ok) {
-                    throw new Error(payload?.error || 'preflight_failed');
-                }
+        if (!prompt) {
+          setText("assistantMeta", "Ошибка: пустой prompt");
+          return;
+        }
 
-                const plan = payload.preflight || {};
-                const execution = plan.execution || {};
-                const warnings = plan.warnings || [];
-                const reasons = plan.reasons || [];
-                const warningText = warnings.length ? warnings.map((item) => `- ${item}`).join('\n') : '- нет';
-                const reasonText = reasons.length ? reasons.map((item) => `- ${item}`).join('\n') : '- нет';
+        const headers = { "Content-Type": "application/json" };
+        if (webApiKey) {
+          headers["X-Krab-Web-Key"] = webApiKey;
+        }
 
-                document.getElementById('assistantOutput').textContent =
-`Preflight:
-task_type=${plan.task_type || '-'}
-profile=${plan.profile || '-'}
-critical=${plan.critical ? 'yes' : 'no'}
-channel=${execution.channel || '-'}
-model=${execution.model || '-'}
-can_run_now=${execution.can_run_now ? 'yes' : 'no'}
-requires_confirm=${execution.requires_confirm_expensive ? 'yes' : 'no'}
+        setText("assistantMeta", "Собираю preflight-план...");
+        document.getElementById("assistantOutput").textContent =
+          "⏳ Анализ маршрута...";
+
+        try {
+          const response = await fetch("/api/model/preflight", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              prompt,
+              task_type: taskType || "chat",
+              preferred_model: selectedModel || null,
+              confirm_expensive: confirmExpensive,
+            }),
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload?.detail || `HTTP ${response.status}`);
+          }
+          if (!payload?.ok) {
+            throw new Error(payload?.error || "preflight_failed");
+          }
+
+          const plan = payload.preflight || {};
+          const execution = plan.execution || {};
+          const warnings = plan.warnings || [];
+          const reasons = plan.reasons || [];
+          const warningText = warnings.length
+            ? warnings.map((item) => `- ${item}`).join("\n")
+            : "- нет";
+          const reasonText = reasons.length
+            ? reasons.map((item) => `- ${item}`).join("\n")
+            : "- нет";
+
+          document.getElementById("assistantOutput").textContent = `Preflight:
+task_type=${plan.task_type || "-"}
+profile=${plan.profile || "-"}
+critical=${plan.critical ? "yes" : "no"}
+channel=${execution.channel || "-"}
+model=${execution.model || "-"}
+can_run_now=${execution.can_run_now ? "yes" : "no"}
+requires_confirm=${execution.requires_confirm_expensive ? "yes" : "no"}
 marginal_cost_usd=${plan.cost_hint?.marginal_call_cost_usd ?? 0}
 
 reasons:
@@ -879,71 +1295,97 @@ ${reasonText}
 warnings:
 ${warningText}
 
-next_step: ${plan.next_step || 'Можно запускать задачу.'}`;
-                setText(
-                    'assistantMeta',
-                    `Preflight OK • профиль: ${plan.profile || '-'} • канал: ${execution.channel || '-'} • depth: ${depthRaw}`
-                );
-            } catch (error) {
-                document.getElementById('assistantOutput').textContent = `Ошибка preflight: ${error.message}`;
-                setText('assistantMeta', 'Preflight завершился с ошибкой');
-            }
+next_step: ${plan.next_step || "Можно запускать задачу."}`;
+          setText(
+            "assistantMeta",
+            `Preflight OK • профиль: ${plan.profile || "-"} • канал: ${execution.channel || "-"} • depth: ${depthRaw}`,
+          );
+        } catch (error) {
+          document.getElementById("assistantOutput").textContent =
+            `Ошибка preflight: ${error.message}`;
+          setText("assistantMeta", "Preflight завершился с ошибкой");
+        }
+      }
+
+      async function submitModelFeedback() {
+        const scoreRaw = (
+          document.getElementById("feedbackScore").value || ""
+        ).trim();
+        const profileRaw = (
+          document.getElementById("feedbackProfile").value || ""
+        ).trim();
+        const noteRaw = (
+          document.getElementById("feedbackNote").value || ""
+        ).trim();
+        const score = Number.parseInt(scoreRaw, 10);
+
+        if (!Number.isInteger(score) || score < 1 || score > 5) {
+          setText("feedbackMeta", "Ошибка: score должен быть от 1 до 5");
+          return;
         }
 
-        async function submitModelFeedback() {
-            const scoreRaw = (document.getElementById('feedbackScore').value || '').trim();
-            const profileRaw = (document.getElementById('feedbackProfile').value || '').trim();
-            const noteRaw = (document.getElementById('feedbackNote').value || '').trim();
-            const score = Number.parseInt(scoreRaw, 10);
+        setText("feedbackMeta", "Сохраняю feedback...");
+        try {
+          const payload = { score, note: noteRaw };
+          if (profileRaw) {
+            payload.profile = profileRaw.toLowerCase();
+          }
+          const response = await postJson(
+            "/api/model/feedback",
+            payload,
+            true,
+            "POST",
+          );
+          if (!response?.ok) {
+            throw new Error(response?.error || "feedback_submit_failed");
+          }
 
-            if (!Number.isInteger(score) || score < 1 || score > 5) {
-                setText('feedbackMeta', 'Ошибка: score должен быть от 1 до 5');
-                return;
-            }
-
-            setText('feedbackMeta', 'Сохраняю feedback...');
-            try {
-                const payload = { score, note: noteRaw };
-                if (profileRaw) {
-                    payload.profile = profileRaw.toLowerCase();
-                }
-                const response = await postJson('/api/model/feedback', payload, true, 'POST');
-                if (!response?.ok) {
-                    throw new Error(response?.error || 'feedback_submit_failed');
-                }
-
-                const result = response.result || {};
-                setText(
-                    'feedbackMeta',
-                    `OK: ${result.model || '-'} (${result.profile || '-'}) → ${result.profile_model_stats?.avg ?? 0}/5`
-                );
-            } catch (error) {
-                setText('feedbackMeta', `Ошибка feedback: ${error.message}`);
-            }
+          const result = response.result || {};
+          setText(
+            "feedbackMeta",
+            `OK: ${result.model || "-"} (${result.profile || "-"}) → ${result.profile_model_stats?.avg ?? 0}/5`,
+          );
+        } catch (error) {
+          setText("feedbackMeta", `Ошибка feedback: ${error.message}`);
         }
+      }
 
-        async function loadModelFeedbackStats() {
-            const profileRaw = (document.getElementById('feedbackProfile').value || '').trim();
-            const query = profileRaw ? `?profile=${encodeURIComponent(profileRaw.toLowerCase())}&top=5` : '?top=5';
-            setText('feedbackMeta', 'Загружаю feedback-статистику...');
+      async function loadModelFeedbackStats() {
+        const profileRaw = (
+          document.getElementById("feedbackProfile").value || ""
+        ).trim();
+        const query = profileRaw
+          ? `?profile=${encodeURIComponent(profileRaw.toLowerCase())}&top=5`
+          : "?top=5";
+        setText("feedbackMeta", "Загружаю feedback-статистику...");
 
-            try {
-                const payload = await fetchJson(`/api/model/feedback${query}`);
-                if (!payload?.ok) {
-                    throw new Error(payload?.error || 'feedback_summary_failed');
-                }
-                const feedback = payload.feedback || {};
-                const models = feedback.top_models || [];
-                const channels = feedback.top_channels || [];
-                const modelsText = models.length
-                    ? models.map((item) => `- ${item.model} (${item.profile}): ${item.avg_score}/5, n=${item.count}`).join('\n')
-                    : '- нет данных';
-                const channelsText = channels.length
-                    ? channels.map((item) => `- ${item.channel}: ${item.avg_score}/5, n=${item.count}`).join('\n')
-                    : '- нет данных';
-                document.getElementById('assistantOutput').textContent =
-`Feedback summary:
-profile=${feedback.profile || 'all'}
+        try {
+          const payload = await fetchJson(`/api/model/feedback${query}`);
+          if (!payload?.ok) {
+            throw new Error(payload?.error || "feedback_summary_failed");
+          }
+          const feedback = payload.feedback || {};
+          const models = feedback.top_models || [];
+          const channels = feedback.top_channels || [];
+          const modelsText = models.length
+            ? models
+                .map(
+                  (item) =>
+                    `- ${item.model} (${item.profile}): ${item.avg_score}/5, n=${item.count}`,
+                )
+                .join("\n")
+            : "- нет данных";
+          const channelsText = channels.length
+            ? channels
+                .map(
+                  (item) =>
+                    `- ${item.channel}: ${item.avg_score}/5, n=${item.count}`,
+                )
+                .join("\n")
+            : "- нет данных";
+          document.getElementById("assistantOutput").textContent =
+            `Feedback summary:
+profile=${feedback.profile || "all"}
 total_feedback=${feedback.total_feedback || 0}
 
 top models:
@@ -951,147 +1393,377 @@ ${modelsText}
 
 top channels:
 ${channelsText}`;
-                setText('feedbackMeta', `Feedback loaded • total=${feedback.total_feedback || 0}`);
-            } catch (error) {
-                setText('feedbackMeta', `Ошибка feedback stats: ${error.message}`);
+          setText(
+            "feedbackMeta",
+            `Feedback loaded • total=${feedback.total_feedback || 0}`,
+          );
+        } catch (error) {
+          setText("feedbackMeta", `Ошибка feedback stats: ${error.message}`);
+        }
+      }
+
+      async function updateStats() {
+        try {
+          const [
+            stats,
+            health,
+            links,
+            recommend,
+            feedbackPayload,
+            usagePayload,
+            alertsPayload,
+            historyPayload,
+          ] = await Promise.all([
+            fetchJson("/api/stats"),
+            fetchJson("/api/health"),
+            fetchJson("/api/links"),
+            fetchJson("/api/model/recommend?profile=chat"),
+            fetchJson("/api/model/feedback?profile=chat&top=1"),
+            fetchJson("/api/ops/usage"),
+            fetchJson("/api/ops/alerts"),
+            fetchJson("/api/ops/history?limit=8"),
+          ]);
+
+          const bb = stats.black_box || {};
+          const rag = stats.rag || {};
+          const router = stats.router || {};
+
+          setText("bb_total", String(bb.total ?? bb.total_messages ?? 0));
+          setText("rag_total", String(rag.count ?? 0));
+          setText("local_model", router.local_model || "Offline");
+          setText("degradation", health.degradation || "unknown");
+
+          const checks = health.checks || {};
+          document.getElementById("checks").innerHTML =
+            badge(!!checks.openclaw, "OpenClaw") +
+            badge(!!checks.local_lm, "Local LM") +
+            badge(!!checks.voice_gateway, "Voice Gateway") +
+            badge(!!checks.krab_ear, "Krab Ear");
+
+          const linksBlock = [
+            ["Dashboard", links.dashboard],
+            ["Stats API", links.stats_api],
+            ["Health API", links.health_api],
+            ["Ecosystem Health API", links.ecosystem_health_api],
+            ["Model Preflight API", `${links.dashboard}/api/model/preflight`],
+            ["Model Feedback API", `${links.dashboard}/api/model/feedback`],
+            [
+              "OpenClaw Deep Check",
+              `${links.dashboard}/api/openclaw/deep-check`,
+            ],
+            [
+              "OpenClaw Remediation Plan",
+              `${links.dashboard}/api/openclaw/remediation-plan`,
+            ],
+            [
+              "OpenClaw Browser Smoke",
+              `${links.dashboard}/api/openclaw/browser-smoke`,
+            ],
+            [
+              "Assistant Capabilities",
+              `${links.dashboard}/api/assistant/capabilities`,
+            ],
+            ["Ops Cost Report", `${links.dashboard}/api/ops/cost-report`],
+            [
+              "Ops Executive Summary",
+              `${links.dashboard}/api/ops/executive-summary`,
+            ],
+            ["Ops Full Report", `${links.dashboard}/api/ops/report`],
+            ["Ops Bundle Export", `${links.dashboard}/api/ops/bundle/export`],
+            ["OpenClaw", links.openclaw],
+            ["Voice Gateway", links.voice_gateway],
+          ]
+            .filter(([, url]) => !!url)
+            .map(
+              ([name, url]) =>
+                `<a href="${url}" target="_blank" rel="noreferrer">${name}: ${url}</a>`,
+            )
+            .join("");
+          document.getElementById("links").innerHTML = linksBlock || "—";
+
+          setText("recommended_model", recommend.model || "—");
+          const bestFeedback =
+            feedbackPayload?.feedback?.top_models?.[0] || null;
+          if (bestFeedback) {
+            setText(
+              "recommended_meta",
+              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count})`,
+            );
+          } else {
+            setText(
+              "recommended_meta",
+              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"}`,
+            );
+          }
+
+          const usage = usagePayload.usage || {};
+          const totals = usage.totals || {};
+          const ratios = usage.ratios || {};
+          const softCap = usage.soft_cap || {};
+          setText(
+            "opsUsageMeta",
+            `Calls: total=${totals.all_calls ?? 0}, cloud=${totals.cloud_calls ?? 0}, local=${totals.local_calls ?? 0} • cloud_share=${ratios.cloud_share ?? 0} • cap_left=${softCap.cloud_remaining_calls ?? 0}`,
+          );
+
+          const alertsRoot = alertsPayload.alerts || {};
+          const alertsList = alertsRoot.alerts || [];
+          if (!alertsList.length) {
+            document.getElementById("opsAlerts").innerHTML =
+              '<span class="badge ok">OK no active alerts</span>';
+          } else {
+            const html = alertsList
+              .map((item) => {
+                const ack = item.acknowledged
+                  ? ` <span class="badge ok">ACK ${item.ack?.actor || ""}</span>`
+                  : "";
+                return `<div><span class="badge ${item.severity === "high" ? "bad" : "warn"}">${item.severity || "info"}</span> ${item.code || ""} — ${item.message || ""}${ack}</div>`;
+              })
+              .join("");
+            document.getElementById("opsAlerts").innerHTML = html;
+          }
+
+          const history = historyPayload.history?.items || [];
+          if (!history.length) {
+            document.getElementById("opsHistory").innerHTML =
+              '<div class="empty-state" style="padding: 24px 0;"><svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="margin-bottom:12px; color: var(--text-placeholder)"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"></path></svg><div style="font-size: 0.85rem">История ops: пусто</div></div>';
+            document.getElementById("opsHistory").classList.add("empty");
+          } else {
+            document.getElementById("opsHistory").classList.remove("empty");
+            document.getElementById("opsHistory").innerHTML = history
+              .map(
+                (item) =>
+                  `${item.ts || "-"} • ${item.status || "-"} • alerts=${item.alerts_count ?? 0} • codes=${(item.codes || []).join(",") || "-"}`,
+              )
+              .join("<br>");
+          }
+          setText(
+            "updated_at",
+            `Обновлено: ${new Date().toLocaleTimeString()}`,
+          );
+        } catch (error) {
+          console.error("Stats update failed", error);
+          setText("updated_at", `Ошибка обновления: ${error.message}`);
+        }
+      }
+
+      async function refreshAll() {
+        await updateStats();
+        await loadModelCatalog(false);
+        await loadOpenclawStatus(false);
+      }
+
+      document
+        .getElementById("refreshBtn")
+        .addEventListener("click", refreshAll);
+      document
+        .getElementById("assistantRunBtn")
+        .addEventListener("click", assistantQuery);
+      document
+        .getElementById("assistantPlanBtn")
+        .addEventListener("click", assistantPreflight);
+      document
+        .getElementById("feedbackSendBtn")
+        .addEventListener("click", submitModelFeedback);
+      document
+        .getElementById("feedbackStatsBtn")
+        .addEventListener("click", loadModelFeedbackStats);
+      document
+        .getElementById("opsAckBtn")
+        .addEventListener("click", () => opsAckAction(true));
+      document
+        .getElementById("opsUnackBtn")
+        .addEventListener("click", () => opsAckAction(false));
+      document
+        .getElementById("modelCatalogReloadBtn")
+        .addEventListener("click", () => loadModelCatalog(true));
+      document
+        .getElementById("modelApplyModeBtn")
+        .addEventListener("click", async () => {
+          const mode = (
+            document.getElementById("modelModeSelect").value || "auto"
+          ).trim();
+          await applyModelAction("set_mode", { mode });
+        });
+      document
+        .getElementById("modelApplyPresetBtn")
+        .addEventListener("click", async () => {
+          const preset = (
+            document.getElementById("modelPresetSelect").value || ""
+          ).trim();
+          const localModel = (
+            document.getElementById("modelChoiceSelect").value || ""
+          ).trim();
+          await applyModelAction("apply_preset", {
+            preset,
+            local_model: localModel,
+          });
+        });
+      document
+        .getElementById("modelApplySlotBtn")
+        .addEventListener("click", async () => {
+          const slot = (
+            document.getElementById("modelSlotSelect").value || ""
+          ).trim();
+          const model = (
+            document.getElementById("modelChoiceSelect").value || ""
+          ).trim();
+          await applyModelAction("set_slot_model", { slot, model });
+        });
+      document
+        .getElementById("modelSlotSelect")
+        .addEventListener("change", syncSlotModelSelection);
+      document
+        .getElementById("assistantAttachBtn")
+        .addEventListener("click", attachSelectedFileToPrompt);
+      document
+        .getElementById("quickWebBtn")
+        .addEventListener("click", runQuickWebSearch);
+      document
+        .getElementById("quickDeepBtn")
+        .addEventListener("click", runQuickDeepResearch);
+      document
+        .getElementById("quickUrlBtn")
+        .addEventListener("click", runQuickUrlReview);
+      async function loadOpenclawStatus(showStatus = true) {
+        try {
+          if (showStatus) setText("ocMeta", "Загружаю статус OpenClaw...");
+
+          const [catalogRes, autoswitchRes, channelsRes] = await Promise.all([
+            fetch("/api/model/catalog").catch((e) => ({
+              ok: false,
+              error: e.message,
+            })),
+            fetch("/api/openclaw/model-autoswitch/status").catch((e) => ({
+              ok: false,
+              error: e.message,
+            })),
+            fetch("/api/openclaw/channels/status").catch((e) => ({
+              ok: false,
+              error: e.message,
+            })),
+          ]);
+
+          // Catalog processing
+          if (catalogRes.ok) {
+            const payload = await catalogRes.json();
+            setText("ocForceMode", payload.catalog?.force_mode || "auto");
+            setText(
+              "ocLocalModel",
+              payload.catalog?.local_active_model || "offline",
+            );
+            const slots = Object.keys(
+              payload.catalog?.cloud_slots || {},
+            ).length;
+            setText("ocCloudSlots", slots > 0 ? `${slots} active` : "none");
+          } else {
+            setText("ocForceMode", "ERR");
+            setText("ocLocalModel", "ERR");
+            setText("ocCloudSlots", "ERR");
+          }
+
+          // Autoswitch processing
+          if (autoswitchRes.ok) {
+            const payload = await autoswitchRes.json();
+            setText("ocAutoswitchStatus", payload.status || "unknown");
+            setText("ocLastSwitch", payload.last_switch || "-");
+            setText("ocSwitchReason", payload.reason || "-");
+          } else {
+            const errPayload = autoswitchRes.json
+              ? await autoswitchRes.json().catch(() => ({}))
+              : {};
+            const errText =
+              errPayload.detail ||
+              autoswitchRes.error ||
+              `HTTP ${autoswitchRes.status}`;
+            setText("ocAutoswitchStatus", `ERR: ${errText}`);
+            setText("ocLastSwitch", "-");
+            setText("ocSwitchReason", "-");
+          }
+
+          // Channels processing
+          if (channelsRes.ok) {
+            const payload = await channelsRes.json();
+            const channels = payload.channels || [];
+            if (channels.length === 0) {
+              document.getElementById("ocChannelsList").innerHTML =
+                '<span class="card-meta">No channels data</span>';
+            } else {
+              document.getElementById("ocChannelsList").innerHTML = channels
+                .map((c) => {
+                  const badgeClass =
+                    c.status === "OK"
+                      ? "ok"
+                      : c.status === "FAIL"
+                        ? "bad"
+                        : "warn";
+                  return `<div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span class="card-meta">${c.name || "channel"}</span>
+                                <span class="badge ${badgeClass}">${c.status}</span>
+                            </div>`;
+                })
+                .join("");
             }
+          } else {
+            const errPayload = channelsRes.json
+              ? await channelsRes.json().catch(() => ({}))
+              : {};
+            const errText =
+              errPayload.detail ||
+              channelsRes.error ||
+              `HTTP ${channelsRes.status}`;
+            document.getElementById("ocChannelsList").innerHTML =
+              `<span class="card-meta" style="color:var(--state-error)">Error: ${errText}</span>`;
+          }
+
+          if (showStatus) setText("ocMeta", "Статус обновлен");
+        } catch (error) {
+          setText("ocMeta", `Ошибка API: ${error.message}`);
         }
+      }
 
-        async function updateStats() {
-            try {
-                const [stats, health, links, recommend, feedbackPayload, usagePayload, alertsPayload, historyPayload] = await Promise.all([
-                    fetchJson('/api/stats'),
-                    fetchJson('/api/health'),
-                    fetchJson('/api/links'),
-                    fetchJson('/api/model/recommend?profile=chat'),
-                    fetchJson('/api/model/feedback?profile=chat&top=1'),
-                    fetchJson('/api/ops/usage'),
-                    fetchJson('/api/ops/alerts'),
-                    fetchJson('/api/ops/history?limit=8')
-                ]);
-
-                const bb = stats.black_box || {};
-                const rag = stats.rag || {};
-                const router = stats.router || {};
-
-                setText('bb_total', String(bb.total ?? bb.total_messages ?? 0));
-                setText('rag_total', String(rag.count ?? 0));
-                setText('local_model', router.local_model || 'Offline');
-                setText('degradation', health.degradation || 'unknown');
-
-                const checks = health.checks || {};
-                document.getElementById('checks').innerHTML =
-                    badge(!!checks.openclaw, 'OpenClaw') +
-                    badge(!!checks.local_lm, 'Local LM') +
-                    badge(!!checks.voice_gateway, 'Voice Gateway') +
-                    badge(!!checks.krab_ear, 'Krab Ear');
-
-                const linksBlock = [
-                    ['Dashboard', links.dashboard],
-                    ['Stats API', links.stats_api],
-                    ['Health API', links.health_api],
-                    ['Ecosystem Health API', links.ecosystem_health_api],
-                    ['Model Preflight API', `${links.dashboard}/api/model/preflight`],
-                    ['Model Feedback API', `${links.dashboard}/api/model/feedback`],
-                    ['OpenClaw Deep Check', `${links.dashboard}/api/openclaw/deep-check`],
-                    ['OpenClaw Remediation Plan', `${links.dashboard}/api/openclaw/remediation-plan`],
-                    ['OpenClaw Browser Smoke', `${links.dashboard}/api/openclaw/browser-smoke`],
-                    ['Assistant Capabilities', `${links.dashboard}/api/assistant/capabilities`],
-                    ['Ops Cost Report', `${links.dashboard}/api/ops/cost-report`],
-                    ['Ops Executive Summary', `${links.dashboard}/api/ops/executive-summary`],
-                    ['Ops Full Report', `${links.dashboard}/api/ops/report`],
-                    ['Ops Bundle Export', `${links.dashboard}/api/ops/bundle/export`],
-                    ['OpenClaw', links.openclaw],
-                    ['Voice Gateway', links.voice_gateway],
-                ].filter(([, url]) => !!url)
-                 .map(([name, url]) => `<a href="${url}" target="_blank" rel="noreferrer">${name}: ${url}</a>`)
-                 .join('');
-                document.getElementById('links').innerHTML = linksBlock || '—';
-
-                setText('recommended_model', recommend.model || '—');
-                const bestFeedback = feedbackPayload?.feedback?.top_models?.[0] || null;
-                if (bestFeedback) {
-                    setText(
-                        'recommended_meta',
-                        `Профиль: ${recommend.profile || 'chat'} • Канал: ${recommend.channel || 'auto'} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count})`
-                    );
-                } else {
-                    setText('recommended_meta', `Профиль: ${recommend.profile || 'chat'} • Канал: ${recommend.channel || 'auto'}`);
-                }
-
-                const usage = usagePayload.usage || {};
-                const totals = usage.totals || {};
-                const ratios = usage.ratios || {};
-                const softCap = usage.soft_cap || {};
-                setText(
-                    'opsUsageMeta',
-                    `Calls: total=${totals.all_calls ?? 0}, cloud=${totals.cloud_calls ?? 0}, local=${totals.local_calls ?? 0} • cloud_share=${ratios.cloud_share ?? 0} • cap_left=${softCap.cloud_remaining_calls ?? 0}`
-                );
-
-                const alertsRoot = alertsPayload.alerts || {};
-                const alertsList = alertsRoot.alerts || [];
-                if (!alertsList.length) {
-                    document.getElementById('opsAlerts').innerHTML = '<span class="badge ok">OK no active alerts</span>';
-                } else {
-                    const html = alertsList
-                        .map((item) => {
-                            const ack = item.acknowledged ? ` <span class="badge ok">ACK ${item.ack?.actor || ''}</span>` : '';
-                            return `<div><span class="badge ${item.severity === 'high' ? 'bad' : 'warn'}">${item.severity || 'info'}</span> ${item.code || ''} — ${item.message || ''}${ack}</div>`;
-                        })
-                        .join('');
-                    document.getElementById('opsAlerts').innerHTML = html;
-                }
-
-                const history = historyPayload.history?.items || [];
-                if (!history.length) {
-                    setText('opsHistory', 'История ops: пусто');
-                } else {
-                    document.getElementById('opsHistory').innerHTML = history
-                        .map((item) => `${item.ts || '-'} • ${item.status || '-'} • alerts=${item.alerts_count ?? 0} • codes=${(item.codes || []).join(',') || '-'}`)
-                        .join('<br>');
-                }
-                setText('updated_at', `Обновлено: ${new Date().toLocaleTimeString()}`);
-            } catch (error) {
-                console.error('Stats update failed', error);
-                setText('updated_at', `Ошибка обновления: ${error.message}`);
-            }
+      async function ocApplyAutoswitch() {
+        try {
+          setText("ocMeta", "Applying autoswitch...");
+          const payload = await postJson(
+            "/api/openclaw/model-autoswitch/apply",
+            { toggle: true },
+          );
+          setText("ocMeta", payload.message || "Autoswitch applied");
+          await loadOpenclawStatus(false);
+        } catch (error) {
+          setText("ocMeta", `API Error: ${error.message}`);
         }
+      }
 
-        async function refreshAll() {
-            await updateStats();
-            await loadModelCatalog(false);
+      async function ocApplyMode(mode) {
+        try {
+          setText("ocMeta", `Setting mode ${mode}...`);
+          await applyModelAction("set_mode", { mode });
+          setText("ocMeta", `Mode ${mode} applied`);
+          await loadOpenclawStatus(false);
+        } catch (error) {
+          setText("ocMeta", `Mode API Error: ${error.message}`);
         }
+      }
 
-        document.getElementById('refreshBtn').addEventListener('click', refreshAll);
-        document.getElementById('assistantRunBtn').addEventListener('click', assistantQuery);
-        document.getElementById('assistantPlanBtn').addEventListener('click', assistantPreflight);
-        document.getElementById('feedbackSendBtn').addEventListener('click', submitModelFeedback);
-        document.getElementById('feedbackStatsBtn').addEventListener('click', loadModelFeedbackStats);
-        document.getElementById('opsAckBtn').addEventListener('click', () => opsAckAction(true));
-        document.getElementById('opsUnackBtn').addEventListener('click', () => opsAckAction(false));
-        document.getElementById('modelCatalogReloadBtn').addEventListener('click', () => loadModelCatalog(true));
-        document.getElementById('modelApplyModeBtn').addEventListener('click', async () => {
-            const mode = (document.getElementById('modelModeSelect').value || 'auto').trim();
-            await applyModelAction('set_mode', { mode });
-        });
-        document.getElementById('modelApplyPresetBtn').addEventListener('click', async () => {
-            const preset = (document.getElementById('modelPresetSelect').value || '').trim();
-            const localModel = (document.getElementById('modelChoiceSelect').value || '').trim();
-            await applyModelAction('apply_preset', { preset, local_model: localModel });
-        });
-        document.getElementById('modelApplySlotBtn').addEventListener('click', async () => {
-            const slot = (document.getElementById('modelSlotSelect').value || '').trim();
-            const model = (document.getElementById('modelChoiceSelect').value || '').trim();
-            await applyModelAction('set_slot_model', { slot, model });
-        });
-        document.getElementById('modelSlotSelect').addEventListener('change', syncSlotModelSelection);
-        document.getElementById('assistantAttachBtn').addEventListener('click', attachSelectedFileToPrompt);
-        document.getElementById('quickWebBtn').addEventListener('click', runQuickWebSearch);
-        document.getElementById('quickDeepBtn').addEventListener('click', runQuickDeepResearch);
-        document.getElementById('quickUrlBtn').addEventListener('click', runQuickUrlReview);
-        setInterval(updateStats, 8000);
-        refreshAll();
+      document
+        .getElementById("ocRefreshBtn")
+        .addEventListener("click", () => loadOpenclawStatus(true));
+      document
+        .getElementById("ocApplyAutoswitchBtn")
+        .addEventListener("click", ocApplyAutoswitch);
+      document
+        .getElementById("ocModeLocalBtn")
+        .addEventListener("click", () => ocApplyMode("local"));
+      document
+        .getElementById("ocModeAutoBtn")
+        .addEventListener("click", () => ocApplyMode("auto"));
+      document
+        .getElementById("ocModeCloudBtn")
+        .addEventListener("click", () => ocApplyMode("cloud"));
+
+      setInterval(updateStats, 8000);
+      refreshAll();
     </script>
-</body>
-
+  </body>
 </html>

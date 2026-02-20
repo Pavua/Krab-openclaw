@@ -167,6 +167,67 @@ class ProvisioningService:
             raise FileNotFoundError(f"Draft {draft_id} не найден")
         return data
 
+    def validate_draft(self, draft_id: str) -> dict[str, Any]:
+        """
+        Метод глубокой валидации draft'а перед применением (R5).
+        Возвращает: {"ok": bool, "errors": [], "warnings": [], "next_step": str}
+        """
+        try:
+            draft = self.get_draft(draft_id)
+        except Exception as e:
+            return {
+                "ok": False,
+                "errors": [f"Системная ошибка: {e}"],
+                "warnings": [],
+                "next_step": "Проверьте ID драфта."
+            }
+
+        errors = []
+        warnings = []
+        
+        # 1. Валидность entity_type
+        entity_type = draft.get("entity_type")
+        if entity_type not in {"agent", "skill"}:
+            errors.append(f"Недопустимый entity_type: '{entity_type}'")
+        
+        # 2. Корректность name и role
+        name = draft.get("name")
+        if not name or len(name) < 2:
+            errors.append("Имя (name) слишком короткое или пустое")
+        
+        role = draft.get("role")
+        if not role:
+            errors.append("Роль (role) не указана")
+        
+        # 3. Проверка settings
+        settings = draft.get("settings")
+        if settings is not None and not isinstance(settings, dict):
+            errors.append("Поле 'settings' должно быть объектом (dict)")
+
+        # 4. Проверка присутствия роли в шаблонах
+        if not errors:
+            templates = self.list_templates(entity_type)
+            known_roles = {t.get("role") for t in templates if t.get("role")}
+            if role not in known_roles:
+                warnings.append(f"Роль '{role}' отсутствует в каталоге шаблонов (role_templates)")
+
+        # 5. Проверка конфликта с существующей записью
+        if not errors:
+            catalog = self._read_catalog(entity_type)
+            key = "agents" if entity_type == "agent" else "skills"
+            items = catalog.get(key, [])
+            existing = next((item for item in items if item.get("name") == name), None)
+            if existing:
+                warnings.append(f"Запись с именем '{name}' уже есть в каталоге. Apply обновит её.")
+
+        is_ok = len(errors) == 0
+        return {
+            "ok": is_ok,
+            "errors": errors,
+            "warnings": warnings,
+            "next_step": "Можно выполнять apply" if is_ok else "Исправьте ошибки в draft"
+        }
+
     def preview_diff(self, draft_id: str) -> dict[str, Any]:
         """Формирует diff между текущей записью каталога и draft-версией."""
         draft = self.get_draft(draft_id)

@@ -2,6 +2,7 @@
 """Тесты WebApp: базовые API и устойчивость при rag=None."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -115,6 +116,48 @@ class _DummyRouter:
             "warnings": [],
             "reasons": ["Стандартная policy free-first hybrid."],
             "next_step": "Можно запускать задачу.",
+        }
+
+    def get_route_explain(
+        self,
+        *,
+        prompt: str = "",
+        task_type: str = "chat",
+        preferred_model: str | None = None,
+        confirm_expensive: bool = False,
+    ):
+        preflight = None
+        if prompt:
+            preflight = self.get_task_preflight(
+                prompt=prompt,
+                task_type=task_type,
+                preferred_model=preferred_model,
+                confirm_expensive=confirm_expensive,
+            )
+        return {
+            "generated_at": "2026-02-12T21:00:00+00:00",
+            "last_route": {
+                "profile": "chat",
+                "task_type": "chat",
+                "channel": "local",
+                "model": "qwen2.5-7b",
+                "route_reason": "local_primary",
+                "route_detail": "local-first",
+            },
+            "reason": {
+                "code": "local_primary",
+                "detail": "local-first",
+                "human": "Сработала стратегия local-first: локальная модель доступна.",
+            },
+            "policy": {
+                "routing_policy": "free_first_hybrid",
+                "force_mode": "auto",
+                "cloud_soft_cap_reached": False,
+                "local_available": True,
+            },
+            "preflight": preflight,
+            "explainability_score": 90 if preflight else 70,
+            "transparency_level": "high" if preflight else "medium",
         }
 
     def submit_feedback(
@@ -485,6 +528,49 @@ def test_health_endpoint_reports_chain_state() -> None:
     assert payload["chain"]["active_ai_channel"] == "cloud"
 
 
+def test_transcriber_status_endpoint_reports_down_state(monkeypatch) -> None:
+    monkeypatch.setenv("STT_ISOLATED_WORKER", "1")
+    monkeypatch.setenv("STT_WORKER_TIMEOUT_SECONDS", "240")
+    client = _build_client()
+    response = client.get("/api/transcriber/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    status = payload["status"]
+    assert status["readiness"] == "down"
+    assert status["voice_gateway_ok"] is False
+    assert status["stt_isolated_worker"] is True
+    assert "transcriber_doctor.command --heal" in " ".join(status["recommendations"])
+    monkeypatch.delenv("STT_ISOLATED_WORKER", raising=False)
+    monkeypatch.delenv("STT_WORKER_TIMEOUT_SECONDS", raising=False)
+
+
+def test_transcriber_status_endpoint_respects_perceptor_config(monkeypatch) -> None:
+    class _VoiceGatewayUp:
+        async def health_check(self):
+            return True
+
+    class _PerceptorStub:
+        whisper_model = "mlx-community/whisper-large-v3-turbo"
+        stt_isolated_worker = False
+
+    monkeypatch.setenv("STT_ISOLATED_WORKER", "1")
+    client, deps = _build_client_with_deps()
+    deps["voice_gateway_client"] = _VoiceGatewayUp()
+    deps["perceptor"] = _PerceptorStub()
+
+    response = client.get("/api/transcriber/status")
+    assert response.status_code == 200
+    payload = response.json()
+    status = payload["status"]
+    assert status["voice_gateway_ok"] is True
+    assert status["stt_isolated_worker"] is False
+    assert status["readiness"] == "degraded"
+    assert status["whisper_model"] == "mlx-community/whisper-large-v3-turbo"
+    assert "STT_ISOLATED_WORKER=1" in " ".join(status["recommendations"])
+    monkeypatch.delenv("STT_ISOLATED_WORKER", raising=False)
+
+
 def test_ecosystem_health_endpoint_reports_details() -> None:
     client = _build_client()
     response = client.get("/api/ecosystem/health")
@@ -530,6 +616,36 @@ def test_model_preflight_endpoint() -> None:
     preflight = payload["preflight"]
     assert preflight["task_type"] == "security"
     assert preflight["execution"]["confirm_expensive_received"] is True
+
+
+def test_model_explain_endpoint_without_prompt() -> None:
+    client = _build_client()
+    response = client.get("/api/model/explain")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    explain = payload["explain"]
+    assert explain["reason"]["code"] == "local_primary"
+    assert explain["preflight"] is None
+    assert explain["transparency_level"] in {"medium", "high"}
+
+
+def test_model_explain_endpoint_with_prompt() -> None:
+    client = _build_client()
+    response = client.get(
+        "/api/model/explain",
+        params={
+            "task_type": "security",
+            "prompt": "Проведи security аудит API",
+            "confirm_expensive": "true",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    explain = payload["explain"]
+    assert isinstance(explain["preflight"], dict)
+    assert explain["preflight"]["task_type"] == "security"
+    assert explain["preflight"]["execution"]["confirm_expensive_received"] is True
 
 
 def test_model_feedback_summary_endpoint() -> None:
@@ -615,6 +731,57 @@ def test_openclaw_browser_smoke_endpoint() -> None:
     assert payload["available"] is True
     assert payload["report"]["ready"] is True
     assert payload["report"]["browser_smoke"]["ok"] is True
+
+
+def test_openclaw_model_autoswitch_status_endpoint(monkeypatch) -> None:
+    client = _build_client()
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = (
+        '{"ok": true, "lm_loaded": false, "desired_default": "google/gemini-2.5-flash", '
+        '"applied": false, "dry_run": true}\n'
+    )
+    completed.stderr = ""
+
+    with patch("src.modules.web_app.subprocess.run", return_value=completed) as mocked_run:
+        response = client.get("/api/openclaw/model-autoswitch/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["autoswitch"]["desired_default"] == "google/gemini-2.5-flash"
+    assert payload["autoswitch"]["dry_run"] is True
+    mocked_run.assert_called_once()
+
+
+def test_openclaw_model_autoswitch_apply_requires_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client = _build_client()
+
+    denied = client.post("/api/openclaw/model-autoswitch/apply")
+    assert denied.status_code == 403
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = (
+        '{"ok": true, "lm_loaded": true, "desired_default": "lmstudio/local", '
+        '"applied": true, "dry_run": false}\n'
+    )
+    completed.stderr = ""
+
+    with patch("src.modules.web_app.subprocess.run", return_value=completed):
+        ok = client.post(
+            "/api/openclaw/model-autoswitch/apply",
+            headers={"X-Krab-Web-Key": "secret123"},
+        )
+
+    assert ok.status_code == 200
+    payload = ok.json()
+    assert payload["ok"] is True
+    assert payload["autoswitch"]["desired_default"] == "lmstudio/local"
+    assert payload["autoswitch"]["applied"] is True
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
 
 
 def test_ops_usage_and_alerts_endpoints() -> None:
@@ -967,3 +1134,21 @@ def test_provisioning_idempotency(monkeypatch) -> None:
     assert second_apply.json().get("idempotent_replay") is True
     assert deps["provisioning_service"].applied == 1
     monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+
+def test_nano_theme_css_route_available() -> None:
+    """Панель должна отдавать CSS темы по каноничному URL."""
+    client = _build_client()
+    response = client.get("/nano_theme.css")
+    assert response.status_code == 200
+    assert "text/css" in response.headers.get("content-type", "")
+    assert ":root" in response.text
+
+
+def test_nano_theme_css_legacy_route_available() -> None:
+    """Старый URL темы тоже должен работать для обратной совместимости."""
+    client = _build_client()
+    response = client.get("/prototypes/nano/nano_theme.css")
+    assert response.status_code == 200
+    assert "text/css" in response.headers.get("content-type", "")
+    assert "--bg-main" in response.text

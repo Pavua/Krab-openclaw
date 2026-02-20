@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Тесты контракта парсинга команды !model set."""
+"""Тесты контракта парсинга команды !model set и алиасов моделей."""
 
-from src.handlers.commands import parse_model_set_request, resolve_local_model_size_human
+from src.handlers.commands import (
+    parse_model_set_request,
+    resolve_local_model_size_human,
+    normalize_model_alias,
+)
 
 
 def test_parse_model_set_canonical_format() -> None:
@@ -65,3 +69,22 @@ def test_resolve_local_model_size_falls_back_to_estimate() -> None:
 
     size = resolve_local_model_size_human(_Router(), "qwen/local", {})
     assert size == "6.8 GB"
+
+
+def test_normalize_model_alias_gemini_shortcut() -> None:
+    normalized, note = normalize_model_alias("gemini-3-pro-latest")
+    assert normalized == "google/gemini-3-pro-preview"
+    assert "Алиас" in note
+
+
+def test_normalize_model_alias_openai_shortcut() -> None:
+    normalized, note = normalize_model_alias("gpt-5-mini")
+    assert normalized == "openai/gpt-5-mini"
+    assert "Алиас" in note
+
+
+def test_normalize_model_alias_keeps_full_id() -> None:
+    model_id = "zai-org/glm-4.6v-flash"
+    normalized, note = normalize_model_alias(model_id)
+    assert normalized == model_id
+    assert note == ""

@@ -194,6 +194,15 @@
 3. Подтверждено, что ошибки `LLM 403/401` в OpenClaw-чатах связаны с cloud API keys, а не с Telegram/iMessage каналами. До ротации ключей безопасный режим: local-first.
 4. Следующий шаг roadmap: policy “умная модель в личке / lite в группах” + единый `!model scan` UI с local+cloud классификацией и быстрым `set` по слотам.
 
+## 🔄 Оперативный статус (2026-02-20)
+
+1. Добавлен `openclaw_runtime_repair.command` для быстрого восстановления runtime-конфига OpenClaw (`primary/fallbacks`, `dmScope`, лимиты токенов) после profile-switch/update.
+2. Добавлены hardened `openclaw_signal_register.command`, `openclaw_signal_link.command`, `openclaw_signal_recover.command`, `openclaw_signal_daemon_logs.command` (единый recovery path, link QR/copy flow, быстрый лог-диагностический контур).
+3. Добавлен anti-413 пакет перехода между чатами: `docs/CHAT_TRANSITION_PLAYBOOK_RU.md` и `prepare_next_chat_context.command`.
+4. Ownership-модель расширена до multi-stream: `scripts/check_workstream_overlap.py` теперь проверяет все `config/workstreams/*_paths.txt` (включая `gemini_design` и `nanobanana_ui`).
+5. Каналы Telegram/WhatsApp/Discord/Slack/iMessage стабилизированы в local-first режиме с cloud fallback.
+6. Следующий блок: довести Signal до `works` (после успешного `signal-cli register/link`) и затем перейти к UX-упрощению модели/режимов в веб-панели Krab.
+
 ---
 
 **Краб — не просто бот. Это цифровая сущность.**

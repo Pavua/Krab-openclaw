@@ -34,7 +34,9 @@ fi
 
 if ! signal-cli -a "$SIGNAL_NUMBER" listDevices >/dev/null 2>&1; then
   echo "❌ Signal номер не зарегистрирован в signal-cli: $SIGNAL_NUMBER"
-  echo "   Сначала выполни: ./openclaw_signal_register.command"
+  echo "   Сначала выполни один из вариантов:"
+  echo "   1) ./openclaw_signal_register.command   (register + verify)"
+  echo "   2) ./openclaw_signal_link.command       (secondary device link)"
   exit 1
 fi
 
