@@ -13,9 +13,11 @@
     --bg-surface-hover: #1e2129;
 
     /* Borders */
-    --border-subtle: rgba(255, 255, 255, 0.05);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    /* slightly brighter for better contrast on inputs */
     --border-focus: rgba(14, 165, 233, 0.6);
-    --border-card: rgba(255, 255, 255, 0.1);
+    --border-card: rgba(255, 255, 255, 0.12);
+    /* stronger card borders */
     --focus-ring: 0 0 0 2px var(--bg-main), 0 0 0 4px var(--accent-cyan);
 
     /* Text */
@@ -65,7 +67,7 @@
 /* ----- GLOBAL ----- */
 * {
     box-sizing: border-box;
-    transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
+    transition: all 0.2s ease;
 }
 
 body {
@@ -187,6 +189,7 @@ button {
     align-items: center;
     justify-content: center;
     gap: 8px;
+    transition: all 0.2s ease, transform 0.1s ease;
 }
 
 button:hover {
@@ -231,8 +234,10 @@ button.primary:hover {
     color: var(--text-main);
     padding: 10px 14px;
     font-family: var(--font-main);
-    font-size: 0.9rem;
+    font-size: 0.95rem;
+    /* slightly larger for readability */
     outline: none;
+    transition: all 0.2s ease;
 }
 
 .field:focus,
@@ -502,6 +507,24 @@ textarea.field {
     }
 }
 
+@media (max-width: 500px) {
+    .container {
+        padding: 0 4px;
+    }
+
+    .form-grid,
+    .grid-middle,
+    .grid-metrics {
+        grid-template-columns: 1fr !important;
+    }
+
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}
+
 @media (max-width: 390px) {
     body {
         padding: 8px;
@@ -516,5 +539,9 @@ textarea.field {
     select {
         font-size: 1rem;
         /* Better touch targets and readability */
+    }
+
+    .form-grid {
+        grid-template-columns: 1fr !important;
     }
 }

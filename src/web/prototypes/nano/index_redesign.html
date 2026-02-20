@@ -134,7 +134,8 @@
 
 <body>
     <div class="container">
-        <div id="fileProtocolWarning" class="card" style="display:none; border-color: var(--state-warn); margin-bottom: 16px;">
+        <div id="fileProtocolWarning" class="card"
+            style="display:none; border-color: var(--state-warn); margin-bottom: 16px;">
             <h4 class="card-title" style="color: var(--state-warn);">Неверный режим открытия</h4>
             <p class="card-meta">
                 Панель открыта как файл (`file://`). Для корректной работы API открой через `http://127.0.0.1:8080`.
@@ -231,7 +232,8 @@
         <!-- --- OPENCLAW CONTROL CENTER (R9 IDs parity) --- -->
         <div class="card">
             <h3 class="card-title">OpenClaw Control Center</h3>
-            <div class="grid-metrics" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 16px;">
+            <div class="grid-metrics"
+                style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 16px;">
                 <div>
                     <div class="card-meta">Force Mode</div>
                     <div class="card-value break-word" id="ocForceMode">—</div>
@@ -447,6 +449,10 @@
 
     <!-- Legacy API JS integration stays intact to ensure 0 regression with the backend -->
     <script>
+        if (window.location.protocol === 'file:') {
+            const warnBanner = document.getElementById('fileProtocolWarning');
+            if (warnBanner) warnBanner.style.display = 'block';
+        }
         function badge(ok, label) {
             const cls = ok ? 'ok' : 'warn';
             return `<span class="badge ${cls}">${ok ? 'ON' : 'OFF'} ${label}</span>`;
@@ -487,6 +493,32 @@
                 throw new Error(payload?.detail || `HTTP ${response.status}`);
             }
             return payload;
+        }
+
+        function withBtnState(btnId, loadingText, fetchPromiseFn) {
+            return async (e) => {
+                const btn = document.getElementById(btnId);
+                const isInput = btn && btn.nodeName === 'INPUT';
+                const origText = btn ? (isInput ? btn.value : btn.innerHTML) : "";
+                if (btn) {
+                    btn.disabled = true;
+                    if (loadingText) {
+                        if (isInput) btn.value = loadingText;
+                        else btn.innerHTML = loadingText;
+                    }
+                }
+                try {
+                    await fetchPromiseFn(e);
+                } finally {
+                    if (btn) {
+                        btn.disabled = false;
+                        if (loadingText) {
+                            if (isInput) btn.value = origText;
+                            else btn.innerHTML = origText;
+                        }
+                    }
+                }
+            };
         }
 
         let modelCatalogState = null;
@@ -1089,40 +1121,188 @@ ${channelsText}`;
             }
         }
 
+        async function loadOpenclawStatus(showStatus = true) {
+            try {
+                if (showStatus) setText('ocMeta', 'Загружаю статус OpenClaw...');
+
+                const [catalogRes, autoswitchRes, channelsRes] = await Promise.all([
+                    fetch('/api/model/catalog').catch((e) => ({ ok: false, error: e.message })),
+                    fetch('/api/openclaw/model-autoswitch/status').catch((e) => ({ ok: false, error: e.message })),
+                    fetch('/api/openclaw/channels/status').catch((e) => ({ ok: false, error: e.message }))
+                ]);
+
+                // Catalog processing
+                if (catalogRes.ok) {
+                    const payload = await catalogRes.json();
+                    setText('ocForceMode', payload.catalog?.force_mode || 'auto');
+                    setText('ocLocalModel', payload.catalog?.local_active_model || 'offline');
+                    const slots = Object.keys(payload.catalog?.cloud_slots || {}).length;
+                    setText('ocCloudSlots', slots > 0 ? `${slots} active` : 'none');
+                } else {
+                    setText('ocForceMode', 'ERR');
+                    setText('ocLocalModel', 'ERR');
+                    setText('ocCloudSlots', 'ERR');
+                }
+
+                // Autoswitch processing
+                if (autoswitchRes.ok) {
+                    const payload = await autoswitchRes.json();
+                    const st = payload.status || 'unknown';
+                    const badgeClass = (st.toUpperCase() === 'ACTIVE' || st.toUpperCase() === 'OK' || st.toUpperCase() === 'ON') ? 'ok' : (st.toUpperCase() === 'FAIL' || st.toUpperCase() === 'ERROR' ? 'bad' : 'warn');
+                    document.getElementById('ocAutoswitchStatus').innerHTML = `<span class="badge ${badgeClass}">${st}</span>`;
+                    setText('ocLastSwitch', payload.last_switch || '-');
+                    setText('ocSwitchReason', payload.reason || '-');
+                } else {
+                    const errPayload = autoswitchRes.json ? await autoswitchRes.json().catch(() => ({})) : {};
+                    const errText = errPayload.detail || autoswitchRes.error || `HTTP ${autoswitchRes.status}`;
+                    document.getElementById('ocAutoswitchStatus').innerHTML = `<span class="badge bad">ERR: ${errText}</span>`;
+                    setText('ocLastSwitch', '-');
+                    setText('ocSwitchReason', '-');
+                }
+
+                // Channels processing
+                if (channelsRes.ok) {
+                    const payload = await channelsRes.json();
+                    const channels = payload.channels || [];
+                    if (channels.length === 0) {
+                        document.getElementById('ocChannelsList').innerHTML = '<span class="card-meta">No channels data</span>';
+                    } else {
+                        document.getElementById('ocChannelsList').innerHTML = channels.map(c => {
+                            const badgeClass = c.status === 'OK' ? 'ok' : (c.status === 'FAIL' ? 'bad' : 'warn');
+                            return `<div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span class="card-meta">${c.name || 'channel'}</span>
+                                <span class="badge ${badgeClass}">${c.status}</span>
+                            </div>`;
+                        }).join('');
+                    }
+                } else {
+                    const errPayload = channelsRes.json ? await channelsRes.json().catch(() => ({})) : {};
+                    const errText = errPayload.detail || channelsRes.error || `HTTP ${channelsRes.status}`;
+                    document.getElementById('ocChannelsList').innerHTML = `<span class="card-meta" style="color:var(--state-error)">Error: ${errText}</span>`;
+                }
+
+                if (showStatus) setText('ocMeta', 'Статус обновлен');
+            } catch (error) {
+                setText('ocMeta', `Ошибка API: ${error.message}`);
+            }
+        }
+
+        async function ocApplyAutoswitch() {
+            try {
+                setText('ocMeta', 'Applying autoswitch...');
+                const payload = await postJson('/api/openclaw/model-autoswitch/apply', { toggle: true });
+                setText('ocMeta', payload.message || 'Autoswitch applied');
+                await loadOpenclawStatus(false);
+            } catch (error) {
+                setText('ocMeta', `Autoswitch Error: ${error.message}`);
+            }
+        }
+
+        async function ocApplyMode(mode) {
+            try {
+                setText('ocMeta', `Setting mode ${mode}...`);
+                await applyModelAction('set_mode', { mode });
+                setText('ocMeta', `Mode ${mode} applied`);
+                await loadOpenclawStatus(false);
+            } catch (error) {
+                setText('ocMeta', `Mode Error: ${error.message}`);
+            }
+        }
+
+        async function loadLocalLifecycleStatus(showStatus = true) {
+            try {
+                if (showStatus) setText('ocMeta', 'Загружаю статус local model...');
+                const response = await fetch('/api/model/local/status');
+                const payload = await response.json().catch(() => ({}));
+
+                if (!response.ok) {
+                    throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+                }
+
+                const status = payload.status || 'unknown';
+                const badgeClass = status === 'loaded' ? 'ok' : (status === 'not_loaded' ? 'warn' : 'bad');
+                document.getElementById('ocLocalLifecycleStatus').innerHTML = `<span class="badge ${badgeClass}">${status}</span>`;
+                document.getElementById('ocLocalLifecycleModel').textContent = payload.model_name || '-';
+
+                if (showStatus) setText('ocMeta', 'Статус local model обновлен');
+            } catch (error) {
+                document.getElementById('ocLocalLifecycleStatus').innerHTML = `<span class="badge bad">ERR</span>`;
+                document.getElementById('ocLocalLifecycleModel').textContent = '-';
+                setText('ocMeta', `Local Status Error: ${error.message}`);
+            }
+        }
+
+        async function ocLoadLocal() {
+            try {
+                setText('ocMeta', 'Загрузка local model...');
+                await postJson('/api/model/local/load-default', {}, true, 'POST');
+                setText('ocMeta', 'Local model загружена');
+                await loadLocalLifecycleStatus(false);
+            } catch (error) {
+                setText('ocMeta', `Load Local Error: ${error.message}`);
+            }
+        }
+
+        async function ocUnloadLocal() {
+            try {
+                setText('ocMeta', 'Выгрузка local model...');
+                await postJson('/api/model/local/unload', {}, true, 'POST');
+                setText('ocMeta', 'Local model выгружена');
+                await loadLocalLifecycleStatus(false);
+            } catch (error) {
+                setText('ocMeta', `Unload Local Error: ${error.message}`);
+            }
+        }
+
         async function refreshAll() {
             await updateStats();
             await loadModelCatalog(false);
+            await loadOpenclawStatus(false);
         }
 
-        document.getElementById('refreshBtn').addEventListener('click', refreshAll);
-        document.getElementById('assistantRunBtn').addEventListener('click', assistantQuery);
-        document.getElementById('assistantPlanBtn').addEventListener('click', assistantPreflight);
-        document.getElementById('feedbackSendBtn').addEventListener('click', submitModelFeedback);
-        document.getElementById('feedbackStatsBtn').addEventListener('click', loadModelFeedbackStats);
-        document.getElementById('opsAckBtn').addEventListener('click', () => opsAckAction(true));
-        document.getElementById('opsUnackBtn').addEventListener('click', () => opsAckAction(false));
-        document.getElementById('modelCatalogReloadBtn').addEventListener('click', () => loadModelCatalog(true));
-        document.getElementById('modelApplyModeBtn').addEventListener('click', async () => {
+        document.getElementById('refreshBtn').addEventListener('click', withBtnState('refreshBtn', 'Syncing...', refreshAll));
+        document.getElementById('assistantRunBtn').addEventListener('click', withBtnState('assistantRunBtn', 'Running...', assistantQuery));
+        document.getElementById('assistantPlanBtn').addEventListener('click', withBtnState('assistantPlanBtn', 'Planning...', assistantPreflight));
+        document.getElementById('feedbackSendBtn').addEventListener('click', withBtnState('feedbackSendBtn', 'Sending...', submitModelFeedback));
+        document.getElementById('feedbackStatsBtn').addEventListener('click', withBtnState('feedbackStatsBtn', 'Loading...', loadModelFeedbackStats));
+        document.getElementById('opsAckBtn').addEventListener('click', withBtnState('opsAckBtn', 'Wait...', () => opsAckAction(true)));
+        document.getElementById('opsUnackBtn').addEventListener('click', withBtnState('opsUnackBtn', 'Wait...', () => opsAckAction(false)));
+        document.getElementById('modelCatalogReloadBtn').addEventListener('click', withBtnState('modelCatalogReloadBtn', 'Reloading...', () => loadModelCatalog(true)));
+
+        document.getElementById('modelApplyModeBtn').addEventListener('click', withBtnState('modelApplyModeBtn', 'Wait...', async () => {
             const mode = (document.getElementById('modelModeSelect').value || 'auto').trim();
             await applyModelAction('set_mode', { mode });
-        });
-        document.getElementById('modelApplyPresetBtn').addEventListener('click', async () => {
+        }));
+        document.getElementById('modelApplyPresetBtn').addEventListener('click', withBtnState('modelApplyPresetBtn', 'Wait...', async () => {
             const preset = (document.getElementById('modelPresetSelect').value || '').trim();
             const localModel = (document.getElementById('modelChoiceSelect').value || '').trim();
             await applyModelAction('apply_preset', { preset, local_model: localModel });
-        });
-        document.getElementById('modelApplySlotBtn').addEventListener('click', async () => {
+        }));
+        document.getElementById('modelApplySlotBtn').addEventListener('click', withBtnState('modelApplySlotBtn', 'Wait...', async () => {
             const slot = (document.getElementById('modelSlotSelect').value || '').trim();
             const model = (document.getElementById('modelChoiceSelect').value || '').trim();
             await applyModelAction('set_slot_model', { slot, model });
-        });
+        }));
+
         document.getElementById('modelSlotSelect').addEventListener('change', syncSlotModelSelection);
-        document.getElementById('assistantAttachBtn').addEventListener('click', attachSelectedFileToPrompt);
-        document.getElementById('quickWebBtn').addEventListener('click', runQuickWebSearch);
-        document.getElementById('quickDeepBtn').addEventListener('click', runQuickDeepResearch);
-        document.getElementById('quickUrlBtn').addEventListener('click', runQuickUrlReview);
+        document.getElementById('assistantAttachBtn').addEventListener('click', withBtnState('assistantAttachBtn', 'Wait...', attachSelectedFileToPrompt));
+        document.getElementById('quickWebBtn').addEventListener('click', withBtnState('quickWebBtn', 'Wait...', runQuickWebSearch));
+        document.getElementById('quickDeepBtn').addEventListener('click', withBtnState('quickDeepBtn', 'Wait...', runQuickDeepResearch));
+        document.getElementById('quickUrlBtn').addEventListener('click', withBtnState('quickUrlBtn', 'Wait...', runQuickUrlReview));
+
+        document.getElementById('ocRefreshBtn').addEventListener('click', withBtnState('ocRefreshBtn', 'Wait...', () => loadOpenclawStatus(true)));
+        document.getElementById('ocApplyAutoswitchBtn').addEventListener('click', withBtnState('ocApplyAutoswitchBtn', 'Wait...', ocApplyAutoswitch));
+        document.getElementById('ocModeLocalBtn').addEventListener('click', withBtnState('ocModeLocalBtn', 'Wait...', () => ocApplyMode('local')));
+        document.getElementById('ocModeAutoBtn').addEventListener('click', withBtnState('ocModeAutoBtn', 'Wait...', () => ocApplyMode('auto')));
+        document.getElementById('ocModeCloudBtn').addEventListener('click', withBtnState('ocModeCloudBtn', 'Wait...', () => ocApplyMode('cloud')));
+
+        document.getElementById('ocLocalLoadBtn').addEventListener('click', withBtnState('ocLocalLoadBtn', 'Wait...', ocLoadLocal));
+        document.getElementById('ocLocalUnloadBtn').addEventListener('click', withBtnState('ocLocalUnloadBtn', 'Wait...', ocUnloadLocal));
+        document.getElementById('ocLocalRefreshBtn').addEventListener('click', withBtnState('ocLocalRefreshBtn', 'Wait...', () => loadLocalLifecycleStatus(true)));
+
         setInterval(updateStats, 8000);
         refreshAll();
+        loadLocalLifecycleStatus(false);
     </script>
 </body>
 
