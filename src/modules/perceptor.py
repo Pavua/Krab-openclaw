@@ -22,6 +22,7 @@ import uuid
 import base64
 import mimetypes
 import re
+import json
 import threading
 import edge_tts
 from typing import Dict, Any, Optional
@@ -73,6 +74,45 @@ class Perceptor:
         )
         
         self.gemini_key = config.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        self.stt_language = str(
+            config.get("STT_LANGUAGE", os.getenv("STT_LANGUAGE", "ru"))
+        ).strip() or "ru"
+        self.stt_temperature = float(
+            config.get("STT_TEMPERATURE", os.getenv("STT_TEMPERATURE", "0.0"))
+        )
+        self.stt_beam_size = int(
+            config.get("STT_BEAM_SIZE", os.getenv("STT_BEAM_SIZE", "7"))
+        )
+        self.stt_best_of = int(
+            config.get("STT_BEST_OF", os.getenv("STT_BEST_OF", "5"))
+        )
+        self.stt_patience = float(
+            config.get("STT_PATIENCE", os.getenv("STT_PATIENCE", "1.0"))
+        )
+        self.stt_condition_on_previous_text = str(
+            config.get(
+                "STT_CONDITION_ON_PREVIOUS_TEXT",
+                os.getenv("STT_CONDITION_ON_PREVIOUS_TEXT", "1"),
+            )
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.stt_no_speech_threshold = float(
+            config.get(
+                "STT_NO_SPEECH_THRESHOLD",
+                os.getenv("STT_NO_SPEECH_THRESHOLD", "0.45"),
+            )
+        )
+        self.stt_compression_ratio_threshold = float(
+            config.get(
+                "STT_COMPRESSION_RATIO_THRESHOLD",
+                os.getenv("STT_COMPRESSION_RATIO_THRESHOLD", "2.4"),
+            )
+        )
+        self.stt_hotwords = self._parse_hotwords(
+            config.get("STT_HOTWORDS", os.getenv("STT_HOTWORDS", ""))
+        )
+        self.stt_replace_map = self._parse_replace_map(
+            config.get("STT_REPLACE_JSON", os.getenv("STT_REPLACE_JSON", ""))
+        )
         # MLX Whisper может падать на параллельных вызовах (Metal/AGX assert),
         # поэтому сериализуем все STT-задачи одним локом.
         self._transcribe_lock = asyncio.Lock()
@@ -125,22 +165,15 @@ class Perceptor:
 
                 start_time = time.time()
 
-                # Промпт-подсказка для Whisper
-                punctuation_prompt = "Привет, я транскрибирую этот текст с правильной пунктуацией, заглавными буквами и форматированием."
-
-                # Запускаем в executor, чтобы не блокировать event loop (MLX тяжелый)
-                # Хотя mlx_whisper может быть оптимизирован, лучше перестраховаться
-                result = await asyncio.to_thread(
-                    mlx_whisper.transcribe,
-                    file_path,
-                    path_or_hf_repo=self.whisper_model,
-                    initial_prompt=punctuation_prompt,
-                    language="ru",       # Форсируем русский
-                    temperature=0.0,     # Убираем галлюцинации
-                    verbose=False
+                # Запускаем в executor, чтобы не блокировать event loop (MLX тяжелый).
+                # Часть аргументов может не поддерживаться конкретной версией mlx_whisper,
+                # поэтому сначала пробуем расширенный профиль, затем безопасный fallback.
+                result = await self._run_mlx_transcribe_with_fallback(
+                    mlx_whisper=mlx_whisper,
+                    file_path=file_path,
                 )
-
-                text = result.get("text", "").strip()
+                raw_text = str(result.get("text", "")).strip()
+                text = self._postprocess_transcript(raw_text)
                 duration = time.time() - start_time
 
                 logger.info(f"✅ Transcribed in {duration:.2f}s: {text[:50]}...")
@@ -149,6 +182,151 @@ class Perceptor:
         except Exception as e:
             logger.error(f"❌ Local Transcription Failed: {e}")
             return f"Ошибка транскрибации: {e}"
+
+    def _parse_hotwords(self, raw: Any) -> list[str]:
+        """Парсит список подсказок для STT из строки 'a,b,c'."""
+        text = str(raw or "").strip()
+        if not text:
+            return []
+        return [token.strip() for token in text.split(",") if token.strip()]
+
+    def _parse_replace_map(self, raw: Any) -> dict[str, str]:
+        """
+        Парсит словарь замен распознанного текста из JSON-строки.
+        Пример:
+        {"джимени":"Gemini","оупен кло":"OpenClaw"}
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return {}
+        try:
+            data = json.loads(text)
+        except Exception:
+            logger.warning("STT_REPLACE_JSON is invalid JSON; skip custom replacements")
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        cleaned: dict[str, str] = {}
+        for key, value in data.items():
+            src = str(key or "").strip()
+            dst = str(value or "").strip()
+            if src and dst:
+                cleaned[src] = dst
+        return cleaned
+
+    def _build_stt_prompt(self) -> str:
+        """Собирает промпт для улучшения пунктуации и распознавания терминов."""
+        base_prompt = (
+            "Транскрибируй русскую речь точно, с корректной пунктуацией, "
+            "заглавными буквами и абзацами по смыслу. "
+            "Не добавляй лишних слов от себя."
+        )
+        if self.stt_hotwords:
+            hotwords_block = ", ".join(self.stt_hotwords[:40])
+            return f"{base_prompt} Важные термины: {hotwords_block}."
+        return base_prompt
+
+    def _build_primary_stt_kwargs(self) -> dict[str, Any]:
+        """Расширенный профиль декодирования для лучшего качества текста."""
+        return {
+            "initial_prompt": self._build_stt_prompt(),
+            "language": self.stt_language,
+            "temperature": self.stt_temperature,
+            "beam_size": self.stt_beam_size,
+            "best_of": self.stt_best_of,
+            "patience": self.stt_patience,
+            "condition_on_previous_text": self.stt_condition_on_previous_text,
+            "no_speech_threshold": self.stt_no_speech_threshold,
+            "compression_ratio_threshold": self.stt_compression_ratio_threshold,
+            "verbose": False,
+        }
+
+    def _build_fallback_stt_kwargs(self) -> dict[str, Any]:
+        """Минимальный профиль, совместимый с более старыми версиями."""
+        return {
+            "initial_prompt": self._build_stt_prompt(),
+            "language": self.stt_language,
+            "temperature": self.stt_temperature,
+            "verbose": False,
+        }
+
+    async def _run_mlx_transcribe_with_fallback(self, mlx_whisper: Any, file_path: str) -> dict[str, Any]:
+        """Пробует расширенный STT-профиль, при несовместимости откатывается на базовый."""
+        primary_kwargs = self._build_primary_stt_kwargs()
+        try:
+            return await asyncio.to_thread(
+                mlx_whisper.transcribe,
+                file_path,
+                path_or_hf_repo=self.whisper_model,
+                **primary_kwargs,
+            )
+        except TypeError as exc:
+            logger.warning("mlx_whisper does not support full STT args, fallback to basic profile: %s", exc)
+            return await asyncio.to_thread(
+                mlx_whisper.transcribe,
+                file_path,
+                path_or_hf_repo=self.whisper_model,
+                **self._build_fallback_stt_kwargs(),
+            )
+
+    def _apply_custom_replacements(self, text: str) -> str:
+        """
+        Применяет пользовательские коррекции (если задан STT_REPLACE_JSON).
+        Заменяет по границам слов в регистронезависимом режиме.
+        """
+        if not self.stt_replace_map or not text:
+            return text
+        fixed = text
+        for raw_src, raw_dst in self.stt_replace_map.items():
+            src = re.escape(raw_src)
+            fixed = re.sub(rf"(?<!\w){src}(?!\w)", raw_dst, fixed, flags=re.IGNORECASE)
+        return fixed
+
+    def _capitalize_sentences(self, text: str) -> str:
+        """Поднимает первую букву в начале предложения."""
+        if not text:
+            return text
+        chars = list(text)
+        need_upper = True
+        for idx, ch in enumerate(chars):
+            if need_upper and ch.isalpha():
+                chars[idx] = ch.upper()
+                need_upper = False
+            if ch in ".!?":
+                need_upper = True
+            elif not ch.isspace() and ch not in "\"'«»()[]{}":
+                # Внутри слова/фразы верхний регистр не форсируем.
+                need_upper = False
+        return "".join(chars)
+
+    def _postprocess_transcript(self, raw_text: str) -> str:
+        """
+        Детеминированная постобработка распознанного текста:
+        - нормализация пробелов/пунктуации,
+        - добавление завершающего знака,
+        - капитализация предложений,
+        - пользовательские замены терминов.
+        """
+        text = str(raw_text or "").strip()
+        if not text:
+            return ""
+
+        # Для командных префиксов (!, /) пунктуацию не вмешиваем.
+        if text.startswith(("!", "/")):
+            return text
+
+        text = re.sub(r"\s+", " ", text)
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        text = re.sub(r"([,.;:!?])(?=[^\s\"')\]»}])", r"\1 ", text)
+        text = re.sub(r"([!?.,])\1{2,}", r"\1", text)
+        text = text.strip()
+
+        if len(text.split()) >= 5 and text[-1] not in ".!?":
+            text += "."
+
+        text = self._capitalize_sentences(text)
+        text = self._apply_custom_replacements(text)
+        return text
 
     async def analyze_image(self, file_path: str, router, prompt: str) -> str:
         """

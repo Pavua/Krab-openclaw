@@ -7,6 +7,51 @@
 
 ---
 
+## ✅ v8 Sprint Update #22 (2026-02-20) — STT Quality Upgrade + Signal/WhatsApp Channel Ops
+
+### Что реализовано
+
+1. **STT качество/пунктуация (Krab Ear runtime в Krab Core)**:
+   - `src/modules/perceptor.py`:
+     - добавлен расширенный STT-профиль (`beam_size`, `best_of`, `patience`, `no_speech_threshold`, `compression_ratio_threshold`);
+     - добавлен безопасный fallback на базовый профиль при несовместимости аргументов `mlx_whisper`;
+     - добавлена детерминированная постобработка транскрипта:
+       - нормализация пробелов и пунктуации,
+       - капитализация предложений,
+       - добавление финальной точки при длинной фразе без завершения,
+       - поддержка пользовательских замен через `STT_REPLACE_JSON`.
+     - поддержка `STT_HOTWORDS` для усиления распознавания важных терминов.
+   - `src/utils/voice_bridge.py`:
+     - синхронизирован с тем же STT-профилем и постобработкой для standalone-режима (`krab_ear.command`).
+
+2. **Signal daemon hardening (канал связи)**:
+   - `openclaw_signal_daemon.command` переведён с foreground-режима на `launchd`:
+     - автозапуск/keepalive,
+     - логи в `logs/signal-daemon.{out,err}.log`,
+     - проверка регистрации номера перед стартом,
+     - проверка порта и probe после запуска.
+   - добавлены one-click скрипты:
+     - `openclaw_signal_daemon_stop.command`
+     - `openclaw_signal_daemon_status.command`
+
+3. **WhatsApp link flow**:
+   - добавлен one-click скрипт `openclaw_whatsapp_link.command`:
+     - запускает `openclaw channels login --channel whatsapp`,
+     - после QR-link сразу показывает probe-статус.
+
+### Верификация
+
+1. Тесты STT-модуля:
+   - `pytest -q tests/test_perceptor.py`
+   - ✅ `10 passed`.
+
+2. Скрипты каналов:
+   - `zsh -n openclaw_signal_daemon.command openclaw_signal_daemon_stop.command openclaw_signal_daemon_status.command openclaw_whatsapp_link.command`
+   - ✅ синтаксис корректен.
+   - `./openclaw_signal_daemon_status.command` показывает фактический статус Signal/WhatsApp/других каналов через `openclaw channels status --probe`.
+
+---
+
 ## ✅ v8 Sprint Update #21 (2026-02-19) — Web Assistant UX, Model Catalog API, Attachments, Stable Startup
 
 ### Что реализовано

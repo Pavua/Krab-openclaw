@@ -111,3 +111,38 @@ async def test_local_vision_precheck_blocks_text_only_model(tmp_path: Path):
         )
     assert result.get("ok") is False
     assert str(result.get("error", "")).startswith("local_model_not_vision_capability")
+
+
+def test_postprocess_transcript_adds_punctuation_and_caps():
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({})
+    raw = "привет как дела сегодня у нас отличная погода"
+    fixed = perceptor._postprocess_transcript(raw)
+    assert fixed.startswith("Привет")
+    assert fixed.endswith(".")
+
+
+def test_postprocess_transcript_applies_custom_replace_map():
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({"STT_REPLACE_JSON": '{"джимини":"Gemini"}'})
+    fixed = perceptor._postprocess_transcript("проверка джимини сегодня")
+    assert "Gemini" in fixed
+
+
+@pytest.mark.asyncio
+async def test_perceptor_transcribe_fallback_on_unsupported_kwargs(tmp_path: Path):
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({})
+
+    test_file = tmp_path / "test_audio.ogg"
+    test_file.write_text("dummy", encoding="utf-8")
+
+    with patch("mlx_whisper.transcribe") as mocked_transcribe:
+        mocked_transcribe.side_effect = [
+            TypeError("unexpected keyword argument 'beam_size'"),
+            {"text": "привет мир как дела"},
+        ]
+        result = await perceptor.transcribe(str(test_file), MagicMock())
+
+    assert mocked_transcribe.call_count == 2
+    assert result.startswith("Привет мир")

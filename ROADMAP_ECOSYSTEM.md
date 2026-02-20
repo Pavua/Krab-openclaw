@@ -123,6 +123,9 @@
 - [ ] Единый интеграционный smoke-пайплайн по трём сервисам.
 - [ ] Подготовка трека iOS companion (PSTN translation) без слияния рантаймов.
 - [x] Архивировать устаревшие roadmap-ветки и дубли (R0: source-of-truth зафиксирован).
+- [x] Ввести one-click канал-операции:
+  - Signal daemon через launchd (`start/stop/status`),
+  - WhatsApp QR-link script с post-probe проверкой.
 - [ ] Automation layer decision:
   - определить, где нужен n8n (интеграции/cron/webhook),
   - где достаточно встроенного scheduler/commands в Krab,
