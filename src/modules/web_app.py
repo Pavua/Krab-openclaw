@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import structlog
 import uvicorn
@@ -603,6 +604,52 @@ class WebApp:
                 }
             }
 
+        @self.app.get("/api/ops/diagnostics")
+        async def ops_diagnostics():
+            """[R12] Унифицированный операционный отчет (алиас system/diagnostics с расширением)."""
+            return await system_diagnostics()
+
+        @self.app.post("/api/ops/models")
+        async def ops_models_control(
+            payload: Dict[str, Any] = Body(...),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            [R12] Управление жизненным циклом локальных моделей.
+            Payload: {"action": "load"|"unload"|"unload_all", "model": "model_name"}
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            router = self.deps.get("router")
+            if not router:
+                return {"ok": False, "error": "router_not_found"}
+            
+            action = payload.get("action")
+            model_name = payload.get("model")
+            
+            try:
+                if action == "load":
+                    if not model_name:
+                        return {"ok": False, "error": "model_name_required"}
+                    success = await router.load_local_model(model_name)
+                    return {"ok": success, "action": action, "model": model_name}
+                
+                elif action == "unload":
+                    if not model_name:
+                        return {"ok": False, "error": "model_name_required"}
+                    success = await router.unload_model_manual(model_name)
+                    return {"ok": success, "action": action, "model": model_name}
+                
+                elif action == "unload_all":
+                    await router.unload_models_manual()
+                    return {"ok": True, "action": action}
+                
+                else:
+                    return {"ok": False, "error": "invalid_action", "supported": ["load", "unload", "unload_all"]}
+            except Exception as e:
+                logger.error("ops_models_control_failed", error=str(e))
+                return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
         @self.app.get("/api/ecosystem/health/export")
         async def ecosystem_health_export():
             """Экспортирует расширенный ecosystem health report в JSON-файл."""
@@ -665,18 +712,42 @@ class WebApp:
             """Возвращает статус локального рантайма LLM."""
             router = self.deps["router"]
             is_available = bool(getattr(router, "is_local_available", False))
-            active_model = str(getattr(router, "active_local_model", "") or "")
-            engine = str(getattr(router, "local_engine", "unknown"))
-            
+            active_model = str(getattr(router, "active_local_model", "") or "").strip()
+            engine_raw = str(getattr(router, "local_engine", "unknown") or "unknown").strip()
+            engine_norm = engine_raw.lower().replace("-", "").replace("_", "")
+
+            if engine_norm == "lmstudio":
+                runtime_url = str(getattr(router, "lm_studio_url", "") or "").strip()
+            elif engine_norm == "ollama":
+                runtime_url = str(getattr(router, "ollama_url", "") or "").strip()
+            else:
+                runtime_url = ""
+
+            lifecycle_status = "loaded" if (is_available and bool(active_model)) else "not_loaded"
+
             return {
                 "ok": True,
-                "status": {
+                # Каноничный формат для frontend R10.
+                "status": lifecycle_status,
+                "model_name": active_model or "",
+                "engine": engine_raw,
+                "url": runtime_url or "n/a",
+                # Backward compatibility для существующих клиентов.
+                "details": {
                     "available": is_available,
-                    "engine": engine,
+                    "engine": engine_raw,
                     "active_model": active_model,
-                    "is_loaded": bool(active_model and is_available),
-                    "url": getattr(router, "lm_studio_url" if engine == "lm-studio" else "ollama_url", "n/a")
-                }
+                    "is_loaded": lifecycle_status == "loaded",
+                    "url": runtime_url or "n/a",
+                },
+                # Старый вложенный формат оставляем на переходный период.
+                "status_legacy": {
+                    "available": is_available,
+                    "engine": engine_raw,
+                    "active_model": active_model,
+                    "is_loaded": lifecycle_status == "loaded",
+                    "url": runtime_url or "n/a",
+                },
             }
 
         @self.app.post("/api/model/local/load-default")

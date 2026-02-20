@@ -86,6 +86,14 @@ class EcosystemHealthService:
             recommendations.append("Voice Gateway недоступен: команды `!call*` будут ограничены.")
         if not ear_check["ok"]:
             recommendations.append("Krab Ear backend недоступен: desktop call-assist поток неактивен.")
+        # [R12] Дополнительные рекомендации на основе бюджета
+        if budget.get("is_economy_mode"):
+            recommendations.append(f"💰 Активен РЕЖИМ ЭКОНОМИИ: бюджет превышен или близок к лимиту ({budget.get('usage_percent')}%).")
+        
+        runway = budget.get("runway_days", 30)
+        if runway < 7:
+            recommendations.append(f"⚠️ КРИТИЧЕСКИЙ БЮДЖЕТ: средств хватит примерно на {runway} дн. Рекомендуется пополнить баланс.")
+
         if not recommendations:
             recommendations.append("Экосистема в норме: поддерживай текущий режим мониторинга.")
 
@@ -107,7 +115,7 @@ class EcosystemHealthService:
             },
             "resources": resources,
             "budget": budget,
-            "recommendations": recommendations[:6],
+            "recommendations": recommendations[:8],  # Увеличил лимит рекомендаций
         }
 
     def _collect_resource_metrics(self) -> dict[str, Any]:

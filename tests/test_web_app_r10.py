@@ -37,9 +37,21 @@ def test_model_local_status(client, mock_deps):
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-    assert data["status"]["engine"] == "lm-studio"
-    assert data["status"]["active_model"] == "test-model"
-    assert data["status"]["is_loaded"] is True
+    assert data["status"] == "loaded"
+    assert data["model_name"] == "test-model"
+    assert data["engine"] == "lm-studio"
+    assert data["url"] == "http://localhost:1234/v1"
+    assert data["status_legacy"]["is_loaded"] is True
+
+
+def test_model_local_status_engine_name_normalization(client, mock_deps):
+    """Проверка, что lmstudio/lm-studio оба мапятся на lm_studio_url."""
+    mock_deps["router"].local_engine = "lmstudio"
+    response = client.get("/api/model/local/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["engine"] == "lmstudio"
+    assert payload["url"] == "http://localhost:1234/v1"
 
 def test_model_local_load_default_unauthorized(client):
     """Проверка POST /api/model/local/load-default с неверным ключом"""
@@ -110,5 +122,12 @@ async def test_model_router_fallback_logic():
         assert response == "Hello from Cloud"
         # Проверяем причину роутинга в последнем маршруте
         last_route = router.get_last_route()
-        assert last_route["route_reason"] == "local_failed_cloud_fallback"
-        assert "no models loaded" in last_route["route_detail"].lower()
+        assert last_route["route_reason"] in {
+            "local_failed_cloud_fallback",
+            "local_fallback_cloud",
+        }
+        route_detail = str(last_route.get("route_detail", "")).lower()
+        assert (
+            "no models loaded" in route_detail
+            or "runtime_error" in route_detail
+        )

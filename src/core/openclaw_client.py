@@ -173,21 +173,24 @@ class OpenClawClient:
         """
         Получает список моделей от OpenClaw Gateway.
         Пробует /v1/models (OpenAI-compatible) и возвращает нормализованный список.
+        [HOTFIX] Если endpoint возвращает HTML (SPA), возвращаем пустой список вместо ошибки парсинга.
         """
-        # 1. Пробуем OpenAI-style endpoint
         result = await self._request_json("GET", "/v1/models")
         if not result.get("ok"):
             logger.warning("OpenClaw get_models failed: %s", result.get("error"))
             return []
 
         data = result.get("data", {})
+        
+        # Если в data есть "raw" и там HTML - значит это SPA Gateway, а не API JSON.
+        if isinstance(data, dict) and "raw" in data:
+            if "<!doctype html>" in str(data["raw"]).lower():
+                logger.warning("OpenClaw /v1/models returned HTML instead of JSON. Check Gateway configuration.")
+                return []
 
-        # 2. Нормализация ответа
-        # OpenAI style: {"data": [...], "object": "list"}
         if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
             return data["data"]
 
-        # Direct list: [...]
         if isinstance(data, list):
             return data
 

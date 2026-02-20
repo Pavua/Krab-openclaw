@@ -126,20 +126,47 @@ class KrabWatchdog:
             logger.error(f"Ecosystem script not found at {ecosystem_script}")
 
     async def _check_resources(self):
-        """[R11] Проверка потребления RAM и применение Soft Healing."""
-        ram_percent = psutil.virtual_memory().percent
-        if ram_percent > self.ram_threshold:
-            logger.warning(f"🚨 CRITICAL RAM USAGE: {ram_percent}% (Threshold: {self.ram_threshold}%)")
+        """[R12] Улучшенный мониторинг RAM и многостадийное самоисцеление."""
+        try:
+            ram_percent = psutil.virtual_memory().percent
+        except Exception as e:
+            logger.error(f"Failed to get RAM metrics: {e}")
+            return
+
+        # Пороги (можно вынести в env)
+        SOFT_THRESHOLD = self.ram_threshold  # По умолчанию 90%
+        HARD_THRESHOLD = 95.0
+        
+        if ram_percent > SOFT_THRESHOLD:
+            logger.warning(f"🚨 RAM USAGE HIGH: {ram_percent}% (Soft Threshold: {SOFT_THRESHOLD}%)")
+            
             if self.router:
-                logger.info("🧠 Soft Healing: Requesting model unload to free up memory...")
-                success = await self.router.unload_models_manual()
-                if success and self.notifier:
+                # [Stage 1] Soft Healing: Выгрузка моделей
+                logger.info("🧠 RAM [Soft Healing]: Requesting model unload...")
+                # unload_models_manual - асинхронный метод
+                await self.router.unload_models_manual()
+                
+                if self.notifier:
                     await self.notifier.notify_system(
-                        "SOFT HEALING",
-                        f"CRITICAL RAM detected ({ram_percent}%). Local models have been unloaded to prevent system hang."
+                        "SOFT HEALING TRIGGERED",
+                        f"Использование RAM: {ram_percent}%. Локальные модели выгружены для освобождения памяти."
                     )
+                
+                # Даем паузу перед возможным Hard Healing
+                await asyncio.sleep(5)
+                new_ram = psutil.virtual_memory().percent
+                
+                if new_ram > HARD_THRESHOLD:
+                    logger.critical(f"💀 RAM STILL CRITICAL AFTER SOFT HEAL: {new_ram}% (Hard Threshold: {HARD_THRESHOLD}%)")
+                    # [Stage 2] Hard Healing: Рестарт ядра
+                    await self._handle_failure("CriticalResourcePressure")
             else:
-                logger.error("❌ Soft Healing failed: ModelRouter not linked to Watchdog.")
+                # Если роутера нет, сразу идем в хард-рестарт при превышении порога
+                if ram_percent > HARD_THRESHOLD:
+                    await self._handle_failure("CriticalResourcePressureNoRouter")
+        else:
+            if ram_percent > 80.0:
+                logger.info(f"📊 RAM check: {ram_percent}% - OK (below {SOFT_THRESHOLD}%)")
 
 # Синглтон
 krab_watchdog = KrabWatchdog()
