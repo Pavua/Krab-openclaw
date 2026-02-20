@@ -56,3 +56,15 @@ temp/
 verify_*.py
 verify_*.sh
 test_mcp_imports.py
+
+# Secrets & certificates
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/
+credentials/
