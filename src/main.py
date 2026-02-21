@@ -393,16 +393,30 @@ async def debug_logger(client, message: Message):
     sender_id = message.from_user.id if message.from_user else 0
     name = message.from_user.first_name if message.from_user else "Unknown"
     msg_type = message.media.value if message.media else "Text"
-    text = message.text or message.caption or f"[{msg_type}]"
+    raw_text = message.text or message.caption or f"[{msg_type}]"
+    # Защита от битых surrogate-пар в редких входящих апдейтах Telegram.
+    # Нельзя слайсить message.text напрямую без страховки: Pyrogram может бросить UnicodeDecodeError.
+    try:
+        text = str(raw_text)
+    except Exception:
+        text = f"[{msg_type}]"
+    try:
+        text_preview_20 = text[:20]
+    except Exception:
+        text_preview_20 = f"[{msg_type}]"
+    try:
+        text_preview_50 = text[:50]
+    except Exception:
+        text_preview_50 = f"[{msg_type}]"
     direction = (
         "OUTGOING" if message.from_user and message.from_user.is_self
         else "INCOMING"
     )
 
-    print(f"DEBUG: Message received from @{sender} ({message.chat.id}): {text[:20]}")
+    print(f"DEBUG: Message received from @{sender} ({message.chat.id}): {text_preview_20}")
     logger.info(
         f"🔍 DEBUG: {direction} from @{sender} ({message.chat.id}). "
-        f"Type: {msg_type}. Text: {text[:50]}..."
+        f"Type: {msg_type}. Text: {text_preview_50}..."
     )
 
     black_box.log_message(

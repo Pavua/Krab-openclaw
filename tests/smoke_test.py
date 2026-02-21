@@ -3,6 +3,7 @@ import sys
 import os
 import asyncio
 import unittest
+import tempfile
 from unittest.mock import MagicMock, patch, AsyncMock
 
 # Add src to path
@@ -42,8 +43,10 @@ class TestSystemHealth(unittest.IsolatedAsyncioTestCase):
     async def test_02_rag_engine(self):
         """Test RAG Engine v2.0."""
         from src.core.rag_engine import RAGEngine
-        # Use a temporary test database
-        rag = RAGEngine(db_path="artifacts/memory/tests_chroma")
+        # Используем уникальную временную БД, чтобы не цепляться за
+        # потенциально поврежденные/устаревшие артефакты предыдущих прогонов.
+        tmp_db = tempfile.mkdtemp(prefix="krab_rag_smoke_")
+        rag = RAGEngine(db_path=tmp_db)
         doc_id = rag.add_document("Test knowledge", category="general")
         self.assertIsNotNone(doc_id)
         res = rag.query("knowledge")

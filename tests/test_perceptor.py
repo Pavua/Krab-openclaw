@@ -9,15 +9,17 @@ from src.modules.perceptor import Perceptor
 @pytest.mark.asyncio
 async def test_perceptor_stt_mock():
     # Мокаем внешнюю зависимость mlx_whisper
-    with patch('mlx_whisper.transcribe', return_value={"text": "Привет мир"}):
-        perceptor = Perceptor({"WHISPER_MODEL": "test"})
-        # Создаем пустой файл для теста
-        test_file = "test_audio.ogg"
-        with open(test_file, "w") as f: f.write("dummy")
-        
-        res = await perceptor.transcribe(test_file, MagicMock())
-        assert res == "Привет мир"
-        os.remove(test_file)
+    with patch.dict(os.environ, {"STT_ISOLATED_WORKER": "0"}):
+        with patch('mlx_whisper.transcribe', return_value={"text": "Привет мир"}):
+            perceptor = Perceptor({"WHISPER_MODEL": "test"})
+            # Создаем пустой файл для теста
+            test_file = "test_audio.ogg"
+            with open(test_file, "w") as f:
+                f.write("dummy")
+
+            res = await perceptor.transcribe(test_file, MagicMock())
+            assert res == "Привет мир"
+            os.remove(test_file)
 
 @pytest.mark.asyncio
 async def test_perceptor_tts_logic():
@@ -131,8 +133,9 @@ def test_postprocess_transcript_applies_custom_replace_map():
 
 @pytest.mark.asyncio
 async def test_perceptor_transcribe_fallback_on_unsupported_kwargs(tmp_path: Path):
-    with patch.object(Perceptor, "_warmup_audio"):
-        perceptor = Perceptor({})
+    with patch.dict(os.environ, {"STT_ISOLATED_WORKER": "0"}):
+        with patch.object(Perceptor, "_warmup_audio"):
+            perceptor = Perceptor({})
 
     test_file = tmp_path / "test_audio.ogg"
     test_file.write_text("dummy", encoding="utf-8")

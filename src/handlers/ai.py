@@ -425,7 +425,10 @@ def _normalize_runtime_error_message_for_user(text: str, router=None) -> tuple[s
     detector = getattr(router, "_is_runtime_error_message", None)
     if callable(detector):
         try:
-            is_runtime_error = bool(detector(raw))
+            detected = detector(raw)
+            # Защита от моков: учитываем только реальный bool-ответ детектора.
+            if isinstance(detected, bool):
+                is_runtime_error = detected
         except Exception:
             is_runtime_error = False
 
@@ -448,6 +451,14 @@ def _normalize_runtime_error_message_for_user(text: str, router=None) -> tuple[s
             "quota exceeded",
             "billing",
             "out of credits",
+            "permission_denied",
+            "api key was reported as leaked",
+            "invalid api key",
+            "incorrect api key",
+            "generative language api has not been used",
+            "api has not been used in project",
+            "it is disabled",
+            "enable it by visiting",
         )
         is_runtime_error = any(marker in lowered for marker in fallback_markers)
 
@@ -459,6 +470,21 @@ def _normalize_runtime_error_message_for_user(text: str, router=None) -> tuple[s
         detail = "локальная модель не загружена"
     elif "quota" in lowered or "billing" in lowered or "out of credits" in lowered:
         detail = "лимит облачного провайдера исчерпан"
+    elif (
+        "generative language api has not been used" in lowered
+        or "api has not been used in project" in lowered
+        or "it is disabled" in lowered
+        or "enable it by visiting" in lowered
+    ):
+        detail = "в Google Cloud не включён Generative Language API для текущего ключа"
+    elif "permission_denied" in lowered:
+        detail = "доступ к облачному провайдеру отклонён (permission denied)"
+    elif (
+        "api key was reported as leaked" in lowered
+        or "invalid api key" in lowered
+        or "incorrect api key" in lowered
+    ):
+        detail = "API ключ облачного провайдера невалиден или скомпрометирован"
     elif "not_found" in lowered or "not found" in lowered:
         detail = "запрошенная модель недоступна у провайдера"
     elif "timeout" in lowered or "timed out" in lowered:
@@ -2264,38 +2290,31 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             clean_display_text,
             max_same_body=2,
         )
-        if removed_repeats:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автоочистка: убраны повторяющиеся фрагменты ответа."
-            ).strip()
-        if removed_repeated_lines:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автоочистка: убраны повторяющиеся строки ответа."
-            ).strip()
-        if removed_nonconsecutive_repeats:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автоочистка: убраны повторяющиеся длинные блоки ответа."
-            ).strip()
-        if corrected_vision_consistency:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автокоррекция: удалены фразы, противоречащие фактическому vision-маршруту."
-            ).strip()
-        if removed_service_phrases:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автоочистка: удалены служебные строки очереди/ожидания."
-            ).strip()
-        if removed_tool_artifacts:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автоочистка: удалены внутренние служебные блоки модели."
-            ).strip()
-        if removed_english_scaffold:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автоочистка: убраны длинные англоязычные вставки (сохранён русский вариант ответа)."
-            ).strip()
-        if removed_numbered_duplicates:
-            clean_display_text = (
-                f"{clean_display_text}\n\n⚠️ Автоочистка: убраны дубли пунктов в нумерованном списке."
-            ).strip()
+        if any(
+            [
+                removed_repeats,
+                removed_repeated_lines,
+                removed_nonconsecutive_repeats,
+                corrected_vision_consistency,
+                removed_service_phrases,
+                removed_tool_artifacts,
+                removed_english_scaffold,
+                removed_numbered_duplicates,
+            ]
+        ):
+            logger.info(
+                "auto_reply: выполнена автоочистка ответа",
+                chat_id=message.chat.id,
+                message_id=message.id,
+                removed_repeats=bool(removed_repeats),
+                removed_repeated_lines=bool(removed_repeated_lines),
+                removed_nonconsecutive_repeats=bool(removed_nonconsecutive_repeats),
+                corrected_vision_consistency=bool(corrected_vision_consistency),
+                removed_service_phrases=bool(removed_service_phrases),
+                removed_tool_artifacts=bool(removed_tool_artifacts),
+                removed_english_scaffold=bool(removed_english_scaffold),
+                removed_numbered_duplicates=bool(removed_numbered_duplicates),
+            )
         if _looks_like_internal_dump(clean_display_text):
             clean_display_text = (
                 "⚠️ Поймал внутренний служебный вывод модели и скрыл его.\n"

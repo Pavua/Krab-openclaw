@@ -472,3 +472,163 @@ async def test_route_query_stream_force_cloud_does_not_use_local_branch(
         )
     ]
     assert chunks == ["Cloud stream response"]
+
+
+@pytest.mark.asyncio
+async def test_route_query_stops_cloud_rotation_on_fatal_auth_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    При фатальной cloud-ошибке (invalid/leaked key) роутер должен
+    остановить перебор кандидатов и вернуть ошибку сразу.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+    router.is_local_available = False
+
+    attempts = {"count": 0}
+
+    async def fake_call_gemini(*args, **kwargs):
+        attempts["count"] += 1
+        return "❌ OpenClaw Error (0): Connection error. | Google API 403: Your API key was reported as leaked."
+
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash", "openai/gpt-4o-mini"],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="Проверка fatal cloud auth",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+
+    assert attempts["count"] == 1
+    assert "скомпрометированный" in response.lower() or "leaked" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_route_query_stops_cloud_rotation_on_api_disabled_403(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Ошибка вида «API not used/disabled» должна считаться фатальной для
+    текущего запроса и останавливать перебор cloud-кандидатов.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+    router.is_local_available = False
+
+    attempts = {"count": 0}
+
+    async def fake_call_gemini(*args, **kwargs):
+        attempts["count"] += 1
+        return (
+            "❌ OpenClaw Error (0): Connection error. | Google API 403: "
+            "Generative Language API has not been used in project 123 or it is disabled. "
+            "Enable it by visiting console.developers.google.com"
+        )
+
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash", "openai/gpt-4o-mini"],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="Проверка fatal cloud api-disabled",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+
+    assert attempts["count"] == 1
+    assert "generative language api" in response.lower() or "google cloud" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_route_query_autoloads_local_when_no_model_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Если локалка «жива», но модель не загружена (no_model_loaded),
+    route_query должен попытаться auto-load и отдать локальный ответ.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "auto"
+    router.is_local_available = False
+    router.last_local_load_error = "no_model_loaded"
+
+    async def fake_check_local_health():
+        router.is_local_available = False
+        return False
+
+    async def fake_autoload(reason: str = "") -> bool:
+        router.is_local_available = True
+        router.active_local_model = "zai-org/glm-4.6v-flash"
+        return True
+
+    async def fake_call_local_llm(prompt: str, context=None, chat_type: str = "private", is_owner: bool = False):
+        return "Локальный ответ после auto-load"
+
+    monkeypatch.setattr(router, "check_local_health", fake_check_local_health)
+    monkeypatch.setattr(router, "_maybe_autoload_local_model", fake_autoload)
+    monkeypatch.setattr(router, "_call_local_llm", fake_call_local_llm)
+
+    response = await router.route_query(
+        prompt="Проверка автозагрузки локальной модели",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+    assert response == "Локальный ответ после auto-load"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_autoloads_local_when_no_model_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Для stream-ветки должна работать та же логика авто-загрузки локальной модели
+    при no_model_loaded.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "auto"
+    router.is_local_available = False
+    router.last_local_load_error = "no_model_loaded"
+
+    async def fake_check_local_health():
+        router.is_local_available = False
+        return False
+
+    async def fake_autoload(reason: str = "") -> bool:
+        router.is_local_available = True
+        router.active_local_model = "zai-org/glm-4.6v-flash"
+        return True
+
+    async def local_stream_ok(payload):
+        yield "stream "
+        yield "ok"
+
+    monkeypatch.setattr(router, "check_local_health", fake_check_local_health)
+    monkeypatch.setattr(router, "_maybe_autoload_local_model", fake_autoload)
+    monkeypatch.setattr(router.stream_client, "stream_chat", local_stream_ok)
+
+    chunks = [
+        chunk
+        async for chunk in router.route_stream(
+            prompt="Проверка stream auto-load",
+            task_type="chat",
+            context=[],
+            chat_type="private",
+            is_owner=True,
+        )
+    ]
+    assert "".join(chunks) == "stream ok"

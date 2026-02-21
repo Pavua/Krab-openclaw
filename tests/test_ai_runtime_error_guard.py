@@ -42,3 +42,28 @@ def test_runtime_error_guard_respects_router_detector() -> None:
     text, rewritten = _normalize_runtime_error_message_for_user("какой-то ответ без маркеров", router=router)
     assert rewritten is True
     assert "Временная ошибка AI" in text
+
+
+def test_runtime_error_guard_rewrites_google_api_disabled() -> None:
+    raw = (
+        "Connection error. | Google API 403: Generative Language API has not been used in project 123 "
+        "or it is disabled. Enable it by visiting console.developers.google.com"
+    )
+    text, rewritten = _normalize_runtime_error_message_for_user(raw)
+    assert rewritten is True
+    assert "Generative Language API" in text
+
+
+class _RouterMockyDetector:
+    """Имитирует некорректный детектор (например, MagicMock), возвращающий не bool."""
+
+    def _is_runtime_error_message(self, text: str):  # noqa: ANN001 - тест намеренно возвращает не bool
+        return {"runtime": "maybe"}
+
+
+def test_runtime_error_guard_ignores_non_bool_detector_result() -> None:
+    router = _RouterMockyDetector()
+    raw = "Привет! Всё в порядке, это обычный пользовательский ответ."
+    text, rewritten = _normalize_runtime_error_message_for_user(raw, router=router)
+    assert rewritten is False
+    assert text == raw

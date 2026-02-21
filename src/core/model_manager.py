@@ -136,6 +136,17 @@ class ModelRouter:
         self.local_preferred_model = config.get("LOCAL_PREFERRED_MODEL", "").strip()
         # Модель для кодинга (если отличается от chat-модели)
         self.local_coding_model = config.get("LOCAL_CODING_MODEL", "").strip()
+        # Защита от шторма автозагрузки локальной модели:
+        # если LM Studio жива, но модель не загружена, пробуем auto-load
+        # не чаще заданного интервала.
+        try:
+            self.local_autoload_cooldown_sec = max(
+                5,
+                int(config.get("LOCAL_AUTOLOAD_COOLDOWN_SEC", 30)),
+            )
+        except Exception:
+            self.local_autoload_cooldown_sec = 30
+        self._last_local_autoload_ts = 0.0
 
         # ═══════════════════════════════════════════════════════════════
         # [PHASE 15.1] Context Window Manager Metadata
@@ -666,6 +677,67 @@ class ModelRouter:
         if self._is_cloud_billing_error(error_text):
             logger.warning("Cloud warning (billing-related): %s. Продолжаем попытки.", error_text)
             # self.cloud_soft_cap_reached = True  <-- Блокировка отключена
+
+    def _is_fatal_cloud_auth_error(self, text: Optional[str]) -> bool:
+        """
+        Определяет фатальные cloud-ошибки, при которых нет смысла перебирать
+        остальные модели этого же провайдера в текущем запросе.
+        """
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return False
+
+        fatal_markers = (
+            "unauthorized",
+            "invalid api key",
+            "incorrect api key",
+            "api key was reported as leaked",
+            "permission_denied",
+            "forbidden",
+            "generative language api has not been used",
+            "api has not been used in project",
+            "it is disabled",
+            "enable it by visiting",
+            "quota exceeded",
+            "out of credits",
+            "insufficient balance",
+            "billing error",
+        )
+        return any(marker in lowered for marker in fatal_markers)
+
+    def _summarize_cloud_error_for_user(self, text: Optional[str]) -> str:
+        """
+        Возвращает короткую пользовательскую формулировку cloud-ошибки
+        без сырого JSON/stacktrace.
+        """
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return "облачный провайдер временно недоступен"
+
+        if "reported as leaked" in lowered:
+            return "ключ провайдера помечен как скомпрометированный (leaked) — нужен новый API key"
+        if "invalid api key" in lowered or "incorrect api key" in lowered:
+            return "API key провайдера невалидный"
+        if (
+            "generative language api has not been used" in lowered
+            or "api has not been used in project" in lowered
+            or "it is disabled" in lowered
+            or "enable it by visiting" in lowered
+        ):
+            return "Generative Language API не включён в Google Cloud проекте для этого ключа"
+        if "permission_denied" in lowered or "403" in lowered:
+            return "доступ к облачной модели отклонён провайдером (403)"
+        if "unauthorized" in lowered or "401" in lowered:
+            return "ошибка авторизации cloud-провайдера (401)"
+        if "quota exceeded" in lowered or "out of credits" in lowered or "billing" in lowered:
+            return "исчерпан лимит/биллинг cloud-провайдера"
+        if "not found" in lowered or "not_found" in lowered:
+            return "запрошенная cloud-модель недоступна (not found)"
+        if "connection error" in lowered or "failed to connect" in lowered:
+            return "ошибка соединения с AI-шлюзом"
+        if "timeout" in lowered:
+            return "таймаут ответа от cloud-провайдера"
+        return "облачный провайдер вернул ошибку"
 
     def _ensure_feedback_store(self) -> dict:
         """Приводит feedback store к ожидаемой структуре."""
@@ -1335,6 +1407,40 @@ class ModelRouter:
             logger.info(f"🔄 Fallback на первую LLM: {chat_candidate}")
 
         return await self._smart_load(chat_candidate, reason="ensure_chat")
+
+    async def _maybe_autoload_local_model(self, reason: str = "") -> bool:
+        """
+        Пытается автоматически загрузить локальную модель, если:
+        - режим не force_cloud,
+        - LM Studio доступна, но loaded-модели нет.
+        """
+        if self.force_mode == "force_cloud":
+            return False
+        if self.local_engine != "lm-studio":
+            return False
+        if self.last_local_load_error != "no_model_loaded":
+            return False
+
+        now = time.time()
+        if (now - float(self._last_local_autoload_ts)) < float(self.local_autoload_cooldown_sec):
+            return False
+
+        self._last_local_autoload_ts = now
+        logger.info(
+            "Auto-load локальной модели: старт",
+            reason=reason or "unspecified",
+            cooldown_sec=self.local_autoload_cooldown_sec,
+        )
+        loaded = await self._ensure_chat_model_loaded()
+        # Обновляем health после попытки, чтобы is_local_available/active_local_model были актуальны.
+        await self.check_local_health(force=True)
+        logger.info(
+            "Auto-load локальной модели: завершен",
+            loaded=bool(loaded),
+            active_local_model=self.active_local_model,
+            local_available=self.is_local_available,
+        )
+        return bool(loaded)
 
     async def list_local_models(self) -> List[str]:
         """Сканирует доступные локальные модели (lms ls) и возвращает уникальные ID."""
@@ -2159,6 +2265,8 @@ class ModelRouter:
                 await self._smart_load(preferred, reason=task_type)
 
         await self.check_local_health()
+        if not self.is_local_available:
+            await self._maybe_autoload_local_model(reason=f"route_query:{task_type}")
 
         async def _run_local(route_reason: str = "local_primary", route_detail: str = "") -> Any:
             if not self.is_local_available:
@@ -2232,6 +2340,13 @@ class ModelRouter:
                     self._mark_cloud_soft_cap_if_needed(str(response))
                     self.last_cloud_error = str(response)
                     self.last_cloud_model = candidate
+                    if self._is_fatal_cloud_auth_error(response):
+                        logger.error(
+                            "Cloud routing aborted: fatal auth/billing error",
+                            model=candidate,
+                            error=str(response)[:280],
+                        )
+                        break
                     continue
                 
                 # Cloud Success Guardrail
@@ -2263,7 +2378,12 @@ class ModelRouter:
                                           model_name=candidate, prompt=prompt, route_reason="force_cloud")
                 return response
             err_msg = self.last_cloud_error or 'Unknown cloud failure'
-            return f"❌ Ошибка Cloud (force): {err_msg}" if is_owner else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
+            summary = self._summarize_cloud_error_for_user(err_msg)
+            return (
+                f"❌ Ошибка Cloud (force_cloud): {summary}."
+                if is_owner
+                else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
+            )
 
         # Auto Mode Strategy
         force_local_due_cost = self.cloud_soft_cap_reached and not is_critical
@@ -2307,7 +2427,12 @@ class ModelRouter:
                     return l_resp
 
         err_msg = self.last_cloud_error or "Все каналы (Local/Cloud) недоступны или вернули ошибку."
-        return f"❌ Ошибка маршрутизации: {err_msg}" if is_owner else "❌ В данный момент генерация ответа не удалась из-за системной ошибки. Пожалуйста, попробуй позже."
+        summary = self._summarize_cloud_error_for_user(err_msg)
+        return (
+            f"❌ Ошибка маршрутизации: {summary}."
+            if is_owner
+            else "❌ В данный момент генерация ответа не удалась из-за системной ошибки. Пожалуйста, попробуй позже."
+        )
 
     async def route_stream(self,
                           prompt: str,
@@ -2321,6 +2446,8 @@ class ModelRouter:
         [PHASE 17.8] Потоковая маршрутизация с защитой local stream и cloud fallback.
         """
         await self.check_local_health()
+        if not self.is_local_available:
+            await self._maybe_autoload_local_model(reason=f"route_stream:{task_type}")
         profile = self.classify_task_profile(prompt, task_type)
         recommendation = self._get_profile_recommendation(profile)
         force_cloud_mode = self.force_mode == "force_cloud"
@@ -2416,6 +2543,13 @@ class ModelRouter:
                     self.last_cloud_model = candidate
                     self._mark_cloud_soft_cap_if_needed(err_msg)
                     logger.warning("Cloud fallback candidate failed", model=candidate, error=err_msg[:200])
+                    if self._is_fatal_cloud_auth_error(err_msg):
+                        logger.error(
+                            "Cloud stream fallback aborted: fatal auth/billing error",
+                            model=candidate,
+                            error=err_msg[:280],
+                        )
+                        break
                     
                     # Проверка на NOT_FOUND (мисконфигурация шлюза)
                     lowered = err_msg.lower()
@@ -2457,7 +2591,12 @@ class ModelRouter:
 
             last_error_text = str(self.last_cloud_error or "").strip()
             err_msg = last_error_text or "облачный провайдер временно недоступен."
-            msg = f"❌ Ошибка Cloud ({failure_reason}): {err_msg}" if is_owner else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
+            summary = self._summarize_cloud_error_for_user(err_msg)
+            msg = (
+                f"❌ Ошибка Cloud ({failure_reason}): {summary}."
+                if is_owner
+                else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
+            )
             yield msg
             return
 
@@ -2703,6 +2842,13 @@ class ModelRouter:
                     self.last_cloud_model = candidate
                     self._mark_cloud_soft_cap_if_needed(str(response))
                     last_err = response
+                    if self._is_fatal_cloud_auth_error(response):
+                        logger.error(
+                            "Cloud stream aborted: fatal auth/billing error",
+                            model=candidate,
+                            error=str(response)[:280],
+                        )
+                        break
                     continue
                 
                 if response and len(response.strip()) >= 2:
@@ -2716,7 +2862,12 @@ class ModelRouter:
                 
         # Если все кандидаты упали
         err_out = last_err or "Cloud API failure"
-        yield f"❌ Ошибка Cloud: {err_out}" if is_owner else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
+        summary = self._summarize_cloud_error_for_user(err_out)
+        yield (
+            f"❌ Ошибка Cloud: {summary}."
+            if is_owner
+            else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
+        )
 
     async def _call_gemini_stream(self, prompt: str, model_name: str, context: list = None,
                                   chat_type: str = "private", is_owner: bool = False):
