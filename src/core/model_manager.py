@@ -594,9 +594,11 @@ class ModelRouter:
         # Общие паттерны ошибок
         error_indicators = (
             "❌", "⚠️", "llm error", "error:", "exception:", "crashed",
-            "connection refused", "failed to fetch", "internal server error",
+            "connection refused", "connection error", "network error",
+            "failed to fetch", "internal server error",
             "500 internal", "502 bad gateway", "503 service unavailable", "504 gateway timeout",
-            "failed to connect", "upstream connect error", "empty response", "no response"
+            "failed to connect", "upstream connect error", "socket timeout",
+            "read timeout", "timed out", "empty response", "no response"
         )
         if any(indicator in lowered for indicator in error_indicators):
             return True
@@ -2451,7 +2453,15 @@ class ModelRouter:
                 yield cleaned
                 return
 
-            yield self.last_cloud_error or "❌ Не удалось получить ответ ни от локальной, ни от облачной модели."
+            last_error_text = str(self.last_cloud_error or "").strip()
+            if failure_reason == "force_cloud":
+                if last_error_text:
+                    yield f"❌ Cloud fallback недоступен: {last_error_text}"
+                else:
+                    yield "❌ Cloud fallback недоступен: облачный провайдер временно недоступен."
+                return
+
+            yield last_error_text or "❌ Не удалось получить ответ ни от локальной, ни от облачной модели."
 
         # Жёсткий cloud-only режим: локальный стрим полностью пропускаем.
         if force_cloud_mode:

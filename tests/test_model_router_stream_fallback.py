@@ -345,3 +345,50 @@ async def test_route_stream_force_cloud_does_not_use_local_recovery(tmp_path: Pa
     ]
     assert len(chunks) == 1
     assert "Cloud fallback недоступен" in chunks[0]
+
+
+@pytest.mark.asyncio
+async def test_route_stream_force_cloud_skips_connection_error_and_uses_next_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Проверяет регрессию: строка "Connection error." не должна считаться валидным
+    ответом модели. Роутер обязан перейти к следующему cloud-кандидату.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+    router.is_local_available = False
+
+    async def fake_check_local_health():
+        router.is_local_available = False
+        return False
+
+    attempts = {"count": 0}
+
+    async def fake_call_gemini(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return "Connection error."
+        return "Стабильный ответ от второго cloud-кандидата"
+
+    monkeypatch.setattr(router, "check_local_health", fake_check_local_health)
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash", "google/gemini-2.5-pro"],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    chunks = [
+        chunk
+        async for chunk in router.route_stream(
+            prompt="Проверка соединения",
+            task_type="chat",
+            context=[],
+            chat_type="private",
+            is_owner=True,
+        )
+    ]
+
+    assert attempts["count"] == 2
+    assert chunks == ["Стабильный ответ от второго cloud-кандидата"]

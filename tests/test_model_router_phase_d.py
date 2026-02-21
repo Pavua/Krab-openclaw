@@ -122,6 +122,7 @@ def test_cloud_error_detection_no_models_loaded_signature(tmp_path: Path) -> Non
     router = _router(tmp_path)
     assert router._is_cloud_error_message("400 No models loaded. Please load a model in the developer page.") is True
     assert router._is_cloud_error_message("The model has crashed without additional information. (Exit code: null)") is True
+    assert router._is_cloud_error_message("Connection error.") is True
 
 
 def test_cloud_soft_cap_switch(tmp_path: Path) -> None:
