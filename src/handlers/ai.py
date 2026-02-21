@@ -45,7 +45,9 @@ def _timeout_from_env(name: str, default_value: int) -> int:
         return default_value
 
 
-AUTO_REPLY_TIMEOUT_SECONDS = _timeout_from_env("AUTO_REPLY_TIMEOUT_SECONDS", 900)
+# В auto-reply держим ограничение по времени ощутимо ниже, чем в !think/agent-flow,
+# чтобы пользователь не видел «🤔 Думаю…» по 10-15 минут при деградации cloud.
+AUTO_REPLY_TIMEOUT_SECONDS = _timeout_from_env("AUTO_REPLY_TIMEOUT_SECONDS", 240)
 THINK_TIMEOUT_SECONDS = _timeout_from_env("THINK_TIMEOUT_SECONDS", 420)
 AUTO_REPLY_CONTEXT_TOKENS = _timeout_from_env("AUTO_REPLY_CONTEXT_TOKENS", 3000)
 AUTO_REPLY_BUSY_NOTICE_SECONDS = _timeout_from_env("AUTO_REPLY_BUSY_NOTICE_SECONDS", 12)

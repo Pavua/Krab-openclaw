@@ -50,6 +50,56 @@ def test_cloud_candidate_normalization_rewrites_obsolete_exp(tmp_path: Path) -> 
     assert "models/gemini-2.0-flash-exp" not in candidates
 
 
+def test_cloud_candidate_list_is_truncated_by_max_candidates(tmp_path: Path) -> None:
+    router = ModelRouter(
+        config={
+            "MODEL_ROUTING_MEMORY_PATH": str(tmp_path / "routing_memory.json"),
+            "MODEL_USAGE_REPORT_PATH": str(tmp_path / "usage_report.json"),
+            "MODEL_OPS_STATE_PATH": str(tmp_path / "ops_state.json"),
+            "MODEL_FEEDBACK_PATH": str(tmp_path / "feedback.json"),
+            "MODEL_CLOUD_MAX_CANDIDATES_PER_REQUEST": "2",
+            "MODEL_CLOUD_PRIORITY_LIST": ",".join(
+                [
+                    "google/gemini-2.5-flash",
+                    "google/gemini-3-pro-preview",
+                    "google/gemini-2.5-pro",
+                    "openai/gpt-4o-mini",
+                ]
+            ),
+        }
+    )
+
+    candidates = router._build_cloud_candidates(
+        task_type="chat",
+        profile="communication",
+        preferred_model="google/gemini-2.5-flash",
+    )
+    assert len(candidates) == 2
+    assert candidates[0] == "google/gemini-2.5-flash"
+
+
+def test_cloud_candidate_list_uses_force_cloud_cap(tmp_path: Path) -> None:
+    router = ModelRouter(
+        config={
+            "MODEL_ROUTING_MEMORY_PATH": str(tmp_path / "routing_memory.json"),
+            "MODEL_USAGE_REPORT_PATH": str(tmp_path / "usage_report.json"),
+            "MODEL_OPS_STATE_PATH": str(tmp_path / "ops_state.json"),
+            "MODEL_FEEDBACK_PATH": str(tmp_path / "feedback.json"),
+            "MODEL_CLOUD_MAX_CANDIDATES_PER_REQUEST": "5",
+            "MODEL_CLOUD_MAX_CANDIDATES_FORCE_CLOUD": "1",
+            "MODEL_CLOUD_PRIORITY_LIST": "google/gemini-2.5-flash,google/gemini-2.5-pro,openai/gpt-4o-mini",
+        }
+    )
+    router.force_mode = "force_cloud"
+
+    candidates = router._build_cloud_candidates(
+        task_type="chat",
+        profile="communication",
+        preferred_model="google/gemini-2.5-flash",
+    )
+    assert candidates == ["google/gemini-2.5-flash"]
+
+
 def test_resolve_cloud_model_uses_group_override_for_group_chat(tmp_path: Path) -> None:
     router = ModelRouter(
         config={

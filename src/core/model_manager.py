@@ -273,6 +273,22 @@ class ModelRouter:
             "MODEL_CLOUD_PRIORITY_LIST",
             "gemini-2.5-flash,gemini-2.5-pro,google/gemini-2.5-flash,google/gemini-2.5-pro,openai/gpt-4o-mini"
         ))
+        # Ограничение длины cloud-ротации, чтобы не зависать на десятках кандидатов.
+        # Особенно критично при force_cloud и сетевых деградациях.
+        try:
+            self.cloud_max_candidates_per_request = max(
+                1,
+                int(config.get("MODEL_CLOUD_MAX_CANDIDATES_PER_REQUEST", 4)),
+            )
+        except Exception:
+            self.cloud_max_candidates_per_request = 4
+        try:
+            self.cloud_max_candidates_force_cloud = max(
+                1,
+                int(config.get("MODEL_CLOUD_MAX_CANDIDATES_FORCE_CLOUD", 3)),
+            )
+        except Exception:
+            self.cloud_max_candidates_force_cloud = 3
 
         # Память предпочтений моделей по профилям задач.
         self._routing_memory_path = Path(
@@ -1134,6 +1150,22 @@ class ModelRouter:
         add(base)
         for extra in self.cloud_priority_models:
             add(extra)
+
+        max_candidates = (
+            int(self.cloud_max_candidates_force_cloud)
+            if self.force_mode == "force_cloud"
+            else int(self.cloud_max_candidates_per_request)
+        )
+        if len(candidates) > max_candidates:
+            dropped = candidates[max_candidates:]
+            candidates = candidates[:max_candidates]
+            logger.info(
+                "Cloud candidate list truncated",
+                max_candidates=max_candidates,
+                force_mode=self.force_mode,
+                kept=candidates,
+                dropped_count=len(dropped),
+            )
 
         return candidates
 
