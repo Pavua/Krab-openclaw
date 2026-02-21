@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krab Project Dashboard</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --tg-theme-bg-color: #ffffff;
+            --tg-theme-text-color: #000000;
+            --tg-theme-button-color: #2481cc;
+            --tg-theme-button-text-color: #ffffff;
+            --accent-color: #ff5722;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--tg-theme-bg-color);
+            color: var(--tg-theme-text-color);
+            margin: 0;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .project-card {
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .status-badge {
+            background: var(--accent-color);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .task-list {
+            list-style: none;
+            padding: 0;
+            margin: 16px 0 0 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 8px;
+        }
+
+        .task-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--tg-theme-button-color);
+            border-radius: 4px;
+        }
+
+        .task-item.completed .task-checkbox {
+            background: var(--tg-theme-button-color);
+        }
+
+        .task-item.completed span {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        .footer {
+            margin-top: auto;
+            text-align: center;
+            font-size: 12px;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>Краб Проекты</h1>
+        <span class="status-badge" id="proj-status">Активен</span>
+    </div>
+
+    <div class="project-card">
+        <h2 id="proj-title">Создание Игры Змейка</h2>
+        <p id="proj-desc" style="font-size: 14px; opacity: 0.8;">Автономное написание кода, тесты и деплой.</p>
+
+        <div class="progress-bar"
+            style="height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin: 15px 0;">
+            <div id="progress-value" style="width: 60%; height: 100%; background: var(--tg-theme-button-color);"></div>
+        </div>
+
+        <ul class="task-list" id="task-list">
+            <li class="task-item completed">
+                <div class="task-checkbox"></div>
+                <span>Инициализация проекта</span>
+            </li>
+            <li class="task-item completed">
+                <div class="task-checkbox"></div>
+                <span>Написание базовой логики</span>
+            </li>
+            <li class="task-item">
+                <div class="task-checkbox"></div>
+                <span>Реализация UI (Pygame)</span>
+            </li>
+            <li class="task-item">
+                <div class="task-checkbox"></div>
+                <span>Авто-тестирование</span>
+            </li>
+        </ul>
+    </div>
+
+    <div class="footer">
+        Krab Turnkey Architect v1.0
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.MainButton.setText("Вернуться в чат").show();
+        tg.MainButton.onClick(() => tg.close());
+    </script>
+</body>
+
+</html>

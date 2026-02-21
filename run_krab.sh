@@ -10,7 +10,7 @@ pkill -f "src.main" || true
 pkill -f "pure_test" || true
 pkill -f "simple_run" || true
 # Удаляем временные файлы блокировки базы (если есть)
-rm -f *.session-journal *.session-wal
+# rm -f *.session-journal *.session-wal
 sleep 1
 
 echo "🦀 Starting Krab AI Userbot Full Stack..."
@@ -81,7 +81,9 @@ fi
 echo "🚀 Launching Krab Userbot..."
 
 while true; do
-    python -u -m src.main > krab.log 2>&1
+    export PYTHONPATH="$DIR:$PYTHONPATH"
+    echo "--- Restarting at $(date) ---" >> krab.log
+    python -u -m src.main >> krab.log 2>&1
     EXIT_CODE=$?
     
     if [ $EXIT_CODE -eq 42 ]; then

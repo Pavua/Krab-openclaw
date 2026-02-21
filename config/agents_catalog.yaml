@@ -1,0 +1,13 @@
+# Каталог agent-ролей Krab (Phase E)
+version: 1
+updated_at: "2026-02-12T00:00:00+00:00"
+agents: []
+role_templates:
+  - role: coding
+    description: Разработка, рефакторинг, тестирование, ревью.
+  - role: crypto-trading-assistant
+    description: Криптоаналитика, риск-лимиты, сигналы и сводки.
+  - role: telegram-moderation
+    description: Модерация чатов Telegram, правила, авто-действия.
+  - role: communication
+    description: Коммуникации, саммари, переводы, контент-черновики.

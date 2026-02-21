@@ -1,68 +1,70 @@
 #!/bin/bash
-# Script to launch Krab Userbot on macOS
-# Get the directory where this script is located
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$DIR"
+# -----------------------------------------------------------------------------
+# 🦀 Krab AI Userbot - Launch Script
+# -----------------------------------------------------------------------------
+# This is the main entry point for running Krab in interactive mode.
+# It ensures the virtual environment is active and sets up the execution context.
+# -----------------------------------------------------------------------------
 
-# Launch Terminal if not waiting
-echo "🦀 Launching Krab Userbot..."
-echo "📂 Directory: $DIR"
+# Navigate to the project root directory
+cd "$(dirname "$0")"
 
-# Check for venv
-if [ ! -d "venv" ]; then
-    echo "❌ Virtual environment 'venv' not found!"
-    echo "Please run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
-    read -p "Press Enter to exit..."
+# ANSI Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Header
+echo -e "${BLUE}=======================================${NC}"
+echo -e "${GREEN}   🦀 KRAB AI: AUTONOMOUS AGENT v7.6   ${NC}"
+echo -e "${BLUE}=======================================${NC}"
+
+find_core_pids() {
+    {
+        pgrep -f -- "python(.+)?src/main.py" || true
+        pgrep -f -- "python(.+)?-m src.main" || true
+    } | tr ' ' '\n' | sed '/^$/d' | sort -u
+}
+
+# Check for .env file
+if [ ! -f ".env" ]; then
+    echo -e "${RED}⚠️  WARNING: .env file not found!${NC}"
+    echo "Creating from .env.example..."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo -e "${GREEN}✅ Created .env. Please configure it!${NC}"
+    else
+        echo -e "${RED}❌ .env.example also missing! Cannot proceed.${NC}"
+        exit 1
+    fi
+fi
+
+# Check for Virtual Environment
+if [ ! -d ".venv" ]; then
+    echo -e "${RED}❌ Virtual environment (.venv) not found!${NC}"
+    echo "Please run: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
     exit 1
 fi
 
-# Activate venv
-# Activate venv
-source venv/bin/activate
+# Launch
+echo -e "${BLUE}🚀 Starting Krab Core...${NC}"
+echo "Logs structure: logs/krab.log"
+echo "Press Ctrl+C to stop."
+echo ""
 
-# Start OpenClaw Gateway in background
-echo "🦀 Starting OpenClaw Gateway..."
-# Assuming OpenCrawl is a sibling directory
-OPENCLAW_BIN="$DIR/../OpenCrawl/node_modules/.bin/openclaw"
-
-if [ -f "$OPENCLAW_BIN" ]; then
-    "$OPENCLAW_BIN" gateway --port 18792 > openclaw.log 2>&1 &
-    OPENCLAW_PID=$!
-    echo "✅ OpenClaw started (PID $OPENCLAW_PID)"
-else
-    echo "⚠️ OpenClaw binary not found at $OPENCLAW_BIN"
-    echo "Please ensure 'OpenCrawl' project is adjacent to this folder."
-fi
-
-# Give it a moment to initialize
-sleep 3
-
-# Run the bot
-# Run the bot in a loop for auto-restart
-while true; do
-    echo "🚀 Starting Python Bot..."
-    python3 -m src.main
-    EXIT_CODE=$?
-    
-    if [ $EXIT_CODE -eq 42 ]; then
-        echo "🔄 Restart requested (Code 42)..."
-        sleep 1
-        continue
-    elif [ $EXIT_CODE -eq 0 ]; then
-        echo "✅ Bot stopped cleanly."
-        break
-    else
-        echo "⚠️ Bot crashed (Code $EXIT_CODE). Restarting in 5 seconds..."
-        sleep 5
+# Защита от двойного старта:
+# если ядро уже запущено, новый экземпляр не стартуем.
+if [[ "${KRAB_ALLOW_DUPLICATE_START:-0}" != "1" ]]; then
+    CORE_PIDS="$(find_core_pids)"
+    if [[ -n "$CORE_PIDS" ]]; then
+        echo -e "${RED}⚠️  Ядро уже запущено. Второй экземпляр не стартую.${NC}"
+        echo "Активные PID:"
+        echo "$CORE_PIDS"
+        echo "Если нужен перезапуск, запусти: ./full_restart.command"
+        exit 0
     fi
-done
-
-# Keep window open if it crashes
-# Cleanup on exit
-if [ -n "$OPENCLAW_PID" ]; then
-    kill "$OPENCLAW_PID"
-    echo "🛑 OpenClaw stopped."
 fi
 
-echo "⚠️ Krab stopped."
-read -p "Press Enter to close..."
+# Execute
+./.venv/bin/python3 -m src.main

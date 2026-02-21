@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  krab:
+    build: .
+    container_name: krab_v7
+    restart: always
+    env_file: .env
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    # Если запущен ComfyUI локально, прокидываем порты или используем network mode host
+    # network_mode: "host"
+    environment:
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    name: krab_network

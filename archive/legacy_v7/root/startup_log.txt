@@ -1,0 +1,24 @@
+nohup: ignoring input
+2026-02-10 02:45:49,549 - KrabMain - INFO - Starting Krab v2.0...
+2026-02-10 02:45:50,095 - pyrogram.connection.connection - INFO - Connecting...
+2026-02-10 02:45:50,150 - pyrogram.connection.connection - INFO - Connected! Production DC4 - IPv4
+2026-02-10 02:45:50,150 - pyrogram.session.session - INFO - NetworkTask started
+2026-02-10 02:45:50,432 - pyrogram.session.session - INFO - Session initialized: Layer 158
+2026-02-10 02:45:50,432 - pyrogram.session.session - INFO - Device: CPython 3.13.5 - Pyrogram 2.0.106
+2026-02-10 02:45:50,432 - pyrogram.session.session - INFO - System: Darwin 25.3.0 (en)
+2026-02-10 02:45:50,432 - pyrogram.session.session - INFO - Session started
+2026-02-10 02:45:50,438 - pyrogram.session.session - INFO - PingTask started
+2026-02-10 02:45:50,575 - pyrogram.dispatcher - INFO - Started 18 HandlerTasks
+2026-02-10 02:45:50,648 - KrabMain - INFO - Logged in as Yung Nagato (@yung_nagato)
+2026-02-10 02:50:08,583 - src.core.model_manager - INFO - Routing to LOCAL (None)
+2026-02-10 02:50:09,482 - httpx - INFO - HTTP Request: POST http://192.168.0.171:1234/chat/completions "HTTP/1.1 200 OK"
+2026-02-10 02:50:09,484 - src.core.model_manager - ERROR - Local LLM Error: 'NoneType' object is not subscriptable
+2026-02-10 02:50:18,828 - src.core.model_manager - INFO - Routing to LOCAL (None)
+2026-02-10 02:50:18,844 - httpx - INFO - HTTP Request: POST http://192.168.0.171:1234/chat/completions "HTTP/1.1 200 OK"
+2026-02-10 02:50:18,846 - src.core.model_manager - ERROR - Local LLM Error: 'NoneType' object is not subscriptable
+2026-02-10 02:58:20,281 - root - INFO - Stop signal received (SIGTERM). Exiting...
+2026-02-10 02:58:20,688 - pyrogram.dispatcher - INFO - Stopped 18 HandlerTasks
+2026-02-10 02:58:20,688 - pyrogram.session.session - INFO - PingTask stopped
+2026-02-10 02:58:20,689 - pyrogram.session.session - INFO - NetworkTask stopped
+2026-02-10 02:58:20,689 - pyrogram.connection.connection - INFO - Disconnected
+2026-02-10 02:58:20,689 - pyrogram.session.session - INFO - Session stopped

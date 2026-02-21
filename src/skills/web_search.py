@@ -1,16 +1,20 @@
 """
 Web Search Skill - Поиск информации через Brave Search API
 """
+import os
+from urllib.parse import quote_plus
+
 import httpx
 import structlog
-from typing import Optional
-from src.config import config
 
 logger = structlog.get_logger(__name__)
 
 async def search_web(query: str) -> str:
     """Ищет информацию в интернете через Brave Search API"""
-    api_key = config.BRAVE_SEARCH_API_KEY
+    # Совместимость с двумя именами env-переменной:
+    # - BRAVE_SEARCH_API_KEY (новое/явное)
+    # - BRAVE_API_KEY (legacy)
+    api_key = (os.getenv("BRAVE_SEARCH_API_KEY") or os.getenv("BRAVE_API_KEY") or "").strip()
     
     if not api_key:
         # Fallback to simple DuckDuckGo link if no API key
@@ -22,8 +26,9 @@ async def search_web(query: str) -> str:
                 "Accept": "application/json",
                 "X-Subscription-Token": api_key
             }
-            url = f"https://api.search.brave.com/res/v1/web/search?q={query}&count=3"
-            response = await client.get(url, headers=headers)
+            safe_query = quote_plus(query)
+            url = f"https://api.search.brave.com/res/v1/web/search?q={safe_query}&count=3"
+            response = await client.get(url, headers=headers, timeout=15)
             
             if response.status_code != 200:
                 return f"❌ Ошибка Brave Search ({response.status_code}): {response.text}"

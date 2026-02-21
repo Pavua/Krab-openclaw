@@ -1,0 +1,13 @@
+# Каталог skills Krab (Phase E)
+version: 1
+updated_at: "2026-02-12T00:00:00+00:00"
+skills: []
+role_templates:
+  - role: coding
+    description: Dev-инструменты, сборка, тесты, quality gates.
+  - role: crypto-trading-assistant
+    description: Рыночные метрики, отчеты по позициям, алерты.
+  - role: telegram-moderation
+    description: Антиспам и enforcement-политики.
+  - role: communication
+    description: Стили общения, summary, multilingual шаблоны.

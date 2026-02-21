@@ -1,67 +1,857 @@
+# -*- coding: utf-8 -*-
 """
-Точка входа в приложение Краб
+Krab v7.2 (Stable) — Core Orchestrator (Entry Point)
+
+Тонкий оркестратор. Вся логика обработчиков вынесена в src/handlers/.
+Этот файл отвечает только за:
+1. Загрузку конфигурации и .env
+2. Инициализацию компонентов (Router, Memory, Perceptor, etc.)
+3. Регистрацию обработчиков через register_all_handlers()
+4. Запуск клиента Pyrogram и graceful shutdown
+
+Предыдущая версия (1661 строка) сохранена в main_legacy.py.
 """
-import asyncio
+
+import os
 import signal
-import sys
+import asyncio
+import json
+import atexit
+from datetime import datetime
 
-import structlog
-import logging
+from dotenv import load_dotenv
+from pyrogram import Client, filters, idle
+from pyrogram.handlers import MessageHandler, CallbackQueryHandler
+from pyrogram.types import (
+    Message,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
+)
 
-from .config import config
-from .model_manager import model_manager
-from .openclaw_client import openclaw_client
-from .userbot_bridge import KraabUserbot
+# Core-модули
+from src.core.model_manager import ModelRouter
+from src.core.context_manager import ContextKeeper
+from src.core.error_handler import safe_handler, get_error_stats
+from src.core.rate_limiter import RateLimiter
+from src.core.config_manager import ConfigManager
+from src.core.security_manager import SecurityManager
+from src.core.mcp_client import mcp_manager
+from src.core.logger_setup import setup_logger, get_last_logs
+from src.core.persona_manager import PersonaManager
+from src.modules.perceptor import Perceptor
+from src.modules.screen_catcher import ScreenCatcher
+from src.utils.black_box import BlackBox
+# from src.utils.web_scout import WebScout # Deprecated
+from src.core.scheduler import KrabScheduler
+from src.core.agent_manager import AgentWorkflow
+from src.core.tool_handler import ToolHandler
+from src.core.summary_manager import SummaryManager
+from src.core.image_manager import ImageManager
+from src.modules.reminder_pro import ReminderManager
+from src.core.openclaw_client import OpenClawClient # Phase 4.1
+from src.core.voice_gateway_client import VoiceGatewayClient
+from src.core.telegram_chat_resolver import TelegramChatResolver
+from src.core.telegram_summary_service import TelegramSummaryService
+from src.core.provisioning_service import ProvisioningService
+from src.core.ai_guardian_client import AIGuardianClient
+from src.core.group_moderation_engine import GroupModerationEngine
+from src.core.agent_loop import ProjectAgent
+from src.core.scheduler import krab_scheduler
+from src.core.notifier import krab_notifier
+from src.core.watchdog import krab_watchdog
+from src.core.process_lock import SingleInstanceProcessLock, DuplicateInstanceError
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = structlog.get_logger()
+# Handler-модули (новая модульная система)
+from src.handlers import register_all_handlers
+from src.handlers.scheduling import get_active_reminders
 
+# === ИНИЦИАЛИЗАЦИЯ ===
+
+# Логирование
+logger = setup_logger()
+
+# Переменные окружения
+load_dotenv(override=True)
+
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+CORE_LOCK_PATH = os.path.join(PROJECT_ROOT, ".runtime", "krab_core.lock")
+CORE_PID_PATH = os.path.join(PROJECT_ROOT, "krab_core.pid")
+core_singleton_lock: SingleInstanceProcessLock | None = None
+
+
+def acquire_core_singleton_lock() -> None:
+    """
+    Захватывает межпроцессный lock ядра.
+
+    Почему так:
+    - защита от случайного двойного запуска (ручной запуск + watchdog/оркестратор);
+    - исключение дублирующих ответов в Telegram из двух конкурирующих процессов.
+    """
+    global core_singleton_lock
+    if core_singleton_lock is not None:
+        return
+
+    lock = SingleInstanceProcessLock(lock_path=CORE_LOCK_PATH, pid_path=CORE_PID_PATH)
+    try:
+        lock.acquire()
+    except DuplicateInstanceError as exc:
+        logger.critical(
+            "Второй запуск ядра отклонён: активный экземпляр уже работает.",
+            lock_file=CORE_LOCK_PATH,
+            active_pid=exc.holder_pid,
+            active_started_at=exc.holder_started_at,
+            holder_payload=exc.info.raw_payload[:300],
+        )
+        raise SystemExit(2) from None
+
+    core_singleton_lock = lock
+    atexit.register(release_core_singleton_lock)
+    logger.info("✅ Singleton-lock ядра захвачен.", lock_file=CORE_LOCK_PATH, pid=os.getpid())
+
+
+def release_core_singleton_lock() -> None:
+    """Освобождает межпроцессный lock ядра при штатном/аварийном завершении."""
+    global core_singleton_lock
+    if core_singleton_lock is None:
+        return
+
+    try:
+        core_singleton_lock.release()
+    finally:
+        core_singleton_lock = None
+
+
+def _int_env(name: str, default: int) -> int:
+    """Безопасно читает целое значение из env."""
+    raw = str(os.getenv(name, str(default))).strip()
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except Exception:
+        return default
+
+
+def _json_contains_lmstudio_provider(payload):
+    """Проверяет наличие provider=lmstudio в auth profiles."""
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_lower = str(key).strip().lower()
+            if key_lower == "lmstudio":
+                return True
+            if key_lower in {"provider", "provider_id", "name", "id"} and str(value).strip().lower() == "lmstudio":
+                return True
+            if _json_contains_lmstudio_provider(value):
+                return True
+        return False
+    if isinstance(payload, list):
+        return any(_json_contains_lmstudio_provider(item) for item in payload)
+    if isinstance(payload, str):
+        return payload.strip().lower() == "lmstudio"
+    return False
+
+
+def preflight_openclaw_auth_profile() -> None:
+    """
+    Проверяет наличие lmstudio auth profile до первого local-fallback.
+    Ничего не ломает, только даёт точный actionable warning.
+    """
+    auth_path = os.path.expanduser(
+        os.getenv("OPENCLAW_AUTH_PROFILES_PATH", "~/.openclaw/agents/main/agent/auth-profiles.json")
+    )
+    remediation_script = os.path.abspath("repair_openclaw_lmstudio_auth.command")
+
+    if not os.path.exists(auth_path):
+        logger.warning(
+            "OpenClaw auth profile store не найден",
+            auth_profiles_path=auth_path,
+            remediation=remediation_script,
+        )
+        return
+
+    try:
+        with open(auth_path, "r", encoding="utf-8") as fp:
+            payload = json.load(fp)
+    except Exception as exc:
+        logger.warning(
+            "OpenClaw auth profile store не читается",
+            auth_profiles_path=auth_path,
+            error=str(exc),
+            remediation=remediation_script,
+        )
+        return
+
+    if not _json_contains_lmstudio_provider(payload):
+        logger.warning(
+            "OpenClaw auth profile lmstudio отсутствует",
+            auth_profiles_path=auth_path,
+            remediation=remediation_script,
+        )
+    else:
+        logger.info("OpenClaw auth preflight OK: lmstudio profile найден", auth_profiles_path=auth_path)
+
+
+preflight_openclaw_auth_profile()
+
+# Telegram-конфигурация
+try:
+    API_ID = int(os.getenv("TELEGRAM_API_ID"))
+except (ValueError, TypeError):
+    API_ID = os.getenv("TELEGRAM_API_ID")
+
+API_HASH = os.getenv("TELEGRAM_API_HASH")
+SESSION_NAME = os.getenv("TELEGRAM_SESSION_NAME", "nexus_session1")
+session_file = f"{SESSION_NAME}.session"
+
+logger.info(f"📂 Looking for session file: {os.path.abspath(session_file)}")
+
+if not os.path.exists(session_file):
+    logger.error(f"‼️ SESSION NOT FOUND: {session_file}. Pyrogram will fail in non-interactive mode.")
+else:
+    logger.info(f"✅ Session file '{session_file}' found. No interactive login should be needed.")
+
+# --- Компоненты ---
+
+# AI Router (LocalLLM + Gemini)
+router = ModelRouter(config=os.environ)
+
+# Контекстная память (JSONL)
+memory = ContextKeeper()
+
+# Perceptor: STT (Whisper), Vision (Gemini), TTS
+perceptor_config = {"WHISPER_MODEL": "mlx-community/whisper-large-v3-turbo"}
+perceptor = Perceptor(config=perceptor_config)
+
+# Очистка кэша голоса при старте
+try:
+    voice_cache_dir = "voice_cache"
+    if os.path.exists(voice_cache_dir):
+        for f in os.listdir(voice_cache_dir):
+            if f.endswith((".mp3", ".ogg")):
+                os.remove(os.path.join(voice_cache_dir, f))
+        logger.info(f"🧹 Voice cache cleared on startup.")
+except Exception as e:
+    logger.warning(f"Could not clear voice cache: {e}")
+
+# Screen Awareness (скриншоты + Vision AI)
+screen_catcher = ScreenCatcher(perceptor)
+
+# Черный Ящик (SQLite логирование)
+black_box = BlackBox()
+
+# Telegram control services (summaryx + chat picker)
+telegram_chat_resolver = TelegramChatResolver(black_box=black_box)
+telegram_summary_service = TelegramSummaryService(router=router)
+
+# Разведчик (Web Search) - Deprecated
+# scout = WebScout()
+
+# Конфигурация с hot-reload (YAML)
+cfg = ConfigManager()
+
+# Безопасность (роли, stealth mode)
+security = SecurityManager(owner_username=os.getenv("OWNER_USERNAME", "p0lrd"), config=cfg)
+
+# Персоны (личности бота)
+persona_manager = PersonaManager(cfg, black_box)
+router.persona = persona_manager
+
+# Browser Agent (Phase 9.2)
+enable_local_browser = os.getenv("ENABLE_LOCAL_BROWSER", "0").strip().lower() in {"1", "true", "yes", "on"}
+browser_agent = None
+if enable_local_browser:
+    try:
+        from src.modules.browser import BrowserAgent
+        browser_agent = BrowserAgent(headless=True)
+    except ImportError:
+        browser_agent = None
+else:
+    logger.info("Local BrowserAgent disabled (fallback-only mode).")
+
+# OpenClaw Client (Phase 4.1)
+openclaw_client = OpenClawClient(
+    base_url=os.getenv("OPENCLAW_BASE_URL", "http://localhost:18789"),
+    api_key=os.getenv("OPENCLAW_API_KEY")
+)
+
+# AI Guardian Client (Phase 11.2)
+ai_guardian_client = AIGuardianClient(
+    base_url=os.getenv("AI_GUARDIAN_URL", "http://localhost:8000")
+)
+
+# Voice Gateway Client (Krab Voice v2)
+voice_gateway_client = VoiceGatewayClient(
+    base_url=os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
+    api_key=os.getenv("VOICE_GATEWAY_API_KEY", ""),
+)
+
+# Провизионинг и каталоги (Phase E)
+provisioning = ProvisioningService()
+
+# Групповая модерация (Phase C, moderation v2)
+group_moderation_engine = GroupModerationEngine(
+    policy_path=os.getenv("GROUP_MODERATION_POLICY_PATH", "artifacts/moderation/group_policies.json"),
+    default_dry_run=os.getenv("GROUP_MODERATION_DEFAULT_DRY_RUN", "1").strip().lower() in {"1", "true", "yes", "on"},
+    ai_guardian=ai_guardian_client,
+)
+
+# Инструменты (shell, RAG, MCP, Browser)
+tools = ToolHandler(router, router.rag, openclaw_client, mcp=mcp_manager, browser_agent=browser_agent)
+router.tools = tools
+
+# Агентный воркфлоу (Phase 8.1 ReAct)
+agent = AgentWorkflow(router, memory, security, tools=tools)
+
+# Фаза 16: Автономные проекты
+project_agent = ProjectAgent(router=router, tools=tools, memory=memory)
+
+# Rate Limiter
+rate_limiter = RateLimiter(
+    limit=cfg.get("security.rate_limit", 10),
+    window=cfg.get("security.rate_window_sec", 60),
+)
+
+# Memory Archiver (если доступен)
+try:
+    from src.core.memory_archiver import MemoryArchiver
+    archiver = MemoryArchiver(router, memory)
+except ImportError:
+    archiver = None
+
+# Summary Manager (для сжатия контекста)
+summarizer = SummaryManager(router, memory, max_tokens=cfg.get("ai.summary_token_threshold", 3000))
+
+# Image Manager (генерация картинок)
+image_gen = ImageManager(cfg.get_all())
+
+# Crypto Intel (Phase 9.4)
+try:
+    from src.modules.crypto import CryptoIntel
+    crypto_intel = CryptoIntel()
+except ImportError:
+    crypto_intel = None
+
+# Email Manager (Phase 9.3)
+try:
+    from src.modules.email_manager import EmailManager
+    email_manager = EmailManager(os.environ)
+except ImportError:
+    email_manager = None
+
+# Web App (Phase 15)
+from src.modules.web_app import WebApp
+web_app = None
+
+# === PYROGRAM CLIENT ===
+# ФИНАЛЬНЫЙ ФИКС 'database is locked': новое имя файла и изолированный workdir
+session_workdir = "/tmp/krab_final"
+session_name = "nexus_last_hope"
+if not os.path.exists(session_workdir):
+    os.makedirs(session_workdir, exist_ok=True)
+
+# Синхронизация сессии из корня проекта в изолированную зону
+origin_session = "nexus_session1.session"
+if os.path.exists(origin_session):
+    import shutil
+    shutil.copy2(origin_session, os.path.join(session_workdir, f"{session_name}.session"))
+
+logger.info(f"🚀 Initializing Pyrogram Client | Session: {session_name} | Workdir: {session_workdir}")
+
+# Даем время ОС освободить дескрипторы (на всякий случай)
+import time
+time.sleep(2)
+
+app = Client(
+    name=session_name,
+    api_id=API_ID,
+    api_hash=API_HASH,
+    workdir=session_workdir,
+    plugins=None, 
+)
+
+# Plugin Manager (Phase 13)
+from src.core.plugin_manager import PluginManager
+plugin_manager = PluginManager()
+
+# Task Queue (Фоновые задачи)
+from src.core.task_queue import TaskQueue
+task_queue = TaskQueue(app)
+
+# Планировщик и Инфраструктура Автономности
+scheduler = krab_scheduler
+notifier = krab_notifier
+watchdog = krab_watchdog
+reminder_manager = None 
+
+
+# === DEBUG LOGGER (group=-1, срабатывает первым на каждое сообщение) ===
+@app.on_message(group=-1)
+async def debug_logger(client, message: Message):
+    """Глобальный логгер — записывает каждое сообщение в Black Box."""
+    sender = message.from_user.username if message.from_user else "Unknown"
+    sender_id = message.from_user.id if message.from_user else 0
+    name = message.from_user.first_name if message.from_user else "Unknown"
+    msg_type = message.media.value if message.media else "Text"
+    raw_text = message.text or message.caption or f"[{msg_type}]"
+    # Защита от битых surrogate-пар в редких входящих апдейтах Telegram.
+    # Нельзя слайсить message.text напрямую без страховки: Pyrogram может бросить UnicodeDecodeError.
+    try:
+        text = str(raw_text)
+    except Exception:
+        text = f"[{msg_type}]"
+    try:
+        text_preview_20 = text[:20]
+    except Exception:
+        text_preview_20 = f"[{msg_type}]"
+    try:
+        text_preview_50 = text[:50]
+    except Exception:
+        text_preview_50 = f"[{msg_type}]"
+    direction = (
+        "OUTGOING" if message.from_user and message.from_user.is_self
+        else "INCOMING"
+    )
+
+    print(f"DEBUG: Message received from @{sender} ({message.chat.id}): {text_preview_20}")
+    logger.info(
+        f"🔍 DEBUG: {direction} from @{sender} ({message.chat.id}). "
+        f"Type: {msg_type}. Text: {text_preview_50}..."
+    )
+
+    black_box.log_message(
+        chat_id=message.chat.id,
+        chat_title=message.chat.title or "Private",
+        sender_id=sender_id,
+        sender_name=name,
+        username=sender,
+        direction=direction,
+        text=text,
+        reply_to_id=message.reply_to_message_id,
+    )
+
+
+# === CALLBACK HANDLER (инлайн-кнопки) ===
+@app.on_callback_query()
+async def handle_callbacks(client, callback_query: CallbackQuery):
+    """Маршрутизация нажатий на inline-кнопки."""
+    data = callback_query.data
+
+    if data == "status_refresh":
+        await router.check_local_health()
+        local_status = "🟢 ON" if router.is_local_available else "🔴 OFF"
+        bb_stats = black_box.get_stats()
+
+        new_text = (
+            "**🦀 Krab v6.0 Statistics (Refreshed)**\n\n"
+            f"🧠 **Local Brain:** {local_status}\n"
+            f"🖤 **Black Box:** {bb_stats['total']} msgs\n\n"
+            f"🕒 Обновлено: {datetime.now().strftime('%H:%M:%S')}"
+        )
+        await callback_query.edit_message_text(new_text)
+        await callback_query.answer("Статус обновлен")
+
+    elif data == "diag_full":
+        await callback_query.answer("Запускаю диагностику...")
+        await callback_query.message.reply_text(
+            "Запустите команду `!diagnose` для полного отчета."
+        )
+
+    elif data == "cfg_view":
+        await callback_query.answer("Просмотр конфигурации...")
+        config_text = (
+            f"🔍 **Session:** `{os.getenv('TELEGRAM_SESSION_NAME')}`\n"
+            f"👤 **Owner:** `{os.getenv('OWNER_USERNAME')}`\n"
+            f"📡 **Local URL:** `{os.getenv('LM_STUDIO_URL', 'Default')}`"
+        )
+        await callback_query.message.reply_text(config_text)
+
+
+# === РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ ===
+
+# Формируем словарь зависимостей для handler-модулей
+# Причина: обработчики не должны импортировать глобальные переменные напрямую,
+# чтобы их было легко тестировать и переиспользовать.
+_deps = {
+    "router": router,
+    "pyrogram": Client,  # fixed: pyrogram module is usually imported as 'from pyrogram import Client' or similar, but here Client is what's used
+    "memory": memory,
+    "perceptor": perceptor,
+    "screen_catcher": screen_catcher,
+    "black_box": black_box,
+    # "scout": scout,
+    "security": security,
+    "config_manager": cfg,
+    "persona_manager": persona_manager,
+    "agent": agent,
+    "tools": tools,
+    "rate_limiter": rate_limiter,
+    "summarizer": summarizer,
+    "image_gen": image_gen,
+    "safe_handler": safe_handler,
+    "get_last_logs": get_last_logs,
+    "task_queue": task_queue,
+    "browser_agent": browser_agent,
+    "crypto_intel": crypto_intel,
+    "email_manager": email_manager,
+    "plugin_manager": plugin_manager,
+    "web_app": web_app,
+    "reminder_manager": None, # Will be set in main()
+    "scheduler": None, # Will be set in main()
+    "openclaw_client": openclaw_client,
+    "voice_gateway_client": voice_gateway_client,
+    "telegram_chat_resolver": telegram_chat_resolver,
+    "telegram_summary_service": telegram_summary_service,
+    "provisioning": provisioning,
+    "ai_guardian": ai_guardian_client,
+    "moderation_engine": group_moderation_engine,
+    "project_agent": project_agent,
+    "start_time": datetime.now(),
+}
+
+# Регистрируем все обработчики из src/handlers/
+register_all_handlers(app, _deps)
+
+
+def _collect_registered_handler_names(client: Client) -> set[str]:
+    """
+    Возвращает множество имён callback-функций, зарегистрированных в dispatcher.
+    Нужен для диагностики «тихих» проблем, когда хендлеры не поднялись.
+    """
+    names: set[str] = set()
+    try:
+        groups = getattr(client.dispatcher, "groups", {}) or {}
+        for handlers in groups.values():
+            for handler in handlers:
+                callback = getattr(handler, "callback", None)
+                if callback is None:
+                    continue
+                callback_name = getattr(callback, "__name__", "")
+                if callback_name:
+                    names.add(str(callback_name))
+    except Exception as exc:
+        logger.warning("Не удалось собрать список зарегистрированных хендлеров", error=str(exc))
+    return names
+
+
+def _collect_handler_groups(client: Client, target_names: set[str]) -> dict[str, int]:
+    """
+    Возвращает словарь {имя_хендлера: группа}, чтобы видеть приоритет маршрутизации.
+    """
+    found: dict[str, int] = {}
+    try:
+        groups = getattr(client.dispatcher, "groups", {}) or {}
+        for group_id, handlers in groups.items():
+            for handler in handlers:
+                callback = getattr(handler, "callback", None)
+                callback_name = getattr(callback, "__name__", "") if callback else ""
+                if callback_name in target_names:
+                    found[str(callback_name)] = int(group_id)
+    except Exception as exc:
+        logger.warning("Не удалось собрать группы хендлеров", error=str(exc))
+    return found
+
+
+async def _ensure_critical_handlers(client: Client, deps: dict) -> None:
+    """
+    Стартовая самодиагностика критичных хендлеров.
+    Если auto-reply отсутствует, выполняем точечную повторную регистрацию ai-модуля.
+    """
+    # Даём loop шанс выполнить отложенные add_handler задачи.
+    await asyncio.sleep(0.25)
+
+    names = _collect_registered_handler_names(client)
+    required = {"debug_logger", "handle_callbacks", "auto_reply_logic"}
+    missing = sorted(required - names)
+    if not missing:
+        groups_info = _collect_handler_groups(client, required)
+        logger.info(
+            "Стартовая проверка хендлеров: ок",
+            handlers_total=len(names),
+            required=list(required),
+            groups=groups_info,
+        )
+        return
+
+    logger.warning(
+        "Обнаружены отсутствующие критичные хендлеры, запускаю самовосстановление",
+        missing=missing,
+        handlers_total=len(names),
+    )
+
+    # Гарантируем presence базовых системных хендлеров.
+    if "debug_logger" in missing:
+        client.add_handler(MessageHandler(debug_logger, filters.all), group=-1)
+    if "handle_callbacks" in missing:
+        client.add_handler(CallbackQueryHandler(handle_callbacks), group=0)
+
+    # Точечно перерегистрируем AI-модуль, если выпал auto_reply.
+    if "auto_reply_logic" in missing:
+        from src.handlers.ai import register_handlers as register_ai_handlers
+        register_ai_handlers(client, deps)
+
+    await asyncio.sleep(0.25)
+    names_after = _collect_registered_handler_names(client)
+    missing_after = sorted(required - names_after)
+    if missing_after:
+        logger.error(
+            "Самовосстановление хендлеров не завершилось успешно",
+            missing=missing_after,
+            handlers_total=len(names_after),
+        )
+    else:
+        groups_info = _collect_handler_groups(client, required)
+        logger.info(
+            "Самовосстановление хендлеров выполнено успешно",
+            handlers_total=len(names_after),
+            groups=groups_info,
+        )
+
+
+# === MAIN LOOP ===
 
 async def main():
-    """Запуск приложения"""
-    print(f"""
-    🦀 KRAB USERBOT STARTED 🦀
-    Owner: {config.OWNER_USERNAME}
-    Mode: {config.LOG_LEVEL}
-    RAM Limit: {config.MAX_RAM_GB}GB
-    """)
-    
-    # Valdiate Config
-    if not config.is_valid():
-        logger.error("config_invalid", errors=config.validate())
-        sys.exit(1)
+    """Точка входа: запуск клиента, MCP, планировщика."""
+    global scheduler
 
-    # Health Checks
-    lm_health = await model_manager.health_check()
-    claw_health = await openclaw_client.health_check()
+    logger.info("🦀 Starting Krab v7.2 (Stable)...")
+    pyrogram_start_max_retries = _int_env("PYROGRAM_START_MAX_RETRIES", 10)
+    pyrogram_start_retry_delay_seconds = _int_env("PYROGRAM_START_RETRY_DELAY_SECONDS", 3)
+    last_start_error = None
+    for attempt in range(1, pyrogram_start_max_retries + 1):
+        try:
+            await app.start()
+            last_start_error = None
+            break
+        except Exception as exc:
+            last_start_error = exc
+            if attempt >= pyrogram_start_max_retries:
+                logger.critical(
+                    "Не удалось запустить Pyrogram после всех попыток",
+                    attempts=pyrogram_start_max_retries,
+                    error=str(exc),
+                )
+                raise
+            sleep_seconds = min(30, pyrogram_start_retry_delay_seconds * attempt)
+            logger.warning(
+                "Ошибка запуска Pyrogram, повтор через паузу",
+                attempt=attempt,
+                max_attempts=pyrogram_start_max_retries,
+                sleep_seconds=sleep_seconds,
+                error=str(exc),
+            )
+            await asyncio.sleep(sleep_seconds)
+    if last_start_error is not None:
+        raise last_start_error
+
+    # Самовосстановление критичных обработчиков сообщений.
+    await _ensure_critical_handlers(app, _deps)
+
+    # MCP Initialization
+    logger.info("🔌 Initializing MCP Servers...")
+    await mcp_manager.connect_all()
+
+    # Инициализация WebApp (Phase 15)
+    web_app = WebApp(
+        _deps,
+        port=cfg.get("WEB_PORT", int(os.getenv("WEB_PORT", 8080))),
+        host=str(cfg.get("WEB_HOST", os.getenv("WEB_HOST", "0.0.0.0"))),
+    )
+    await web_app.start()
+    _deps["web_app"] = web_app
+
+    # Проверка роутера
+    await router.check_local_health()
+    me = await app.get_me()
+    logger.info(f"Logged in as {me.first_name} (@{me.username})")
+
+    # Планировщик и Автономные операции (v11.0)
+    scheduler.telegram_client = app
+    notifier.set_client(app, me.id)
+    watchdog.notifier = notifier
+    watchdog.router = router
+
+    async def send_daily_cost_report():
+        """
+        Ежедневный отчёт по расходам/маршрутизации.
+        Нужен, чтобы владелец видел реальный burn-rate и мог оперативно
+        подкручивать политику моделей.
+        """
+        try:
+            if not hasattr(router, "get_cost_report") or not hasattr(router, "get_usage_summary"):
+                logger.warning("Daily cost report skipped: router cost API unavailable.")
+                return
+
+            forecast_calls = int(os.getenv("COST_DAILY_FORECAST_CALLS", "5000"))
+            cost = router.get_cost_report(monthly_calls_forecast=forecast_calls)
+            usage = router.get_usage_summary()
+            report_format = os.getenv("COST_DAILY_REPORT_FORMAT", "full").strip().lower()
+            totals = usage.get("totals", {})
+            ratios = usage.get("ratios", {})
+            top_models = usage.get("top_models", [])
+            monthly = cost.get("monthly_forecast", {})
+            budget = cost.get("budget", {})
+            costs_usd = cost.get("costs_usd", {})
+
+            top_lines = []
+            for item in top_models[:3]:
+                model_name = str(item.get("model", "-"))
+                model_calls = int(item.get("count", 0))
+                top_lines.append(f"• `{model_name}`: `{model_calls}`")
+            top_text = "\n".join(top_lines) if top_lines else "• _(нет данных)_"
+
+            if report_format in {"brief", "short", "compact"}:
+                report = (
+                    "💵 **Daily Cost Report (Brief)**\n\n"
+                    f"• Calls L/C/T: `{int(totals.get('local_calls', 0))}` / "
+                    f"`{int(totals.get('cloud_calls', 0))}` / `{int(totals.get('all_calls', 0))}`\n"
+                    f"• Cost total (USD): `{float(costs_usd.get('total_cost', 0.0))}`\n"
+                    f"• Forecast (USD): `{float(monthly.get('forecast_total_cost', 0.0))}`\n"
+                    f"• Budget ratio: `{float(budget.get('forecast_ratio', 0.0))}`\n"
+                    f"• Cloud share: `{float(ratios.get('cloud_share', 0.0))}`"
+                )
+            else:
+                report = (
+                    "💵 **Daily Cost Report**\n\n"
+                    f"• Local calls: `{int(totals.get('local_calls', 0))}`\n"
+                    f"• Cloud calls: `{int(totals.get('cloud_calls', 0))}`\n"
+                    f"• Total calls: `{int(totals.get('all_calls', 0))}`\n"
+                    f"• Cloud share: `{float(ratios.get('cloud_share', 0.0))}`\n\n"
+                    f"• Current total cost (USD): `{float(costs_usd.get('total_cost', 0.0))}`\n"
+                    f"• Avg cost/call (USD): `{float(costs_usd.get('avg_cost_per_call', 0.0))}`\n\n"
+                    f"• Forecast calls: `{int(monthly.get('forecast_calls', 0))}`\n"
+                    f"• Forecast total (USD): `{float(monthly.get('forecast_total_cost', 0.0))}`\n"
+                    f"• Budget (USD): `{float(budget.get('cloud_monthly_budget_usd', 0.0))}`\n"
+                    f"• Budget ratio: `{float(budget.get('forecast_ratio', 0.0))}`\n\n"
+                    "**Top models:**\n"
+                    f"{top_text}"
+                )
+            await notifier.notify(report)
+            logger.info("✅ Daily cost report sent to owner.")
+        except Exception as exc:
+            logger.error(f"❌ Daily cost report failed: {exc}")
     
-    logger.info("system_check", lm_studio=lm_health, openclaw=claw_health)
+    # Регистрация системных задач
+    scheduler.start()
+    asyncio.create_task(watchdog.start_monitoring())
     
-    if not claw_health:
-        logger.warning("openclaw_unreachable", url=config.OPENCLAW_URL)
-        # Не выходим, может поднимется позже
-        
-    # Start Userbot (Lazy Initialization)
-    kraab = KraabUserbot()
+    # Задача обновления пульса каждые 30 секунд
+    scheduler.add_interval_task(lambda: watchdog.update_pulse("CoreMainLoop"), minutes=1, task_id="system_watchdog_pulse")
+    
+    # Мониторинг ресурсов каждые 15 минут
+    scheduler.add_interval_task(notifier.check_resources, minutes=15, task_id="system_resource_monitor")
+
+    # Ежедневный отчёт по расходам (вкл/выкл и время через .env)
+    daily_cost_enabled = os.getenv("COST_DAILY_REPORT_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    if daily_cost_enabled:
+        try:
+            report_hour = int(os.getenv("COST_DAILY_REPORT_HOUR", "23"))
+            report_minute = int(os.getenv("COST_DAILY_REPORT_MINUTE", "55"))
+            cron_expr = f"{report_minute} {report_hour} * * *"
+            scheduler.add_cron_task(
+                send_daily_cost_report,
+                cron_string=cron_expr,
+                task_id="system_daily_cost_report",
+            )
+            logger.info(f"💵 Daily cost report scheduled at {report_hour:02d}:{report_minute:02d}.")
+        except Exception as exc:
+            logger.error(f"❌ Failed to schedule daily cost report: {exc}")
+    
+    _deps["scheduler"] = scheduler
+    _deps["notifier"] = notifier
+    _deps["watchdog"] = watchdog
+    
+    # Reminder Manager (Legacy compatibility)
     try:
-        await kraab.start()
-        logger.info("kraab_running")
-        
-        # Ждем сигнала остановки (Ctrl+C вызовет CancelledError)
-        stop_event = asyncio.Event()
-        await stop_event.wait()
-    except asyncio.CancelledError:
-        logger.info("stopping_signal_received")
+        from src.modules.reminder_pro import ReminderManager
+        reminder_manager = ReminderManager(scheduler)
+        _deps["reminder_manager"] = reminder_manager
     except Exception as e:
-        logger.error("fatal_error", error=str(e))
-    finally:
-        await kraab.stop()
-        logger.info("kraab_stopped")
+        logger.warning(f"ReminderManager init failed: {e}")
 
+    await notifier.notify_system("Krab v11.0 Online", "Все системы автономности (Scheduler, Watchdog, Notifier) запущены и готовы к работе.")
+
+    # 10. Загрузка плагинов (Phase 13)
+    await plugin_manager.load_all(app, _deps)
+    logger.info("🧩 All plugins from plugins/ loaded")
+
+    # Graceful shutdown по SIGTERM/SIGINT
+    def handle_signal(sig, frame):
+        logger.info(f"⚡ Received signal {sig}, shutting down gracefully...")
+        # app.run handles signals, but if we need custom cleanup:
+        asyncio.get_event_loop().create_task(graceful_shutdown())
+
+    # We rely on Pyrogram's signal handling if using app.run(), but can add custom hooks
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
+    async def graceful_shutdown():
+        logger.info("🛑 Graceful shutdown in progress...")
+        if scheduler:
+            # У KrabScheduler публичный API = stop(), не shutdown().
+            if hasattr(scheduler, "stop"):
+                scheduler.stop()
+            elif hasattr(scheduler, "shutdown"):
+                scheduler.shutdown()
+        # Отменяем активные напоминания
+        for task in get_active_reminders():
+            task.cancel()
+
+        await mcp_manager.shutdown()
+        
+        if browser_agent:
+            await browser_agent.stop()
+            
+        if crypto_intel:
+            await crypto_intel.close()
+        
+        if email_manager:
+            # EmailManager uses blocking clients but we close the httpx client if we added one 
+            # (In my implementation I didn't add a close for smtp/imap as they are context managed 
+            # or closed immediately, but it's good practice)
+            pass
+            
+        await app.stop()
+        logger.info("✅ Krab stopped cleanly.")
+
+    # Уведомление владельца о запуске (в Saved Messages)
+    # try:
+    #     owner = os.getenv("OWNER_USERNAME", "").replace("@", "").strip()
+    #     # Отправляем в Saved Messages (самому себе), а не по хардкоду
+    #     await app.send_message("me", (
+    #         "🦀 **Krab v7.2 (Stable) Modular Architecture Online.**\n"
+    #         f"👤 Owner: @{owner}\n"
+    #         "📦 Handlers: 9 modules loaded\n"
+    #         "🧠 AI Router: Cloud + Local Fallback\n"
+    #         "🔌 MCP Singularity: Active\n"
+    #         "👀 Screen Awareness: Ready (!see)\n"
+    #         "🗣️ Neural Voice: Ready (!say)\n"
+    #         "🛡️ Stealth Mode: Ready (!panic)\n"
+    #         "✅ RAG Memory v2.0: Ready"
+    #     ))
+    # except Exception as e:
+    #     logger.warning(f"Could not send startup notification: {e}")
+
+    logger.info("⚡ Entering idle mode... Bot should be responsive.")
+    print("DEBUG: Entring idle mode.")
+    
+    # We await idle() only if we want to block HERE.
+    # But app.run() calls start(), checks signals, and waits for disconnect.
+    # Wait, app.run(coro) runs coro and then disconnects?
+    # No, app.run() -> start() -> run coro -> stop().
+    # So if coro returns, app stops.
+    # So we MUST await idle() here to keep it running.
+    await idle()
+    
+    await graceful_shutdown()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        acquire_core_singleton_lock()
+        app.run(main())
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        logger.critical(f"🔥 Critical Crash in main loop: {e}", exc_info=True)
+    finally:
+        release_core_singleton_lock()

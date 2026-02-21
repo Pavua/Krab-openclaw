@@ -1,0 +1,18 @@
+ai:
+  default_model: gemini-2.0-flash
+  max_tokens: 4096
+  reasoning_model: gemini-2.0-pro-exp
+  temperature: 0.5
+  use_rag: true
+personality:
+  active_persona: default
+  emoji_style: moderate
+scheduler:
+  backup_hour: 3
+  digest_hour: 9
+security:
+  rate_limit: 10
+  rate_window_sec: 60
+tts:
+  speed: +0%
+  voice: ru-RU-DmitryNeural
