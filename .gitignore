@@ -31,6 +31,7 @@ browser_data/
 backups/
 voice_cache/
 artifacts/
+.runtime/
 
 # Node
 node_modules/
@@ -56,6 +57,7 @@ temp/
 verify_*.py
 verify_*.sh
 test_mcp_imports.py
+tests/report.html
 
 # Secrets & certificates
 .env.*
