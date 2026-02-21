@@ -18,6 +18,7 @@ PROJECT_ROOT="/Users/pablito/Antigravity_AGENTS/Краб"
 LOG_FILE="$PROJECT_ROOT/logs/krab.log"
 PID_FILE="$PROJECT_ROOT/krab_core.pid"
 DRY_RUN="${KRAB_RESTART_DRY_RUN:-0}"
+LOCK_FILE="$PROJECT_ROOT/.runtime/krab_core.lock"
 
 cd "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/logs"
@@ -35,6 +36,39 @@ find_core_pids() {
     } | tr ' ' '\n' | sed '/^$/d' | sort -u
   )"
   echo "$pids"
+}
+
+read_lock_pid() {
+  if [[ ! -f "$LOCK_FILE" ]]; then
+    return 1
+  fi
+  python3 - "$LOCK_FILE" <<'PY'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    pid = int(data.get("pid", 0) or 0)
+    if pid > 0:
+        print(pid)
+except Exception:
+    pass
+PY
+}
+
+cleanup_stale_lock() {
+  local lock_pid
+  lock_pid="$(read_lock_pid || true)"
+  if [[ -z "${lock_pid:-}" ]]; then
+    return 0
+  fi
+
+  if ! ps -p "$lock_pid" >/dev/null 2>&1; then
+    echo "🧹 Найден stale lock (PID=$lock_pid), удаляю: $LOCK_FILE"
+    if [[ "$DRY_RUN" != "1" ]]; then
+      rm -f "$LOCK_FILE"
+    fi
+  fi
 }
 
 stop_existing_core() {
@@ -75,6 +109,7 @@ stop_existing_core() {
   fi
 
   sleep 1
+  cleanup_stale_lock
 }
 
 resolve_python() {
@@ -111,6 +146,19 @@ start_core() {
   while [[ "$sec" -le "$stable_window" ]]; do
     sleep 1
     if ! ps -p "$new_pid" >/dev/null 2>&1; then
+      # Важно: если целевой PID завершился из-за singleton-lock гонки,
+      # но другой процесс ядра уже жив, считаем рестарт успешным.
+      local active_now
+      active_now="$(find_core_pids)"
+      if [[ -n "${active_now:-}" ]]; then
+        local active_pid
+        active_pid="$(echo "$active_now" | head -n 1)"
+        echo "⚠️ Стартовый PID $new_pid завершился на ${sec}-й секунде, но ядро активно на PID: $active_pid"
+        echo "$active_pid" > "$PID_FILE"
+        echo "✅ Рестарт считается успешным (обнаружен живой singleton-процесс)."
+        return 0
+      fi
+
       echo "❌ Процесс умер на ${sec}-й секунде после старта. Смотрите лог: $LOG_FILE"
       return 1
     fi

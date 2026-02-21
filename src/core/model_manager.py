@@ -2151,7 +2151,7 @@ class ModelRouter:
                 prompt = f"### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n{tool_data}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
         # Smart Memory Planner
-        if self.is_local_available or self.force_mode != "force_cloud":
+        if self.force_mode != "force_cloud" and self.is_local_available:
             preferred = preferred_model or self.local_preferred_model
             if task_type == "coding" and self.local_coding_model:
                 preferred = self.local_coding_model
@@ -2250,7 +2250,7 @@ class ModelRouter:
         if self.force_mode == "force_local":
             l_status, l_resp = await _run_local(route_reason="force_local", route_detail="forced by mode")
             if l_status == "ok": return l_resp
-            return f"❌ Force Local Error: {l_resp or l_status}"
+            return f"❌ Ошибка алгоритма Local ({l_status}): {l_resp}" if is_owner else "❌ Локальные модели сейчас недоступны."
 
         if self.force_mode == "force_cloud":
             c_res = await _run_cloud(route_reason="force_cloud", route_detail="forced by mode")
@@ -2262,7 +2262,8 @@ class ModelRouter:
                 self._remember_last_route(profile=profile, task_type=task_type, channel="cloud",
                                           model_name=candidate, prompt=prompt, route_reason="force_cloud")
                 return response
-            return f"❌ Force Cloud Error: {self.last_cloud_error or 'Unknown cloud failure'}"
+            err_msg = self.last_cloud_error or 'Unknown cloud failure'
+            return f"❌ Ошибка Cloud (force): {err_msg}" if is_owner else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
 
         # Auto Mode Strategy
         force_local_due_cost = self.cloud_soft_cap_reached and not is_critical
@@ -2305,7 +2306,8 @@ class ModelRouter:
                 if l_status == "ok":
                     return l_resp
 
-        return self.last_cloud_error or "❌ Не удалось получить ответ: все каналы (Local/Cloud) недоступны или вернули ошибку."
+        err_msg = self.last_cloud_error or "Все каналы (Local/Cloud) недоступны или вернули ошибку."
+        return f"❌ Ошибка маршрутизации: {err_msg}" if is_owner else "❌ В данный момент генерация ответа не удалась из-за системной ошибки. Пожалуйста, попробуй позже."
 
     async def route_stream(self,
                           prompt: str,
@@ -2454,14 +2456,10 @@ class ModelRouter:
                 return
 
             last_error_text = str(self.last_cloud_error or "").strip()
-            if failure_reason == "force_cloud":
-                if last_error_text:
-                    yield f"❌ Cloud fallback недоступен: {last_error_text}"
-                else:
-                    yield "❌ Cloud fallback недоступен: облачный провайдер временно недоступен."
-                return
-
-            yield last_error_text or "❌ Не удалось получить ответ ни от локальной, ни от облачной модели."
+            err_msg = last_error_text or "облачный провайдер временно недоступен."
+            msg = f"❌ Ошибка Cloud ({failure_reason}): {err_msg}" if is_owner else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
+            yield msg
+            return
 
         # Жёсткий cloud-only режим: локальный стрим полностью пропускаем.
         if force_cloud_mode:
@@ -2656,7 +2654,11 @@ class ModelRouter:
         model_name = self.models.get(task_type, self.models["chat"])
         
         # Если принудительно локалка или она доступна и это чат/код
-        if self.force_mode == 'force_local' or (self.is_local_available and task_type in ['chat', 'coding']):
+        if self.force_mode == 'force_local' or (
+            self.force_mode != 'force_cloud'
+            and self.is_local_available
+            and task_type in ['chat', 'coding']
+        ):
              try:
                  full_res = await self.route_query(prompt, task_type, context, chat_type, is_owner, use_rag=False)
                  if full_res and full_res.strip():
@@ -2669,20 +2671,58 @@ class ModelRouter:
                  yield f"❌ Ошибка маршрутизации: {e}"
              return
 
-        # 4. Стриминг через облако (Gemini)
-        async for chunk in self._call_gemini_stream(prompt, model_name, context, chat_type, is_owner):
-            if chunk:
-                yield chunk
-            else:
-                break
+        # 4. Стриминг через облако (Gemini) с Fallback
+        preferred = self.models.get(task_type, self.models["chat"])
+        candidates = self._build_cloud_candidates(
+            task_type=task_type,
+            profile=self.classify_task_profile(prompt, task_type),
+            preferred_model=preferred,
+            chat_type=chat_type,
+            is_owner=is_owner,
+            prompt=prompt
+        )
+        
+        last_err = None
+        for i, candidate in enumerate(candidates):
+            if "-exp" in candidate and "gemini-2.0" in candidate:
+                candidate = candidate.replace("-exp", "")
+            
+            try:
+                # Временно псевдо-стриминг (полный ответ за раз)
+                response = await self._call_gemini(
+                    prompt, 
+                    candidate, 
+                    context, 
+                    chat_type, 
+                    is_owner, 
+                    max_retries=(1 if i == 0 else 0)
+                )
+                
+                if self._is_runtime_error_message(response):
+                    self.last_cloud_error = str(response)
+                    self.last_cloud_model = candidate
+                    self._mark_cloud_soft_cap_if_needed(str(response))
+                    last_err = response
+                    continue
+                
+                if response and len(response.strip()) >= 2:
+                    self.last_cloud_error = None
+                    self.last_cloud_model = candidate
+                    yield self._sanitize_model_text(response)
+                    return
+            except Exception as e:
+                last_err = f"Error from OpenClaw generator: {e}"
+                continue
+                
+        # Если все кандидаты упали
+        err_out = last_err or "Cloud API failure"
+        yield f"❌ Ошибка Cloud: {err_out}" if is_owner else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
 
     async def _call_gemini_stream(self, prompt: str, model_name: str, context: list = None,
                                   chat_type: str = "private", is_owner: bool = False):
         """
-        Генератор для стриминга ответов из Cloud (OpenClaw).
-        Пока реализован как псевдо-стриминг (полный ответ за раз), так как OpenClawClient.chat_completions не стримит.
+        Генератор для стриминга ответов из Cloud (Оставлен для совместимости API).
         """
-        # В будущем можно добавить stream=True в OpenClawClient
         full_response = await self._call_gemini(prompt, model_name, context, chat_type, is_owner)
         yield full_response
 
@@ -2721,6 +2761,15 @@ class ModelRouter:
         result["Cloud (OpenClaw)"] = {
             "ok": openclaw_health,
             "status": f"Ready ({self.models['chat']})" if openclaw_health else "Unreachable",
+        }
+        
+        result["Cloud Reliability"] = {
+            "ok": not bool(self.last_cloud_error),
+            "status": "Errors Present" if self.last_cloud_error else "Stable",
+            "last_error": self.last_cloud_error or "None",
+            "last_provider_model": getattr(self, "last_cloud_model", "None"),
+            "cloud_failures": self._stats.get("cloud_failures", 0),
+            "force_mode": self.force_mode,
         }
 
         # 3. RAG Engine

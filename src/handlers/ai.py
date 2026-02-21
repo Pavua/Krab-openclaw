@@ -409,6 +409,73 @@ def _sanitize_model_output(text: str, router=None) -> str:
     return cleaned.strip()
 
 
+def _normalize_runtime_error_message_for_user(text: str, router=None) -> tuple[str, bool]:
+    """
+    Нормализует «сырой» runtime-error модели в человекочитаемый ответ.
+
+    Зачем:
+    Даже если в пайплайн просочился технический ответ (например, `Connection error.`),
+    пользователь должен получить понятный fallback, а не внутренний текст шлюза.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return "", False
+
+    is_runtime_error = False
+    detector = getattr(router, "_is_runtime_error_message", None)
+    if callable(detector):
+        try:
+            is_runtime_error = bool(detector(raw))
+        except Exception:
+            is_runtime_error = False
+
+    lowered = raw.lower()
+    if not is_runtime_error:
+        fallback_markers = (
+            "connection error",
+            "network error",
+            "failed to connect",
+            "connection refused",
+            "timeout",
+            "timed out",
+            "gateway timeout",
+            "upstream",
+            "provider unavailable",
+            "no models loaded",
+            "please load a model",
+            "not_found",
+            "not found",
+            "quota exceeded",
+            "billing",
+            "out of credits",
+        )
+        is_runtime_error = any(marker in lowered for marker in fallback_markers)
+
+    if not is_runtime_error:
+        return raw, False
+
+    detail = "временный сбой канала AI"
+    if "no models loaded" in lowered or "please load a model" in lowered:
+        detail = "локальная модель не загружена"
+    elif "quota" in lowered or "billing" in lowered or "out of credits" in lowered:
+        detail = "лимит облачного провайдера исчерпан"
+    elif "not_found" in lowered or "not found" in lowered:
+        detail = "запрошенная модель недоступна у провайдера"
+    elif "timeout" in lowered or "timed out" in lowered:
+        detail = "превышено время ожидания ответа"
+    elif (
+        "connection error" in lowered
+        or "network error" in lowered
+        or "failed to connect" in lowered
+        or "connection refused" in lowered
+        or "upstream" in lowered
+    ):
+        detail = "ошибка соединения с AI-шлюзом"
+
+    user_text = f"⚠️ Временная ошибка AI: {detail}. Повтори запрос через 3-5 секунд."
+    return user_text, True
+
+
 def _is_explicit_non_russian_request(text: str) -> bool:
     """
     Определяет, просил ли пользователь явно отвечать не на русском.
@@ -2234,6 +2301,16 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 "⚠️ Поймал внутренний служебный вывод модели и скрыл его.\n"
                 "Попробуй повторить запрос короче, без пересылки слишком длинного технического контента."
             )
+        clean_display_text, runtime_error_rewritten = _normalize_runtime_error_message_for_user(
+            clean_display_text,
+            router,
+        )
+        if runtime_error_rewritten:
+            logger.warning(
+                "auto_reply: runtime ошибка нормализована в user-facing fallback",
+                chat_id=message.chat.id,
+                message_id=message.id,
+            )
         clean_display_text, response_trimmed = _clamp_auto_reply_text(
             clean_display_text,
             is_private=is_private,
@@ -2361,15 +2438,27 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         await reply_msg.edit_text("❌ Пустой ответ.")
 
     # Save Assistant Message
-    memory.save_message(
-        message.chat.id,
-        {
-            "role": "assistant",
-            "text": persisted_response_text,
-            "chat_type": chat_type_value,
-            "reply_to_author_id": int(user_id or 0),
-        },
-    )
+    is_runtime_error_resp = False
+    if hasattr(router, "_is_runtime_error_message"):
+        is_runtime_error_resp = router._is_runtime_error_message(persisted_response_text)
+    elif persisted_response_text.startswith("❌ "):
+        is_runtime_error_resp = True
+
+    if not is_runtime_error_resp:
+        memory.save_message(
+            message.chat.id,
+            {
+                "role": "assistant",
+                "text": persisted_response_text,
+                "chat_type": chat_type_value,
+                "reply_to_author_id": int(user_id or 0),
+            },
+        )
+    else:
+        logger.warning(
+            "auto_reply: пропущен save_message (обнаружено сообщение об ошибке)",
+            chat_id=message.chat.id
+        )
 
     if ai_runtime:
         current = ai_runtime.get_context_snapshot(message.chat.id)
