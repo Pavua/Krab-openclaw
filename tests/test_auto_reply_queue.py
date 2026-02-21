@@ -7,6 +7,7 @@ import asyncio
 
 import pytest
 
+from src.handlers import ai as ai_handler
 from src.handlers.ai import ChatQueuedTask, ChatWorkQueue
 
 
@@ -87,3 +88,68 @@ async def test_queue_retries_once_then_succeeds() -> None:
     assert stats["processed"] == 1
     assert stats["failed"] == 0
     assert stats["retried"] == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_final_failure_calls_notifier_once() -> None:
+    """После исчерпания ретраев очередь должна вызвать final-failure нотификатор."""
+    queue = ChatWorkQueue(max_per_chat=10, max_retries=0)
+    notified: list[str] = []
+
+    async def _runner() -> None:
+        raise RuntimeError("boom")
+
+    async def _on_final_failure(exc: BaseException) -> None:
+        notified.append(type(exc).__name__)
+
+    accepted, _ = queue.enqueue(
+        ChatQueuedTask(
+            chat_id=42,
+            message_id=1,
+            received_at=0.0,
+            priority=0,
+            runner=_runner,
+            on_final_failure=_on_final_failure,
+        )
+    )
+    assert accepted is True
+
+    queue.ensure_worker(42)
+    await asyncio.sleep(0.2)
+
+    assert notified == ["RuntimeError"]
+    stats = queue.get_stats()
+    assert stats["failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_runner_timeout_marks_failure_and_notifies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Зависшая задача должна прерываться queue-timeout и отдавать fallback-уведомление."""
+    monkeypatch.setattr(ai_handler, "AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS", 1.0)
+    queue = ChatWorkQueue(max_per_chat=10, max_retries=0)
+    notified: list[str] = []
+
+    async def _runner() -> None:
+        await asyncio.sleep(2.0)
+
+    async def _on_final_failure(exc: BaseException) -> None:
+        notified.append(type(exc).__name__)
+
+    accepted, _ = queue.enqueue(
+        ChatQueuedTask(
+            chat_id=43,
+            message_id=1,
+            received_at=0.0,
+            priority=0,
+            runner=_runner,
+            on_final_failure=_on_final_failure,
+        )
+    )
+    assert accepted is True
+
+    queue.ensure_worker(43)
+    await asyncio.sleep(1.3)
+
+    assert notified == ["TimeoutError"]
+    stats = queue.get_stats()
+    assert stats["failed"] == 1

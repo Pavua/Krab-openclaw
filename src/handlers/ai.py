@@ -22,7 +22,7 @@ import re
 from io import StringIO
 from dataclasses import dataclass
 from collections import deque
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from pyrogram import filters, enums
 from pyrogram.types import Message
@@ -73,6 +73,15 @@ AUTO_REPLY_FORWARD_BURST_MAX_ITEMS = _timeout_from_env("AUTO_REPLY_FORWARD_BURST
 AUTO_REPLY_QUEUE_MAX_RETRIES = max(
     0,
     int(str(os.getenv("AUTO_REPLY_QUEUE_MAX_RETRIES", "1")).strip() or "1"),
+)
+AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS = float(
+    str(
+        os.getenv(
+            "AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS",
+            str(max(AUTO_REPLY_TIMEOUT_SECONDS + 60, 300)),
+        )
+    ).strip()
+    or str(max(AUTO_REPLY_TIMEOUT_SECONDS + 60, 300))
 )
 AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED = str(
     os.getenv("AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED", "1")
@@ -133,6 +142,7 @@ class ChatQueuedTask:
     priority: int
     runner: Any
     attempt: int = 0
+    on_final_failure: Callable[[BaseException], Awaitable[None]] | None = None
 
 
 class ChatWorkQueue:
@@ -184,7 +194,10 @@ class ChatWorkQueue:
                     attempt=task.attempt,
                     queue_left_after_pop=len(queue),
                 )
-                await task.runner()
+                await asyncio.wait_for(
+                    task.runner(),
+                    timeout=max(1.0, float(AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS)),
+                )
                 self._processed += 1
                 logger.debug(
                     "queue: задача обработана успешно",
@@ -212,6 +225,19 @@ class ChatWorkQueue:
                         message_id=task.message_id,
                         attempt=task.attempt,
                     )
+                    if task.on_final_failure:
+                        try:
+                            if isinstance(sys.exc_info()[1], BaseException):
+                                exc_value = sys.exc_info()[1]
+                            else:
+                                exc_value = RuntimeError("queue_task_failed")
+                            await task.on_final_failure(exc_value)
+                        except Exception:
+                            logger.debug(
+                                "queue: не удалось отправить final-failure нотификацию",
+                                chat_id=chat_id,
+                                message_id=task.message_id,
+                            )
             finally:
                 self._active_task.pop(chat_id, None)
                 if not queue:
@@ -3425,6 +3451,21 @@ def register_handlers(app, deps: dict):
         async def _runner():
             await _process_auto_reply(client, message, deps)
 
+        async def _on_final_failure(exc: BaseException) -> None:
+            # Гарантируем user-facing ответ, если задача окончательно провалилась после ретраев.
+            if message.chat.type == enums.ChatType.PRIVATE:
+                err = str(exc or "").strip().lower()
+                if "timeout" in err or isinstance(exc, asyncio.TimeoutError):
+                    detail = "превышен лимит времени обработки"
+                else:
+                    detail = "внутренняя ошибка пайплайна"
+                try:
+                    await message.reply_text(
+                        f"⚠️ Временная ошибка AI: {detail}. Повтори запрос через 3-5 секунд."
+                    )
+                except Exception:
+                    pass
+
         if not ai_runtime.queue_enabled:
             logger.debug(
                 "auto_reply_logic: очередь выключена, выполняю запрос сразу",
@@ -3440,6 +3481,7 @@ def register_handlers(app, deps: dict):
             received_at=time.time(),
             priority=0,
             runner=_runner,
+            on_final_failure=_on_final_failure,
         )
         accepted, queue_size = queue_manager.enqueue(queued_task)
         if not accepted:
@@ -3645,6 +3687,17 @@ def register_handlers(app, deps: dict):
         async def _runner():
             await _process_auto_reply(client, message, deps)
 
+        async def _on_final_failure(exc: BaseException) -> None:
+            err = str(exc or "").strip().lower()
+            if "timeout" in err or isinstance(exc, asyncio.TimeoutError):
+                detail = "превышен лимит времени обработки"
+            else:
+                detail = "внутренняя ошибка пайплайна"
+            try:
+                await message.reply_text(f"⚠️ Временная ошибка AI: {detail}. Повтори запрос через 3-5 секунд.")
+            except Exception:
+                pass
+
         if not ai_runtime.queue_enabled:
             await _runner()
             return
@@ -3655,6 +3708,7 @@ def register_handlers(app, deps: dict):
             received_at=time.time(),
             priority=0,
             runner=_runner,
+            on_final_failure=_on_final_failure,
         )
         accepted, queue_size = queue_manager.enqueue(queued_task)
         if not accepted:
