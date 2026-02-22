@@ -5,6 +5,7 @@ from src.handlers.commands import (
     parse_model_set_request,
     resolve_local_model_size_human,
     normalize_model_alias,
+    render_cloud_probe_summary,
 )
 
 
@@ -88,3 +89,29 @@ def test_normalize_model_alias_keeps_full_id() -> None:
     normalized, note = normalize_model_alias(model_id)
     assert normalized == model_id
     assert note == ""
+
+
+def test_render_cloud_probe_summary_ok_and_failed() -> None:
+    text = render_cloud_probe_summary(
+        {
+            "providers": {
+                "google": {"ok": True},
+                "openai": {
+                    "ok": False,
+                    "summary": "ключ отклонён",
+                    "key_source": "env:OPENAI_API_KEY",
+                },
+            }
+        }
+    )
+    assert "Cloud check" in text
+    assert "`google`" in text
+    assert "`openai`" in text
+    assert "ключ отклонён" in text
+    assert "!openclaw cloud" in text
+
+
+def test_render_cloud_probe_summary_empty_on_invalid_payload() -> None:
+    assert render_cloud_probe_summary(None) == ""
+    assert render_cloud_probe_summary({}) == ""
+    assert render_cloud_probe_summary({"providers": []}) == ""

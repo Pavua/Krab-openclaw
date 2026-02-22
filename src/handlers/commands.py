@@ -129,6 +129,42 @@ def parse_model_set_request(args: list[str], valid_slots: list[str]) -> dict[str
     }
 
 
+def render_cloud_probe_summary(diag_payload: dict | None) -> str:
+    """
+    Рендерит короткую сводку cloud-диагностики для owner-команд.
+
+    Зачем:
+    После `!model cloud` сразу показываем, какие провайдеры реально готовы,
+    чтобы не гадать, почему force_cloud молчит или отвечает runtime-ошибкой.
+    """
+    if not isinstance(diag_payload, dict):
+        return ""
+    providers = diag_payload.get("providers")
+    if not isinstance(providers, dict) or not providers:
+        return ""
+
+    ok_items: list[str] = []
+    failed_items: list[str] = []
+    for provider, info in providers.items():
+        info_dict = info if isinstance(info, dict) else {}
+        provider_name = str(provider or "unknown")
+        if bool(info_dict.get("ok")):
+            ok_items.append(provider_name)
+            continue
+        summary = str(info_dict.get("summary") or info_dict.get("error_code") or "ошибка провайдера").strip()
+        source = str(info_dict.get("key_source") or "unknown_key_source").strip()
+        failed_items.append(f"- `{provider_name}`: {summary} (`{source}`)")
+
+    lines: list[str] = []
+    if ok_items:
+        lines.append("✅ Cloud check: " + ", ".join(f"`{name}`" for name in ok_items))
+    if failed_items:
+        lines.append("⚠️ Cloud check (проблемы):")
+        lines.extend(failed_items)
+        lines.append("Подсказка: `!openclaw cloud` для детальной проверки.")
+    return "\n".join(lines).strip()
+
+
 MODEL_FRIENDLY_ALIASES: dict[str, str] = {
     # Gemini
     "gemini-flash": "google/gemini-2.5-flash",
@@ -1747,7 +1783,19 @@ def register_handlers(app, deps: dict):
 
         if subcommand in ['local', 'cloud', 'auto']:
             res = router.set_force_mode(subcommand)
-            await message.reply_text(f"✅ **Режим обновлен:**\n{res}")
+            cloud_probe_tail = ""
+            if (
+                subcommand == "cloud"
+                and openclaw_client
+                and hasattr(openclaw_client, "get_cloud_provider_diagnostics")
+            ):
+                try:
+                    cloud_diag = await openclaw_client.get_cloud_provider_diagnostics()
+                    cloud_probe_tail = render_cloud_probe_summary(cloud_diag)
+                except Exception as exc:
+                    cloud_probe_tail = f"⚠️ Cloud check не выполнен: {exc}"
+            suffix = f"\n\n{cloud_probe_tail}" if cloud_probe_tail else ""
+            await message.reply_text(f"✅ **Режим обновлен:**\n{res}{suffix}")
             return
 
         if subcommand == "recommend":
