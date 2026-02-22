@@ -143,8 +143,16 @@
         </div>
 
         <header>
-            <div class="header-titles">
-                <h1>Krab Web Panel V2</h1>
+            <div class="header-titles" style="display: flex; flex-direction: column; gap: 4px;">
+                <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <h1>Krab Web Panel V2</h1>
+                    <div id="tokenStatusBadge" class="badge warn"
+                        style="display: flex; align-items: center; gap: 6px; border-radius:12px; font-size: 0.75rem; padding: 4px 10px; font-family: var(--font-mono); transition: all 0.3s ease;">
+                        <div class="pulse-warn" id="tokenPulse"
+                            style="width:6px; height:6px; background:currentColor; border-radius:50%;"></div>
+                        <span id="tokenStatusText">Missing Token</span>
+                    </div>
+                </div>
                 <p class="subtitle">Nexus Orchestration & Local LM Gateway</p>
             </div>
             <button id="refreshBtn" class="primary" aria-label="Синхронизировать данные">
@@ -199,12 +207,96 @@
                 </div>
             </div>
 
-            <div class="card">
-                <h3 class="card-title" style="color:var(--state-warn)">Ops Alerts & Guardrails</h3>
-                <div style="display:flex; gap:8px; margin-bottom:8px;">
-                        <input id="opsAlertSearch" class="field" placeholder="Поиск по коду alert..." style="flex:1;" oninput="filterAlerts()" />
+            <div class="card state-container" style="display: flex; flex-direction: column;">
+                <h3 class="card-title" style="color: var(--text-main); margin-bottom: 16px;">Ops Center v2</h3>
+
+                <!-- Queue and Preflight Blocks -->
+                <div class="ops-v2-grid" style="display: grid; gap: 16px; margin-bottom: 24px;">
+                    <!-- Очередь -->
+                    <div class="card state-container"
+                        style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+                        <h4 class="form-label"
+                            style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);"
+                                class="pulse-ok"></div>
+                            Очередь и обработка
+                        </h4>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+                            <span class="card-meta" style="margin: 0;">Active Route:</span>
+                            <span id="opsQueueMode" class="badge"
+                                style="border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(14, 165, 233, 0.1);">—</span>
+                        </div>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span class="card-meta" style="margin: 0;">Active Tasks:</span>
+                            <span id="opsActiveTasks" class="card-value" style="font-size: 0.9rem;">0</span>
+                        </div>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span class="card-meta" style="margin: 0;">В очереди:</span>
+                            <span id="opsQueueLength" class="card-value" style="font-size: 0.9rem;">0</span>
+                        </div>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span class="card-meta" style="margin: 0;">Timeouts:</span>
+                            <span id="opsQueueTimeouts" class="card-value"
+                                style="font-size: 0.9rem; color: var(--text-muted);">0</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span class="card-meta" style="margin: 0;">Errors:</span>
+                            <span id="opsQueueErrors" class="card-value"
+                                style="font-size: 0.9rem; color: var(--text-muted);">0</span>
+                        </div>
                     </div>
-                    <div id="opsAlerts" class="card-meta" style="max-height: 200px; overflow-y: auto;">—</div>
+                    <!-- Preflight -->
+                    <div class="card state-container"
+                        style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+                        <h4 class="form-label"
+                            style="margin-bottom: 12px; color: var(--accent-orange); display: flex; align-items: center; gap: 8px;">
+                            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange);"
+                                class="pulse-warn"></div>
+                            Cloud Preflight
+                        </h4>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+                            <span class="card-meta" style="margin: 0;">Soft Cap Usage:</span>
+                            <span id="opsCloudCap" class="card-value"
+                                style="font-size: 0.9rem; font-family: var(--font-mono);">—</span>
+                        </div>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span class="card-meta" style="margin: 0;">Provider Status:</span>
+                            <span id="opsCloudProviderStatus" class="card-value"
+                                style="font-size: 0.9rem; color: var(--state-ok);">Active</span>
+                        </div>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span class="card-meta" style="margin: 0;">Last Error Code:</span>
+                            <span id="opsCloudErrorCode" class="card-value"
+                                style="font-size: 0.9rem; color: var(--text-muted);">None</span>
+                        </div>
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span class="card-meta" style="margin: 0;">Retryable:</span>
+                            <span id="opsCloudRetryable" class="card-value"
+                                style="font-size: 0.9rem; color: var(--text-muted);">N/A</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span class="card-meta" style="margin: 0;">Last Check:</span>
+                            <span id="opsCloudLastCheck" class="card-value"
+                                style="font-size: 0.9rem; color: var(--text-muted);">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <h3 class="card-title" style="color:var(--state-warn); font-size:1rem; margin-bottom:12px;">Ops Alerts &
+                    Guardrails</h3>
+                <div style="display:flex; gap:8px; margin-bottom:8px;">
+                    <input id="opsAlertSearch" class="field" placeholder="Поиск по коду alert..." style="flex:1;"
+                        oninput="filterAlerts()" />
+                </div>
+                <div id="opsAlerts" class="card-meta" style="max-height: 200px; overflow-y: auto;">—</div>
                 <p class="card-meta" id="opsUsageMeta"></p>
 
                 <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-subtle);">
@@ -301,8 +393,8 @@
         <!-- --- AI ASSISTANT --- -->
         <div class="card" style="border-top: 2px solid var(--accent-cyan); padding: 32px;">
             <h3 class="card-title" style="margin-bottom:24px; color:var(--text-main); font-size:1.1rem;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    style="color:var(--accent-cyan);">
+                <svg id="assistantPulseIcon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" style="color:var(--accent-cyan); transition: all 0.3s ease;">
                     <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
                 </svg>
                 AI Assistant Interface
@@ -1033,7 +1125,7 @@ ${channelsText}`;
                 }
             });
         }
-        
+
         async function updateStats() {
             try {
                 const [stats, health, links, recommend, feedbackPayload, usagePayload, alertsPayload, historyPayload] = await Promise.all([
@@ -1131,14 +1223,14 @@ ${channelsText}`;
                 } else {
                     document.getElementById('opsHistory').classList.remove('empty');
                     document.getElementById('opsHistory').innerHTML = history
-            .map((item) => {
-                const badgeCls = item.status === 'ok' ? 'ok' : (item.status === 'error' ? 'bad' : 'warn');
-                return `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border-subtle); align-items:center;">
+                        .map((item) => {
+                            const badgeCls = item.status === 'ok' ? 'ok' : (item.status === 'error' ? 'bad' : 'warn');
+                            return `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border-subtle); align-items:center;">
                     <div style="font-size:0.9em;"><span class="badge ${badgeCls}">${item.status || "-"}</span> ${item.ts || "-"}</div>
                     <div style="font-size:0.85em; color:var(--text-placeholder);">alerts: ${item.alerts_count ?? 0} ${item.codes?.length ? `(${item.codes.join(',')})` : ''}</div>
                 </div>`;
-            })
-            .join("");
+                        })
+                        .join("");
                 }
                 setText('updated_at', `Обновлено: ${new Date().toLocaleTimeString()}`);
             } catch (error) {

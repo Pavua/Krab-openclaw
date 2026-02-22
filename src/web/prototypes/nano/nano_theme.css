@@ -514,6 +514,7 @@ textarea.field {
 
     .form-grid,
     .grid-middle,
+    .ops-v2-grid,
     .grid-metrics {
         grid-template-columns: 1fr !important;
     }

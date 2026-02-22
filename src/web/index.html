@@ -143,8 +143,16 @@
     </div>
 
     <header>
-      <div class="header-titles">
-        <h1>Krab Web Panel V2</h1>
+      <div class="header-titles" style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <h1>Krab Web Panel V2</h1>
+          <div id="tokenStatusBadge" class="badge warn"
+            style="display: flex; align-items: center; gap: 6px; border-radius:12px; font-size: 0.75rem; padding: 4px 10px; font-family: var(--font-mono); transition: all 0.3s ease;">
+            <div class="pulse-warn" id="tokenPulse"
+              style="width:6px; height:6px; background:currentColor; border-radius:50%;"></div>
+            <span id="tokenStatusText">Missing Token</span>
+          </div>
+        </div>
         <p class="subtitle">Nexus Orchestration & Local LM Gateway</p>
       </div>
       <button id="refreshBtn" class="primary" aria-label="Синхронизировать данные">
@@ -210,9 +218,83 @@
       </div>
 
       <div class="card state-container" style="display: flex; flex-direction: column;">
-        <h3 class="card-title" style="color: var(--state-warn)">
-          Ops Alerts & Guardrails
+        <h3 class="card-title" style="color: var(--text-main); margin-bottom: 16px;">
+          Ops Center v2
         </h3>
+
+        <!-- Queue and Preflight Blocks -->
+        <div class="ops-v2-grid" style="display: grid; gap: 16px; margin-bottom: 24px;">
+          <!-- Очередь -->
+          <div class="card state-container"
+            style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+            <h4 class="form-label" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);"
+                class="pulse-ok"></div>
+              Очередь и обработка
+            </h4>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+              <span class="card-meta" style="margin: 0;">Active Route:</span>
+              <span id="opsQueueMode" class="badge"
+                style="border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(14, 165, 233, 0.1);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Active Tasks:</span>
+              <span id="opsActiveTasks" class="card-value" style="font-size: 0.9rem;">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">В очереди:</span>
+              <span id="opsQueueLength" class="card-value" style="font-size: 0.9rem;">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Timeouts:</span>
+              <span id="opsQueueTimeouts" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Errors:</span>
+              <span id="opsQueueErrors" class="card-value" style="font-size: 0.9rem; color: var(--text-muted);">0</span>
+            </div>
+          </div>
+          <!-- Preflight -->
+          <div class="card state-container"
+            style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+            <h4 class="form-label"
+              style="margin-bottom: 12px; color: var(--accent-orange); display: flex; align-items: center; gap: 8px;">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange);"
+                class="pulse-warn"></div>
+              Cloud Preflight
+            </h4>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+              <span class="card-meta" style="margin: 0;">Soft Cap Usage:</span>
+              <span id="opsCloudCap" class="card-value"
+                style="font-size: 0.9rem; font-family: var(--font-mono);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Provider Status:</span>
+              <span id="opsCloudProviderStatus" class="card-value"
+                style="font-size: 0.9rem; color: var(--state-ok);">Active</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Last Error Code:</span>
+              <span id="opsCloudErrorCode" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">None</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Retryable:</span>
+              <span id="opsCloudRetryable" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">N/A</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Last Check:</span>
+              <span id="opsCloudLastCheck" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">—</span>
+            </div>
+          </div>
+        </div>
+
+        <h4 class="form-label" style="margin-bottom: 12px; color: var(--state-warn)">Alerts & Guardrails</h4>
         <div style="display:flex; gap:8px; margin-bottom:12px;">
           <input id="opsAlertSearch" class="field" placeholder="Поиск по коду alert..." style="flex:1;"
             oninput="filterAlerts()" />
@@ -239,7 +321,7 @@
 
         <h4 class="form-label" style="margin-top: 20px;">Operations History</h4>
         <div id="opsHistory" class="ops-history empty"
-          style="flex: 1; border: 1px solid var(--border-card); background: var(--bg-base); margin-top: 8px;">
+          style="flex: 1; border: 1px solid var(--border-subtle); background: var(--bg-panel); margin-top: 8px; color: var(--text-main); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
           <div class="empty-state" style="padding: 24px 0">
             <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"
               style="margin-bottom: 12px; color: var(--text-placeholder)">
@@ -392,8 +474,8 @@
             color: var(--text-main);
             font-size: 1.1rem;
           ">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          style="color: var(--accent-cyan)">
+        <svg id="assistantPulseIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" style="color: var(--accent-cyan); transition: all 0.3s ease;">
           <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
         </svg>
         AI Assistant Interface
@@ -1406,6 +1488,14 @@ ${channelsText}`;
           `Calls: total=${totals.all_calls ?? 0}, cloud=${totals.cloud_calls ?? 0}, local=${totals.local_calls ?? 0} • cloud_share=${ratios.cloud_share ?? 0} • cap_left=${softCap.cloud_remaining_calls ?? 0}`,
         );
 
+        setText("opsCloudCap", `${totals.cloud_calls ?? 0} / ${softCap.cloud_soft_cap_calls ?? 10000}`);
+        const capReached = softCap.cloud_soft_cap_reached;
+        const capBdge = document.getElementById("opsCloudCapReached");
+        if (capBdge) {
+          capBdge.className = capReached ? "badge bad" : "badge ok";
+          capBdge.innerHTML = capReached ? "True" : "False";
+        }
+
         const alertsRoot = alertsPayload.alerts || {};
         const alertsList = alertsRoot.alerts || [];
         if (!alertsList.length) {
@@ -1492,6 +1582,46 @@ ${channelsText}`;
     document.getElementById("quickDeepBtn").addEventListener("click", withBtnState("quickDeepBtn", "Wait...", runQuickDeepResearch));
     document.getElementById("quickUrlBtn").addEventListener("click", withBtnState("quickUrlBtn", "Wait...", runQuickUrlReview));
 
+    function triggerAssistantPulse() {
+      const icon = document.getElementById("assistantPulseIcon");
+      if (icon) {
+        icon.style.transform = "scale(1.2)";
+        icon.style.filter = "brightness(1.5)";
+        setTimeout(() => {
+          icon.style.transform = "scale(1)";
+          icon.style.filter = "brightness(1)";
+        }, 300);
+      }
+    }
+
+    const apiKeyInput = document.getElementById("assistantApiKey");
+    function updateTokenStatus() {
+      const tokenBadge = document.getElementById("tokenStatusBadge");
+      const tokenText = document.getElementById("tokenStatusText");
+      const tokenPulse = document.getElementById("tokenPulse");
+      if (!tokenBadge) return;
+
+      if (apiKeyInput && apiKeyInput.value.trim().length > 0) {
+        tokenBadge.className = "badge ok";
+        tokenText.innerText = "Token Configured";
+        tokenPulse.className = "pulse-ok";
+        tokenBadge.style.background = "rgba(34, 197, 94, 0.1)";
+        tokenBadge.style.color = "var(--state-ok)";
+        tokenBadge.style.borderColor = "var(--state-ok)";
+      } else {
+        tokenBadge.className = "badge warn";
+        tokenText.innerText = "Token Missing";
+        tokenPulse.className = "pulse-warn";
+        tokenBadge.style.background = "rgba(245, 158, 11, 0.1)";
+        tokenBadge.style.color = "var(--state-warn)";
+        tokenBadge.style.borderColor = "var(--state-warn)";
+      }
+    }
+    if (apiKeyInput) {
+      apiKeyInput.addEventListener("input", updateTokenStatus);
+      updateTokenStatus(); // Initial check
+    }
+
     document.getElementById("ocRefreshBtn").addEventListener("click", withBtnState("ocRefreshBtn", "Wait...", () => loadOpenclawStatus(true)));
     document.getElementById("ocApplyAutoswitchBtn").addEventListener("click", withBtnState("ocApplyAutoswitchBtn", "Wait...", ocApplyAutoswitch));
     document.getElementById("ocModeLocalBtn").addEventListener("click", withBtnState("ocModeLocalBtn", "Wait...", () => ocApplyMode("local")));
@@ -1533,10 +1663,20 @@ ${channelsText}`;
             payload.catalog?.cloud_slots || {},
           ).length;
           setText("ocCloudSlots", slots > 0 ? `${slots} active` : "none");
+
+          // Updates for Control UX Buttons
+          const m = payload.catalog?.force_mode || "auto";
+          ["local", "auto", "cloud"].forEach(md => {
+            const btn = document.getElementById(`ocMode${md.charAt(0).toUpperCase() + md.slice(1)}Btn`);
+            if (btn) btn.className = (m === md) ? "primary" : "";
+          });
+          setText("opsQueueMode", m);
+
         } else {
           setText("ocForceMode", "ERR");
           setText("ocLocalModel", "ERR");
           setText("ocCloudSlots", "ERR");
+          setText("opsQueueMode", "ERR");
         }
 
         // Autoswitch processing
