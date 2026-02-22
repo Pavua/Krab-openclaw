@@ -8,6 +8,7 @@
 3. При успешном local stream fallback в облако не вызывается.
 """
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -682,3 +683,86 @@ async def test_route_stream_autoloads_local_when_no_model_loaded(
         )
     ]
     assert "".join(chunks) == "stream ok"
+
+
+@pytest.mark.asyncio
+async def test_route_query_force_cloud_uses_zero_retry_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    В force_cloud режиме не делаем внутренние retry на кандидате, чтобы
+    не зависать в очереди при деградации cloud-канала.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+    router.is_local_available = False
+
+    observed = {"max_retries": None}
+
+    async def fake_call_gemini(*args, **kwargs):
+        observed["max_retries"] = kwargs.get("max_retries")
+        return "Cloud ok"
+
+    monkeypatch.setattr(router, "_build_cloud_candidates", lambda *args, **kwargs: ["google/gemini-2.5-flash"])
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="force cloud no retry",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+    assert response == "Cloud ok"
+    assert observed["max_retries"] == 0
+
+
+@pytest.mark.asyncio
+async def test_route_query_force_cloud_stops_on_fail_fast_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    При исчерпании fail-fast бюджета force_cloud не должен перебирать
+    весь список cloud-кандидатов.
+    """
+    router = ModelRouter(
+        config={
+            "MODEL_ROUTING_MEMORY_PATH": str(tmp_path / "routing_memory.json"),
+            "MODEL_USAGE_REPORT_PATH": str(tmp_path / "usage_report.json"),
+            "MODEL_OPS_STATE_PATH": str(tmp_path / "ops_state.json"),
+            "MODEL_FEEDBACK_PATH": str(tmp_path / "feedback.json"),
+            "CLOUD_FAIL_FAST_BUDGET_SECONDS": "1",
+            "MODEL_CLOUD_MAX_CANDIDATES_FORCE_CLOUD": "3",
+        }
+    )
+    router.force_mode = "force_cloud"
+    router.is_local_available = False
+
+    attempts = {"count": 0}
+
+    async def fake_call_gemini(*args, **kwargs):
+        attempts["count"] += 1
+        await asyncio.sleep(1.1)
+        return "❌ OpenClaw Error (0): Connection error."
+
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: [
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-pro",
+            "openai/gpt-4o-mini",
+        ],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="force cloud fail-fast budget",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+
+    assert attempts["count"] == 1
+    assert "превышено время ожидания" in response.lower()

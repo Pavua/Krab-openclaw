@@ -289,6 +289,28 @@ class ModelRouter:
             )
         except Exception:
             self.cloud_max_candidates_force_cloud = 3
+        # Fail-fast guardrails для cloud-вызовов:
+        # ограничиваем длительность одного HTTP-запроса и общий бюджет времени
+        # для force_cloud-ветки, чтобы user не видел вечное «🤔 Думаю...».
+        try:
+            self.cloud_request_timeout_seconds = max(
+                5,
+                int(config.get("CLOUD_REQUEST_TIMEOUT_SECONDS", 22)),
+            )
+        except Exception:
+            self.cloud_request_timeout_seconds = 22
+        try:
+            self.cloud_fail_fast_budget_seconds = max(
+                1,
+                int(config.get("CLOUD_FAIL_FAST_BUDGET_SECONDS", 40)),
+            )
+        except Exception:
+            self.cloud_fail_fast_budget_seconds = 40
+        # Provider probe может быть полезен для диагностики, но тормозит прод-ответы.
+        # По умолчанию выключен в обычном chat-контуре.
+        self.cloud_probe_on_chat_error = str(
+            config.get("CLOUD_PROVIDER_PROBE_ON_CHAT_ERROR", "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
         # Память предпочтений моделей по профилям задач.
         self._routing_memory_path = Path(
@@ -780,6 +802,12 @@ class ModelRouter:
                 "code": "model_not_found",
                 "summary": "запрошенная cloud-модель недоступна (not found)",
                 "retryable": False,
+            }
+        if "fail-fast budget exceeded" in lowered:
+            return {
+                "code": "timeout",
+                "summary": "превышено время ожидания ответа от облачного канала",
+                "retryable": True,
             }
         if "connection error" in lowered or "failed to connect" in lowered:
             return {
@@ -2449,6 +2477,13 @@ class ModelRouter:
             if prefer_pro_for_owner_private:
                 cloud_preferred = self.models.get("pro", cloud_preferred)
 
+            force_cloud_mode = self.force_mode == "force_cloud"
+            deadline = (
+                time.monotonic() + float(self.cloud_fail_fast_budget_seconds)
+                if force_cloud_mode
+                else None
+            )
+
             for i, candidate in enumerate(
                 self._build_cloud_candidates(
                     task_type=task_type,
@@ -2461,9 +2496,21 @@ class ModelRouter:
             ):
                 if "-exp" in candidate and "gemini-2.0" in candidate:
                     candidate = candidate.replace("-exp", "")
+                if deadline is not None and time.monotonic() >= deadline:
+                    self.last_cloud_error = (
+                        "Cloud fail-fast budget exceeded "
+                        f"({self.cloud_fail_fast_budget_seconds}s)"
+                    )
+                    logger.warning(
+                        "Cloud routing stopped by fail-fast budget",
+                        budget_seconds=self.cloud_fail_fast_budget_seconds,
+                        attempt=i + 1,
+                        reason=route_reason,
+                    )
+                    break
                     
                 logger.info("Routing to CLOUD", model=candidate, profile=profile, reason=route_reason)
-                max_retries_cloud = 1 if i == 0 else 0
+                max_retries_cloud = 0 if force_cloud_mode else (1 if i == 0 else 0)
                 response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
                 
                 if self._is_runtime_error_message(response):
@@ -2653,6 +2700,11 @@ class ModelRouter:
             cloud_preferred = preferred_model or recommendation.get("model")
             if prefer_pro_for_owner_private:
                 cloud_preferred = self.models.get("pro", cloud_preferred)
+            deadline = (
+                time.monotonic() + float(self.cloud_fail_fast_budget_seconds)
+                if failure_reason == "force_cloud"
+                else None
+            )
             for candidate in self._build_cloud_candidates(
                 task_type=task_type,
                 profile=profile,
@@ -2663,9 +2715,27 @@ class ModelRouter:
             ):
                 if "-exp" in candidate and "gemini-2.0" in candidate:
                     candidate = candidate.replace("-exp", "")
+                if deadline is not None and time.monotonic() >= deadline:
+                    self.last_cloud_error = (
+                        "Cloud stream fail-fast budget exceeded "
+                        f"({self.cloud_fail_fast_budget_seconds}s)"
+                    )
+                    logger.warning(
+                        "Cloud stream fallback stopped by fail-fast budget",
+                        budget_seconds=self.cloud_fail_fast_budget_seconds,
+                    )
+                    break
 
                 logger.info("Routing to CLOUD (Stream Fallback)", model=candidate, profile=profile, reason=failure_reason)
-                response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=1)
+                retries = 0 if failure_reason == "force_cloud" else 1
+                response = await self._call_gemini(
+                    prompt,
+                    candidate,
+                    context,
+                    chat_type,
+                    is_owner,
+                    max_retries=retries,
+                )
                 
                 # [R12] Используем унифицированный детектор ошибок
                 if self._is_runtime_error_message(response):
@@ -2860,19 +2930,29 @@ class ModelRouter:
 
         for attempt in range(max_retries + 1):
             try:
-                response_text = await self.openclaw_client.chat_completions(messages, model=model_name)
+                response_text = await self.openclaw_client.chat_completions(
+                    messages,
+                    model=model_name,
+                    timeout_seconds=self.cloud_request_timeout_seconds,
+                    probe_provider_on_error=self.cloud_probe_on_chat_error,
+                )
                 cleaned_response = self._sanitize_model_text(response_text)
                 normalized = (cleaned_response or "").strip()
                 error_detected = self._is_cloud_error_message(normalized)
                 billing_issue = self._is_cloud_billing_error(normalized)
+                fatal_auth_error = self._is_fatal_cloud_auth_error(normalized)
 
                 if error_detected or billing_issue:
                     self._mark_cloud_soft_cap_if_needed(normalized or "пустой ответ")
+                    if fatal_auth_error:
+                        self._stats["cloud_failures"] += 1
+                        return f"❌ Ошибка Cloud: {response_text}"
                     if attempt < max_retries:
                         logger.warning(f"OpenClaw Attempt {attempt+1} failed: {response_text}")
                         await asyncio.sleep(2 ** (attempt + 1))
                         continue
                         
+                    self._stats["cloud_failures"] += 1
                     if billing_issue:
                         return f"❌ Ошибка биллинга (OpenClaw): Похоже, на аккаунте закончились средства или достигнут лимит провайдера. Проверьте баланс на шлюзе. (Детали: {response_text})"
                     return f"❌ Ошибка Cloud: {response_text}"
@@ -2965,7 +3045,7 @@ class ModelRouter:
                     context, 
                     chat_type, 
                     is_owner, 
-                    max_retries=(1 if i == 0 else 0)
+                    max_retries=(0 if self.force_mode == "force_cloud" else (1 if i == 0 else 0))
                 )
                 
                 if self._is_runtime_error_message(response):

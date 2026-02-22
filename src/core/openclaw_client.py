@@ -432,7 +432,13 @@ class OpenClawClient:
             return {"error": str(data.get("error", "Unknown Error"))}
         return {"error": "Invalid OpenClaw response"}
 
-    async def chat_completions(self, messages: list, model: str = "google/gemini-1.5-flash") -> str:
+    async def chat_completions(
+        self,
+        messages: list,
+        model: str = "google/gemini-1.5-flash",
+        timeout_seconds: int = 60,
+        probe_provider_on_error: bool = True,
+    ) -> str:
         """Отправляет chat-completion в OpenClaw Gateway."""
         payload = {
             "model": model,
@@ -440,10 +446,16 @@ class OpenClawClient:
             "stream": False,
             "max_tokens": 2048,  # Защита от бесконечного выхлопа
         }
-        response = await self._request_json("POST", "/v1/chat/completions", payload=payload, timeout=60)
+        safe_timeout = int(max(4, timeout_seconds))
+        response = await self._request_json(
+            "POST",
+            "/v1/chat/completions",
+            payload=payload,
+            timeout=safe_timeout,
+        )
         if not response.get("ok"):
             detail = self._format_error_detail(response.get("data") or response.get("error"))
-            if "connection error" in detail.lower():
+            if probe_provider_on_error and "connection error" in detail.lower():
                 provider_hint = await self._probe_provider_health_hint(model)
                 if provider_hint:
                     detail = f"{detail} | {provider_hint}"
@@ -453,7 +465,7 @@ class OpenClawClient:
         try:
             content = str(data["choices"][0]["message"]["content"] or "")
             lowered = content.strip().lower()
-            if "connection error" in lowered:
+            if probe_provider_on_error and "connection error" in lowered:
                 provider_hint = await self._probe_provider_health_hint(model)
                 if provider_hint:
                     return f"{content} | {provider_hint}"
