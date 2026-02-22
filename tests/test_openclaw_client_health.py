@@ -146,6 +146,31 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], 0)
         self.assertIn("error", result)
 
+    async def test_cloud_provider_diagnostics_reports_missing_keys(self):
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "OPENAI_API_KEY": ""}, clear=False):
+            with patch.object(client, "_get_auth_profile_api_key", return_value=""):
+                diag = await client.get_cloud_provider_diagnostics(["google", "openai"])
+        self.assertFalse(diag["ok"])
+        self.assertEqual(diag["providers"]["google"]["error_code"], "missing_api_key")
+        self.assertEqual(diag["providers"]["openai"]["error_code"], "missing_api_key")
+
+    async def test_cloud_provider_diagnostics_uses_probe_classification(self):
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "gm-test-1234", "OPENAI_API_KEY": "sk-test-5678"}, clear=False):
+            async def fake_probe(model: str):
+                if model.startswith("google/"):
+                    return "Google API 403: Your API key was reported as leaked."
+                return None
+
+            with patch.object(client, "_probe_provider_health_hint", side_effect=fake_probe):
+                diag = await client.get_cloud_provider_diagnostics(["google", "openai"])
+
+        self.assertFalse(diag["ok"])
+        self.assertEqual(diag["providers"]["google"]["error_code"], "api_key_leaked")
+        self.assertFalse(diag["providers"]["google"]["retryable"])
+        self.assertTrue(diag["providers"]["openai"]["ok"])
+
     async def test_get_auth_provider_health(self):
         client = FakeOpenClawClient()
         with patch.dict(

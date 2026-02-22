@@ -1337,7 +1337,7 @@ def register_handlers(app, deps: dict):
                 f"• Base URL: `{report.get('base_url', '-')}`\n\n"
                 f"{triage_line}\n"
                 "_Ремедиация auth:_ `repair_openclaw_lmstudio_auth.command`\n\n"
-                "_Подкоманды:_ `!openclaw auth`, `!openclaw browser`, `!openclaw tools`, `!openclaw deep`, `!openclaw plan`, `!openclaw smoke [url]`"
+                "_Подкоманды:_ `!openclaw auth`, `!openclaw cloud`, `!openclaw browser`, `!openclaw tools`, `!openclaw deep`, `!openclaw plan`, `!openclaw smoke [url]`"
             )
             await notification.edit_text(text)
             return
@@ -1376,6 +1376,39 @@ def register_handlers(app, deps: dict):
                 + "\n".join(provider_lines)
                 + "\n\n"
                 f"```json\n{payload}\n```"
+            )
+            return
+
+        if sub in {"cloud", "cloudcheck", "providers-cloud"}:
+            cloud_diag = await openclaw_client.get_cloud_provider_diagnostics()
+            providers = cloud_diag.get("providers", {})
+            lines = []
+            if isinstance(providers, dict) and providers:
+                for name in sorted(providers.keys()):
+                    item = providers.get(name, {})
+                    status = "UP" if bool(item.get("ok")) else "DOWN"
+                    lines.append(
+                        f"- `{name}`: `{status}` "
+                        f"(code=`{item.get('error_code', 'unknown')}`, "
+                        f"key=`{item.get('key_source', '-')}` {item.get('key_preview', '')})"
+                    )
+                    if not bool(item.get("ok")):
+                        lines.append(f"  └ {item.get('summary', 'ошибка провайдера')}")
+                        hint = str(item.get("hint", "") or "").strip()
+                        if hint:
+                            lines.append(f"  └ hint: `{hint}`")
+            else:
+                lines.append("- _(провайдеры не проверены)_")
+
+            await notification.edit_text(
+                "**🧩 OpenClaw Cloud Key Check:**\n"
+                f"- overall: `{'OK' if cloud_diag.get('ok') else 'FAIL'}`\n"
+                f"- checked: `{cloud_diag.get('checked', [])}`\n\n"
+                "**Providers:**\n"
+                + "\n".join(lines)
+                + "\n\n"
+                "_Подсказка:_ сначала исправляй `error_code` со значениями "
+                "`api_key_leaked`, `api_key_invalid`, `api_disabled`, `quota_or_billing`."
             )
             return
 
@@ -1465,7 +1498,7 @@ def register_handlers(app, deps: dict):
             )
             return
 
-        await notification.edit_text("❓ Использование: `!openclaw [status|auth|browser|tools|deep|plan|smoke]`")
+        await notification.edit_text("❓ Использование: `!openclaw [status|auth|cloud|browser|tools|deep|plan|smoke]`")
 
     # --- !diagnose / !diag: Полная диагностика ---
     @app.on_message(filters.command(["diagnose", "diag"], prefixes="!"))
@@ -2235,7 +2268,7 @@ def register_handlers(app, deps: dict):
             "`!ops executive [monthly_calls]` — KPI/риски/рекомендации (компактно)\n"
             "`!ops ack <code> [note]` — Подтвердить ops-alert\n"
             "`!ops unack <code>` — Снять подтверждение ops-alert\n"
-            "`!openclaw [status|auth|browser|tools|deep|plan|smoke]` — Health/deep-check/remediation/smoke OpenClaw\n"
+            "`!openclaw [status|auth|cloud|browser|tools|deep|plan|smoke]` — Health/deep-check/remediation/smoke OpenClaw\n"
             "`!model` — Управление моделями\n"
             "`!model scan` — 🔍 Сканировать доступные\n"
             "`!model recommend` — Рекомендация модели по профилю\n"

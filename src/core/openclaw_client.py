@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any, Optional
 
 import aiohttp
@@ -26,6 +27,7 @@ class OpenClawClient:
     def __init__(self, base_url: str = "http://localhost:18789", api_key: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self._provider_probe_cache: dict[str, tuple[float, str]] = {}
         self.headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -110,6 +112,284 @@ class OpenClawClient:
             return json.dumps(payload, ensure_ascii=False)
         return str(payload)
 
+    async def _probe_provider_health_hint(self, model: str) -> Optional[str]:
+        """
+        Быстрый probe upstream-провайдера, чтобы превратить «Connection error.»
+        в диагностическое сообщение (invalid/leaked key, quota и т.д.).
+        """
+        model_name = str(model or "").strip().lower()
+        if not model_name:
+            return None
+
+        provider = model_name.split("/", 1)[0]
+        if provider not in {"google", "openai"}:
+            return None
+
+        # Короткий TTL-кеш, чтобы не спамить внешние API на каждом запросе.
+        now = time.time()
+        cached = self._provider_probe_cache.get(provider)
+        if cached and (now - cached[0]) < 120:
+            return cached[1]
+
+        hint = None
+        try:
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if provider == "google":
+                    api_key = (
+                        os.getenv("GEMINI_API_KEY", "").strip()
+                        or os.getenv("GOOGLE_API_KEY", "").strip()
+                        or self._get_auth_profile_api_key("google")
+                        or self._get_auth_profile_api_key("gemini")
+                    )
+                    if not api_key:
+                        hint = "Google/Gemini API key не задан (env/auth-profiles)."
+                    else:
+                        url = (
+                            "https://generativelanguage.googleapis.com/v1beta/"
+                            f"models/gemini-2.5-flash:generateContent?key={api_key}"
+                        )
+                        payload = {"contents": [{"parts": [{"text": "ping"}]}]}
+                        async with session.post(url, json=payload) as resp:
+                            text = await resp.text()
+                            if resp.status >= 400:
+                                hint = f"Google API {resp.status}: {text[:220]}"
+                elif provider == "openai":
+                    api_key = os.getenv("OPENAI_API_KEY", "").strip() or self._get_auth_profile_api_key("openai")
+                    if not api_key:
+                        hint = "OPENAI_API_KEY не задан (env/auth-profiles)."
+                    else:
+                        headers = {"Authorization": f"Bearer {api_key}"}
+                        async with session.get("https://api.openai.com/v1/models", headers=headers) as resp:
+                            text = await resp.text()
+                            if resp.status >= 400:
+                                hint = f"OpenAI API {resp.status}: {text[:220]}"
+        except Exception as exc:
+            hint = f"probe {provider} недоступен: {exc}"
+
+        if hint:
+            self._provider_probe_cache[provider] = (now, hint)
+        return hint
+
+    def _resolve_provider_api_key(self, provider: str) -> tuple[str, str]:
+        """
+        Возвращает (api_key, source) для cloud-провайдера без логирования секрета.
+        source нужен для диагностики конфигурации.
+        """
+        normalized = str(provider or "").strip().lower()
+        if normalized == "google":
+            env_gemini = os.getenv("GEMINI_API_KEY", "").strip()
+            if env_gemini:
+                return env_gemini, "env:GEMINI_API_KEY"
+            env_google = os.getenv("GOOGLE_API_KEY", "").strip()
+            if env_google:
+                return env_google, "env:GOOGLE_API_KEY"
+            profile_google = self._get_auth_profile_api_key("google")
+            if profile_google:
+                return profile_google, "auth_profiles:google"
+            profile_gemini = self._get_auth_profile_api_key("gemini")
+            if profile_gemini:
+                return profile_gemini, "auth_profiles:gemini"
+            return "", "missing"
+
+        if normalized == "openai":
+            env_openai = os.getenv("OPENAI_API_KEY", "").strip()
+            if env_openai:
+                return env_openai, "env:OPENAI_API_KEY"
+            profile_openai = self._get_auth_profile_api_key("openai")
+            if profile_openai:
+                return profile_openai, "auth_profiles:openai"
+            return "", "missing"
+
+        return "", "unsupported_provider"
+
+    def _classify_provider_probe_hint(self, hint: str) -> dict[str, Any]:
+        """
+        Нормализует provider probe hint в стабильный код/summary/retryable.
+        """
+        raw = str(hint or "").strip()
+        lowered = raw.lower()
+        if not lowered:
+            return {"code": "ok", "summary": "ok", "retryable": True}
+
+        if "reported as leaked" in lowered:
+            return {
+                "code": "api_key_leaked",
+                "summary": "API key помечен как скомпрометированный (leaked)",
+                "retryable": False,
+            }
+        if "invalid api key" in lowered or "incorrect api key" in lowered:
+            return {
+                "code": "api_key_invalid",
+                "summary": "API key невалидный",
+                "retryable": False,
+            }
+        if (
+            "generative language api has not been used" in lowered
+            or "api has not been used in project" in lowered
+            or "it is disabled" in lowered
+            or "enable it by visiting" in lowered
+        ):
+            return {
+                "code": "api_disabled",
+                "summary": "Generative Language API не включён в проекте",
+                "retryable": False,
+            }
+        if "permission_denied" in lowered or " 403" in f" {lowered}":
+            return {
+                "code": "permission_denied",
+                "summary": "доступ отклонён провайдером (403)",
+                "retryable": False,
+            }
+        if "unauthorized" in lowered or " 401" in f" {lowered}":
+            return {
+                "code": "unauthorized",
+                "summary": "ошибка авторизации (401)",
+                "retryable": False,
+            }
+        if "quota" in lowered or "billing" in lowered or "out of credits" in lowered:
+            return {
+                "code": "quota_or_billing",
+                "summary": "исчерпан лимит/биллинг",
+                "retryable": False,
+            }
+        if "not found" in lowered or "not_found" in lowered:
+            return {
+                "code": "model_not_found",
+                "summary": "модель/endpoint не найден",
+                "retryable": False,
+            }
+        if "timeout" in lowered or "timed out" in lowered:
+            return {
+                "code": "timeout",
+                "summary": "таймаут соединения",
+                "retryable": True,
+            }
+        if (
+            "connection error" in lowered
+            or "failed to connect" in lowered
+            or "upstream" in lowered
+            or "probe" in lowered
+        ):
+            return {
+                "code": "network_error",
+                "summary": "ошибка сети/шлюза",
+                "retryable": True,
+            }
+        return {
+            "code": "unknown",
+            "summary": "неизвестная ошибка провайдера",
+            "retryable": True,
+        }
+
+    async def get_cloud_provider_diagnostics(
+        self,
+        providers: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        """
+        Быстрая диагностика ключей cloud-провайдеров (google/openai).
+        Для каждого провайдера возвращает:
+        - key_present/source,
+        - probe status (ok/fail),
+        - error class и краткую сводку.
+        """
+        target = [str(item).strip().lower() for item in (providers or ["google", "openai"]) if str(item).strip()]
+        diagnostics: dict[str, Any] = {}
+        overall_ok = True
+
+        probe_model = {
+            "google": "google/gemini-2.5-flash",
+            "openai": "openai/gpt-4o-mini",
+        }
+
+        for provider in target:
+            key, source = self._resolve_provider_api_key(provider)
+            key_present = bool(key)
+            key_preview = ""
+            if key_present:
+                key_preview = f"***{key[-4:]}" if len(key) >= 4 else "***"
+
+            if not key_present:
+                diagnostics[provider] = {
+                    "ok": False,
+                    "provider": provider,
+                    "key_present": False,
+                    "key_source": source,
+                    "key_preview": "",
+                    "error_code": "missing_api_key",
+                    "summary": "API key не задан",
+                    "retryable": False,
+                }
+                overall_ok = False
+                continue
+
+            hint = await self._probe_provider_health_hint(probe_model.get(provider, provider))
+            if not hint:
+                diagnostics[provider] = {
+                    "ok": True,
+                    "provider": provider,
+                    "key_present": True,
+                    "key_source": source,
+                    "key_preview": key_preview,
+                    "error_code": "ok",
+                    "summary": "доступ подтверждён",
+                    "retryable": True,
+                }
+                continue
+
+            classified = self._classify_provider_probe_hint(hint)
+            diagnostics[provider] = {
+                "ok": False,
+                "provider": provider,
+                "key_present": True,
+                "key_source": source,
+                "key_preview": key_preview,
+                "error_code": str(classified.get("code", "unknown")),
+                "summary": str(classified.get("summary", "ошибка провайдера")),
+                "retryable": bool(classified.get("retryable", True)),
+                "hint": str(hint)[:260],
+            }
+            overall_ok = False
+
+        return {
+            "ok": overall_ok,
+            "providers": diagnostics,
+            "checked": target,
+            "checked_at": int(time.time()),
+        }
+
+    def _load_auth_profiles_payload(self) -> dict[str, Any]:
+        """
+        Загружает локальный auth-profiles store OpenClaw.
+        Возвращает пустой dict, если файл отсутствует/битый.
+        """
+        profile_path = os.path.expanduser(
+            os.getenv(
+                "OPENCLAW_AUTH_PROFILES_PATH",
+                "~/.openclaw/agents/main/agent/auth-profiles.json",
+            )
+        )
+        if not os.path.exists(profile_path):
+            return {}
+        try:
+            with open(profile_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _get_auth_profile_api_key(self, provider_name: str) -> str:
+        """
+        Возвращает apiKey из auth-profiles для указанного провайдера.
+        Не логирует ключ и не бросает исключения.
+        """
+        payload = self._load_auth_profiles_payload()
+        node = payload.get(str(provider_name).strip().lower())
+        if not isinstance(node, dict):
+            return ""
+        value = node.get("apiKey") or node.get("api_key") or ""
+        return str(value).strip()
+
     async def _probe_first_available(self, paths: list[str], timeout: int = 5) -> dict[str, Any]:
         """Пробует список endpoint'ов и возвращает первый успешный ответ."""
         tried: list[str] = []
@@ -160,11 +440,21 @@ class OpenClawClient:
         response = await self._request_json("POST", "/v1/chat/completions", payload=payload, timeout=60)
         if not response.get("ok"):
             detail = self._format_error_detail(response.get("data") or response.get("error"))
+            if "connection error" in detail.lower():
+                provider_hint = await self._probe_provider_health_hint(model)
+                if provider_hint:
+                    detail = f"{detail} | {provider_hint}"
             return f"❌ OpenClaw Error ({response.get('status', 0)}): {detail}"
 
         data = response.get("data", {})
         try:
-            return data["choices"][0]["message"]["content"]
+            content = str(data["choices"][0]["message"]["content"] or "")
+            lowered = content.strip().lower()
+            if "connection error" in lowered:
+                provider_hint = await self._probe_provider_health_hint(model)
+                if provider_hint:
+                    return f"{content} | {provider_hint}"
+            return content
         except Exception:
             detail = self._format_error_detail(data)
             return f"❌ OpenClaw вернул неожиданный формат: {detail}"
