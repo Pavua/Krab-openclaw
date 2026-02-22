@@ -80,13 +80,16 @@ class OpenClawClient:
                     "raw": text,
             }
         except Exception as exc:
-            logger.warning("OpenClaw request failed path=%s error=%s", path, exc)
+            err_text = str(exc).strip()
+            if not err_text:
+                err_text = exc.__class__.__name__
+            logger.warning("OpenClaw request failed path=%s error=%s", path, err_text)
             return {
                 "ok": False,
                 "status": 0,
-                "data": {"error": str(exc)},
+                "data": {"error": err_text},
                 "url": url,
-                "error": str(exc),
+                "error": err_text,
             }
 
     def _format_error_detail(self, payload: Any) -> str:

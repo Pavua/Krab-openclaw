@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -145,6 +146,24 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], 0)
         self.assertIn("error", result)
+
+    async def test_request_json_empty_exception_text_uses_exception_class(self):
+        """Если текст исключения пустой, клиент должен вернуть имя класса ошибки."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+
+        class BrokenSession:
+            async def __aenter__(self):
+                raise asyncio.TimeoutError()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("src.core.openclaw_client.aiohttp.ClientSession", return_value=BrokenSession()):
+            result = await client._request_json("GET", "/health", timeout=1)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], 0)
+        self.assertEqual(result.get("error"), "TimeoutError")
 
     async def test_cloud_provider_diagnostics_reports_missing_keys(self):
         client = OpenClawClient(base_url="http://localhost:18789", api_key="")
