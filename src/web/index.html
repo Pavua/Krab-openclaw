@@ -133,11 +133,15 @@
 </head>
 
 <body>
-  <div id="fileProtocolWarning"
-    style="display: none; background: rgba(239, 68, 68, 0.9); color: white; padding: 12px; border-radius: var(--radius-md); margin-bottom: 24px; text-align: center; font-weight: bold; border: 1px solid var(--state-bad);">
-    Панель открыта как файл. Открой через http://127.0.0.1:8080
-  </div>
   <div class="container">
+    <div id="fileProtocolWarning" class="card"
+      style="display:none; border-color: var(--state-warn); margin-bottom: 16px;">
+      <h4 class="card-title" style="color: var(--state-warn);">Неверный режим открытия</h4>
+      <p class="card-meta">
+        Панель открыта как файл (`file://`). Для корректной работы API открой через `http://127.0.0.1:8080`.
+      </p>
+    </div>
+
     <header>
       <div class="header-titles">
         <h1>Krab Web Panel V2</h1>
@@ -173,55 +177,69 @@
 
     <!-- --- SERVICES & OPS --- -->
     <div class="grid-middle">
-      <div class="form-group" style="gap: 20px">
-        <div class="card">
-          <h3 class="card-title">Контекст и Сервисы</h3>
-          <div id="checks" style="margin-bottom: 12px">—</div>
-          <div class="card-meta" id="updated_at">Waiting for sync...</div>
+      <div class="form-group" style="gap: 16px">
+        <div class="card state-container" style="padding: 20px;">
+          <h3 class="card-title">Сервисы & Интеграции</h3>
+          <div id="checks" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">—</div>
+          <div class="card-meta" id="updated_at" style="font-family: var(--font-mono); font-size: 0.75rem;">Waiting for
+            sync...</div>
         </div>
 
-        <div class="card">
-          <h3 class="card-title">Рекомендовано</h3>
-          <p class="card-value" id="recommended_model" style="font-size: 1.4rem">
+        <div class="card state-container"
+          style="background: linear-gradient(145deg, var(--bg-surface), var(--bg-panel)); padding: 20px;">
+          <h3 class="card-title">Рекомендовано (Routing)</h3>
+          <p class="card-value text-info" id="recommended_model"
+            style="font-size: 1.4rem; text-shadow: var(--accent-glow); margin-bottom: 8px;">
             —
           </p>
-          <p class="card-meta" id="recommended_meta"></p>
+          <p class="card-meta" id="recommended_meta" style="line-height: 1.5;"></p>
         </div>
 
-        <div class="card">
-          <h3 class="card-title">Ссылки</h3>
-          <div class="link-list" id="links">
-            <a href="#">OpenClaw Dashboard</a>
-            <a href="#">LM Studio API</a>
-          </div>
+        <div class="card state-container" style="padding: 20px;">
+          <details>
+            <summary class="card-title"
+              style="cursor: pointer; margin: 0; display: flex; align-items: center; justify-content: space-between;">
+              <span>Диагностика & API Ссылки</span>
+              <span style="opacity: 0.5;">▼</span>
+            </summary>
+            <div class="link-list" id="links"
+              style="margin-top: 16px; max-height: 200px; overflow-y: auto; padding-right: 8px;">
+            </div>
+          </details>
         </div>
       </div>
 
-      <div class="card">
+      <div class="card state-container" style="display: flex; flex-direction: column;">
         <h3 class="card-title" style="color: var(--state-warn)">
           Ops Alerts & Guardrails
         </h3>
-        <div id="opsAlerts" class="card-meta">—</div>
-        <p class="card-meta" id="opsUsageMeta"></p>
-
-        <div style="
-              margin-top: 16px;
-              padding-top: 16px;
-              border-top: 1px solid var(--border-subtle);
-            ">
-          <div class="form-grid" style="grid-template-columns: 1fr 1fr">
-            <input id="opsAlertCode" class="field" placeholder="Alert Code (ex: cloud_share)" />
-            <input id="opsAlertNote" class="field" placeholder="Note (opt)" />
-          </div>
-          <div style="display: flex; gap: 10px">
-            <button id="opsAckBtn" class="primary">Acknowledge</button>
-            <button id="opsUnackBtn">Revoke Ack</button>
-          </div>
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <input id="opsAlertSearch" class="field" placeholder="Поиск по коду alert..." style="flex:1;"
+            oninput="filterAlerts()" />
         </div>
-        <p class="card-meta" id="opsActionMeta">
-          Управление alert-ами через Web API
-        </p>
-        <div id="opsHistory" class="ops-history empty">
+        <div id="opsAlerts" class="card-meta"
+          style="max-height: 180px; overflow-y: auto; padding-right: 4px; margin-bottom: 12px; border-radius: var(--radius-sm);">
+          —</div>
+        <p class="card-meta" id="opsUsageMeta"
+          style="border-top: 1px dashed var(--border-card); padding-top: 12px; line-height: 1.5;"></p>
+
+        <div
+          style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-subtle); background: rgba(0,0,0,0.2); margin-left: -24px; margin-right: -24px; padding-left: 24px; padding-right: 24px;">
+          <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap: 12px;">
+            <input id="opsAlertCode" class="field" placeholder="Alert Code (ex: cloud_share)"
+              style="background: var(--bg-panel);" />
+            <input id="opsAlertNote" class="field" placeholder="Note (opt)" style="background: var(--bg-panel);" />
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 12px;">
+            <button id="opsAckBtn" class="primary" style="flex: 1;">Acknowledge</button>
+            <button id="opsUnackBtn" style="flex: 1;">Revoke Ack</button>
+          </div>
+          <p class="card-meta" id="opsActionMeta" style="margin-top: 12px; text-align: center;">Ожидание...</p>
+        </div>
+
+        <h4 class="form-label" style="margin-top: 20px;">Operations History</h4>
+        <div id="opsHistory" class="ops-history empty"
+          style="flex: 1; border: 1px solid var(--border-card); background: var(--bg-base); margin-top: 8px;">
           <div class="empty-state" style="padding: 24px 0">
             <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"
               style="margin-bottom: 12px; color: var(--text-placeholder)">
@@ -255,97 +273,100 @@
         OpenClaw Control Center
       </h3>
 
-      <div class="grid-metrics" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))">
+      <div class="grid-metrics" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
         <!-- Status & Mode -->
-        <div class="form-group" style="
-              background: var(--bg-surface);
-              padding: 16px;
-              border-radius: var(--radius-md);
-              border: 1px solid var(--border-subtle);
-            ">
-          <h4 class="form-label" style="margin-bottom: 12px">Model Status</h4>
-          <div style="display: flex; flex-direction: column; gap: 8px">
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Force Mode:</span>
-              <span id="ocForceMode" class="card-value" style="font-size: 0.9rem">—</span>
-            </div>
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Local Model:</span>
-              <span id="ocLocalModel" class="card-value" style="font-size: 0.9rem">—</span>
-            </div>
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Cloud Slots:</span>
-              <span id="ocCloudSlots" class="card-value" style="font-size: 0.9rem">—</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Autoswitch -->
-        <div class="form-group" style="
-              background: var(--bg-surface);
-              padding: 16px;
-              border-radius: var(--radius-md);
-              border: 1px solid var(--border-subtle);
-            ">
-          <h4 class="form-label" style="margin-bottom: 12px">
-            Autoswitch Status
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; color: var(--accent-orange); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange);"
+              class="pulse-warn"></div>
+            Route & Model
           </h4>
-          <div style="display: flex; flex-direction: column; gap: 8px">
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Status:</span>
-              <span id="ocAutoswitchStatus" class="card-value" style="font-size: 0.9rem">—</span>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Routing Mode:</span>
+              <span id="ocForceMode" class="badge"
+                style="border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(14, 165, 233, 0.1);">—</span>
             </div>
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Last Switch:</span>
-              <span id="ocLastSwitch" class="card-value" style="font-size: 0.9rem">—</span>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Local Node:</span>
+              <span id="ocLocalModel" class="card-value"
+                style="font-size: 0.95rem; font-family: var(--font-mono); color: var(--text-main);">—</span>
             </div>
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Reason:</span>
-              <span id="ocSwitchReason" class="card-value" style="font-size: 0.9rem">—</span>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Cloud Slots:</span>
+              <span id="ocCloudSlots" class="card-value" style="font-size: 0.95rem; color: var(--text-main);">—</span>
             </div>
           </div>
         </div>
 
         <!-- Channels -->
-        <div class="form-group" style="
-              background: var(--bg-surface);
-              padding: 16px;
-              border-radius: var(--radius-md);
-              border: 1px solid var(--border-subtle);
-            ">
-          <h4 class="form-label" style="margin-bottom: 12px">
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);" class="pulse-ok">
+            </div>
             Channels Health
           </h4>
-          <div id="ocChannelsList" style="display: flex; flex-direction: column; gap: 8px">
+          <div id="ocChannelsList"
+            style="display: flex; flex-direction: column; gap: 10px; max-height: 120px; overflow-y: auto; padding-right: 4px;">
             <span class="card-meta">—</span>
           </div>
         </div>
 
-        <!-- Local Model Lifecycle -->
-        <div class="form-group" style="
-              background: var(--bg-surface);
-              padding: 16px;
-              border-radius: var(--radius-md);
-              border: 1px solid var(--border-subtle);
-            ">
-          <h4 class="form-label" style="margin-bottom: 12px">
-            Local Model Lifecycle
+        <!-- Autoswitch -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label" style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+            Autoswitch & Queue
           </h4>
-          <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px">
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Status:</span>
-              <span id="ocLocalLifecycleStatus" class="card-value" style="font-size: 0.9rem">—</span>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Status:</span>
+              <span id="ocAutoswitchStatus" class="card-value" style="font-size: 0.95rem;">—</span>
             </div>
-            <div style="display: flex; justify-content: space-between">
-              <span class="card-meta">Model:</span>
-              <span id="ocLocalLifecycleModel" class="card-value" style="font-size: 0.9rem">—</span>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Last Switch:</span>
+              <span id="ocLastSwitch" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Reason:</span>
+              <span id="ocSwitchReason" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right; color: var(--text-muted);">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Local Model Lifecycle -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label" style="margin-bottom: 16px;">
+            Local Model Engine
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Status:</span>
+              <span id="ocLocalLifecycleStatus" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Loaded Model:</span>
+              <span id="ocLocalLifecycleModel" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 150px; text-align: right;">—</span>
             </div>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
-            <button id="ocLocalLoadBtn" style="flex: 1; padding: 6px">Load Local</button>
-            <button id="ocLocalUnloadBtn" style="flex: 1; padding: 6px">Unload Local</button>
-            <button id="ocLocalRefreshBtn" style="width: 100%; padding: 6px; margin-top: 4px">Refresh Local
-              Status</button>
+            <button id="ocLocalLoadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Load Default</button>
+            <button id="ocLocalUnloadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Unload</button>
+            <button id="ocLocalRefreshBtn"
+              style="width: 100%; padding: 6px 10px; margin-top: 4px; font-size: 0.8rem;">Sync Engine State</button>
           </div>
         </div>
       </div>
@@ -564,6 +585,14 @@
     function setText(id, value) {
       const node = document.getElementById(id);
       if (node) node.textContent = value;
+    }
+
+    function showApiError(id, actionName, error) {
+      const node = document.getElementById(id);
+      if (node) {
+        node.innerHTML = `<span style="color: var(--state-bad);">⚠️ Ошибка [${actionName}]: ${error.message}</span>`;
+      }
+      console.error(`[${actionName}]`, error);
     }
 
     async function fetchJson(url) {
@@ -825,7 +854,7 @@
         );
         await updateStats();
       } catch (error) {
-        setText("modelControlMeta", `Ошибка применения: ${error.message}`);
+        showApiError("modelControlMeta", "Model Action", error);
       }
     }
 
@@ -1062,7 +1091,7 @@
       } catch (error) {
         document.getElementById("assistantOutput").textContent =
           `Ошибка: ${error.message}`;
-        setText("assistantMeta", "Запрос завершился с ошибкой");
+        setText("assistantMeta", "Запрос завершился с ошибкой: " + error.message);
       }
     }
 
@@ -1159,7 +1188,7 @@ next_step: ${plan.next_step || "Можно запускать задачу."}`;
       } catch (error) {
         document.getElementById("assistantOutput").textContent =
           `Ошибка preflight: ${error.message}`;
-        setText("assistantMeta", "Preflight завершился с ошибкой");
+        setText("assistantMeta", "Preflight завершился с ошибкой: " + error.message);
       }
     }
 
@@ -1258,6 +1287,18 @@ ${channelsText}`;
       }
     }
 
+    function filterAlerts() {
+      const query = (document.getElementById('opsAlertSearch')?.value || '').toLowerCase();
+      const items = document.querySelectorAll('#opsAlerts .alert-item');
+      items.forEach(el => {
+        if (query === '' || el.getAttribute('data-code').includes(query) || el.textContent.toLowerCase().includes(query)) {
+          el.style.display = 'flex';
+        } else {
+          el.style.display = 'none';
+        }
+      });
+    }
+
     async function updateStats() {
       try {
         const [
@@ -1316,6 +1357,10 @@ ${channelsText}`;
             `${links.dashboard}/api/openclaw/browser-smoke`,
           ],
           [
+            "OpenClaw Cloud Diagnostics",
+            `${links.dashboard}/api/openclaw/cloud`,
+          ],
+          [
             "Assistant Capabilities",
             `${links.dashboard}/api/assistant/capabilities`,
           ],
@@ -1369,10 +1414,16 @@ ${channelsText}`;
         } else {
           const html = alertsList
             .map((item) => {
+              const bg = item.severity === "high" ? "background: var(--state-error-muted); border-left: 3px solid var(--state-error);" : "background: var(--state-warn-muted); border-left: 3px solid var(--state-warn);";
               const ack = item.acknowledged
-                ? ` <span class="badge ok">ACK ${item.ack?.actor || ""}</span>`
-                : "";
-              return `<div><span class="badge ${item.severity === "high" ? "bad" : "warn"}">${item.severity || "info"}</span> ${item.code || ""} — ${item.message || ""}${ack}</div>`;
+                ? ` <span class="badge ok" title="${item.ack?.actor || ''} at ${item.ack?.ts || ''}">ACK</span>`
+                : (item.revoked ? ` <span class="badge" style="background: var(--bg-element); color: var(--text-placeholder)">REVOKED</span>` : "");
+
+              const statusCls = item.severity === "high" ? "bad" : "warn";
+              return `<div class="alert-item" data-code="${(item.code || '').toLowerCase()}" style="padding: 8px; margin-bottom: 4px; border-radius: 4px; ${bg} display:flex; justify-content:space-between; align-items:flex-start;">
+                <div><span class="badge ${statusCls}">${item.severity || "info"}</span> <strong>${item.code || ""}</strong> <span style="font-size:0.9em">— ${item.message || ""}</span></div>
+                <div>${ack}</div>
+              </div>`;
             })
             .join("");
           document.getElementById("opsAlerts").innerHTML = html;
@@ -1386,11 +1437,14 @@ ${channelsText}`;
         } else {
           document.getElementById("opsHistory").classList.remove("empty");
           document.getElementById("opsHistory").innerHTML = history
-            .map(
-              (item) =>
-                `${item.ts || "-"} • ${item.status || "-"} • alerts=${item.alerts_count ?? 0} • codes=${(item.codes || []).join(",") || "-"}`,
-            )
-            .join("<br>");
+            .map((item) => {
+              const badgeCls = item.status === 'ok' ? 'ok' : (item.status === 'error' ? 'bad' : 'warn');
+              return `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border-subtle); align-items:center;">
+                    <div style="font-size:0.9em;"><span class="badge ${badgeCls}">${item.status || "-"}</span> ${item.ts || "-"}</div>
+                    <div style="font-size:0.85em; color:var(--text-placeholder);">alerts: ${item.alerts_count ?? 0} ${item.codes?.length ? `(${item.codes.join(',')})` : ''}</div>
+                </div>`;
+            })
+            .join("");
         }
         setText(
           "updated_at",
@@ -1547,7 +1601,7 @@ ${channelsText}`;
         setText("ocMeta", payload.message || "Autoswitch applied");
         await loadOpenclawStatus(false);
       } catch (error) {
-        setText("ocMeta", `Autoswitch Error: ${error.message}`);
+        showApiError("ocMeta", "Autoswitch", error);
       }
     }
 
@@ -1558,7 +1612,7 @@ ${channelsText}`;
         setText("ocMeta", `Mode ${mode} applied`);
         await loadOpenclawStatus(false);
       } catch (error) {
-        setText("ocMeta", `Mode Error: ${error.message}`);
+        showApiError("ocMeta", "Apply Mode", error);
       }
     }
 
@@ -1582,7 +1636,7 @@ ${channelsText}`;
       } catch (error) {
         document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge bad">FAIL</span>`;
         document.getElementById("ocLocalLifecycleModel").textContent = "-";
-        setText("ocMeta", `Local Status Error: ${error.message}`);
+        showApiError("ocMeta", "Local Status", error);
       }
     }
 
@@ -1593,7 +1647,7 @@ ${channelsText}`;
         setText("ocMeta", "Local model загружена");
         await loadLocalLifecycleStatus(false);
       } catch (error) {
-        setText("ocMeta", `Load Local Error: ${error.message}`);
+        showApiError("ocMeta", "Load Model", error);
       }
     }
 
@@ -1604,7 +1658,7 @@ ${channelsText}`;
         setText("ocMeta", "Local model выгружена");
         await loadLocalLifecycleStatus(false);
       } catch (error) {
-        setText("ocMeta", `Unload Local Error: ${error.message}`);
+        showApiError("ocMeta", "Unload Model", error);
       }
     }
 

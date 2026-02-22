@@ -201,7 +201,10 @@
 
             <div class="card">
                 <h3 class="card-title" style="color:var(--state-warn)">Ops Alerts & Guardrails</h3>
-                <div id="opsAlerts" class="card-meta">—</div>
+                <div style="display:flex; gap:8px; margin-bottom:8px;">
+                        <input id="opsAlertSearch" class="field" placeholder="Поиск по коду alert..." style="flex:1;" oninput="filterAlerts()" />
+                    </div>
+                    <div id="opsAlerts" class="card-meta" style="max-height: 200px; overflow-y: auto;">—</div>
                 <p class="card-meta" id="opsUsageMeta"></p>
 
                 <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-subtle);">
@@ -868,7 +871,7 @@
                 }
             } catch (error) {
                 document.getElementById('assistantOutput').textContent = `Ошибка: ${error.message}`;
-                setText('assistantMeta', 'Запрос завершился с ошибкой');
+                setText('assistantMeta', 'Запрос завершился с ошибкой: ' + error.message);
             }
         }
 
@@ -948,7 +951,7 @@ next_step: ${plan.next_step || 'Можно запускать задачу.'}`;
                 );
             } catch (error) {
                 document.getElementById('assistantOutput').textContent = `Ошибка preflight: ${error.message}`;
-                setText('assistantMeta', 'Preflight завершился с ошибкой');
+                setText('assistantMeta', 'Preflight завершился с ошибкой: ' + error.message);
             }
         }
 
@@ -1019,6 +1022,18 @@ ${channelsText}`;
             }
         }
 
+        function filterAlerts() {
+            const query = (document.getElementById('opsAlertSearch')?.value || '').toLowerCase();
+            const items = document.querySelectorAll('#opsAlerts .alert-item');
+            items.forEach(el => {
+                if (query === '' || el.getAttribute('data-code').includes(query) || el.textContent.toLowerCase().includes(query)) {
+                    el.style.display = 'flex';
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+        }
+        
         async function updateStats() {
             try {
                 const [stats, health, links, recommend, feedbackPayload, usagePayload, alertsPayload, historyPayload] = await Promise.all([
@@ -1058,6 +1073,7 @@ ${channelsText}`;
                     ['OpenClaw Deep Check', `${links.dashboard}/api/openclaw/deep-check`],
                     ['OpenClaw Remediation Plan', `${links.dashboard}/api/openclaw/remediation-plan`],
                     ['OpenClaw Browser Smoke', `${links.dashboard}/api/openclaw/browser-smoke`],
+                    ['OpenClaw Cloud Diagnostics', `${links.dashboard}/api/openclaw/cloud`],
                     ['Assistant Capabilities', `${links.dashboard}/api/assistant/capabilities`],
                     ['Ops Cost Report', `${links.dashboard}/api/ops/cost-report`],
                     ['Ops Executive Summary', `${links.dashboard}/api/ops/executive-summary`],
@@ -1097,8 +1113,12 @@ ${channelsText}`;
                 } else {
                     const html = alertsList
                         .map((item) => {
-                            const ack = item.acknowledged ? ` <span class="badge ok">ACK ${item.ack?.actor || ''}</span>` : '';
-                            return `<div><span class="badge ${item.severity === 'high' ? 'bad' : 'warn'}">${item.severity || 'info'}</span> ${item.code || ''} — ${item.message || ''}${ack}</div>`;
+                            const ack = item.acknowledged ? ` <span class="badge ok" title="ACK by ${item.ack?.actor || ''}">ACK</span>` : '';
+                            const statusCls = item.severity === 'high' ? 'bad' : 'warn';
+                            return `<div class="alert-item" data-code="${(item.code || '').toLowerCase()}" style="padding:4px 0; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:flex-start;">
+                                <div><span class="badge ${statusCls}">${item.severity || 'info'}</span> ${item.code || ''} — ${item.message || ''}</div>
+                                <div>${ack}</div>
+                            </div>`;
                         })
                         .join('');
                     document.getElementById('opsAlerts').innerHTML = html;
@@ -1111,8 +1131,14 @@ ${channelsText}`;
                 } else {
                     document.getElementById('opsHistory').classList.remove('empty');
                     document.getElementById('opsHistory').innerHTML = history
-                        .map((item) => `${item.ts || '-'} • ${item.status || '-'} • alerts=${item.alerts_count ?? 0} • codes=${(item.codes || []).join(',') || '-'}`)
-                        .join('<br>');
+            .map((item) => {
+                const badgeCls = item.status === 'ok' ? 'ok' : (item.status === 'error' ? 'bad' : 'warn');
+                return `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border-subtle); align-items:center;">
+                    <div style="font-size:0.9em;"><span class="badge ${badgeCls}">${item.status || "-"}</span> ${item.ts || "-"}</div>
+                    <div style="font-size:0.85em; color:var(--text-placeholder);">alerts: ${item.alerts_count ?? 0} ${item.codes?.length ? `(${item.codes.join(',')})` : ''}</div>
+                </div>`;
+            })
+            .join("");
                 }
                 setText('updated_at', `Обновлено: ${new Date().toLocaleTimeString()}`);
             } catch (error) {
