@@ -23,32 +23,28 @@
 ## Что сделать
 
 1. Mobile + overflow hardening:
+   - экраны `<390px` и `<430px` не должны давать горизонтальный скролл;
+   - длинные токены/ID/URL корректно переносятся (`overflow-wrap`, `word-break`);
+   - кнопки в toolbars не налезают друг на друга.
 
-- экраны `<390px` и `<430px` не должны давать горизонтальный скролл;
-- длинные токены/ID/URL корректно переносятся (`overflow-wrap`, `word-break`);
-- кнопки в toolbars не налезают друг на друга.
+2. A11y baseline:
+   - видимый `focus-visible` для интерактивных элементов;
+   - контрастные состояния для `error/warn/success/info`;
+   - минимальные `aria-label` там, где смысл кнопки неочевиден.
 
-1. A11y baseline:
+3. Unified states:
+   - привести к единой схеме state-бейджей/панелей:
+     - `loading`,
+     - `empty`,
+     - `error`,
+     - `ready`;
+   - синхронизировать визуально между `index_redesign`, `transcriber_console`, `ops_center`.
 
-- видимый `focus-visible` для интерактивных элементов;
-- контрастные состояния для `error/warn/success/info`;
-- минимальные `aria-label` там, где смысл кнопки неочевиден.
-
-1. Unified states:
-
-- привести к единой схеме state-бейджей/панелей:
-  - `loading`,
-  - `empty`,
-  - `error`,
-  - `ready`;
-- синхронизировать визуально между `index_redesign`, `transcriber_console`, `ops_center`.
-
-1. Документация:
-
-- создать `docs/frontend_ui_polish/FRONTEND_R6_QA_MATRIX_RU.md`
-  - минимум 14 проверок;
-  - отдельные секции desktop/mobile/a11y;
-  - формат PASS/FAIL + критерий для каждой проверки.
+4. Документация:
+   - создать `docs/frontend_ui_polish/FRONTEND_R6_QA_MATRIX_RU.md`
+     - минимум 14 проверок;
+     - отдельные секции desktop/mobile/a11y;
+     - формат PASS/FAIL + критерий для каждой проверки.
 
 ## Ограничения
 
