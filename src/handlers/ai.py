@@ -145,7 +145,12 @@ except Exception:
 
 @dataclass
 class ChatQueuedTask:
-    """Одна задача автоответа в очереди чата."""
+    """
+    Одна задача автоответа в очереди чата.
+
+    status: pending | started | timeout | done | failed
+    started_at: timestamp старта обработки (для диагностики зависаний).
+    """
 
     chat_id: int
     message_id: int
@@ -154,6 +159,8 @@ class ChatQueuedTask:
     runner: Any
     attempt: int = 0
     on_final_failure: Callable[[BaseException], Awaitable[None]] | None = None
+    status: str = "pending"
+    started_at: float = 0.0
 
 
 class ChatWorkQueue:
@@ -195,6 +202,8 @@ class ChatWorkQueue:
                 self._workers.pop(chat_id, None)
                 return
             task = queue.popleft()
+            task.status = "started"
+            task.started_at = time.time()
             self._active_task[chat_id] = task
             should_stop = False
             try:
@@ -209,6 +218,7 @@ class ChatWorkQueue:
                     task.runner(),
                     timeout=max(1.0, float(AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS)),
                 )
+                task.status = "done"
                 self._processed += 1
                 logger.debug(
                     "queue: задача обработана успешно",
@@ -216,8 +226,34 @@ class ChatWorkQueue:
                     message_id=task.message_id,
                     processed=self._processed,
                 )
+            except asyncio.TimeoutError as timeout_exc:
+                # --- КРИТИЧЕСКИЙ ПУТЬ ---
+                # TimeoutError НЕ уходит в retry — это окончательный провал.
+                # on_final_failure вызывается сразу, чтобы пользователь не
+                # видел вечное «🤔 Думаю...» без финального ответа.
+                task.status = "timeout"
+                self._failed += 1
+                elapsed = time.time() - task.started_at if task.started_at else 0.0
+                logger.warning(
+                    "queue: задача истекла по таймауту — вызываем on_final_failure",
+                    chat_id=chat_id,
+                    message_id=task.message_id,
+                    attempt=task.attempt,
+                    elapsed_seconds=f"{elapsed:.1f}",
+                    timeout_seconds=AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS,
+                )
+                if task.on_final_failure:
+                    try:
+                        await task.on_final_failure(timeout_exc)
+                    except Exception:
+                        logger.debug(
+                            "queue: не удалось отправить timeout-нотификацию",
+                            chat_id=chat_id,
+                            message_id=task.message_id,
+                        )
             except Exception:
                 if task.attempt < self.max_retries:
+                    task.status = "pending"
                     task.attempt += 1
                     queue.appendleft(task)
                     self._retried += 1
@@ -229,6 +265,7 @@ class ChatWorkQueue:
                         max_retries=self.max_retries,
                     )
                 else:
+                    task.status = "failed"
                     self._failed += 1
                     logger.exception(
                         "Ошибка обработки задачи в очереди",
@@ -260,7 +297,19 @@ class ChatWorkQueue:
                 return
 
     def get_stats(self) -> dict:
+        """Возвращает статистику очереди, включая активные задачи с lifecycle-статусами."""
         queue_lengths = {str(chat_id): len(q) for chat_id, q in self._queues.items()}
+        # Детальная информация по активным задачам (для /api/queue/status).
+        active_tasks_detail = {}
+        now = time.time()
+        for chat_id, task in self._active_task.items():
+            active_tasks_detail[str(chat_id)] = {
+                "message_id": int(task.message_id),
+                "status": str(task.status),
+                "attempt": int(task.attempt),
+                "started_at": float(task.started_at or 0.0),
+                "elapsed_seconds": round(now - task.started_at, 1) if task.started_at else 0.0,
+            }
         return {
             "processed": int(self._processed),
             "failed": int(self._failed),
@@ -270,6 +319,8 @@ class ChatWorkQueue:
             "queued_total": int(sum(queue_lengths.values())),
             "max_per_chat": int(self.max_per_chat),
             "max_retries": int(self.max_retries),
+            "active_tasks": active_tasks_detail,
+            "task_timeout_seconds": float(AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS),
         }
 
 

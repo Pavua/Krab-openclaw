@@ -800,6 +800,36 @@ class ModelRouter:
             "retryable": True,
         }
 
+    def _categorize_cloud_error(self, text: Optional[str]) -> str:
+        """
+        Возвращает строковую категорию cloud-ошибки для тестов и логов.
+
+        Категории:
+        - auth_fatal    — leaked/invalid key, permission denied, unauthorized
+        - api_disabled  — API not enabled in Google Cloud project
+        - quota         — quota exceeded, billing, out of credits
+        - model_not_found — 404 NOT_FOUND
+        - network       — connection error, timeout
+        - unknown       — прочее
+
+        Зачем: _classify_cloud_error() возвращает dict — удобно внутри роутера.
+        Этот метод нужен для тестов и быстрого if/match в обработчиках.
+        """
+        info = self._classify_cloud_error(text)
+        code = str(info.get("code") or "unknown")
+        # Унифицируем несколько кодов под общую категорию auth_fatal.
+        if code in {"api_key_leaked", "api_key_invalid", "unauthorized", "permission_denied"}:
+            return "auth_fatal"
+        if code == "api_disabled":
+            return "api_disabled"
+        if code == "quota_or_billing":
+            return "quota"
+        if code == "model_not_found":
+            return "model_not_found"
+        if code in {"network_error", "timeout"}:
+            return "network"
+        return "unknown"
+
     def _summarize_cloud_error_for_user(self, text: Optional[str]) -> str:
         """
         Возвращает короткую пользовательскую формулировку cloud-ошибки
