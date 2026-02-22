@@ -294,6 +294,17 @@ def register_handlers(app, deps: dict):
             else:
                 local_diag_reason = "⚠️ Локальный контур недоступен."
         cloud_model = router.models.get("chat", "—")
+        cloud_error_info = (
+            router.get_last_cloud_error_info()
+            if hasattr(router, "get_last_cloud_error_info")
+            else {"has_error": False, "code": "none", "summary": ""}
+        )
+        cloud_diag_extra = ""
+        if bool(cloud_error_info.get("has_error")):
+            cloud_diag_extra = (
+                f"   └ Cloud err: `{cloud_error_info.get('code', 'unknown')}` — "
+                f"{cloud_error_info.get('summary', 'ошибка провайдера')}\n"
+            )
         last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
         if isinstance(last_route, dict) and last_route:
             last_route_text = (
@@ -357,6 +368,7 @@ def register_handlers(app, deps: dict):
             f"{f'   └ Reason: `{local_diag_reason}`\\n' if local_diag_reason else ''}"
             f"☁️  **Cloud (OpenClaw):** {cloud_status}\n"
             f"   └ Config chat: `{cloud_model}`\n"
+            f"{cloud_diag_extra}"
             f"🎧 **Voice Gateway:** {voice_status}\n"
             f"🧠 **RAG:** {rag_status} ({rag_docs} docs)\n"
             f"🧭 **Last route:** `{last_route_text}`\n"
@@ -1478,6 +1490,17 @@ def register_handlers(app, deps: dict):
                 emoji = "ℹ️"
                 status = str(val)
             lines.append(f"{emoji} **{key}**: {status}")
+        cloud_error_info = (
+            router.get_last_cloud_error_info()
+            if hasattr(router, "get_last_cloud_error_info")
+            else {"has_error": False}
+        )
+        if bool(cloud_error_info.get("has_error")):
+            lines.append(
+                "⚠️ **Cloud Error Class**: "
+                f"`{cloud_error_info.get('code', 'unknown')}` — "
+                f"{cloud_error_info.get('summary', 'ошибка провайдера')}"
+            )
         last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
         if isinstance(last_route, dict) and last_route:
             lines.append(
@@ -1510,6 +1533,17 @@ def register_handlers(app, deps: dict):
                 emoji = "ℹ️"
                 status = str(val)
             lines.append(f"{emoji} **{key}**: {status}")
+        cloud_error_info = (
+            router.get_last_cloud_error_info()
+            if hasattr(router, "get_last_cloud_error_info")
+            else {"has_error": False}
+        )
+        if bool(cloud_error_info.get("has_error")):
+            lines.append(
+                "⚠️ **Cloud Error Class**: "
+                f"`{cloud_error_info.get('code', 'unknown')}` — "
+                f"{cloud_error_info.get('summary', 'ошибка провайдера')}"
+            )
         last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
         if isinstance(last_route, dict) and last_route:
             lines.append(

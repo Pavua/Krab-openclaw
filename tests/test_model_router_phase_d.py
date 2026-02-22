@@ -125,6 +125,26 @@ def test_cloud_error_detection_no_models_loaded_signature(tmp_path: Path) -> Non
     assert router._is_cloud_error_message("Connection error.") is True
 
 
+def test_cloud_error_classifier_leaked_key(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    info = router._classify_cloud_error(
+        "Google API 403: Your API key was reported as leaked. Please use another API key."
+    )
+    assert info["code"] == "api_key_leaked"
+    assert info["retryable"] is False
+
+
+def test_last_cloud_error_info_uses_classifier(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+    router.last_cloud_error = "Connection error. Upstream connect error."
+    router.last_cloud_model = "google/gemini-2.5-flash"
+    info = router.get_last_cloud_error_info()
+    assert info["has_error"] is True
+    assert info["code"] == "network_error"
+    assert info["retryable"] is True
+    assert info["last_provider_model"] == "google/gemini-2.5-flash"
+
+
 def test_cloud_soft_cap_switch(tmp_path: Path) -> None:
     router = _router(tmp_path, soft_cap=2)
 

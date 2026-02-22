@@ -494,6 +494,12 @@ def _normalize_runtime_error_message_for_user(text: str, router=None) -> tuple[s
         return raw, False
 
     detail = "временный сбой канала AI"
+    cloud_summary = ""
+    if router and hasattr(router, "_summarize_cloud_error_for_user"):
+        try:
+            cloud_summary = str(router._summarize_cloud_error_for_user(raw) or "").strip()
+        except Exception:
+            cloud_summary = ""
     if "no models loaded" in lowered or "please load a model" in lowered:
         detail = "локальная модель не загружена"
     elif "quota" in lowered or "billing" in lowered or "out of credits" in lowered:
@@ -526,6 +532,8 @@ def _normalize_runtime_error_message_for_user(text: str, router=None) -> tuple[s
     ):
         detail = "ошибка соединения с AI-шлюзом"
 
+    if detail == "временный сбой канала AI" and cloud_summary:
+        detail = cloud_summary
     user_text = f"⚠️ Временная ошибка AI: {detail}. Повтори запрос через 3-5 секунд."
     return user_text, True
 

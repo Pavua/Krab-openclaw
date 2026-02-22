@@ -721,39 +721,108 @@ class ModelRouter:
         )
         return any(marker in lowered for marker in fatal_markers)
 
-    def _summarize_cloud_error_for_user(self, text: Optional[str]) -> str:
+    def _classify_cloud_error(self, text: Optional[str]) -> dict:
         """
-        Возвращает короткую пользовательскую формулировку cloud-ошибки
-        без сырого JSON/stacktrace.
+        Классифицирует cloud-ошибку в стабильный код + человекочитаемую сводку.
+        Используется в !status/!diagnose и в user-facing fallback-ответах.
         """
         lowered = str(text or "").strip().lower()
         if not lowered:
-            return "облачный провайдер временно недоступен"
+            return {
+                "code": "none",
+                "summary": "облачный провайдер временно недоступен",
+                "retryable": True,
+            }
 
         if "reported as leaked" in lowered:
-            return "ключ провайдера помечен как скомпрометированный (leaked) — нужен новый API key"
+            return {
+                "code": "api_key_leaked",
+                "summary": "ключ провайдера помечен как скомпрометированный (leaked) — нужен новый API key",
+                "retryable": False,
+            }
         if "invalid api key" in lowered or "incorrect api key" in lowered:
-            return "API key провайдера невалидный"
+            return {
+                "code": "api_key_invalid",
+                "summary": "API key провайдера невалидный",
+                "retryable": False,
+            }
         if (
             "generative language api has not been used" in lowered
             or "api has not been used in project" in lowered
             or "it is disabled" in lowered
             or "enable it by visiting" in lowered
         ):
-            return "Generative Language API не включён в Google Cloud проекте для этого ключа"
+            return {
+                "code": "api_disabled",
+                "summary": "Generative Language API не включён в Google Cloud проекте для этого ключа",
+                "retryable": False,
+            }
         if "permission_denied" in lowered or "403" in lowered:
-            return "доступ к облачной модели отклонён провайдером (403)"
+            return {
+                "code": "permission_denied",
+                "summary": "доступ к облачной модели отклонён провайдером (403)",
+                "retryable": False,
+            }
         if "unauthorized" in lowered or "401" in lowered:
-            return "ошибка авторизации cloud-провайдера (401)"
+            return {
+                "code": "unauthorized",
+                "summary": "ошибка авторизации cloud-провайдера (401)",
+                "retryable": False,
+            }
         if "quota exceeded" in lowered or "out of credits" in lowered or "billing" in lowered:
-            return "исчерпан лимит/биллинг cloud-провайдера"
+            return {
+                "code": "quota_or_billing",
+                "summary": "исчерпан лимит/биллинг cloud-провайдера",
+                "retryable": False,
+            }
         if "not found" in lowered or "not_found" in lowered:
-            return "запрошенная cloud-модель недоступна (not found)"
+            return {
+                "code": "model_not_found",
+                "summary": "запрошенная cloud-модель недоступна (not found)",
+                "retryable": False,
+            }
         if "connection error" in lowered or "failed to connect" in lowered:
-            return "ошибка соединения с AI-шлюзом"
+            return {
+                "code": "network_error",
+                "summary": "ошибка соединения с AI-шлюзом",
+                "retryable": True,
+            }
         if "timeout" in lowered:
-            return "таймаут ответа от cloud-провайдера"
-        return "облачный провайдер вернул ошибку"
+            return {
+                "code": "timeout",
+                "summary": "таймаут ответа от cloud-провайдера",
+                "retryable": True,
+            }
+
+        return {
+            "code": "unknown",
+            "summary": "облачный провайдер вернул ошибку",
+            "retryable": True,
+        }
+
+    def _summarize_cloud_error_for_user(self, text: Optional[str]) -> str:
+        """
+        Возвращает короткую пользовательскую формулировку cloud-ошибки
+        без сырого JSON/stacktrace.
+        """
+        info = self._classify_cloud_error(text)
+        return str(info.get("summary") or "облачный провайдер вернул ошибку")
+
+    def get_last_cloud_error_info(self) -> dict:
+        """
+        Публичный runtime-диагностический объект по последней cloud-ошибке.
+        Нужен командам статуса/диагностики и веб-панели.
+        """
+        raw = str(self.last_cloud_error or "").strip()
+        info = self._classify_cloud_error(raw)
+        return {
+            "has_error": bool(raw),
+            "code": str(info.get("code") or "none"),
+            "summary": str(info.get("summary") or ""),
+            "retryable": bool(info.get("retryable", True)),
+            "last_provider_model": str(getattr(self, "last_cloud_model", "") or ""),
+            "raw_excerpt": raw[:320] if raw else "",
+        }
 
     def _ensure_feedback_store(self) -> dict:
         """Приводит feedback store к ожидаемой структуре."""
@@ -2954,6 +3023,10 @@ class ModelRouter:
             "cloud_failures": self._stats.get("cloud_failures", 0),
             "force_mode": self.force_mode,
         }
+        cloud_diag = self.get_last_cloud_error_info()
+        result["Cloud Reliability"]["error_code"] = cloud_diag.get("code", "none")
+        result["Cloud Reliability"]["error_summary"] = cloud_diag.get("summary", "")
+        result["Cloud Reliability"]["retryable"] = bool(cloud_diag.get("retryable", True))
 
         # 3. RAG Engine
         if self.rag:
