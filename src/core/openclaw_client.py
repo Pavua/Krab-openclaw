@@ -24,40 +24,104 @@ logger = logging.getLogger(__name__)
 class OpenClawClient:
     """Клиент интеграции Krab -> OpenClaw Gateway."""
 
-    def __init__(self, base_url: str = "http://localhost:18789", api_key: Optional[str] = None):
+    def __init__(self, base_url: str = "http://localhost:18789", api_key: Optional[str | dict[str, str]] = None):
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
+        # Gateway auth key может быть строкой или словарем {"free": "...", "paid": "..."}.
+        # Это bearer-доступ к OpenClaw, не ключи провайдера Gemini.
+        if isinstance(api_key, dict):
+            self.gateway_tiers = {k: str(v) for k, v in api_key.items() if str(v).strip()}
+            self.api_key = self.gateway_tiers.get("free") or next(iter(self.gateway_tiers.values()), None)
+        else:
+            self.gateway_tiers = {"default": str(api_key)} if api_key else {}
+            self.api_key = api_key
+
+        self.active_gateway_tier = next(
+            (k for k, v in self.gateway_tiers.items() if v == self.api_key),
+            "default",
+        )
+
+        # Провайдерные Gemini-ключи для free->paid fallback в диагностике и direct-probe.
+        # Приоритет: GEMINI_API_KEY_FREE/GEMINI_API_KEY_PAID -> GEMINI_API_KEY -> GOOGLE_API_KEY.
+        self.gemini_tiers: dict[str, str] = {}
+        env_free = os.getenv("GEMINI_API_KEY_FREE", "").strip()
+        env_paid = os.getenv("GEMINI_API_KEY_PAID", "").strip()
+        env_default = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+        if env_free:
+            self.gemini_tiers["free"] = env_free
+        if env_paid:
+            self.gemini_tiers["paid"] = env_paid
+        if env_default and "free" not in self.gemini_tiers:
+            self.gemini_tiers["free"] = env_default
+        self.active_tier = "free" if "free" in self.gemini_tiers else (
+            "paid" if "paid" in self.gemini_tiers else "default"
+        )
+
         self._provider_probe_cache: dict[str, tuple[float, str]] = {}
         self.headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "Krab/8.0 (OpenClaw-Client)",
         }
+        self._update_auth_header()
+
+    def _update_auth_header(self):
         if self.api_key:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
+        elif "Authorization" in self.headers:
+            del self.headers["Authorization"]
+
+    def has_tier(self, tier_name: str) -> bool:
+        """Проверяет доступность tier в gateway- или gemini-пуле."""
+        return tier_name in self.gemini_tiers or tier_name in self.gateway_tiers
+
+    def set_tier(self, tier_name: str) -> bool:
+        """
+        Переключает активный tier.
+        - Gemini tier: влияет на выбор ключа в provider probe/direct fallback.
+        - Gateway tier: влияет на Bearer токен OpenClaw.
+        """
+        switched = False
+        if tier_name in self.gemini_tiers:
+            self.active_tier = tier_name
+            switched = True
+
+        if tier_name in self.gateway_tiers:
+            self.api_key = self.gateway_tiers[tier_name]
+            self.active_gateway_tier = tier_name
+            self._update_auth_header()
+            switched = True
+
+        if switched:
+            logger.info("OpenClaw tier switched", tier=tier_name)
+        return switched
 
     def get_token_info(self) -> dict[str, Any]:
         """
-        Возвращает безопасную информацию о токене (R15).
-        Маскирует ключ, оставляя только начало и конец для идентификации.
+        Возвращает безопасную информацию о токене.
+        Совместим с R15 (`masked_key`) и расширен для R16 (`tiers`).
         """
-        if not self.api_key:
-            return {
-                "is_configured": False,
-                "masked_key": None,
-                "provider": "openclaw"
-            }
-        
-        key = self.api_key
-        # Маскирование: sk-ant-api-key-12345 -> sk-ant...2345
-        if len(key) <= 8:
-            masked = "****"
-        else:
-            masked = f"{key[:6]}...{key[-4:]}"
-            
+        def _mask(key: str) -> str:
+            if len(key) <= 8:
+                return "****"
+            return f"{key[:6]}...{key[-4:]}"
+
+        tier_info: dict[str, dict[str, Any]] = {}
+        for name, key in self.gemini_tiers.items():
+            if not key:
+                tier_info[name] = {"is_configured": False, "masked_key": None}
+                continue
+            tier_info[name] = {"is_configured": True, "masked_key": _mask(key)}
+
+        masked_key = None
+        if self.api_key:
+            masked_key = _mask(str(self.api_key))
+
         return {
-            "is_configured": True,
-            "masked_key": masked,
+            "is_configured": bool(self.api_key),
+            "masked_key": masked_key,
+            "active_tier": self.active_tier,
+            "tiers": tier_info,
+            "gateway_active_tier": self.active_gateway_tier,
             "provider": "openclaw"
         }
 
@@ -164,12 +228,7 @@ class OpenClawClient:
             timeout = aiohttp.ClientTimeout(total=8)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 if provider == "google":
-                    api_key = (
-                        os.getenv("GEMINI_API_KEY", "").strip()
-                        or os.getenv("GOOGLE_API_KEY", "").strip()
-                        or self._get_auth_profile_api_key("google")
-                        or self._get_auth_profile_api_key("gemini")
-                    )
+                    api_key, _source = self._resolve_provider_api_key("google")
                     if not api_key:
                         hint = "Google/Gemini API key не задан (env/auth-profiles)."
                     else:
@@ -206,6 +265,19 @@ class OpenClawClient:
         """
         normalized = str(provider or "").strip().lower()
         if normalized == "google":
+            # R16: tier-aware Gemini ключи из env.
+            tier_key = self.gemini_tiers.get(self.active_tier, "").strip()
+            if tier_key:
+                return tier_key, f"env:GEMINI_API_KEY_{self.active_tier.upper()}"
+
+            free_key = self.gemini_tiers.get("free", "").strip()
+            if free_key:
+                return free_key, "env:GEMINI_API_KEY_FREE"
+
+            paid_key = self.gemini_tiers.get("paid", "").strip()
+            if paid_key:
+                return paid_key, "env:GEMINI_API_KEY_PAID"
+
             env_gemini = os.getenv("GEMINI_API_KEY", "").strip()
             if env_gemini:
                 return env_gemini, "env:GEMINI_API_KEY"

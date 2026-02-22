@@ -606,40 +606,28 @@ class ModelRouter:
 
     def _is_lmstudio_model_loaded(self, entry: Dict[str, Any]) -> bool:
         """
-        Определяет признак загруженной модели LM Studio.
-
-        Почему так:
-        В разных версиях LM Studio loaded-статус приходит в разных полях
-        (`loaded_instances`, `loaded`, `state`, `status`, `availability`).
-        Если читать только одно поле, !status может ошибочно показывать
-        `no_model_loaded`, хотя модель уже отвечает в /chat/completions.
+        Определяет признак загруженной модели LM Studio 0.3.x или OpenAI compat.
         """
         if not isinstance(entry, dict):
             return False
-
-        loaded_instances = entry.get("loaded_instances")
-        if isinstance(loaded_instances, list) and len(loaded_instances) > 0:
+            
+        # 1. Пробуем явные поля статуса
+        for key in ("state", "status", "availability"):
+            val = str(entry.get(key) or "").lower().strip()
+            if val in {"ready", "loaded", "active", "running", "online"}:
+                return True
+            if val in {"unloaded", "not_loaded", "not loaded", "idle_unloaded", "evicted", "offline"}:
+                return False
+        
+        # 2. Поле 'loaded' (bool) — классика LM Studio
+        if entry.get("loaded") is True:
+            return True
+            
+        # 3. Эвристика для OpenAI-совместимых API (если в списке /v1/models — считаем живой)
+        if "id" in entry and entry.get("object") == "model":
             return True
 
-        explicit_bool = entry.get("loaded")
-        if isinstance(explicit_bool, bool):
-            return explicit_bool
-
-        state_fields = []
-        for key in ("state", "status", "availability"):
-            raw = entry.get(key)
-            if raw is None:
-                continue
-            state_fields.append(str(raw).strip().lower())
-
-        positive_tokens = {"ready", "loaded", "active", "running", "online"}
-        negative_tokens = {"unloaded", "not_loaded", "not loaded", "idle_unloaded", "evicted", "offline"}
-
-        for state in state_fields:
-            if state in positive_tokens:
-                return True
-            if state in negative_tokens:
-                return False
+        return False
 
         return False
 
@@ -854,6 +842,133 @@ class ModelRouter:
         # Истекло
         self._preflight_cache.pop(provider, None)
         return None
+
+    async def get_cloud_diagnostics_summary(self, provider: str = "google") -> dict:
+        """
+        R17: UX-обёртка над `openclaw_client.get_cloud_provider_diagnostics`.
+        Возвращает компактный словарь без JSON-мусора для отображения в Telegram.
+
+        Формат:
+            {
+                "ok": bool,
+                "error_code": str,   # "ok" | "api_key_invalid" | "quota_or_billing" | ...
+                "user_message": str, # человекочитаемый текст (без raw JSON)
+                "tiers": dict,       # информация о тирах ключей
+                "preflight_blocked": bool,
+            }
+        """
+        # Проверяем preflight — если заблокирован, сообщаем сразу
+        preflight_msg = self._check_cloud_preflight(provider)
+        preflight_blocked = preflight_msg is not None
+
+        # UX-маппинг error_code -> понятное сообщение
+        _user_messages = {
+            "ok": "✅ Cloud-провайдер доступен и ключ валиден.",
+            "missing_api_key": "🔑 API ключ не задан. Установите GEMINI_API_KEY или GEMINI_API_KEY_FREE.",
+            "api_key_invalid": "❌ API ключ недействителен. Проверьте правильность ключа.",
+            "api_key_leaked": "🚨 API ключ помечен как скомпрометированный. Создайте новый в Google Cloud Console.",
+            "api_disabled": "🔒 Generative Language API не включён в проекте. Включите через Google Cloud Console.",
+            "quota_or_billing": "💰 Превышена квота или проблема с биллингом. Проверьте лимиты в Google Cloud.",
+            "permission_denied": "🚫 Доступ запрещён (403). Проверьте rights на ключ.",
+            "unauthorized": "🔐 Ошибка авторизации (401). Возможно, ключ истёк.",
+            "model_not_found": "🤖 Модель не найдена. Проверьте название или доступность в регионе.",
+            "network": "🌐 Сетевая ошибка. Проверьте соединение с интернетом.",
+            "timeout": "⏱ Таймаут ответа cloud-провайдера. Повторите позже.",
+            "unknown": "⚠️ Неизвестная ошибка cloud-провайдера.",
+        }
+
+        client = getattr(self, "openclaw_client", None)
+        if client is None:
+            return {
+                "ok": False,
+                "error_code": "no_client",
+                "user_message": "❌ Cloud-клиент не инициализирован.",
+                "tiers": {},
+                "preflight_blocked": preflight_blocked,
+            }
+
+        try:
+            raw = await client.get_cloud_provider_diagnostics([provider])
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error_code": "diagnostic_error",
+                "user_message": f"⚠️ Ошибка диагностики: {str(exc)[:120]}",
+                "tiers": {},
+                "preflight_blocked": preflight_blocked,
+            }
+
+        provider_data = raw.get("providers", {}).get(provider, {})
+        ok = bool(provider_data.get("ok", False))
+        error_code = str(provider_data.get("error_code", "unknown"))
+        user_message = _user_messages.get(error_code, _user_messages["unknown"])
+
+        # Если провайдер ОК, но preflight заблокирован — статус не "ok"
+        if ok and preflight_blocked:
+            ok = False
+            error_code = "preflight_blocked"
+            user_message = f"🚧 Провайдер временно заблокирован: {preflight_msg}"
+
+        # Информация о тирах ключей
+        token_info = {}
+        try:
+            token_info = client.get_token_info()
+        except Exception:
+            pass
+
+        return {
+            "ok": ok,
+            "error_code": error_code,
+            "user_message": user_message,
+            "tiers": token_info.get("tiers", {}),
+            "active_tier": token_info.get("active_tier", "unknown"),
+            "preflight_blocked": preflight_blocked,
+        }
+
+    def _has_paid_cloud_tier(self) -> bool:
+        """
+        Проверяет, доступен ли paid-tier у cloud-клиента.
+        Важно для тестов: при мок-клиенте без tier API не выполняем лишние ретраи.
+        """
+        client = getattr(self, "openclaw_client", None)
+        if client is None:
+            return False
+        has_tier = getattr(client, "has_tier", None)
+        if callable(has_tier):
+            try:
+                result = has_tier("paid")
+                # Важно для тестов: MagicMock может вернуть "truthy" объект вместо bool.
+                if isinstance(result, bool):
+                    return result
+                return False
+            except Exception:
+                return False
+        tiers = getattr(client, "tiers", None)
+        if isinstance(tiers, dict):
+            return "paid" in tiers
+        gateway_tiers = getattr(client, "gateway_tiers", None)
+        if isinstance(gateway_tiers, dict):
+            return "paid" in gateway_tiers
+        return False
+
+    def _switch_cloud_tier(self, tier_name: str) -> bool:
+        """Безопасный переключатель tier с защитой от несовместимых моков."""
+        client = getattr(self, "openclaw_client", None)
+        if client is None:
+            return False
+        setter = getattr(client, "set_tier", None)
+        if not callable(setter):
+            return False
+        if tier_name == "paid" and not self._has_paid_cloud_tier():
+            return False
+        try:
+            switched = setter(tier_name)
+            # Жестко принимаем только bool-результат, чтобы не ловить ложный успех от MagicMock.
+            if isinstance(switched, bool):
+                return switched
+            return False
+        except Exception:
+            return False
 
     def _categorize_cloud_error(self, text: Optional[str]) -> str:
         """
@@ -1469,7 +1584,7 @@ class ModelRouter:
         url = f"{base}/api/v1/models"
         
         try:
-            timeout = aiohttp.ClientTimeout(total=5)
+            timeout = aiohttp.ClientTimeout(total=15) # Увеличено с 5 до 15с
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as resp:
                     if resp.status == 200:
@@ -2345,7 +2460,8 @@ class ModelRouter:
             }
 
             headers = {"Content-Type": "application/json"}
-            timeout = aiohttp.ClientTimeout(total=300, sock_read=60) # Увеличиваем стабильность
+            # total=300 для длинных ответов, sock_read=180 для "thinking" моделей
+            timeout = aiohttp.ClientTimeout(total=300, sock_read=180) 
             
             full_content = []
             collected_chars = 0
@@ -2554,7 +2670,7 @@ class ModelRouter:
                 if self._is_runtime_error_message(response):
                     # Если ошибка похожа на проблему квоты или таймаута — пробуем переключить тир
                     if any(x in str(response).lower() for x in ["quota", "429", "timeout", "exhausted"]):
-                        if self.openclaw_client.set_tier("paid"):
+                        if self._switch_cloud_tier("paid"):
                             logger.info("💰 Tier Fallback: Free key exhausted, switching to PAID")
                             # Повторяем вызов с новым тиром
                             response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
@@ -2579,7 +2695,7 @@ class ModelRouter:
                     continue
 
                 # Сбрасываем тир на free для следующего запроса (опционально, но лучше для экономии)
-                self.openclaw_client.set_tier("free")
+                self._switch_cloud_tier("free")
                 self.last_cloud_error = None
                 self.last_cloud_model = candidate
                 return candidate, response
@@ -2802,7 +2918,7 @@ class ModelRouter:
                     
                     # R16: Tiered Fallback Logic (Free -> Paid) for streaming fallback
                     if any(x in err_msg.lower() for x in ["quota", "429", "timeout", "exhausted"]):
-                        if self.openclaw_client.set_tier("paid"):
+                        if self._switch_cloud_tier("paid"):
                             logger.info("💰 Tier Fallback (Stream): Free key exhausted, switching to PAID")
                             # Повторяем вызов с новым тиром
                             response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=retries)
@@ -2837,7 +2953,7 @@ class ModelRouter:
                         continue
 
                 # Сбрасываем тир на free перед завершением (R16)
-                self.openclaw_client.set_tier("free")
+                self._switch_cloud_tier("free")
 
                 if not response or len(response.strip()) < 2:
                     logger.warning("Cloud fallback candidate %s returned empty/junk", candidate)
@@ -3030,8 +3146,8 @@ class ModelRouter:
                         self._stats["cloud_failures"] += 1
                         return f"❌ Ошибка Cloud: {response_text}"
 
-                    category = self._categorize_cloud_error(normalized)
-                    if not category.get("retryable", True):
+                    category = self._classify_cloud_error(normalized)
+                    if not bool(category.get("retryable", True)):
                         provider = model_name.split("/", 1)[0]
                         self._preflight_cache[provider] = (time.time() + self._preflight_ttl_seconds, category.get("summary", "fatal error"))
 
@@ -3260,6 +3376,25 @@ class ModelRouter:
             profile: self._get_profile_recommendation(profile)
             for profile in ["chat", "moderation", "code", "security", "infra", "review", "communication"]
         }
+        
+        # [R17] Cloud Keys Diagnostics
+        openclaw_keys = {}
+        if hasattr(self, "openclaw_client") and self.openclaw_client:
+            openclaw_keys = self.openclaw_client.get_token_info()
+            
+        gemini_keys = {
+            "is_configured": bool(self.gemini_key),
+            "masked_key": f"...{self.gemini_key[-4:]}" if self.gemini_key and len(self.gemini_key) > 8 else None,
+            "has_error": self.last_cloud_error is not None and "gemini" in str(self.last_cloud_error).lower(),
+            "provider": "google"
+        }
+        
+        cloud_keys = {
+            "openclaw": openclaw_keys,
+            "gemini": gemini_keys,
+            "last_error": self.get_last_cloud_error_info()
+        }
+
         return {
             "cloud_models": self.models.copy(),
             "local_engine": self.local_engine,
@@ -3276,6 +3411,7 @@ class ModelRouter:
             "feedback_summary": self.get_feedback_summary(top=3),
             "last_route": self.get_last_route(),
             "last_stream_route": self.get_last_stream_route(),
+            "cloud_keys": cloud_keys, # [R17]
         }
 
     def get_profile_recommendation(self, profile: str = "chat") -> dict:
