@@ -140,7 +140,7 @@ def test_last_cloud_error_info_uses_classifier(tmp_path: Path) -> None:
     router.last_cloud_model = "google/gemini-2.5-flash"
     info = router.get_last_cloud_error_info()
     assert info["has_error"] is True
-    assert info["code"] == "network_error"
+    assert info["code"] == "network"
     assert info["retryable"] is True
     assert info["last_provider_model"] == "google/gemini-2.5-flash"
 

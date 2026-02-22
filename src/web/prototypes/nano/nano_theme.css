@@ -477,6 +477,42 @@ textarea.field {
 }
 
 /* ----- RESPONSIVE ----- */
+/* --- R16 Component Styles --- */
+.cloud-tier-badge {
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+    background: rgba(14, 165, 233, 0.1);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.cloud-tier-badge.tier-paid {
+    border-color: var(--state-purple);
+    color: var(--state-purple);
+    background: rgba(139, 92, 246, 0.1);
+}
+
+.queue-status-ok {
+    border-top: 2px solid var(--state-ok) !important;
+}
+
+.queue-status-warn {
+    border-top: 2px solid var(--state-bad) !important;
+    background: rgba(239, 68, 68, 0.05) !important;
+}
+
+.card-probe-btn {
+    border-color: var(--accent-orange) !important;
+    color: var(--accent-orange) !important;
+    background: rgba(245, 158, 11, 0.05) !important;
+}
+
+.card-probe-btn:hover {
+    background: rgba(245, 158, 11, 0.15) !important;
+}
+
 @media (max-width: 900px) {
     body {
         padding: 16px;
@@ -490,6 +526,21 @@ textarea.field {
 
     .card {
         padding: 16px;
+    }
+
+    .ops-v2-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .assistant-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .assistant-actions>button,
+    .assistant-actions>div {
+        width: 100%;
+        justify-content: center;
     }
 }
 

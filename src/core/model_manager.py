@@ -71,9 +71,17 @@ class ModelRouter:
             self._health_full_scan_interval = 3600
 
         # OpenClaw Client (Cloud Model Gateway)
+        # R16: Поддержка многоуровневых ключей (JSON в OPENCLAW_API_KEY)
+        raw_key = config.get("OPENCLAW_API_KEY")
+        if raw_key and raw_key.startswith("{"):
+            try:
+                raw_key = json.loads(raw_key)
+            except Exception:
+                logger.error("Failed to parse OPENCLAW_API_KEY as JSON, using as raw string")
+        
         self.openclaw_client = OpenClawClient(
             base_url=config.get("OPENCLAW_BASE_URL", "http://localhost:18789"),
-            api_key=config.get("OPENCLAW_API_KEY")
+            api_key=raw_key
         )
         # Stream Client для WebSocket/SSE
         self.stream_client = OpenClawStreamClient(
@@ -2538,27 +2546,40 @@ class ModelRouter:
                     
                 logger.info("Routing to CLOUD", model=candidate, profile=profile, reason=route_reason)
                 max_retries_cloud = 0 if force_cloud_mode else (1 if i == 0 else 0)
+                
+                # R16: Tiered Fallback Logic (Free -> Paid)
+                # По умолчанию OpenClawClient стартует с "free" (если ключи в JSON)
                 response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
                 
                 if self._is_runtime_error_message(response):
-                    logger.warning("Cloud candidate %s failed", candidate, error=response)
-                    self._mark_cloud_soft_cap_if_needed(str(response))
-                    self.last_cloud_error = str(response)
-                    self.last_cloud_model = candidate
-                    if self._is_fatal_cloud_auth_error(response):
-                        logger.error(
-                            "Cloud routing aborted: fatal auth/billing error",
-                            model=candidate,
-                            error=str(response)[:280],
-                        )
-                        break
-                    continue
+                    # Если ошибка похожа на проблему квоты или таймаута — пробуем переключить тир
+                    if any(x in str(response).lower() for x in ["quota", "429", "timeout", "exhausted"]):
+                        if self.openclaw_client.set_tier("paid"):
+                            logger.info("💰 Tier Fallback: Free key exhausted, switching to PAID")
+                            # Повторяем вызов с новым тиром
+                            response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
+                    
+                    if self._is_runtime_error_message(response):
+                        logger.warning("Cloud candidate %s failed", candidate, error=response)
+                        self._mark_cloud_soft_cap_if_needed(str(response))
+                        self.last_cloud_error = str(response)
+                        self.last_cloud_model = candidate
+                        if self._is_fatal_cloud_auth_error(response):
+                            logger.error(
+                                "Cloud routing aborted: fatal auth/billing error",
+                                model=candidate,
+                                error=str(response)[:280],
+                            )
+                            break
+                        continue
                 
                 # Cloud Success Guardrail
                 if not response or len(response.strip()) < 2:
                     logger.warning("Cloud candidate %s returned empty/junk", candidate)
                     continue
 
+                # Сбрасываем тир на free для следующего запроса (опционально, но лучше для экономии)
+                self.openclaw_client.set_tier("free")
                 self.last_cloud_error = None
                 self.last_cloud_model = candidate
                 return candidate, response
@@ -2775,31 +2796,48 @@ class ModelRouter:
                     max_retries=retries,
                 )
                 
-                # [R12] Используем унифицированный детектор ошибок
+                # R12: Используем унифицированный детектор ошибок
                 if self._is_runtime_error_message(response):
                     err_msg = str(response or "Cloud error")
-                    self.last_cloud_error = err_msg
-                    self.last_cloud_model = candidate
-                    self._mark_cloud_soft_cap_if_needed(err_msg)
-                    logger.warning("Cloud fallback candidate failed", model=candidate, error=err_msg[:200])
-                    if self._is_fatal_cloud_auth_error(err_msg):
-                        logger.error(
-                            "Cloud stream fallback aborted: fatal auth/billing error",
-                            model=candidate,
-                            error=err_msg[:280],
-                        )
-                        break
                     
-                    # Проверка на NOT_FOUND (мисконфигурация шлюза)
-                    lowered = err_msg.lower()
-                    if "not found" in lowered or "not_found" in lowered:
-                         logger.error("OpenClaw provider model mapping error", candidate=candidate)
-                         if allow_local_recovery:
-                             recovered_local = await _try_local_recovery_without_reasoning()
-                             if recovered_local:
-                                 yield recovered_local
-                                 return
-                    continue
+                    # R16: Tiered Fallback Logic (Free -> Paid) for streaming fallback
+                    if any(x in err_msg.lower() for x in ["quota", "429", "timeout", "exhausted"]):
+                        if self.openclaw_client.set_tier("paid"):
+                            logger.info("💰 Tier Fallback (Stream): Free key exhausted, switching to PAID")
+                            # Повторяем вызов с новым тиром
+                            response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=retries)
+                            if not self._is_runtime_error_message(response):
+                                # Если со второй попытки успех — продолжаем
+                                pass
+                            else:
+                                err_msg = str(response or "Cloud error (Paid Tier)")
+                    
+                    if self._is_runtime_error_message(response):
+                        self.last_cloud_error = err_msg
+                        self.last_cloud_model = candidate
+                        self._mark_cloud_soft_cap_if_needed(err_msg)
+                        logger.warning("Cloud fallback candidate failed", model=candidate, error=err_msg[:200])
+                        if self._is_fatal_cloud_auth_error(err_msg):
+                            logger.error(
+                                "Cloud stream fallback aborted: fatal auth/billing error",
+                                model=candidate,
+                                error=err_msg[:280],
+                            )
+                            break
+                        
+                        # Проверка на NOT_FOUND (мисконфигурация шлюза)
+                        lowered = err_msg.lower()
+                        if "not found" in lowered or "not_found" in lowered:
+                             logger.error("OpenClaw provider model mapping error", candidate=candidate)
+                             if allow_local_recovery:
+                                 recovered_local = await _try_local_recovery_without_reasoning()
+                                 if recovered_local:
+                                     yield recovered_local
+                                     return
+                        continue
+
+                # Сбрасываем тир на free перед завершением (R16)
+                self.openclaw_client.set_tier("free")
 
                 if not response or len(response.strip()) < 2:
                     logger.warning("Cloud fallback candidate %s returned empty/junk", candidate)
@@ -3236,6 +3274,8 @@ class ModelRouter:
             "recommendations": recommendations,
             "usage_report": self._usage_report.copy(),
             "feedback_summary": self.get_feedback_summary(top=3),
+            "last_route": self.get_last_route(),
+            "last_stream_route": self.get_last_stream_route(),
         }
 
     def get_profile_recommendation(self, profile: str = "chat") -> dict:

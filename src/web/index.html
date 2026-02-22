@@ -133,6 +133,9 @@
 </head>
 
 <body>
+  <div id="toastContainer"
+    style="position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 10000; pointer-events: none;">
+  </div>
   <div class="container">
     <div id="fileProtocolWarning" class="card"
       style="display:none; border-color: var(--state-warn); margin-bottom: 16px;">
@@ -222,74 +225,77 @@
           Ops Center v2
         </h3>
 
-        <!-- Queue and Preflight Blocks -->
+        <!-- Queue and Routing Blocks -->
         <div class="ops-v2-grid" style="display: grid; gap: 16px; margin-bottom: 24px;">
-          <!-- Очередь -->
-          <div class="card state-container"
+          <!-- Queue Stability Card -->
+          <div class="card state-container queue-status-ok" id="queueStabilityContainer"
             style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
             <h4 class="form-label" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);"
-                class="pulse-ok"></div>
-              Очередь и обработка
+              <div id="queueStabilityPulse"
+                style="width: 8px; height: 8px; border-radius: 50%; background: var(--state-ok);" class="pulse-ok">
+              </div>
+              Queue Stability
             </h4>
             <div
               style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
-              <span class="card-meta" style="margin: 0;">Active Route:</span>
-              <span id="opsQueueMode" class="badge"
-                style="border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(14, 165, 233, 0.1);">—</span>
+              <span class="card-meta" style="margin: 0;">Глубина очереди:</span>
+              <span id="opsQueueLength" class="card-value"
+                style="font-size: 0.95rem; font-family: var(--font-mono);">0</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span class="card-meta" style="margin: 0;">Active Tasks:</span>
-              <span id="opsActiveTasks" class="card-value" style="font-size: 0.9rem;">0</span>
+              <span class="card-meta" style="margin: 0;">Активные задачи:</span>
+              <span id="opsActiveTasks" class="card-value" style="font-size: 0.9rem; color: var(--text-main);">0</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span class="card-meta" style="margin: 0;">В очереди:</span>
-              <span id="opsQueueLength" class="card-value" style="font-size: 0.9rem;">0</span>
+              <span class="card-meta" style="margin: 0;">Среднее время (с):</span>
+              <span id="opsAvgTaskTime" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-main);">0.0</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span class="card-meta" style="margin: 0;">Timeouts:</span>
-              <span id="opsQueueTimeouts" class="card-value"
-                style="font-size: 0.9rem; color: var(--text-muted);">0</span>
+              <span class="card-meta" style="margin: 0;">Возраст старейшей:</span>
+              <span id="opsOldestTaskAge" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">0s</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span class="card-meta" style="margin: 0;">Errors:</span>
-              <span id="opsQueueErrors" class="card-value" style="font-size: 0.9rem; color: var(--text-muted);">0</span>
+              <span class="card-meta" style="margin: 0;">Застрявшие задачи:</span>
+              <span id="opsStuckTasks" class="card-value"
+                style="font-size: 0.9rem; color: var(--state-ok); font-weight: 600;">0</span>
             </div>
           </div>
-          <!-- Preflight -->
+
+          <!-- Cloud Routing Card -->
           <div class="card state-container"
             style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
             <h4 class="form-label"
-              style="margin-bottom: 12px; color: var(--accent-orange); display: flex; align-items: center; gap: 8px;">
-              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange);"
-                class="pulse-warn"></div>
-              Cloud Preflight
+              style="margin-bottom: 12px; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);"
+                class="pulse-ai"></div>
+              Cloud Routing UX
             </h4>
             <div
               style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
-              <span class="card-meta" style="margin: 0;">Soft Cap Usage:</span>
-              <span id="opsCloudCap" class="card-value"
-                style="font-size: 0.9rem; font-family: var(--font-mono);">—</span>
+              <span class="card-meta" style="margin: 0;">Активный тир:</span>
+              <span id="opsCloudActiveTier" class="badge cloud-tier-badge">—</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span class="card-meta" style="margin: 0;">Provider Status:</span>
-              <span id="opsCloudProviderStatus" class="card-value"
-                style="font-size: 0.9rem; color: var(--state-ok);">Active</span>
+              <span class="card-meta" style="margin: 0;">Использован Fallback:</span>
+              <span id="opsCloudFallbackUsed" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">No</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span class="card-meta" style="margin: 0;">Last Error Code:</span>
+              <span class="card-meta" style="margin: 0;">Причина Fallback:</span>
+              <span id="opsCloudFallbackReason" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; color: var(--text-muted); max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Код последней ошибки:</span>
               <span id="opsCloudErrorCode" class="card-value"
                 style="font-size: 0.9rem; color: var(--text-muted);">None</span>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span class="card-meta" style="margin: 0;">Retryable:</span>
-              <span id="opsCloudRetryable" class="card-value"
-                style="font-size: 0.9rem; color: var(--text-muted);">N/A</span>
-            </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span class="card-meta" style="margin: 0;">Last Check:</span>
-              <span id="opsCloudLastCheck" class="card-value"
-                style="font-size: 0.9rem; color: var(--text-muted);">—</span>
+              <span class="card-meta" style="margin: 0;">Заблокировано (Preflight):</span>
+              <span id="opsCloudBlockedProviders" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; color: var(--state-warn); max-width: 130px; text-align: right;">0</span>
             </div>
           </div>
         </div>
@@ -454,15 +460,23 @@
       </div>
 
       <div class="assistant-actions" style="margin-top: 24px">
+        <button id="ocCloudProbeBtn" class="card-probe-btn" style="position: relative; overflow: hidden;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            style="margin-right: -4px;">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+            <polyline points="22 4 12 14.01 9 11.01" />
+          </svg>
+          Cloud Probe
+        </button>
         <button id="ocApplyAutoswitchBtn" class="primary">
           Apply Autoswitch
         </button>
-        <div style="display: flex; gap: 8px">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
           <button id="ocModeLocalBtn">Set Local</button>
           <button id="ocModeAutoBtn">Set Auto</button>
           <button id="ocModeCloudBtn">Set Cloud</button>
+          <button id="ocRefreshBtn">Refresh Status</button>
         </div>
-        <button id="ocRefreshBtn">Refresh Status</button>
         <span class="card-meta" id="ocMeta" style="margin-left: auto; color: var(--text-main)">Ready</span>
       </div>
     </div>
@@ -677,12 +691,33 @@
       console.error(`[${actionName}]`, error);
     }
 
-    async function fetchJson(url) {
-      const response = await fetch(url);
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, options);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       return response.json();
+    }
+
+    function showToast(msg, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      if (!container) return;
+      const el = document.createElement('div');
+      const bg = type === 'error' ? 'var(--state-critical)' : (type === 'warn' ? 'var(--state-warn)' : 'var(--state-ok)');
+      el.style = `background: ${bg}; color: var(--bg-panel); padding: 10px 16px; border-radius: 6px; font-size: 0.9rem; font-weight: 500; font-family: var(--font-main); box-shadow: 0 4px 12px rgba(0,0,0,0.5); opacity: 0; transform: translateY(10px); transition: all 0.3s ease; pointer-events: auto;`;
+      el.textContent = msg;
+      container.appendChild(el);
+
+      requestAnimationFrame(() => {
+        el.style.opacity = '1';
+        el.style.transform = 'translateY(0)';
+      });
+
+      setTimeout(() => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(10px)';
+        setTimeout(() => el.remove(), 300);
+      }, 3000);
     }
 
     function readWebApiKey() {
@@ -1392,6 +1427,7 @@ ${channelsText}`;
           usagePayload,
           alertsPayload,
           historyPayload,
+          queuePayload,
         ] = await Promise.all([
           fetchJson("/api/stats"),
           fetchJson("/api/health"),
@@ -1401,16 +1437,68 @@ ${channelsText}`;
           fetchJson("/api/ops/usage"),
           fetchJson("/api/ops/alerts"),
           fetchJson("/api/ops/history?limit=8"),
+          fetchJson("/api/queue").catch(() => ({ ok: false, queue: {} })),
         ]);
 
         const bb = stats.black_box || {};
         const rag = stats.rag || {};
         const router = stats.router || {};
+        const lastRoute = router.last_route || {};
 
         setText("bb_total", String(bb.total ?? bb.total_messages ?? 0));
         setText("rag_total", String(rag.count ?? 0));
         setText("local_model", router.local_model || "Offline");
         setText("degradation", health.degradation || "unknown");
+
+        // --- Cloud Routing UX ---
+        const activeTier = lastRoute.channel === "cloud" ? "Cloud" : (lastRoute.channel === "local" ? "Local" : "Auto");
+        const isFallback = Boolean(lastRoute.route_reason && lastRoute.route_reason !== "primary_choice");
+        setText("opsCloudActiveTier", activeTier);
+        setText("opsCloudFallbackUsed", isFallback ? "Yes" : "No");
+        setText("opsCloudFallbackReason", lastRoute.route_reason || "—");
+        setText("opsCloudErrorCode", lastRoute.route_detail || "None");
+        setText("opsCloudBlockedProviders", "0"); // Not exposed by backend yet
+
+        const tierBadge = document.getElementById("opsCloudActiveTier");
+        if (tierBadge) {
+          tierBadge.style.background = activeTier === "Cloud" ? "var(--accent-cyan)" : (activeTier === "Local" ? "var(--state-warn)" : "var(--bg-element)");
+          tierBadge.style.color = activeTier === "Cloud" ? "#fff" : "var(--text-main)";
+        }
+
+        // --- Queue Stability Card ---
+        const queueStats = queuePayload.queue || {};
+        const activeTasks = Object.values(queueStats.active_tasks || {});
+        const queueDepth = queueStats.queued_total || 0;
+
+        let oldestAge = 0;
+        let totalSecs = 0;
+        let stuckCount = 0;
+
+        for (const t of activeTasks) {
+          const age = t.elapsed_seconds || 0;
+          totalSecs += age;
+          if (age > oldestAge) oldestAge = age;
+          if (age > (queueStats.task_timeout_seconds || 60) * 0.8) stuckCount++;
+        }
+        const avgSecs = activeTasks.length > 0 ? (totalSecs / activeTasks.length).toFixed(1) : "0.0";
+
+        setText("opsQueueLength", String(queueDepth));
+        setText("opsActiveTasks", String(activeTasks.length));
+        setText("opsAvgTaskTime", String(avgSecs));
+        setText("opsOldestTaskAge", `${oldestAge.toFixed(1)}s`);
+        setText("opsStuckTasks", String(stuckCount));
+
+        const queueContainer = document.getElementById("queueStabilityContainer");
+        const queuePulse = document.getElementById("queueStabilityPulse");
+        if (stuckCount > 0) {
+          if (queueContainer) queueContainer.className = "card state-container queue-status-warn";
+          if (queuePulse) queuePulse.className = "pulse-warn";
+          document.getElementById("opsStuckTasks").style.color = "var(--state-warn)";
+        } else {
+          if (queueContainer) queueContainer.className = "card state-container queue-status-ok";
+          if (queuePulse) queuePulse.className = "pulse-ok";
+          document.getElementById("opsStuckTasks").style.color = "var(--state-ok)";
+        }
 
         const checks = health.checks || {};
         document.getElementById("checks").innerHTML =
