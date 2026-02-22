@@ -3,6 +3,7 @@ import pytest
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
+from types import SimpleNamespace
 from PIL import Image
 from src.modules.perceptor import Perceptor
 
@@ -191,3 +192,47 @@ async def test_perceptor_transcribe_isolated_worker_failure(tmp_path: Path):
 
     assert "Ошибка транскрибации" in result
     assert "AGX command buffer assertion" in result
+
+
+@pytest.mark.asyncio
+async def test_upload_genai_file_prefers_file_keyword():
+    """Для нового SDK используем upload(file=...)."""
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({})
+
+    class _NewFiles:
+        def __init__(self):
+            self.calls = []
+
+        def upload(self, *, file, config=None):
+            self.calls.append({"file": file, "config": config})
+            return SimpleNamespace(name="new-upload")
+
+    files_api = _NewFiles()
+    client = SimpleNamespace(files=files_api)
+    result = await perceptor._upload_genai_file(client, "/tmp/sample.mp4")
+
+    assert result.name == "new-upload"
+    assert files_api.calls == [{"file": "/tmp/sample.mp4", "config": None}]
+
+
+@pytest.mark.asyncio
+async def test_upload_genai_file_fallbacks_to_path_keyword_for_legacy_sdk():
+    """Для старой сигнатуры upload(path=...) включается fallback без падения."""
+    with patch.object(Perceptor, "_warmup_audio"):
+        perceptor = Perceptor({})
+
+    class _LegacyFiles:
+        def __init__(self):
+            self.calls = []
+
+        def upload(self, *, path, config=None):
+            self.calls.append({"path": path, "config": config})
+            return SimpleNamespace(name="legacy-upload")
+
+    files_api = _LegacyFiles()
+    client = SimpleNamespace(files=files_api)
+    result = await perceptor._upload_genai_file(client, "/tmp/doc.pdf")
+
+    assert result.name == "legacy-upload"
+    assert files_api.calls == [{"path": "/tmp/doc.pdf", "config": None}]

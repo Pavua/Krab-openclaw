@@ -883,10 +883,7 @@ class Perceptor:
             logger.info(f"🎞️ Uploading video to Gemini: {file_path}")
             
             # Загружаем файл
-            video_file = await asyncio.to_thread(
-                client.files.upload,
-                path=file_path
-            )
+            video_file = await self._upload_genai_file(client, file_path)
             
             # Ждем обработки
             while True:
@@ -940,10 +937,7 @@ class Perceptor:
             logger.info(f"📄 Uploading document to Gemini: {file_path}")
             
             # Загружаем файл
-            doc_file = await asyncio.to_thread(
-                client.files.upload,
-                path=file_path
-            )
+            doc_file = await self._upload_genai_file(client, file_path)
             
             # Ждем обработки
             while True:
@@ -974,6 +968,20 @@ class Perceptor:
         except Exception as e:
             logger.error(f"Document analysis error: {e}")
             return f"Не удалось проанализировать документ: {e}"
+
+    async def _upload_genai_file(self, client: Any, file_path: str):
+        """
+        Загружает файл в Google GenAI c совместимостью разных версий SDK.
+
+        Новые версии ждут аргумент `file=...`, в старых встречается `path=...`.
+        """
+        try:
+            return await asyncio.to_thread(client.files.upload, file=file_path)
+        except TypeError as exc:
+            # Фолбэк для старых вариантов сигнатуры upload(path=...).
+            if "unexpected keyword argument 'file'" in str(exc).lower():
+                return await asyncio.to_thread(client.files.upload, path=file_path)
+            raise
 
     def _clean_text_for_tts(self, text: str) -> str:
         """
