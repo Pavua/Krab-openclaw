@@ -532,6 +532,14 @@ def test_stats_endpoint_works_without_rag() -> None:
     assert payload["rag"]["enabled"] is False
 
 
+def test_links_endpoint_contains_openclaw_cloud_api() -> None:
+    client = _build_client()
+    response = client.get("/api/links")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["openclaw_cloud_api"].endswith("/api/openclaw/cloud")
+
+
 def test_health_endpoint_reports_chain_state() -> None:
     client = _build_client()
     response = client.get("/api/health")

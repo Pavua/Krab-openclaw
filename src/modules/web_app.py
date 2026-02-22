@@ -425,6 +425,7 @@ class WebApp:
                 "health_api": f"{base}/api/health",
                 "ecosystem_health_api": f"{base}/api/ecosystem/health",
                 "links_api": f"{base}/api/links",
+                "openclaw_cloud_api": f"{base}/api/openclaw/cloud",
                 "voice_gateway": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
                 "openclaw": os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"),
             }
