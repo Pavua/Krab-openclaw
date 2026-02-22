@@ -61,6 +61,7 @@ from src.core.scheduler import krab_scheduler
 from src.core.notifier import krab_notifier
 from src.core.watchdog import krab_watchdog
 from src.core.process_lock import SingleInstanceProcessLock, DuplicateInstanceError
+from src.utils.telegram_safe_text import extract_message_text_safe
 
 # Handler-модули (новая модульная система)
 from src.handlers import register_all_handlers
@@ -393,13 +394,9 @@ async def debug_logger(client, message: Message):
     sender_id = message.from_user.id if message.from_user else 0
     name = message.from_user.first_name if message.from_user else "Unknown"
     msg_type = message.media.value if message.media else "Text"
-    raw_text = message.text or message.caption or f"[{msg_type}]"
-    # Защита от битых surrogate-пар в редких входящих апдейтах Telegram.
-    # Нельзя слайсить message.text напрямую без страховки: Pyrogram может бросить UnicodeDecodeError.
-    try:
-        text = str(raw_text)
-    except Exception:
-        text = f"[{msg_type}]"
+    # Безопасно читаем текст/caption: в редких апдейтах доступ к полю сам по себе
+    # может бросить UnicodeDecodeError, поэтому нужен централизованный helper.
+    text = extract_message_text_safe(message, fallback_label=msg_type)
     try:
         text_preview_20 = text[:20]
     except Exception:

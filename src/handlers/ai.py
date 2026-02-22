@@ -27,6 +27,7 @@ from typing import Any, Awaitable, Callable
 from pyrogram import filters, enums
 from pyrogram.types import Message
 from pyrogram import raw, utils as pyro_utils
+from pyrogram.errors import FloodWait
 
 from .auth import is_owner, is_authorized, is_superuser
 from ..core.markdown_sanitizer import sanitize_markdown_for_telegram, strip_backticks_from_content
@@ -130,6 +131,16 @@ _LAST_BUSY_NOTICE_TS = {}
 _RECENT_MESSAGE_MARKERS = {}
 _RECENT_MESSAGE_TTL_SECONDS = 180
 _FORWARD_BURST_CONTEXT_MAP: dict[str, str] = {}
+_SELF_IDENTITY_CACHE_KEY = "__self_identity_cache"
+_SELF_IDENTITY_LOCK_KEY = "__self_identity_lock"
+try:
+    AUTO_REPLY_SELF_IDENTITY_TTL_SECONDS = float(
+        str(os.getenv("AUTO_REPLY_SELF_IDENTITY_TTL_SECONDS", "600")).strip() or "600"
+    )
+    if AUTO_REPLY_SELF_IDENTITY_TTL_SECONDS < 30:
+        AUTO_REPLY_SELF_IDENTITY_TTL_SECONDS = 30.0
+except Exception:
+    AUTO_REPLY_SELF_IDENTITY_TTL_SECONDS = 600.0
 
 
 @dataclass
@@ -1705,6 +1716,103 @@ async def _await_if_needed(value):
     return value
 
 
+def _read_self_identity_cache(deps: dict) -> dict[str, Any] | None:
+    """Возвращает кэш self-профиля, если он валиден по структуре."""
+    cache = deps.get(_SELF_IDENTITY_CACHE_KEY)
+    if not isinstance(cache, dict):
+        return None
+    return cache
+
+
+async def _resolve_self_identity(client, deps: dict) -> dict[str, Any]:
+    """
+    Возвращает username/id текущего аккаунта с TTL-кэшем.
+
+    Зачем:
+    - чтобы не вызывать client.get_me() на каждое входящее сообщение;
+    - чтобы избежать каскадного FloodWait при высоком потоке апдейтов.
+    """
+    now = time.monotonic()
+    cached = _read_self_identity_cache(deps)
+    if cached:
+        age = now - float(cached.get("fetched_at", 0.0) or 0.0)
+        if age < float(AUTO_REPLY_SELF_IDENTITY_TTL_SECONDS):
+            return cached
+
+    identity_lock = deps.get(_SELF_IDENTITY_LOCK_KEY)
+    if not isinstance(identity_lock, asyncio.Lock):
+        identity_lock = asyncio.Lock()
+        deps[_SELF_IDENTITY_LOCK_KEY] = identity_lock
+
+    async with identity_lock:
+        cached = _read_self_identity_cache(deps)
+        if cached:
+            age = now - float(cached.get("fetched_at", 0.0) or 0.0)
+            if age < float(AUTO_REPLY_SELF_IDENTITY_TTL_SECONDS):
+                return cached
+
+        fallback_username = str((cached or {}).get("username") or "").strip().lower() or None
+        fallback_user_id = int((cached or {}).get("user_id") or 0)
+        try:
+            me = await client.get_me()
+            resolved_username = str(getattr(me, "username", "") or "").strip().lower() or None
+            resolved_user_id = int(getattr(me, "id", 0) or 0)
+            payload = {
+                "username": resolved_username,
+                "user_id": resolved_user_id,
+                "fetched_at": time.monotonic(),
+            }
+            deps[_SELF_IDENTITY_CACHE_KEY] = payload
+            return payload
+        except FloodWait as exc:
+            wait_seconds = int(getattr(exc, "value", 0) or 0)
+            if fallback_username or fallback_user_id:
+                payload = {
+                    "username": fallback_username,
+                    "user_id": fallback_user_id,
+                    "fetched_at": time.monotonic(),
+                }
+                deps[_SELF_IDENTITY_CACHE_KEY] = payload
+                logger.warning(
+                    "auto_reply: get_me FloodWait, использую кэш self-профиля",
+                    wait_seconds=wait_seconds,
+                    fallback_username=fallback_username,
+                    fallback_user_id=fallback_user_id,
+                )
+                return payload
+            logger.warning(
+                "auto_reply: get_me FloodWait без fallback-кэша",
+                wait_seconds=wait_seconds,
+            )
+        except Exception as exc:
+            if fallback_username or fallback_user_id:
+                payload = {
+                    "username": fallback_username,
+                    "user_id": fallback_user_id,
+                    "fetched_at": time.monotonic(),
+                }
+                deps[_SELF_IDENTITY_CACHE_KEY] = payload
+                logger.warning(
+                    "auto_reply: get_me failed, использую кэш self-профиля",
+                    error=str(exc),
+                    fallback_username=fallback_username,
+                    fallback_user_id=fallback_user_id,
+                )
+                return payload
+            logger.warning(
+                "auto_reply: get_me failed, self-профиль недоступен",
+                error=str(exc),
+            )
+
+        payload = {
+            "username": fallback_username,
+            "user_id": fallback_user_id,
+            "fetched_at": time.monotonic(),
+        }
+        deps[_SELF_IDENTITY_CACHE_KEY] = payload
+        return payload
+
+
 def _extract_text_from_media_payload(payload: Any) -> str:
     """
     Нормализует ответ мультимодальных интеграций (perceptor/openclaw) в строку.
@@ -1788,7 +1896,8 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         message.reply_to_message.from_user.is_self
     )
     
-    me = await client.get_me()
+    self_identity = await _resolve_self_identity(client, deps)
+    self_username = str(self_identity.get("username") or "").strip().lower() or None
     is_mentioned = False
     text_content = _message_content_hint(message)
     
@@ -1796,7 +1905,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         text_lower = text_content.lower()
         is_mentioned = (
             "краб" in text_lower or 
-            (me.username and f"@{me.username.lower()}" in text_lower)
+            (self_username and f"@{self_username}" in text_lower)
         )
 
     allow_group_replies = True
