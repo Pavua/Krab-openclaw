@@ -1751,6 +1751,24 @@ class WebApp:
             report = await openclaw.get_browser_smoke_report(url=url)
             return {"available": True, "report": report}
 
+        @self.app.get("/api/openclaw/cloud")
+        async def openclaw_cloud_diagnostics(providers: str = Query(default="")):
+            """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API."""
+            openclaw = self.deps.get("openclaw_client")
+            if not openclaw:
+                return {"available": False, "error": "openclaw_client_not_configured"}
+            if not hasattr(openclaw, "get_cloud_provider_diagnostics"):
+                return {"available": False, "error": "cloud_diagnostics_not_supported"}
+
+            providers_list: list[str] | None = None
+            raw = (providers or "").strip()
+            if raw:
+                providers_list = [item.strip().lower() for item in raw.split(",") if item.strip()]
+                if not providers_list:
+                    providers_list = None
+            report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
+            return {"available": True, "report": report}
+
         def _run_openclaw_model_autoswitch(*, dry_run: bool) -> dict:
             """
             Запускает autoswitch-утилиту OpenClaw.

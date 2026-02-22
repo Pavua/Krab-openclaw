@@ -446,6 +446,25 @@ class _DummyOpenClaw:
             "ready": True,
         }
 
+    async def get_cloud_provider_diagnostics(self, providers=None):
+        providers_list = providers or ["google", "openai"]
+        result = {}
+        for provider in providers_list:
+            name = str(provider).lower()
+            result[name] = {
+                "ok": True,
+                "error_code": "",
+                "summary": "",
+                "retryable": False,
+                "key_source": f"env:{name.upper()}_API_KEY",
+                "key_preview": "AIza****",
+                "hint": "",
+            }
+        return {
+            "providers": result,
+            "timestamp": "2026-02-22T00:00:00+00:00",
+        }
+
 
 class _DummyVoiceGateway:
     async def health_check(self):
@@ -731,6 +750,35 @@ def test_openclaw_browser_smoke_endpoint() -> None:
     assert payload["available"] is True
     assert payload["report"]["ready"] is True
     assert payload["report"]["browser_smoke"]["ok"] is True
+
+
+def test_openclaw_cloud_diagnostics_endpoint() -> None:
+    client = _build_client()
+    response = client.get("/api/openclaw/cloud")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert payload["report"]["providers"]["google"]["ok"] is True
+    assert payload["report"]["providers"]["openai"]["ok"] is True
+
+
+def test_openclaw_cloud_diagnostics_endpoint_with_providers_filter() -> None:
+    client = _build_client()
+    response = client.get("/api/openclaw/cloud?providers=google")
+    assert response.status_code == 200
+    payload = response.json()
+    providers = payload["report"]["providers"]
+    assert set(providers.keys()) == {"google"}
+
+
+def test_openclaw_cloud_diagnostics_endpoint_not_supported() -> None:
+    client, deps = _build_client_with_deps()
+    deps["openclaw_client"] = object()
+    response = client.get("/api/openclaw/cloud")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is False
+    assert payload["error"] == "cloud_diagnostics_not_supported"
 
 
 def test_openclaw_model_autoswitch_status_endpoint(monkeypatch) -> None:
