@@ -54,6 +54,16 @@ class EcosystemHealthService:
         # [R11] Сбор системных метрик и бюджета
         resources = self._collect_resource_metrics()
         budget = self.router.cost_engine.get_budget_status() if hasattr(self.router, "cost_engine") else {}
+        
+        # [R15] Метрики очереди задач и статус токена
+        queue_metrics = {}
+        token_status = {"is_configured": False, "masked_key": None}
+        
+        if hasattr(self.router, "task_queue") and self.router.task_queue:
+            queue_metrics = self.router.task_queue.get_metrics()
+            
+        if hasattr(self.router, "openclaw_client") and self.router.openclaw_client:
+            token_status = self.router.openclaw_client.get_token_info()
 
         cloud_ok = bool(openclaw_check["ok"])
         local_ok = bool(local_check["ok"])
@@ -103,7 +113,7 @@ class EcosystemHealthService:
             "risk_level": risk_level,
             "degradation": degradation,
             "checks": {
-                "openclaw": openclaw_check,
+                "openclaw": {**openclaw_check, "token_status": token_status},
                 "local_lm": local_check,
                 "voice_gateway": voice_check,
                 "krab_ear": ear_check,
@@ -114,6 +124,7 @@ class EcosystemHealthService:
                 "voice_assist_ready": voice_assist_ready,
             },
             "resources": resources,
+            "queue": queue_metrics, # R15
             "budget": budget,
             "recommendations": recommendations[:8],  # Увеличил лимит рекомендаций
         }

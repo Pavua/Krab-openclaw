@@ -28,6 +28,11 @@ class TaskQueue:
         self.app = app # Pyrogram Client for notifications
         self.tasks: Dict[str, BackgroundTask] = {}
         self._running_count = 0
+        
+        # R15: Метрики рантайма
+        self._total_completed = 0
+        self._total_failed = 0
+        self._total_execution_time = 0.0
 
     async def enqueue(self, name: str, chat_id: int, coro: Coroutine) -> str:
         """Добавляет задачу в очередь на выполнение."""
@@ -44,11 +49,13 @@ class TaskQueue:
         """Обертка для выполнения и уведомления."""
         bt.status = "RUNNING"
         self._running_count += 1
+        start_ts = datetime.now()
         logger.info(f"🚀 Background Task Starter: {bt.name}", id=bt.id)
         
         try:
             bt.result = await coro
             bt.status = "COMPLETED"
+            self._total_completed += 1
             
             # Уведомляем пользователя
             await self.app.send_message(
@@ -58,6 +65,7 @@ class TaskQueue:
         except Exception as e:
             bt.status = "FAILED"
             bt.error = str(e)
+            self._total_failed += 1
             logger.error(f"❌ Task {bt.id} Failed: {e}")
             await self.app.send_message(
                 bt.chat_id,
@@ -65,7 +73,25 @@ class TaskQueue:
             )
         finally:
             bt.end_time = datetime.now()
+            duration = (bt.end_time - start_ts).total_seconds()
+            self._total_execution_time += duration
             self._running_count -= 1
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Возвращает метрики очереди для Dashboard (R15)."""
+        avg_time = 0.0
+        total_finished = self._total_completed + self._total_failed
+        if total_finished > 0:
+            avg_time = round(self._total_execution_time / total_finished, 2)
+            
+        return {
+            "active_tasks": self._running_count,
+            "waiting_tasks": 0, # В текущей архитектуре задачи не ждут
+            "completed_count": self._total_completed,
+            "failed_count": self._total_failed,
+            "avg_task_seconds": avg_time,
+            "total_tasks_ever": total_finished + self._running_count
+        }
 
     def get_status(self, task_id: str) -> Optional[BackgroundTask]:
         return self.tasks.get(task_id)

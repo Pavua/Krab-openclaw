@@ -312,6 +312,10 @@ class ModelRouter:
             config.get("CLOUD_PROVIDER_PROBE_ON_CHAT_ERROR", "0")
         ).strip().lower() in {"1", "true", "yes", "on"}
 
+        # R15: Cloud Preflight Cache (provider -> (expiration_ts, error_msg))
+        self._preflight_cache: dict[str, tuple[float, str]] = {}
+        self._preflight_ttl_seconds = 300  # 5 минут блокировки при фатальной ошибке
+
         # Память предпочтений моделей по профилям задач.
         self._routing_memory_path = Path(
             config.get("MODEL_ROUTING_MEMORY_PATH", "artifacts/model_routing_memory.json")
@@ -791,42 +795,57 @@ class ModelRouter:
                 "summary": "ошибка авторизации cloud-провайдера (401)",
                 "retryable": False,
             }
-        if "quota exceeded" in lowered or "out of credits" in lowered or "billing" in lowered:
+        
+        if "quota" in lowered or "billing" in lowered or "limit" in lowered:
             return {
-                "code": "quota_or_billing",
-                "summary": "исчерпан лимит/биллинг cloud-провайдера",
+                "code": "quota",
+                "summary": "превышена квота или проблема с биллингом",
                 "retryable": False,
             }
-        if "not found" in lowered or "not_found" in lowered:
+
+        if "not found" in lowered or "404" in lowered:
             return {
                 "code": "model_not_found",
-                "summary": "запрошенная cloud-модель недоступна (not found)",
+                "summary": "модель не найдена в текущем регионе/аккаунте",
                 "retryable": False,
             }
-        if "fail-fast budget exceeded" in lowered:
+
+        if "fail-fast budget" in lowered:
             return {
                 "code": "timeout",
                 "summary": "превышено время ожидания ответа от облачного канала",
                 "retryable": True,
             }
-        if "connection error" in lowered or "failed to connect" in lowered:
+
+        if "connection error" in lowered or "timeout" in lowered or "network" in lowered:
             return {
-                "code": "network_error",
-                "summary": "ошибка соединения с AI-шлюзом",
-                "retryable": True,
-            }
-        if "timeout" in lowered:
-            return {
-                "code": "timeout",
-                "summary": "таймаут ответа от cloud-провайдера",
+                "code": "network",
+                "summary": "проблема с сетью или таймаут соединения",
                 "retryable": True,
             }
 
         return {
             "code": "unknown",
-            "summary": "облачный провайдер вернул ошибку",
+            "summary": lowered[:120] if lowered else "неизвестная ошибка",
             "retryable": True,
         }
+
+    def _check_cloud_preflight(self, provider: str) -> Optional[str]:
+        """
+        R15: Проверяет, нет ли в кэше активной фатальной ошибки для провайдера.
+        Возвращает сообщение об ошибке, если провайдер заблокирован.
+        """
+        cached = self._preflight_cache.get(provider)
+        if not cached:
+            return None
+        
+        expiration, error_msg = cached
+        if time.time() < expiration:
+            return f"Preflight: провайдер '{provider}' заблокирован (R15 Gate): {error_msg}"
+        
+        # Истекло
+        self._preflight_cache.pop(provider, None)
+        return None
 
     def _categorize_cloud_error(self, text: Optional[str]) -> str:
         """
@@ -850,11 +869,11 @@ class ModelRouter:
             return "auth_fatal"
         if code == "api_disabled":
             return "api_disabled"
-        if code == "quota_or_billing":
+        if code in {"quota_or_billing", "quota"}:
             return "quota"
         if code == "model_not_found":
             return "model_not_found"
-        if code in {"network_error", "timeout"}:
+        if code in {"network_error", "timeout", "network"}:
             return "network"
         return "unknown"
 
@@ -2494,6 +2513,14 @@ class ModelRouter:
                     prompt=prompt,
                 )
             ):
+                provider = candidate.split("/", 1)[0]
+                preflight_error = self._check_cloud_preflight(provider)
+                if preflight_error:
+                    logger.warning("Cloud preflight rejected candidate", candidate=candidate, error=preflight_error)
+                    if force_cloud_mode:
+                        return "preflight_blocked", f"❌ {preflight_error}"
+                    continue
+
                 if "-exp" in candidate and "gemini-2.0" in candidate:
                     candidate = candidate.replace("-exp", "")
                 if deadline is not None and time.monotonic() >= deadline:
@@ -2547,7 +2574,7 @@ class ModelRouter:
 
         if self.force_mode == "force_cloud":
             c_res = await _run_cloud(route_reason="force_cloud", route_detail="forced by mode")
-            if isinstance(c_res, tuple) and c_res[0] != "all_candidates_failed":
+            if isinstance(c_res, tuple) and c_res[0] != "all_candidates_failed" and c_res[0] != "preflight_blocked":
                 # Finalize cloud normally
                 candidate, response = c_res
                 self._remember_model_choice(profile, candidate, "cloud")
@@ -2556,6 +2583,8 @@ class ModelRouter:
                                           model_name=candidate, prompt=prompt, route_reason="force_cloud")
                 return response
             err_msg = self.last_cloud_error or 'Unknown cloud failure'
+            if isinstance(c_res, tuple) and c_res[0] == "preflight_blocked":
+                err_msg = c_res[1] # Use the preflight error message directly
             summary = self._summarize_cloud_error_for_user(err_msg)
             return (
                 f"❌ Ошибка Cloud (force_cloud): {summary}."
@@ -2585,7 +2614,7 @@ class ModelRouter:
             
             cloud_result = await _run_cloud(route_reason=c_reason, route_detail=c_detail)
             
-            if isinstance(cloud_result, tuple) and cloud_result[0] != "all_candidates_failed":
+            if isinstance(cloud_result, tuple) and cloud_result[0] != "all_candidates_failed" and cloud_result[0] != "preflight_blocked":
                 candidate, c_response = cloud_result
                 # Finalize
                 self._remember_model_choice(profile, candidate, "cloud")
@@ -2713,6 +2742,15 @@ class ModelRouter:
                 is_owner=is_owner,
                 prompt=prompt,
             ):
+                provider = candidate.split("/", 1)[0]
+                preflight_error = self._check_cloud_preflight(provider)
+                if preflight_error:
+                    logger.warning("Cloud stream preflight rejected candidate", candidate=candidate, error=preflight_error)
+                    if force_cloud_mode:
+                        yield f"❌ {preflight_error}"
+                        return
+                    continue
+
                 if "-exp" in candidate and "gemini-2.0" in candidate:
                     candidate = candidate.replace("-exp", "")
                 if deadline is not None and time.monotonic() >= deadline:
@@ -2860,22 +2898,23 @@ class ModelRouter:
 
         emitted_chunks = 0
         try:
-            async for chunk in self.stream_client.stream_chat(payload):
-                emitted_chunks += 1
-                yield chunk
-            if emitted_chunks > 0:
-                local_model = self.active_local_model or payload.get("model") or "local-model"
-                self._remember_last_stream_route(
-                    profile=profile,
-                    task_type=task_type,
-                    channel="local",
-                    model_name=str(local_model),
-                    prompt=prompt,
-                    route_reason="local_stream_primary",
-                    route_detail="stream completed on local model",
-                    force_mode=self.force_mode,
-                )
-            return
+            async with self._acquire_local_slot(self.active_local_model):
+                async for chunk in self.stream_client.stream_chat(payload):
+                    emitted_chunks += 1
+                    yield chunk
+                if emitted_chunks > 0:
+                    local_model = self.active_local_model or payload.get("model") or "local-model"
+                    self._remember_last_stream_route(
+                        profile=profile,
+                        task_type=task_type,
+                        channel="local",
+                        model_name=str(local_model),
+                        prompt=prompt,
+                        route_reason="local_stream_primary",
+                        route_detail="stream completed on local model",
+                        force_mode=self.force_mode,
+                    )
+                return
         except StreamFailure as e:
             logger.warning(
                 "Local stream guardrail/failure triggered",
@@ -2944,9 +2983,20 @@ class ModelRouter:
 
                 if error_detected or billing_issue:
                     self._mark_cloud_soft_cap_if_needed(normalized or "пустой ответ")
+                    fatal_auth_error = self._is_fatal_cloud_auth_error(normalized)
                     if fatal_auth_error:
+                        # R15: Кэшируем фатальную ошибку для Preflight Gate
+                        provider = model_name.split("/", 1)[0]
+                        self._preflight_cache[provider] = (time.time() + self._preflight_ttl_seconds, response_text)
+                        
                         self._stats["cloud_failures"] += 1
                         return f"❌ Ошибка Cloud: {response_text}"
+
+                    category = self._categorize_cloud_error(normalized)
+                    if not category.get("retryable", True):
+                        provider = model_name.split("/", 1)[0]
+                        self._preflight_cache[provider] = (time.time() + self._preflight_ttl_seconds, category.get("summary", "fatal error"))
+
                     if attempt < max_retries:
                         logger.warning(f"OpenClaw Attempt {attempt+1} failed: {response_text}")
                         await asyncio.sleep(2 ** (attempt + 1))

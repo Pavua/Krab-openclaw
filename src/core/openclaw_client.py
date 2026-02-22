@@ -36,6 +36,31 @@ class OpenClawClient:
         if self.api_key:
             self.headers["Authorization"] = f"Bearer {self.api_key}"
 
+    def get_token_info(self) -> dict[str, Any]:
+        """
+        Возвращает безопасную информацию о токене (R15).
+        Маскирует ключ, оставляя только начало и конец для идентификации.
+        """
+        if not self.api_key:
+            return {
+                "is_configured": False,
+                "masked_key": None,
+                "provider": "openclaw"
+            }
+        
+        key = self.api_key
+        # Маскирование: sk-ant-api-key-12345 -> sk-ant...2345
+        if len(key) <= 8:
+            masked = "****"
+        else:
+            masked = f"{key[:6]}...{key[-4:]}"
+            
+        return {
+            "is_configured": True,
+            "masked_key": masked,
+            "provider": "openclaw"
+        }
+
     def _url(self, path: str) -> str:
         """Собирает абсолютный URL с нормализацией слешей."""
         if not path.startswith("/"):
