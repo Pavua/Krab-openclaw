@@ -635,6 +635,50 @@ async def test_route_query_force_cloud_skips_local_health_probe(
 
 
 @pytest.mark.asyncio
+async def test_route_query_auto_cloud_primary_skips_local_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    В auto-режиме для cloud-primary задач (reasoning/critical) роутер
+    не должен заранее трогать локальный runtime (health/autoload/smart-load).
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "auto"
+    router.is_local_available = False
+
+    async def must_not_call_check_local_health(*args, **kwargs):
+        raise AssertionError("check_local_health не должен вызываться в cloud-primary auto")
+
+    async def must_not_call_autoload(*args, **kwargs):
+        raise AssertionError("_maybe_autoload_local_model не должен вызываться в cloud-primary auto")
+
+    async def must_not_call_smart_load(*args, **kwargs):
+        raise AssertionError("_smart_load не должен вызываться в cloud-primary auto")
+
+    async def fake_call_gemini(*args, **kwargs):
+        return "Cloud primary response without local touching"
+
+    monkeypatch.setattr(router, "check_local_health", must_not_call_check_local_health)
+    monkeypatch.setattr(router, "_maybe_autoload_local_model", must_not_call_autoload)
+    monkeypatch.setattr(router, "_smart_load", must_not_call_smart_load)
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash"],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="Сделай глубокий reasoning анализ плана",
+        task_type="reasoning",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+    assert response == "Cloud primary response without local touching"
+
+
+@pytest.mark.asyncio
 async def test_route_query_force_cloud_skips_preflight_blocked_provider_and_uses_next_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

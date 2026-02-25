@@ -278,20 +278,20 @@ class ModelRouter:
             self.local_reasoning_max_chars = 2000
         try:
             self.local_stream_total_timeout_seconds = float(
-                config.get("LOCAL_STREAM_TOTAL_TIMEOUT_SECONDS", 75.0)
+                config.get("LOCAL_STREAM_TOTAL_TIMEOUT_SECONDS", 240.0)
             )
             if self.local_stream_total_timeout_seconds <= 0:
-                self.local_stream_total_timeout_seconds = 75.0
+                self.local_stream_total_timeout_seconds = 240.0
         except Exception:
-            self.local_stream_total_timeout_seconds = 75.0
+            self.local_stream_total_timeout_seconds = 240.0
         try:
             self.local_stream_sock_read_timeout_seconds = float(
-                config.get("LOCAL_STREAM_SOCK_READ_TIMEOUT_SECONDS", 20.0)
+                config.get("LOCAL_STREAM_SOCK_READ_TIMEOUT_SECONDS", 90.0)
             )
             if self.local_stream_sock_read_timeout_seconds <= 0:
-                self.local_stream_sock_read_timeout_seconds = 20.0
+                self.local_stream_sock_read_timeout_seconds = 90.0
         except Exception:
-            self.local_stream_sock_read_timeout_seconds = 20.0
+            self.local_stream_sock_read_timeout_seconds = 90.0
         self.local_stream_fallback_to_cloud = str(
             config.get("LOCAL_STREAM_FALLBACK_TO_CLOUD", "1")
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -3014,9 +3014,19 @@ class ModelRouter:
                 prompt = f"### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n{tool_data}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
         force_cloud_mode = self.force_mode == "force_cloud"
+        # Auto Mode Strategy (ранний расчёт нужен для решения:
+        # готовить ли локальный контур заранее или идти cloud-primary без касания LM Studio).
+        force_local_due_cost = self.cloud_soft_cap_reached and not is_critical
+        prefer_cloud = is_critical or task_type == "reasoning"
+        if force_local_due_cost:
+            prefer_cloud = False
 
-        # Smart Memory Planner
-        if not force_cloud_mode and self.is_local_available:
+        # Smart Memory Planner:
+        # готовим локальный контур только если реально планируем local-first.
+        should_prepare_local = (not force_cloud_mode) and (
+            self.force_mode == "force_local" or not prefer_cloud
+        )
+        if should_prepare_local and self.is_local_available:
             preferred = preferred_model or self.local_preferred_model
             if task_type == "coding" and self.local_coding_model:
                 preferred = self.local_coding_model
@@ -3025,7 +3035,7 @@ class ModelRouter:
 
         # В force_cloud полностью исключаем касание local runtime:
         # никаких health-check/autoload, чтобы не будить LM Studio/Ollama.
-        if not force_cloud_mode:
+        if should_prepare_local:
             await self.check_local_health()
             if not self.is_local_available:
                 await self._maybe_autoload_local_model(reason=f"route_query:{task_type}")
@@ -3238,11 +3248,6 @@ class ModelRouter:
                 if is_owner
                 else "❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже."
             )
-
-        # Auto Mode Strategy
-        force_local_due_cost = self.cloud_soft_cap_reached and not is_critical
-        prefer_cloud = is_critical or task_type == "reasoning"
-        if force_local_due_cost: prefer_cloud = False
 
         local_status = "skipped"
         local_response = None
@@ -3646,6 +3651,13 @@ class ModelRouter:
                     )
                     # [R24] Успех
                     self.channel_state.record_success("local")
+                else:
+                    # LM Studio может завершить stream без контента (EMPTY MESSAGE).
+                    # Это невалидный локальный ответ — уходим в cloud fallback.
+                    raise StreamFailure(
+                        "empty_output",
+                        "local stream finished without content chunks",
+                    )
                 return
         except StreamFailure as e:
             self.channel_state.record_failure("local")

@@ -86,8 +86,10 @@ class OpenClawStreamClient:
         self.api_key = api_key
         self.default_max_chars = self._read_int_env("LOCAL_STREAM_MAX_CHARS", 20000)
         self.default_max_reasoning_chars = self._read_int_env("LOCAL_REASONING_MAX_CHARS", 2000)
-        self.default_total_timeout_seconds = self._read_float_env("LOCAL_STREAM_TOTAL_TIMEOUT_SECONDS", 75.0)
-        self.default_sock_read_timeout_seconds = self._read_float_env("LOCAL_STREAM_SOCK_READ_TIMEOUT_SECONDS", 20.0)
+        # Для тяжёлых MLX-моделей на Mac первый токен может идти заметно дольше.
+        # Делаем щадящие дефолты, чтобы не рвать локальный канал раньше времени.
+        self.default_total_timeout_seconds = self._read_float_env("LOCAL_STREAM_TOTAL_TIMEOUT_SECONDS", 240.0)
+        self.default_sock_read_timeout_seconds = self._read_float_env("LOCAL_STREAM_SOCK_READ_TIMEOUT_SECONDS", 90.0)
 
     @staticmethod
     def _read_int_env(name: str, default: int) -> int:
