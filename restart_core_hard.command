@@ -25,6 +25,14 @@ cd "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/logs"
 mkdir -p "$PROJECT_ROOT/.runtime"
 
+# Загружаем .env поверх текущего окружения, чтобы рестарт использовал
+# актуальные ключи/настройки проекта, а не случайные переменные из shell.
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+  set -a
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
+
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "[DRY RUN] Режим проверки без остановки/запуска процессов."
 fi

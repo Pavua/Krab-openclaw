@@ -302,7 +302,7 @@ class ModelRouter:
         self.lms_gpu_offload = str(config.get("LM_STUDIO_GPU_OFFLOAD", "")).strip().lower()
         self.cloud_priority_models = self._parse_cloud_priority(config.get(
             "MODEL_CLOUD_PRIORITY_LIST",
-            "gemini-2.5-flash,gemini-2.5-pro,google/gemini-2.5-flash,google/gemini-2.5-pro,openai/gpt-4o-mini"
+            "openai/gpt-4o-mini,openai/gpt-5-mini,openai/gpt-5-codex,google/gemini-2.5-flash,google/gemini-3-pro-preview,google/gemini-2.5-pro"
         ))
         # Ограничение длины cloud-ротации, чтобы не зависать на десятках кандидатов.
         # Особенно критично при force_cloud и сетевых деградациях.
@@ -586,6 +586,24 @@ class ModelRouter:
             return ""
 
         cleaned = str(text)
+        # Жёстко вырезаем технические tool-schema блоки,
+        # которые не должны попадать в пользовательский ответ.
+        cleaned = re.sub(r"<tools>.*?</tools>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(
+            r"You may call one or more functions to assist with the user query\.",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"You can also use the session_status function to get information about the current session\.",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        # Подчищаем висящие хвосты JSON-schema от function/tool описаний.
+        cleaned = re.sub(r'"required"\s*:\s*\[\s*"action"\s*]\s*}\s*}\s*}', "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'"type"\s*:\s*"string"\s*}\s*}\s*,?', "", cleaned, flags=re.IGNORECASE)
 
         # Удаляем только служебные маркеры box, но не полезный текст внутри.
         cleaned = cleaned.replace("<|begin_of_box|>", "")
@@ -632,6 +650,11 @@ class ModelRouter:
             "## agent list",
             "### default agents",
             "</tool_call>",
+            "<tools>",
+            "</tools>",
+            "you may call one or more functions",
+            "you can also use the session_status function",
+            "required\": [\"action\"]",
             "```json",
         )
         filtered_lines: list[str] = []
@@ -643,6 +666,9 @@ class ModelRouter:
             if "\"action\"" in low and "not found" in low:
                 continue
             if any(fragment in low for fragment in blocked_fragments):
+                continue
+            # Служебный спам из action-log/tool-контуров: не показываем пользователю.
+            if low.startswith("включено логирован") and "пауза 5 минут" in low:
                 continue
             filtered_lines.append(line)
         cleaned = "\n".join(filtered_lines)
@@ -1596,8 +1622,10 @@ class ModelRouter:
         prompt: str = "",
     ) -> str:
         """Выбирает облачную модель с учетом профиля и предпочтений."""
-        if preferred_model and "gemini" in preferred_model:
-            return preferred_model
+        # Предпочтение из runtime/UI должно работать для любого провайдера,
+        # а не только для Gemini. Иначе web-slot'ы OpenAI фактически игнорируются.
+        if preferred_model and str(preferred_model).strip():
+            return str(preferred_model).strip()
         if profile in {"security", "infra", "review"}:
             return self.models.get("pro", self.models.get("thinking", self.models["chat"]))
         if profile == "code":
@@ -1611,9 +1639,13 @@ class ModelRouter:
             if self.owner_private_always_pro:
                 return self.models.get("pro", self.models["chat"])
             if self._should_use_pro_for_owner_private(prompt, chat_type, is_owner):
-                return self.chat_model_owner_private_important or self.models.get("pro", self.models["chat"])
+                # Важный private-запрос: сначала берём актуальный slot `pro`,
+                # и только потом fallback на legacy owner-override из env.
+                return self.models.get("pro", self.chat_model_owner_private_important or self.models["chat"])
             if self.chat_model_owner_private:
-                return self.chat_model_owner_private
+                # Для обычного owner-private приоритет у runtime slot `chat`,
+                # чтобы настройки из web-панели применялись сразу.
+                return self.models.get("chat", self.chat_model_owner_private)
 
         # Для групповых чатов можно выделить отдельную более бюджетную модель.
         if self._is_group_chat(chat_type) and self.chat_model_group:
@@ -1657,9 +1689,16 @@ class ModelRouter:
             candidates.append(normalized)
 
         add(preferred_model or "")
-        add(base)
-        for extra in self.cloud_priority_models:
-            add(extra)
+        if self.force_mode == "force_cloud":
+            # В force_cloud сначала пробуем приоритетный список (обычно OpenAI-first),
+            # затем добавляем базовую профильную модель.
+            for extra in self.cloud_priority_models:
+                add(extra)
+            add(base)
+        else:
+            add(base)
+            for extra in self.cloud_priority_models:
+                add(extra)
 
         max_candidates = (
             int(self.cloud_max_candidates_force_cloud)
@@ -3084,8 +3123,10 @@ class ModelRouter:
                     preflight_error = self._check_cloud_preflight(provider)
                     if preflight_error:
                         logger.warning("Cloud preflight rejected candidate", candidate=candidate, error=preflight_error)
+                        # В force_cloud нельзя падать на первом же заблокированном провайдере:
+                        # продолжаем к следующему cloud-кандидату (например, OpenAI после Google).
                         if force_cloud_mode:
-                            return "preflight_blocked", f"❌ {preflight_error}"
+                            self.last_cloud_error = f"❌ {preflight_error}"
                         continue
 
                     if "-exp" in candidate and "gemini-2.0" in candidate:
@@ -3373,9 +3414,10 @@ class ModelRouter:
                 preflight_error = self._check_cloud_preflight(provider)
                 if preflight_error:
                     logger.warning("Cloud stream preflight rejected candidate", candidate=candidate, error=preflight_error)
+                    # Аналогично route_query: в force_cloud переходим к следующему кандидату,
+                    # а не завершаем стрим на первом заблокированном провайдере.
                     if force_cloud_mode:
-                        yield f"❌ {preflight_error}"
-                        return
+                        self.last_cloud_error = f"❌ {preflight_error}"
                     continue
 
                 if "-exp" in candidate and "gemini-2.0" in candidate:

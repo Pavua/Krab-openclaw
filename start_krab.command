@@ -40,6 +40,12 @@ if [ ! -f ".env" ]; then
     fi
 fi
 
+# Критично: всегда загружаем переменные из .env поверх внешнего окружения.
+# Это предотвращает использование устаревших API-ключей из shell/launchd.
+set -a
+source ".env"
+set +a
+
 # Check for Virtual Environment
 if [ ! -d ".venv" ]; then
     echo -e "${RED}❌ Virtual environment (.venv) not found!${NC}"

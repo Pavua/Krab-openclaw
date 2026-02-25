@@ -47,7 +47,7 @@ def test_cloud_candidate_normalization_rewrites_obsolete_exp(tmp_path: Path) -> 
         profile="communication",
         preferred_model="models/gemini-2.0-flash-exp",
     )
-    assert "gemini-2.5-flash" in candidates
+    assert "google/gemini-2.5-flash" in candidates
     assert "models/gemini-2.0-flash-exp" not in candidates
 
 
@@ -99,6 +99,32 @@ def test_cloud_candidate_list_uses_force_cloud_cap(tmp_path: Path) -> None:
         preferred_model="google/gemini-2.5-flash",
     )
     assert candidates == ["google/gemini-2.5-flash"]
+
+
+def test_force_cloud_candidates_prioritize_priority_list_before_base(tmp_path: Path) -> None:
+    router = ModelRouter(
+        config={
+            "MODEL_ROUTING_MEMORY_PATH": str(tmp_path / "routing_memory.json"),
+            "MODEL_USAGE_REPORT_PATH": str(tmp_path / "usage_report.json"),
+            "MODEL_OPS_STATE_PATH": str(tmp_path / "ops_state.json"),
+            "MODEL_FEEDBACK_PATH": str(tmp_path / "feedback.json"),
+            "MODEL_CLOUD_MAX_CANDIDATES_FORCE_CLOUD": "3",
+            "MODEL_CLOUD_PRIORITY_LIST": "openai/gpt-4o-mini,openai/gpt-5-mini,google/gemini-2.5-flash",
+            "GEMINI_CHAT_MODEL": "google/gemini-2.5-flash",
+        }
+    )
+    router.force_mode = "force_cloud"
+
+    candidates = router._build_cloud_candidates(
+        task_type="chat",
+        profile="chat",
+        preferred_model=None,
+        chat_type="private",
+        is_owner=True,
+        prompt="Короткий тест",
+    )
+
+    assert candidates[:3] == ["openai/gpt-4o-mini", "openai/gpt-5-mini", "google/gemini-2.5-flash"]
 
 
 def test_resolve_cloud_model_uses_group_override_for_group_chat(tmp_path: Path) -> None:
@@ -274,6 +300,49 @@ async def test_route_stream_local_success_does_not_call_cloud(tmp_path: Path, mo
     assert "".join(chunks) == "Привет, мир!"
     last_stream = router.get_last_stream_route()
     assert last_stream.get("channel") == "local"
+
+
+@pytest.mark.asyncio
+async def test_route_stream_placeholder_local_model_skips_local_and_uses_cloud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Регрессия: при active_local_model=local/local-model нельзя отправлять payload в LM Studio.
+    Должен сработать cloud fallback без локального stream-вызова.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "auto"
+    router.is_local_available = True
+    router.active_local_model = "local"
+
+    async def fake_check_local_health(force: bool = False):
+        router.is_local_available = True
+        return True
+
+    async def must_not_use_local_stream(payload):
+        raise AssertionError("Локальный stream не должен вызываться для placeholder model_id")
+        if False:
+            yield ""
+
+    async def fake_call_gemini(*args, **kwargs):
+        return "Cloud fallback for placeholder local model"
+
+    monkeypatch.setattr(router, "check_local_health", fake_check_local_health)
+    monkeypatch.setattr(router.stream_client, "stream_chat", must_not_use_local_stream)
+    monkeypatch.setattr(router, "_build_cloud_candidates", lambda *args, **kwargs: ["google/gemini-2.5-flash"])
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    chunks = [
+        chunk
+        async for chunk in router.route_stream(
+            prompt="Проверка placeholder local model",
+            task_type="chat",
+            context=[],
+            chat_type="private",
+            is_owner=True,
+        )
+    ]
+    assert chunks == ["Cloud fallback for placeholder local model"]
 
 
 @pytest.mark.asyncio
@@ -488,6 +557,120 @@ async def test_route_query_force_cloud_does_not_trigger_local_smart_load(
 
 
 @pytest.mark.asyncio
+async def test_route_query_force_cloud_skips_local_health_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    В force_cloud route_query не должен вызывать даже check_local_health:
+    это предотвращает любые касания LM Studio/Ollama в cloud-only режиме.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+
+    async def must_not_call_check_local_health(*args, **kwargs):
+        raise AssertionError("check_local_health не должен вызываться в force_cloud")
+
+    async def fake_call_gemini(*args, **kwargs):
+        return "Cloud-only response"
+
+    monkeypatch.setattr(router, "check_local_health", must_not_call_check_local_health)
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash"],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="strict cloud mode",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+    assert response == "Cloud-only response"
+
+
+@pytest.mark.asyncio
+async def test_route_query_force_cloud_skips_preflight_blocked_provider_and_uses_next_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Регрессия: в force_cloud preflight-блок первого провайдера
+    не должен останавливать весь cloud-маршрут.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+    router.is_local_available = False
+
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash", "openai/gpt-4o-mini"],
+    )
+
+    def fake_check_cloud_preflight(provider: str):
+        if provider == "google":
+            return "Preflight: провайдер 'google' заблокирован (R15 Gate)"
+        return None
+
+    calls: list[str] = []
+
+    async def fake_call_gemini(prompt, model_name, context, chat_type, is_owner, max_retries=0):
+        calls.append(str(model_name))
+        return "Cloud fallback via OpenAI OK"
+
+    monkeypatch.setattr(router, "_check_cloud_preflight", fake_check_cloud_preflight)
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="Проверка preflight skip",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+
+    assert response == "Cloud fallback via OpenAI OK"
+    assert calls == ["openai/gpt-4o-mini"]
+
+
+@pytest.mark.asyncio
+async def test_route_query_force_cloud_failure_updates_last_route_as_cloud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Даже при cloud-ошибке в force_cloud last_route должен обновляться как cloud,
+    чтобы UI не показывал устаревший local-маршрут.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+
+    async def fake_call_gemini(*args, **kwargs):
+        return "❌ OpenClaw Error (0): TimeoutError"
+
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash"],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    response = await router.route_query(
+        prompt="cloud fail route mark",
+        task_type="chat",
+        context=[],
+        chat_type="private",
+        is_owner=True,
+    )
+    last_route = router.get_last_route()
+
+    assert "Ошибка Cloud (force_cloud)" in response
+    assert last_route.get("channel") == "cloud"
+    assert last_route.get("route_reason") == "force_cloud_failed"
+
+
+@pytest.mark.asyncio
 async def test_route_query_stream_force_cloud_does_not_use_local_branch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -523,6 +706,43 @@ async def test_route_query_stream_force_cloud_does_not_use_local_branch(
         )
     ]
     assert chunks == ["Cloud stream response"]
+
+
+@pytest.mark.asyncio
+async def test_route_stream_force_cloud_skips_local_health_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    В route_stream режим force_cloud также не должен запускать local health-check.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "force_cloud"
+
+    async def must_not_call_check_local_health(*args, **kwargs):
+        raise AssertionError("check_local_health не должен вызываться в force_cloud stream")
+
+    async def fake_call_gemini(*args, **kwargs):
+        return "Cloud stream response without local probe"
+
+    monkeypatch.setattr(router, "check_local_health", must_not_call_check_local_health)
+    monkeypatch.setattr(
+        router,
+        "_build_cloud_candidates",
+        lambda *args, **kwargs: ["google/gemini-2.5-flash"],
+    )
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    chunks = [
+        chunk
+        async for chunk in router.route_stream(
+            prompt="force cloud stream no local probe",
+            task_type="chat",
+            context=[],
+            chat_type="private",
+            is_owner=True,
+        )
+    ]
+    assert chunks == ["Cloud stream response without local probe"]
 
 
 @pytest.mark.asyncio

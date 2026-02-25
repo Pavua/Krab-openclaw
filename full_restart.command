@@ -20,6 +20,14 @@ DRY_RUN="${FULL_RESTART_DRY_RUN:-0}"
 
 cd "$PROJECT_ROOT"
 
+# Критично: перед запуском ядра принудительно загружаем .env и
+# перекрываем внешние переменные окружения (старые ключи/URL).
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+  set -a
+  source "$PROJECT_ROOT/.env"
+  set +a
+fi
+
 find_core_pids() {
   local pids
   pids="$(
