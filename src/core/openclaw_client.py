@@ -1019,10 +1019,10 @@ class OpenClawClient:
             return False
         return self._looks_like_models_payload(models_payload)
 
-    def _probe_gateway_cli_health(self, timeout: int = 8, cache_ttl_sec: int = 5) -> bool:
+    def _probe_gateway_cli_health(self, timeout: int = 15, cache_ttl_sec: int = 25) -> bool:
         """
         Fallback-проверка runtime через CLI, если HTTP-роуты отдают control UI HTML.
-        Кэшируем коротко, чтобы не запускать subprocess на каждом health-пуле.
+        Кэшируем результат, чтобы не запускать тяжёлый subprocess на каждом health-пуле.
         """
         now_ts = time.time()
         if self._health_cli_probe_cache:

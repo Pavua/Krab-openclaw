@@ -48,8 +48,10 @@ def _timeout_from_env(name: str, default_value: int) -> int:
 
 # В auto-reply держим ограничение по времени ощутимо ниже, чем в !think/agent-flow,
 # чтобы пользователь не видел «🤔 Думаю…» по 10-15 минут при деградации cloud.
-AUTO_REPLY_TIMEOUT_SECONDS = _timeout_from_env("AUTO_REPLY_TIMEOUT_SECONDS", 240)
-THINK_TIMEOUT_SECONDS = _timeout_from_env("THINK_TIMEOUT_SECONDS", 420)
+# Для тяжёлых локальных моделей (10-20+ GB) генерация может занимать минуты.
+# Держим щадящие дефолты, чтобы не обрывать ответ преждевременно.
+AUTO_REPLY_TIMEOUT_SECONDS = _timeout_from_env("AUTO_REPLY_TIMEOUT_SECONDS", 600)
+THINK_TIMEOUT_SECONDS = _timeout_from_env("THINK_TIMEOUT_SECONDS", 1200)
 AUTO_REPLY_CONTEXT_TOKENS = _timeout_from_env("AUTO_REPLY_CONTEXT_TOKENS", 3000)
 AUTO_REPLY_BUSY_NOTICE_SECONDS = _timeout_from_env("AUTO_REPLY_BUSY_NOTICE_SECONDS", 12)
 AUTO_REPLY_QUEUE_ENABLED = str(os.getenv("AUTO_REPLY_QUEUE_ENABLED", "1")).strip().lower() in {
@@ -79,10 +81,10 @@ AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS = float(
     str(
         os.getenv(
             "AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS",
-            str(max(AUTO_REPLY_TIMEOUT_SECONDS + 60, 300)),
+            str(max(AUTO_REPLY_TIMEOUT_SECONDS + 180, 900)),
         )
     ).strip()
-    or str(max(AUTO_REPLY_TIMEOUT_SECONDS + 60, 300))
+    or str(max(AUTO_REPLY_TIMEOUT_SECONDS + 180, 900))
 )
 AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED = str(
     os.getenv("AUTO_REPLY_GROUP_AUTHOR_ISOLATION_ENABLED", "1")
@@ -150,6 +152,7 @@ class ChatQueuedTask:
 
     status: pending | started | timeout | done | failed
     started_at: timestamp старта обработки (для диагностики зависаний).
+    channel_type: тип канала (R17 telemetry) — private | group | channel | unknown
     """
 
     chat_id: int
@@ -161,6 +164,8 @@ class ChatQueuedTask:
     on_final_failure: Callable[[BaseException], Awaitable[None]] | None = None
     status: str = "pending"
     started_at: float = 0.0
+    # R17: Тип канала для телеметрии по каналам
+    channel_type: str = "unknown"
 
 
 class ChatWorkQueue:
@@ -178,6 +183,11 @@ class ChatWorkQueue:
         self._processed = 0
         self._failed = 0
         self._retried = 0
+        # R17: Reply Completion Guard — счётчик незавершённых ответов
+        self._reply_incomplete_guard_triggered = 0
+        # R17: Телеметрия по типам каналов
+        self._processed_by_channel: dict[str, int] = {}
+        self._failed_by_channel: dict[str, int] = {}
 
     def set_max_per_chat(self, value: int) -> None:
         self.max_per_chat = max(1, int(value))
@@ -220,10 +230,14 @@ class ChatWorkQueue:
                 )
                 task.status = "done"
                 self._processed += 1
+                # R17: Телеметрия по типу канала
+                ch = getattr(task, "channel_type", "unknown") or "unknown"
+                self._processed_by_channel[ch] = self._processed_by_channel.get(ch, 0) + 1
                 logger.debug(
                     "queue: задача обработана успешно",
                     chat_id=chat_id,
                     message_id=task.message_id,
+                    channel_type=ch,
                     processed=self._processed,
                 )
             except asyncio.TimeoutError as timeout_exc:
@@ -233,6 +247,10 @@ class ChatWorkQueue:
                 # видел вечное «🤔 Думаю...» без финального ответа.
                 task.status = "timeout"
                 self._failed += 1
+                # R17: Reply Completion Guard — фиксируем незавершённый ответ
+                self._reply_incomplete_guard_triggered += 1
+                ch = getattr(task, "channel_type", "unknown") or "unknown"
+                self._failed_by_channel[ch] = self._failed_by_channel.get(ch, 0) + 1
                 elapsed = time.time() - task.started_at if task.started_at else 0.0
                 logger.warning(
                     "queue: задача истекла по таймауту — вызываем on_final_failure",
@@ -241,6 +259,7 @@ class ChatWorkQueue:
                     attempt=task.attempt,
                     elapsed_seconds=f"{elapsed:.1f}",
                     timeout_seconds=AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS,
+                    reply_incomplete_guard_triggered=self._reply_incomplete_guard_triggered,
                 )
                 if task.on_final_failure:
                     try:
@@ -267,11 +286,16 @@ class ChatWorkQueue:
                 else:
                     task.status = "failed"
                     self._failed += 1
+                    # R17: Reply Completion Guard — финальный провал после всех попыток
+                    self._reply_incomplete_guard_triggered += 1
+                    ch = getattr(task, "channel_type", "unknown") or "unknown"
+                    self._failed_by_channel[ch] = self._failed_by_channel.get(ch, 0) + 1
                     logger.exception(
                         "Ошибка обработки задачи в очереди",
                         chat_id=chat_id,
                         message_id=task.message_id,
                         attempt=task.attempt,
+                        reply_incomplete_guard_triggered=self._reply_incomplete_guard_triggered,
                     )
                     if task.on_final_failure:
                         try:
@@ -314,6 +338,8 @@ class ChatWorkQueue:
             "processed": int(self._processed),
             "failed": int(self._failed),
             "retried": int(self._retried),
+            # R17: Reply Completion Guard — счётчик незавершённых ответов
+            "reply_incomplete_guard_triggered": int(self._reply_incomplete_guard_triggered),
             "active_chats": len(self._workers),
             "queue_lengths": queue_lengths,
             "queued_total": int(sum(queue_lengths.values())),
@@ -321,6 +347,9 @@ class ChatWorkQueue:
             "max_retries": int(self.max_retries),
             "active_tasks": active_tasks_detail,
             "task_timeout_seconds": float(AUTO_REPLY_QUEUE_TASK_TIMEOUT_SECONDS),
+            # R17: Телеметрия по типам каналов
+            "processed_by_channel": dict(self._processed_by_channel),
+            "failed_by_channel": dict(self._failed_by_channel),
         }
 
 
@@ -491,6 +520,7 @@ def _sanitize_model_output(text: str, router=None) -> str:
     
     import re
     cleaned = str(text)
+    cleaned = re.sub(r"\[\[reply_to:\d+\]\]\s*", "", cleaned, flags=re.IGNORECASE)
     # Удаляем всё в формате <|...|>
     cleaned = re.sub(r"<\|.*?\|>", "", cleaned)
     # Удаляем классические токены
@@ -1365,9 +1395,25 @@ def _drop_tool_artifact_blocks(text: str) -> tuple[str, bool]:
         return "", False
 
     original = payload
+    # Жёстко вырезаем полноценные tool-schema блоки.
+    payload = re.sub(r"<tools>.*?</tools>", "", payload, flags=re.IGNORECASE | re.DOTALL)
+    payload = re.sub(r"\[\[reply_to:\d+\]\]\s*", "", payload, flags=re.IGNORECASE)
     # Удаляем маркеры box, сохраняя потенциально полезный текст.
     payload = payload.replace("<|begin_of_box|>", "")
     payload = payload.replace("<|end_of_box|>", "")
+    # Универсальная очистка action-json, даже если action отличается от sessions_send.
+    payload = re.sub(
+        r"\{[^{}\n]*\"action\"\s*:\s*\"[^\"]+\"[^{}\n]*\}",
+        "",
+        payload,
+        flags=re.IGNORECASE,
+    )
+    payload = re.sub(
+        r"\{[^{}\n]*\\u[0-9a-fA-F]{4}[^{}\n]*\"action\"\s*:\s*\"[^\"]+\"[^{}\n]*\}",
+        "",
+        payload,
+        flags=re.IGNORECASE,
+    )
 
     blocked_fragments = (
         "begin_of_box",
@@ -1381,6 +1427,10 @@ def _drop_tool_artifact_blocks(text: str) -> tuple[str, bool]:
         "sessions_send",
         "\"action\": \"sessions_send\"",
         "\"action\":\"sessions_send\"",
+        "\"action\":",
+        "\"action\" :",
+        "\"parameters\":",
+        "\"parameters\" :",
         "\"sessionkey\"",
         "\"default channel",
         "default channel id",
@@ -1389,6 +1439,11 @@ def _drop_tool_artifact_blocks(text: str) -> tuple[str, bool]:
         "## agent list",
         "### default agents",
         "</tool_call>",
+        "<tools>",
+        "</tools>",
+        "you may call one or more functions",
+        "you can also use the session_status function",
+        "\"required\": [\"action\"]",
     )
     noisy_line_patterns = (
         r"^\s*\"?(name|description|icon|color|sound|volume|timeout|type|id)\"?\s*:\s*\"?whatsapp\"?",
@@ -1405,6 +1460,12 @@ def _drop_tool_artifact_blocks(text: str) -> tuple[str, bool]:
         if any(fragment in low for fragment in blocked_fragments):
             removed = True
             continue
+        if low.startswith("включено логирован") and "пауза 5 минут" in low:
+            removed = True
+            continue
+        if "\"action\"" in low and "not found" in low:
+            removed = True
+            continue
         if any(re.search(pattern, low) for pattern in noisy_line_patterns):
             removed = True
             continue
@@ -1415,6 +1476,40 @@ def _drop_tool_artifact_blocks(text: str) -> tuple[str, bool]:
     if not payload:
         return "", original != ""
     return payload, (removed or payload != original)
+
+
+def _drop_unverified_autonomy_claims(text: str) -> tuple[str, bool]:
+    """
+    Удаляет неподтверждённые обещания автономных действий и расписаний
+    (типичный hallucination-паттерн в обычном диалоге).
+    """
+    if not text:
+        return "", False
+
+    blocked_patterns = (
+        r"\bбуду\b.*\bкаждые\s+\d+\s*(?:минут|мин|час|часа|часов)\b",
+        r"\bчерез\s+\d+\s*(?:минут|мин|час|часа|часов)\b.*\b(?:выложу|отправлю|пришлю|сделаю)\b",
+        r"\bзадача\s+активна\b.*\bбуду\b",
+        r"\bя\s+начал\b.*\bавтоматизаци",
+        r"\bпроцесс\s+будет\s+запущен\b",
+    )
+    kept: list[str] = []
+    removed = False
+    for line in str(text).splitlines():
+        low = line.strip().lower()
+        if any(re.search(pattern, low) for pattern in blocked_patterns):
+            removed = True
+            continue
+        kept.append(line)
+
+    payload = "\n".join(kept).strip()
+    payload = re.sub(r"\n{3,}", "\n\n", payload)
+    if not payload and removed:
+        payload = (
+            "⚠️ Я не запускаю автономные задачи по таймеру из обычного сообщения. "
+            "Сформулируй конкретное действие здесь и сейчас."
+        )
+    return payload, removed
 
 
 def _looks_like_internal_dump(text: str) -> bool:
@@ -1437,6 +1532,11 @@ def _looks_like_internal_dump(text: str) -> bool:
         "## agent list",
         "no_reply",
         "heartbeat_ok",
+        "<tools>",
+        "</tools>",
+        "you may call one or more functions",
+        "session_status function",
+        "required\": [\"action\"]",
     )
     marker_hits = sum(1 for marker in suspicious_markers if marker in low)
 
@@ -2216,6 +2316,11 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             "Не придумывай результаты запуска команд/обновлений; если чего-то не выполнял — скажи это прямо.\n\n"
             f"{final_prompt}"
         )
+    final_prompt = (
+        "Не обещай автономные периодические действия (например, «каждые 10 минут буду ...»), "
+        "если пользователь не запустил отдельную команду планировщика/автоматизации.\n\n"
+        f"{final_prompt}"
+    )
     if is_voice_response_needed:
         final_prompt = (
             "Ответь строго на русском языке, дружелюбно и естественно.\n"
@@ -2386,7 +2491,10 @@ async def _process_auto_reply(client, message: Message, deps: dict):
             if not full_response:
                 raise e
             else:
-                 full_response += f"\n\n⚠️ [Стрим прерван: {e}]"
+                full_response += (
+                    "\n\n⚠️ Поток ответа был прерван. "
+                    "Показываю часть, которую удалось получить до сбоя."
+                )
 
     try:
         await asyncio.wait_for(run_streaming(), timeout=AUTO_REPLY_TIMEOUT_SECONDS)
@@ -2398,7 +2506,18 @@ async def _process_auto_reply(client, message: Message, deps: dict):
     except Exception as e:
         logger.error(f"Auto-reply critical failure: {e}")
         if not full_response:
-            await reply_msg.edit_text(f"❌ Ошибка: {e}")
+            raw_error = _sanitize_model_output(str(e), router)
+            raw_error, _ = _drop_tool_artifact_blocks(raw_error)
+            user_error, rewritten = _normalize_runtime_error_message_for_user(raw_error, router)
+            if not user_error:
+                user_error = (
+                    "⚠️ Временная ошибка AI: не удалось сформировать ответ. "
+                    "Повтори запрос через 3-5 секунд."
+                )
+            elif not rewritten and is_owner_sender and raw_error:
+                safe_tail = str(raw_error).strip()[:280]
+                user_error = f"⚠️ Ошибка AI: {safe_tail}"
+            await reply_msg.edit_text(user_error)
             return
 
     if (
@@ -2456,6 +2575,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
         clean_display_text = _sanitize_model_output(full_response, router)
         clean_display_text, removed_service_phrases = _drop_service_busy_phrases(clean_display_text)
         clean_display_text, removed_tool_artifacts = _drop_tool_artifact_blocks(clean_display_text)
+        clean_display_text, removed_unverified_autonomy_claims = _drop_unverified_autonomy_claims(clean_display_text)
         clean_display_text, removed_english_scaffold = _drop_english_scaffold_when_russian_expected(
             clean_display_text,
             prefer_russian=prefer_russian_response,
@@ -2494,6 +2614,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 corrected_vision_consistency,
                 removed_service_phrases,
                 removed_tool_artifacts,
+                removed_unverified_autonomy_claims,
                 removed_english_scaffold,
                 removed_numbered_duplicates,
             ]
@@ -2508,6 +2629,7 @@ async def _process_auto_reply(client, message: Message, deps: dict):
                 corrected_vision_consistency=bool(corrected_vision_consistency),
                 removed_service_phrases=bool(removed_service_phrases),
                 removed_tool_artifacts=bool(removed_tool_artifacts),
+                removed_unverified_autonomy_claims=bool(removed_unverified_autonomy_claims),
                 removed_english_scaffold=bool(removed_english_scaffold),
                 removed_numbered_duplicates=bool(removed_numbered_duplicates),
             )

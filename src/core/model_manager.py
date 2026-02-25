@@ -1643,9 +1643,10 @@ class ModelRouter:
                 # и только потом fallback на legacy owner-override из env.
                 return self.models.get("pro", self.chat_model_owner_private_important or self.models["chat"])
             if self.chat_model_owner_private:
-                # Для обычного owner-private приоритет у runtime slot `chat`,
-                # чтобы настройки из web-панели применялись сразу.
-                return self.models.get("chat", self.chat_model_owner_private)
+                # Для обычного owner-private сохраняем legacy-поведение:
+                # если задан отдельный owner-private override, используем его.
+                # Runtime/UI по-прежнему может переопределить это через preferred_model.
+                return self.chat_model_owner_private
 
         # Для групповых чатов можно выделить отдельную более бюджетную модель.
         if self._is_group_chat(chat_type) and self.chat_model_group:
