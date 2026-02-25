@@ -1007,6 +1007,18 @@ class ModelRouter:
                 "summary": "модель не найдена в текущем регионе/аккаунте",
                 "retryable": False,
             }
+        if (
+            "context window too small" in lowered
+            or "maximum context length" in lowered
+            or "context length exceeded" in lowered
+            or "prompt is too long" in lowered
+            or "minimum is" in lowered and "tokens" in lowered
+        ):
+            return {
+                "code": "context_limit",
+                "summary": "превышен лимит контекста модели — сократи запрос или историю диалога",
+                "retryable": False,
+            }
 
         if "fail-fast budget" in lowered:
             return {
@@ -1199,6 +1211,8 @@ class ModelRouter:
             return "quota"
         if code == "model_not_found":
             return "model_not_found"
+        if code == "context_limit":
+            return "context_limit"
         if code in {"network_error", "timeout", "network"}:
             return "network"
         return "unknown"
@@ -3031,90 +3045,90 @@ class ModelRouter:
                 self.config,
                 label=f"route_query:{route_reason}",
             )
-
-            for i, candidate in enumerate(
-                self._build_cloud_candidates(
-                    task_type=task_type,
-                    profile=profile,
-                    preferred_model=cloud_preferred,
-                    chat_type=chat_type,
-                    is_owner=is_owner,
-                    prompt=prompt,
-                )
-            ):
-                provider = candidate.split("/", 1)[0]
-                preflight_error = self._check_cloud_preflight(provider)
-                if preflight_error:
-                    logger.warning("Cloud preflight rejected candidate", candidate=candidate, error=preflight_error)
-                    if force_cloud_mode:
-                        return "preflight_blocked", f"❌ {preflight_error}"
-                    continue
-
-                if "-exp" in candidate and "gemini-2.0" in candidate:
-                    candidate = candidate.replace("-exp", "")
-
-                # [R24] Заменяем ручной deadline на budget.checkpoint()
-                try:
-                    budget.checkpoint(f"candidate_{i}:{candidate}")
-                except BudgetExceededError as exc:
-                    self.last_cloud_error = (
-                        f"Cloud fail-fast budget exceeded ({exc.elapsed:.1f}s/{exc.total:.1f}s)"
+            async with budget:
+                for i, candidate in enumerate(
+                    self._build_cloud_candidates(
+                        task_type=task_type,
+                        profile=profile,
+                        preferred_model=cloud_preferred,
+                        chat_type=chat_type,
+                        is_owner=is_owner,
+                        prompt=prompt,
                     )
-                    logger.warning(
-                        "Cloud routing stopped by budget guard",
-                        elapsed=round(exc.elapsed, 1),
-                        total=exc.total,
-                        attempt=i + 1,
-                        reason=route_reason,
-                    )
-                    break
-
-                logger.info("Routing to CLOUD", model=candidate, profile=profile, reason=route_reason)
-                max_retries_cloud = 0 if force_cloud_mode else (1 if i == 0 else 0)
-                # [R24] Используем effective_call_timeout() из бюджета
-                call_timeout = int(budget.effective_call_timeout())
-
-                # R16: Tiered Fallback Logic (Free -> Paid)
-                # По умолчанию OpenClawClient стартует с "free" (если ключи в JSON)
-                response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
-
-                if self._is_runtime_error_message(response):
-                    # Если ошибка похожа на проблему квоты или таймаута — пробуем переключить тир
-                    if any(x in str(response).lower() for x in ["quota", "429", "timeout", "exhausted"]):
-                        if self._switch_cloud_tier("paid"):
-                            logger.info("💰 Tier Fallback: Free key exhausted, switching to PAID")
-                            # Повторяем вызов с новым тиром
-                            response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
-
-                    if self._is_runtime_error_message(response):
-                        logger.warning("Cloud candidate %s failed", candidate, error=response)
-                        self._mark_cloud_soft_cap_if_needed(str(response))
-                        self.last_cloud_error = str(response)
-                        self.last_cloud_model = candidate
-                        # [R24] Anti-flap: фиксируем ошибку cloud канала
-                        self.channel_state.record_failure("cloud")
-                        if self._is_fatal_cloud_auth_error(response):
-                            logger.error(
-                                "Cloud routing aborted: fatal auth/billing error",
-                                model=candidate,
-                                error=str(response)[:280],
-                            )
-                            break
+                ):
+                    provider = candidate.split("/", 1)[0]
+                    preflight_error = self._check_cloud_preflight(provider)
+                    if preflight_error:
+                        logger.warning("Cloud preflight rejected candidate", candidate=candidate, error=preflight_error)
+                        if force_cloud_mode:
+                            return "preflight_blocked", f"❌ {preflight_error}"
                         continue
 
-                # Cloud Success Guardrail
-                if not response or len(response.strip()) < 2:
-                    logger.warning("Cloud candidate %s returned empty/junk", candidate)
-                    continue
+                    if "-exp" in candidate and "gemini-2.0" in candidate:
+                        candidate = candidate.replace("-exp", "")
 
-                # Если включен sticky paid-tier, не откатываемся на free после успеха.
-                if not self.cloud_tier_sticky_on_paid:
-                    self._switch_cloud_tier("free")
-                self.last_cloud_error = None
-                self.last_cloud_model = candidate
-                # [R24] Anti-flap: фиксируем успех cloud канала
-                self.channel_state.record_success("cloud")
-                return candidate, response
+                    # [R24] Заменяем ручной deadline на budget.checkpoint()
+                    try:
+                        budget.checkpoint(f"candidate_{i}:{candidate}")
+                    except BudgetExceededError as exc:
+                        self.last_cloud_error = (
+                            f"Cloud fail-fast budget exceeded ({exc.elapsed:.1f}s/{exc.total:.1f}s)"
+                        )
+                        logger.warning(
+                            "Cloud routing stopped by budget guard",
+                            elapsed=round(exc.elapsed, 1),
+                            total=exc.total,
+                            attempt=i + 1,
+                            reason=route_reason,
+                        )
+                        break
+
+                    logger.info("Routing to CLOUD", model=candidate, profile=profile, reason=route_reason)
+                    max_retries_cloud = 0 if force_cloud_mode else (1 if i == 0 else 0)
+                    # [R24] Используем effective_call_timeout() из бюджета
+                    call_timeout = int(budget.effective_call_timeout())
+
+                    # R16: Tiered Fallback Logic (Free -> Paid)
+                    # По умолчанию OpenClawClient стартует с "free" (если ключи в JSON)
+                    response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
+
+                    if self._is_runtime_error_message(response):
+                        # Если ошибка похожа на проблему квоты или таймаута — пробуем переключить тир
+                        if any(x in str(response).lower() for x in ["quota", "429", "timeout", "exhausted"]):
+                            if self._switch_cloud_tier("paid"):
+                                logger.info("💰 Tier Fallback: Free key exhausted, switching to PAID")
+                                # Повторяем вызов с новым тиром
+                                response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
+
+                        if self._is_runtime_error_message(response):
+                            logger.warning("Cloud candidate %s failed", candidate, error=response)
+                            self._mark_cloud_soft_cap_if_needed(str(response))
+                            self.last_cloud_error = str(response)
+                            self.last_cloud_model = candidate
+                            # [R24] Anti-flap: фиксируем ошибку cloud канала
+                            self.channel_state.record_failure("cloud")
+                            if self._is_fatal_cloud_auth_error(response):
+                                logger.error(
+                                    "Cloud routing aborted: fatal auth/billing error",
+                                    model=candidate,
+                                    error=str(response)[:280],
+                                )
+                                break
+                            continue
+
+                    # Cloud Success Guardrail
+                    if not response or len(response.strip()) < 2:
+                        logger.warning("Cloud candidate %s returned empty/junk", candidate)
+                        continue
+
+                    # Если включен sticky paid-tier, не откатываемся на free после успеха.
+                    if not self.cloud_tier_sticky_on_paid:
+                        self._switch_cloud_tier("free")
+                    self.last_cloud_error = None
+                    self.last_cloud_model = candidate
+                    # [R24] Anti-flap: фиксируем успех cloud канала
+                    self.channel_state.record_success("cloud")
+                    return candidate, response
 
             return "all_candidates_failed", self.last_cloud_error or "Cloud API failure"
 

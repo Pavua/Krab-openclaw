@@ -89,6 +89,13 @@ def test_categorize_cloud_error_unknown_fallback(tmp_path: Path) -> None:
     assert router._categorize_cloud_error("Unexpected error XYZ-9999 from server.") == "unknown"
 
 
+def test_categorize_cloud_error_context_limit(tmp_path: Path) -> None:
+    """Слишком длинный контекст модели → context_limit."""
+    router = _router(tmp_path)
+    msg = "Model context window too small (12000 tokens). Minimum is 16000."
+    assert router._categorize_cloud_error(msg) == "context_limit"
+
+
 def test_categorize_cloud_error_empty_text(tmp_path: Path) -> None:
     """Пустой текст → unknown (не ломается)."""
     router = _router(tmp_path)

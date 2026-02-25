@@ -96,7 +96,7 @@ class RequestBudgetGuard:
         """
         cfg = config or {}
         try:
-            total = max(5, float(cfg.get("CLOUD_FAIL_FAST_BUDGET_SECONDS", 40)))
+            total = max(1, float(cfg.get("CLOUD_FAIL_FAST_BUDGET_SECONDS", 40)))
         except (ValueError, TypeError):
             total = 40.0
         if override_total is not None:
