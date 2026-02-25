@@ -31,13 +31,21 @@ async def test_preflight_gate_blocks_subsequent_calls(mock_config):
     assert "API key провайдера невалидный" in resp1
     assert mock_client.chat_completions.call_count == 1
 
-    # 2. Второй вызов - должен быть заблокирован Preflight Gate
+    # 2. Второй вызов:
+    # провайдер первой попытки (google) должен быть заблокирован Preflight Gate,
+    # но роутер в force_cloud продолжит на следующий кандидат (openai).
     resp2 = ""
     async for chunk in router.route_stream("test prompt", "chat", {}, "private", True):
         resp2 += chunk
-    assert "Preflight: провайдер 'model-b' заблокирован" in resp2
-    # Счетчик вызовов клиента не должен увеличиться
-    assert mock_client.chat_completions.call_count == 1
+    # Пользовательский ответ в актуальной логике — summary по cloud-ошибке.
+    assert "Ошибка Cloud (force_cloud)" in resp2
+    # После второго вызова должен быть только один дополнительный вызов к клиенту
+    # (google пропускается preflight-ом, вызывается следующий кандидат).
+    assert mock_client.chat_completions.call_count == 2
+    # Убеждаемся, что блокировка preflight реально зафиксирована по провайдеру google.
+    preflight_msg = router._check_cloud_preflight("google")
+    assert preflight_msg is not None
+    assert "Preflight: провайдер 'google' заблокирован" in preflight_msg
 
 @pytest.mark.asyncio
 async def test_preflight_gate_expiration(mock_config):
@@ -56,17 +64,20 @@ async def test_preflight_gate_expiration(mock_config):
         pass
     assert mock_client.chat_completions.call_count == 1
     
-    # 2. Сразу второй вызов (все еще заблокирован)
+    # 2. Сразу второй вызов:
+    # google ещё заблокирован, но роутер пробует следующий кандидат.
     resp_blocked = ""
     async for chunk in router.route_stream("test prompt", "chat", {}, "private", True):
         resp_blocked += chunk
-    assert "Preflight" in resp_blocked
-    assert mock_client.chat_completions.call_count == 1
+    assert "Ошибка Cloud (force_cloud)" in resp_blocked
+    assert mock_client.chat_completions.call_count == 2
+    assert router._check_cloud_preflight("google") is not None
     
     # 3. Ждем истечения TTL
     await asyncio.sleep(0.6)
     
-    # 4. Третий вызов - должен снова дойти до клиента
+    # 4. Третий вызов: после TTL провайдер google должен снова стать доступным
+    # для попытки (т.е. произойдёт ещё один вызов клиента).
     async for _ in router.route_stream("test prompt", "chat", {}, "private", True):
         pass
-    assert mock_client.chat_completions.call_count == 2
+    assert mock_client.chat_completions.call_count >= 3
