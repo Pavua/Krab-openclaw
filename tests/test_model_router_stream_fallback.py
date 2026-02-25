@@ -519,6 +519,49 @@ async def test_route_stream_force_cloud_skips_connection_error_and_uses_next_can
 
 
 @pytest.mark.asyncio
+async def test_route_stream_detects_runtime_error_text_chunk_and_fallbacks_to_cloud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Регрессия: LM Studio может вернуть runtime-ошибку как текстовый chunk
+    (`400 No models loaded...`) вместо StreamFailure. В этом случае роутер
+    обязан НЕ отдавать этот chunk пользователю и переключиться в cloud.
+    """
+    router = _router(tmp_path, fallback_enabled=True)
+    router.force_mode = "auto"
+    router.is_local_available = True
+    router.active_local_model = "zai-org/glm-4.6v-flash"
+
+    async def fake_check_local_health():
+        router.is_local_available = True
+        return True
+
+    async def runtime_error_chunk_stream(payload):
+        yield "400 No models loaded. Please load a model in the developer page."
+
+    async def fake_call_gemini(*args, **kwargs):
+        return "Cloud fallback после runtime-ошибки local stream"
+
+    monkeypatch.setattr(router, "check_local_health", fake_check_local_health)
+    monkeypatch.setattr(router.stream_client, "stream_chat", runtime_error_chunk_stream)
+    monkeypatch.setattr(router, "_build_cloud_candidates", lambda *args, **kwargs: ["google/gemini-2.5-flash"])
+    monkeypatch.setattr(router, "_call_gemini", fake_call_gemini)
+
+    chunks = [
+        chunk
+        async for chunk in router.route_stream(
+            prompt="Проверка связи",
+            task_type="chat",
+            context=[],
+            chat_type="private",
+            is_owner=True,
+        )
+    ]
+
+    assert chunks == ["Cloud fallback после runtime-ошибки local stream"]
+
+
+@pytest.mark.asyncio
 async def test_route_query_force_cloud_does_not_trigger_local_smart_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

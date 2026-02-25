@@ -3616,9 +3616,20 @@ class ModelRouter:
             return
 
         emitted_chunks = 0
+        local_probe_buffer = ""
         try:
             async with self._acquire_local_slot(local_model_id):
                 async for chunk in self.stream_client.stream_chat(payload):
+                    # Guardrail: часть рантайм-ошибок LM Studio может приходить как
+                    # обычный текстовый chunk (вместо HTTP/SSE ошибки). В этом случае
+                    # нельзя отдавать сырую ошибку в канал — принудительно уходим в cloud.
+                    if chunk:
+                        local_probe_buffer = (local_probe_buffer + str(chunk))[:512]
+                        if emitted_chunks <= 2 and self._is_runtime_error_message(local_probe_buffer):
+                            raise StreamFailure(
+                                "local_runtime_error",
+                                f"local stream returned runtime error text: {local_probe_buffer[:240]}",
+                            )
                     emitted_chunks += 1
                     yield chunk
                 if emitted_chunks > 0:
