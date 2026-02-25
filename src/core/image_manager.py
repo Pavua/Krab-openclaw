@@ -16,6 +16,7 @@ import asyncio
 import copy
 import json
 import os
+import platform
 import subprocess
 import time
 import uuid
@@ -420,22 +421,65 @@ class ImageManager:
             parsed = urlparse(self.comfy_url)
             listen_host = parsed.hostname or "127.0.0.1"
             listen_port = str(parsed.port or 8188)
+            force_cpu = str(self._cfg(self.config, "COMFY_FORCE_CPU", "0")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            low_vram = str(self._cfg(self.config, "COMFY_LOWVRAM", "1")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            disable_custom_nodes = str(self._cfg(self.config, "COMFY_DISABLE_ALL_CUSTOM_NODES", "1")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            reserve_vram_gb = str(self._cfg(self.config, "COMFY_RESERVE_VRAM_GB", "8")).strip()
+            cache_ram_gb = str(self._cfg(self.config, "COMFY_CACHE_RAM_GB", "3")).strip()
+
+            cmd = [
+                str(python_exec),
+                "main.py",
+                "--listen",
+                listen_host,
+                "--port",
+                listen_port,
+                "--reserve-vram",
+                reserve_vram_gb,
+                "--cache-ram",
+                cache_ram_gb,
+            ]
+            if low_vram:
+                cmd.append("--lowvram")
+            if force_cpu:
+                cmd.append("--cpu")
+            # На macOS Apple Silicon по умолчанию НЕ форсим --cpu,
+            # чтобы Comfy мог использовать Metal/MPS.
+            if disable_custom_nodes:
+                cmd.extend(
+                    [
+                        "--disable-all-custom-nodes",
+                        "--whitelist-custom-nodes",
+                        "ComfyUI-GGUF",
+                    ]
+                )
+
+            env = os.environ.copy()
+            if platform.system().lower() == "darwin":
+                env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
             self._comfy_process = subprocess.Popen(
-                [
-                    str(python_exec),
-                    "main.py",
-                    "--listen",
-                    listen_host,
-                    "--port",
-                    listen_port,
-                    "--disable-all-custom-nodes",
-                    "--whitelist-custom-nodes",
-                    "ComfyUI-GGUF",
-                ],
+                cmd,
                 cwd=str(comfy_dir),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=env,
             )
             self._comfy_auto_started = True
             return True
@@ -505,6 +549,53 @@ class ImageManager:
                 ) as resp:
                     if resp.status != 200:
                         err_text = await resp.text()
+                        # Совместимость: старые workflow на CheckpointLoaderGGUF невалидны
+                        # для новых сборок Comfy/узлов. Строим безопасный fallback-граф.
+                        if self._should_use_compat_flux_fallback(err_text):
+                            compat_prompt = self._build_compat_flux_prompt(prompt=prompt, spec=spec)
+                            async with session.post(
+                                f"{self.comfy_url}/prompt",
+                                json={"prompt": compat_prompt, "client_id": client_id},
+                            ) as compat_resp:
+                                if compat_resp.status != 200:
+                                    return {
+                                        "ok": False,
+                                        "error": f"comfy_submit_failed:{compat_resp.status}:{await compat_resp.text()}",
+                                    }
+                                payload = await compat_resp.json(content_type=None)
+                                prompt_id = payload.get("prompt_id")
+                                if not prompt_id:
+                                    return {"ok": False, "error": "comfy_prompt_id_missing"}
+                                # Идём дальше в polling /history с compat prompt_id.
+                                started = time.monotonic()
+                                image_meta = None
+                                while (time.monotonic() - started) < self.comfy_timeout_sec:
+                                    async with session.get(f"{self.comfy_url}/history/{prompt_id}") as hist_resp:
+                                        if hist_resp.status == 200:
+                                            history_payload = await hist_resp.json(content_type=None)
+                                            image_meta = self._extract_image_meta_from_history(history_payload, prompt_id)
+                                            if image_meta:
+                                                break
+                                    await asyncio.sleep(self.comfy_poll_interval)
+                                if not image_meta:
+                                    return {"ok": False, "error": "comfy_timeout_waiting_image"}
+                                query = (
+                                    f"filename={image_meta['filename']}"
+                                    f"&subfolder={image_meta.get('subfolder', '')}"
+                                    f"&type={image_meta.get('type', 'output')}"
+                                )
+                                async with session.get(f"{self.comfy_url}/view?{query}") as view_resp:
+                                    if view_resp.status != 200:
+                                        return {"ok": False, "error": f"comfy_view_failed:{view_resp.status}"}
+                                    image_bytes = await view_resp.read()
+                                file_path = self.output_dir / f"comfy_{uuid.uuid4().hex[:10]}.png"
+                                file_path.write_bytes(image_bytes)
+                                logger.info(
+                                    "Локальная генерация через ComfyUI завершена (compat workflow)",
+                                    path=str(file_path),
+                                    workflow=str(workflow_path),
+                                )
+                                return {"ok": True, "path": str(file_path)}
                         # Self-heal: если нода GGUF недоступна в текущем runtime,
                         # делаем 1 форс-перезапуск ComfyUI и повторяем submit.
                         if (
@@ -565,6 +656,120 @@ class ImageManager:
         file_path.write_bytes(image_bytes)
         logger.info("Локальная генерация через ComfyUI завершена", path=str(file_path), workflow=str(workflow_path))
         return {"ok": True, "path": str(file_path)}
+
+    def _should_use_compat_flux_fallback(self, error_text: str) -> bool:
+        """
+        Определяет, что нужен совместимый fallback-граф для новых Comfy-сборок.
+        """
+        low = str(error_text or "").lower()
+        return any(
+            marker in low
+            for marker in (
+                "checkpointloadergguf does not exist",
+                "prompt outputs failed validation",
+                "required input is missing",
+                "server got itself in trouble",
+            )
+        )
+
+    def _build_compat_flux_prompt(self, prompt: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Строит совместимый API-граф ComfyUI для FLUX через стандартный CheckpointLoader.
+
+        Почему:
+        - старые workflow в проекте используют `CheckpointLoaderGGUF`, который
+          может отсутствовать в новых рантаймах;
+        - часть старых графов не содержит `latent_image` для `KSampler`.
+        """
+        ckpt_name = str(
+            self._cfg(self.config, "COMFY_FLUX_CHECKPOINT", "FLUX1/flux1-dev-fp8.safetensors")
+        ).strip()
+        ckpt_config = str(
+            self._cfg(self.config, "COMFY_FLUX_CHECKPOINT_CONFIG", "v1-inference.yaml")
+        ).strip()
+        width = int(self._cfg(self.config, "COMFY_COMPAT_WIDTH", 832))
+        height = int(self._cfg(self.config, "COMFY_COMPAT_HEIGHT", 1216))
+        steps = int(self._cfg(self.config, "COMFY_COMPAT_STEPS", 28))
+        cfg = float(self._cfg(self.config, "COMFY_COMPAT_CFG", 3.5))
+
+        base_graph: Dict[str, Any] = {
+            "1": {
+                "inputs": {"ckpt_name": ckpt_name, "config_name": ckpt_config},
+                "class_type": "CheckpointLoader",
+            },
+            "2": {
+                "inputs": {"text": str(prompt or "").strip(), "clip": ["1", 1]},
+                "class_type": "CLIPTextEncode",
+            },
+            "3": {
+                "inputs": {"text": "", "clip": ["1", 1]},
+                "class_type": "CLIPTextEncode",
+            },
+            "4": {
+                "inputs": {"width": width, "height": height, "batch_size": 1},
+                "class_type": "EmptyLatentImage",
+            },
+            "5": {
+                "inputs": {
+                    "seed": int(time.time()) % 2_147_483_647,
+                    "steps": steps,
+                    "cfg": cfg,
+                    "sampler_name": "euler",
+                    "scheduler": "normal",
+                    "denoise": 1.0,
+                    "model": ["1", 0],
+                    "positive": ["2", 0],
+                    "negative": ["3", 0],
+                    "latent_image": ["4", 0],
+                },
+                "class_type": "KSampler",
+            },
+            "6": {
+                "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
+                "class_type": "VAEDecode",
+            },
+            "7": {
+                "inputs": {"filename_prefix": "flux_output", "images": ["6", 0]},
+                "class_type": "SaveImage",
+            },
+        }
+
+        # Для alias `local:flux-uncensored` пробуем добавить LoRA, если задана.
+        alias = str(spec.get("alias") or "").strip().lower()
+        lora_name = str(self._cfg(self.config, "COMFY_FLUX_UNCENSORED_LORA", "FLUX-Uncensored-V2.safetensors")).strip()
+        try:
+            lora_strength_model = float(
+                self._cfg(self.config, "COMFY_FLUX_UNCENSORED_LORA_STRENGTH_MODEL", 0.85)
+            )
+        except Exception:
+            lora_strength_model = 0.85
+        try:
+            lora_strength_clip = float(
+                self._cfg(self.config, "COMFY_FLUX_UNCENSORED_LORA_STRENGTH_CLIP", 0.85)
+            )
+        except Exception:
+            lora_strength_clip = 0.85
+
+        # Нормализуем диапазон силы LoRA, чтобы не получать нестабильный перегруз.
+        lora_strength_model = max(0.0, min(1.8, lora_strength_model))
+        lora_strength_clip = max(0.0, min(1.8, lora_strength_clip))
+
+        if alias == "local:flux-uncensored" and lora_name:
+            base_graph["8"] = {
+                "inputs": {
+                    "lora_name": lora_name,
+                    "strength_model": lora_strength_model,
+                    "strength_clip": lora_strength_clip,
+                    "model": ["1", 0],
+                    "clip": ["1", 1],
+                },
+                "class_type": "LoraLoader",
+            }
+            base_graph["2"]["inputs"]["clip"] = ["8", 1]
+            base_graph["3"]["inputs"]["clip"] = ["8", 1]
+            base_graph["5"]["inputs"]["model"] = ["8", 0]
+
+        return base_graph
 
     def _patch_workflow_prompt(self, workflow: Dict[str, Any], prompt: str) -> Dict[str, Any]:
         """Подставляет пользовательский prompt в CLIPTextEncode узлы workflow."""
