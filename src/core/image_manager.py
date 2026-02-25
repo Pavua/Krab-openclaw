@@ -34,6 +34,8 @@ class ImageManager:
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
+        # Поддержка внешнего размещения ComfyUI (например, на SSD).
+        self.comfy_dir = Path(str(self._cfg(config, "COMFY_DIR", "ComfyUI"))).expanduser()
         self.comfy_url = str(self._cfg(config, "COMFY_URL", "http://localhost:8188")).rstrip("/")
         self.gemini_key = self._cfg(config, "GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
         self.openai_key = str(self._cfg(config, "OPENAI_API_KEY", os.getenv("OPENAI_API_KEY")) or "").strip()
@@ -52,7 +54,7 @@ class ImageManager:
 
         self.model_specs = self._build_model_specs(config)
         self.default_local_alias = str(
-            self._cfg(config, "IMAGE_DEFAULT_LOCAL_MODEL", "local:flux-dev")
+            self._cfg(config, "IMAGE_DEFAULT_LOCAL_MODEL", "local:flux-mlx-q8-uncensored")
         ).strip()
         self.default_cloud_alias = str(
             self._cfg(config, "IMAGE_DEFAULT_CLOUD_MODEL", "cloud:imagen3")
@@ -61,6 +63,30 @@ class ImageManager:
         self._comfy_process: Optional[subprocess.Popen] = None
         self._comfy_auto_started: bool = False
         self._comfy_lock = asyncio.Lock()
+
+    def _resolve_workflow_path(self, raw_path: str) -> Path:
+        """
+        Нормализует путь workflow:
+        1) как есть (абсолютный/от cwd),
+        2) если не найден и путь начинался с `ComfyUI/` — подменяем на `COMFY_DIR/...`,
+        3) fallback: `COMFY_DIR/workflows/<basename>`.
+        """
+        candidate = Path(str(raw_path or "").strip())
+        if candidate.exists():
+            return candidate
+
+        normalized = str(raw_path or "").strip()
+        if normalized.startswith("ComfyUI/"):
+            rel = normalized[len("ComfyUI/") :]
+            via_comfy_dir = self.comfy_dir / rel
+            if via_comfy_dir.exists():
+                return via_comfy_dir
+
+        via_basename = self.comfy_dir / "workflows" / candidate.name
+        if candidate.name and via_basename.exists():
+            return via_basename
+
+        return candidate
 
     @staticmethod
     def _cfg(config: Dict[str, Any], key: str, default: Any = None) -> Any:
@@ -74,12 +100,14 @@ class ImageManager:
 
     def _build_model_specs(self, config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """Собирает каталог моделей из конфигурации."""
-        workflow_default = str(
+        workflow_default_raw = str(
             self._cfg(config, "COMFY_WORKFLOW_PATH", "ComfyUI/workflows/flux_dev_no_censorship.json")
         ).strip()
-        workflow_alt = str(
+        workflow_alt_raw = str(
             self._cfg(config, "COMFY_ALT_WORKFLOW_PATH", "ComfyUI/workflows/flux_uncensored_v2.json")
         ).strip()
+        workflow_default = str(self._resolve_workflow_path(workflow_default_raw))
+        workflow_alt = str(self._resolve_workflow_path(workflow_alt_raw))
 
         return {
             "local:flux-dev": {
@@ -101,6 +129,26 @@ class ImageManager:
                 "workflow": workflow_alt,
                 "cost_per_image_usd": 0.0,
                 "note": "Локальная генерация через ComfyUI",
+            },
+            "local:flux-mlx-q8-uncensored": {
+                "alias": "local:flux-mlx-q8-uncensored",
+                "title": "FLUX MLX Q8 Uncensored (ComfyUI)",
+                "channel": "local",
+                "provider": "comfyui",
+                "model_id": "flux-mlx-q8-uncensored",
+                "workflow": str(
+                    self._resolve_workflow_path(
+                        str(
+                            self._cfg(
+                                config,
+                                "COMFY_WORKFLOW_FLUX_MLX_Q8",
+                                "ComfyUI/workflows/flux_gguf_uncensored.json",
+                            )
+                        ).strip()
+                    )
+                ),
+                "cost_per_image_usd": 0.0,
+                "note": "Локальная генерация через GGUF/MLX Q8 workflow",
             },
             "cloud:imagen3": {
                 "alias": "cloud:imagen3",
@@ -361,9 +409,10 @@ class ImageManager:
 
     def _start_comfy_process(self) -> bool:
         """Запускает демон ComfyUI, если он не запущен."""
-        comfy_dir = Path("ComfyUI")
+        comfy_dir = self.comfy_dir
         python_exec = comfy_dir / "venv/bin/python"
         if not python_exec.exists():
+            logger.warning("ComfyUI python не найден", comfy_dir=str(comfy_dir), python_exec=str(python_exec))
             return False
         if self._comfy_process and self._comfy_process.poll() is None:
             return True
@@ -406,6 +455,30 @@ class ImageManager:
         self._comfy_process = None
         self._comfy_auto_started = False
 
+    def _comfy_port(self) -> int:
+        """Возвращает порт ComfyUI из comfy_url."""
+        parsed = urlparse(self.comfy_url)
+        return int(parsed.port or 8188)
+
+    def _restart_comfy_server(self) -> bool:
+        """
+        Жестко перезапускает ComfyUI на целевом порту.
+        Нужен как self-heal при несовместимых custom nodes в уже запущенном процессе.
+        """
+        self._stop_comfy_process()
+        try:
+            port = self._comfy_port()
+            subprocess.run(
+                ["pkill", "-f", f"ComfyUI/main.py.*--port {port}"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(1.2)
+        except Exception:
+            pass
+        return self._start_comfy_process()
+
     async def _generate_local_comfy(self, spec: Dict[str, Any], prompt: str) -> dict[str, Any]:
         """Генерация через ComfyUI API (/prompt -> /history -> /view)."""
         if not await self._ensure_comfy_running():
@@ -431,11 +504,36 @@ class ImageManager:
                     json={"prompt": patched_prompt, "client_id": client_id},
                 ) as resp:
                     if resp.status != 200:
-                        return {"ok": False, "error": f"comfy_submit_failed:{resp.status}:{await resp.text()}"}
-                    payload = await resp.json(content_type=None)
-                    prompt_id = payload.get("prompt_id")
-                    if not prompt_id:
-                        return {"ok": False, "error": "comfy_prompt_id_missing"}
+                        err_text = await resp.text()
+                        # Self-heal: если нода GGUF недоступна в текущем runtime,
+                        # делаем 1 форс-перезапуск ComfyUI и повторяем submit.
+                        if (
+                            "CheckpointLoaderGGUF does not exist" in err_text
+                            and self._restart_comfy_server()
+                        ):
+                            await asyncio.sleep(2.0)
+                            if not await self._ensure_comfy_running():
+                                return {"ok": False, "error": "comfy_restart_failed"}
+                            async with session.post(
+                                f"{self.comfy_url}/prompt",
+                                json={"prompt": patched_prompt, "client_id": client_id},
+                            ) as retry_resp:
+                                if retry_resp.status != 200:
+                                    return {
+                                        "ok": False,
+                                        "error": f"comfy_submit_failed:{retry_resp.status}:{await retry_resp.text()}",
+                                    }
+                                payload = await retry_resp.json(content_type=None)
+                                prompt_id = payload.get("prompt_id")
+                                if not prompt_id:
+                                    return {"ok": False, "error": "comfy_prompt_id_missing"}
+                        else:
+                            return {"ok": False, "error": f"comfy_submit_failed:{resp.status}:{err_text}"}
+                    else:
+                        payload = await resp.json(content_type=None)
+                        prompt_id = payload.get("prompt_id")
+                        if not prompt_id:
+                            return {"ok": False, "error": "comfy_prompt_id_missing"}
 
                 started = time.monotonic()
                 image_meta = None
