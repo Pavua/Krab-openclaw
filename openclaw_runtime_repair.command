@@ -37,8 +37,9 @@ openclaw models fallbacks add openai/gpt-4o-mini >/dev/null
 
 # 2) Изоляция сессий и лимиты для более стабильных ответов
 openclaw config set session.dmScope per-channel-peer >/dev/null
-# 12000 снижает риск ошибки "model context window too small (12000 tokens)".
-openclaw config set agents.defaults.contextTokens 12000 >/dev/null
+# Безопасный минимум для текущего набора моделей и fallback-цепочки.
+# Важно: 12000 вызывает массовые ошибки "Minimum is 16000" в OpenClaw.
+openclaw config set agents.defaults.contextTokens 20000 >/dev/null
 
 # Локальные модели: жёстко ограничиваем maxTokens для ответов в каналах.
 LM_COUNT="$(openclaw config get models.providers.lmstudio.models 2>/dev/null | jq 'length' 2>/dev/null || echo 0)"
