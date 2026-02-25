@@ -446,6 +446,7 @@ class OpenClawClient:
             cleaned,
             flags=re.IGNORECASE,
         )
+        cleaned = re.sub(r"\[\[reply_to:\d+\]\]\s*", "", cleaned, flags=re.IGNORECASE)
 
         filtered_lines: list[str] = []
         for line in cleaned.splitlines():
@@ -458,6 +459,10 @@ class OpenClawClient:
                 continue
             if " not found" in low and ("begin_of_box" in low or "reply_to" in low):
                 continue
+            if low.endswith("not found"):
+                line = re.sub(r"\s*not found\s*$", "", line, flags=re.IGNORECASE).rstrip()
+                if not line:
+                    continue
             filtered_lines.append(line)
 
         cleaned = "\n".join(filtered_lines)
@@ -732,6 +737,13 @@ class OpenClawClient:
 
             # Выполняем переключение на paid tier.
             # Ключ уже проверен выше — присваиваем active_tier.
+            switched = self.set_tier("paid")
+            if not switched:
+                logger.warning(
+                    "CloudTier autoswitch failed: set_tier('paid') не применился (sync/restart issue)."
+                )
+                return False
+
             prev_tier = self._tier_state.active_tier
             self._tier_state.active_tier = "paid"
             self._tier_state.last_switch_at = time.time()
@@ -1103,8 +1115,26 @@ class OpenClawClient:
                     if switched:
                         logger.info(
                             "CloudTier: autoswitch выполнен после quota-ошибки. "
-                            "Следующий запрос пойдёт через paid tier."
+                            "Повторяем текущий запрос через paid tier."
                         )
+                        retry_response = await self._request_json(
+                            "POST",
+                            "/v1/chat/completions",
+                            payload=payload,
+                            timeout=safe_timeout,
+                        )
+                        if retry_response.get("ok"):
+                            retry_data = retry_response.get("data", {})
+                            try:
+                                retry_content = str(retry_data["choices"][0]["message"]["content"] or "")
+                                return self._sanitize_assistant_output(retry_content)
+                            except Exception:
+                                detail = self._format_error_detail(retry_data)
+                                raise Exception(f"OpenClaw retry вернул неожиданный формат: {detail}")
+                        detail = self._format_error_detail(
+                            retry_response.get("data") or retry_response.get("error")
+                        )
+                        detail_lower = detail.lower()
 
                 if probe_provider_on_error and "connection error" in detail_lower:
                     provider_hint = await self._probe_provider_health_hint(model)
@@ -1127,9 +1157,16 @@ class OpenClawClient:
                 detail = self._format_error_detail(data)
                 raise Exception(f"OpenClaw вернул неожиданный формат: {detail}")
 
+        cloud_coro = _do_call()
         try:
-            return await self._breaker.call(_do_call())
+            return await self._breaker.call(cloud_coro)
         except CircuitBreakerOpenError as exc:
+            # В OPEN breaker мог отклонить запрос до await корутины.
+            # Явно закрываем, чтобы не получить RuntimeWarning "never awaited".
+            try:
+                cloud_coro.close()
+            except Exception:
+                pass
             self._metrics["cloud_failures_total"] += 1
             return f"❌ OpenClaw Circuit OPEN: gateway недоступен. {str(exc)}"
         except Exception as exc:

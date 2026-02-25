@@ -677,6 +677,20 @@
             style="display: flex; flex-direction: column; gap: 10px; max-height: 120px; overflow-y: auto; padding-right: 4px;">
             <span class="card-meta">—</span>
           </div>
+          <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display:flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--border-card); padding-top: 8px;">
+              <span class="card-meta" style="margin: 0;">Relay reachable:</span>
+              <span id="ocRelayReachable" class="badge warn">—</span>
+            </div>
+            <div style="display:flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Tab attached:</span>
+              <span id="ocTabAttached" class="badge warn">—</span>
+            </div>
+            <div style="display:flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Last browser call:</span>
+              <span id="ocBrowserLast" class="card-meta text-ellipsis" style="max-width: 140px; text-align: right;">—</span>
+            </div>
+          </div>
         </div>
 
         <!-- Autoswitch -->
@@ -1757,7 +1771,7 @@
       btn.textContent = "Running...";
       btn.disabled = true;
       try {
-        await fetch("/api/openclaw/cloud/diagnostics", { method: "GET" }).catch(() => { });
+        await fetch("/api/openclaw/cloud", { method: "GET" }).catch(() => { });
         await updateStats();
       } catch (e) {
         console.error("Cloud diag failed:", e);
@@ -2082,6 +2096,19 @@ ${channelsText}`;
       });
     }
 
+    window.__runtimeGatewayTokenPresent = false;
+    window.__runtimeGatewayTokenMasked = "";
+    function resolveGatewayTokenStatus() {
+      const runtimePresent = Boolean(window.__runtimeGatewayTokenPresent);
+      const runtimeMasked = String(window.__runtimeGatewayTokenMasked || "").trim();
+      const manualPresent = Boolean((document.getElementById("assistantApiKey")?.value || "").trim());
+      return {
+        configured: runtimePresent || manualPresent,
+        source: runtimePresent ? "runtime" : (manualPresent ? "manual" : "missing"),
+        masked: runtimeMasked,
+      };
+    }
+
     async function updateStats() {
       try {
         const [
@@ -2095,6 +2122,7 @@ ${channelsText}`;
           timelinePayload,
           queuePayload,
           slaPayload,
+          runtimeConfig,
         ] = await Promise.all([
           fetchJson("/api/stats"),
           fetchJson("/api/health"),
@@ -2106,7 +2134,14 @@ ${channelsText}`;
           fetchJson("/api/timeline?limit=50"),
           fetchJson("/api/queue").catch(() => ({ ok: false, queue: {} })),
           fetchJson("/api/sla").catch(() => ({ ok: false })),
+          fetchJson("/api/openclaw/runtime-config").catch(() => ({ ok: false })),
         ]);
+
+        if (runtimeConfig && runtimeConfig.ok) {
+          window.__runtimeGatewayTokenPresent = Boolean(runtimeConfig.gateway_token_present);
+          window.__runtimeGatewayTokenMasked = String(runtimeConfig.gateway_token_masked || "");
+        }
+        updateTokenStatus();
 
         const bb = stats.black_box || {};
         const rag = stats.rag || {};
@@ -2453,16 +2488,19 @@ ${channelsText}`;
       const tokenPulse = document.getElementById("tokenPulse");
       if (!tokenBadge) return;
 
-      if (apiKeyInput && apiKeyInput.value.trim().length > 0) {
+      const tokenStatus = resolveGatewayTokenStatus();
+      if (tokenStatus.configured) {
         tokenBadge.className = "badge ok";
-        tokenText.innerText = "Token Configured";
+        tokenText.innerText = tokenStatus.source === "runtime"
+          ? `Gateway Token: Configured (${tokenStatus.masked || "runtime"})`
+          : "Gateway Token: Manual Override";
         tokenPulse.className = "pulse-ok";
         tokenBadge.style.background = "rgba(34, 197, 94, 0.1)";
         tokenBadge.style.color = "var(--state-ok)";
         tokenBadge.style.borderColor = "var(--state-ok)";
       } else {
         tokenBadge.className = "badge warn";
-        tokenText.innerText = "Token Missing";
+        tokenText.innerText = "Gateway Token: Missing";
         tokenPulse.className = "pulse-warn";
         tokenBadge.style.background = "rgba(245, 158, 11, 0.1)";
         tokenBadge.style.color = "var(--state-warn)";
@@ -2643,7 +2681,7 @@ ${channelsText}`;
         loadControlCompatStatus(false);
         loadEffectiveRouting(false);
 
-        const [catalogRes, autoswitchRes, channelsRes] = await Promise.all([
+        const [catalogRes, autoswitchRes, channelsRes, browserSmokeRes] = await Promise.all([
           fetch("/api/model/catalog").catch((e) => ({
             ok: false,
             error: e.message,
@@ -2653,6 +2691,10 @@ ${channelsText}`;
             error: e.message,
           })),
           fetch("/api/openclaw/channels/status").catch((e) => ({
+            ok: false,
+            error: e.message,
+          })),
+          fetch("/api/openclaw/browser-smoke?url=https%3A%2F%2Fexample.com").catch((e) => ({
             ok: false,
             error: e.message,
           })),
@@ -2731,6 +2773,52 @@ ${channelsText}`;
           const errText = errPayload.detail || channelsRes.error || `HTTP ${channelsRes.status}`;
           document.getElementById("ocChannelsList").innerHTML =
             `<span class="badge bad">FAIL</span> <span style="font-size: 0.8em; color: var(--state-error);">${errText}</span>`;
+        }
+
+        // Browser relay/tool smoke
+        const relayBadge = document.getElementById("ocRelayReachable");
+        const tabBadge = document.getElementById("ocTabAttached");
+        const lastBrowser = document.getElementById("ocBrowserLast");
+        if (browserSmokeRes.ok) {
+          const payload = await browserSmokeRes.json().catch(() => ({}));
+          const report = payload.report || {};
+          const baseBrowser = report.base?.browser || {};
+          const smoke = report.browser_smoke || {};
+          const relayOk = Boolean(baseBrowser.available);
+          const tabAttached = Boolean(
+            smoke.ok &&
+            (
+              smoke.channel === "endpoint" ||
+              smoke.tool === "browser_open" ||
+              smoke.tool === "browser_navigate" ||
+              smoke.tool === "browser_snapshot"
+            )
+          );
+          const lastCall = smoke.tool || smoke.path || smoke.channel || "n/a";
+
+          if (relayBadge) {
+            relayBadge.className = relayOk ? "badge ok" : "badge bad";
+            relayBadge.textContent = relayOk ? "Yes" : "No";
+          }
+          if (tabBadge) {
+            tabBadge.className = tabAttached ? "badge ok" : "badge warn";
+            tabBadge.textContent = tabAttached ? "Yes" : "No";
+          }
+          if (lastBrowser) {
+            lastBrowser.textContent = String(lastCall);
+          }
+        } else {
+          if (relayBadge) {
+            relayBadge.className = "badge bad";
+            relayBadge.textContent = "No";
+          }
+          if (tabBadge) {
+            tabBadge.className = "badge warn";
+            tabBadge.textContent = "Unknown";
+          }
+          if (lastBrowser) {
+            lastBrowser.textContent = "smoke_error";
+          }
         }
 
         if (showStatus) setText("ocMeta", "Статус обновлен");

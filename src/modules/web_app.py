@@ -84,6 +84,16 @@ class WebApp:
             return payload
         return payload[-max_chars:]
 
+    @staticmethod
+    def _mask_secret(value: str) -> str:
+        """Маскирует секрет для UI/логов: видны только префикс и суффикс."""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if len(text) <= 6:
+            return "*" * len(text)
+        return f"{text[:3]}...{text[-3:]}"
+
     def _run_local_script(
         self,
         script_path: Path,
@@ -543,6 +553,34 @@ class WebApp:
                 "context_latest_api": f"{base}/api/context/latest",
                 "voice_gateway": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
                 "openclaw": os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"),
+            }
+
+        @self.app.get("/api/openclaw/runtime-config")
+        async def openclaw_runtime_config():
+            """
+            Runtime-конфиг OpenClaw для UI.
+            Важно: секрет не отдаём целиком, только masked + флаг присутствия.
+            """
+            base_url = os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789").strip().rstrip("/")
+            raw_key = str(os.getenv("OPENCLAW_API_KEY", "") or "").strip()
+            key_present = False
+            key_masked = ""
+            key_kind = "missing"
+            if raw_key:
+                key_present = True
+                if raw_key.startswith("{"):
+                    key_kind = "tiered_json"
+                    key_masked = "tiered-json-configured"
+                else:
+                    key_kind = "plain"
+                    key_masked = self._mask_secret(raw_key)
+
+            return {
+                "ok": True,
+                "openclaw_base_url": base_url,
+                "gateway_token_present": key_present,
+                "gateway_token_masked": key_masked,
+                "gateway_token_kind": key_kind,
             }
 
         @self.app.post("/api/context/checkpoint")
@@ -2029,8 +2067,7 @@ class WebApp:
             report = await openclaw.get_browser_smoke_report(url=url)
             return {"available": True, "report": report}
 
-        @self.app.get("/api/openclaw/cloud")
-        async def openclaw_cloud_diagnostics(providers: str = Query(default="")):
+        async def _openclaw_cloud_diagnostics_impl(providers: str = ""):
             """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API."""
             openclaw = self.deps.get("openclaw_client")
             if not openclaw:
@@ -2046,6 +2083,16 @@ class WebApp:
                     providers_list = None
             report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
             return {"available": True, "report": report}
+
+        @self.app.get("/api/openclaw/cloud")
+        async def openclaw_cloud_diagnostics(providers: str = Query(default="")):
+            """Канонический endpoint cloud-диагностики."""
+            return await _openclaw_cloud_diagnostics_impl(providers=providers)
+
+        @self.app.get("/api/openclaw/cloud/diagnostics")
+        async def openclaw_cloud_diagnostics_legacy(providers: str = Query(default="")):
+            """Совместимость со старым UI-клиентом (legacy alias)."""
+            return await _openclaw_cloud_diagnostics_impl(providers=providers)
 
         @self.app.get("/api/openclaw/cloud/tier/state")
         async def openclaw_cloud_tier_state():

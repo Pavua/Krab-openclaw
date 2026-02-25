@@ -1225,6 +1225,30 @@ class ModelRouter:
         info = self._classify_cloud_error(text)
         return str(info.get("summary") or "облачный провайдер вернул ошибку")
 
+    def _trim_context_for_cloud(self, context: Optional[list], *, max_messages: int = 6, max_chars_per_message: int = 1200) -> list:
+        """
+        Укорачивает контекст для cloud-вызова при ошибке context_limit.
+
+        Политика:
+        - оставляем только последние max_messages сообщений,
+        - в каждом сообщении режем текст до max_chars_per_message символов.
+        """
+        if not context:
+            return []
+        if not isinstance(context, list):
+            return []
+        tail = context[-max(1, int(max_messages)) :]
+        result: list = []
+        for item in tail:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "user"))
+            text = str(item.get("text", "") or "")
+            if len(text) > max_chars_per_message:
+                text = text[-max_chars_per_message:]
+            result.append({"role": role, "text": text})
+        return result
+
     def get_last_cloud_error_info(self) -> dict:
         """
         Публичный runtime-диагностический объект по последней cloud-ошибке.
@@ -3614,21 +3638,24 @@ class ModelRouter:
 
         system_instructions = f"{persona_prompt}\n\n{base_instructions}".strip()
 
-        # Формируем сообщения для OpenClaw (OpenAI-like format)
-        messages = []
-        if system_instructions:
-            messages.append({"role": "system", "content": system_instructions})
-        
-        if context:
-            # Преобразуем контекст в формат сообщений
-            for msg in context:
-                role = self._normalize_chat_role(msg.get("role", "user"))
-                messages.append({"role": role, "content": msg.get("text", "")})
-        
-        messages.append({"role": "user", "content": prompt})
+        # Рабочая копия контекста: может динамически сокращаться на context_limit.
+        working_context = list(context or [])
+
+        def _build_messages() -> list:
+            """Собирает payload сообщений для OpenClaw в текущем состоянии контекста."""
+            messages = []
+            if system_instructions:
+                messages.append({"role": "system", "content": system_instructions})
+            if working_context:
+                for msg in working_context:
+                    role = self._normalize_chat_role(msg.get("role", "user"))
+                    messages.append({"role": role, "content": msg.get("text", "")})
+            messages.append({"role": "user", "content": prompt})
+            return messages
 
         for attempt in range(max_retries + 1):
             try:
+                messages = _build_messages()
                 start_t = time.time()
                 response_text = await self.openclaw_client.chat_completions(
                     messages,
@@ -3659,6 +3686,21 @@ class ModelRouter:
                         return f"❌ Ошибка Cloud: {response_text}"
 
                     category = self._classify_cloud_error(normalized)
+                    if (
+                        str(category.get("code", "")) == "context_limit"
+                        and attempt < max_retries
+                        and working_context
+                    ):
+                        trimmed = self._trim_context_for_cloud(working_context)
+                        if trimmed and trimmed != working_context:
+                            logger.warning(
+                                "Cloud context_limit detected, retrying with trimmed context",
+                                original_messages=len(working_context),
+                                trimmed_messages=len(trimmed),
+                                model=model_name,
+                            )
+                            working_context = trimmed
+                            continue
                     if not bool(category.get("retryable", True)):
                         provider = model_name.split("/", 1)[0]
                         msg = category.get("summary", "fatal error")

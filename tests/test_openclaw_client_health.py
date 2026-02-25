@@ -8,6 +8,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -204,6 +205,63 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("reply_to", lowered)
         self.assertNotIn("not found", lowered)
         self.assertIn("Нормальный ответ.", result)
+
+    async def test_chat_completions_retries_after_autoswitch_on_quota(self):
+        """При quota-ошибке клиент должен autoswitch на paid и повторить запрос в том же вызове."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+
+        calls = {"count": 0}
+
+        async def fake_request(method: str, path: str, payload=None, timeout=15):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return {
+                    "ok": False,
+                    "status": 429,
+                    "data": {"error": {"message": "resource_exhausted: quota exceeded"}},
+                }
+            return {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "choices": [
+                        {"message": {"content": "Ответ после autoswitch."}}
+                    ]
+                },
+            }
+
+        with (
+            patch.object(client, "_request_json", side_effect=fake_request),
+            patch.object(client, "try_autoswitch_to_paid", return_value=True),
+        ):
+            result = await client.chat_completions(
+                [{"role": "user", "content": "ping"}],
+                model="google/gemini-2.5-flash",
+            )
+
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(result, "Ответ после autoswitch.")
+
+    async def test_chat_completions_circuit_open_no_never_awaited_warning(self):
+        """Circuit OPEN не должен оставлять не-await-нутую корутину."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+        client._breaker.record_failure("gateway down")
+        client._breaker.record_failure("gateway down")
+        client._breaker.record_failure("gateway down")
+        client._breaker.record_failure("gateway down")
+        client._breaker.record_failure("gateway down")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            response = await client.chat_completions(
+                [{"role": "user", "content": "ping"}],
+                model="google/gemini-2.5-flash",
+                timeout_seconds=1,
+            )
+
+        self.assertIn("Circuit OPEN", response)
+        never_awaited = [item for item in caught if "never awaited" in str(item.message).lower()]
+        self.assertEqual(never_awaited, [])
 
     async def test_cloud_provider_diagnostics_reports_missing_keys(self):
         with patch.dict("os.environ", {

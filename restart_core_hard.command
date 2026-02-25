@@ -19,9 +19,11 @@ LOG_FILE="$PROJECT_ROOT/logs/krab.log"
 PID_FILE="$PROJECT_ROOT/krab_core.pid"
 DRY_RUN="${KRAB_RESTART_DRY_RUN:-0}"
 LOCK_FILE="$PROJECT_ROOT/.runtime/krab_core.lock"
+BACKOFF_STATE_FILE="$PROJECT_ROOT/.runtime/restart_core_backoff.state"
 
 cd "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/logs"
+mkdir -p "$PROJECT_ROOT/.runtime"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "[DRY RUN] Режим проверки без остановки/запуска процессов."
@@ -68,6 +70,45 @@ cleanup_stale_lock() {
     if [[ "$DRY_RUN" != "1" ]]; then
       rm -f "$LOCK_FILE"
     fi
+  fi
+}
+
+load_backoff_state() {
+  if [[ ! -f "$BACKOFF_STATE_FILE" ]]; then
+    echo "0 0"
+    return 0
+  fi
+  awk 'NR==1 {print $1" "$2}' "$BACKOFF_STATE_FILE" 2>/dev/null || echo "0 0"
+}
+
+save_backoff_state() {
+  local fail_count="$1"
+  local last_ts="$2"
+  echo "$fail_count $last_ts" > "$BACKOFF_STATE_FILE"
+}
+
+reset_backoff_state() {
+  save_backoff_state "0" "0"
+}
+
+apply_start_backoff_if_needed() {
+  local now_ts
+  now_ts="$(date +%s)"
+  local state
+  state="$(load_backoff_state)"
+  local fail_count last_fail_ts
+  fail_count="$(echo "$state" | awk '{print $1}')"
+  last_fail_ts="$(echo "$state" | awk '{print $2}')"
+  fail_count="${fail_count:-0}"
+  last_fail_ts="${last_fail_ts:-0}"
+
+  if [[ "$fail_count" -gt 0 ]] && [[ $((now_ts - last_fail_ts)) -lt 300 ]]; then
+    local sleep_sec=$((fail_count * 5))
+    if [[ "$sleep_sec" -gt 30 ]]; then
+      sleep_sec=30
+    fi
+    echo "⏳ Backoff: обнаружены недавние падения ядра ($fail_count), пауза ${sleep_sec}с перед запуском."
+    sleep "$sleep_sec"
   fi
 }
 
@@ -134,6 +175,8 @@ start_core() {
     return 0
   fi
 
+  apply_start_backoff_if_needed
+
   export PYTHONPATH="$PROJECT_ROOT"
   nohup "$py" -m src.main >> "$LOG_FILE" 2>&1 &
   local new_pid=$!
@@ -156,16 +199,29 @@ start_core() {
         echo "⚠️ Стартовый PID $new_pid завершился на ${sec}-й секунде, но ядро активно на PID: $active_pid"
         echo "$active_pid" > "$PID_FILE"
         echo "✅ Рестарт считается успешным (обнаружен живой singleton-процесс)."
+        reset_backoff_state
         return 0
       fi
 
       echo "❌ Процесс умер на ${sec}-й секунде после старта. Смотрите лог: $LOG_FILE"
+      local now_ts
+      now_ts="$(date +%s)"
+      local state
+      state="$(load_backoff_state)"
+      local fail_count
+      fail_count="$(echo "$state" | awk '{print $1}')"
+      fail_count="${fail_count:-0}"
+      fail_count=$((fail_count + 1))
+      save_backoff_state "$fail_count" "$now_ts"
+      echo "🧪 Последние строки лога перед падением:"
+      tail -n 40 "$LOG_FILE" || true
       return 1
     fi
     sec=$((sec + 1))
   done
 
   echo "✅ Ядро стабильно живо ${stable_window}с после старта."
+  reset_backoff_state
   return 0
 }
 

@@ -889,6 +889,15 @@ def test_openclaw_cloud_diagnostics_endpoint() -> None:
     assert payload["report"]["providers"]["openai"]["ok"] is True
 
 
+def test_openclaw_cloud_diagnostics_legacy_alias_endpoint() -> None:
+    client = _build_client()
+    response = client.get("/api/openclaw/cloud/diagnostics?providers=google")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is True
+    assert set(payload["report"]["providers"].keys()) == {"google"}
+
+
 def test_openclaw_cloud_diagnostics_endpoint_with_providers_filter() -> None:
     client = _build_client()
     response = client.get("/api/openclaw/cloud?providers=google")
@@ -896,6 +905,19 @@ def test_openclaw_cloud_diagnostics_endpoint_with_providers_filter() -> None:
     payload = response.json()
     providers = payload["report"]["providers"]
     assert set(providers.keys()) == {"google"}
+
+
+def test_openclaw_runtime_config_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789")
+    monkeypatch.setenv("OPENCLAW_API_KEY", "sk-nexus-bridge")
+    client = _build_client()
+    response = client.get("/api/openclaw/runtime-config")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["openclaw_base_url"] == "http://127.0.0.1:18789"
+    assert payload["gateway_token_present"] is True
+    assert payload["gateway_token_masked"].startswith("sk-")
 
 
 def test_openclaw_cloud_diagnostics_endpoint_not_supported() -> None:

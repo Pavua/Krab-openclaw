@@ -16,10 +16,12 @@ import asyncio
 import copy
 import json
 import os
+import subprocess
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 import structlog
@@ -34,6 +36,7 @@ class ImageManager:
         self.config = config
         self.comfy_url = str(self._cfg(config, "COMFY_URL", "http://localhost:8188")).rstrip("/")
         self.gemini_key = self._cfg(config, "GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+        self.openai_key = str(self._cfg(config, "OPENAI_API_KEY", os.getenv("OPENAI_API_KEY")) or "").strip()
 
         self.output_dir = Path(self._cfg(config, "IMAGE_OUTPUT_DIR", "artifacts/downloads"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -55,6 +58,9 @@ class ImageManager:
             self._cfg(config, "IMAGE_DEFAULT_CLOUD_MODEL", "cloud:imagen3")
         ).strip()
         self.last_result: Dict[str, Any] = {}
+        self._comfy_process: Optional[subprocess.Popen] = None
+        self._comfy_auto_started: bool = False
+        self._comfy_lock = asyncio.Lock()
 
     @staticmethod
     def _cfg(config: Dict[str, Any], key: str, default: Any = None) -> Any:
@@ -122,6 +128,15 @@ class ImageManager:
                 "model_id": str(self._cfg(config, "IMAGE_MODEL_NANO_BANANA_PRO", "")).strip(),
                 "cost_per_image_usd": float(self._cfg(config, "IMAGE_COST_NANO_BANANA_PRO_USD", 0.06)),
                 "note": "Требуется валидный model id в IMAGE_MODEL_NANO_BANANA_PRO",
+            },
+            "cloud:openai-gpt-image-1": {
+                "alias": "cloud:openai-gpt-image-1",
+                "title": "OpenAI GPT Image 1",
+                "channel": "cloud",
+                "provider": "openai",
+                "model_id": str(self._cfg(config, "IMAGE_MODEL_OPENAI", "gpt-image-1")).strip(),
+                "cost_per_image_usd": float(self._cfg(config, "IMAGE_COST_OPENAI_GPT_IMAGE_1_USD", 0.04)),
+                "note": "OpenAI Images API",
             },
         }
 
@@ -253,9 +268,9 @@ class ImageManager:
             aliases = [model_alias]
         else:
             if effective_prefer_local:
-                aliases = [self.default_local_alias, self.default_cloud_alias]
+                aliases = [self.default_local_alias, self.default_cloud_alias, "cloud:openai-gpt-image-1"]
             else:
-                aliases = [self.default_cloud_alias, self.default_local_alias]
+                aliases = [self.default_cloud_alias, "cloud:openai-gpt-image-1", self.default_local_alias]
 
         errors: list[str] = []
         for alias in aliases:
@@ -281,20 +296,29 @@ class ImageManager:
         """Делегирует генерацию в нужный backend по спецификации модели."""
         alias = spec.get("alias", "unknown")
         if spec.get("channel") == "local":
-            local = await self._generate_local_comfy(spec=spec, prompt=prompt)
-            if local.get("ok"):
-                local.update(
-                    {
-                        "model_alias": alias,
-                        "provider": spec.get("provider"),
-                        "channel": "local",
-                        "model_id": spec.get("model_id", ""),
-                        "cost_estimate_usd": 0.0,
-                    }
-                )
-            return local
+            try:
+                local = await self._generate_local_comfy(spec=spec, prompt=prompt)
+                if local.get("ok"):
+                    local.update(
+                        {
+                            "model_alias": alias,
+                            "provider": spec.get("provider"),
+                            "channel": "local",
+                            "model_id": spec.get("model_id", ""),
+                            "cost_estimate_usd": 0.0,
+                        }
+                    )
+                return local
+            finally:
+                # Если ComfyUI был поднят менеджером только для этого запроса — выгружаем.
+                if self._comfy_auto_started:
+                    self._stop_comfy_process()
 
-        cloud = await self._generate_cloud_gemini(spec=spec, prompt=prompt, aspect_ratio=aspect_ratio)
+        provider = str(spec.get("provider") or "").strip().lower()
+        if provider == "openai":
+            cloud = await self._generate_cloud_openai(spec=spec, prompt=prompt, aspect_ratio=aspect_ratio)
+        else:
+            cloud = await self._generate_cloud_gemini(spec=spec, prompt=prompt, aspect_ratio=aspect_ratio)
         if cloud.get("ok"):
             unit_cost = spec.get("cost_per_image_usd")
             cloud.update(
@@ -318,9 +342,73 @@ class ImageManager:
         except Exception:
             return False
 
+    async def _ensure_comfy_running(self) -> bool:
+        """Гарантирует, что ComfyUI запущен (стартует, если нужно) и доступен."""
+        if await self._is_comfy_online():
+            return True
+        async with self._comfy_lock:
+            if await self._is_comfy_online():
+                return True
+            started = self._start_comfy_process()
+            if not started:
+                return False
+            deadline = time.monotonic() + self.comfy_timeout_sec
+            while time.monotonic() < deadline:
+                if await self._is_comfy_online():
+                    return True
+                await asyncio.sleep(1.0)
+            return await self._is_comfy_online()
+
+    def _start_comfy_process(self) -> bool:
+        """Запускает демон ComfyUI, если он не запущен."""
+        comfy_dir = Path("ComfyUI")
+        python_exec = comfy_dir / "venv/bin/python"
+        if not python_exec.exists():
+            return False
+        if self._comfy_process and self._comfy_process.poll() is None:
+            return True
+        try:
+            parsed = urlparse(self.comfy_url)
+            listen_host = parsed.hostname or "127.0.0.1"
+            listen_port = str(parsed.port or 8188)
+            self._comfy_process = subprocess.Popen(
+                [
+                    str(python_exec),
+                    "main.py",
+                    "--listen",
+                    listen_host,
+                    "--port",
+                    listen_port,
+                    "--disable-all-custom-nodes",
+                    "--whitelist-custom-nodes",
+                    "ComfyUI-GGUF",
+                ],
+                cwd=str(comfy_dir),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            self._comfy_auto_started = True
+            return True
+        except Exception:
+            self._comfy_process = None
+            self._comfy_auto_started = False
+            return False
+
+    def _stop_comfy_process(self) -> None:
+        """Останавливает процесс ComfyUI, запущенный менеджером."""
+        if self._comfy_process and self._comfy_process.poll() is None:
+            try:
+                self._comfy_process.terminate()
+                self._comfy_process.wait(timeout=5)
+            except Exception:
+                self._comfy_process.kill()
+        self._comfy_process = None
+        self._comfy_auto_started = False
+
     async def _generate_local_comfy(self, spec: Dict[str, Any], prompt: str) -> dict[str, Any]:
         """Генерация через ComfyUI API (/prompt -> /history -> /view)."""
-        if not await self._is_comfy_online():
+        if not await self._ensure_comfy_running():
             return {"ok": False, "error": "comfyui_offline"}
 
         workflow_path = Path(spec.get("workflow") or "")
@@ -443,17 +531,17 @@ class ImageManager:
 
             client = genai.Client(api_key=self.gemini_key)
             cfg_kwargs: Dict[str, Any] = {
-                "number_of_images": 1,
-                "include_rai_reasoning": True,
+                "numberOfImages": 1,
+                "includeRaiReason": True,
             }
             if aspect_ratio:
-                cfg_kwargs["aspect_ratio"] = aspect_ratio
+                cfg_kwargs["aspectRatio"] = aspect_ratio
 
             response = await asyncio.to_thread(
-                client.models.generate_image,
+                client.models.generate_images,
                 model=model_id,
                 prompt=prompt,
-                config=types.GenerateImageConfig(**cfg_kwargs),
+                config=types.GenerateImagesConfig(**cfg_kwargs),
             )
             if not response or not getattr(response, "generated_images", None):
                 return {"ok": False, "error": "gemini_empty_response"}
@@ -465,3 +553,57 @@ class ImageManager:
             return {"ok": True, "path": str(file_path)}
         except Exception as exc:
             return {"ok": False, "error": f"gemini_generate_failed:{exc}"}
+
+    async def _generate_cloud_openai(self, spec: Dict[str, Any], prompt: str, aspect_ratio: str) -> dict[str, Any]:
+        """Генерация через OpenAI Images API (gpt-image-1)."""
+        model_id = str(spec.get("model_id") or "").strip() or "gpt-image-1"
+        if not self.openai_key:
+            return {"ok": False, "error": "openai_key_missing"}
+
+        size_map = {
+            "1:1": "1024x1024",
+            "16:9": "1536x1024",
+            "9:16": "1024x1536",
+            "4:3": "1024x768",
+            "3:4": "768x1024",
+        }
+        size_value = size_map.get(str(aspect_ratio or "").strip(), "1024x1024")
+        payload = {
+            "model": model_id,
+            "prompt": prompt,
+            "size": size_value,
+            "n": 1,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.openai_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=90)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    "https://api.openai.com/v1/images/generations",
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    raw_text = await response.text()
+                    if response.status != 200:
+                        return {"ok": False, "error": f"openai_generate_failed:{response.status}:{raw_text[:400]}"}
+                    body = json.loads(raw_text)
+            data = body.get("data") or []
+            if not data:
+                return {"ok": False, "error": "openai_empty_response"}
+            image_b64 = str(data[0].get("b64_json") or "").strip()
+            if not image_b64:
+                return {"ok": False, "error": "openai_b64_missing"}
+
+            import base64
+
+            image_bytes = base64.b64decode(image_b64)
+            file_path = self.output_dir / f"openai_img_{uuid.uuid4().hex[:10]}.png"
+            file_path.write_bytes(image_bytes)
+            logger.info("Облачная генерация изображения через OpenAI завершена", model=model_id, path=str(file_path))
+            return {"ok": True, "path": str(file_path)}
+        except Exception as exc:
+            return {"ok": False, "error": f"openai_generate_exception:{exc}"}
