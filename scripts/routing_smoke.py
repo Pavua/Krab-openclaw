@@ -7,8 +7,27 @@ Routing Smoke Test (R24).
 import requests
 import sys
 import json
+import os
+from pathlib import Path
 
-BASE_URL = "http://127.0.0.1:8000"
+
+def _load_env() -> None:
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env()
+BASE_URL = os.getenv("KRAB_SMOKE_BASE_URL") or f"http://{os.getenv('WEB_HOST', '127.0.0.1')}:{os.getenv('WEB_PORT', '8080')}"
 
 def check_endpoint(name, path):
     url = f"{BASE_URL}{path}"

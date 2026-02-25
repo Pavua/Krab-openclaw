@@ -5,5 +5,7 @@ cd "$(dirname "$0")/.."
 source .venv/bin/activate 2>/dev/null || source .venv_krab/bin/activate 2>/dev/null
 python3 scripts/r24_orchestrator.py
 echo "\n✅ Проверки завершены. Отчет: output/reports/R24_SMOKE_REPORT.md"
-echo "Нажми любую клавишу для выхода..."
-read -k 1
+if [[ -t 0 ]]; then
+  echo "Нажми любую клавишу для выхода..."
+  read -k 1
+fi
