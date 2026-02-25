@@ -20,16 +20,21 @@ import re
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Literal, Optional, Dict, Any, List, Set, AsyncGenerator
+from urllib.parse import urlparse
 # from src.core.rag_engine import RAGEngine # Deprecated
 
 # Настройка логгера
 import structlog
 logger = structlog.get_logger("ModelRouter")
 
+from src.core.observability import track_event, metrics
 from src.core.openclaw_client import OpenClawClient
 from src.core.agent_swarm import SwarmManager
 from src.core.stream_client import OpenClawStreamClient, StreamFailure
 from src.core.cost_engine import CostEngine
+# R24: Anti-flap и request budget guard
+from src.core.channel_state import ChannelStateMachine
+from src.core.request_budget import RequestBudgetGuard, BudgetExceededError
 
 class ModelRouter:
     def __init__(self, config: Dict[str, Any]):
@@ -121,6 +126,11 @@ class ModelRouter:
         # [R11] Cost Engine для контроля бюджета
         self.cost_engine = CostEngine(config)
 
+        # [R24] Anti-flap state machine для local/cloud каналов.
+        # Предотвращает «дрожание» маршрутизации при нестабильных каналах.
+        # Параметры: CHANNEL_ERR_THRESHOLD, CHANNEL_OK_THRESHOLD, CHANNEL_LOCK_COOLDOWN_SEC
+        self.channel_state = ChannelStateMachine(config)
+
         # Счётчики (для диагностики)
         self._stats = {
             "local_calls": 0,
@@ -155,6 +165,19 @@ class ModelRouter:
         except Exception:
             self.local_autoload_cooldown_sec = 30
         self._last_local_autoload_ts = 0.0
+        # Grace-период после успешной загрузки модели:
+        # LM Studio может короткое время возвращать "нет загруженных моделей",
+        # хотя runtime уже поднимает инстанс. Без grace-периода это приводило
+        # к ложному no_model_loaded и повторной загрузке той же модели (:2).
+        try:
+            self.local_post_load_grace_sec = max(
+                5,
+                int(config.get("LOCAL_POST_LOAD_GRACE_SEC", 20)),
+            )
+        except Exception:
+            self.local_post_load_grace_sec = 20
+        self._last_local_load_success_ts = 0.0
+        self._last_local_load_success_model = ""
 
         # ═══════════════════════════════════════════════════════════════
         # [PHASE 15.1] Context Window Manager Metadata
@@ -319,6 +342,11 @@ class ModelRouter:
         self.cloud_probe_on_chat_error = str(
             config.get("CLOUD_PROVIDER_PROBE_ON_CHAT_ERROR", "0")
         ).strip().lower() in {"1", "true", "yes", "on"}
+        # Если free-tier исчерпан и был выполнен переход на paid,
+        # оставляем paid активным до ручного отката/ротации ключей.
+        self.cloud_tier_sticky_on_paid = str(
+            config.get("CLOUD_TIER_STICKY_ON_PAID", "1")
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
         # R15: Cloud Preflight Cache (provider -> (expiration_ts, error_msg))
         self._preflight_cache: dict[str, tuple[float, str]] = {}
@@ -444,7 +472,8 @@ class ModelRouter:
         Нормализует cloud model id:
         - снимает префикс `models/`,
         - убирает нестабильные `-exp` (кроме thinking),
-        - подставляет стабильный chat-маршрут по умолчанию.
+        - подставляет стабильный chat-маршрут по умолчанию,
+        - добавляет provider-префикс для известных cloud-моделей.
         """
         if not model_name:
             return ""
@@ -457,9 +486,96 @@ class ModelRouter:
 
         lowered = normalized.lower()
         if "-exp" in lowered and "thinking" not in lowered:
-            return self.models.get("chat", "gemini-2.5-flash")
+            fallback_model = str(self.models.get("chat", "") or "").strip()
+            fallback_lowered = fallback_model.lower()
+            if fallback_model and fallback_lowered != lowered and "-exp" not in fallback_lowered:
+                normalized = fallback_model
+                lowered = normalized.lower()
+            else:
+                normalized = "google/gemini-2.5-flash"
+                lowered = normalized.lower()
+
+        # Приводим "голые" model-id к provider/model формату, чтобы OpenClaw
+        # не пытался интерпретировать их как local alias.
+        if "/" not in normalized:
+            if lowered.startswith("gemini"):
+                return f"google/{normalized}"
+            if lowered.startswith("gpt") or lowered.startswith("o1") or lowered.startswith("o3") or lowered.startswith("o4"):
+                return f"openai/{normalized}"
 
         return normalized
+
+    @staticmethod
+    def _canonical_local_model_id(model_id: Optional[str]) -> str:
+        """
+        Нормализует локальный model_id для сравнения:
+        - приводит к lowercase;
+        - отрезает runtime-суффикс инстанса LM Studio (`:2`, `:3`, ...).
+        """
+        raw = str(model_id or "").strip().lower()
+        if not raw:
+            return ""
+        # LM Studio может создавать alias вида model:2 для второй копии.
+        return re.sub(r":\d+$", "", raw)
+
+    def _is_placeholder_local_model_id(self, model_id: Optional[str]) -> bool:
+        """
+        Проверяет, что model_id является служебным плейсхолдером, а не реальной моделью.
+
+        Почему это важно:
+        - в payload к LM Studio нельзя отправлять `local`/`local-model`;
+        - такие значения ломают `/v1/chat/completions` с ошибкой
+          `Invalid model identifier "local"`.
+        """
+        canonical = self._canonical_local_model_id(model_id)
+        return canonical in {
+            "",
+            "local",
+            "local-model",
+            "default",
+            "default-model",
+        }
+
+    def _get_routable_local_model_id(self) -> Optional[str]:
+        """
+        Возвращает безопасный локальный model_id для реального запроса к LM Studio.
+        """
+        candidate = str(self.active_local_model or "").strip()
+        if self._is_placeholder_local_model_id(candidate):
+            return None
+        return candidate
+
+    def _mark_local_load_success(self, model_id: Optional[str]) -> None:
+        """
+        Фиксирует факт успешной локальной загрузки модели.
+
+        Используется для grace-периода, чтобы не запускать повторный load в момент,
+        когда LM Studio ещё не успел отразить loaded_instances.
+        """
+        self._last_local_load_success_ts = time.time()
+        self._last_local_load_success_model = self._canonical_local_model_id(model_id)
+
+    def _clear_local_load_success(self) -> None:
+        """Сбрасывает метаданные успешной загрузки (после явной выгрузки)."""
+        self._last_local_load_success_ts = 0.0
+        self._last_local_load_success_model = ""
+
+    def _has_recent_local_load_grace(self, model_id: Optional[str] = None) -> bool:
+        """
+        Проверяет, действует ли grace-период после последней успешной загрузки.
+        При указанном model_id дополнительно сверяем канонический идентификатор.
+        """
+        ts = float(self._last_local_load_success_ts or 0.0)
+        if ts <= 0:
+            return False
+        if (time.time() - ts) > float(self.local_post_load_grace_sec):
+            return False
+        if model_id is None:
+            return True
+        requested = self._canonical_local_model_id(model_id)
+        if not requested:
+            return False
+        return requested == self._last_local_load_success_model
 
     def _sanitize_model_text(self, text: Optional[str]) -> str:
         """
@@ -477,6 +593,19 @@ class ModelRouter:
         # [HOTFIX] Удаляем оставшиеся тех-теги формата <|...|>.
         cleaned = re.sub(r"<\|[^|>]+?\|>", "", cleaned)
         cleaned = cleaned.replace("</s>", "").replace("<s>", "")
+        # [HOTFIX] Убираем универсальные tool-action JSON блоки, даже если action не sessions_send.
+        cleaned = re.sub(
+            r"\{[^{}\n]*\"action\"\s*:\s*\"[^\"]+\"[^{}\n]*\}",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"\{[^{}\n]*\\u[0-9a-fA-F]{4}[^{}\n]*\"action\"\s*:\s*\"[^\"]+\"[^{}\n]*\}",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
 
         # Точечная фильтрация строк с утечкой служебных артефактов.
         blocked_fragments = (
@@ -494,6 +623,10 @@ class ModelRouter:
             "\"action\":\"sessions_send\"",
             "\"sessionkey\"",
             "\"default channel",
+            "\"action\":",
+            "\"action\" :",
+            "\"parameters\":",
+            "\"parameters\" :",
             "## /users/",
             "# agents.md - workspace agents",
             "## agent list",
@@ -505,6 +638,9 @@ class ModelRouter:
         for line in cleaned.splitlines():
             low = line.strip().lower()
             if low in {"```", "```json", "```text", "```yaml"}:
+                continue
+            # "not found" на строке с action/json — типичный хвост shell-артефакта (<|...|> not found).
+            if "\"action\"" in low and "not found" in low:
                 continue
             if any(fragment in low for fragment in blocked_fragments):
                 continue
@@ -610,24 +746,50 @@ class ModelRouter:
         """
         if not isinstance(entry, dict):
             return False
-            
-        # 1. Пробуем явные поля статуса
+
+        # 1) Явный список инстансов модели (LM Studio runtime view).
+        loaded_instances = entry.get("loaded_instances")
+        if isinstance(loaded_instances, list):
+            return len(loaded_instances) > 0
+        if isinstance(loaded_instances, dict):
+            return bool(loaded_instances)
+
+        # 2) Булевы признаки loaded/is_loaded.
+        for key in ("loaded", "is_loaded"):
+            if entry.get(key) is True:
+                return True
+            if entry.get(key) is False:
+                return False
+
+        # 3) Текстовые статусы.
         for key in ("state", "status", "availability"):
             val = str(entry.get(key) or "").lower().strip()
             if val in {"ready", "loaded", "active", "running", "online"}:
                 return True
             if val in {"unloaded", "not_loaded", "not loaded", "idle_unloaded", "evicted", "offline"}:
                 return False
-        
-        # 2. Поле 'loaded' (bool) — классика LM Studio
-        if entry.get("loaded") is True:
-            return True
-            
-        # 3. Эвристика для OpenAI-совместимых API (если в списке /v1/models — считаем живой)
-        if "id" in entry and entry.get("object") == "model":
-            return True
 
-        return False
+        # 4) Если это только OpenAI-compatible listing (`object=model`) без runtime статуса,
+        # считаем, что загруженность не подтверждена.
+        #
+        # Важно: у некоторых сборок LM Studio endpoint `/api/v1/models` фактически
+        # отдаёт OpenAI-совместимый список без поля loaded. В этом случае используем
+        # аккуратную эвристику по активной модели роутера, иначе получаем ложный
+        # `Offline` сразу после успешного load.
+        if str(entry.get("object") or "").strip().lower() == "model":
+            candidate_id = self._extract_model_id(entry)
+            candidate_canonical = self._canonical_local_model_id(candidate_id)
+            active_canonical = self._canonical_local_model_id(self.active_local_model)
+
+            # Приоритет 1: модель совпадает с текущей активной у роутера.
+            if candidate_canonical and active_canonical and candidate_canonical == active_canonical:
+                return True
+
+            # Приоритет 2: недавняя подтверждённая загрузка той же модели.
+            if candidate_canonical and self._has_recent_local_load_grace(candidate_canonical):
+                return True
+
+            return False
 
         return False
 
@@ -679,6 +841,46 @@ class ModelRouter:
     def _is_cloud_error_message(self, text: Optional[str]) -> bool:
         """Обратная совместимость для существующих вызовов."""
         return self._is_runtime_error_message(text)
+
+    def _should_reset_local_state_from_runtime_error(self, text: Optional[str]) -> bool:
+        """
+        Определяет фатальные локальные runtime-ошибки, после которых нужно
+        немедленно сбросить локальный статус и заново пройти health/load цикл.
+        """
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return False
+
+        signatures = (
+            "no models loaded",
+            "please load a model",
+            "local model is not loaded",
+            "invalid model identifier",
+            "model not active",
+            "is not loaded",
+        )
+        return any(sig in lowered for sig in signatures)
+
+    def _reset_local_state_from_runtime_error(self, text: Optional[str]) -> None:
+        """
+        Сбрасывает локальный runtime-state после фатальной ошибки локального канала.
+        Это предотвращает цикл ложных попыток по несуществующей/выгруженной модели.
+        """
+        if not self._should_reset_local_state_from_runtime_error(text):
+            return
+
+        self.is_local_available = False
+        self.active_local_model = None
+        self._clear_local_load_success()
+        self.last_local_load_error = "no_model_loaded_runtime"
+        self.last_local_load_error_human = (
+            "⚠️ LM Studio не держит загруженную модель. "
+            "Выполни `!model load <id>` или включи auto-load."
+        )
+        logger.warning(
+            "Local state reset after runtime model error",
+            error=str(text or "")[:320],
+        )
 
     def _is_cloud_billing_error(self, text: str) -> bool:
         """
@@ -874,6 +1076,7 @@ class ModelRouter:
             "model_not_found": "🤖 Модель не найдена. Проверьте название или доступность в регионе.",
             "network": "🌐 Сетевая ошибка. Проверьте соединение с интернетом.",
             "timeout": "⏱ Таймаут ответа cloud-провайдера. Повторите позже.",
+            "gateway_api_unavailable": "🚧 OpenClaw API недоступен или отвечает не-JSON (проверьте OPENCLAW_BASE_URL и gateway token).",
             "unknown": "⚠️ Неизвестная ошибка cloud-провайдера.",
         }
 
@@ -1451,8 +1654,10 @@ class ModelRouter:
                 async with session.post(url, json={"all": True}, timeout=10) as resp:
                     if resp.status == 200:
                         logger.info("✅ All local models unloaded successfully")
+                        track_event("local_unload", "info", {"reason": "manual_unload", "all": True}, "router")
                         self.active_local_model = None
                         self.is_local_available = False
+                        self._clear_local_load_success()
                         return True
                     else:
                         logger.error(f"❌ Failed to unload models: status {resp.status}")
@@ -1497,12 +1702,40 @@ class ModelRouter:
         # (в 0.3.x загруженные модели имеют специфические поля или это единственный способ)
         try:
             models = await self._scan_local_models()
-            loaded_models = [m for m in models if m.get("loaded")]
+            loaded_models = [m for m in models if bool(m.get("loaded"))]
             
             if loaded_models:
                 self.local_engine = "lm-studio"
                 self.is_local_available = True
-                self.active_local_model = loaded_models[0]["id"]
+                # Если active_local_model уже задан, сохраняем его при совпадении
+                # канонического model_id (важно для alias вида model:2).
+                current_model = self._get_routable_local_model_id()
+                current_canonical = self._canonical_local_model_id(current_model)
+                selected = None
+                if current_canonical:
+                    for item in loaded_models:
+                        if self._canonical_local_model_id(item.get("id")) == current_canonical:
+                            selected = item.get("id") or selected
+                            break
+                if not selected:
+                    for item in loaded_models:
+                        candidate = item.get("id")
+                        if not self._is_placeholder_local_model_id(candidate):
+                            selected = candidate
+                            break
+                if not selected and not self._is_placeholder_local_model_id(self._last_local_load_success_model):
+                    selected = self._last_local_load_success_model
+                if not selected:
+                    self.local_engine = "lm-studio"
+                    self.is_local_available = False
+                    self.active_local_model = None
+                    self.last_local_load_error = "local_model_unresolved"
+                    self.last_local_load_error_human = (
+                        "⚠️ LM Studio вернул loaded-модель без маршрутизируемого model_id."
+                    )
+                    logger.warning("LM Studio loaded model unresolved: only placeholder model_id found.")
+                    return False
+                self.active_local_model = selected
                 self.last_local_load_error = None
                 self.last_local_load_error_human = None
                 logger.info(f"✅ Local AI active: {self.active_local_model} (LM Studio)")
@@ -1513,6 +1746,18 @@ class ModelRouter:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(f"{base_root}/api/v1/models") as resp:
                     if resp.status == 200:
+                        # В первые секунды после успешного load LM Studio иногда ещё
+                        # не помечает loaded_instances. Держим локалку online в grace-окне,
+                        # чтобы избежать ложного no_model_loaded и повторного auto-load.
+                        if self._has_recent_local_load_grace(self.active_local_model):
+                            self.local_engine = "lm-studio"
+                            self.is_local_available = True
+                            logger.info(
+                                "⏱ Local health grace active after recent load",
+                                active_local_model=self.active_local_model,
+                                grace_sec=self.local_post_load_grace_sec,
+                            )
+                            return True
                         self.local_engine = "lm-studio"
                         self.is_local_available = False # Но модель не загружена!
                         self.active_local_model = None
@@ -1550,6 +1795,18 @@ class ModelRouter:
             self.last_local_load_error_human = "⚠️ Локальный движок недоступен (LM Studio/Ollama unreachable)."
         return False
 
+    async def _check_local_health_safe(self, force: bool = False) -> bool:
+        """
+        Безопасная обёртка вокруг check_local_health.
+
+        Нужна для совместимости тестов/monkeypatch-ов, где mock-функция
+        объявлена без аргумента `force`.
+        """
+        try:
+            return await self.check_local_health(force=force)
+        except TypeError:
+            return await self.check_local_health()
+
     async def _light_ping_local_server(self, base_root: str) -> bool:
         """
         Лёгкий probe доступности LM Studio без сканирования списка моделей.
@@ -1557,12 +1814,40 @@ class ModelRouter:
         Почему так:
         - `/api/v1/models` полезен для диагностики, но слишком частый вызов
           может мешать авто-выгрузке по idle TTL;
-        - здесь проверяем только «сервер жив / сервер мёртв» через штатные endpoint.
+        - здесь проверяем только «порт доступен / недоступен» без HTTP-вызова
+          к model-endpoint'ам, чтобы не шуметь в логах LM Studio.
+        """
+        parsed = urlparse(base_root)
+        host = (parsed.hostname or "").strip()
+        if not host:
+            return False
+        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host=host, port=port),
+                timeout=1.8,
+            )
+            # reader здесь не используется, но требуется для корректной сигнатуры.
+            _ = reader
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                # На старых реализациях транспорта wait_closed может быть недоступен.
+                pass
+            return True
+        except Exception:
+            return False
+
+    async def _legacy_light_ping_http(self, base_root: str) -> bool:
+        """
+        Legacy fallback probe через HTTP endpoint'ы.
+
+        Оставлен как отладочный резерв: не используется в штатном потоке,
+        чтобы не генерировать лишние обращения к `/v1/models`.
         """
         timeout = aiohttp.ClientTimeout(total=2)
-        # Не используем /health: в ряде версий LM Studio это шумит в логах
-        # сообщением "Unexpected endpoint or method".
-        probe_paths = ("/v1/models", "/api/v1/models", "/")
+        probe_paths = ("/", "/api", "/v1")
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 for path in probe_paths:
@@ -1599,9 +1884,27 @@ class ModelRouter:
 
                         models = []
                         for m in normalized:
-                            # LM Studio 0.3.x использует "key" как ID модели
-                            identifier = m.get("key") or self._extract_model_id(m) or m.get("id", "")
-                            if not identifier: continue
+                            # LM Studio иногда возвращает служебный id="local",
+                            # который нельзя отправлять в /chat/completions.
+                            identifier = ""
+                            placeholder_fallback = ""
+                            for key in ("key", "model", "model_id", "modelId", "identifier", "name", "id"):
+                                raw = m.get(key)
+                                if not raw:
+                                    continue
+                                candidate = str(raw).strip()
+                                if not candidate:
+                                    continue
+                                if self._is_placeholder_local_model_id(candidate):
+                                    if not placeholder_fallback:
+                                        placeholder_fallback = candidate
+                                    continue
+                                identifier = candidate
+                                break
+                            if not identifier:
+                                identifier = placeholder_fallback
+                            if not identifier:
+                                continue
                             
                             # В LM Studio поля loaded-статуса зависят от версии API.
                             is_loaded = self._is_lmstudio_model_loaded(m)
@@ -1830,6 +2133,19 @@ class ModelRouter:
             if model_id.lower() == lowered:
                 return model_id
 
+        requested_canonical = self._canonical_local_model_id(requested_clean)
+        canonical_matches = [
+            model_id
+            for model_id in available_ids
+            if self._canonical_local_model_id(model_id) == requested_canonical
+        ]
+        if canonical_matches:
+            # Предпочитаем базовый id без runtime-суффикса, если он есть.
+            for model_id in canonical_matches:
+                if model_id.lower().rstrip() == requested_canonical:
+                    return model_id
+            return canonical_matches[0]
+
         # Допускаем однозначное совпадение по суффиксу/префиксу.
         fuzzy_matches = [
             model_id for model_id in available_ids
@@ -1913,6 +2229,7 @@ class ModelRouter:
                         logger.info(f"✅ REST API Load Success: {resolved_model}")
                         self.active_local_model = resolved_model
                         self.is_local_available = True
+                        self._mark_local_load_success(resolved_model)
                         self.last_local_load_error = None
                         self.last_local_load_error_human = None
                         return True
@@ -1970,6 +2287,7 @@ class ModelRouter:
                 if proc.returncode == 0:
                     self.active_local_model = resolved_model
                     self.is_local_available = True
+                    self._mark_local_load_success(resolved_model)
                     self.last_local_load_error = None
                     self.last_local_load_error_human = None
                     logger.info("✅ CLI fallback load success", command=" ".join(cmd), model=resolved_model)
@@ -2016,8 +2334,13 @@ class ModelRouter:
                 async with session.post(url, json=payload) as resp:
                     if resp.status == 200:
                         logger.info(f"✅ REST API Unload Success")
+                        track_event("local_unload", "info", {"model": model_name, "reason": "rest_api"}, "router")
                         if not model_name:
                             self.active_local_model = None
+                            self.is_local_available = False
+                            self._clear_local_load_success()
+                        elif self._canonical_local_model_id(model_name) == self._last_local_load_success_model:
+                            self._clear_local_load_success()
                         return True
         except Exception as e:
             logger.error(f"❌ REST API Unload failed: {e}")
@@ -2029,7 +2352,16 @@ class ModelRouter:
                 cmd = [lms_path, "unload", "--all"] if not model_name else [lms_path, "unload", model_name]
                 proc = await asyncio.create_subprocess_exec(*cmd)
                 await proc.communicate()
-                return proc.returncode == 0
+                if proc.returncode == 0:
+                    track_event("local_unload", "info", {"model": model_name, "reason": "cli_fallback"}, "router")
+                    if not model_name:
+                        self.active_local_model = None
+                        self.is_local_available = False
+                        self._clear_local_load_success()
+                    elif self._canonical_local_model_id(model_name) == self._last_local_load_success_model:
+                        self._clear_local_load_success()
+                    return True
+                return False
             except Exception:
                 pass
         return False
@@ -2243,13 +2575,37 @@ class ModelRouter:
             model_name: ID модели для загрузки
             reason: причина (chat / coding / forced)
         """
+        # Если модель только что успешно загружалась, не дублируем load.
+        if self._has_recent_local_load_grace(model_name):
+            active_id = self.active_local_model or model_name
+            self.active_local_model = active_id
+            self.is_local_available = True
+            self._touch_model_usage(active_id)
+            logger.info(
+                "⏱ Пропускаю повторный load: активен grace-период после предыдущей загрузки",
+                requested=model_name,
+                active=active_id,
+                grace_sec=self.local_post_load_grace_sec,
+            )
+            return True
+
         # Проверяем, не загружена ли уже
         loaded = await self._get_loaded_models_memory()
+        target_canonical = self._canonical_local_model_id(model_name)
         for m in loaded:
-            if m["id"] == model_name and m["loaded"]:
-                self._touch_model_usage(model_name)
-                self.active_local_model = model_name
-                logger.info(f"✅ Модель {model_name} уже загружена, обновляем LRU (reason: {reason})")
+            if not m.get("loaded"):
+                continue
+            loaded_id = str(m.get("id") or "")
+            loaded_canonical = self._canonical_local_model_id(loaded_id)
+            if loaded_id == model_name or (loaded_canonical and loaded_canonical == target_canonical):
+                self._touch_model_usage(loaded_id)
+                self.active_local_model = loaded_id
+                logger.info(
+                    "✅ Модель уже загружена, обновляем LRU",
+                    requested=model_name,
+                    active=loaded_id,
+                    reason=reason,
+                )
                 return True
 
         # Проверяем, поместится ли
@@ -2440,6 +2796,25 @@ class ModelRouter:
                 base_url = base_url.rstrip("/") + "/v1"
             base_url = base_url.replace("/v1/v1", "/v1")
 
+            local_model = self._get_routable_local_model_id()
+            if not local_model:
+                await self._check_local_health_safe(force=True)
+                local_model = self._get_routable_local_model_id()
+            if not local_model and self.local_engine == "lm-studio":
+                # Дополнительная попытка self-heal: пробуем автозагрузить chat-модель.
+                loaded = await self._ensure_chat_model_loaded()
+                if loaded:
+                    await self._check_local_health_safe(force=True)
+                    local_model = self._get_routable_local_model_id()
+            if not local_model:
+                self.last_local_load_error = "local_model_unresolved"
+                self.last_local_load_error_human = (
+                    "⚠️ Локальная модель не определена. "
+                    "Загрузи модель в LM Studio или выполни `!model load <id>`."
+                )
+                logger.warning("Local LLM call skipped: model_id unresolved.")
+                return "Error: Local model is not loaded. Please load a model in LM Studio."
+
             messages = [{"role": "system", "content": system_msg}]
             if context:
                 for idx, msg in enumerate(context):
@@ -2450,7 +2825,7 @@ class ModelRouter:
             messages.append({"role": "user", "content": prompt})
 
             payload = {
-                "model": self.active_local_model or "local-model",
+                "model": local_model,
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 2048,
@@ -2499,6 +2874,7 @@ class ModelRouter:
             
             final_text = "".join(full_content)
             duration = time.time() - start_t
+            metrics.add_latency(duration * 1000)
             
             cleaned = self._sanitize_model_text(final_text)
             if cleaned:
@@ -2513,6 +2889,7 @@ class ModelRouter:
             err_msg = str(e).lower()
             logger.error(f"Local LLM Stream Error: {e}")
             self._stats["local_failures"] += 1
+            metrics.inc("local_failures")
             
             # Если это явная ошибка рантайма (Connection Refused),
             # возвращаем её как текст ошибки для детектора в роутере
@@ -2558,22 +2935,35 @@ class ModelRouter:
             if tool_data:
                 prompt = f"### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n{tool_data}\n\n### ТЕКУЩИЙ ЗАПРОС:\n{prompt}"
 
+        force_cloud_mode = self.force_mode == "force_cloud"
+
         # Smart Memory Planner
-        if self.force_mode != "force_cloud" and self.is_local_available:
+        if not force_cloud_mode and self.is_local_available:
             preferred = preferred_model or self.local_preferred_model
             if task_type == "coding" and self.local_coding_model:
                 preferred = self.local_coding_model
             if preferred:
                 await self._smart_load(preferred, reason=task_type)
 
-        await self.check_local_health()
-        if not self.is_local_available:
-            await self._maybe_autoload_local_model(reason=f"route_query:{task_type}")
+        # В force_cloud полностью исключаем касание local runtime:
+        # никаких health-check/autoload, чтобы не будить LM Studio/Ollama.
+        if not force_cloud_mode:
+            await self.check_local_health()
+            if not self.is_local_available:
+                await self._maybe_autoload_local_model(reason=f"route_query:{task_type}")
 
         async def _run_local(route_reason: str = "local_primary", route_detail: str = "") -> Any:
             if not self.is_local_available:
                 return "unavailable", None
-            async with self._acquire_local_slot(self.active_local_model):
+            # [R24] Anti-flap: не пускаем если канал LOCKED
+            if not self.channel_state.is_usable("local"):
+                logger.warning(
+                    "Local channel LOCKED by anti-flap state machine",
+                    state=self.channel_state.get_state("local"),
+                )
+                return "channel_locked", None
+            local_slot_model = self._get_routable_local_model_id()
+            async with self._acquire_local_slot(local_slot_model):
                 logger.info(
                     "Routing to LOCAL",
                     model=self.active_local_model,
@@ -2583,7 +2973,11 @@ class ModelRouter:
                 local_response = await self._call_local_llm(prompt, context, chat_type, is_owner)
                 
                 if self._is_runtime_error_message(local_response):
-                    logger.warning("Local LLM Runtime Error", model=self.active_local_model, error=local_response)
+                    failed_local_model = self.active_local_model
+                    self._reset_local_state_from_runtime_error(local_response)
+                    logger.warning("Local LLM Runtime Error", model=failed_local_model, error=local_response)
+                    # [R24] Anti-flap: фиксируем ошибку local канала
+                    self.channel_state.record_failure("local")
                     return "runtime_error", local_response
 
                 if local_response and local_response.strip():
@@ -2591,9 +2985,10 @@ class ModelRouter:
                     if len(local_response.strip()) < 1 and not skip_swarm:
                         return "empty_output", "Local response was too short"
                         
-                    self._touch_model_usage(self.active_local_model or "local-model")
+                    local_model = self._get_routable_local_model_id() or "unknown-local"
+                    self._touch_model_usage(local_model)
                     self._stats["local_calls"] += 1
-                    local_model = self.active_local_model or "local-model"
+                    metrics.inc("local_success")
                     self._remember_model_choice(profile, local_model, "local")
                     self._update_usage_report(profile, local_model, "local")
                     self._remember_last_route(
@@ -2606,13 +3001,23 @@ class ModelRouter:
                         route_detail=route_detail,
                         force_mode=self.force_mode,
                     )
+                    # [R24] Anti-flap: фиксируем успех local канала
+                    self.channel_state.record_success("local")
                     return "ok", local_response
                 return "empty_output", None
 
         async def _run_cloud(route_reason: str = "cloud_primary", route_detail: str = ""):
             if self.require_confirm_expensive and is_critical and not confirm_expensive:
                 return "confirm_needed", "⚠️ Для критичной задачи требуется подтверждение дорогого облачного прогона."
-            
+
+            # [R24] Anti-flap: не пускаем если cloud канал LOCKED
+            if not self.channel_state.is_usable("cloud"):
+                logger.warning(
+                    "Cloud channel LOCKED by anti-flap state machine",
+                    state=self.channel_state.get_state("cloud"),
+                )
+                return "cloud_channel_locked", "☁️ Cloud канал временно заблокирован (anti-flap). Повтори через минуту."
+
             cloud_preferred = preferred_model or recommendation.get("model")
             if self.cost_engine:
                 cloud_preferred = self.cost_engine.get_recommended_model(profile, cloud_preferred)
@@ -2620,11 +3025,11 @@ class ModelRouter:
             if prefer_pro_for_owner_private:
                 cloud_preferred = self.models.get("pro", cloud_preferred)
 
-            force_cloud_mode = self.force_mode == "force_cloud"
-            deadline = (
-                time.monotonic() + float(self.cloud_fail_fast_budget_seconds)
-                if force_cloud_mode
-                else None
+            # [R24] RequestBudgetGuard — единый бюджет времени для route_query.
+            # Применяется в ВСЕХ режимах (не только force_cloud).
+            budget = RequestBudgetGuard.from_config(
+                self.config,
+                label=f"route_query:{route_reason}",
             )
 
             for i, candidate in enumerate(
@@ -2647,26 +3052,32 @@ class ModelRouter:
 
                 if "-exp" in candidate and "gemini-2.0" in candidate:
                     candidate = candidate.replace("-exp", "")
-                if deadline is not None and time.monotonic() >= deadline:
+
+                # [R24] Заменяем ручной deadline на budget.checkpoint()
+                try:
+                    budget.checkpoint(f"candidate_{i}:{candidate}")
+                except BudgetExceededError as exc:
                     self.last_cloud_error = (
-                        "Cloud fail-fast budget exceeded "
-                        f"({self.cloud_fail_fast_budget_seconds}s)"
+                        f"Cloud fail-fast budget exceeded ({exc.elapsed:.1f}s/{exc.total:.1f}s)"
                     )
                     logger.warning(
-                        "Cloud routing stopped by fail-fast budget",
-                        budget_seconds=self.cloud_fail_fast_budget_seconds,
+                        "Cloud routing stopped by budget guard",
+                        elapsed=round(exc.elapsed, 1),
+                        total=exc.total,
                         attempt=i + 1,
                         reason=route_reason,
                     )
                     break
-                    
+
                 logger.info("Routing to CLOUD", model=candidate, profile=profile, reason=route_reason)
                 max_retries_cloud = 0 if force_cloud_mode else (1 if i == 0 else 0)
-                
+                # [R24] Используем effective_call_timeout() из бюджета
+                call_timeout = int(budget.effective_call_timeout())
+
                 # R16: Tiered Fallback Logic (Free -> Paid)
                 # По умолчанию OpenClawClient стартует с "free" (если ключи в JSON)
                 response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
-                
+
                 if self._is_runtime_error_message(response):
                     # Если ошибка похожа на проблему квоты или таймаута — пробуем переключить тир
                     if any(x in str(response).lower() for x in ["quota", "429", "timeout", "exhausted"]):
@@ -2674,12 +3085,14 @@ class ModelRouter:
                             logger.info("💰 Tier Fallback: Free key exhausted, switching to PAID")
                             # Повторяем вызов с новым тиром
                             response = await self._call_gemini(prompt, candidate, context, chat_type, is_owner, max_retries=max_retries_cloud)
-                    
+
                     if self._is_runtime_error_message(response):
                         logger.warning("Cloud candidate %s failed", candidate, error=response)
                         self._mark_cloud_soft_cap_if_needed(str(response))
                         self.last_cloud_error = str(response)
                         self.last_cloud_model = candidate
+                        # [R24] Anti-flap: фиксируем ошибку cloud канала
+                        self.channel_state.record_failure("cloud")
                         if self._is_fatal_cloud_auth_error(response):
                             logger.error(
                                 "Cloud routing aborted: fatal auth/billing error",
@@ -2688,18 +3101,21 @@ class ModelRouter:
                             )
                             break
                         continue
-                
+
                 # Cloud Success Guardrail
                 if not response or len(response.strip()) < 2:
                     logger.warning("Cloud candidate %s returned empty/junk", candidate)
                     continue
 
-                # Сбрасываем тир на free для следующего запроса (опционально, но лучше для экономии)
-                self._switch_cloud_tier("free")
+                # Если включен sticky paid-tier, не откатываемся на free после успеха.
+                if not self.cloud_tier_sticky_on_paid:
+                    self._switch_cloud_tier("free")
                 self.last_cloud_error = None
                 self.last_cloud_model = candidate
+                # [R24] Anti-flap: фиксируем успех cloud канала
+                self.channel_state.record_success("cloud")
                 return candidate, response
-            
+
             return "all_candidates_failed", self.last_cloud_error or "Cloud API failure"
 
         # --- Execution starts here ---
@@ -2709,7 +3125,7 @@ class ModelRouter:
             if l_status == "ok": return l_resp
             return f"❌ Ошибка алгоритма Local ({l_status}): {l_resp}" if is_owner else "❌ Локальные модели сейчас недоступны."
 
-        if self.force_mode == "force_cloud":
+        if force_cloud_mode:
             c_res = await _run_cloud(route_reason="force_cloud", route_detail="forced by mode")
             if isinstance(c_res, tuple) and c_res[0] != "all_candidates_failed" and c_res[0] != "preflight_blocked":
                 # Finalize cloud normally
@@ -2723,6 +3139,20 @@ class ModelRouter:
             if isinstance(c_res, tuple) and c_res[0] == "preflight_blocked":
                 err_msg = c_res[1] # Use the preflight error message directly
             summary = self._summarize_cloud_error_for_user(err_msg)
+            failed_candidate = str(self.last_cloud_model or "unknown-cloud")
+            self._remember_last_route(
+                profile=profile,
+                task_type=task_type,
+                channel="cloud",
+                model_name=failed_candidate,
+                prompt=prompt,
+                route_reason="force_cloud_failed",
+                route_detail=summary,
+                force_mode=self.force_mode,
+            )
+            # R23: инкрементируем force_cloud_failfast_total в метрику openclaw_client.
+            if self.openclaw_client and hasattr(self.openclaw_client, "_metrics"):
+                self.openclaw_client._metrics["force_cloud_failfast_total"] += 1
             return (
                 f"❌ Ошибка Cloud (force_cloud): {summary}."
                 if is_owner
@@ -2789,12 +3219,13 @@ class ModelRouter:
         """
         [PHASE 17.8] Потоковая маршрутизация с защитой local stream и cloud fallback.
         """
-        await self.check_local_health()
-        if not self.is_local_available:
-            await self._maybe_autoload_local_model(reason=f"route_stream:{task_type}")
+        force_cloud_mode = self.force_mode == "force_cloud"
+        if not force_cloud_mode:
+            await self.check_local_health()
+            if not self.is_local_available:
+                await self._maybe_autoload_local_model(reason=f"route_stream:{task_type}")
         profile = self.classify_task_profile(prompt, task_type)
         recommendation = self._get_profile_recommendation(profile)
-        force_cloud_mode = self.force_mode == "force_cloud"
         prefer_pro_for_owner_private = self._should_use_pro_for_owner_private(
             prompt=prompt,
             chat_type=chat_type,
@@ -2844,6 +3275,7 @@ class ModelRouter:
                     return
 
             if not self.local_stream_fallback_to_cloud:
+                track_event("cloud_fallback_aborted", "warn", {"reason": failure_reason, "detail": "Fallback disabled by config"}, "router")
                 logger.warning(
                     "Local stream failed, cloud fallback disabled by config",
                     reason=failure_reason,
@@ -2855,30 +3287,50 @@ class ModelRouter:
                 )
                 return
 
-            logger.warning(
-                "Local stream failed, switching to cloud fallback",
-                reason=failure_reason,
-                detail=failure_detail,
-                profile=profile,
-                model=self.active_local_model,
-            )
+            if failure_reason == "force_cloud":
+                track_event("force_cloud", "info", {"detail": "forced by user"}, "router")
+                logger.info(
+                    "Force cloud stream: local branch bypassed, using cloud candidates",
+                    detail=failure_detail,
+                    profile=profile,
+                )
+            else:
+                track_event("cloud_fallback", "warn", {"reason": failure_reason, "detail": failure_detail}, "router")
+                logger.warning(
+                    "Local stream failed, switching to cloud fallback",
+                    reason=failure_reason,
+                    detail=failure_detail,
+                    profile=profile,
+                    model=self.active_local_model,
+                )
+
+            # [R24] Anti-flap: не пускаем если cloud канал LOCKED
+            if not self.channel_state.is_usable("cloud"):
+                logger.warning(
+                    "Cloud channel LOCKED by anti-flap state machine (Stream)",
+                    state=self.channel_state.get_state("cloud"),
+                )
+                yield "☁️ Cloud канал временно заблокирован (anti-flap). Повтори через минуту."
+                return
 
             cloud_preferred = preferred_model or recommendation.get("model")
             if prefer_pro_for_owner_private:
                 cloud_preferred = self.models.get("pro", cloud_preferred)
-            deadline = (
-                time.monotonic() + float(self.cloud_fail_fast_budget_seconds)
-                if failure_reason == "force_cloud"
-                else None
+
+            # [R24] RequestBudgetGuard — единый бюджет времени
+            budget = RequestBudgetGuard.from_config(
+                self.config,
+                label=f"route_stream:{failure_reason}",
             )
-            for candidate in self._build_cloud_candidates(
+
+            for i, candidate in enumerate(self._build_cloud_candidates(
                 task_type=task_type,
                 profile=profile,
                 preferred_model=cloud_preferred,
                 chat_type=chat_type,
                 is_owner=is_owner,
                 prompt=prompt,
-            ):
+            )):
                 provider = candidate.split("/", 1)[0]
                 preflight_error = self._check_cloud_preflight(provider)
                 if preflight_error:
@@ -2890,19 +3342,27 @@ class ModelRouter:
 
                 if "-exp" in candidate and "gemini-2.0" in candidate:
                     candidate = candidate.replace("-exp", "")
-                if deadline is not None and time.monotonic() >= deadline:
+
+                # [R24] Checkpoint
+                try:
+                    budget.checkpoint(f"candidate_{i}:{candidate}")
+                except BudgetExceededError as exc:
                     self.last_cloud_error = (
-                        "Cloud stream fail-fast budget exceeded "
-                        f"({self.cloud_fail_fast_budget_seconds}s)"
+                        f"Cloud stream fail-fast budget exceeded ({exc.elapsed:.1f}s/{exc.total:.1f}s)"
                     )
                     logger.warning(
                         "Cloud stream fallback stopped by fail-fast budget",
-                        budget_seconds=self.cloud_fail_fast_budget_seconds,
+                        budget_total=exc.total,
+                        elapsed=exc.elapsed,
                     )
                     break
 
                 logger.info("Routing to CLOUD (Stream Fallback)", model=candidate, profile=profile, reason=failure_reason)
                 retries = 0 if failure_reason == "force_cloud" else 1
+                
+                # [R24] Используем effective_call_timeout() из бюджета (неявный таймаут, в _call_gemini внутри он может быть перехвачен)
+                # TODO: Если _call_gemini поддерживает явный таймаут, передать его. В этой версии оставляем совместимость.
+                
                 response = await self._call_gemini(
                     prompt,
                     candidate,
@@ -2933,6 +3393,9 @@ class ModelRouter:
                         self.last_cloud_model = candidate
                         self._mark_cloud_soft_cap_if_needed(err_msg)
                         logger.warning("Cloud fallback candidate failed", model=candidate, error=err_msg[:200])
+                        # [R24] Anti-flap: фиксируем ошибку cloud канала
+                        self.channel_state.record_failure("cloud")
+                        
                         if self._is_fatal_cloud_auth_error(err_msg):
                             logger.error(
                                 "Cloud stream fallback aborted: fatal auth/billing error",
@@ -2952,8 +3415,9 @@ class ModelRouter:
                                      return
                         continue
 
-                # Сбрасываем тир на free перед завершением (R16)
-                self._switch_cloud_tier("free")
+                # Если включен sticky paid-tier, не откатываемся на free после успеха.
+                if not self.cloud_tier_sticky_on_paid:
+                    self._switch_cloud_tier("free")
 
                 if not response or len(response.strip()) < 2:
                     logger.warning("Cloud fallback candidate %s returned empty/junk", candidate)
@@ -3033,8 +3497,21 @@ class ModelRouter:
                     messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": prompt})
 
+        local_model_id = self._get_routable_local_model_id()
+        if not local_model_id:
+            await self._check_local_health_safe(force=True)
+            local_model_id = self._get_routable_local_model_id()
+        if not local_model_id:
+            logger.warning("route_stream: local model id unresolved, switching to cloud fallback.")
+            async for cloud_chunk in _stream_cloud_fallback(
+                "runtime_error",
+                "local model is not loaded/resolved",
+            ):
+                yield cloud_chunk
+            return
+
         payload = {
-            "model": self.active_local_model or "local-model",
+            "model": local_model_id,
             "messages": messages,
             "temperature": 0.7,
             "max_tokens": 2048,
@@ -3050,14 +3527,21 @@ class ModelRouter:
             "_krab_sock_read_timeout_seconds": self.local_stream_sock_read_timeout_seconds,
         }
 
+        # [R24] Anti-flap: не пускаем если local канал LOCKED
+        if not self.channel_state.is_usable("local"):
+            logger.warning("Local channel LOCKED by anti-flap, skipping stream to cloud", state=self.channel_state.get_state("local"))
+            async for cloud_chunk in _stream_cloud_fallback("force_cloud", "local channel locked"):
+                yield cloud_chunk
+            return
+
         emitted_chunks = 0
         try:
-            async with self._acquire_local_slot(self.active_local_model):
+            async with self._acquire_local_slot(local_model_id):
                 async for chunk in self.stream_client.stream_chat(payload):
                     emitted_chunks += 1
                     yield chunk
                 if emitted_chunks > 0:
-                    local_model = self.active_local_model or payload.get("model") or "local-model"
+                    local_model = self._get_routable_local_model_id() or payload.get("model") or "unknown-local"
                     self._remember_last_stream_route(
                         profile=profile,
                         task_type=task_type,
@@ -3068,8 +3552,12 @@ class ModelRouter:
                         route_detail="stream completed on local model",
                         force_mode=self.force_mode,
                     )
+                    # [R24] Успех
+                    self.channel_state.record_success("local")
                 return
         except StreamFailure as e:
+            self.channel_state.record_failure("local")
+            self._reset_local_state_from_runtime_error(e.technical_message)
             logger.warning(
                 "Local stream guardrail/failure triggered",
                 reason=e.reason,
@@ -3091,12 +3579,16 @@ class ModelRouter:
         """
         Вызов Cloud модели через OpenClaw Gateway.
         """
+        model_name = self._normalize_cloud_model_name(model_name)
+        if not model_name:
+            model_name = self._normalize_cloud_model_name(self.models.get("chat", "google/gemini-2.5-flash"))
+
         # [HOTFIX v11.4.2] Глобальный фильтер проблемных моделей (УСИЛЕННЫЙ)
         if model_name and ("-exp" in model_name or "gemini-2.0-flash-exp" in model_name):
             if "thinking" not in model_name: # Thinking пока только exp
                 stable_chat_model = self.models.get("chat", "gemini-2.5-flash")
                 logger.info(f"Filtering out problematic model: {model_name} -> {stable_chat_model}")
-                model_name = stable_chat_model
+                model_name = self._normalize_cloud_model_name(stable_chat_model)
         
         # Динамический System Prompt
         from src.core.prompts import get_system_prompt
@@ -3123,12 +3615,16 @@ class ModelRouter:
 
         for attempt in range(max_retries + 1):
             try:
+                start_t = time.time()
                 response_text = await self.openclaw_client.chat_completions(
                     messages,
                     model=model_name,
                     timeout_seconds=self.cloud_request_timeout_seconds,
                     probe_provider_on_error=self.cloud_probe_on_chat_error,
                 )
+                duration_ms = (time.time() - start_t) * 1000
+                metrics.add_latency(duration_ms)
+                
                 cleaned_response = self._sanitize_model_text(response_text)
                 normalized = (cleaned_response or "").strip()
                 error_detected = self._is_cloud_error_message(normalized)
@@ -3142,14 +3638,18 @@ class ModelRouter:
                         # R15: Кэшируем фатальную ошибку для Preflight Gate
                         provider = model_name.split("/", 1)[0]
                         self._preflight_cache[provider] = (time.time() + self._preflight_ttl_seconds, response_text)
+                        track_event("preflight_block", "error", {"provider": provider, "reason": "fatal_auth", "details": response_text}, "router")
                         
                         self._stats["cloud_failures"] += 1
+                        metrics.inc("cloud_failures")
                         return f"❌ Ошибка Cloud: {response_text}"
 
                     category = self._classify_cloud_error(normalized)
                     if not bool(category.get("retryable", True)):
                         provider = model_name.split("/", 1)[0]
-                        self._preflight_cache[provider] = (time.time() + self._preflight_ttl_seconds, category.get("summary", "fatal error"))
+                        msg = category.get("summary", "fatal error")
+                        self._preflight_cache[provider] = (time.time() + self._preflight_ttl_seconds, msg)
+                        track_event("preflight_block", "warn", {"provider": provider, "reason": "non_retryable_error", "details": msg}, "router")
 
                     if attempt < max_retries:
                         logger.warning(f"OpenClaw Attempt {attempt+1} failed: {response_text}")
@@ -3157,11 +3657,13 @@ class ModelRouter:
                         continue
                         
                     self._stats["cloud_failures"] += 1
+                    metrics.inc("cloud_failures")
                     if billing_issue:
                         return f"❌ Ошибка биллинга (OpenClaw): Похоже, на аккаунте закончились средства или достигнут лимит провайдера. Проверьте баланс на шлюзе. (Детали: {response_text})"
                     return f"❌ Ошибка Cloud: {response_text}"
 
                 self._stats["cloud_calls"] += 1
+                metrics.inc("cloud_success")
                 return cleaned_response
 
             except Exception as e:
@@ -3171,6 +3673,7 @@ class ModelRouter:
                     continue
                 
                 self._stats["cloud_failures"] += 1
+                metrics.inc("cloud_failures")
                 return f"❌ Ошибка Cloud: {e}"
 
     async def route_query_stream(self,

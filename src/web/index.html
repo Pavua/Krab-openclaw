@@ -129,6 +129,139 @@
         grid-template-columns: 1fr;
       }
     }
+
+    /* --- Assistant Refactor CSS --- */
+    .route-badge {
+      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+    }
+
+    .route-badge.local {
+      color: var(--accent-orange);
+      border-color: var(--accent-orange);
+    }
+
+    .route-badge.cloud {
+      color: var(--accent-cyan);
+      border-color: var(--accent-cyan);
+    }
+
+    .route-badge.auto {
+      color: var(--accent-purple);
+      border-color: var(--accent-purple);
+    }
+
+    .error-class {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: rgba(239, 68, 68, 0.1);
+      border-left: 3px solid var(--state-error);
+      color: var(--state-error);
+      font-size: 0.85rem;
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+
+    .assistant-history {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--border-card);
+      max-height: 250px;
+      overflow-y: auto;
+    }
+
+    @keyframes skeleton-loading {
+      0% {
+        opacity: 0.5;
+      }
+
+      50% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0.5;
+      }
+    }
+
+    .skeleton-text {
+      animation: skeleton-loading 1.5s infinite ease-in-out;
+      color: transparent !important;
+      background: rgba(255, 255, 255, 0.1) !important;
+      border-radius: 4px;
+      min-width: 40px;
+      display: inline-block;
+    }
+
+    .history-item {
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      margin-bottom: 8px;
+      font-size: 0.8rem;
+    }
+
+    .history-prompt {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-main);
+      margin-bottom: 4px;
+    }
+
+    @media (max-width: 390px) {
+      body {
+        overflow-x: hidden;
+      }
+
+      .container {
+        padding: 12px;
+        max-width: 100vw;
+        box-sizing: border-box;
+      }
+
+      .grid-metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .card {
+        padding: 16px !important;
+        box-sizing: border-box;
+      }
+
+      .assistant-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .assistant-actions button {
+        width: 100%;
+        margin-bottom: 6px;
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr !important;
+      }
+
+      .card button {
+        white-space: normal;
+        height: auto;
+      }
+
+
+      .assistant-output {
+        min-height: 120px;
+        font-size: 0.85rem;
+      }
+    }
   </style>
 </head>
 
@@ -165,6 +298,35 @@
         Sync Data
       </button>
     </header>
+
+    <!-- --- CORE HEALTH --- -->
+    <div class="grid-metrics" style="margin-bottom: 24px;">
+      <div class="card" style="border-left: 3px solid var(--accent-cyan); display: flex; flex-direction: column;">
+        <h3 class="card-title" style="display: flex; align-items: center; justify-content: space-between;">
+          Core Liveness (Lite)
+          <div id="coreLivenessPulse" class="pulse-warn"
+            style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></div>
+        </h3>
+        <p class="card-value" id="coreLivenessStatus" style="font-size: 1.2rem; margin-top: 8px;">—</p>
+        <p class="card-meta" id="coreLivenessTime"
+          style="margin-top: auto; padding-top: 12px; font-family: var(--font-mono); font-size: 0.75rem;">Waiting for
+          ping...</p>
+      </div>
+
+      <div class="card" style="border-left: 3px solid var(--accent-purple); display: flex; flex-direction: column;">
+        <h3 class="card-title" style="display: flex; align-items: center; justify-content: space-between;">
+          Ecosystem Deep Health
+          <span id="deepHealthRisk" class="badge"
+            style="background: rgba(255,255,255,0.1); border-color: transparent;">—</span>
+        </h3>
+        <p class="card-value" id="deepHealthStatus" style="font-size: 1.2rem; margin-top: 8px;">—</p>
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 8px; line-height: 1.4;"
+          id="deepHealthDegradation">—</div>
+        <p class="card-meta" id="deepHealthTime"
+          style="margin-top: auto; padding-top: 12px; font-family: var(--font-mono); font-size: 0.75rem;">Waiting for
+          deep scan...</p>
+      </div>
+    </div>
 
     <!-- --- METRICS --- -->
     <div class="grid-metrics">
@@ -256,10 +418,20 @@
               <span id="opsOldestTaskAge" class="card-value"
                 style="font-size: 0.9rem; color: var(--text-muted);">0s</span>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
               <span class="card-meta" style="margin: 0;">Застрявшие задачи:</span>
               <span id="opsStuckTasks" class="card-value"
                 style="font-size: 0.9rem; color: var(--state-ok); font-weight: 600;">0</span>
+            </div>
+            <!-- R17 Phase 3: Queue Observability -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Task Aborts/Retries:</span>
+              <span id="opsTaskAborts" class="card-value" style="font-size: 0.9rem; color: var(--text-main);">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Guard Triggers:</span>
+              <span id="opsGuardTriggers" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-main);">0</span>
             </div>
           </div>
 
@@ -298,6 +470,38 @@
                 style="font-size: 0.9rem; color: var(--state-warn); max-width: 130px; text-align: right;">0</span>
             </div>
           </div>
+
+          <!-- SLA Metrics Card -->
+          <div class="card state-container"
+            style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+            <h4 class="form-label"
+              style="margin-bottom: 12px; color: var(--state-purple); display: flex; align-items: center; gap: 8px;">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--state-purple);"
+                class="pulse-ai"></div>
+              SLA & Performance
+            </h4>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+              <span class="card-meta" style="margin: 0;">Success Rate:</span>
+              <span id="opsSlaSuccessRate" class="card-value skeleton-text"
+                style="font-size: 0.95rem; font-family: var(--font-mono);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Latency p50:</span>
+              <span id="opsSlaP50" class="card-value skeleton-text"
+                style="font-size: 0.9rem; color: var(--text-main);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Latency p95:</span>
+              <span id="opsSlaP95" class="card-value skeleton-text"
+                style="font-size: 0.9rem; color: var(--text-main);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Fail-Fast Count:</span>
+              <span id="opsSlaFailFast" class="card-value skeleton-text"
+                style="font-size: 0.9rem; color: var(--state-warn);">—</span>
+            </div>
+          </div>
         </div>
 
         <h4 class="form-label" style="margin-bottom: 12px; color: var(--state-warn)">Alerts & Guardrails</h4>
@@ -325,10 +529,32 @@
           <p class="card-meta" id="opsActionMeta" style="margin-top: 12px; text-align: center;">Ожидание...</p>
         </div>
 
-        <h4 class="form-label" style="margin-top: 20px;">Operations History</h4>
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; flex-wrap: wrap; gap: 8px;">
+          <h4 class="form-label" style="margin: 0;">Event Timeline (Timeline UI)</h4>
+          <div style="display: flex; gap: 6px;">
+            <select id="tlFilterSeverity" class="field" style="padding: 2px 6px; font-size: 0.75rem;">
+              <option value="all">All Sev</option>
+              <option value="info">Info</option>
+              <option value="warn">Warn</option>
+              <option value="error">Error</option>
+            </select>
+            <select id="tlFilterChannel" class="field" style="padding: 2px 6px; font-size: 0.75rem;">
+              <option value="all">All Chan</option>
+              <option value="local">Local</option>
+              <option value="cloud">Cloud</option>
+            </select>
+            <select id="tlFilterType" class="field" style="padding: 2px 6px; font-size: 0.75rem;">
+              <option value="all">All Types</option>
+              <option value="metrics">Metrics</option>
+              <option value="routing">Routing</option>
+              <option value="lifecycle">Lifecycle</option>
+            </select>
+          </div>
+        </div>
         <div id="opsHistory" class="ops-history empty"
           style="flex: 1; border: 1px solid var(--border-subtle); background: var(--bg-panel); margin-top: 8px; color: var(--text-main); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
-          <div class="empty-state" style="padding: 24px 0">
+          <div class="empty-state skeleton-box" style="padding: 24px 0">
             <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"
               style="margin-bottom: 12px; color: var(--text-placeholder)">
               <path stroke-linecap="round" stroke-linejoin="round"
@@ -336,10 +562,57 @@
               </path>
             </svg>
             <div style="font-size: 0.85rem">
-              Operations history will appear here.
+              Loading timeline events...
             </div>
           </div>
         </div>
+
+        <!-- --- RUNTIME CONTROLS --- -->
+        <h4 class="form-label" style="margin-top: 24px; color: var(--accent-orange);">Runtime Controls</h4>
+        <div
+          style="display: flex; gap: 16px; margin-bottom: 12px; font-size: 0.85rem; padding-bottom: 8px; border-bottom: 1px dashed var(--border-card);">
+          <div><span class="card-meta">Channel State:</span> <span id="rtChannelState" class="badge">Wait...</span>
+          </div>
+          <div><span class="card-meta">Breaker State:</span> <span id="rtBreakerState" class="badge">Wait...</span>
+          </div>
+        </div>
+        <div class="form-grid"
+          style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px;">
+          <button id="rtRepairCoreBtn" style="padding: 6px 10px; font-size: 0.8rem; justify-content: center;">Repair
+            Core</button>
+          <button id="rtClearCacheBtn" style="padding: 6px 10px; font-size: 0.8rem; justify-content: center;">Clear
+            Cache</button>
+          <button id="rtResetTierBtn"
+            style="padding: 6px 10px; font-size: 0.8rem; justify-content: center; border-color: var(--state-error); color: var(--state-error);">Reset
+            Cloud Tier</button>
+          <button id="rtSmokeTriggerBtn"
+            style="padding: 6px 10px; font-size: 0.8rem; justify-content: center; border-color: var(--accent-cyan); color: var(--accent-cyan);">Run
+            Smoke Trigger</button>
+        </div>
+        <p class="card-meta" id="rtControlMeta" style="margin-top: 8px;">Ready.</p>
+      </div>
+    </div>
+
+    <!-- --- ANTI-413 RECOVERY --- -->
+    <div class="card" style="
+          border-top: 2px solid var(--state-warn);
+          padding: 24px;
+          margin-bottom: 24px;
+        ">
+      <h3 class="card-title" style="margin-bottom: 8px; color: var(--text-main);">
+        Anti-413 Recovery
+      </h3>
+      <p class="card-meta" style="margin-bottom: 10px;">
+        Быстрые действия для перехода в новый чат без потери контекста.
+      </p>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+        <button id="ctxCheckpointBtn" class="primary">Create Checkpoint</button>
+        <button id="ctxTransitionPackBtn">Build Transition Pack</button>
+        <button id="ctxRefreshBtn">Refresh Context Links</button>
+      </div>
+      <p id="ctxContextMeta" class="card-meta" style="margin-top: 12px;">Ожидание...</p>
+      <div id="ctxContextLinks" class="link-list" style="margin-top: 8px;">
+        <span class="card-meta">—</span>
       </div>
     </div>
 
@@ -374,18 +647,18 @@
           <div style="display: flex; flex-direction: column; gap: 12px">
             <div
               style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
-              <span class="card-meta" style="margin: 0;">Routing Mode:</span>
+              <span class="card-meta" style="margin: 0;">Режим роутинга:</span>
               <span id="ocForceMode" class="badge"
                 style="border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(14, 165, 233, 0.1);">—</span>
             </div>
             <div
               style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
-              <span class="card-meta" style="margin: 0;">Local Node:</span>
+              <span class="card-meta" style="margin: 0;">Локальный узел:</span>
               <span id="ocLocalModel" class="card-value"
                 style="font-size: 0.95rem; font-family: var(--font-mono); color: var(--text-main);">—</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span class="card-meta" style="margin: 0;">Cloud Slots:</span>
+              <span class="card-meta" style="margin: 0;">Облачные слоты:</span>
               <span id="ocCloudSlots" class="card-value" style="font-size: 0.95rem; color: var(--text-main);">—</span>
             </div>
           </div>
@@ -415,17 +688,17 @@
           <div style="display: flex; flex-direction: column; gap: 12px">
             <div
               style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
-              <span class="card-meta" style="margin: 0;">Status:</span>
+              <span class="card-meta" style="margin: 0;">Статус:</span>
               <span id="ocAutoswitchStatus" class="card-value" style="font-size: 0.95rem;">—</span>
             </div>
             <div
               style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
-              <span class="card-meta" style="margin: 0;">Last Switch:</span>
+              <span class="card-meta" style="margin: 0;">Последнее перекл.:</span>
               <span id="ocLastSwitch" class="card-value text-ellipsis"
                 style="font-size: 0.9rem; max-width: 140px; text-align: right;">—</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span class="card-meta" style="margin: 0;">Reason:</span>
+              <span class="card-meta" style="margin: 0;">Причина:</span>
               <span id="ocSwitchReason" class="card-value text-ellipsis"
                 style="font-size: 0.9rem; max-width: 140px; text-align: right; color: var(--text-muted);">—</span>
             </div>
@@ -441,21 +714,160 @@
           <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
             <div
               style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
-              <span class="card-meta" style="margin: 0;">Status:</span>
+              <span class="card-meta" style="margin: 0;">Статус:</span>
               <span id="ocLocalLifecycleStatus" class="card-value" style="font-size: 0.95rem;">—</span>
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span class="card-meta" style="margin: 0;">Loaded Model:</span>
+              <span class="card-meta" style="margin: 0;">Загруженная модель:</span>
               <span id="ocLocalLifecycleModel" class="card-value text-ellipsis"
                 style="font-size: 0.9rem; max-width: 150px; text-align: right;">—</span>
             </div>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
-            <button id="ocLocalLoadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Load Default</button>
-            <button id="ocLocalUnloadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Unload</button>
+            <button id="ocLocalLoadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Загрузить по
+              умолчанию</button>
+            <button id="ocLocalUnloadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Выгрузить</button>
             <button id="ocLocalRefreshBtn"
-              style="width: 100%; padding: 6px 10px; margin-top: 4px; font-size: 0.8rem;">Sync Engine State</button>
+              style="width: 100%; padding: 6px 10px; margin-top: 4px; font-size: 0.8rem;">Синхронизировать
+              статус</button>
           </div>
+        </div>
+
+
+        <!-- Control UI Compat -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label" style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+            Совместимость Control UI
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Runtime:</span>
+              <span id="ocCompatRuntime" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Schema Warning:</span>
+              <span id="ocCompatWarn" class="badge ok">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Уровень влияния:</span>
+              <span id="ocCompatImpact" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right; color: var(--text-muted);">—</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span class="card-meta" style="margin: 0;">Рекомендация:</span>
+              <span id="ocCompatAction" class="card-value text-ellipsis"
+                style="font-size: 0.85rem; text-align: left; color: var(--accent-cyan); white-space: normal;">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Effective Routing -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px; color: var(--accent-orange);">
+            Эффективный роутинг
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Запрошено:</span>
+              <span id="ocrouteReq" class="badge">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Эффективный:</span>
+              <span id="ocrouteEff" class="badge"
+                style="border-color: var(--accent-cyan); color: var(--accent-cyan);">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Активный слот/модель:</span>
+              <span id="ocrouteActive" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Cloud Fallback:</span>
+              <span id="ocrouteFallback" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">—</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span class="card-meta" style="margin: 0;">Decision notes:</span>
+              <span id="ocrouteNotes" class="card-value"
+                style="font-size: 0.8rem; text-align: left; color: var(--text-muted); white-space: normal;">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cloud Keys Diagnostics [R17] -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);" class="pulse-warn"
+              id="cloudKeysPulse"></div>
+            Cloud Keys Diagnostics
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">OpenClaw (OpenAI):</span>
+              <div style="text-align: right; line-height: 1.2;">
+                <span id="keyOpenClawStatus" class="badge">—</span><br />
+                <span id="keyOpenClawMask" class="card-meta" style="font-size: 0.75rem;">—</span>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Google Gemini:</span>
+              <div style="text-align: right; line-height: 1.2;">
+                <span id="keyGeminiStatus" class="badge">—</span><br />
+                <span id="keyGeminiMask" class="card-meta" style="font-size: 0.75rem;">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="cloudKeyErrorHint"
+            style="display: none; padding: 12px; background: rgba(239, 68, 68, 0.1); border-left: 3px solid var(--state-error); border-radius: 4px; font-size: 0.85rem; margin-top: 12px; color: var(--text-main);">
+            <strong style="color: var(--state-error)">Error Detected:</strong> <span
+              id="cloudKeyErrorText"></span><br />
+            <span id="cloudKeyErrorNextStep" style="color: var(--text-muted); display: block; margin-top: 4px;"></span>
+          </div>
+          <button id="keyCheckOpenClawBtn"
+            style="width: 100%; padding: 6px 10px; margin-top: 12px; font-size: 0.8rem;">Deep Check OpenClaw
+            Connection</button>
+        </div>
+
+        <!-- Cloud Tier Status -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3); margin-top: 16px;">
+          <h4 class="form-label" style="margin-bottom: 16px; color: var(--accent-purple);">
+            Cloud Tier Status
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Active Tier:</span>
+              <span id="ocTierActive" class="badge auto">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Configured:</span>
+              <span id="ocTierLoaded" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span class="card-meta" style="margin: 0;">Last Error:</span>
+              <span id="ocTierLastError" class="card-value text-ellipsis"
+                style="font-size: 0.85rem; text-align: left; color: var(--text-muted); white-space: normal;">—</span>
+            </div>
+          </div>
+          <button id="ocCloudDiagBtn" class="primary" style="width: 100%; padding: 6px 10px; font-size: 0.85rem;"
+            onclick="runCloudDiag()">Run cloud diag</button>
         </div>
       </div>
 
@@ -472,12 +884,12 @@
           Apply Autoswitch
         </button>
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button id="ocModeLocalBtn">Set Local</button>
-          <button id="ocModeAutoBtn">Set Auto</button>
-          <button id="ocModeCloudBtn">Set Cloud</button>
-          <button id="ocRefreshBtn">Refresh Status</button>
+          <button id="ocModeLocalBtn" class="primary" style="flex:1">Режим Local</button>
+          <button id="ocModeAutoBtn" class="primary" style="flex:1">Режим Auto</button>
+          <button id="ocModeCloudBtn" class="primary" style="flex:1">Режим Cloud</button>
+          <button id="ocRefreshBtn" style="flex:1">Обновить статус</button>
         </div>
-        <span class="card-meta" id="ocMeta" style="margin-left: auto; color: var(--text-main)">Ready</span>
+        <span class="card-meta" id="ocMeta" style="margin-left: auto; color: var(--text-main)">Готов</span>
       </div>
     </div>
 
@@ -492,7 +904,7 @@
           stroke-width="2" style="color: var(--accent-cyan); transition: all 0.3s ease;">
           <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
         </svg>
-        AI Assistant Interface
+        Интерфейс AI Ассистента
       </h3>
 
       <!-- AI Engine Config -->
@@ -529,11 +941,11 @@
       </div>
 
       <div class="assistant-actions">
-        <button id="modelCatalogReloadBtn">Reload Catalog</button>
-        <button id="modelApplyModeBtn">Apply Mode</button>
-        <button id="modelApplyPresetBtn">Apply Preset</button>
-        <button id="modelApplySlotBtn">Save Slot</button>
-        <span class="card-meta" id="modelControlMeta" style="margin-left: auto">Model catalog loaded.</span>
+        <button id="modelCatalogReloadBtn">Обновить каталог</button>
+        <button id="modelApplyModeBtn">Применить режим</button>
+        <button id="modelApplyPresetBtn">Применить пресет</button>
+        <button id="modelApplySlotBtn">Сохранить слот</button>
+        <span class="card-meta" id="modelControlMeta" style="margin-left: auto">Каталог моделей загружен.</span>
       </div>
 
       <!-- Task Parameters -->
@@ -568,26 +980,47 @@
         </div>
         <div class="form-group">
           <span class="form-label">API Key</span>
-          <input id="assistantApiKey" class="field" placeholder="API Key (optional)" />
+          <input id="assistantApiKey" class="field" placeholder="API Ключ (опционально)" />
         </div>
       </div>
 
-      <textarea id="assistantPrompt" class="field" placeholder="Enter task, prompt, or code snippet here..."></textarea>
+      <textarea id="assistantPrompt" class="field" placeholder="Введите задачу, промпт или фрагмент кода..."></textarea>
 
-      <div class="assistant-actions" style="margin-top: 16px">
-        <button id="assistantRunBtn" class="primary" aria-label="Запустить ассистента">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="5 3 19 12 5 21 5 3" />
-          </svg>
-          Run Assistant
-        </button>
-        <button id="assistantPlanBtn" aria-label="Собрать preflight-план">
-          Preflight Plan
-        </button>
-        <span class="card-meta" id="assistantMeta" style="margin-left: auto">Ready for execution</span>
+      <div class="assistant-actions" style="margin-top: 16px; flex-wrap: wrap; align-items: flex-start;">
+        <div style="display: flex; gap: 8px; flex: 1; min-width: 200px;">
+          <button id="assistantRunBtn" class="primary" aria-label="Запустить ассистента" style="flex: 1;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            Запустить
+          </button>
+          <button id="assistantPlanBtn" aria-label="Собрать preflight-план" style="flex: 1;">
+            План (Preflight)
+          </button>
+        </div>
+
+        <div id="assistantMetaContainer"
+          style="margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 180px;">
+          <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap;">
+            <span class="card-meta" style="margin:0;font-size:0.75rem;">Rule:</span>
+            <span id="assistantForceBadge" class="route-badge auto"
+              style="display: none; border-color: var(--text-muted); color: var(--text-muted);">Auto</span>
+            <span class="card-meta" style="margin:0;font-size:0.75rem;margin-left:4px;">Exec:</span>
+            <span id="assistantRouteBadge" class="route-badge auto" style="display: none;">—</span>
+            <span id="assistantModelBadge" class="card-meta"
+              style="margin: 0; margin-left:8px; font-size: 0.8rem;">Готов к
+              запуску</span>
+          </div>
+          <span id="assistantRouteDetail" class="card-meta"
+            style="font-size: 0.75rem; color: var(--text-muted); display: none; text-align: right; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+        </div>
       </div>
 
-      <div id="assistantOutput" class="assistant-output empty">
+      <div id="assistantRetryContainer" style="display: none; margin-top: 12px; justify-content: flex-end; gap: 8px;">
+        <!-- Filled dynamically by JS -->
+      </div>
+
+      <div id="assistantOutput" class="assistant-output empty" style="margin-top: 12px;">
         <div class="empty-state" style="height: 100%">
           <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"
             style="margin-bottom: 16px; color: var(--text-placeholder)">
@@ -600,48 +1033,53 @@
                 color: var(--text-main);
                 margin-bottom: 8px;
               ">
-            Awaiting Input
+            Ожидаю запрос
           </div>
           <div style="font-size: 0.9rem">
-            Run assistant or use quick tools to generate content.
+            Запусти ассистента или используй быстрые утилиты ниже.
           </div>
         </div>
+      </div>
+
+      <div id="assistantHistory" class="assistant-history" style="display: none;">
+        <h4 class="form-label" style="margin-bottom: 12px; font-size: 0.85rem;">История запросов</h4>
+        <div id="assistantHistoryList"></div>
       </div>
 
       <!-- Quick Actions Tools -->
       <div style="margin-top: 32px">
         <h4 class="form-label" style="margin-bottom: 12px; font-size: 0.9rem">
-          Quick Utilities
+          Быстрые утилиты
         </h4>
         <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr))">
           <div class="form-group">
-            <input id="quickWebQuery" class="field" placeholder="Web search query..." />
+            <input id="quickWebQuery" class="field" placeholder="Поисковый запрос..." />
             <button id="quickWebBtn" style="width: 100%" aria-label="Искать в вебе">
-              Search
+              Поиск
             </button>
           </div>
           <div class="form-group">
-            <input id="quickDeepTopic" class="field" placeholder="Deep research topic..." />
+            <input id="quickDeepTopic" class="field" placeholder="Тема deep research..." />
             <button id="quickDeepBtn" style="width: 100%" aria-label="Начать глубокое исследование">
-              Deep Research
+              Глубокое исследование
             </button>
           </div>
           <div class="form-group">
-            <input id="quickSourceUrl" class="field" placeholder="URL for context..." />
+            <input id="quickSourceUrl" class="field" placeholder="URL для разбора..." />
             <button id="quickUrlBtn" style="width: 100%" aria-label="Анализировать ссылку">
-              Analyze URL
+              Анализ URL
             </button>
           </div>
           <div class="form-group">
             <input id="assistantFileInput" class="field" type="file" style="padding: 6px"
               aria-label="Выбрать файл для загрузки" />
             <button id="assistantAttachBtn" style="width: 100%" aria-label="Прикрепить файл">
-              Attach File
+              Прикрепить файл
             </button>
           </div>
         </div>
         <p class="card-meta" id="quickActionMeta">
-          Use quick tools to automatically generate tailored prompts.
+          Используй утилиты для автоподготовки качественного промпта.
         </p>
       </div>
 
@@ -655,10 +1093,10 @@
             gap: 8px;
           ">
         <input id="feedbackScore" class="field" type="number" min="1" max="5" value="5" placeholder="1-5" />
-        <input id="feedbackProfile" class="field" placeholder="Profile (opt)" />
-        <input id="feedbackNote" class="field" placeholder="Feedback notes..." />
-        <button id="feedbackSendBtn" class="primary">Submit Feedback</button>
-        <button id="feedbackStatsBtn">Show Stats</button>
+        <input id="feedbackProfile" class="field" placeholder="Профиль (опц)" />
+        <input id="feedbackNote" class="field" placeholder="Комментарии к отзыву..." />
+        <button id="feedbackSendBtn" class="primary">Отправить отзыв</button>
+        <button id="feedbackStatsBtn">Показать стату</button>
       </div>
       <p class="card-meta" id="feedbackMeta">
         Score is applied to the latest engine run profile.
@@ -720,6 +1158,15 @@
       }, 3000);
     }
 
+    function escapeHtml(text) {
+      return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
     function readWebApiKey() {
       return (document.getElementById("assistantApiKey").value || "").trim();
     }
@@ -742,6 +1189,63 @@
         throw new Error(payload?.detail || `HTTP ${response.status}`);
       }
       return payload;
+    }
+
+    function renderContextLinks(payload) {
+      const root = document.getElementById("ctxContextLinks");
+      if (!root) return;
+      const items = [
+        ["Latest checkpoint", payload?.latest_checkpoint_path],
+        ["Latest pack dir", payload?.latest_pack_dir],
+        ["Transfer prompt", payload?.latest_transfer_prompt_path],
+        ["Files to attach", payload?.latest_files_to_attach_path],
+      ].filter(([, value]) => !!value);
+
+      if (!items.length) {
+        root.innerHTML = '<span class="card-meta">Артефакты ещё не созданы.</span>';
+        return;
+      }
+
+      root.innerHTML = items
+        .map(([name, value]) => {
+          const rawPath = String(value || "");
+          const href = rawPath.startsWith("/") ? `file://${encodeURI(rawPath)}` : rawPath;
+          return `<a href="${href}" target="_blank" rel="noreferrer">${escapeHtml(name)}: ${escapeHtml(rawPath)}</a>`;
+        })
+        .join("");
+    }
+
+    async function loadContextLatest(showStatus = true) {
+      try {
+        if (showStatus) setText("ctxContextMeta", "Загружаю последние anti-413 артефакты...");
+        const payload = await fetchJson("/api/context/latest");
+        renderContextLinks(payload);
+        if (showStatus) setText("ctxContextMeta", "Список артефактов обновлен.");
+      } catch (error) {
+        setText("ctxContextMeta", `Ошибка загрузки контекста: ${error.message}`);
+      }
+    }
+
+    async function runContextCheckpoint() {
+      try {
+        setText("ctxContextMeta", "Создаю checkpoint...");
+        const payload = await postJson("/api/context/checkpoint", {}, true, "POST");
+        setText("ctxContextMeta", `Checkpoint готов: ${payload.artifact_path || "-"}`);
+        await loadContextLatest(false);
+      } catch (error) {
+        setText("ctxContextMeta", `Checkpoint не создан: ${error.message}`);
+      }
+    }
+
+    async function runContextTransitionPack() {
+      try {
+        setText("ctxContextMeta", "Собираю transition-pack...");
+        const payload = await postJson("/api/context/transition-pack", {}, true, "POST");
+        setText("ctxContextMeta", `Transition-pack готов: ${payload.pack_dir || "-"}`);
+        await loadContextLatest(false);
+      } catch (error) {
+        setText("ctxContextMeta", `Transition-pack не собран: ${error.message}`);
+      }
     }
 
     function withBtnState(btnId, loadingText, fetchPromiseFn) {
@@ -1031,7 +1535,7 @@
         return;
       }
       document.getElementById("assistantTaskType").value = "chat";
-      document.getElementById("assistantReasoningDepth").value = "balanced";
+      document.getElementById("assistantReasoningDepth").value = "auto";
       appendPromptChunk(
         `Сделай web-search по теме: "${query}".
 Нужен краткий отчет: ключевые факты, 3-5 надежных источников и практические выводы.`,
@@ -1078,7 +1582,7 @@
         return;
       }
       document.getElementById("assistantTaskType").value = "reasoning";
-      document.getElementById("assistantReasoningDepth").value = "balanced";
+      document.getElementById("assistantReasoningDepth").value = "auto";
       appendPromptChunk(
         `Разбери материал по ссылке: ${sourceUrl}
 Нужно:
@@ -1128,7 +1632,142 @@
       }
     }
 
-    async function assistantQuery() {
+    let assistantReqHistory = [];
+
+    function parseErrorClass(errorDetail) {
+      const msg = (errorDetail || "").toLowerCase();
+      if (msg.includes("quota") || msg.includes("rate limit") || msg.includes("insufficient_quota") || msg.includes("billing_error")) return { type: "quota", label: "Превышена квота/Баланс (Quota)" };
+      if (msg.includes("auth") || msg.includes("token") || msg.includes("invalid header") || msg.includes("unauthorized") || msg.includes("forbidden") || msg.includes("api key") || msg.includes("401")) return { type: "auth", label: "Ошибка авторизации (Auth)" };
+      if (msg.includes("network") || msg.includes("timeout") || msg.includes("connection refused") || msg.includes("econnrefused")) return { type: "network", label: "Проблема сети (Network)" };
+      if (msg.includes("not found") || msg.includes("model_not_found") || msg.includes("404")) return { type: "model_not_found", label: "Модель не найдена (Model Not Found)" };
+      if (msg.includes("bad gateway") || msg.includes("502") || msg.includes("openclaw gateway")) return { type: "gateway", label: "Ошибка шлюза (Gateway)" };
+      return { type: "unknown", label: "Внутренняя ошибка" };
+    }
+
+    function renderRetryButtons(forceMode, errClass) {
+      const cnt = document.getElementById("assistantRetryContainer");
+      cnt.innerHTML = "";
+
+      let btn = null;
+      if (forceMode === "force_cloud") {
+        btn = document.createElement("button");
+        btn.textContent = "Retry cloud only";
+        btn.onclick = () => assistantQuery("force_cloud");
+      } else if (forceMode === "auto") {
+        btn = document.createElement("button");
+        btn.textContent = "Try local once";
+        btn.onclick = () => assistantQuery("force_local");
+      }
+
+      if (btn) {
+        btn.className = "secondary";
+        btn.style.padding = "4px 10px";
+        btn.style.fontSize = "0.80rem";
+        btn.style.borderColor = "var(--border-subtle)";
+        btn.style.color = "var(--text-main)";
+        btn.style.background = "rgba(0,0,0,0.2)";
+        cnt.appendChild(btn);
+        cnt.style.display = "flex";
+      } else {
+        cnt.style.display = "none";
+      }
+    }
+
+    function renderAssistantHistory() {
+      const histEl = document.getElementById("assistantHistory");
+      const listEl = document.getElementById("assistantHistoryList");
+      if (assistantReqHistory.length === 0) {
+        histEl.style.display = "none";
+        return;
+      }
+      histEl.style.display = "block";
+      listEl.innerHTML = "";
+      assistantReqHistory.forEach(item => {
+        const div = document.createElement("div");
+        div.className = "history-item";
+        let statusHtml = item.error ? `<span style="color:var(--state-error)">Error: ${item.error}</span>` : `<span style="color:var(--text-muted)">OK</span>`;
+        div.innerHTML = `
+          <div class="history-prompt">
+            <span style="color:var(--text-muted); margin-right:6px;">${item.time}</span>
+            <strong>${item.snippet}</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; color:var(--text-muted); font-size: 0.75rem; margin-top:4px;">
+            <span>[${item.forceMode}] ${item.channel} ${item.model !== "-" ? "→ " + item.model : ""}</span>
+            <span>${item.elapsed}s | ${statusHtml}</span>
+          </div>
+        `;
+        listEl.appendChild(div);
+      });
+    }
+
+    function addAssistantHistory(prompt, route, forceMode, elapsed, errorLabel) {
+      const snippet = prompt.length > 50 ? prompt.substring(0, 50) + "..." : prompt;
+      let d = new Date();
+      let timeStr = d.getHours().toString().padStart(2, '0') + ":" + d.getMinutes().toString().padStart(2, '0') + ":" + d.getSeconds().toString().padStart(2, '0');
+
+      assistantReqHistory.unshift({
+        time: timeStr,
+        snippet,
+        channel: route.channel || "-",
+        model: route.model || "-",
+        forceMode,
+        elapsed,
+        error: errorLabel
+      });
+      if (assistantReqHistory.length > 30) assistantReqHistory.pop();
+      renderAssistantHistory();
+    }
+
+    function updateAssistantMetaUI(route, forceMode, elapsedS) {
+      const routeBadge = document.getElementById("assistantRouteBadge");
+      const forceBadge = document.getElementById("assistantForceBadge");
+      const modelBadge = document.getElementById("assistantModelBadge");
+      const detailEl = document.getElementById("assistantRouteDetail");
+
+      if (route.channel) {
+        routeBadge.textContent = route.channel.toUpperCase();
+        routeBadge.className = `route-badge ${route.channel}`;
+        routeBadge.style.display = "inline-block";
+      } else {
+        routeBadge.style.display = "none";
+      }
+
+      if (forceMode) {
+        forceBadge.textContent = forceMode === "force_cloud" ? "Force Cloud" : (forceMode === "force_local" ? "Force Local" : "Auto");
+        forceBadge.className = forceMode === "auto" ? "route-badge auto" : "route-badge";
+        if (forceMode !== "auto") {
+          forceBadge.style.borderColor = "var(--state-warn)";
+          forceBadge.style.color = "var(--state-warn)";
+        } else {
+          forceBadge.style.borderColor = "var(--text-muted)";
+          forceBadge.style.color = "var(--text-muted)";
+        }
+        forceBadge.style.display = "inline-block";
+      } else {
+        forceBadge.style.display = "none";
+      }
+
+      modelBadge.textContent = `${route.model || "-"} [${elapsedS}s]`;
+      detailEl.textContent = `Provider: ${route.provider || "-"} | Region: ${route.region || "-"}`;
+      detailEl.style.display = "block";
+    }
+
+    async function runCloudDiag() {
+      const btn = document.getElementById("ocCloudDiagBtn");
+      btn.textContent = "Running...";
+      btn.disabled = true;
+      try {
+        await fetch("/api/openclaw/cloud/diagnostics", { method: "GET" }).catch(() => { });
+        await updateStats();
+      } catch (e) {
+        console.error("Cloud diag failed:", e);
+      } finally {
+        btn.textContent = "Run cloud diag";
+        btn.disabled = false;
+      }
+    }
+
+    async function assistantQuery(overrideForceMode = null) {
       const prompt = (
         document.getElementById("assistantPrompt").value || ""
       ).trim();
@@ -1148,16 +1787,23 @@
       const webApiKey = (
         document.getElementById("assistantApiKey").value || ""
       ).trim();
+      const selectedMode = overrideForceMode || (
+        document.getElementById("modelModeSelect")?.value || ""
+      )
+        .trim()
+        .toLowerCase();
+      const selectedModel = (
+        document.getElementById("modelChoiceSelect")?.value || ""
+      ).trim();
       let taskType = taskTypeRaw || "chat";
       const confirmExpensive = depthRaw === "deep";
 
-      // UX: depth=deep автоматически переводит chat -> reasoning.
       if (taskType === "chat" && depthRaw === "deep") {
         taskType = "reasoning";
       }
 
       if (!prompt) {
-        setText("assistantMeta", "Ошибка: пустой prompt");
+        document.getElementById("assistantModelBadge").textContent = "Ошибка: пустой prompt";
         return;
       }
 
@@ -1167,9 +1813,19 @@
         headers["X-Krab-Web-Key"] = webApiKey;
       }
 
-      setText("assistantMeta", "Выполняю запрос...");
-      document.getElementById("assistantOutput").textContent =
-        "⏳ Выполнение...";
+      const outputEl = document.getElementById("assistantOutput");
+      const retryContainer = document.getElementById("assistantRetryContainer");
+
+      document.getElementById("assistantModelBadge").textContent = "Выполняю запрос...";
+      document.getElementById("assistantRouteBadge").style.display = "none";
+      document.getElementById("assistantForceBadge").style.display = "none";
+      document.getElementById("assistantRouteDetail").style.display = "none";
+      retryContainer.style.display = "none";
+
+      outputEl.innerHTML = "⏳ Выполнение...";
+      outputEl.classList.remove("empty");
+
+      const requestStartTime = Date.now();
 
       try {
         const response = await fetch("/api/assistant/query", {
@@ -1179,21 +1835,25 @@
             prompt,
             task_type: taskType || "chat",
             use_rag: useRag,
+            force_mode: selectedMode || undefined,
+            preferred_model: selectedModel || undefined,
             confirm_expensive: confirmExpensive,
           }),
         });
         const payload = await response.json();
         if (!response.ok) {
-          throw new Error(payload?.detail || `HTTP ${response.status}`);
+          throw { detail: payload?.detail || `HTTP ${response.status}` };
         }
 
-        document.getElementById("assistantOutput").textContent =
-          payload.reply || "(пустой ответ)";
-        setText(
-          "assistantMeta",
-          `OK • профиль: ${payload.profile || "-"} • task: ${payload.task_type || "-"} • depth: ${depthRaw}`,
-        );
+        outputEl.textContent = payload.reply || "(пустой ответ)";
+
+        const elapsedS = ((Date.now() - requestStartTime) / 1000).toFixed(1);
         const lastRoute = payload.last_route || {};
+        const effectiveMode = String(payload.effective_force_mode || selectedMode || "auto");
+
+        updateAssistantMetaUI(lastRoute, effectiveMode, elapsedS);
+        addAssistantHistory(prompt, lastRoute, effectiveMode, elapsedS, null);
+
         if (lastRoute.profile) {
           document.getElementById("feedbackProfile").value = String(
             lastRoute.profile,
@@ -1206,9 +1866,17 @@
           );
         }
       } catch (error) {
-        document.getElementById("assistantOutput").textContent =
-          `Ошибка: ${error.message}`;
-        setText("assistantMeta", "Запрос завершился с ошибкой: " + error.message);
+        const elapsedS = ((Date.now() - requestStartTime) / 1000).toFixed(1);
+        const errDetail = error.detail || error.message || "Unknown error";
+        const errClass = parseErrorClass(errDetail);
+
+        outputEl.innerHTML = `<span class="error-class">${errClass.label}</span><br/><br/>${errDetail}`;
+        document.getElementById("assistantModelBadge").textContent = "Запрос завершился с ошибкой";
+
+        const effectiveMode = selectedMode || "auto";
+        addAssistantHistory(prompt, {}, effectiveMode, elapsedS, errClass.label);
+
+        renderRetryButtons(effectiveMode, errClass);
       }
     }
 
@@ -1238,7 +1906,7 @@
       }
 
       if (!prompt) {
-        setText("assistantMeta", "Ошибка: пустой prompt");
+        document.getElementById("assistantModelBadge").textContent = "Ошибка: пустой prompt";
         return;
       }
 
@@ -1247,7 +1915,7 @@
         headers["X-Krab-Web-Key"] = webApiKey;
       }
 
-      setText("assistantMeta", "Собираю preflight-план...");
+      document.getElementById("assistantModelBadge").textContent = "Собираю preflight-план...";
       document.getElementById("assistantOutput").textContent =
         "⏳ Анализ маршрута...";
 
@@ -1298,14 +1966,12 @@ warnings:
 ${warningText}
 
 next_step: ${plan.next_step || "Можно запускать задачу."}`;
-        setText(
-          "assistantMeta",
-          `Preflight OK • профиль: ${plan.profile || "-"} • канал: ${execution.channel || "-"} • depth: ${depthRaw}`,
-        );
+
+        document.getElementById("assistantModelBadge").textContent = `Preflight OK • профиль: ${plan.profile || "-"} • канал: ${execution.channel || "-"} • depth: ${depthRaw}`;
       } catch (error) {
         document.getElementById("assistantOutput").textContent =
           `Ошибка preflight: ${error.message}`;
-        setText("assistantMeta", "Preflight завершился с ошибкой: " + error.message);
+        document.getElementById("assistantModelBadge").textContent = "Preflight завершился с ошибкой: " + error.message;
       }
     }
 
@@ -1426,8 +2092,9 @@ ${channelsText}`;
           feedbackPayload,
           usagePayload,
           alertsPayload,
-          historyPayload,
+          timelinePayload,
           queuePayload,
+          slaPayload,
         ] = await Promise.all([
           fetchJson("/api/stats"),
           fetchJson("/api/health"),
@@ -1436,21 +2103,81 @@ ${channelsText}`;
           fetchJson("/api/model/feedback?profile=chat&top=1"),
           fetchJson("/api/ops/usage"),
           fetchJson("/api/ops/alerts"),
-          fetchJson("/api/ops/history?limit=8"),
+          fetchJson("/api/timeline?limit=50"),
           fetchJson("/api/queue").catch(() => ({ ok: false, queue: {} })),
+          fetchJson("/api/sla").catch(() => ({ ok: false })),
         ]);
 
         const bb = stats.black_box || {};
         const rag = stats.rag || {};
         const router = stats.router || {};
         const lastRoute = router.last_route || {};
+        const cloudKeys = router.cloud_keys || {};
 
         setText("bb_total", String(bb.total ?? bb.total_messages ?? 0));
         setText("rag_total", String(rag.count ?? 0));
         setText("local_model", router.local_model || "Offline");
         setText("degradation", health.degradation || "unknown");
 
-        // --- Cloud Routing UX ---
+        // --- Cloud Keys Diagnostics [R17] ---
+        const ocKeys = cloudKeys.openclaw || {};
+        const geminiKeys = cloudKeys.gemini || {};
+        const lastError = cloudKeys.last_error || {};
+
+        setText("keyOpenClawMask", ocKeys.masked_key || "Не задан");
+        const ocBadge = document.getElementById("keyOpenClawStatus");
+        if (ocBadge) {
+          ocBadge.className = ocKeys.is_configured ? "badge ok" : "badge warn";
+          ocBadge.textContent = ocKeys.is_configured ? "Configured" : "Missing";
+        }
+
+        setText("keyGeminiMask", geminiKeys.masked_key || "Не задан");
+        const geminiBadge = document.getElementById("keyGeminiStatus");
+        if (geminiBadge) {
+          if (geminiKeys.has_error) {
+            geminiBadge.className = "badge bad";
+            geminiBadge.textContent = "Error";
+          } else {
+            geminiBadge.className = geminiKeys.is_configured ? "badge ok" : "badge warn";
+            geminiBadge.textContent = geminiKeys.is_configured ? "Configured" : "Missing";
+          }
+        }
+
+        const errHint = document.getElementById("cloudKeyErrorHint");
+        if (lastError.has_error) {
+          setText("cloudKeyErrorText", lastError.summary || "Неизвестная ошибка");
+          let nextStep = "Проверьте логи.";
+          if (lastError.code === "api_key_invalid" || lastError.code === "unauthorized") {
+            nextStep = "Проверьте конфигурацию ключа в ENV или <b>openclaw.json</b>. (<a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OpenClaw Dashboard</a>)";
+          } else if (lastError.code === "quota_exceeded" || lastError.code === "billing_error") {
+            nextStep = "Проверьте баланс на платформе провайдера или смените тир в <a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OC Dashboard</a>.";
+          }
+          document.getElementById("cloudKeyErrorNextStep").innerHTML = "\u2192 Next step: " + nextStep;
+          if (errHint) errHint.style.display = "block";
+
+          const pulse = document.getElementById("cloudKeysPulse");
+          if (pulse) pulse.className = "pulse-bad";
+        } else {
+          if (errHint) errHint.style.display = "none";
+          const pulse = document.getElementById("cloudKeysPulse");
+          if (pulse) pulse.className = (ocKeys.is_configured || geminiKeys.is_configured) ? "pulse-ok" : "pulse-warn";
+        }
+
+
+        // --- Cloud Tier Status ---
+        const activeTierVal = lastRoute.channel === "cloud" ? (geminiKeys.is_configured ? "Gemini" : "OpenClaw") : "None";
+        let loadedTiers = [];
+        if (geminiKeys.is_configured) loadedTiers.push("Gemini");
+        if (ocKeys.is_configured) loadedTiers.push("OpenClaw");
+        setText("ocTierActive", activeTierVal);
+        const ocTierActiveBadge = document.getElementById("ocTierActive");
+        if (ocTierActiveBadge) {
+          ocTierActiveBadge.className = activeTierVal !== "None" ? "badge cloud" : "badge";
+          ocTierActiveBadge.style.color = activeTierVal !== "None" ? "var(--accent-cyan)" : "var(--text-muted)";
+        }
+        setText("ocTierLoaded", loadedTiers.join(", ") || "None");
+        setText("ocTierLastError", (lastError.has_error || lastError.summary) ? (lastError.summary || "Unknown Error") : "Clear");
+
         const activeTier = lastRoute.channel === "cloud" ? "Cloud" : (lastRoute.channel === "local" ? "Local" : "Auto");
         const isFallback = Boolean(lastRoute.route_reason && lastRoute.route_reason !== "primary_choice");
         setText("opsCloudActiveTier", activeTier);
@@ -1464,6 +2191,20 @@ ${channelsText}`;
           tierBadge.style.background = activeTier === "Cloud" ? "var(--accent-cyan)" : (activeTier === "Local" ? "var(--state-warn)" : "var(--bg-element)");
           tierBadge.style.color = activeTier === "Cloud" ? "#fff" : "var(--text-main)";
         }
+
+        // --- SLA Widget ---
+        if (slaPayload && slaPayload.ok !== false) {
+          setText("opsSlaSuccessRate", `${slaPayload.success_rate_pct ?? 0}%`);
+          setText("opsSlaP50", `${slaPayload.latency_p50_ms ?? 0}ms`);
+          setText("opsSlaP95", `${slaPayload.latency_p95_ms ?? 0}ms`);
+          setText("opsSlaFailFast", String(slaPayload.fail_fast_count ?? 0));
+        } else {
+          setText("opsSlaSuccessRate", "N/A");
+          setText("opsSlaP50", "N/A");
+          setText("opsSlaP95", "N/A");
+          setText("opsSlaFailFast", "N/A");
+        }
+        document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
 
         // --- Queue Stability Card ---
         const queueStats = queuePayload.queue || {};
@@ -1487,6 +2228,13 @@ ${channelsText}`;
         setText("opsAvgTaskTime", String(avgSecs));
         setText("opsOldestTaskAge", `${oldestAge.toFixed(1)}s`);
         setText("opsStuckTasks", String(stuckCount));
+        const guardTriggers =
+          queueStats.reply_incomplete_guard_triggered ??
+          queueStats.guard_triggers ??
+          queueStats.guard_blocks ??
+          0;
+        setText("opsTaskAborts", String(queueStats.aborts || queueStats.retries || 0));
+        setText("opsGuardTriggers", String(guardTriggers));
 
         const queueContainer = document.getElementById("queueStabilityContainer");
         const queuePulse = document.getElementById("queueStabilityPulse");
@@ -1529,6 +2277,18 @@ ${channelsText}`;
           [
             "OpenClaw Cloud Diagnostics",
             `${links.dashboard}/api/openclaw/cloud`,
+          ],
+          [
+            "Context Checkpoint API",
+            links.context_checkpoint_api || `${links.dashboard}/api/context/checkpoint`,
+          ],
+          [
+            "Context Transition Pack API",
+            links.context_transition_pack_api || `${links.dashboard}/api/context/transition-pack`,
+          ],
+          [
+            "Context Latest API",
+            links.context_latest_api || `${links.dashboard}/api/context/latest`,
           ],
           [
             "Assistant Capabilities",
@@ -1606,24 +2366,24 @@ ${channelsText}`;
             .join("");
           document.getElementById("opsAlerts").innerHTML = html;
         }
+        const alerts = alertsPayload.alerts || [];
 
-        const history = historyPayload.history?.items || [];
-        if (!history.length) {
-          document.getElementById("opsHistory").innerHTML =
-            '<div class="empty-state" style="padding: 24px 0;"><svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="margin-bottom:12px; color: var(--text-placeholder)"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"></path></svg><div style="font-size: 0.85rem">История ops: пусто</div></div>';
-          document.getElementById("opsHistory").classList.add("empty");
-        } else {
-          document.getElementById("opsHistory").classList.remove("empty");
-          document.getElementById("opsHistory").innerHTML = history
-            .map((item) => {
-              const badgeCls = item.status === 'ok' ? 'ok' : (item.status === 'error' ? 'bad' : 'warn');
-              return `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border-subtle); align-items:center;">
-                    <div style="font-size:0.9em;"><span class="badge ${badgeCls}">${item.status || "-"}</span> ${item.ts || "-"}</div>
-                    <div style="font-size:0.85em; color:var(--text-placeholder);">alerts: ${item.alerts_count ?? 0} ${item.codes?.length ? `(${item.codes.join(',')})` : ''}</div>
-                </div>`;
-            })
-            .join("");
-        }
+        // Update Timeline
+        window.lastTimelineEvents = timelinePayload?.events || [];
+        renderTimeline();
+
+        // Remove SLA skeleton after first successful load
+        document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
+
+        // Extrapolate channel state and breaker state
+        const stChannel = router.channel_state || health.router?.channel_state || (router.cloud_active ? "cloud" : "local");
+        const stBreaker = router.breaker_state || health.router?.breaker_state || "closed";
+
+        const rtChan = document.getElementById("rtChannelState");
+        const rtBrk = document.getElementById("rtBreakerState");
+        if (rtChan) rtChan.textContent = String(stChannel).toUpperCase();
+        if (rtBrk) rtBrk.textContent = String(stBreaker).toUpperCase();
+
         setText(
           "updated_at",
           `Обновлено: ${new Date().toLocaleTimeString()}`,
@@ -1638,6 +2398,7 @@ ${channelsText}`;
       await updateStats();
       await loadModelCatalog(false);
       await loadOpenclawStatus(false);
+      await loadContextLatest(false);
     }
 
     document.getElementById("refreshBtn").addEventListener("click", withBtnState("refreshBtn", "Syncing...", refreshAll));
@@ -1669,6 +2430,9 @@ ${channelsText}`;
     document.getElementById("quickWebBtn").addEventListener("click", withBtnState("quickWebBtn", "Wait...", runQuickWebSearch));
     document.getElementById("quickDeepBtn").addEventListener("click", withBtnState("quickDeepBtn", "Wait...", runQuickDeepResearch));
     document.getElementById("quickUrlBtn").addEventListener("click", withBtnState("quickUrlBtn", "Wait...", runQuickUrlReview));
+    document.getElementById("ctxCheckpointBtn").addEventListener("click", withBtnState("ctxCheckpointBtn", "Creating...", runContextCheckpoint));
+    document.getElementById("ctxTransitionPackBtn").addEventListener("click", withBtnState("ctxTransitionPackBtn", "Building...", runContextTransitionPack));
+    document.getElementById("ctxRefreshBtn").addEventListener("click", withBtnState("ctxRefreshBtn", "Refreshing...", () => loadContextLatest(true)));
 
     function triggerAssistantPulse() {
       const icon = document.getElementById("assistantPulseIcon");
@@ -1716,13 +2480,168 @@ ${channelsText}`;
     document.getElementById("ocModeAutoBtn").addEventListener("click", withBtnState("ocModeAutoBtn", "Wait...", () => ocApplyMode("auto")));
     document.getElementById("ocModeCloudBtn").addEventListener("click", withBtnState("ocModeCloudBtn", "Wait...", () => ocApplyMode("cloud")));
 
+    document.getElementById("ocCloudProbeBtn").addEventListener("click", withBtnState("ocCloudProbeBtn", "Probing...", updateStats));
+    document.getElementById("keyCheckOpenClawBtn").addEventListener("click", withBtnState("keyCheckOpenClawBtn", "Checking...", updateStats));
+
     document.getElementById("ocLocalLoadBtn").addEventListener("click", withBtnState("ocLocalLoadBtn", "Wait...", ocLoadLocal));
+    // Timeline Rendering
+    function renderTimeline() {
+      const events = window.lastTimelineEvents || [];
+      const histDiv = document.getElementById("opsHistory");
+
+      const sevFilter = document.getElementById("tlFilterSeverity").value;
+      const chanFilter = document.getElementById("tlFilterChannel").value;
+      const typeFilter = document.getElementById("tlFilterType").value;
+
+      const filtered = events.filter(e => {
+        if (sevFilter !== "all" && e.severity !== sevFilter) return false;
+        if (chanFilter !== "all") {
+          const chanStr = (e.context?.channel || e.message || "").toLowerCase();
+          if (!chanStr.includes(chanFilter)) return false;
+        }
+        if (typeFilter !== "all" && e.event_type !== typeFilter) return false;
+        return true;
+      });
+
+      histDiv.classList.remove("empty");
+      if (events.length === 0) {
+        histDiv.innerHTML = '<div class="empty-state">Нет событий в памяти</div>';
+        histDiv.classList.add("empty");
+      } else if (filtered.length === 0) {
+        histDiv.innerHTML = '<div class="empty-state">Нет событий по выбранным фильтрам</div>';
+        histDiv.classList.add("empty");
+      } else {
+        histDiv.innerHTML = filtered
+          .map(
+            (e) => `
+                <div class="event-row">
+                  <span class="event-time">${new Date(e.timestamp * 1000).toLocaleTimeString()}</span>
+                  <span class="event-badge badge-${e.severity}">${e.severity}</span>
+                  <span class="event-badge" style="background:var(--bg-panel); color:var(--text-main); border-color:var(--border-subtle);">${e.event_type}</span>
+                  <span class="event-msg">${e.message}</span>
+                </div>
+              `
+          )
+          .join("");
+      }
+    }
+
+    document.getElementById("tlFilterSeverity").addEventListener("change", renderTimeline);
+    document.getElementById("tlFilterChannel").addEventListener("change", renderTimeline);
+    document.getElementById("tlFilterType").addEventListener("change", renderTimeline);
+
+    // Initializations
+    document.getElementById("rtRepairCoreBtn").addEventListener("click", () => {
+      fetchJson("/api/ops/repair", { method: "POST" })
+        .then(() => alert("Repair triggered"))
+        .catch(err => alert("Repair error: " + err.message));
+    });
+
+    document.getElementById("rtResetTierBtn").addEventListener("click", () => {
+      fetchJson("/api/openclaw/tier/reset", { method: "POST" })
+        .then(() => alert("Cloud Tier Reset successfully"))
+        .catch(err => alert(err.message));
+    });
+
+    document.getElementById("rtSmokeTriggerBtn").addEventListener("click", () => {
+      showToast("Triggering Smoke Tests...", "warn");
+      fetchJson("/api/diagnostics/smoke", { method: "POST" })
+        .then(() => showToast("Smoke Test triggered", "success"))
+        .catch(err => showToast("Smoke triggered err: " + err.message, "error"));
+    });
+
+    document.getElementById("rtClearCacheBtn").addEventListener("click", () => alert("Not implemented"));
     document.getElementById("ocLocalUnloadBtn").addEventListener("click", withBtnState("ocLocalUnloadBtn", "Wait...", ocUnloadLocal));
     document.getElementById("ocLocalRefreshBtn").addEventListener("click", withBtnState("ocLocalRefreshBtn", "Wait...", () => loadLocalLifecycleStatus(true)));
+
+    document.getElementById("rtRepairCoreBtn").addEventListener("click", withBtnState("rtRepairCoreBtn", "Wait...", async () => {
+      try {
+        const res = await fetch("/api/openclaw/channels/runtime-repair", { method: "POST" });
+        const data = await res.json();
+        setText("rtControlMeta", data.ok ? "Core repaired." : `Error: ${data.error}`);
+        await updateStats();
+      } catch (e) {
+        setText("rtControlMeta", `Error: ${e.message}`);
+      }
+    }));
+
+    document.getElementById("rtClearCacheBtn").addEventListener("click", withBtnState("rtClearCacheBtn", "Wait...", async () => {
+      try {
+        const res = await fetch("/api/openclaw/cache/clear", { method: "POST" });
+        const data = await res.json();
+        setText("rtControlMeta", data.ok ? "Preflight cache cleared." : `Error: ${data.error}`);
+      } catch (e) {
+        setText("rtControlMeta", `Error: ${e.message}`);
+      }
+    }));
+
+    document.getElementById("rtResetTierBtn").addEventListener("click", withBtnState("rtResetTierBtn", "Wait...", async () => {
+      try {
+        const res = await fetch("/api/openclaw/cloud/tier/reset", { method: "POST" });
+        const data = await res.json();
+        setText("rtControlMeta", data.ok ? "Cloud tier reset." : `Error: ${data.error}`);
+        await updateStats();
+      } catch (e) {
+        setText("rtControlMeta", `Error: ${e.message}`);
+      }
+    }));
+
+    async function loadControlCompatStatus(showStatus = true) {
+      try {
+        const res = await fetch("/api/openclaw/control-compat/status");
+        if (res.ok) {
+          const payload = await res.json();
+          const root = document.getElementById("ocCompatRuntime");
+          const warnBadge = document.getElementById("ocCompatWarn");
+          const actionText = document.getElementById("ocCompatAction");
+
+          if (root) {
+            const st = payload.runtime_status || "UNKNOWN";
+            if (st === "OK" && payload.impact_level === "ui_only") {
+              root.innerHTML = `<span class="badge ok">OK</span>`;
+            } else {
+              const stClass = st === 'OK' ? 'ok' : 'bad';
+              root.innerHTML = `<span class="badge ${stClass}">${st}</span>`;
+            }
+          }
+          if (warnBadge) {
+            const hasWarn = payload.has_schema_warning;
+            warnBadge.textContent = hasWarn ? "Да" : "Нет";
+            warnBadge.className = hasWarn ? "badge warn" : "badge ok";
+          }
+          if (actionText) actionText.textContent = payload.recommended_action || "-";
+
+          let impactRU = "нет";
+          if (payload.impact_level === "ui_only") impactRU = "только UI";
+          else if (payload.impact_level === "runtime_risk") impactRU = "риск runtime";
+          setText("ocCompatImpact", impactRU);
+        }
+      } catch (e) {
+        console.error("Control Compat Error:", e);
+      }
+    }
+
+    async function loadEffectiveRouting(showStatus = true) {
+      try {
+        const res = await fetch("/api/openclaw/routing/effective");
+        if (res.ok) {
+          const data = await res.json();
+          setText("ocrouteReq", data.requested_mode || "-");
+          setText("ocrouteEff", data.effective_mode || "-");
+          setText("ocrouteActive", data.active_slot_or_model || "-");
+          setText("ocrouteFallback", data.cloud_fallback ? "Да" : "Нет");
+          setText("ocrouteNotes", data.decision_notes || "-");
+        }
+      } catch (e) {
+        console.error("Effective Routing Error:", e);
+      }
+    }
 
     async function loadOpenclawStatus(showStatus = true) {
       try {
         if (showStatus) setText("ocMeta", "Загружаю статус OpenClaw...");
+        loadControlCompatStatus(false);
+        loadEffectiveRouting(false);
 
         const [catalogRes, autoswitchRes, channelsRes] = await Promise.all([
           fetch("/api/model/catalog").catch((e) => ({
@@ -1770,14 +2689,15 @@ ${channelsText}`;
         // Autoswitch processing
         if (autoswitchRes.ok) {
           const payload = await autoswitchRes.json();
-          const rawSt = String(payload.status || "unknown").toUpperCase();
+          const autoswitch = payload.autoswitch || {};
+          const rawSt = String(autoswitch.status || "unknown").toUpperCase();
           const isOk = rawSt === "ACTIVE" || rawSt === "OK" || rawSt === "ON";
           const isBad = rawSt === "FAIL" || rawSt === "ERROR";
           const badgeClass = isOk ? "ok" : (isBad ? "bad" : "warn");
           const badgeText = isOk ? "OK" : (isBad ? "FAIL" : "WARN");
           document.getElementById("ocAutoswitchStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
-          setText("ocLastSwitch", payload.last_switch || "-");
-          setText("ocSwitchReason", payload.reason || "-");
+          setText("ocLastSwitch", autoswitch.last_switch || "-");
+          setText("ocSwitchReason", autoswitch.reason || "-");
         } else {
           const errPayload = autoswitchRes.json ? await autoswitchRes.json().catch(() => ({})) : {};
           const errText = errPayload.detail || autoswitchRes.error || `HTTP ${autoswitchRes.status}`;
@@ -1821,12 +2741,14 @@ ${channelsText}`;
 
     async function ocApplyAutoswitch() {
       try {
-        setText("ocMeta", "Applying autoswitch...");
+        setText("ocMeta", "Применяю autoswitch...");
         const payload = await postJson(
           "/api/openclaw/model-autoswitch/apply",
           { toggle: true },
         );
-        setText("ocMeta", payload.message || "Autoswitch applied");
+        const autoswitch = payload.autoswitch || {};
+        const statusText = String(autoswitch.status || "unknown").toUpperCase();
+        setText("ocMeta", `Autoswitch применен (${statusText})`);
         await loadOpenclawStatus(false);
       } catch (error) {
         showApiError("ocMeta", "Autoswitch", error);
@@ -1840,7 +2762,7 @@ ${channelsText}`;
         setText("ocMeta", `Mode ${mode} applied`);
         await loadOpenclawStatus(false);
       } catch (error) {
-        showApiError("ocMeta", "Apply Mode", error);
+        showApiError("ocMeta", "Применить режим", error);
       }
     }
 
@@ -1890,9 +2812,84 @@ ${channelsText}`;
       }
     }
 
+    async function startCoreHealthPolling() {
+      // Lite Health (Liveness) - 3 seconds
+      async function pollLite() {
+        try {
+          const res = await fetch("/api/health/lite");
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.status === "ok") {
+            setText("coreLivenessStatus", "Online");
+            document.getElementById("coreLivenessStatus").style.color = "var(--state-ok)";
+            document.getElementById("coreLivenessPulse").className = "pulse-ok";
+            document.getElementById("coreLivenessPulse").style.background = "var(--state-ok)";
+          } else {
+            setText("coreLivenessStatus", "Degraded");
+            document.getElementById("coreLivenessStatus").style.color = "var(--state-warn)";
+            document.getElementById("coreLivenessPulse").className = "pulse-warn";
+            document.getElementById("coreLivenessPulse").style.background = "var(--state-warn)";
+          }
+        } catch (err) {
+          setText("coreLivenessStatus", "Offline / Error");
+          document.getElementById("coreLivenessStatus").style.color = "var(--state-error)";
+          document.getElementById("coreLivenessPulse").className = "";
+          document.getElementById("coreLivenessPulse").style.background = "var(--state-error)";
+        }
+        setText("coreLivenessTime", new Date().toLocaleTimeString());
+        setTimeout(pollLite, 3000);
+      }
+
+      // Deep Health Ecosystem - 20 seconds
+      async function pollDeep() {
+        try {
+          const res = await fetch("/api/health");
+          const data = await res.json().catch(() => ({}));
+
+          if (res.ok && data.status) {
+            setText("deepHealthStatus", data.status.toUpperCase());
+            const statusColor = data.status === "ok" ? "var(--state-ok)" :
+              (data.status === "critical" ? "var(--state-error)" : "var(--state-warn)");
+            document.getElementById("deepHealthStatus").style.color = statusColor;
+
+            setText("deepHealthRisk", data.risk_level ? data.risk_level.toUpperCase() : "UNKNOWN");
+            const riskColor = data.risk_level === "high" ? "var(--state-error)" :
+              (data.risk_level === "medium" ? "var(--state-warn)" : "var(--state-ok)");
+            document.getElementById("deepHealthRisk").className = "badge";
+            document.getElementById("deepHealthRisk").style.color = riskColor;
+            document.getElementById("deepHealthRisk").style.borderColor = riskColor;
+
+            setText("deepHealthDegradation", data.degradation ? data.degradation.replace(/_/g, " ") : "normal");
+            setText("deepHealthTime", data.generated_at ? new Date(data.generated_at).toLocaleTimeString() : new Date().toLocaleTimeString());
+          } else {
+            setText("deepHealthStatus", "ERROR");
+            document.getElementById("deepHealthStatus").style.color = "var(--state-error)";
+            setText("deepHealthRisk", "UNKNOWN");
+            document.getElementById("deepHealthRisk").style.color = "var(--text-muted)";
+            setText("deepHealthDegradation", "Fallback Text: Invalid response or timeout");
+            setText("deepHealthTime", new Date().toLocaleTimeString());
+          }
+        } catch (err) {
+          setText("deepHealthStatus", "OFFLINE");
+          document.getElementById("deepHealthStatus").style.color = "var(--state-error)";
+          setText("deepHealthRisk", "HIGH");
+          document.getElementById("deepHealthRisk").style.color = "var(--state-error)";
+          setText("deepHealthDegradation", "Fallback Text: API Gateway unreachable / timeout");
+          setText("deepHealthTime", new Date().toLocaleTimeString());
+        }
+        setTimeout(pollDeep, 20000);
+      }
+
+      // Start polls
+      pollLite();
+      pollDeep();
+    }
+
+    startCoreHealthPolling();
+
     setInterval(updateStats, 8000);
     refreshAll();
     loadLocalLifecycleStatus(false);
+    loadContextLatest(false);
   </script>
 </body>
 

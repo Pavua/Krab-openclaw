@@ -10,15 +10,41 @@ OpenClaw Client.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import re
+import subprocess
 import time
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import aiohttp
 
+# R24: Circuit breaker для защиты OpenClaw Gateway
+from src.core.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CloudTierState:
+    """
+    Состояние Cloud Tier в runtime.
+
+    Зачем:
+    - Единая точка истины об активном tier (free/paid/default).
+    - История переключений для диагностики и observability.
+    - sticky_paid блокирует авто-возврат на free после ручного переключения.
+
+    Сохраняется только в памяти процесса (не персистируется на диск).
+    """
+    active_tier: str = "free"          # Текущий tier: "free" | "paid" | "default"
+    last_switch_at: float = 0.0        # time.time() последнего переключения
+    switch_reason: str = "init"        # Причина последнего switch
+    sticky_paid: bool = False          # Если True, paid не сбрасывается авто-логикой
+    switch_count: int = 0              # Количество переключений за сессию процесса
 
 
 class OpenClawClient:
@@ -55,8 +81,70 @@ class OpenClawClient:
         self.active_tier = "free" if "free" in self.gemini_tiers else (
             "paid" if "paid" in self.gemini_tiers else "default"
         )
+        # Runtime-настройки синхронизации paid-tier в OpenClaw конфиг.
+        self.openclaw_config_path = os.path.expanduser(
+            os.getenv("OPENCLAW_CONFIG_PATH", "~/.openclaw/openclaw.json")
+        )
+        self.openclaw_agent_models_path = os.path.expanduser(
+            os.getenv("OPENCLAW_AGENT_MODELS_PATH", "~/.openclaw/agents/main/agent/models.json")
+        )
+        self.enable_paid_tier_sync = self._env_flag("OPENCLAW_TIER_SYNC_PAID_KEY", default=True)
+        self.enable_paid_tier_restart = self._env_flag("OPENCLAW_TIER_SYNC_RESTART_GATEWAY", default=True)
+        try:
+            self.paid_tier_sync_cooldown_sec = max(
+                5, int(os.getenv("OPENCLAW_TIER_SYNC_COOLDOWN_SEC", "30"))
+            )
+        except Exception:
+            self.paid_tier_sync_cooldown_sec = 30
+        self._last_paid_tier_sync_ts = 0.0
+        self._paid_tier_applied = False
+
+        # ─── R23: Cloud Tier State ───────────────────────────────────────────
+        # Начальный tier определяется по наличию ключей в gemini_tiers.
+        _initial_tier = "free" if "free" in self.gemini_tiers else (
+            "paid" if "paid" in self.gemini_tiers else "default"
+        )
+        self._tier_state = CloudTierState(
+            active_tier=_initial_tier,
+            last_switch_at=time.time(),
+            switch_reason="init",
+            sticky_paid=False,
+            switch_count=0,
+        )
+        # asyncio.Lock защищает от гонок при параллельных autoswitch.
+        # Создаётся лениво в async-контексте через _get_tier_lock().
+        self._tier_switch_lock: Optional[asyncio.Lock] = None
+
+        # Cooldown для autoswitch (не переключать чаще N секунд).
+        try:
+            self._autoswitch_cooldown_sec = max(
+                10, int(os.getenv("CLOUD_TIER_AUTOSWITCH_COOLDOWN_SEC", "60"))
+            )
+        except Exception:
+            self._autoswitch_cooldown_sec = 60
+
+        # Sticky paid: если True, paid tier остаётся до ручного reset_cloud_tier().
+        # Читается из env при старте; может быть переопределён через reset.
+        self._sticky_on_paid = self._env_flag("CLOUD_TIER_STICKY_ON_PAID", default=True)
+
+        # ─── R23: Runtime-метрики (prometheus-style счётчики) ────────────────
+        # Не логируем содержимое секретов, только счётчики событий.
+        self._metrics: dict[str, int] = {
+            "cloud_attempts_total": 0,      # Попыток вызова cloud API
+            "cloud_failures_total": 0,      # Неудачных cloud-вызовов
+            "tier_switch_total": 0,         # Переключений тира
+            "force_cloud_failfast_total": 0, # Fail-fast в force_cloud режиме
+        }
+
+        # ─── R24: Circuit Breaker ─────────────────────────────────────────────
+        # Защищает OpenClaw от каскадных отказов.
+        # При N=5 отказах/60с → OPEN (блокирует запросы на 30с).
+        # Параметры читаются из конфига через BREAKER_* переменные.
+        # Для передачи конфига использовать OpenClawClient.configure_breaker().
+        self._breaker = CircuitBreaker()
 
         self._provider_probe_cache: dict[str, tuple[float, str]] = {}
+        self._health_cli_probe_cache: tuple[float, bool] | None = None
         self.headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -70,6 +158,127 @@ class OpenClawClient:
         elif "Authorization" in self.headers:
             del self.headers["Authorization"]
 
+    @staticmethod
+    def _env_flag(name: str, default: bool = False) -> bool:
+        """Парсит bool-переменные окружения в формате 1/0, true/false, on/off."""
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _read_json_file(self, path: str) -> dict[str, Any]:
+        """Безопасно читает JSON-файл. При ошибке возвращает пустой dict."""
+        if not path or not os.path.exists(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_json_file(self, path: str, payload: dict[str, Any]) -> bool:
+        """Атомарно записывает JSON-файл без утечки ключей в лог."""
+        if not path or not isinstance(payload, dict):
+            return False
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            tmp_path = f"{path}.tmp.{os.getpid()}"
+            with open(tmp_path, "w", encoding="utf-8") as fp:
+                json.dump(payload, fp, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _extract_google_api_key(payload: dict[str, Any]) -> str:
+        """Достает models.providers.google.apiKey из OpenClaw payload."""
+        try:
+            models = payload.get("models", {})
+            providers = models.get("providers", {})
+            google = providers.get("google", {})
+            value = google.get("apiKey") or google.get("api_key") or ""
+            return str(value).strip()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _inject_google_api_key(payload: dict[str, Any], api_key: str) -> bool:
+        """Обновляет models.providers.google.apiKey. Возвращает True, если payload изменился."""
+        if not isinstance(payload, dict):
+            return False
+        models = payload.get("models")
+        if not isinstance(models, dict):
+            return False
+        providers = models.get("providers")
+        if not isinstance(providers, dict):
+            return False
+        google = providers.get("google")
+        if not isinstance(google, dict):
+            return False
+        current = str(google.get("apiKey") or "").strip()
+        if current == api_key:
+            return False
+        google["apiKey"] = api_key
+        return True
+
+    def _sync_paid_tier_google_key(self) -> bool:
+        """
+        Применяет GEMINI_API_KEY_PAID в OpenClaw конфиг и перезапускает gateway.
+        Выполняется только при первом переключении на paid-tier.
+        """
+        paid_key = str(self.gemini_tiers.get("paid", "") or "").strip()
+        if not paid_key:
+            return False
+
+        now_ts = time.time()
+        if (now_ts - float(self._last_paid_tier_sync_ts)) < float(self.paid_tier_sync_cooldown_sec):
+            return self._paid_tier_applied
+
+        openclaw_payload = self._read_json_file(self.openclaw_config_path)
+        current_openclaw_key = self._extract_google_api_key(openclaw_payload)
+        if current_openclaw_key == paid_key:
+            self._paid_tier_applied = True
+            self._last_paid_tier_sync_ts = now_ts
+            return True
+
+        changed_any = False
+        targets = [self.openclaw_config_path, self.openclaw_agent_models_path]
+        for path in targets:
+            payload = self._read_json_file(path)
+            if not payload:
+                continue
+            changed = self._inject_google_api_key(payload, paid_key)
+            if changed and self._write_json_file(path, payload):
+                changed_any = True
+
+        if not changed_any:
+            self._last_paid_tier_sync_ts = now_ts
+            return False
+
+        if self.enable_paid_tier_restart:
+            try:
+                proc = subprocess.run(
+                    ["openclaw", "gateway", "restart"],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    self._last_paid_tier_sync_ts = now_ts
+                    return False
+            except Exception:
+                self._last_paid_tier_sync_ts = now_ts
+                return False
+
+        self._paid_tier_applied = True
+        self._last_paid_tier_sync_ts = now_ts
+        return True
+
     def has_tier(self, tier_name: str) -> bool:
         """Проверяет доступность tier в gateway- или gemini-пуле."""
         return tier_name in self.gemini_tiers or tier_name in self.gateway_tiers
@@ -82,8 +291,17 @@ class OpenClawClient:
         """
         switched = False
         if tier_name in self.gemini_tiers:
-            self.active_tier = tier_name
-            switched = True
+            if tier_name == "paid" and self.enable_paid_tier_sync and not self._paid_tier_applied:
+                if not self._sync_paid_tier_google_key():
+                    logger.warning(
+                        "OpenClaw tier switch blocked: failed to sync paid Gemini key to gateway config."
+                    )
+                else:
+                    self.active_tier = tier_name
+                    switched = True
+            else:
+                self.active_tier = tier_name
+                switched = True
 
         if tier_name in self.gateway_tiers:
             self.api_key = self.gateway_tiers[tier_name]
@@ -92,7 +310,7 @@ class OpenClawClient:
             switched = True
 
         if switched:
-            logger.info("OpenClaw tier switched", tier=tier_name)
+            logger.info("OpenClaw tier switched: %s", tier_name)
         return switched
 
     def get_token_info(self) -> dict[str, Any]:
@@ -204,6 +422,48 @@ class OpenClawClient:
             return json.dumps(payload, ensure_ascii=False)
         return str(payload)
 
+    def _sanitize_assistant_output(self, text: str) -> str:
+        """
+        Убирает служебные артефакты OpenClaw/tool-рантайма из пользовательского ответа.
+        Нужен как fail-safe для каналов, где upstream может вернуть сырой служебный хвост.
+        """
+        cleaned = str(text or "")
+        if not cleaned:
+            return ""
+
+        cleaned = cleaned.replace("<|begin_of_box|>", "")
+        cleaned = cleaned.replace("<|end_of_box|>", "")
+        cleaned = re.sub(r"<\|[^|>]+?\|>", "", cleaned)
+        cleaned = re.sub(
+            r"\{[^{}\n]*\"action\"\s*:\s*\"[^\"]+\"[^{}\n]*\}",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"\{[^{}\n]*\\u[0-9a-fA-F]{4}[^{}\n]*\"action\"\s*:\s*\"[^\"]+\"[^{}\n]*\}",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+
+        filtered_lines: list[str] = []
+        for line in cleaned.splitlines():
+            low = line.strip().lower()
+            if low in {"```", "```json", "```text", "```yaml"}:
+                continue
+            if "[[reply_to:" in low:
+                continue
+            if "\"action\"" in low and "not found" in low:
+                continue
+            if " not found" in low and ("begin_of_box" in low or "reply_to" in low):
+                continue
+            filtered_lines.append(line)
+
+        cleaned = "\n".join(filtered_lines)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        return cleaned
+
     async def _probe_provider_health_hint(self, model: str) -> Optional[str]:
         """
         Быстрый probe upstream-провайдера, чтобы превратить «Connection error.»
@@ -306,6 +566,11 @@ class OpenClawClient:
     def _classify_provider_probe_hint(self, hint: str) -> dict[str, Any]:
         """
         Нормализует provider probe hint в стабильный код/summary/retryable.
+
+        R23: Расширена классификация:
+        - resource_exhausted / 429 → quota_or_billing (триггер autoswitch)
+        - html вместо json → gateway_unavailable
+        - gateway недоступен (не TCP-сеть) → gateway_unavailable
         """
         raw = str(hint or "").strip()
         lowered = raw.lower()
@@ -317,12 +582,14 @@ class OpenClawClient:
                 "code": "api_key_leaked",
                 "summary": "API key помечен как скомпрометированный (leaked)",
                 "retryable": False,
+                "triggers_autoswitch": False,
             }
         if "invalid api key" in lowered or "incorrect api key" in lowered:
             return {
                 "code": "api_key_invalid",
                 "summary": "API key невалидный",
                 "retryable": False,
+                "triggers_autoswitch": False,
             }
         if (
             "generative language api has not been used" in lowered
@@ -334,36 +601,60 @@ class OpenClawClient:
                 "code": "api_disabled",
                 "summary": "Generative Language API не включён в проекте",
                 "retryable": False,
+                "triggers_autoswitch": False,
             }
         if "permission_denied" in lowered or " 403" in f" {lowered}":
             return {
                 "code": "permission_denied",
                 "summary": "доступ отклонён провайдером (403)",
                 "retryable": False,
+                "triggers_autoswitch": False,
             }
         if "unauthorized" in lowered or " 401" in f" {lowered}":
             return {
                 "code": "unauthorized",
                 "summary": "ошибка авторизации (401)",
                 "retryable": False,
+                "triggers_autoswitch": False,
             }
-        if "quota" in lowered or "billing" in lowered or "out of credits" in lowered:
+        # R23: resource_exhausted и 429 добавлены как явные квота-триггеры.
+        # triggers_autoswitch=True → при chat_completions() запустится try_autoswitch_to_paid().
+        if (
+            "quota" in lowered
+            or "billing" in lowered
+            or "out of credits" in lowered
+            or "resource_exhausted" in lowered
+            or "resource exhausted" in lowered
+            or " 429" in f" {lowered}"
+        ):
             return {
                 "code": "quota_or_billing",
-                "summary": "исчерпан лимит/биллинг",
+                "summary": "исчерпан лимит/биллинг (квота или 429)",
                 "retryable": False,
+                "triggers_autoswitch": True,
             }
         if "not found" in lowered or "not_found" in lowered:
             return {
                 "code": "model_not_found",
                 "summary": "модель/endpoint не найден",
                 "retryable": False,
+                "triggers_autoswitch": False,
             }
         if "timeout" in lowered or "timed out" in lowered:
             return {
                 "code": "timeout",
                 "summary": "таймаут соединения",
                 "retryable": True,
+                "triggers_autoswitch": False,
+            }
+        # R23: gateway_unavailable — Gateway вернул HTML вместо JSON API
+        # или поднялся ошибочный процесс на порту.
+        if "html instead of json" in lowered or "gateway unavailable" in lowered:
+            return {
+                "code": "gateway_unavailable",
+                "summary": "Gateway недоступен или вернул HTML вместо JSON API",
+                "retryable": True,
+                "triggers_autoswitch": False,
             }
         if (
             "connection error" in lowered
@@ -372,14 +663,166 @@ class OpenClawClient:
             or "probe" in lowered
         ):
             return {
-                "code": "network_error",
+                "code": "network",
                 "summary": "ошибка сети/шлюза",
                 "retryable": True,
+                "triggers_autoswitch": False,
             }
         return {
             "code": "unknown",
             "summary": "неизвестная ошибка провайдера",
             "retryable": True,
+            "triggers_autoswitch": False,
+        }
+
+    # ─── R23: Tier State Management ──────────────────────────────────────────
+
+    def _get_tier_lock(self) -> asyncio.Lock:
+        """
+        Возвращает asyncio.Lock для tier switch.
+        Создаётся лениво при первом вызове в async-контексте.
+        Это позволяет использовать OpenClawClient в синхронном init,
+        не создавая event loop преждевременно.
+        """
+        if self._tier_switch_lock is None:
+            self._tier_switch_lock = asyncio.Lock()
+        return self._tier_switch_lock
+
+    async def try_autoswitch_to_paid(self, reason: str = "quota_or_billing") -> bool:
+        """
+        Безопасное переключение на paid tier при исчерпании квоты free tier.
+
+        Защиты:
+        - asyncio.Lock: исключает гонку при параллельных вызовах.
+        - cooldown: не переключает чаще _autoswitch_cooldown_sec секунд.
+        - sticky_paid: если уже активен и sticky — не трогает.
+        - Нет paid ключа → возвращает False без лишних попыток.
+
+        Не логирует сами ключи — только факт переключения и причину.
+
+        Возвращает True если переключение выполнено, False иначе.
+        """
+        # Быстрая проверка вне lock — если paid уже активен, ничего делать не надо.
+        if self._tier_state.active_tier == "paid":
+            return True
+
+        paid_key = str(self.gemini_tiers.get("paid", "") or "").strip()
+        if not paid_key:
+            logger.debug("CloudTier autoswitch skipped: GEMINI_API_KEY_PAID не задан.")
+            return False
+
+        lock = self._get_tier_lock()
+        async with lock:
+            # После захвата lock перепроверяем — другой coroutine мог уже переключить.
+            if self._tier_state.active_tier == "paid":
+                return True
+
+            now = time.time()
+            last_sw = float(self._tier_state.last_switch_at or 0.0)
+            elapsed = now - last_sw
+
+            if elapsed < float(self._autoswitch_cooldown_sec):
+                remaining = float(self._autoswitch_cooldown_sec) - elapsed
+                logger.info(
+                    "CloudTier autoswitch cooldown active: %.0fs остаток (cooldown=%ss).",
+                    remaining,
+                    self._autoswitch_cooldown_sec,
+                )
+                return False
+
+            # Выполняем переключение на paid tier.
+            # Ключ уже проверен выше — присваиваем active_tier.
+            prev_tier = self._tier_state.active_tier
+            self._tier_state.active_tier = "paid"
+            self._tier_state.last_switch_at = time.time()
+            self._tier_state.switch_reason = reason
+            self._tier_state.switch_count += 1
+            if self._sticky_on_paid:
+                self._tier_state.sticky_paid = True
+
+            # Обновляем active_tier на объекте для совместимости с legacy-кодом.
+            self.active_tier = "paid"
+
+            # Инкрементируем метрику.
+            self._metrics["tier_switch_total"] += 1
+
+            logger.info(
+                "CloudTier autoswitch: %s → paid | reason=%s | switch_count=%d | sticky=%s",
+                prev_tier,
+                reason,
+                self._tier_state.switch_count,
+                self._tier_state.sticky_paid,
+            )
+            return True
+
+    def get_tier_state_export(self) -> dict[str, Any]:
+        """
+        Экспортирует CloudTierState и runtime-метрики для диагностики.
+
+        Зачем:
+        - Единый endpoint /api/openclaw/cloud/tier/state читает этот метод.
+        - Не содержит секретов (ключи не включаются).
+        - Включает: active_tier, switch_count, sticky_paid, метрики.
+
+        Вызывается из web_app.py endpoint GET /api/openclaw/cloud/tier/state.
+        """
+        state = self._tier_state
+        # Доступные tiers (без значений ключей — только имена).
+        available_tiers = list(self.gemini_tiers.keys()) if self.gemini_tiers else ["default"]
+        return {
+            "active_tier": state.active_tier,
+            "last_switch_at": state.last_switch_at,
+            "switch_reason": state.switch_reason,
+            "sticky_paid": state.sticky_paid,
+            "switch_count": state.switch_count,
+            "available_tiers": available_tiers,
+            "autoswitch_cooldown_sec": self._autoswitch_cooldown_sec,
+            "sticky_on_paid_config": self._sticky_on_paid,
+            "metrics": dict(self._metrics),
+            # R24: circuit breaker диагностика
+            "circuit_breaker": self._breaker.get_diagnostics(),
+        }
+
+    async def reset_cloud_tier(self) -> dict[str, Any]:
+        """
+        Сбрасывает cloud tier на free (ручной reset через API).
+
+        Зачем:
+        - Используется через POST /api/openclaw/cloud/tier/reset.
+        - Снимает sticky_paid флаг.
+        - Не требует перезапуска — влияет мгновенно.
+
+        Возвращает: {ok, previous_tier, new_tier, reset_at}.
+        """
+        lock = self._get_tier_lock()
+        async with lock:
+            prev = self._tier_state.active_tier
+            free_key = str(self.gemini_tiers.get("free", "") or "").strip()
+            # Определяем новый tier: free если есть ключ, иначе default.
+            new_tier = "free" if free_key else "default"
+
+            self._tier_state.active_tier = new_tier
+            self._tier_state.last_switch_at = time.time()
+            self._tier_state.switch_reason = "manual_reset"
+            self._tier_state.sticky_paid = False
+            self._tier_state.switch_count += 1
+
+            # Обновляем legacy-атрибут для совместимости.
+            self.active_tier = new_tier
+            self._metrics["tier_switch_total"] += 1
+
+            logger.info(
+                "CloudTier manual reset: %s → %s | switch_count=%d",
+                prev,
+                new_tier,
+                self._tier_state.switch_count,
+            )
+
+        return {
+            "ok": True,
+            "previous_tier": prev,
+            "new_tier": new_tier,
+            "reset_at": self._tier_state.last_switch_at,
         }
 
     async def get_cloud_provider_diagnostics(
@@ -401,6 +844,10 @@ class OpenClawClient:
             "google": "google/gemini-2.5-flash",
             "openai": "openai/gpt-4o-mini",
         }
+        gateway_probe = await self._probe_gateway_api_health()
+        gateway_ok = bool(gateway_probe.get("ok"))
+        if not gateway_ok:
+            overall_ok = False
 
         for provider in target:
             key, source = self._resolve_provider_api_key(provider)
@@ -425,6 +872,19 @@ class OpenClawClient:
 
             hint = await self._probe_provider_health_hint(probe_model.get(provider, provider))
             if not hint:
+                if not gateway_ok:
+                    diagnostics[provider] = {
+                        "ok": False,
+                        "provider": provider,
+                        "key_present": True,
+                        "key_source": source,
+                        "key_preview": key_preview,
+                        "error_code": str(gateway_probe.get("error_code", "gateway_api_unavailable")),
+                        "summary": str(gateway_probe.get("summary", "gateway API недоступен")),
+                        "retryable": bool(gateway_probe.get("retryable", True)),
+                    }
+                    overall_ok = False
+                    continue
                 diagnostics[provider] = {
                     "ok": True,
                     "provider": provider,
@@ -452,10 +912,11 @@ class OpenClawClient:
             overall_ok = False
 
         return {
-            "ok": overall_ok,
+            "ok": overall_ok and gateway_ok,
             "providers": diagnostics,
             "checked": target,
             "checked_at": int(time.time()),
+            "gateway": gateway_probe,
         }
 
     def _load_auth_profiles_payload(self) -> dict[str, Any]:
@@ -510,9 +971,78 @@ class OpenClawClient:
         }
 
     async def health_check(self) -> bool:
-        """Проверяет доступность OpenClaw Gateway."""
+        """
+        Проверяет доступность OpenClaw Gateway.
+
+        Почему не только HTTP 200:
+        иногда на API-роуты попадает HTML control UI (reverse-proxy/SPA fallback).
+        Такой ответ не считается рабочим API.
+        """
         result = await self._request_json("GET", "/health", timeout=4)
-        return bool(result.get("ok"))
+        if not bool(result.get("ok")):
+            return False
+
+        payload = result.get("data", {})
+        if self._payload_contains_html(payload):
+            if self._probe_gateway_cli_health():
+                logger.info("OpenClaw health_check: /health вернул HTML, но CLI probe подтвердил рабочий runtime.")
+                return True
+            logger.warning("OpenClaw health_check: /health returned HTML instead of JSON API")
+            return False
+
+        if self._looks_like_gateway_health_payload(payload):
+            return True
+
+        # Fallback: некоторые инсталляции отдают минимальный /health,
+        # поэтому валидируем API-контур через /v1/models.
+        models_probe = await self._request_json("GET", "/v1/models", timeout=4)
+        if not bool(models_probe.get("ok")):
+            return False
+        models_payload = models_probe.get("data", {})
+        if self._payload_contains_html(models_payload):
+            if self._probe_gateway_cli_health():
+                logger.info("OpenClaw health_check: /v1/models вернул HTML, но CLI probe подтвердил рабочий runtime.")
+                return True
+            logger.warning("OpenClaw health_check: /v1/models returned HTML instead of JSON API")
+            return False
+        return self._looks_like_models_payload(models_payload)
+
+    def _probe_gateway_cli_health(self, timeout: int = 8, cache_ttl_sec: int = 5) -> bool:
+        """
+        Fallback-проверка runtime через CLI, если HTTP-роуты отдают control UI HTML.
+        Кэшируем коротко, чтобы не запускать subprocess на каждом health-пуле.
+        """
+        now_ts = time.time()
+        if self._health_cli_probe_cache:
+            cached_ts, cached_state = self._health_cli_probe_cache
+            if now_ts - cached_ts <= max(1, cache_ttl_sec):
+                return bool(cached_state)
+
+        if str(os.getenv("OPENCLAW_HEALTH_CLI_FALLBACK", "1")).strip().lower() in {"0", "false", "off", "no"}:
+            self._health_cli_probe_cache = (now_ts, False)
+            return False
+
+        try:
+            proc = subprocess.run(
+                ["openclaw", "channels", "status", "--probe"],
+                capture_output=True,
+                text=True,
+                timeout=max(3, int(timeout)),
+                check=False,
+            )
+        except FileNotFoundError:
+            logger.debug("OpenClaw health_check: CLI fallback недоступен (openclaw не найден в PATH).")
+            self._health_cli_probe_cache = (now_ts, False)
+            return False
+        except Exception as exc:
+            logger.warning("OpenClaw health_check: CLI fallback failed: %s", str(exc) or exc.__class__.__name__)
+            self._health_cli_probe_cache = (now_ts, False)
+            return False
+
+        combined_output = f"{proc.stdout}\n{proc.stderr}".lower()
+        is_ok = proc.returncode == 0 and "gateway reachable" in combined_output
+        self._health_cli_probe_cache = (now_ts, bool(is_ok))
+        return bool(is_ok)
 
     async def invoke_tool(self, tool_name: str, args: dict) -> dict:
         """Вызывает tool через OpenClaw API."""
@@ -536,40 +1066,76 @@ class OpenClawClient:
         timeout_seconds: int = 60,
         probe_provider_on_error: bool = True,
     ) -> str:
-        """Отправляет chat-completion в OpenClaw Gateway."""
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "max_tokens": 2048,  # Защита от бесконечного выхлопа
-        }
-        safe_timeout = int(max(4, timeout_seconds))
-        response = await self._request_json(
-            "POST",
-            "/v1/chat/completions",
-            payload=payload,
-            timeout=safe_timeout,
-        )
-        if not response.get("ok"):
-            detail = self._format_error_detail(response.get("data") or response.get("error"))
-            if probe_provider_on_error and "connection error" in detail.lower():
-                provider_hint = await self._probe_provider_health_hint(model)
-                if provider_hint:
-                    detail = f"{detail} | {provider_hint}"
-            return f"❌ OpenClaw Error ({response.get('status', 0)}): {detail}"
+        """
+        Отправляет chat-completion в OpenClaw Gateway.
 
-        data = response.get("data", {})
+        R23: Инкрементирует cloud_attempts_total/cloud_failures_total.
+        При quota_or_billing / 429 запускает try_autoswitch_to_paid().
+        R24: Оборачивает в CircuitBreaker — при OPEN возвращает ошибку немедленно.
+        """
+        async def _do_call():
+            self._metrics["cloud_attempts_total"] += 1
+
+            payload = {
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "max_tokens": 2048,  # Защита от бесконечного выхлопа
+            }
+            safe_timeout = int(max(4, timeout_seconds))
+            response = await self._request_json(
+                "POST",
+                "/v1/chat/completions",
+                payload=payload,
+                timeout=safe_timeout,
+            )
+            if not response.get("ok"):
+                self._metrics["cloud_failures_total"] += 1
+                detail = self._format_error_detail(response.get("data") or response.get("error"))
+                detail_lower = detail.lower()
+
+                # R23: Если ответ содержит признаки квоты/429 — пробуем autoswitch на paid.
+                classified = self._classify_provider_probe_hint(detail)
+                if classified.get("triggers_autoswitch"):
+                    switched = await self.try_autoswitch_to_paid(
+                        reason=classified.get("code", "quota_or_billing")
+                    )
+                    if switched:
+                        logger.info(
+                            "CloudTier: autoswitch выполнен после quota-ошибки. "
+                            "Следующий запрос пойдёт через paid tier."
+                        )
+
+                if probe_provider_on_error and "connection error" in detail_lower:
+                    provider_hint = await self._probe_provider_health_hint(model)
+                    if provider_hint:
+                        detail = f"{detail} | {provider_hint}"
+                # Поднимаем исключение, чтобы breaker засчитал отказ
+                raise Exception(f"OpenClaw Error ({response.get('status', 0)}): {detail}")
+
+            data = response.get("data", {})
+            try:
+                content = str(data["choices"][0]["message"]["content"] or "")
+                lowered = content.strip().lower()
+                if probe_provider_on_error and "connection error" in lowered:
+                    provider_hint = await self._probe_provider_health_hint(model)
+                    if provider_hint:
+                        return self._sanitize_assistant_output(f"{content} | {provider_hint}")
+                return self._sanitize_assistant_output(content)
+            except Exception:
+                self._metrics["cloud_failures_total"] += 1
+                detail = self._format_error_detail(data)
+                raise Exception(f"OpenClaw вернул неожиданный формат: {detail}")
+
         try:
-            content = str(data["choices"][0]["message"]["content"] or "")
-            lowered = content.strip().lower()
-            if probe_provider_on_error and "connection error" in lowered:
-                provider_hint = await self._probe_provider_health_hint(model)
-                if provider_hint:
-                    return f"{content} | {provider_hint}"
-            return content
-        except Exception:
-            detail = self._format_error_detail(data)
-            return f"❌ OpenClaw вернул неожиданный формат: {detail}"
+            return await self._breaker.call(_do_call())
+        except CircuitBreakerOpenError as exc:
+            self._metrics["cloud_failures_total"] += 1
+            return f"❌ OpenClaw Circuit OPEN: gateway недоступен. {str(exc)}"
+        except Exception as exc:
+            return f"❌ {str(exc)}"
+
+
 
     async def get_models(self) -> list[dict[str, Any]]:
         """
@@ -1301,6 +1867,129 @@ class OpenClawClient:
             return False
 
         return False
+
+    def _payload_contains_html(self, payload: Any) -> bool:
+        """
+        Определяет, что payload фактически HTML-страница control UI.
+        Используется как защитный слой для health/models/auth endpoint'ов.
+        """
+        if isinstance(payload, dict):
+            raw = str(payload.get("raw", "")).strip().lower()
+            if raw.startswith("<!doctype html") or raw.startswith("<html"):
+                return True
+            return False
+        if isinstance(payload, str):
+            lowered = payload.strip().lower()
+            return lowered.startswith("<!doctype html") or lowered.startswith("<html")
+        return False
+
+    def _looks_like_gateway_health_payload(self, payload: Any) -> bool:
+        """
+        Эвристика валидного JSON payload для /health.
+        Не принимаем пустой dict и HTML-ответ.
+        """
+        if not isinstance(payload, dict):
+            return False
+        if self._payload_contains_html(payload):
+            return False
+        if not payload:
+            return False
+        known_keys = {"ok", "status", "healthy", "ready", "service", "version", "uptime", "gateway"}
+        return bool(set(payload.keys()).intersection(known_keys))
+
+    def _looks_like_models_payload(self, payload: Any) -> bool:
+        """Проверяет, что /v1/models вернул API-совместимую структуру."""
+        if self._payload_contains_html(payload):
+            return False
+        if isinstance(payload, dict):
+            if isinstance(payload.get("data"), list):
+                return True
+            if isinstance(payload.get("models"), list):
+                return True
+            return False
+        if isinstance(payload, list):
+            return True
+        return False
+
+    async def _probe_gateway_api_health(self) -> dict[str, Any]:
+        """
+        Проверяет готовность именно API-контура OpenClaw (не только доступность UI).
+        """
+        def _ws_runtime_fallback_ok(summary: str) -> dict[str, Any]:
+            """
+            Для новых сборок OpenClaw, где HTTP-порт отдаёт Control UI (HTML),
+            принимаем runtime как рабочий, если CLI probe подтверждает gateway reachable.
+            """
+            if self._probe_gateway_cli_health():
+                return {
+                    "ok": True,
+                    "status": 200,
+                    "error_code": "ok_ws_runtime",
+                    "summary": summary,
+                    "transport": "ws_runtime_fallback",
+                }
+            return {
+                "ok": False,
+                "status": 200,
+                "error_code": "gateway_api_unavailable",
+                "summary": "gateway вернул HTML, а CLI health fallback не подтвердил runtime",
+                "retryable": True,
+            }
+
+        health_result = await self._request_json("GET", "/health", timeout=4)
+        if not bool(health_result.get("ok")):
+            status = int(health_result.get("status", 0))
+            return {
+                "ok": False,
+                "status": status,
+                "error_code": "gateway_api_unavailable",
+                "summary": f"gateway /health недоступен (HTTP {status})",
+                "retryable": True,
+            }
+
+        health_payload = health_result.get("data", {})
+        if self._payload_contains_html(health_payload):
+            return _ws_runtime_fallback_ok("gateway runtime reachable (CLI fallback), HTTP /health вернул HTML")
+
+        if self._looks_like_gateway_health_payload(health_payload):
+            return {
+                "ok": True,
+                "status": int(health_result.get("status", 0)),
+                "error_code": "ok",
+                "summary": "gateway API health ok",
+            }
+
+        models_result = await self._request_json("GET", "/v1/models", timeout=5)
+        if not bool(models_result.get("ok")):
+            status = int(models_result.get("status", 0))
+            return {
+                "ok": False,
+                "status": status,
+                "error_code": "gateway_api_unavailable",
+                "summary": f"gateway /v1/models недоступен (HTTP {status})",
+                "retryable": True,
+            }
+
+        models_payload = models_result.get("data", {})
+        if not self._looks_like_models_payload(models_payload):
+            if self._payload_contains_html(models_payload):
+                return _ws_runtime_fallback_ok(
+                    "gateway runtime reachable (CLI fallback), HTTP /v1/models вернул HTML"
+                )
+            return {
+                "ok": False,
+                "status": int(models_result.get("status", 0)),
+                "error_code": "gateway_api_unavailable",
+                "summary": "gateway /v1/models вернул не-API payload",
+                "retryable": False,
+            }
+
+        return {
+            "ok": True,
+            "status": int(models_result.get("status", 0)),
+            "error_code": "ok",
+            "summary": "gateway API models ok",
+        }
 
     def _inspect_local_lmstudio_profile(self) -> dict[str, Any]:
         """

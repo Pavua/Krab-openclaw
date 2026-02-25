@@ -532,12 +532,122 @@ def test_stats_endpoint_works_without_rag() -> None:
     assert payload["rag"]["enabled"] is False
 
 
-def test_links_endpoint_contains_openclaw_cloud_api() -> None:
+def test_links_endpoint_contains_openclaw_cloud_api_and_context_urls() -> None:
     client = _build_client()
     response = client.get("/api/links")
     assert response.status_code == 200
     payload = response.json()
     assert payload["openclaw_cloud_api"].endswith("/api/openclaw/cloud")
+    assert payload["health_lite_api"].endswith("/api/health/lite")
+    assert payload["context_checkpoint_api"].endswith("/api/context/checkpoint")
+    assert payload["context_transition_pack_api"].endswith("/api/context/transition-pack")
+    assert payload["context_latest_api"].endswith("/api/context/latest")
+
+
+def test_context_checkpoint_endpoint_success(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client = _build_client()
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = "checkpoint done"
+    completed.stderr = ""
+
+    with (
+        patch("src.modules.web_app.subprocess.run", return_value=completed),
+        patch(
+            "src.modules.web_app.WebApp._latest_path_by_glob",
+            return_value=Path("/tmp/checkpoint_20260223_120000.md"),
+        ),
+    ):
+        response = client.post(
+            "/api/context/checkpoint",
+            headers={"X-Krab-Web-Key": "secret123"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["artifact_type"] == "checkpoint"
+    assert payload["artifact_path"] == "/tmp/checkpoint_20260223_120000.md"
+    assert payload["exit_code"] == 0
+    assert "checkpoint done" in payload["stdout_tail"]
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+
+def test_context_transition_pack_endpoint_success(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client = _build_client()
+
+    pack_dir = tmp_path / "pack_20260223_130000"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    transfer = pack_dir / "TRANSFER_PROMPT_RU.md"
+    transfer.write_text("ok", encoding="utf-8")
+    files = pack_dir / "FILES_TO_ATTACH.txt"
+    files.write_text("ok", encoding="utf-8")
+
+    completed = MagicMock()
+    completed.returncode = 0
+    completed.stdout = "transition pack done"
+    completed.stderr = ""
+
+    with (
+        patch("src.modules.web_app.subprocess.run", return_value=completed),
+        patch("src.modules.web_app.WebApp._latest_path_by_glob", return_value=pack_dir),
+    ):
+        response = client.post(
+            "/api/context/transition-pack",
+            headers={"X-Krab-Web-Key": "secret123"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["artifact_type"] == "transition_pack"
+    assert payload["pack_dir"] == str(pack_dir)
+    assert payload["transfer_prompt_path"] == str(transfer)
+    assert payload["files_to_attach_path"] == str(files)
+    assert payload["exit_code"] == 0
+    assert "transition pack done" in payload["stdout_tail"]
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+
+def test_context_write_endpoints_require_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client = _build_client()
+
+    denied_checkpoint = client.post("/api/context/checkpoint")
+    denied_pack = client.post("/api/context/transition-pack")
+    assert denied_checkpoint.status_code == 403
+    assert denied_pack.status_code == 403
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+
+def test_context_latest_endpoint_returns_paths(tmp_path) -> None:
+    client = _build_client()
+
+    checkpoint = tmp_path / "checkpoint_20260223_140000.md"
+    checkpoint.write_text("ok", encoding="utf-8")
+    pack_dir = tmp_path / "pack_20260223_140001"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    transfer = pack_dir / "TRANSFER_PROMPT_RU.md"
+    transfer.write_text("ok", encoding="utf-8")
+    files = pack_dir / "FILES_TO_ATTACH.txt"
+    files.write_text("ok", encoding="utf-8")
+
+    with patch(
+        "src.modules.web_app.WebApp._latest_path_by_glob",
+        side_effect=[checkpoint, pack_dir],
+    ):
+        response = client.get("/api/context/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["latest_checkpoint_path"] == str(checkpoint)
+    assert payload["latest_pack_dir"] == str(pack_dir)
+    assert payload["latest_transfer_prompt_path"] == str(transfer)
+    assert payload["latest_files_to_attach_path"] == str(files)
 
 
 def test_health_endpoint_reports_chain_state() -> None:
@@ -553,6 +663,15 @@ def test_health_endpoint_reports_chain_state() -> None:
     assert payload["degradation"] == "normal"
     assert payload["risk_level"] in {"low", "medium", "high"}
     assert payload["chain"]["active_ai_channel"] == "cloud"
+
+
+def test_health_lite_endpoint_is_fast_liveness_probe() -> None:
+    client = _build_client()
+    response = client.get("/api/health/lite")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["status"] == "up"
 
 
 def test_transcriber_status_endpoint_reports_down_state(monkeypatch) -> None:
@@ -840,6 +959,125 @@ def test_openclaw_model_autoswitch_apply_requires_api_key(monkeypatch) -> None:
     monkeypatch.delenv("WEB_API_KEY", raising=False)
 
 
+def test_openclaw_control_compat_status_ui_only_warning() -> None:
+    """
+    [R22] Control Compat: runtime каналов жив, но в логах есть schema-варнинги.
+    Ожидаемый impact_level: "ui_only".
+    """
+    from unittest.mock import AsyncMock
+
+    client = _build_client()
+
+    # Данные для мока `openclaw channels status --probe` (returncode=0, runtime жив)
+    mock_channels_stdout = b"Status: ok\nChannels: 3 active\n"
+
+    # Данные для мока `openclaw logs --tail 200` (warn содержит schema node)
+    mock_logs_stdout = (
+        b"[INFO] channels ready\n"
+        b"[WARN] Unsupported schema node. Use Raw mode.\n"
+        b"[INFO] schema validation skipped for channel_1\n"
+    )
+
+    def _make_proc(returncode: int, stdout: bytes):
+        """Создаёт фейковый объект процесса с async-методом communicate."""
+        proc = MagicMock()
+        proc.returncode = returncode
+        proc.communicate = AsyncMock(return_value=(stdout, b""))
+        proc.terminate = MagicMock()
+        return proc
+
+    mock_channels_proc = _make_proc(0, mock_channels_stdout)
+    mock_logs_proc = _make_proc(0, mock_logs_stdout)
+
+    # asyncio.create_subprocess_exec вызывается дважды: сначала channels, потом logs
+    call_count = {"n": 0}
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return mock_channels_proc
+        return mock_logs_proc
+
+    with patch(
+        "src.modules.web_app.asyncio.create_subprocess_exec",
+        side_effect=_fake_create_subprocess_exec,
+    ):
+        response = client.get("/api/openclaw/control-compat/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["runtime_channels_ok"] is True
+    assert payload["impact_level"] == "ui_only"
+    assert isinstance(payload["control_schema_warnings"], list)
+    assert len(payload["control_schema_warnings"]) > 0
+    # Варнинг про schema node должен присутствовать
+    warnings_text = " ".join(payload["control_schema_warnings"]).lower()
+    assert "schema" in warnings_text
+    assert isinstance(payload["recommended_action"], str)
+    assert len(payload["recommended_action"]) > 0
+
+
+def test_openclaw_routing_effective_endpoint() -> None:
+    """
+    [R22] Routing Effective: проверяет структуру ответа на стандартном _DummyRouter.
+    force_mode="auto", local available → cloud_fallback_enabled=True, decision_notes непустой.
+    """
+    client = _build_client()
+    response = client.get("/api/openclaw/routing/effective")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    # force_mode=auto у _DummyRouter
+    assert payload["force_mode_requested"] == "auto"
+    assert payload["force_mode_effective"] == "auto"
+    # cloud fallback включен в auto-режиме
+    assert payload["cloud_fallback_enabled"] is True
+    # default slot "chat" присутствует в _DummyRouter.models
+    assert payload["assistant_default_slot"] == "chat"
+    assert payload["assistant_default_model"] == "google/gemini-2.5-flash"
+    # decision_notes — непустой список строк
+    notes = payload["decision_notes"]
+    assert isinstance(notes, list)
+    assert len(notes) > 0
+    assert all(isinstance(n, str) for n in notes)
+
+
+def test_openclaw_routing_effective_force_cloud_mode() -> None:
+    """
+    [R22] Routing Effective: при force_mode=force_cloud cloud_fallback=True,
+    и в decision_notes присутствует объяснение cloud-принуждения.
+    """
+    client, deps = _build_client_with_deps()
+    deps["router"].force_mode = "force_cloud"
+
+    response = client.get("/api/openclaw/routing/effective")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["force_mode_effective"] == "cloud"
+    assert payload["cloud_fallback_enabled"] is True
+    notes_text = " ".join(payload["decision_notes"]).lower()
+    assert "cloud" in notes_text
+
+
+def test_openclaw_routing_effective_force_local_disables_fallback() -> None:
+    """
+    [R22] Routing Effective: при force_mode=force_local cloud_fallback=False,
+    и в decision_notes явно упомянут local-режим.
+    """
+    client, deps = _build_client_with_deps()
+    deps["router"].force_mode = "force_local"
+
+    response = client.get("/api/openclaw/routing/effective")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["force_mode_effective"] == "local"
+    assert payload["cloud_fallback_enabled"] is False
+    notes_text = " ".join(payload["decision_notes"]).lower()
+    assert "local" in notes_text
+
+
 def test_ops_usage_and_alerts_endpoints() -> None:
     client = _build_client()
 
@@ -994,7 +1232,69 @@ def test_assistant_query_endpoint(monkeypatch) -> None:
     assert payload["mode"] == "web_native"
     assert payload["task_type"] == "chat"
     assert "reply::chat::hello world" in payload["reply"]
+    assert payload["effective_force_mode"] == "auto"
     assert payload["last_route"]["model"] == "qwen2.5-7b"
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+
+def test_assistant_query_applies_force_mode_from_payload(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client = _build_client()
+
+    ok = client.post(
+        "/api/assistant/query",
+        json={
+            "prompt": "cloud only please",
+            "task_type": "chat",
+            "use_rag": False,
+            "force_mode": "cloud",
+        },
+        headers={"X-Krab-Web-Key": "secret123"},
+    )
+    assert ok.status_code == 200
+    payload = ok.json()
+    assert payload["ok"] is True
+    assert payload["effective_force_mode"] == "force_cloud"
+    monkeypatch.delenv("WEB_API_KEY", raising=False)
+
+
+def test_assistant_query_force_cloud_skips_leaked_key_local_fallback(monkeypatch) -> None:
+    """
+    В force_cloud endpoint не должен выполнять аварийный local-fallback
+    даже если cloud вернул "reported as leaked".
+    """
+    monkeypatch.setenv("WEB_API_KEY", "secret123")
+    client, deps = _build_client_with_deps()
+    router = deps["router"]
+
+    calls = {"route_query": 0, "check_local_health": 0}
+
+    async def fake_route_query(*args, **kwargs):
+        calls["route_query"] += 1
+        return "❌ OpenClaw Error (0): Google API 403: Your API key was reported as leaked."
+
+    async def fake_check_local_health(*args, **kwargs):
+        calls["check_local_health"] += 1
+        return True
+
+    monkeypatch.setattr(router, "route_query", fake_route_query)
+    monkeypatch.setattr(router, "check_local_health", fake_check_local_health)
+
+    response = client.post(
+        "/api/assistant/query",
+        json={
+            "prompt": "cloud only leaked key test",
+            "task_type": "chat",
+            "force_mode": "cloud",
+        },
+        headers={"X-Krab-Web-Key": "secret123"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["effective_force_mode"] == "force_cloud"
+    assert calls["route_query"] == 1
+    assert calls["check_local_health"] == 0
+    assert "Переключился на local-first" not in str(payload.get("reply", ""))
     monkeypatch.delenv("WEB_API_KEY", raising=False)
 
 

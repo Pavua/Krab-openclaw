@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from src.core.openclaw_client import OpenClawClient
@@ -165,10 +169,53 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], 0)
         self.assertEqual(result.get("error"), "TimeoutError")
 
-    async def test_cloud_provider_diagnostics_reports_missing_keys(self):
+    async def test_chat_completions_sanitizes_runtime_artifacts(self):
+        """Артефакты begin/end_of_box и action-not-found не должны уходить пользователю."""
         client = OpenClawClient(base_url="http://localhost:18789", api_key="")
-        with patch.dict("os.environ", {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "OPENAI_API_KEY": ""}, clear=False):
-            with patch.object(client, "_get_auth_profile_api_key", return_value=""):
+
+        async def fake_request(method: str, path: str, payload=None, timeout=15):
+            return {
+                "ok": True,
+                "status": 200,
+                "data": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    "<|begin_of_box|>\n"
+                                    "[[reply_to:69409]] <|begin_of_box|> Я здесь и готов помочь. not found\n"
+                                    "<|end_of_box|>\n"
+                                    "Нормальный ответ."
+                                )
+                            }
+                        }
+                    ]
+                },
+            }
+
+        with patch.object(client, "_request_json", side_effect=fake_request):
+            result = await client.chat_completions(
+                [{"role": "user", "content": "ping"}],
+                model="google/gemini-2.5-flash",
+            )
+
+        lowered = result.lower()
+        self.assertNotIn("begin_of_box", lowered)
+        self.assertNotIn("reply_to", lowered)
+        self.assertNotIn("not found", lowered)
+        self.assertIn("Нормальный ответ.", result)
+
+    async def test_cloud_provider_diagnostics_reports_missing_keys(self):
+        with patch.dict("os.environ", {
+            "GEMINI_API_KEY": "", 
+            "GOOGLE_API_KEY": "", 
+            "OPENAI_API_KEY": "", 
+            "OPENCLAW_API_KEY": "",
+            "GEMINI_API_KEY_FREE": "",
+            "GEMINI_API_KEY_PAID": ""
+        }, clear=False):
+            with patch.object(OpenClawClient, "_get_auth_profile_api_key", return_value=""):
+                client = OpenClawClient(base_url="http://localhost:18789", api_key="")
                 diag = await client.get_cloud_provider_diagnostics(["google", "openai"])
         self.assertFalse(diag["ok"])
         self.assertEqual(diag["providers"]["google"]["error_code"], "missing_api_key")
@@ -182,13 +229,112 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
                     return "Google API 403: Your API key was reported as leaked."
                 return None
 
-            with patch.object(client, "_probe_provider_health_hint", side_effect=fake_probe):
+            with (
+                patch.object(client, "_probe_provider_health_hint", side_effect=fake_probe),
+                patch.object(client, "_probe_gateway_api_health", return_value={"ok": True, "error_code": "ok", "summary": "ok"}),
+            ):
                 diag = await client.get_cloud_provider_diagnostics(["google", "openai"])
 
         self.assertFalse(diag["ok"])
         self.assertEqual(diag["providers"]["google"]["error_code"], "api_key_leaked")
         self.assertFalse(diag["providers"]["google"]["retryable"])
         self.assertTrue(diag["providers"]["openai"]["ok"])
+
+    async def test_health_check_rejects_html_payload(self):
+        """health_check не должен считать HTML-страницу валидным API health."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+        with (
+            patch.dict("os.environ", {"OPENCLAW_HEALTH_CLI_FALLBACK": "0"}, clear=False),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"ok": True, "status": 200, "data": {"raw": "<!doctype html><html>ui</html>"}},
+            ),
+        ):
+            result = await client.health_check()
+        self.assertFalse(result)
+
+    async def test_health_check_accepts_html_payload_when_cli_probe_ok(self):
+        """Если HTTP отдаёт HTML, но CLI probe подтверждает runtime, health_check должен вернуть True."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+        with (
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"ok": True, "status": 200, "data": {"raw": "<!doctype html><html>ui</html>"}},
+            ),
+            patch(
+                "src.core.openclaw_client.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["openclaw", "channels", "status", "--probe"],
+                    returncode=0,
+                    stdout="Gateway reachable.\n",
+                    stderr="",
+                ),
+            ),
+        ):
+            result = await client.health_check()
+        self.assertTrue(result)
+
+    async def test_health_check_rejects_html_payload_when_cli_probe_failed(self):
+        """Если HTTP отдаёт HTML и CLI probe не подтвердил runtime, health_check должен вернуть False."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+        with (
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"ok": True, "status": 200, "data": {"raw": "<!doctype html><html>ui</html>"}},
+            ),
+            patch(
+                "src.core.openclaw_client.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=["openclaw", "channels", "status", "--probe"],
+                    returncode=1,
+                    stdout="Gateway unreachable.\n",
+                    stderr="",
+                ),
+            ),
+        ):
+            result = await client.health_check()
+        self.assertFalse(result)
+
+    async def test_health_check_accepts_models_fallback_when_health_sparse(self):
+        """Если /health «пустой», но /v1/models валиден — health_check возвращает True."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+
+        async def fake_request(method: str, path: str, payload=None, timeout=15):
+            if path == "/health":
+                return {"ok": True, "status": 200, "data": {}}
+            if path == "/v1/models":
+                return {"ok": True, "status": 200, "data": {"data": [{"id": "google/gemini-2.5-flash"}]}}
+            return {"ok": False, "status": 404, "data": {}}
+
+        with patch.object(client, "_request_json", side_effect=fake_request):
+            result = await client.health_check()
+        self.assertTrue(result)
+
+    async def test_cloud_provider_diagnostics_marks_gateway_api_unavailable(self):
+        """Даже при валидном ключе диагностика должна падать, если gateway API нерабочий."""
+        client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "gm-test-1234"}, clear=False):
+            with (
+                patch.object(client, "_probe_provider_health_hint", return_value=None),
+                patch.object(
+                    client,
+                    "_probe_gateway_api_health",
+                    return_value={
+                        "ok": False,
+                        "error_code": "gateway_api_unavailable",
+                        "summary": "gateway вернул HTML вместо JSON API",
+                        "retryable": False,
+                    },
+                ),
+            ):
+                diag = await client.get_cloud_provider_diagnostics(["google"])
+
+        self.assertFalse(diag["ok"])
+        self.assertEqual(diag["providers"]["google"]["error_code"], "gateway_api_unavailable")
+        self.assertFalse(diag["providers"]["google"]["ok"])
 
     async def test_get_auth_provider_health(self):
         client = FakeOpenClawClient()
@@ -362,6 +508,74 @@ class OpenClawClientHealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "REPORT_OK")
         prompt = client.last_messages[1]["content"]
         self.assertIn("[Wrapped](https://wrapped.example)", prompt)
+
+    async def test_set_tier_paid_syncs_openclaw_google_key_and_restarts_gateway(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "openclaw.json"
+            agent_models_path = root / "models.json"
+            seed = {
+                "models": {
+                    "providers": {
+                        "google": {"apiKey": "free-key"},
+                    }
+                }
+            }
+            config_path.write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
+            agent_models_path.write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "GEMINI_API_KEY_FREE": "free-key",
+                    "GEMINI_API_KEY_PAID": "paid-key",
+                    "OPENCLAW_CONFIG_PATH": str(config_path),
+                    "OPENCLAW_AGENT_MODELS_PATH": str(agent_models_path),
+                    "OPENCLAW_TIER_SYNC_PAID_KEY": "1",
+                    "OPENCLAW_TIER_SYNC_RESTART_GATEWAY": "1",
+                    "OPENCLAW_TIER_SYNC_COOLDOWN_SEC": "5",
+                },
+                clear=False,
+            ):
+                client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+                with patch(
+                    "src.core.openclaw_client.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        args=["openclaw", "gateway", "restart"],
+                        returncode=0,
+                        stdout="ok",
+                        stderr="",
+                    ),
+                ) as restart_mock:
+                    switched = client.set_tier("paid")
+
+            self.assertTrue(switched)
+            self.assertTrue(client._paid_tier_applied)  # type: ignore[attr-defined]
+            self.assertEqual(client.active_tier, "paid")
+            self.assertEqual(restart_mock.call_count, 1)
+            self.assertEqual(
+                json.loads(config_path.read_text(encoding="utf-8"))["models"]["providers"]["google"]["apiKey"],
+                "paid-key",
+            )
+            self.assertEqual(
+                json.loads(agent_models_path.read_text(encoding="utf-8"))["models"]["providers"]["google"]["apiKey"],
+                "paid-key",
+            )
+
+    async def test_set_tier_free_does_not_restart_gateway(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "GEMINI_API_KEY_FREE": "free-key",
+                "GEMINI_API_KEY_PAID": "paid-key",
+            },
+            clear=False,
+        ):
+            client = OpenClawClient(base_url="http://localhost:18789", api_key="")
+            with patch("src.core.openclaw_client.subprocess.run") as restart_mock:
+                switched = client.set_tier("free")
+        self.assertTrue(switched)
+        restart_mock.assert_not_called()
 
 
 if __name__ == "__main__":

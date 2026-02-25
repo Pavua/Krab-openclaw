@@ -27,6 +27,7 @@ from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, 
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.core.ecosystem_health import EcosystemHealthService
+from src.core.observability import get_observability_snapshot, metrics, timeline, build_ops_response
 
 logger = structlog.get_logger("WebApp")
 
@@ -69,6 +70,101 @@ class WebApp:
         provided = (header_key or "").strip() or (token or "").strip()
         if provided != expected:
             raise HTTPException(status_code=403, detail="forbidden: invalid WEB_API_KEY")
+
+    @staticmethod
+    def _project_root() -> Path:
+        """Возвращает корень проекта Krab."""
+        return Path(__file__).resolve().parents[2]
+
+    @staticmethod
+    def _tail_text(text: str, max_chars: int = 2000) -> str:
+        """Возвращает хвост текста с ограничением длины."""
+        payload = str(text or "")
+        if len(payload) <= max_chars:
+            return payload
+        return payload[-max_chars:]
+
+    def _run_local_script(
+        self,
+        script_path: Path,
+        *,
+        timeout_seconds: int = 90,
+        args: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Единый раннер локальных .command-скриптов для web API.
+
+        Возвращает нормализованный payload без выброса исключений наружу:
+        {
+          ok: bool,
+          exit_code: int,
+          stdout_tail: str,
+          error: str
+        }
+        """
+        target = Path(script_path).resolve()
+        if not target.exists() or not target.is_file():
+            return {
+                "ok": False,
+                "exit_code": 127,
+                "stdout_tail": "",
+                "error": f"script_not_found:{target}",
+            }
+
+        cmd = [str(target)] + [str(item) for item in (args or [])]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(self._project_root()),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=int(max(5, timeout_seconds)),
+            )
+            merged = "\n".join(
+                item for item in [(proc.stdout or "").strip(), (proc.stderr or "").strip()] if item
+            )
+            return {
+                "ok": proc.returncode == 0,
+                "exit_code": int(proc.returncode),
+                "stdout_tail": self._tail_text(merged, max_chars=2000),
+                "error": "",
+            }
+        except subprocess.TimeoutExpired as exc:
+            timeout_tail = self._tail_text(
+                "\n".join(
+                    item
+                    for item in [
+                        (exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")),
+                        (exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")),
+                    ]
+                    if item
+                ),
+                max_chars=2000,
+            )
+            return {
+                "ok": False,
+                "exit_code": 124,
+                "stdout_tail": timeout_tail,
+                "error": "script_timeout",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "exit_code": 1,
+                "stdout_tail": "",
+                "error": f"script_run_error:{exc}",
+            }
+
+    def _latest_path_by_glob(self, pattern: str) -> Path | None:
+        """Возвращает самый свежий путь по glob-паттерну внутри проекта."""
+        root = self._project_root()
+        items = sorted(
+            root.glob(pattern),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return items[0] if items else None
 
     def _assistant_rate_limit_per_min(self) -> int:
         """Возвращает лимит запросов assistant API в минуту на одного клиента."""
@@ -310,6 +406,21 @@ class WebApp:
                 "chain": report["chain"],
             }
 
+        @self.app.get("/api/health/lite")
+        async def get_health_lite():
+            """
+            Быстрый liveness-check web-панели.
+
+            Важно:
+            - не тянет deep ecosystem probes;
+            - используется daemon-скриптами и uptime-watch для проверки
+              «жив ли HTTP-процесс», а не «все ли внешние зависимости сейчас быстрые».
+            """
+            return {
+                "ok": True,
+                "status": "up",
+            }
+
         @self.app.get("/api/transcriber/status")
         async def transcriber_status():
             """
@@ -423,11 +534,91 @@ class WebApp:
                 "dashboard": base,
                 "stats_api": f"{base}/api/stats",
                 "health_api": f"{base}/api/health",
+                "health_lite_api": f"{base}/api/health/lite",
                 "ecosystem_health_api": f"{base}/api/ecosystem/health",
                 "links_api": f"{base}/api/links",
                 "openclaw_cloud_api": f"{base}/api/openclaw/cloud",
+                "context_checkpoint_api": f"{base}/api/context/checkpoint",
+                "context_transition_pack_api": f"{base}/api/context/transition-pack",
+                "context_latest_api": f"{base}/api/context/latest",
                 "voice_gateway": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
                 "openclaw": os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"),
+            }
+
+        @self.app.post("/api/context/checkpoint")
+        async def context_checkpoint(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Создает checkpoint для перехода в новый чат (anti-413).
+            Вызывает one-click скрипт и возвращает путь к свежему артефакту.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            script_path = self._project_root() / "new_chat_checkpoint.command"
+            run = self._run_local_script(script_path, timeout_seconds=120)
+            if not bool(run.get("ok")):
+                detail = str(run.get("error") or f"exit_code={run.get('exit_code', 1)}")
+                raise HTTPException(status_code=500, detail=f"context_checkpoint_failed:{detail}")
+
+            artifact = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
+            if artifact is None:
+                raise HTTPException(status_code=500, detail="context_checkpoint_failed:no_artifact")
+
+            return {
+                "ok": True,
+                "artifact_type": "checkpoint",
+                "artifact_path": str(artifact),
+                "stdout_tail": str(run.get("stdout_tail") or ""),
+                "exit_code": int(run.get("exit_code", 0)),
+            }
+
+        @self.app.post("/api/context/transition-pack")
+        async def context_transition_pack(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Собирает transition-pack для восстановления состояния в новом чате.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            script_path = self._project_root() / "build_transition_pack.command"
+            run = self._run_local_script(script_path, timeout_seconds=180)
+            if not bool(run.get("ok")):
+                detail = str(run.get("error") or f"exit_code={run.get('exit_code', 1)}")
+                raise HTTPException(status_code=500, detail=f"context_transition_pack_failed:{detail}")
+
+            pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
+            if pack_dir is None:
+                raise HTTPException(status_code=500, detail="context_transition_pack_failed:no_pack_dir")
+
+            transfer_prompt = pack_dir / "TRANSFER_PROMPT_RU.md"
+            files_to_attach = pack_dir / "FILES_TO_ATTACH.txt"
+            return {
+                "ok": True,
+                "artifact_type": "transition_pack",
+                "pack_dir": str(pack_dir),
+                "transfer_prompt_path": str(transfer_prompt) if transfer_prompt.exists() else None,
+                "files_to_attach_path": str(files_to_attach) if files_to_attach.exists() else None,
+                "stdout_tail": str(run.get("stdout_tail") or ""),
+                "exit_code": int(run.get("exit_code", 0)),
+            }
+
+        @self.app.get("/api/context/latest")
+        async def context_latest():
+            """
+            Возвращает ссылки на последние anti-413 артефакты.
+            """
+            checkpoint = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
+            pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
+            transfer_prompt = (pack_dir / "TRANSFER_PROMPT_RU.md") if pack_dir else None
+            files_to_attach = (pack_dir / "FILES_TO_ATTACH.txt") if pack_dir else None
+            return {
+                "ok": True,
+                "latest_checkpoint_path": str(checkpoint) if checkpoint else None,
+                "latest_pack_dir": str(pack_dir) if pack_dir else None,
+                "latest_transfer_prompt_path": str(transfer_prompt) if transfer_prompt and transfer_prompt.exists() else None,
+                "latest_files_to_attach_path": str(files_to_attach) if files_to_attach and files_to_attach.exists() else None,
             }
 
         @self.app.get("/api/openclaw/channels/status")
@@ -590,8 +781,17 @@ class WebApp:
             
             health_data = await health_service.collect()
             
+            status = "ok"
+            if not router.is_local_available:
+                status = "degraded"
+                if getattr(router, "active_tier", "") == "default":
+                    status = "failed"
+            elif getattr(router, "active_tier", "") == "paid":
+                status = "degraded"
+            
             return {
                 "ok": True,
+                "status": status,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "resources": health_data.get("resources", {}),
                 "budget": health_data.get("budget", {}),
@@ -609,6 +809,71 @@ class WebApp:
         async def ops_diagnostics():
             """[R12] Унифицированный операционный отчет (алиас system/diagnostics с расширением)."""
             return await system_diagnostics()
+
+        @self.app.get("/api/ops/metrics")
+        async def ops_metrics():
+            """Export internal metrics."""
+            return {"ok": True, "metrics": metrics.get_snapshot()}
+
+        @self.app.get("/api/ops/timeline")
+        @self.app.get("/api/timeline")
+        async def ops_timeline(limit: int = 200, min_severity: Optional[str] = None, channel: Optional[str] = None):
+            """Export recent event timeline."""
+            return {"ok": True, "events": timeline.get_events(limit=limit, min_severity=min_severity, channel=channel)}
+
+        @self.app.get("/api/sla")
+        async def get_sla_metrics():
+            """Returns dynamic SLA metrics for the NOC-lite UI (Latency p50/p95, Success Rate)."""
+            snap = metrics.get_snapshot()
+            counters = snap.get("counters", {})
+            latencies = snap.get("latencies", {"p50_ms": 0.0, "p95_ms": 0.0})
+
+            # Calculate basic success rate based on counters (this is a simplified sliding window approximation).
+            total_success = counters.get("local_success", 0) + counters.get("cloud_success", 0)
+            total_fail = counters.get("local_failures", 0) + counters.get("cloud_failures", 0)
+            total = total_success + total_fail
+            success_rate = (total_success / total * 100.0) if total > 0 else 100.0
+
+            fail_fast_count = counters.get("force_cloud_failfast_total", 0)
+
+            return {
+                "ok": True,
+                "latency_p50_ms": latencies.get("p50_ms", 0.0),
+                "latency_p95_ms": latencies.get("p95_ms", 0.0),
+                "success_rate_pct": round(success_rate, 2),
+                "fail_fast_count": fail_fast_count,
+            }
+
+        @self.app.get("/api/ops/runtime_snapshot")
+        async def ops_runtime_snapshot():
+            """Deep observability snapshot linking all states."""
+            router = self.deps.get("router")
+            if not router:
+                return {"ok": False, "error": "router_not_found"}
+                
+            task_queue = self.deps.get("queue")
+            queue_stats = task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
+            
+            openclaw = router.openclaw_client
+            tier_state = openclaw.get_tier_state_export() if getattr(openclaw, "get_tier_state_export", None) else {}
+            
+            return {
+                "ok": True,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "router_state": {
+                    "is_local_available": router.is_local_available,
+                    "active_tier": getattr(router, "active_tier", "default"),
+                    "local_failures": router._stats.get("local_failures", 0),
+                    "cloud_failures": router._stats.get("cloud_failures", 0)
+                },
+                "tier_state": tier_state,
+                "breaker_state": {
+                    "preflight_cache": {k: {"expires_in": v[0] - time.time(), "error": v[1]} for k, v in getattr(router, "_preflight_cache", {}).items() if v[0] > time.time()}
+                },
+                "queue_depth": queue_stats.get("active_tasks", 0),
+                "queue_stats": queue_stats,
+                "observability": get_observability_snapshot()
+            }
 
         @self.app.post("/api/ops/models")
         async def ops_models_control(
@@ -1542,6 +1807,8 @@ class WebApp:
             preferred_model = payload.get("preferred_model")
             preferred_model_str = str(preferred_model).strip() if preferred_model else None
             confirm_expensive = bool(payload.get("confirm_expensive", False))
+            requested_force_mode_raw = str(payload.get("force_mode", "")).strip().lower()
+            requested_force_mode = requested_force_mode_raw if requested_force_mode_raw in {"auto", "local", "cloud"} else ""
 
             # Web UX-хелпер: поддержка команд вида `.model ...` и `!model ...`
             # прямо из web-assistant input. Иначе команда уходила в LLM как обычный prompt.
@@ -1642,6 +1909,13 @@ class WebApp:
                     return response_payload
 
             try:
+                # Если UI передал force_mode, синхронизируем режим до выполнения запроса.
+                if requested_force_mode and hasattr(router, "set_force_mode"):
+                    router.set_force_mode(requested_force_mode)
+                effective_force_mode = _normalize_force_mode(
+                    getattr(router, "force_mode", "auto")
+                )
+
                 reply = await router.route_query(
                     prompt=prompt,
                     task_type=task_type,
@@ -1655,10 +1929,12 @@ class WebApp:
 
                 # Local-first аварийная деградация:
                 # если cloud-ключ скомпрометирован/отклонён, пробуем принудительный local.
+                # В force_cloud это запрещено: режим должен быть строго cloud-only.
                 leaked_key_marker = "reported as leaked"
                 if (
                     isinstance(reply, str)
                     and leaked_key_marker in reply.lower()
+                    and effective_force_mode != "cloud"
                     and hasattr(router, "check_local_health")
                 ):
                     local_ok = bool(await router.check_local_health(force=True))
@@ -1709,6 +1985,7 @@ class WebApp:
                 "mode": "web_native",
                 "task_type": task_type,
                 "profile": profile,
+                "effective_force_mode": str(getattr(router, "force_mode", "auto")),
                 "recommendation": recommendation,
                 "last_route": last_route,
                 "reply": reply,
@@ -1769,6 +2046,81 @@ class WebApp:
                     providers_list = None
             report = await openclaw.get_cloud_provider_diagnostics(providers=providers_list)
             return {"available": True, "report": report}
+
+        @self.app.get("/api/openclaw/cloud/tier/state")
+        async def openclaw_cloud_tier_state():
+            """
+            [R23/R25] Диагностика Cloud Tier State.
+
+            Возвращает текущий активный tier (free/paid/default), статистику
+            переключений, метрики (cloud_attempts_total и др.) и конфигурацию.
+            Не содержит секретов — только счётчики событий.
+            """
+            try:
+                openclaw = self.deps.get("openclaw_client")
+                if not openclaw:
+                    return build_ops_response(status="failed", error_code="openclaw_client_not_configured", summary="Openclaw client not configured")
+                if not hasattr(openclaw, "get_tier_state_export"):
+                    return build_ops_response(status="failed", error_code="tier_state_not_supported", summary="Tier state not supported")
+                tier_state = openclaw.get_tier_state_export()
+                return build_ops_response(status="ok", data={"tier_state": tier_state})
+            except Exception as exc:
+                return build_ops_response(status="failed", error_code="system_error", summary=str(exc))
+
+        @self.app.post("/api/openclaw/cloud/tier/reset")
+        async def openclaw_cloud_tier_reset(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            [R23/R25] Ручной сброс Cloud Tier на free.
+
+            Требует X-Krab-Web-Key или token (WEB_API_KEY).
+            Снимает sticky_paid флаг, не требует перезапуска бота.
+            Возвращает: {ok, previous_tier, new_tier, reset_at}.
+            """
+            try:
+                self._assert_write_access(x_krab_web_key, token)
+            except HTTPException as exc:
+                return build_ops_response(status="failed", error_code="forbidden", summary=exc.detail)
+
+            try:
+                openclaw = self.deps.get("openclaw_client")
+                if not openclaw:
+                    return build_ops_response(status="failed", error_code="openclaw_client_not_configured", summary="Openclaw client not configured")
+                if not hasattr(openclaw, "reset_cloud_tier"):
+                    return build_ops_response(status="failed", error_code="tier_reset_not_supported", summary="Tier reset not supported")
+                
+                result = await openclaw.reset_cloud_tier()
+                return build_ops_response(status="ok", data={"result": result})
+            except Exception as exc:
+                return build_ops_response(status="failed", error_code="tier_reset_error", summary=str(exc))
+
+        @self.app.get("/api/ops/runtime_snapshot")
+        async def ops_runtime_snapshot():
+            """[R25] Снапшот рантайма с маскировкой секретов."""
+            try:
+                data = get_observability_snapshot()
+                return build_ops_response(status="ok", data=data)
+            except Exception as exc:
+                return build_ops_response(status="failed", error_code="snapshot_error", summary=str(exc))
+
+        @self.app.get("/api/ops/metrics")
+        async def ops_metrics():
+            """[R25] Метрики в унифицированном формате."""
+            try:
+                return build_ops_response(status="ok", data=metrics.get_snapshot())
+            except Exception as exc:
+                return build_ops_response(status="failed", error_code="metrics_error", summary=str(exc))
+
+        @self.app.get("/api/ops/timeline")
+        async def ops_timeline():
+            """[R25] Таймлайн событий с маскировкой."""
+            try:
+                data = {"events": get_observability_snapshot().get("timeline_tail", [])}
+                return build_ops_response(status="ok", data=data)
+            except Exception as exc:
+                return build_ops_response(status="failed", error_code="timeline_error", summary=str(exc))
 
         def _run_openclaw_model_autoswitch(*, dry_run: bool) -> dict:
             """
@@ -1832,6 +2184,185 @@ class WebApp:
             self._assert_write_access(x_krab_web_key, token)
             payload = _run_openclaw_model_autoswitch(dry_run=False)
             return {"ok": True, "autoswitch": payload}
+
+        @self.app.get("/api/openclaw/control-compat/status")
+        async def openclaw_control_compat_status():
+            """
+            [R22] Control Compatibility Diagnostics.
+
+            Дает прозрачный ответ на вопрос: предупреждения OpenClaw Control UI
+            (`Unsupported schema node`) — это UI-артефакт или реальный runtime-риск?
+
+            Источники:
+            - `openclaw channels status --probe` → runtime_channels_ok
+            - `openclaw logs --tail 200` → control_schema_warnings (фильтрация по маркерам)
+
+            Логика impact_level:
+            - runtime ok + warnings → "ui_only"   (каналы работают, предупреждение косметическое)
+            - runtime fail + warnings → "runtime_risk"  (нужна диагностика)
+            - runtime ok, warnings нет → "none"
+            """
+            # --- Шаг 1: проверяем runtime каналов ---
+            runtime_ok = False
+            try:
+                proc_channels = await asyncio.create_subprocess_exec(
+                    "openclaw", "channels", "status", "--probe",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    stdout_ch, _ = await asyncio.wait_for(proc_channels.communicate(), timeout=30.0)
+                    runtime_ok = proc_channels.returncode == 0
+                except asyncio.TimeoutError:
+                    try:
+                        proc_channels.terminate()
+                    except ProcessLookupError:
+                        pass
+                    runtime_ok = False
+            except Exception:
+                runtime_ok = False
+
+            # --- Шаг 2: получаем последние логи OpenClaw для поиска schema-маркеров ---
+            schema_markers = {"unsupported schema node", "schema", "validation"}
+            control_schema_warnings: list[str] = []
+            try:
+                proc_logs = await asyncio.create_subprocess_exec(
+                    "openclaw", "logs", "--tail", "200",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    stdout_logs, _ = await asyncio.wait_for(proc_logs.communicate(), timeout=10.0)
+                    raw_logs = stdout_logs.decode("utf-8", errors="replace")
+                    for line in raw_logs.splitlines():
+                        line_lower = line.lower()
+                        # Ищем строки, содержащие хотя бы один из маркеров схемы
+                        if any(marker in line_lower for marker in schema_markers):
+                            stripped = line.strip()
+                            if stripped:
+                                control_schema_warnings.append(stripped)
+                except asyncio.TimeoutError:
+                    try:
+                        proc_logs.terminate()
+                    except ProcessLookupError:
+                        pass
+                    # При таймауте логов — не считаем это runtime-риском
+            except Exception:
+                # CLI openclaw logs недоступен — просто нет данных для schema-анализа
+                pass
+
+            # --- Шаг 3: определяем impact_level и рекомендацию ---
+            has_warnings = bool(control_schema_warnings)
+            if runtime_ok and has_warnings:
+                impact_level = "ui_only"
+                recommended_action = (
+                    "Предупреждения ограничены UI Control. Runtime каналов работает нормально. "
+                    "Для редактирования затронутых полей используй Raw-режим в Control Dashboard."
+                )
+            elif not runtime_ok and has_warnings:
+                impact_level = "runtime_risk"
+                recommended_action = (
+                    "Обнаружены schema-предупреждения И проблемы runtime. "
+                    "Запусти: openclaw doctor --fix  или  ./openclaw_runtime_repair.command"
+                )
+            elif not runtime_ok:
+                impact_level = "runtime_risk"
+                recommended_action = (
+                    "Runtime каналов недоступен. Schema-предупреждения не обнаружены. "
+                    "Запусти: openclaw doctor --fix"
+                )
+            else:
+                impact_level = "none"
+                recommended_action = "Все каналы работают нормально. Предупреждений нет."
+
+            return {
+                "ok": runtime_ok or not has_warnings,
+                "runtime_channels_ok": runtime_ok,
+                "control_schema_warnings": control_schema_warnings,
+                "impact_level": impact_level,
+                "recommended_action": recommended_action,
+            }
+
+        @self.app.get("/api/openclaw/routing/effective")
+        async def openclaw_routing_effective():
+            """
+            [R22] Routing Effective Source of Truth.
+
+            Единый источник истины о текущем routing-решении Krab:
+            откуда оно взялось, какой force_mode активен, почему идём в local или cloud.
+
+            Читает только существующие атрибуты роутера — без внешних вызовов.
+            Это позволяет: дебаггинг без отправки запросов в LM Studio/cloud,
+            проверку конфигурации, понимание причин route-решений.
+            """
+            router = self.deps["router"]
+
+            # --- Normalize force_mode ---
+            force_mode_raw = str(getattr(router, "force_mode", "auto") or "auto")
+            force_mode_eff = _normalize_force_mode(force_mode_raw)
+
+            # --- Определяем default slot и модель ---
+            cloud_slots: dict = {}
+            raw_models = getattr(router, "models", {}) or {}
+            if isinstance(raw_models, dict):
+                cloud_slots = {str(k): str(v) for k, v in raw_models.items()}
+            # Приоритет: "chat" → первый ключ → пусто
+            default_slot = "chat" if "chat" in cloud_slots else (next(iter(cloud_slots), None) or "")
+            default_model = cloud_slots.get(default_slot, "")
+
+            # --- Cloud fallback включен если НЕ принудительный local ---
+            cloud_fallback_enabled = force_mode_eff != "local"
+
+            # --- Строим decision_notes из состояния роутера ---
+            local_engine = str(getattr(router, "local_engine", "") or "")
+            local_available = bool(getattr(router, "is_local_available", False))
+            active_local_model = str(getattr(router, "active_local_model", "") or "")
+            routing_policy = str(getattr(router, "routing_policy", "free_first_hybrid") or "free_first_hybrid")
+            cloud_cap_reached = bool(getattr(router, "cloud_soft_cap_reached", False))
+
+            decision_notes: list[str] = []
+            if force_mode_raw in {"force_local", "local"}:
+                decision_notes.append(
+                    f"Принудительный local-режим активен — все запросы идут через {local_engine or 'local'}."
+                )
+            elif force_mode_raw in {"force_cloud", "cloud"}:
+                decision_notes.append(
+                    "Принудительный cloud-режим активен — локальный движок пропускается."
+                )
+            else:
+                decision_notes.append(
+                    f"Routing policy: {routing_policy} — auto-routing включен."
+                )
+
+            if local_available:
+                decision_notes.append(
+                    f"Локальный движок '{local_engine}' доступен."
+                    + (f" Активная модель: '{active_local_model}'." if active_local_model else "")
+                )
+            else:
+                decision_notes.append(
+                    "Локальный движок недоступен — fallback только на cloud."
+                )
+
+            if cloud_cap_reached:
+                decision_notes.append(
+                    "Cloud soft-cap достигнут: приоритет переключен на локальный движок."
+                )
+
+            if not cloud_fallback_enabled:
+                decision_notes.append(
+                    "Cloud fallback ОТКЛЮЧЕН: force_local режим запрещает обращение к cloud."
+                )
+
+            return {
+                "ok": True,
+                "force_mode_requested": force_mode_raw,
+                "force_mode_effective": force_mode_eff,
+                "assistant_default_slot": default_slot,
+                "assistant_default_model": default_model,
+                "cloud_fallback_enabled": cloud_fallback_enabled,
+                "decision_notes": decision_notes,
+            }
 
         @self.app.get("/api/provisioning/templates")
         async def provisioning_templates(entity: str = Query(default="agent")):
