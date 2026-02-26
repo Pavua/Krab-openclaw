@@ -1,0 +1,25 @@
+{
+  "profiles": {
+    "chat": 354,
+    "communication": 100,
+    "security": 8,
+    "moderation": 5,
+    "review": 19,
+    "infra": 3
+  },
+  "models": {
+    "zai-org/glm-4.6v-flash": 151,
+    "gemini-2.5-flash": 178,
+    "qwen2.5-coder-7b-instruct-mlx": 57,
+    "gemini-2.5-pro": 9,
+    "google/gemini-1.5-pro": 1,
+    "gemini-3-pro-preview": 7,
+    "test-local-model": 18,
+    "google/gemini-2.5-flash": 64,
+    "google/gemini-3-pro-preview": 4
+  },
+  "channels": {
+    "local": 225,
+    "cloud": 264
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "ts": "2026-02-12T20:43:22+00:00",
+  "degradation": "normal",
+  "checks": {
+    "openclaw": {
+      "ok": true,
+      "status": "OK",
+      "latency_ms": 65
+    },
+    "local_lm": {
+      "ok": true,
+      "status": "OK",
+      "latency_ms": 66
+    },
+    "voice_gateway": {
+      "ok": true,
+      "status": "OK",
+      "latency_ms": 7
+    },
+    "krab_ear": {
+      "ok": false,
+      "status": "<urlopen error [Errno 61] Connection refused>",
+      "latency_ms": 0
+    }
+  }
+}

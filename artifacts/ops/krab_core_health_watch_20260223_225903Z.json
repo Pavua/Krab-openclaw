@@ -1,0 +1,153 @@
+{
+  "ok": true,
+  "generated_at": "2026-02-23T22:59:03+00:00",
+  "url": "http://127.0.0.1:8080/api/health/lite",
+  "duration_sec": 30,
+  "interval_sec": 2.0,
+  "probe_timeout_sec": 4.0,
+  "analysis": {
+    "samples_count": 15,
+    "up_count": 15,
+    "down_count": 0,
+    "first_down_at": null,
+    "flaps": 0,
+    "ok": true
+  },
+  "samples": [
+    {
+      "ts_utc": "2026-02-23T22:58:17+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:23+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:25+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:30+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:35+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:37+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:39+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:41+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:46+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:48+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:50+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:54+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:56+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:58:58+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T22:59:01+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        63898
+      ]
+    }
+  ]
+}

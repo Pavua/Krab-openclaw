@@ -1,0 +1,16 @@
+# Antigravity ownership (v8 parallel mode)
+src/handlers/telegram_control.py
+src/handlers/groups.py
+src/handlers/tools.py
+src/core/group_moderation_engine.py
+src/core/telegram_chat_resolver.py
+src/core/telegram_summary_service.py
+src/core/provisioning_service.py
+src/handlers/provisioning.py
+src/core/voice_gateway_client.py
+src/main.py
+tests/test_telegram_chat_resolver.py
+tests/test_telegram_summary_service.py
+tests/test_provisioning_service.py
+tests/test_group_moderation_engine.py
+tests/test_voice_gateway_client.py

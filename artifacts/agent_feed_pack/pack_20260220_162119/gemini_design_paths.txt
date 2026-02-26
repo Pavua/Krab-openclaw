@@ -1,0 +1,5 @@
+# Gemini 3 Pro ownership (frontend/design proposals)
+docs/frontend_design/**
+artifacts/frontend_design/**
+src/web/prototypes/gemini/**
+

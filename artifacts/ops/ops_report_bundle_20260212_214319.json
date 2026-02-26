@@ -1,0 +1,204 @@
+{
+  "generated_at": "2026-02-12T20:43:22+00:00",
+  "usage": {
+    "totals": {
+      "all_calls": 29,
+      "local_calls": 0,
+      "cloud_calls": 29
+    },
+    "ratios": {
+      "local_share": 0.0,
+      "cloud_share": 1.0
+    },
+    "soft_cap": {
+      "cloud_soft_cap_calls": 300,
+      "cloud_soft_cap_reached": false,
+      "cloud_remaining_calls": 271
+    },
+    "top_models": [
+      {
+        "model": "gemini-2.5-flash",
+        "count": 29
+      }
+    ],
+    "top_profiles": [
+      {
+        "profile": "chat",
+        "count": 29
+      }
+    ]
+  },
+  "alerts": {
+    "status": "alert",
+    "alerts": [
+      {
+        "severity": "medium",
+        "code": "cloud_share_high",
+        "message": "Высокая доля облачных вызовов; проверь политику free-first и локальные модели.",
+        "acknowledged": false
+      },
+      {
+        "severity": "low",
+        "code": "local_usage_absent",
+        "message": "Локальный канал не используется; проверь LM Studio/Ollama и маршрутизацию.",
+        "acknowledged": false
+      },
+      {
+        "severity": "high",
+        "code": "cloud_budget_exceeded_forecast",
+        "message": "Прогноз облачных расходов (50.00$) превышает бюджет (25.00$) на текущем профиле нагрузки.",
+        "acknowledged": false
+      }
+    ],
+    "summary": {
+      "totals": {
+        "all_calls": 29,
+        "local_calls": 0,
+        "cloud_calls": 29
+      },
+      "ratios": {
+        "local_share": 0.0,
+        "cloud_share": 1.0
+      },
+      "soft_cap": {
+        "cloud_soft_cap_calls": 300,
+        "cloud_soft_cap_reached": false,
+        "cloud_remaining_calls": 271
+      },
+      "top_models": [
+        {
+          "model": "gemini-2.5-flash",
+          "count": 29
+        }
+      ],
+      "top_profiles": [
+        {
+          "profile": "chat",
+          "count": 29
+        }
+      ]
+    },
+    "cost_report": {
+      "costs_usd": {
+        "cloud_calls_cost": 0.29,
+        "local_calls_cost": 0.0,
+        "total_cost": 0.29,
+        "avg_cost_per_call": 0.01
+      },
+      "pricing": {
+        "cloud_cost_per_call_usd": 0.01,
+        "local_cost_per_call_usd": 0.0
+      },
+      "monthly_forecast": {
+        "forecast_calls": 5000,
+        "forecast_cloud_calls": 5000,
+        "forecast_local_calls": 0,
+        "forecast_cloud_cost": 50.0,
+        "forecast_local_cost": 0.0,
+        "forecast_total_cost": 50.0
+      },
+      "usage_summary": {
+        "totals": {
+          "all_calls": 29,
+          "local_calls": 0,
+          "cloud_calls": 29
+        },
+        "ratios": {
+          "local_share": 0.0,
+          "cloud_share": 1.0
+        },
+        "soft_cap": {
+          "cloud_soft_cap_calls": 300,
+          "cloud_soft_cap_reached": false,
+          "cloud_remaining_calls": 271
+        },
+        "top_models": [
+          {
+            "model": "gemini-2.5-flash",
+            "count": 29
+          }
+        ],
+        "top_profiles": [
+          {
+            "profile": "chat",
+            "count": 29
+          }
+        ]
+      },
+      "budget": {
+        "cloud_monthly_budget_usd": 25.0,
+        "forecast_ratio": 2.0
+      }
+    }
+  },
+  "costs": {
+    "costs_usd": {
+      "cloud_calls_cost": 0.29,
+      "local_calls_cost": 0.0,
+      "total_cost": 0.29,
+      "avg_cost_per_call": 0.01
+    },
+    "pricing": {
+      "cloud_cost_per_call_usd": 0.01,
+      "local_cost_per_call_usd": 0.0
+    },
+    "monthly_forecast": {
+      "forecast_calls": 5000,
+      "forecast_cloud_calls": 5000,
+      "forecast_local_calls": 0,
+      "forecast_cloud_cost": 50.0,
+      "forecast_local_cost": 0.0,
+      "forecast_total_cost": 50.0
+    },
+    "usage_summary": {
+      "totals": {
+        "all_calls": 29,
+        "local_calls": 0,
+        "cloud_calls": 29
+      },
+      "ratios": {
+        "local_share": 0.0,
+        "cloud_share": 1.0
+      },
+      "soft_cap": {
+        "cloud_soft_cap_calls": 300,
+        "cloud_soft_cap_reached": false,
+        "cloud_remaining_calls": 271
+      },
+      "top_models": [
+        {
+          "model": "gemini-2.5-flash",
+          "count": 29
+        }
+      ],
+      "top_profiles": [
+        {
+          "profile": "chat",
+          "count": 29
+        }
+      ]
+    },
+    "budget": {
+      "cloud_monthly_budget_usd": 25.0,
+      "forecast_ratio": 2.0
+    }
+  },
+  "history": {
+    "items": [
+      {
+        "ts": "2026-02-12T20:43:22+00:00",
+        "status": "alert",
+        "alerts_count": 3,
+        "codes": [
+          "cloud_share_high",
+          "local_usage_absent",
+          "cloud_budget_exceeded_forecast"
+        ],
+        "cloud_calls": 29,
+        "local_calls": 0
+      }
+    ],
+    "count": 1,
+    "total": 1
+  }
+}

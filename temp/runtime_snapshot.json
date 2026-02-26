@@ -1,0 +1,437 @@
+{
+  "timestamp": "2026-02-25T03:27:24.618711",
+  "endpoints": {
+    "health": {
+      "status": "ok",
+      "checks": {
+        "openclaw": true,
+        "local_lm": false,
+        "voice_gateway": false,
+        "krab_ear": false
+      },
+      "degradation": "normal",
+      "risk_level": "medium",
+      "chain": {
+        "active_ai_channel": "cloud",
+        "fallback_ready": false,
+        "voice_assist_ready": false
+      }
+    },
+    "stats": {
+      "router": {
+        "cloud_models": {
+          "chat": "google/gemini-2.5-flash",
+          "thinking": "google/gemini-3-pro-preview",
+          "pro": "google/gemini-3-pro-preview",
+          "coding": "google/gemini-3-pro-preview"
+        },
+        "local_engine": "lm-studio",
+        "local_model": null,
+        "local_available": false,
+        "stats": {
+          "local_calls": 0,
+          "cloud_calls": 0,
+          "local_failures": 0,
+          "cloud_failures": 0
+        },
+        "force_mode": "auto",
+        "fallback_models": [
+          "gemini-2.0-flash-lite-preview-02-05",
+          "gemini-2.0-flash",
+          "gemini-2.0-flash-001",
+          "gemini-1.5-flash",
+          "gemini-1.5-pro"
+        ],
+        "routing_policy": "free_first_hybrid",
+        "cloud_soft_cap_calls": 10000,
+        "cloud_soft_cap_reached": false,
+        "recommendations": {
+          "chat": {
+            "profile": "chat",
+            "model": "gemini-2.5-flash",
+            "channel": "local",
+            "critical": false,
+            "feedback_hint": {
+              "avg_score": 3.2,
+              "count": 5
+            }
+          },
+          "moderation": {
+            "profile": "moderation",
+            "model": "zai-org/glm-4.6v-flash",
+            "channel": "local",
+            "critical": false,
+            "feedback_hint": {
+              "avg_score": 0.0,
+              "count": 0
+            }
+          },
+          "code": {
+            "profile": "code",
+            "model": "gemini-2.5-flash",
+            "channel": "local",
+            "critical": false,
+            "feedback_hint": {
+              "avg_score": 0.0,
+              "count": 0
+            }
+          },
+          "security": {
+            "profile": "security",
+            "model": "gemini-2.5-pro",
+            "channel": "cloud",
+            "critical": true,
+            "feedback_hint": {
+              "avg_score": 0.0,
+              "count": 0
+            }
+          },
+          "infra": {
+            "profile": "infra",
+            "model": "gemini-2.5-pro",
+            "channel": "cloud",
+            "critical": true,
+            "feedback_hint": {
+              "avg_score": 0.0,
+              "count": 0
+            }
+          },
+          "review": {
+            "profile": "review",
+            "model": "test-local-model",
+            "channel": "local",
+            "critical": true,
+            "feedback_hint": {
+              "avg_score": 0.0,
+              "count": 0
+            }
+          },
+          "communication": {
+            "profile": "communication",
+            "model": "gemini-2.5-flash",
+            "channel": "local",
+            "critical": false,
+            "feedback_hint": {
+              "avg_score": 3.143,
+              "count": 7
+            }
+          }
+        },
+        "usage_report": {
+          "profiles": {
+            "chat": 296,
+            "communication": 100,
+            "security": 8,
+            "moderation": 5,
+            "review": 9,
+            "infra": 3
+          },
+          "models": {
+            "zai-org/glm-4.6v-flash": 145,
+            "gemini-2.5-flash": 178,
+            "qwen2.5-coder-7b-instruct-mlx": 57,
+            "gemini-2.5-pro": 9,
+            "google/gemini-1.5-pro": 1,
+            "gemini-3-pro-preview": 7,
+            "test-local-model": 8,
+            "google/gemini-2.5-flash": 12,
+            "google/gemini-3-pro-preview": 4
+          },
+          "channels": {
+            "local": 209,
+            "cloud": 212
+          }
+        },
+        "feedback_summary": {
+          "generated_at": "2026-02-25T02:27:24+00:00",
+          "profile": null,
+          "top_models": [
+            {
+              "profile": "chat",
+              "model": "model-b",
+              "count": 6,
+              "avg_score": 5.0,
+              "last_score": 5,
+              "last_ts": "2026-02-12T22:04:11+00:00"
+            },
+            {
+              "profile": "chat",
+              "model": "qwen2.5-7b",
+              "count": 2,
+              "avg_score": 5.0,
+              "last_score": 5,
+              "last_ts": "2026-02-12T22:04:11+00:00"
+            },
+            {
+              "profile": "communication",
+              "model": "zai-org/glm-4.6v-flash",
+              "count": 10,
+              "avg_score": 3.2,
+              "last_score": 4,
+              "last_ts": "2026-02-21T22:10:41+00:00"
+            }
+          ],
+          "top_channels": [
+            {
+              "channel": "cloud",
+              "count": 12,
+              "avg_score": 3.167
+            },
+            {
+              "channel": "local",
+              "count": 30,
+              "avg_score": 2.8
+            }
+          ],
+          "total_feedback": 42,
+          "recent_events": [
+            {
+              "ts": "2026-02-21T21:51:20+00:00",
+              "score": 3,
+              "profile": "communication",
+              "model": "zai-org/glm-4.6v-flash",
+              "channel": "local"
+            },
+            {
+              "ts": "2026-02-21T21:52:05+00:00",
+              "score": 3,
+              "profile": "communication",
+              "model": "zai-org/glm-4.6v-flash",
+              "channel": "local"
+            },
+            {
+              "ts": "2026-02-21T21:52:09+00:00",
+              "score": 3,
+              "profile": "communication",
+              "model": "zai-org/glm-4.6v-flash",
+              "channel": "local"
+            },
+            {
+              "ts": "2026-02-21T21:52:35+00:00",
+              "score": 3,
+              "profile": "communication",
+              "model": "zai-org/glm-4.6v-flash",
+              "channel": "local"
+            },
+            {
+              "ts": "2026-02-21T22:10:41+00:00",
+              "score": 4,
+              "profile": "communication",
+              "model": "zai-org/glm-4.6v-flash",
+              "channel": "local"
+            }
+          ],
+          "last_route": {
+            "ts": "2026-02-24T22:08:52+00:00",
+            "profile": "chat",
+            "task_type": "chat",
+            "channel": "cloud",
+            "model": "google/gemini-2.5-flash",
+            "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nПривет! 🦀 Я в полном порядке, готов к работе. Чем могу помочь?\n\n### ТЕКУЩИЙ ЗАПРОС:\nHello, how are you?",
+            "route_reason": "force_cloud",
+            "route_detail": "",
+            "force_mode": "force_cloud",
+            "local_available": false
+          }
+        },
+        "last_route": {
+          "ts": "2026-02-24T22:08:52+00:00",
+          "profile": "chat",
+          "task_type": "chat",
+          "channel": "cloud",
+          "model": "google/gemini-2.5-flash",
+          "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nПривет! 🦀 Я в полном порядке, готов к работе. Чем могу помочь?\n\n### ТЕКУЩИЙ ЗАПРОС:\nHello, how are you?",
+          "route_reason": "force_cloud",
+          "route_detail": "",
+          "force_mode": "force_cloud",
+          "local_available": false
+        },
+        "last_stream_route": {
+          "ts": "2026-02-25T01:21:48+00:00",
+          "profile": "communication",
+          "task_type": "chat",
+          "channel": "local",
+          "model": "zai-org/glm-4.6v-flash",
+          "prompt_preview": "Отвечай строго на русском языке, если пользователь явно не попросил другой язык.\nНе вставляй длинные англоязычные блоки и не смешивай языки в одном ответе.\nНе п",
+          "route_reason": "local_stream_primary",
+          "route_detail": "stream completed on local model",
+          "force_mode": "auto",
+          "local_available": true
+        },
+        "cloud_keys": {
+          "openclaw": {
+            "is_configured": true,
+            "masked_key": "sk-nex...idge",
+            "active_tier": "free",
+            "tiers": {
+              "free": {
+                "is_configured": true,
+                "masked_key": "AIzaSy...hl48"
+              },
+              "paid": {
+                "is_configured": true,
+                "masked_key": "AQ.Ab8...Zmsg"
+              }
+            },
+            "gateway_active_tier": "default",
+            "provider": "openclaw"
+          },
+          "gemini": {
+            "is_configured": true,
+            "masked_key": "...Zmsg",
+            "has_error": false,
+            "provider": "google"
+          },
+          "last_error": {
+            "has_error": false,
+            "code": "none",
+            "summary": "облачный провайдер временно недоступен",
+            "retryable": true,
+            "last_provider_model": "",
+            "raw_excerpt": ""
+          }
+        }
+      },
+      "black_box": {
+        "total": 8264,
+        "incoming": 8249,
+        "outgoing": 15,
+        "path": "artifacts/memory/black_box.db"
+      },
+      "rag": {
+        "enabled": false,
+        "count": 0
+      }
+    },
+    "diagnostics": {
+      "ok": true,
+      "status": "degraded",
+      "timestamp": "2026-02-25T02:27:24.643065+00:00",
+      "resources": {
+        "cpu_percent": 26.1,
+        "ram_percent": 54.1,
+        "ram_available_gb": 16.5,
+        "load_avg": [
+          8.68359375,
+          8.16650390625,
+          7.017578125
+        ]
+      },
+      "budget": {
+        "monthly_budget": 25.0,
+        "monthly_spent": 0.0,
+        "usage_percent": 0.0,
+        "is_economy_mode": false,
+        "month_progress_percent": 83.3,
+        "runway_days": 30
+      },
+      "local_ai": {
+        "engine": "lm-studio",
+        "model": null,
+        "available": false
+      },
+      "watchdog": {
+        "last_recoveries": {
+          "OpenClawGateway": 1771972491.61731,
+          "CoreMainLoop": 1771981043.021618
+        }
+      }
+    },
+    "ecosystem": {
+      "ok": true,
+      "report": {
+        "generated_at": "2026-02-25T02:27:24+00:00",
+        "status": "degraded",
+        "risk_level": "medium",
+        "degradation": "normal",
+        "checks": {
+          "openclaw": {
+            "ok": true,
+            "status": "ok",
+            "latency_ms": 3,
+            "source": "openclaw",
+            "degraded": false,
+            "token_status": {
+              "is_configured": true,
+              "masked_key": "sk-nex...idge",
+              "active_tier": "free",
+              "tiers": {
+                "free": {
+                  "is_configured": true,
+                  "masked_key": "AIzaSy...hl48"
+                },
+                "paid": {
+                  "is_configured": true,
+                  "masked_key": "AQ.Ab8...Zmsg"
+                }
+              },
+              "gateway_active_tier": "default",
+              "provider": "openclaw"
+            }
+          },
+          "local_lm": {
+            "ok": false,
+            "status": "unavailable",
+            "latency_ms": 0,
+            "source": "router.check_local_health",
+            "degraded": false
+          },
+          "voice_gateway": {
+            "ok": false,
+            "status": "unavailable",
+            "latency_ms": 1,
+            "source": "voice_gateway",
+            "degraded": false
+          },
+          "krab_ear": {
+            "ok": false,
+            "status": "error: Cannot connect to host 127.0.0.1:5005 ssl:default [Connect call failed ('127.0.0.1', 5005)]",
+            "latency_ms": 1,
+            "source": "http://127.0.0.1:5005/health",
+            "degraded": false
+          }
+        },
+        "chain": {
+          "active_ai_channel": "cloud",
+          "fallback_ready": false,
+          "voice_assist_ready": false
+        },
+        "resources": {
+          "cpu_percent": 16.7,
+          "ram_percent": 54.1,
+          "ram_available_gb": 16.5,
+          "load_avg": [
+            8.68359375,
+            8.16650390625,
+            7.017578125
+          ]
+        },
+        "queue": {},
+        "budget": {
+          "monthly_budget": 25.0,
+          "monthly_spent": 0.0,
+          "usage_percent": 0.0,
+          "is_economy_mode": false,
+          "month_progress_percent": 83.3,
+          "runway_days": 30
+        },
+        "recommendations": [
+          "Voice Gateway недоступен: команды `!call*` будут ограничены.",
+          "Krab Ear backend недоступен: desktop call-assist поток неактивен."
+        ],
+        "_diagnostics": {
+          "latency_summary": {
+            "openclaw": 3,
+            "local_lm": 0,
+            "voice_gateway": 1,
+            "krab_ear": 1
+          },
+          "slowest_source": "openclaw",
+          "slowest_latency_ms": 3,
+          "total_collect_ms": 3,
+          "timeout_budget_sec": 2.5
+        }
+      }
+    }
+  }
+}

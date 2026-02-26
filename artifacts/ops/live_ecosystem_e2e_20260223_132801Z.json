@@ -1,0 +1,174 @@
+{
+  "generated_at": "2026-02-23T13:28:01+00:00",
+  "overall_ok": true,
+  "degradation": "normal",
+  "checks": {
+    "openclaw": {
+      "ok": true,
+      "status_code": 200,
+      "latency_ms": 23,
+      "body_preview": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n    <title>OpenClaw Control</title>\n    <meta name=\"color-scheme\" content=\"dark light\" />\n  ",
+      "url": "http://127.0.0.1:18789/health"
+    },
+    "local_lm": {
+      "ok": true,
+      "status_code": 200,
+      "latency_ms": 2,
+      "body_preview": "{\n  \"data\": [\n    {\n      \"id\": \"zai-org/glm-4.6v-flash\",\n      \"object\": \"model\",\n      \"owned_by\": \"organization_owner\"\n    },\n    {\n      \"id\": \"nvidia/nemotron-3-nano\",\n      \"object\": \"model\",\n      \"owned_by\": \"organization_owner\"\n   ",
+      "url": "http://127.0.0.1:1234/v1/models"
+    },
+    "voice_gateway": {
+      "ok": true,
+      "status_code": 200,
+      "latency_ms": 2,
+      "body_preview": "{\"ok\":true,\"service\":\"krab-voice-gateway\",\"version\":\"0.1.0\"}",
+      "url": "http://127.0.0.1:8090/health"
+    },
+    "krab_ear": {
+      "ok": true,
+      "status_code": 0,
+      "latency_ms": 0,
+      "error": "Cannot connect to host 127.0.0.1:8765 ssl:default [Connect call failed ('127.0.0.1', 8765)]",
+      "url": "http://127.0.0.1:8765/health",
+      "process_probe": {
+        "ok": true,
+        "status": "process_up",
+        "project_root": "/Users/pablito/Antigravity_AGENTS/Krab Ear",
+        "pids": [
+          "51927"
+        ]
+      },
+      "status_override": "native_process_up_http_unavailable"
+    }
+  },
+  "voice_lifecycle": {
+    "ok": true,
+    "steps": [
+      {
+        "step": "create_session",
+        "ok": true,
+        "session_id": "vs_c6d2be1de18c",
+        "response": {
+          "ok": true,
+          "result": {
+            "id": "vs_c6d2be1de18c",
+            "status": "created",
+            "translation_mode": "auto_to_ru",
+            "notify_mode": "auto_on",
+            "tts_mode": "hybrid",
+            "source": "live_e2e",
+            "src_lang": "auto",
+            "tgt_lang": "ru",
+            "created_at": "2026-02-23T13:28:01+00:00",
+            "updated_at": "2026-02-23T13:28:01+00:00",
+            "meta": {
+              "started_by": "openclaw_krab"
+            }
+          }
+        }
+      },
+      {
+        "step": "patch_translation_mode",
+        "ok": true,
+        "response": {
+          "ok": true,
+          "result": {
+            "id": "vs_c6d2be1de18c",
+            "status": "created",
+            "translation_mode": "auto_to_ru",
+            "notify_mode": "auto_on",
+            "tts_mode": "hybrid",
+            "source": "live_e2e",
+            "src_lang": "auto",
+            "tgt_lang": "ru",
+            "created_at": "2026-02-23T13:28:01+00:00",
+            "updated_at": "2026-02-23T13:28:01+00:00",
+            "meta": {
+              "started_by": "openclaw_krab"
+            }
+          }
+        }
+      },
+      {
+        "step": "get_diagnostics",
+        "ok": true,
+        "response": {
+          "ok": true,
+          "result": {
+            "session_id": "vs_c6d2be1de18c",
+            "created_at": "2026-02-23T13:28:01+00:00",
+            "updated_at": "2026-02-23T13:28:01+00:00",
+            "counters": {},
+            "latency_ms": {},
+            "pipeline": {
+              "mode": "hybrid",
+              "last_fallback": "",
+              "last_error": "",
+              "cache_hits": 0,
+              "cache_misses": 0
+            },
+            "costs": {
+              "total_usd": 0.0,
+              "breakdown": {
+                "twilio": 0.0,
+                "ai": 0.0
+              }
+            },
+            "translation_mode": "auto_to_ru",
+            "notify_mode": "auto_on",
+            "source": "live_e2e",
+            "runtime": {
+              "buffering_mode": "adaptive",
+              "target_latency_ms": 420,
+              "min_latency_ms": 180,
+              "max_latency_ms": 1200,
+              "vad_sensitivity": 0.38,
+              "silence_increase_step_ms": 35,
+              "speech_decrease_step_ms": 25
+            },
+            "status": "created",
+            "timeline_size": 0
+          }
+        }
+      },
+      {
+        "step": "stop_session",
+        "ok": true,
+        "response": {
+          "ok": true,
+          "result": {
+            "ok": true,
+            "session": {
+              "id": "vs_c6d2be1de18c",
+              "status": "stopped",
+              "translation_mode": "auto_to_ru",
+              "notify_mode": "auto_on",
+              "tts_mode": "hybrid",
+              "source": "live_e2e",
+              "src_lang": "auto",
+              "tgt_lang": "ru",
+              "created_at": "2026-02-23T13:28:01+00:00",
+              "updated_at": "2026-02-23T13:28:01+00:00",
+              "meta": {
+                "started_by": "openclaw_krab"
+              }
+            }
+          }
+        }
+      },
+      {
+        "step": "verify_removed",
+        "ok": true,
+        "response": {
+          "ok": false,
+          "error": "http_404",
+          "details": {
+            "detail": "session_not_found"
+          }
+        }
+      }
+    ],
+    "skipped": false,
+    "reason": ""
+  }
+}

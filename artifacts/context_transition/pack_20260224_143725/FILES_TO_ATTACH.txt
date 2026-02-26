@@ -1,0 +1,13 @@
+Прикрепить в новый диалог (в порядке):
+- AGENTS.md
+- CHAT_TRANSITION_PLAYBOOK_RU.md
+- HANDOVER.md
+- ROADMAP.md
+- TRANSFER_PROMPT_RU.md
+- checkpoint_20260224_143725.md
+- next_chat_context_20260224_143725.md
+
+Минимальный набор (если нужно совсем коротко):
+- TRANSFER_PROMPT_RU.md
+- next_chat_context_*.md (самый свежий)
+- checkpoint_*.md (самый свежий)

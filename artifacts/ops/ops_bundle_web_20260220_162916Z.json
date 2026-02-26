@@ -1,0 +1,133 @@
+{
+  "generated_at": "2026-02-20T16:29:16+00:00",
+  "ops_report": {
+    "generated_at": "2026-02-12T21:00:00+00:00",
+    "usage": {
+      "totals": {
+        "all_calls": 10,
+        "local_calls": 7,
+        "cloud_calls": 3
+      },
+      "ratios": {
+        "local_share": 0.7,
+        "cloud_share": 0.3
+      },
+      "soft_cap": {
+        "cloud_soft_cap_calls": 100,
+        "cloud_soft_cap_reached": false,
+        "cloud_remaining_calls": 97
+      },
+      "top_models": [
+        {
+          "model": "qwen2.5-7b",
+          "count": 6
+        }
+      ],
+      "top_profiles": [
+        {
+          "profile": "chat",
+          "count": 8
+        }
+      ]
+    },
+    "alerts": {
+      "status": "ok",
+      "alerts": [],
+      "summary": {
+        "totals": {
+          "all_calls": 10,
+          "local_calls": 7,
+          "cloud_calls": 3
+        },
+        "ratios": {
+          "local_share": 0.7,
+          "cloud_share": 0.3
+        },
+        "soft_cap": {
+          "cloud_soft_cap_calls": 100,
+          "cloud_soft_cap_reached": false,
+          "cloud_remaining_calls": 97
+        },
+        "top_models": [
+          {
+            "model": "qwen2.5-7b",
+            "count": 6
+          }
+        ],
+        "top_profiles": [
+          {
+            "profile": "chat",
+            "count": 8
+          }
+        ]
+      }
+    },
+    "costs": {
+      "costs_usd": {
+        "cloud_calls_cost": 0.03,
+        "local_calls_cost": 0.0,
+        "total_cost": 0.03,
+        "avg_cost_per_call": 0.003
+      },
+      "pricing": {
+        "cloud_cost_per_call_usd": 0.01,
+        "local_cost_per_call_usd": 0.0
+      },
+      "monthly_forecast": {
+        "forecast_calls": 9000,
+        "forecast_cloud_calls": 1500,
+        "forecast_local_calls": 3500,
+        "forecast_cloud_cost": 15.0,
+        "forecast_local_cost": 0.0,
+        "forecast_total_cost": 15.0
+      },
+      "usage_summary": {
+        "totals": {
+          "all_calls": 10,
+          "local_calls": 7,
+          "cloud_calls": 3
+        },
+        "ratios": {
+          "local_share": 0.7,
+          "cloud_share": 0.3
+        },
+        "soft_cap": {
+          "cloud_soft_cap_calls": 100,
+          "cloud_soft_cap_reached": false,
+          "cloud_remaining_calls": 97
+        },
+        "top_models": [
+          {
+            "model": "qwen2.5-7b",
+            "count": 6
+          }
+        ],
+        "top_profiles": [
+          {
+            "profile": "chat",
+            "count": 8
+          }
+        ]
+      }
+    },
+    "history": {
+      "items": [
+        {
+          "ts": "2026-02-12T10:00:00+00:00",
+          "status": "ok",
+          "alerts_count": 0,
+          "codes": [],
+          "cloud_calls": 3,
+          "local_calls": 7
+        }
+      ],
+      "count": 1,
+      "total": 1
+    }
+  },
+  "health": {
+    "openclaw": true,
+    "local_lm": true,
+    "voice_gateway": false
+  }
+}

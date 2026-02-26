@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "generated_at": "2026-02-23T22:45:16+00:00",
+  "required_failed": 0,
+  "advisory_failed": 0,
+  "checks": [
+    {
+      "name": "pytest_targeted_r20",
+      "required": true,
+      "ok": true,
+      "duration_ms": 2232,
+      "detail": "..............................................                           [100%]\n46 passed in 1.41s"
+    },
+    {
+      "name": "compile_web_health_modules",
+      "required": true,
+      "ok": true,
+      "duration_ms": 38,
+      "detail": "returncode=0"
+    },
+    {
+      "name": "http_lite_health",
+      "required": true,
+      "ok": true,
+      "duration_ms": 82,
+      "detail": "status=200"
+    },
+    {
+      "name": "http_deep_health",
+      "required": false,
+      "ok": true,
+      "duration_ms": 5000,
+      "detail": "status=200"
+    }
+  ]
+}

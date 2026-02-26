@@ -1,0 +1,1405 @@
+{
+  "profiles": {
+    "chat": {
+      "models": {
+        "qwen2.5-7b": {
+          "count": 2,
+          "sum": 10,
+          "avg": 5.0,
+          "channels": {
+            "local": {
+              "count": 2,
+              "sum": 10,
+              "avg": 5.0
+            }
+          },
+          "last_score": 5,
+          "last_ts": "2026-02-12T22:04:11+00:00"
+        },
+        "model-a": {
+          "count": 6,
+          "sum": 6,
+          "avg": 1.0,
+          "channels": {
+            "local": {
+              "count": 6,
+              "sum": 6,
+              "avg": 1.0
+            }
+          },
+          "last_score": 1,
+          "last_ts": "2026-02-12T22:04:11+00:00"
+        },
+        "model-b": {
+          "count": 6,
+          "sum": 30,
+          "avg": 5.0,
+          "channels": {
+            "local": {
+              "count": 6,
+              "sum": 30,
+              "avg": 5.0
+            }
+          },
+          "last_score": 5,
+          "last_ts": "2026-02-12T22:04:11+00:00"
+        },
+        "bad-model": {
+          "count": 6,
+          "sum": 6,
+          "avg": 1.0,
+          "channels": {
+            "local": {
+              "count": 6,
+              "sum": 6,
+              "avg": 1.0
+            }
+          },
+          "last_score": 1,
+          "last_ts": "2026-02-12T22:04:11+00:00"
+        },
+        "gemini-2.5-flash": {
+          "count": 5,
+          "sum": 16,
+          "avg": 3.2,
+          "channels": {
+            "cloud": {
+              "count": 5,
+              "sum": 16,
+              "avg": 3.2
+            }
+          },
+          "last_score": 3,
+          "last_ts": "2026-02-18T21:02:11+00:00"
+        },
+        "google/gemini-2.5-flash": {
+          "count": 19,
+          "sum": 61,
+          "avg": 3.211,
+          "channels": {
+            "cloud": {
+              "count": 19,
+              "sum": 61,
+              "avg": 3.211
+            }
+          },
+          "last_score": 4,
+          "last_ts": "2026-02-25T12:07:11+00:00"
+        },
+        "zai-org/glm-4.6v-flash": {
+          "count": 2,
+          "sum": 6,
+          "avg": 3.0,
+          "channels": {
+            "local": {
+              "count": 2,
+              "sum": 6,
+              "avg": 3.0
+            }
+          },
+          "last_score": 3,
+          "last_ts": "2026-02-26T11:03:17+00:00"
+        }
+      },
+      "channels": {
+        "local": {
+          "count": 22,
+          "sum": 58,
+          "avg": 2.636
+        },
+        "cloud": {
+          "count": 24,
+          "sum": 77,
+          "avg": 3.208
+        }
+      },
+      "feedback_total": 46
+    },
+    "communication": {
+      "models": {
+        "gemini-2.5-flash": {
+          "count": 7,
+          "sum": 22,
+          "avg": 3.143,
+          "channels": {
+            "cloud": {
+              "count": 7,
+              "sum": 22,
+              "avg": 3.143
+            }
+          },
+          "last_score": 3,
+          "last_ts": "2026-02-21T13:54:37+00:00"
+        },
+        "zai-org/glm-4.6v-flash": {
+          "count": 10,
+          "sum": 32,
+          "avg": 3.2,
+          "channels": {
+            "local": {
+              "count": 10,
+              "sum": 32,
+              "avg": 3.2
+            }
+          },
+          "last_score": 4,
+          "last_ts": "2026-02-21T22:10:41+00:00"
+        }
+      },
+      "channels": {
+        "cloud": {
+          "count": 7,
+          "sum": 22,
+          "avg": 3.143
+        },
+        "local": {
+          "count": 10,
+          "sum": 32,
+          "avg": 3.2
+        }
+      },
+      "feedback_total": 17
+    }
+  },
+  "events": [
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "qwen2.5-7b",
+      "channel": "local",
+      "note": "отличный ответ"
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "model-a",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "model-b",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "model-a",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "model-b",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "model-a",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "model-b",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "bad-model",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "bad-model",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:03:35+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "bad-model",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "qwen2.5-7b",
+      "channel": "local",
+      "note": "отличный ответ"
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "model-a",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "model-b",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "model-a",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "model-b",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "model-a",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 5,
+      "profile": "chat",
+      "model": "model-b",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "bad-model",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "bad-model",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-12T22:04:11+00:00",
+      "score": 1,
+      "profile": "chat",
+      "model": "bad-model",
+      "channel": "local",
+      "note": ""
+    },
+    {
+      "ts": "2026-02-18T10:37:22+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😈:added"
+    },
+    {
+      "ts": "2026-02-18T10:39:01+00:00",
+      "score": 4,
+      "profile": "communication",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-18T10:39:53+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:⚡:added"
+    },
+    {
+      "ts": "2026-02-18T10:39:57+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:❤:added"
+    },
+    {
+      "ts": "2026-02-18T10:46:23+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:❤:added"
+    },
+    {
+      "ts": "2026-02-18T11:15:24+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:✍:added"
+    },
+    {
+      "ts": "2026-02-18T11:15:26+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:❤:added"
+    },
+    {
+      "ts": "2026-02-18T11:18:13+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:✍:added"
+    },
+    {
+      "ts": "2026-02-18T11:20:44+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:❤:added"
+    },
+    {
+      "ts": "2026-02-18T21:02:09+00:00",
+      "score": 4,
+      "profile": "chat",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-18T21:02:11+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😈:added"
+    },
+    {
+      "ts": "2026-02-21T13:54:37+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-21T21:47:59+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😈:added"
+    },
+    {
+      "ts": "2026-02-21T21:48:58+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:❤:added"
+    },
+    {
+      "ts": "2026-02-21T21:49:12+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😈:added"
+    },
+    {
+      "ts": "2026-02-21T21:49:14+00:00",
+      "score": 4,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-21T21:50:11+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-21T21:51:20+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-21T21:52:05+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-21T21:52:09+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:🕊:added"
+    },
+    {
+      "ts": "2026-02-21T21:52:35+00:00",
+      "score": 3,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-21T22:10:41+00:00",
+      "score": 4,
+      "profile": "communication",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-25T10:39:21+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:42:31+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:44:01+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:44:24+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:✍:added"
+    },
+    {
+      "ts": "2026-02-25T10:45:03+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:46:16+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:46:53+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:50:11+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:50:15+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😈:added"
+    },
+    {
+      "ts": "2026-02-25T10:51:35+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:51:59+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T10:52:02+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T11:07:11+00:00",
+      "score": 4,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-25T11:11:43+00:00",
+      "score": 4,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-25T11:12:40+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-25T11:14:39+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:😈:added"
+    },
+    {
+      "ts": "2026-02-25T11:14:46+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:🕊:added"
+    },
+    {
+      "ts": "2026-02-25T12:02:52+00:00",
+      "score": 4,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-25T12:07:11+00:00",
+      "score": 4,
+      "profile": "chat",
+      "model": "google/gemini-2.5-flash",
+      "channel": "cloud",
+      "note": "weak_reaction_signal:👍:added"
+    },
+    {
+      "ts": "2026-02-26T11:02:57+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😁:added"
+    },
+    {
+      "ts": "2026-02-26T11:03:17+00:00",
+      "score": 3,
+      "profile": "chat",
+      "model": "zai-org/glm-4.6v-flash",
+      "channel": "local",
+      "note": "weak_reaction_signal:😁:added"
+    }
+  ],
+  "last_route": {
+    "ts": "2026-02-26T21:21:35+00:00",
+    "profile": "chat",
+    "task_type": "chat",
+    "channel": "cloud",
+    "model": "google/gemini-2.5-flash",
+    "prompt_preview": "Test prompt",
+    "route_reason": "local_fallback_cloud",
+    "route_detail": "local_status=runtime_error",
+    "force_mode": "auto",
+    "local_available": false
+  },
+  "updated_at": "2026-02-26T21:21:35+00:00",
+  "route_history": [
+    {
+      "ts": "2026-02-24T16:42:30+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "Проверка связи.",
+      "route_reason": "local_primary",
+      "route_detail": "auto mode",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-24T16:42:38+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n✅ Соединение проверено. Я здесь, готов к работе.\n\nКакой следующий шаг в нашем взаимодействии? 🦀\n\n### ТЕКУЩИЙ ЗАПРОС:\nПроверка связи.",
+      "route_reason": "local_primary",
+      "route_detail": "auto mode",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-24T20:24:57+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "Привет",
+      "route_reason": "local_primary",
+      "route_detail": "auto mode",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-24T20:25:42+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nПривет! Я Krab 🦀, элитный AI-ассистент. Чем могу помочь сегодня?\n\n### ТЕКУЩИЙ ЗАПРОС:\nПривет",
+      "route_reason": "local_primary",
+      "route_detail": "auto mode",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-24T21:24:41+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "FORCE_CLOUD_LIVE_AFTER_PATCH_1771968275",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: 400 no models loaded. please load a model in the developer page or use the 'lms load' command.",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T21:24:44+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nFORCE_CLOUD_LIVE_AFTER_PATCH_1771968275",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: 400 no models loaded. please load a model in the developer page or use the 'lms load' command.",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T21:30:25+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "FORCE_CLOUD_FINAL_1771968622",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T21:30:30+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nЯ уже на месте, всегда готов к новым приключениям в облаках, или где угодно, куда пошлют 🦀. Что дальше?\n\n### ТЕКУЩИЙ ЗАПРОС:\nFORCE_C",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T21:32:01+00:00",
+      "profile": "communication",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Отвечай строго на русском языке, если пользователь явно не попросил другой язык.\nНе вставляй длинные англоязычные блоки и не смешивай языки в одном ответе.\nНе п",
+      "route_reason": "force_cloud",
+      "route_detail": "force_cloud: local stream bypassed by force_cloud mode",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T21:37:23+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Проверка связи. Ответь коротко: cloud-ok",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T21:37:29+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\ncloud-ok 🦀\n\n### ТЕКУЩИЙ ЗАПРОС:\nПроверка связи. Ответь коротко: cloud-ok",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T22:08:47+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Hello, how are you?",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-24T22:08:52+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nПривет! 🦀 Я в полном порядке, готов к работе. Чем могу помочь?\n\n### ТЕКУЩИЙ ЗАПРОС:\nHello, how are you?",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-25T13:31:04+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "Проверка связи force cloud",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен (probe через 30с). internal error",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T13:31:04+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nПроверка связи force cloud",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен (probe через 30с). internal error",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T16:29:06+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "Сверка связи.",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен (probe через 30с). internal error",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T16:29:06+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nСверка связи.",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен (probe через 30с). internal error",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:33:16+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "Коротко ответь: связь локального контура ок?",
+      "route_reason": "local_primary",
+      "route_detail": "auto mode",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:33:42+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Коротко ответь: cloud контур доступен?",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:34:05+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nДа\n\n### ТЕКУЩИЙ ЗАПРОС:\nКоротко ответь: связь локального контура ок?",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:34:06+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nКоротко ответь: cloud контур доступен?",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "проблема с сетью или таймаут соединения",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:37:01+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "Ответь одним словом: cloud?",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен. circuit open: probe in progress (probe in 0s)",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:37:01+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь одним словом: cloud?",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен. circuit open: probe in progress (probe in 0s)",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:42:31+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "Ответь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен. circuit open: probe in progress (probe in 0s)",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:42:31+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен. circuit open: probe in progress (probe in 0s)",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:43:20+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "Ответь одним словом: local_ok",
+      "route_reason": "force_local",
+      "route_detail": "forced by mode",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:43:20+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-pro",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nlocal_ok\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь одним словом: local_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: ❌ openclaw circuit open: gateway недоступен. circuit open: probe in progress (probe in 0s)",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:46:15+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "Ответь одним словом: local_ok",
+      "route_reason": "force_local",
+      "route_detail": "forced by mode",
+      "force_mode": "force_local",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:46:20+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nlocal_ok\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь одним словом: local_ok",
+      "route_reason": "force_local",
+      "route_detail": "forced by mode",
+      "force_mode": "force_local",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:47:05+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Ответь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:47:51+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:51:43+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Ответь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T18:52:29+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T19:09:45+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Ответь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T19:10:34+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "force_cloud",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T19:15:37+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Ответь одним словом: cloud_ok",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышено время ожидания ответа от облачного канала",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T19:28:45+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "Ответь коротко: локальный контур после загрузки модели?",
+      "route_reason": "force_local",
+      "route_detail": "forced by mode",
+      "force_mode": "force_local",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-25T19:29:12+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "local",
+      "model": "zai-org/glm-4.6v-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nПосле загрузки локальной модели формируется контекст с доступом к ее параметрам и внутреннему состоянию.\n\n### ТЕКУЩИЙ ЗАПРОС:\nОтветь",
+      "route_reason": "force_local",
+      "route_detail": "forced by mode",
+      "force_mode": "force_local",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-26T13:59:13+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "openai/gpt-5-mini",
+      "prompt_preview": "проверка связи",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: 400 no models loaded. please load a model in the developer page or use the 'lms load' command.",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T13:59:16+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "openai/gpt-5-mini",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\n❌ Облачный сервис временно недоступен. Пожалуйста, попробуй позже.\n\n### ТЕКУЩИЙ ЗАПРОС:\nпроверка связи",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ ошибка cloud: 400 no models loaded. please load a model in the developer page or use the 'lms load' command.",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:18:49+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nSearch result: found nothing\n\n### ТЕКУЩИЙ ЗАПРОС:\nНайди что-нибудь",
+      "route_reason": "cloud_primary",
+      "route_detail": "local_status=skipped",
+      "force_mode": "auto",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:18:51+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "тест force_cloud fail",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышена квота или проблема с биллингом",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:18:51+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "тест no local fallback",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ cloud error: api unavailable",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:18:51+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "тест predictable response",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышена квота или проблема с биллингом",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:19:15+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Test prompt",
+      "route_reason": "local_fallback_cloud",
+      "route_detail": "local_status=runtime_error",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-26T21:19:15+00:00",
+      "profile": "review",
+      "task_type": "reasoning",
+      "channel": "local",
+      "model": "test-local-model",
+      "prompt_preview": "Critical task",
+      "route_reason": "cloud_fallback_local",
+      "route_detail": "cloud failed",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-26T21:19:40+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "test prompt",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:19:40+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "test prompt",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ fatal error on both tiers",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:19:46+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nWeb Data: BTC is 100k\n\n### ТЕКУЩИЙ ЗАПРОС:\nСколько стоит BTC?",
+      "route_reason": "cloud_primary",
+      "route_detail": "local_status=skipped",
+      "force_mode": "auto",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:19:57+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Test prompt",
+      "route_reason": "local_fallback_cloud",
+      "route_detail": "local_status=runtime_error",
+      "force_mode": "auto",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:20:29+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nSearch result: found nothing\n\n### ТЕКУЩИЙ ЗАПРОС:\nНайди что-нибудь",
+      "route_reason": "cloud_primary",
+      "route_detail": "local_status=skipped",
+      "force_mode": "auto",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:20:31+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "тест force_cloud fail",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышена квота или проблема с биллингом",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:20:31+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "тест no local fallback",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ cloud error: api unavailable",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:20:31+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "тест predictable response",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "превышена квота или проблема с биллингом",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:20:55+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Test prompt",
+      "route_reason": "local_fallback_cloud",
+      "route_detail": "local_status=runtime_error",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-26T21:20:55+00:00",
+      "profile": "review",
+      "task_type": "reasoning",
+      "channel": "local",
+      "model": "test-local-model",
+      "prompt_preview": "Critical task",
+      "route_reason": "cloud_fallback_local",
+      "route_detail": "cloud failed",
+      "force_mode": "auto",
+      "local_available": true
+    },
+    {
+      "ts": "2026-02-26T21:21:19+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "test prompt",
+      "route_reason": "force_cloud",
+      "route_detail": "",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:21:19+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "test prompt",
+      "route_reason": "force_cloud_failed",
+      "route_detail": "❌ fatal error on both tiers",
+      "force_mode": "force_cloud",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:21:24+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "### ДАННЫЕ ИЗ ИНСТРУМЕНТОВ:\nWeb Data: BTC is 100k\n\n### ТЕКУЩИЙ ЗАПРОС:\nСколько стоит BTC?",
+      "route_reason": "cloud_primary",
+      "route_detail": "local_status=skipped",
+      "force_mode": "auto",
+      "local_available": false
+    },
+    {
+      "ts": "2026-02-26T21:21:35+00:00",
+      "profile": "chat",
+      "task_type": "chat",
+      "channel": "cloud",
+      "model": "google/gemini-2.5-flash",
+      "prompt_preview": "Test prompt",
+      "route_reason": "local_fallback_cloud",
+      "route_detail": "local_status=runtime_error",
+      "force_mode": "auto",
+      "local_available": false
+    }
+  ]
+}

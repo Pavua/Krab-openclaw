@@ -1,0 +1,65 @@
+{
+  "ok": true,
+  "generated_at": "2026-02-25T22:56:30+00:00",
+  "with_live": false,
+  "required_failed": [],
+  "advisory_failed": [],
+  "steps": [
+    {
+      "name": "stream_runtime_text_to_cloud_fallback",
+      "required": true,
+      "ok": true,
+      "exit_code": 0,
+      "cmd": [
+        "/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_model_router_stream_fallback.py::test_route_stream_detects_runtime_error_text_chunk_and_fallbacks_to_cloud"
+      ],
+      "summary": ".                                                                        [100%]\n1 passed in 0.08s"
+    },
+    {
+      "name": "force_cloud_skips_local_health_stream",
+      "required": true,
+      "ok": true,
+      "exit_code": 0,
+      "cmd": [
+        "/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_model_router_stream_fallback.py::test_route_stream_force_cloud_skips_local_health_probe"
+      ],
+      "summary": ".                                                                        [100%]\n1 passed in 0.07s"
+    },
+    {
+      "name": "force_cloud_skips_local_health_query",
+      "required": true,
+      "ok": true,
+      "exit_code": 0,
+      "cmd": [
+        "/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_model_router_stream_fallback.py::test_route_query_force_cloud_skips_local_health_probe"
+      ],
+      "summary": ".                                                                        [100%]\n1 passed in 0.08s"
+    },
+    {
+      "name": "auto_cloud_primary_skips_local_probe",
+      "required": true,
+      "ok": true,
+      "exit_code": 0,
+      "cmd": [
+        "/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_model_router_stream_fallback.py::test_route_query_auto_cloud_primary_skips_local_probe"
+      ],
+      "summary": ".                                                                        [100%]\n1 passed in 0.07s"
+    }
+  ]
+}

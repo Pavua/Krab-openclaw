@@ -1,0 +1,170 @@
+{
+  "ok": false,
+  "generated_at": "2026-02-25T19:44:52+00:00",
+  "tail_lines": 320,
+  "channels_probe": {
+    "ok": true,
+    "exit_code": 0,
+    "summary": "ok",
+    "stdout_tail": "Checking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, in:15m ago, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:pairing\n- Discord default: enabled, configured, running, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, not configured, stopped, disconnected, error:not configured\n\nWarnings:\n- bluebubbles default: Not configured (missing serverUrl or password). (Run: openclaw channels add bluebubbles --http-url <server-url> --password <password>)\n- Run: openclaw doctor\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).",
+    "stderr_tail": "[plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)"
+  },
+  "logs": [
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab_manual_bg.log",
+      "exists": false,
+      "tail_lines_scanned": 0
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/ai_decisions.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    }
+  ],
+  "findings_count": 18,
+  "error_findings_count": 12,
+  "warn_findings_count": 6,
+  "findings": [
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 137,
+      "code": "model_crash",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:39.459+01:00 The model has crashed without additional information. (Exit code: null)"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 171,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:40.394+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 172,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:43.487+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 173,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:44.561+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 174,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:45.613+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 176,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:49.759+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 215,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T17:49:50.007Z [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 242,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:18:35.653Z [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 261,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:22:39.717Z [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 264,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:23:01.005Z [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 270,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:33:16.054Z [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 306,
+      "code": "model_crash",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:39.093Z [agent/embedded] embedded run agent end: runId=chatcmpl_1e37ec4a-b17a-4e47-9d69-761e28cc7277 isError=true error=The model has crashed without additional information. (Exit code: null)"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 308,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:40.152Z [agent/embedded] embedded run agent end: runId=chatcmpl_9eca7f21-cdd5-4598-8a4b-3e46cd666c75 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 310,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:43.267Z [agent/embedded] embedded run agent end: runId=chatcmpl_be4443b6-856b-498f-ab79-45537248eb50 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 312,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:44.337Z [agent/embedded] embedded run agent end: runId=chatcmpl_01292a66-5c99-4fc9-b15a-3cb216b3efe7 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 314,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:45.382Z [agent/embedded] embedded run agent end: runId=chatcmpl_6eca8912-1b99-4b0f-9a63-bc98726bf032 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 316,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:49.540Z [agent/embedded] embedded run agent end: runId=chatcmpl_1a407032-3259-45ec-a1a7-2c60b3abe2b4 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 317,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:26:31.471Z [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/"
+    }
+  ]
+}

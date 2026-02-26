@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-02-23T13:23:43+00:00",
+  "status": "degraded",
+  "risk_level": "medium",
+  "degradation": "normal",
+  "checks": {
+    "openclaw": {
+      "ok": true,
+      "status": "ok",
+      "latency_ms": 0,
+      "source": "openclaw",
+      "token_status": {
+        "is_configured": false,
+        "masked_key": null
+      }
+    },
+    "local_lm": {
+      "ok": true,
+      "status": "ok",
+      "latency_ms": 0,
+      "source": "router.check_local_health"
+    },
+    "voice_gateway": {
+      "ok": false,
+      "status": "unavailable",
+      "latency_ms": 0,
+      "source": "voice_gateway"
+    },
+    "krab_ear": {
+      "ok": false,
+      "status": "unavailable",
+      "latency_ms": 0,
+      "source": "krab_ear_client"
+    }
+  },
+  "chain": {
+    "active_ai_channel": "cloud",
+    "fallback_ready": true,
+    "voice_assist_ready": false
+  },
+  "resources": {
+    "cpu_percent": 0.0,
+    "ram_percent": 74.4,
+    "ram_available_gb": 9.2,
+    "load_avg": [
+      9.19189453125,
+      10.015625,
+      10.83740234375
+    ]
+  },
+  "queue": {},
+  "budget": {},
+  "recommendations": [
+    "Voice Gateway недоступен: команды `!call*` будут ограничены.",
+    "Krab Ear backend недоступен: desktop call-assist поток неактивен."
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "ok": false,
+  "generated_at": "2026-02-23T21:55:07+00:00",
+  "url": "http://127.0.0.1:8080/api/health",
+  "duration_sec": 20,
+  "interval_sec": 2.0,
+  "analysis": {
+    "samples_count": 10,
+    "up_count": 5,
+    "down_count": 5,
+    "first_down_at": "2026-02-23T21:54:39+00:00",
+    "flaps": 9,
+    "ok": false
+  },
+  "samples": [
+    {
+      "ts_utc": "2026-02-23T21:54:35+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:54:39+00:00",
+      "http_up": false,
+      "http_status": 0,
+      "error": "timed out",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:54:41+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:54:45+00:00",
+      "http_up": false,
+      "http_status": 0,
+      "error": "timed out",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:54:48+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:54:52+00:00",
+      "http_up": false,
+      "http_status": 0,
+      "error": "timed out",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:54:54+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:54:58+00:00",
+      "http_up": false,
+      "http_status": 0,
+      "error": "timed out",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:55:00+00:00",
+      "http_up": true,
+      "http_status": 200,
+      "error": "",
+      "core_pids": [
+        57614
+      ]
+    },
+    {
+      "ts_utc": "2026-02-23T21:55:04+00:00",
+      "http_up": false,
+      "http_status": 0,
+      "error": "timed out",
+      "core_pids": [
+        57614
+      ]
+    }
+  ]
+}

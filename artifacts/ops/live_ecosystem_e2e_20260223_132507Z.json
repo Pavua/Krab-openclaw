@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-02-23T13:25:07+00:00",
+  "overall_ok": true,
+  "degradation": "normal",
+  "checks": {
+    "openclaw": {
+      "ok": true,
+      "status_code": 200,
+      "latency_ms": 23,
+      "body_preview": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n    <title>OpenClaw Control</title>\n    <meta name=\"color-scheme\" content=\"dark light\" />\n  ",
+      "url": "http://127.0.0.1:18789/health"
+    },
+    "local_lm": {
+      "ok": true,
+      "status_code": 200,
+      "latency_ms": 2,
+      "body_preview": "{\n  \"data\": [\n    {\n      \"id\": \"zai-org/glm-4.6v-flash\",\n      \"object\": \"model\",\n      \"owned_by\": \"organization_owner\"\n    },\n    {\n      \"id\": \"nvidia/nemotron-3-nano\",\n      \"object\": \"model\",\n      \"owned_by\": \"organization_owner\"\n   ",
+      "url": "http://127.0.0.1:1234/v1/models"
+    },
+    "voice_gateway": {
+      "ok": false,
+      "status_code": 0,
+      "latency_ms": 0,
+      "error": "Cannot connect to host 127.0.0.1:8090 ssl:default [Connect call failed ('127.0.0.1', 8090)]",
+      "url": "http://127.0.0.1:8090/health"
+    },
+    "krab_ear": {
+      "ok": false,
+      "status_code": 0,
+      "latency_ms": 0,
+      "error": "Cannot connect to host 127.0.0.1:8765 ssl:default [Connect call failed ('127.0.0.1', 8765)]",
+      "url": "http://127.0.0.1:8765/health"
+    }
+  },
+  "voice_lifecycle": {
+    "skipped": true,
+    "reason": "voice_gateway_unavailable",
+    "ok": false,
+    "steps": []
+  }
+}

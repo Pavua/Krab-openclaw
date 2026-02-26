@@ -1,0 +1,569 @@
+{
+  "ok": false,
+  "generated_at": "2026-02-25T19:25:22+00:00",
+  "tail_lines": 320,
+  "channels_probe": {
+    "ok": true,
+    "exit_code": 0,
+    "summary": "ok",
+    "stdout_tail": "Checking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, in:35m ago, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:pairing\n- Discord default: enabled, configured, running, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, not configured, stopped, disconnected, error:not configured\n\nWarnings:\n- bluebubbles default: Not configured (missing serverUrl or password). (Run: openclaw channels add bluebubbles --http-url <server-url> --password <password>)\n- Run: openclaw doctor\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).",
+    "stderr_tail": "[plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)"
+  },
+  "logs": [
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab_manual_bg.log",
+      "exists": false,
+      "tail_lines_scanned": 0
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/ai_decisions.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "exists": true,
+      "tail_lines_scanned": 320
+    }
+  ],
+  "findings_count": 75,
+  "error_findings_count": 22,
+  "warn_findings_count": 53,
+  "findings": [
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab.log",
+      "line_tail_index": 218,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:40,396 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:40\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mOpenClaw Attempt 1 failed: 400 No models loaded. Please load a model in the developer page or use the 'lms load' "
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab.log",
+      "line_tail_index": 219,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:43,488 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:43\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab.log",
+      "line_tail_index": 221,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:44,563 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:44\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab.log",
+      "line_tail_index": 225,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:48,755 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:48\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/krab.log",
+      "line_tail_index": 227,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:49,761 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:49\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/ai_decisions.log",
+      "line_tail_index": 218,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:40,396 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:40\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mOpenClaw Attempt 1 failed: 400 No models loaded. Please load a model in the developer page or use the 'lms load' "
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/ai_decisions.log",
+      "line_tail_index": 219,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:43,488 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:43\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/ai_decisions.log",
+      "line_tail_index": 221,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:44,563 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:44\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/ai_decisions.log",
+      "line_tail_index": 225,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:48,755 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:48\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/Antigravity_AGENTS/Краб/logs/ai_decisions.log",
+      "line_tail_index": 227,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25 20:16:49,761 - ModelRouter - WARNING - \u001b[2m2026-02-25 20:16:49\u001b[0m [\u001b[33m\u001b[1mwarning  \u001b[0m] \u001b[1mCloud candidate %s failed     \u001b[0m \u001b[36merror\u001b[0m=\u001b[35m\"❌ Ошибка Cloud: 400 No models loaded. Please load a model"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 53,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:39:04.069+01:00 <|begin_of_box|>Ваш запрос — \"связь локального контура ок?\" — требует краткого ответа."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 54,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>Коротко ответь: связь локального контура ок?<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 54,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>Коротко ответь: связь локального контура ок?<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 75,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:42:06.390+01:00 <|begin_of_box|>Got it, let's analyze the current situation. The user is asking about cloud service availability, and we need to respond accordingly."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 75,
+      "code": "orchestration_leak_user_asking",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:42:06.390+01:00 <|begin_of_box|>Got it, let's analyze the current situation. The user is asking about cloud service availability, and we need to respond accordingly."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 101,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{tool_name: web_search, parameters: {query: 'check cloud service availability'}}, method: \"POST\"}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 101,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{tool_name: web_search, parameters: {query: 'check cloud service availability'}}, method: \"POST\"}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 104,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "{\"tool_name\": \"web_search\", \"parameters\": {\"query\": \"check cloud service availability\"}}, method: \"POST\"}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 106,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "{\"tool_name\": \"web_search\", \"parameters\": {\"query\": \"check cloud service availability\"}}, method: \"POST\"}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 109,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "{\"tool_name\": \"web_search\", \"parameters\": {\"query\": \"check cloud service availability\"}}, method: \"POST\"}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 110,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "{\"tool_name\": \"web_search\", \"parameters\": {\"query\": \"check cloud service availability\"}}, method: \"POST\"}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 111,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "{\"tool_name\": \"web_search\", \"parameters\": {\"query\": \"check cloud service availability\"}}, method: \"POST\"}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 121,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:43:46.273+01:00 <|begin_of_box|>{\"action\": \"call_tool\", \"tool_name\": \"web_search\"}, \"description\": \"Search the web using the provided query.\", \"parameters\": {\"action\": \"call_tool\", \"tool_name\": \"web_search\""
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 121,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:43:46.273+01:00 <|begin_of_box|>{\"action\": \"call_tool\", \"tool_name\": \"web_search\"}, \"description\": \"Search the web using the provided query.\", \"parameters\": {\"action\": \"call_tool\", \"tool_name\": \"web_search\""
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 122,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{\"action\": \"call_tool\", \"tool_name\": \"web_search\"}, \"description\": \"Search the web using the provided query.\", \"parameters\": {\"action\": \"call_tool\", \"tool_name\": \"web_search\"}}, \"response_format\": {\"tool_"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 122,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{\"action\": \"call_tool\", \"tool_name\": \"web_search\"}, \"description\": \"Search the web using the provided query.\", \"parameters\": {\"action\": \"call_tool\", \"tool_name\": \"web_search\"}}, \"response_format\": {\"tool_"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 135,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:47:08.968+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 135,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:47:08.968+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 138,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:47:54.334+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 138,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:47:54.334+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 150,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:51:01.043+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 150,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:51:01.043+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 156,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:52:32.603+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 156,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:52:32.603+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 177,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:55:21.037+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 177,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:55:21.037+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 189,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:58:44.629+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 189,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:58:44.629+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 194,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:59:55.372+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 194,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T19:59:55.372+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 230,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:09:53.886+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 230,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:09:53.886+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 234,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:10:47.426+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 234,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:10:47.426+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 238,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:12:25.074+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 238,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:12:25.074+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 243,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:13:46.069+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 243,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:13:46.069+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 249,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:15:36.607+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 249,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "2026-02-25T20:15:36.607+01:00 <|begin_of_box|>cloud_ok<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 253,
+      "code": "model_crash",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:39.459+01:00 The model has crashed without additional information. (Exit code: null)"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 257,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{function_name}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 257,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{function_name}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 261,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>Got it, let's see. The user wants a one-word response \"cloud_ok\". So I need to output that exact string."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 271,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{function_name}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 271,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{function_name}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 274,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>Got it, let's see. The user wants a one-word response \"cloud_ok\". So I need to output that exact string."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 284,
+      "code": "tool_box_marker_begin",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{function_name}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 284,
+      "code": "tool_box_marker_end",
+      "severity": "warn",
+      "excerpt": "<|begin_of_box|>{function_name}<|end_of_box|>"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 287,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:40.394+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 288,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:43.487+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 289,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:44.561+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 290,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:45.613+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.log",
+      "line_tail_index": 292,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T20:16:49.759+01:00 400 No models loaded. Please load a model in the developer page or use the 'lms load' command."
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 219,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T17:49:50.007Z [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 246,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:18:35.653Z [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 265,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:22:39.717Z [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 268,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:23:01.005Z [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 274,
+      "code": "sanitizer_plugin_untracked_provenance",
+      "severity": "warn",
+      "excerpt": "2026-02-25T18:33:16.054Z [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 310,
+      "code": "model_crash",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:39.093Z [agent/embedded] embedded run agent end: runId=chatcmpl_1e37ec4a-b17a-4e47-9d69-761e28cc7277 isError=true error=The model has crashed without additional information. (Exit code: null)"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 312,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:40.152Z [agent/embedded] embedded run agent end: runId=chatcmpl_9eca7f21-cdd5-4598-8a4b-3e46cd666c75 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 314,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:43.267Z [agent/embedded] embedded run agent end: runId=chatcmpl_be4443b6-856b-498f-ab79-45537248eb50 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 316,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:44.337Z [agent/embedded] embedded run agent end: runId=chatcmpl_01292a66-5c99-4fc9-b15a-3cb216b3efe7 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 318,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:45.382Z [agent/embedded] embedded run agent end: runId=chatcmpl_6eca8912-1b99-4b0f-9a63-bc98726bf032 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    },
+    {
+      "file": "/Users/pablito/.openclaw/logs/gateway.err.log",
+      "line_tail_index": 320,
+      "code": "no_models_loaded",
+      "severity": "error",
+      "excerpt": "2026-02-25T19:16:49.540Z [agent/embedded] embedded run agent end: runId=chatcmpl_1a407032-3259-45ec-a1a7-2c60b3abe2b4 isError=true error=400 No models loaded. Please load a model in the developer page or use the 'lms loa"
+    }
+  ]
+}
