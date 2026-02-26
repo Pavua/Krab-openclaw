@@ -1,14 +1,17 @@
 """
 iMessage Integration - Отправка сообщений через AppleScript
 """
-import subprocess
+import asyncio
 import structlog
 
 logger = structlog.get_logger(__name__)
 
-def send_imessage(target: str, message: str) -> bool:
+OSASCRIPT_TIMEOUT = 30.0
+
+
+async def send_imessage(target: str, message: str) -> bool:
     """
-    Отправляет iMessage через AppleScript
+    Отправляет iMessage через AppleScript (асинхронно).
     target: номер телефона или email
     """
     script = f'''
@@ -19,9 +22,22 @@ def send_imessage(target: str, message: str) -> bool:
     end tell
     '''
     try:
-        subprocess.run(['osascript', '-e', script], check=True)
+        process = await asyncio.create_subprocess_exec(
+            "osascript",
+            "-e",
+            script,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(process.communicate(), timeout=OSASCRIPT_TIMEOUT)
+        if process.returncode != 0:
+            err = (stderr or b"").decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"osascript exited {process.returncode}: {err}")
         logger.info("imessage_sent", to=target)
         return True
+    except asyncio.TimeoutError as e:
+        logger.error("imessage_timeout", error=str(e))
+        return False
     except Exception as e:
         logger.error("imessage_failed", error=str(e))
         return False

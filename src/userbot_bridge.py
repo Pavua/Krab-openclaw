@@ -632,8 +632,13 @@ class KraabUserbot:
     async def _run_self_test(self, message: Message):
         """Вызов внешнего теста здоровья"""
         await message.reply("🧪 Запуск теста...")
-        import subprocess
-        subprocess.Popen(["python3", "tests/autonomous_test.py"])
+        proc = await asyncio.create_subprocess_exec(
+            "python3",
+            "tests/autonomous_test.py",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        asyncio.create_task(proc.wait())  # reap in background
         await message.reply("✅ Тест запущен в фоне. Проверьте `health_check.log`.")
 
 
