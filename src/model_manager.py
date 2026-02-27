@@ -22,6 +22,7 @@ from .core.cloud_gateway import (
     get_cloud_fallback_chain,
     verify_gemini_access as cloud_verify_gemini_access,
 )
+from .core.cost_analytics import cost_analytics
 from .core.local_health import discover_models as discover_models_impl
 from .core.model_router import ModelRouter
 from .core.model_types import ModelInfo, ModelStatus, ModelType
@@ -60,6 +61,13 @@ class ModelManager:
             fallback_chain=self.fallback_chain,
             config_model=config.MODEL,
         )
+        # Аналитика затрат (Cost Engine, бюджет, отчёты) — Фаза 4.1, Шаг 4
+        self._cost_analytics = cost_analytics
+
+    @property
+    def cost_analytics(self):
+        """Аналитика затрат: токены, стоимость, бюджет, отчёты."""
+        return self._cost_analytics
 
     async def discover_models(self) -> list[ModelInfo]:
         """Обнаруживает все доступные модели (LM Studio + облако) через local_health и cloud_gateway."""
