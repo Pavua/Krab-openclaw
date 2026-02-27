@@ -12,13 +12,11 @@ import httpx
 import structlog
 
 from .config import config
+from .core.exceptions import ProviderAuthError, ProviderError
 from .core.lm_studio_health import is_lm_studio_available
 from .core.routing_errors import (
-    RouterAuthError,
     RouterError,
-    RouterNetworkError,
     RouterQuotaError,
-    RouterTimeoutError,
 )
 
 logger = structlog.get_logger(__name__)
@@ -116,18 +114,25 @@ class OpenClawClient:
                     error_text = await response.aread()
                     body_str = error_text.decode("utf-8", errors="ignore")
                     logger.error("openclaw_api_error", status=response.status_code, body=body_str)
-                    # Fail-fast: auth и quota не повторяем и не делаем fallback
+                    # 401/403 — ошибка авторизации API, не повторять
                     if response.status_code in (401, 403):
-                        raise RouterAuthError(
-                            user_message="Ошибка доступа к OpenClaw/облаку: неверный или отсутствующий токен.",
-                            details={"status": response.status_code, "body": body_str[:500]},
+                        raise ProviderAuthError(
+                            message=f"status={response.status_code} body={body_str[:500]}",
+                            user_message="Ошибка авторизации API",
                         )
                     if response.status_code == 429:
                         raise RouterQuotaError(
                             user_message="Квота исчерпана. Попробуй позже или переключись на локальную модель (!model local).",
                             details={"status": 429},
                         )
-                    # Остальные ошибки — одно сообщение без fallback по умолчанию
+                    # 5xx и прочие — провайдер временно недоступен (retryable)
+                    if response.status_code >= 500:
+                        raise ProviderError(
+                            message=f"status={response.status_code} body={body_str[:500]}",
+                            user_message="Провайдер временно недоступен",
+                            retryable=True,
+                        )
+                    # Остальные ошибки (4xx кроме 401/403/429) — одно сообщение без fallback
                     yield f"Ошибка API: {response.status_code}. {body_str[:300]}"
                     return
 
@@ -165,19 +170,24 @@ class OpenClawClient:
                 self._sessions[chat_id] = self._sessions[chat_id][-20:]
                 
         except RouterError:
-            # Уже типизированная ошибка роутинга — пробрасываем (fail-fast, без fallback)
+            # Ошибка роутинга (например RouterQuotaError) — пробрасываем
+            raise
+        except (ProviderError, ProviderAuthError):
+            # Иерархия провайдера — пробрасываем
             raise
         except httpx.TimeoutException as e:
             logger.error("openclaw_stream_error", error=str(e))
-            raise RouterTimeoutError(
-                user_message="Превышено время ожидания OpenClaw. Сократи запрос или попробуй позже. Можно переключиться на локальную модель: !model local.",
-                details={"error": str(e)},
+            raise ProviderError(
+                message=str(e),
+                user_message="Провайдер временно недоступен",
+                retryable=True,
             )
         except (httpx.ConnectError, httpx.RequestError) as e:
             logger.error("openclaw_stream_error", error=str(e))
-            raise RouterNetworkError(
-                user_message="Сетевая ошибка при обращении к OpenClaw. Проверь доступность сервиса. Можно переключиться на локальную модель: !model local.",
-                details={"error": str(e)},
+            raise ProviderError(
+                message=str(e),
+                user_message="Провайдер временно недоступен",
+                retryable=True,
             )
         except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
             logger.error("openclaw_stream_error", error=str(e))

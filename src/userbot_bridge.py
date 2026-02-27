@@ -20,6 +20,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from .config import config
+from .core.exceptions import KrabError
 from .core.routing_errors import RouterError, user_message_for_surface
 from .employee_templates import ROLES, get_role_prompt, list_roles
 from .handlers import (
@@ -393,6 +394,9 @@ class KraabUserbot:
                     await self.client.send_voice(message.chat.id, voice_path)
                     if os.path.exists(voice_path): os.remove(voice_path)
 
+        except KrabError as e:
+            logger.warning("provider_error", error=str(e), retryable=e.retryable)
+            await message.reply(e.user_message or str(e))
         except RouterError as e:
             logger.warning("routing_error", code=e.code, error=str(e))
             await message.reply(user_message_for_surface(e, telegram=True))
