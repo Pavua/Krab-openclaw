@@ -1,14 +1,17 @@
 """
-Unit tests for LM Studio health utility (Фаза 2.3).
+Unit tests for LM Studio health utility (Фаза 2.3 / 4.1 — реализация в local_health).
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.core.lm_studio_health import is_lm_studio_available, fetch_lm_studio_models_list
 
+# Патчим модуль, где реально используется httpx (Фаза 4.1)
+_httpx_patch_target = "src.core.local_health.httpx"
+
 
 @pytest.mark.asyncio
 async def test_is_lm_studio_available_returns_true_on_200():
-    with patch("src.core.lm_studio_health.httpx") as mock_httpx:
+    with patch(_httpx_patch_target) as mock_httpx:
         mock_resp = AsyncMock()
         mock_resp.status_code = 200
         mock_client = AsyncMock()
@@ -21,7 +24,7 @@ async def test_is_lm_studio_available_returns_true_on_200():
 
 @pytest.mark.asyncio
 async def test_is_lm_studio_available_returns_false_on_non_200():
-    with patch("src.core.lm_studio_health.httpx") as mock_httpx:
+    with patch(_httpx_patch_target) as mock_httpx:
         mock_resp = AsyncMock()
         mock_resp.status_code = 503
         mock_client = AsyncMock()
@@ -34,7 +37,7 @@ async def test_is_lm_studio_available_returns_false_on_non_200():
 
 @pytest.mark.asyncio
 async def test_fetch_lm_studio_models_list_returns_list_on_success():
-    with patch("src.core.lm_studio_health.httpx") as mock_httpx:
+    with patch(_httpx_patch_target) as mock_httpx:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"data": [{"id": "local", "name": "Local"}]}
@@ -50,7 +53,7 @@ async def test_fetch_lm_studio_models_list_returns_list_on_success():
 async def test_fetch_lm_studio_models_list_returns_empty_on_failure():
     import httpx
     # Патчим только AsyncClient, чтобы httpx.HTTPError оставался настоящим классом в except
-    with patch("src.core.lm_studio_health.httpx.AsyncClient") as mock_ac:
+    with patch(_httpx_patch_target + ".AsyncClient") as mock_ac:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
         mock_ac.return_value.__aenter__ = AsyncMock(return_value=mock_client)

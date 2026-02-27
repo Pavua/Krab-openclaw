@@ -11,8 +11,6 @@ Model Manager - Умное управление моделями LM Studio
 import asyncio
 import json
 import time
-from dataclasses import dataclass
-from enum import Enum
 from typing import Optional
 
 import httpx
@@ -20,43 +18,10 @@ import psutil
 import structlog
 
 from .config import config
-from .core.lm_studio_health import fetch_lm_studio_models_list
+from .core.local_health import discover_models as discover_models_impl
+from .core.model_types import ModelInfo, ModelStatus, ModelType
 
 logger = structlog.get_logger(__name__)
-
-
-class ModelStatus(Enum):
-    """Статус модели"""
-    AVAILABLE = "available"      # Доступна для загрузки
-    LOADED = "loaded"           # Загружена и готова
-    LOADING = "loading"         # В процессе загрузки
-    UNLOADING = "unloading"     # В процессе выгрузки
-    ERROR = "error"             # Ошибка
-    UNKNOWN = "unknown"
-
-
-class ModelType(Enum):
-    """Тип модели"""
-    LOCAL_MLX = "mlx"
-    LOCAL_GGUF = "gguf"
-    CLOUD_GEMINI = "gemini"
-    CLOUD_OPENROUTER = "openrouter"
-
-
-@dataclass
-class ModelInfo:
-    """Информация о модели"""
-    id: str
-    name: str
-    type: ModelType
-    status: ModelStatus = ModelStatus.UNKNOWN
-    size_gb: float = 8.0  # Default approx size
-    context_window: int = 8192
-    supports_vision: bool = False
-    
-    @property
-    def is_local(self) -> bool:
-        return self.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF)
 
 
 class ModelManager:
@@ -85,42 +50,13 @@ class ModelManager:
         ]
     
     async def discover_models(self) -> list[ModelInfo]:
-        """
-        Обнаруживает все доступные модели в LM Studio
-        """
-        models = []
-        model_list = await fetch_lm_studio_models_list(
-            self.lm_studio_url, client=self._http_client
+        """Обнаруживает все доступные модели (LM Studio + облако) через local_health."""
+        return await discover_models_impl(
+            self.lm_studio_url,
+            self._http_client,
+            models_cache=self._models_cache,
+            fetch_google_models_async=self._fetch_google_models,
         )
-        if not model_list:
-            logger.warning("lm_studio_offline")
-        else:
-            for model_data in model_list:
-                model_id = model_data.get("id", "")
-                model_type = self._detect_model_type(model_id)
-                size = 8.0
-                if "7b" in model_id.lower(): size = 5.0
-                if "13b" in model_id.lower(): size = 10.0
-                if "30b" in model_id.lower() or "32b" in model_id.lower(): size = 18.0
-                if "70b" in model_id.lower(): size = 40.0
-                if "q4" in model_id.lower(): size *= 0.6
-                model = ModelInfo(
-                    id=model_id,
-                    name=model_data.get("name", model_id),
-                    type=model_type,
-                    status=ModelStatus.AVAILABLE,
-                    size_gb=size,
-                    supports_vision="vl" in model_id.lower() or "vision" in model_id.lower()
-                )
-                models.append(model)
-                self._models_cache[model_id] = model
-            logger.info("models_discovered", count=len(models))
-            
-        # Get Google Models
-        google_models = await self._fetch_google_models()
-        models.extend(google_models)
-            
-        return models
 
     async def _fetch_google_models(self) -> list[ModelInfo]:
         """Запрашивает список моделей у Google"""
