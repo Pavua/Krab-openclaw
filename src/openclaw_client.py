@@ -74,8 +74,14 @@ class OpenClawClient:
             rest = messages
             slot_for_tail = max_msgs
 
-        # Берём последние slot_for_tail не-системных сообщений (или все rest если меньше)
-        tail = rest[-slot_for_tail:] if len(rest) > slot_for_tail else rest
+        # Берём последние slot_for_tail не-системных сообщений (или все rest если меньше).
+        # При slot_for_tail == 0 не используем rest[-0:] — в Python это rest[0:], т.е. весь список.
+        if slot_for_tail == 0:
+            tail = []
+        elif len(rest) > slot_for_tail:
+            tail = rest[-slot_for_tail:]
+        else:
+            tail = rest
         if max_chars is not None:
             current = 0
             new_tail = []
