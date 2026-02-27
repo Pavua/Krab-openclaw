@@ -23,6 +23,7 @@ from .core.cloud_gateway import (
     verify_gemini_access as cloud_verify_gemini_access,
 )
 from .core.local_health import discover_models as discover_models_impl
+from .core.model_router import ModelRouter
 from .core.model_types import ModelInfo, ModelStatus, ModelType
 
 logger = structlog.get_logger(__name__)
@@ -52,7 +53,14 @@ class ModelManager:
             "lmstudio/seed-oss-36b-instruct-mlx",
             *cloud_chain,
         ]
-    
+        self._router = ModelRouter(
+            lm_studio_url=self.lm_studio_url,
+            gemini_api_key=config.GEMINI_API_KEY,
+            http_client=self._http_client,
+            fallback_chain=self.fallback_chain,
+            config_model=config.MODEL,
+        )
+
     async def discover_models(self) -> list[ModelInfo]:
         """Обнаруживает все доступные модели (LM Studio + облако) через local_health и cloud_gateway."""
         async def _fetch_google() -> list[ModelInfo]:
@@ -94,33 +102,8 @@ class ModelManager:
             return ModelType.LOCAL_MLX
     
     async def get_best_model(self) -> str:
-        """
-        Возвращает лучшую доступную модель из цепочки fallback.
-        """
-        # 0. Если пользователь явно задал модель в конфиге
-        if config.MODEL and config.MODEL != "auto":
-             return config.MODEL
-
-        # 1. Проверяем цепочку
-        for model_id in self.fallback_chain:
-            try:
-                # Если это локальная, проверяем загружена ли она или доступна
-                if "local" in model_id.lower() or "mlx" in model_id.lower():
-                     # Простая проверка: считаем доступной если LMS отвечает
-                     # Можно добавить более сложную логику
-                     if self.lm_studio_url:
-                         return "local" # Default local alias
-                
-                # Если Gemini
-                if "gemini" in model_id.lower():
-                    if config.GEMINI_API_KEY:
-                        return model_id
-                        
-            except (httpx.HTTPError, OSError):
-                continue
-                
-        # Default fallback
-        return "google/gemini-2.0-flash"
+        """Возвращает лучшую доступную модель из цепочки fallback (делегирует в ModelRouter)."""
+        return await self._router.get_best_model()
 
     def get_ram_usage(self) -> dict:
         """Получает текущее использование RAM"""
