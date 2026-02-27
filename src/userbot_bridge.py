@@ -21,6 +21,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from .config import config
+from .core.routing_errors import RouterError, user_message_for_surface
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
 from .employee_templates import ROLES, get_role_prompt, list_roles, save_role
@@ -373,6 +374,9 @@ class KraabUserbot:
                     await self.client.send_voice(message.chat.id, voice_path)
                     if os.path.exists(voice_path): os.remove(voice_path)
 
+        except RouterError as e:
+            logger.warning("routing_error", code=e.code, error=str(e))
+            await message.reply(user_message_for_surface(e, telegram=True))
         except Exception as e:
             logger.error("process_message_error", error=str(e))
             await message.reply(f"🦀❌ **Ошибка в клешнях:** `{str(e)}`")

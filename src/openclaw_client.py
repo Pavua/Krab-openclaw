@@ -1,5 +1,8 @@
 """
 OpenClaw Client - Клиент для взаимодействия с OpenClaw Gateway
+
+Фаза 2.1: использует единый модуль ошибок роутинга (auth, quota, network, timeout).
+Fail-fast для некорректируемых ошибок (auth, quota) — без retry и без fallback на LM Studio.
 """
 import asyncio
 import json
@@ -9,6 +12,13 @@ import httpx
 import structlog
 
 from .config import config
+from .core.routing_errors import (
+    RouterAuthError,
+    RouterError,
+    RouterNetworkError,
+    RouterQuotaError,
+    RouterTimeoutError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -99,9 +109,22 @@ class OpenClawClient:
                 
                 logger.info("openclaw_response_status", status=response.status_code)
                 if response.status_code != 200:
-                    error_text = await response.aread() # Using aread() to be safe in AsyncResponse
-                    logger.error("openclaw_api_error", status=response.status_code, body=error_text.decode('utf-8', errors='ignore'))
-                    yield f"Error: {response.status_code} - {error_text.decode('utf-8', errors='ignore')}"
+                    error_text = await response.aread()
+                    body_str = error_text.decode("utf-8", errors="ignore")
+                    logger.error("openclaw_api_error", status=response.status_code, body=body_str)
+                    # Fail-fast: auth и quota не повторяем и не делаем fallback
+                    if response.status_code in (401, 403):
+                        raise RouterAuthError(
+                            user_message="Ошибка доступа к OpenClaw/облаку: неверный или отсутствующий токен.",
+                            details={"status": response.status_code, "body": body_str[:500]},
+                        )
+                    if response.status_code == 429:
+                        raise RouterQuotaError(
+                            user_message="Квота исчерпана. Попробуй позже или переключись на локальную модель (!model local).",
+                            details={"status": 429},
+                        )
+                    # Остальные ошибки — одно сообщение без fallback по умолчанию
+                    yield f"Ошибка API: {response.status_code}. {body_str[:300]}"
                     return
 
                 async for line in response.aiter_lines():
@@ -137,10 +160,24 @@ class OpenClawClient:
             if len(self._sessions[chat_id]) > 20:
                 self._sessions[chat_id] = self._sessions[chat_id][-20:]
                 
+        except RouterError:
+            # Уже типизированная ошибка роутинга — пробрасываем (fail-fast, без fallback)
+            raise
+        except httpx.TimeoutException as e:
+            logger.error("openclaw_stream_error", error=str(e))
+            raise RouterTimeoutError(
+                user_message="Превышено время ожидания OpenClaw. Сократи запрос или попробуй позже.",
+                details={"error": str(e)},
+            )
+        except (httpx.ConnectError, httpx.RequestError) as e:
+            logger.error("openclaw_stream_error", error=str(e))
+            raise RouterNetworkError(
+                user_message="Сетевая ошибка при обращении к OpenClaw. Проверь доступность сервиса.",
+                details={"error": str(e)},
+            )
         except Exception as e:
             logger.error("openclaw_stream_error", error=str(e))
-            
-            # FALLBACK TO LM STUDIO
+            # Только для непредвиденных ошибок пробуем fallback на LM Studio (retryable-подобное поведение)
             if config.LM_STUDIO_URL:
                 logger.info("falling_back_to_lm_studio")
                 yield "⚠️ OpenClaw Error. Falling back to LM Studio...\n\n"
@@ -148,8 +185,8 @@ class OpenClawClient:
                     async with httpx.AsyncClient(base_url=f"{config.LM_STUDIO_URL}/v1", timeout=120) as lm_client:
                         payload = {
                             "messages": self._sessions[chat_id],
-                            "stream": False,  # Non-stream fallback for simplicity
-                            "model": "local"
+                            "stream": False,
+                            "model": "local",
                         }
                         resp = await lm_client.post("/chat/completions", json=payload)
                         if resp.status_code == 200:
@@ -158,12 +195,11 @@ class OpenClawClient:
                             self._sessions[chat_id].append({"role": "assistant", "content": content})
                             yield content
                             return
-                        else:
-                            yield f"❌ Both OpenClaw and LM Studio failed: {resp.status_code}"
+                        yield f"❌ OpenClaw и LM Studio вернули ошибку: {resp.status_code}"
                 except Exception as lme:
-                    yield f"❌ Critical failure: {str(lme)}"
+                    yield f"❌ Критическая ошибка: {str(lme)}"
             else:
-                yield f"Error: {str(e)}"
+                yield f"Ошибка: {str(e)}"
 
     def clear_session(self, chat_id: str):
         """Очищает историю чата"""

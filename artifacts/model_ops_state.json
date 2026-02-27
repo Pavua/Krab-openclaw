@@ -2,28 +2,6 @@
   "acknowledged": {},
   "history": [
     {
-      "ts": "2026-02-25T20:50:21+00:00",
-      "status": "alert",
-      "alerts_count": 2,
-      "codes": [
-        "model_quality_degraded",
-        "cloud_budget_near_forecast"
-      ],
-      "cloud_calls": 212,
-      "local_calls": 215
-    },
-    {
-      "ts": "2026-02-25T20:50:29+00:00",
-      "status": "alert",
-      "alerts_count": 2,
-      "codes": [
-        "model_quality_degraded",
-        "cloud_budget_near_forecast"
-      ],
-      "cloud_calls": 212,
-      "local_calls": 215
-    },
-    {
       "ts": "2026-02-25T20:50:37+00:00",
       "status": "alert",
       "alerts_count": 2,
@@ -5492,6 +5470,28 @@
     },
     {
       "ts": "2026-02-26T21:54:00+00:00",
+      "status": "alert",
+      "alerts_count": 2,
+      "codes": [
+        "model_quality_degraded",
+        "cloud_budget_exceeded_forecast"
+      ],
+      "cloud_calls": 254,
+      "local_calls": 223
+    },
+    {
+      "ts": "2026-02-26T23:02:50+00:00",
+      "status": "alert",
+      "alerts_count": 2,
+      "codes": [
+        "model_quality_degraded",
+        "cloud_budget_exceeded_forecast"
+      ],
+      "cloud_calls": 254,
+      "local_calls": 223
+    },
+    {
+      "ts": "2026-02-27T00:05:33+00:00",
       "status": "alert",
       "alerts_count": 2,
       "codes": [
