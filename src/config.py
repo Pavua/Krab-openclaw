@@ -47,6 +47,9 @@ class Config:
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # Routing: force_cloud полностью обходит локальный путь (Фаза 2.2)
+    FORCE_CLOUD: bool = os.getenv("FORCE_CLOUD", "0").strip().lower() in ("1", "true", "yes")
     
     # User settings
     OWNER_USERNAME: str = "@yung_nagato"
@@ -85,6 +88,8 @@ class Config:
                     cls.MAX_RAM_GB = int(value)
                 elif key == "MODEL":
                     cls.MODEL = value
+                elif key == "FORCE_CLOUD":
+                    cls.FORCE_CLOUD = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
                 elif key == "BRAVE_SEARCH_API_KEY":

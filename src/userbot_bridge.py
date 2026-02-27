@@ -331,7 +331,8 @@ class KraabUserbot:
                 message=query or ("(Image sent)" if images else ""),
                 chat_id=chat_id,
                 system_prompt=system_prompt,
-                images=images
+                images=images,
+                force_cloud=getattr(config, "FORCE_CLOUD", False),
             ):
                 full_response += chunk
                 current_chunk += chunk

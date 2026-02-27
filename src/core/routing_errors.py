@@ -106,7 +106,7 @@ class RouterTimeoutError(RouterError):
 
     def __init__(
         self,
-        user_message: str = "Превышено время ожидания. Попробуй сократить запрос или повторить.",
+        user_message: str = "Превышено время ожидания. Сократи запрос или повтори позже. Можно переключиться на локальную модель: !model local.",
         details: Optional[dict[str, Any]] = None,
     ) -> None:
         super().__init__(

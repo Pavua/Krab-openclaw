@@ -61,14 +61,17 @@ class OpenClawClient:
 
 
     async def send_message_stream(
-        self, 
-        message: str, 
-        chat_id: str, 
+        self,
+        message: str,
+        chat_id: str,
         system_prompt: Optional[str] = None,
-        images: Optional[List[str]] = None
+        images: Optional[List[str]] = None,
+        force_cloud: bool = False,
     ) -> AsyncIterator[str]:
         """
-        Отправляет сообщение и получает потоковый ответ
+        Отправляет сообщение и получает потоковый ответ.
+        force_cloud: если True, локальный путь (fallback на LM Studio) не используется —
+        при ошибке облака возвращается сообщение о деградации с подсказкой !model local.
         """
         # Инициализация сессии если нет
         if chat_id not in self._sessions:
@@ -166,18 +169,24 @@ class OpenClawClient:
         except httpx.TimeoutException as e:
             logger.error("openclaw_stream_error", error=str(e))
             raise RouterTimeoutError(
-                user_message="Превышено время ожидания OpenClaw. Сократи запрос или попробуй позже.",
+                user_message="Превышено время ожидания OpenClaw. Сократи запрос или попробуй позже. Можно переключиться на локальную модель: !model local.",
                 details={"error": str(e)},
             )
         except (httpx.ConnectError, httpx.RequestError) as e:
             logger.error("openclaw_stream_error", error=str(e))
             raise RouterNetworkError(
-                user_message="Сетевая ошибка при обращении к OpenClaw. Проверь доступность сервиса.",
+                user_message="Сетевая ошибка при обращении к OpenClaw. Проверь доступность сервиса. Можно переключиться на локальную модель: !model local.",
                 details={"error": str(e)},
             )
         except Exception as e:
             logger.error("openclaw_stream_error", error=str(e))
-            # Только для непредвиденных ошибок пробуем fallback на LM Studio (retryable-подобное поведение)
+            # force_cloud: не использовать локальный путь (Фаза 2.2) — сообщение о деградации облака
+            if force_cloud:
+                yield (
+                    "❌ Облачный сервис временно недоступен. Попробуй позже или переключись на локальную модель: !model local."
+                )
+                return
+            # Только для непредвиденных ошибок и не force_cloud пробуем fallback на LM Studio
             if config.LM_STUDIO_URL:
                 logger.info("falling_back_to_lm_studio")
                 yield "⚠️ OpenClaw Error. Falling back to LM Studio...\n\n"
@@ -195,11 +204,11 @@ class OpenClawClient:
                             self._sessions[chat_id].append({"role": "assistant", "content": content})
                             yield content
                             return
-                        yield f"❌ OpenClaw и LM Studio вернули ошибку: {resp.status_code}"
+                        yield "❌ OpenClaw и LM Studio вернули ошибку. Попробуй позже или !model local."
                 except Exception as lme:
                     yield f"❌ Критическая ошибка: {str(lme)}"
             else:
-                yield f"Ошибка: {str(e)}"
+                yield "❌ Ошибка облака. Попробуй позже или переключись на локальную модель: !model local."
 
     def clear_session(self, chat_id: str):
         """Очищает историю чата"""
