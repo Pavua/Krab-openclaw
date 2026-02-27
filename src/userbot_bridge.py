@@ -14,24 +14,41 @@ from typing import Optional
 
 import structlog
 import os
-import sys
 import base64
 import textwrap
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from .config import config
-from .core.lm_studio_health import is_lm_studio_available
 from .core.routing_errors import RouterError, user_message_for_surface
+from .employee_templates import ROLES, get_role_prompt, list_roles
+from .handlers import (
+    handle_agent,
+    handle_clear,
+    handle_config,
+    handle_diagnose,
+    handle_ls,
+    handle_model,
+    handle_panel,
+    handle_read,
+    handle_remember,
+    handle_restart,
+    handle_recall,
+    handle_role,
+    handle_search,
+    handle_set,
+    handle_status,
+    handle_sysinfo,
+    handle_voice,
+    handle_web,
+    handle_write,
+)
+from .mcp_client import mcp_manager
+from .memory_engine import memory_manager
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
-from .employee_templates import ROLES, get_role_prompt, list_roles, save_role
-from .voice_engine import text_to_speech
-from .employee_templates import ROLES, get_role_prompt, list_roles
-from .voice_engine import text_to_speech
 from .search_engine import search_brave, close_search
-from .memory_engine import memory_manager
-from .mcp_client import mcp_manager
+from .voice_engine import text_to_speech
 
 logger = structlog.get_logger(__name__)
 
@@ -99,63 +116,63 @@ class KraabUserbot:
         is_allowed = filters.create(check_allowed)
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
-        # Регистрация командных оберток
+        # Регистрация командных оберток (Фаза 4.4: модульные хендлеры)
         @self.client.on_message(filters.command("status", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_status(c, m): await self._handle_status(m)
+        async def wrap_status(c, m): await handle_status(self, m)
 
         @self.client.on_message(filters.command("model", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_model(c, m): await self._handle_model(m)
+        async def wrap_model(c, m): await handle_model(self, m)
 
         @self.client.on_message(filters.command("clear", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_clear(c, m): await self._handle_clear(m)
-            
+        async def wrap_clear(c, m): await handle_clear(self, m)
+
         @self.client.on_message(filters.command("config", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_config(c, m): await self._handle_config(m)
+        async def wrap_config(c, m): await handle_config(self, m)
 
         @self.client.on_message(filters.command("set", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_set(c, m): await self._handle_set(m)
+        async def wrap_set(c, m): await handle_set(self, m)
 
         @self.client.on_message(filters.command("role", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_role(c, m): await self._handle_role(m)
+        async def wrap_role(c, m): await handle_role(self, m)
 
         @self.client.on_message(filters.command("voice", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_voice(c, m): await self._handle_voice(m)
+        async def wrap_voice(c, m): await handle_voice(self, m)
 
         @self.client.on_message(filters.command("web", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_web(c, m): await self._handle_web(m)
+        async def wrap_web(c, m): await handle_web(self, m)
 
         @self.client.on_message(filters.command("sysinfo", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_sysinfo(c, m): await self._handle_sysinfo(m)
+        async def wrap_sysinfo(c, m): await handle_sysinfo(self, m)
 
         @self.client.on_message(filters.command("panel", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_panel(c, m): await self._handle_panel(m)
+        async def wrap_panel(c, m): await handle_panel(self, m)
 
         @self.client.on_message(filters.command("restart", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_restart(c, m): await self._handle_restart(m)
+        async def wrap_restart(c, m): await handle_restart(self, m)
 
         @self.client.on_message(filters.command("search", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_search(c, m): await self._handle_search(m)
+        async def wrap_search(c, m): await handle_search(self, m)
 
         @self.client.on_message(filters.command("remember", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_remember(c, m): await self._handle_remember(m)
+        async def wrap_remember(c, m): await handle_remember(self, m)
 
         @self.client.on_message(filters.command("recall", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_recall(c, m): await self._handle_recall(m)
+        async def wrap_recall(c, m): await handle_recall(self, m)
 
         @self.client.on_message(filters.command("ls", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_ls(c, m): await self._handle_ls(m)
+        async def wrap_ls(c, m): await handle_ls(self, m)
 
         @self.client.on_message(filters.command("read", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_read(c, m): await self._handle_read(m)
+        async def wrap_read(c, m): await handle_read(self, m)
 
         @self.client.on_message(filters.command("write", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_write(c, m): await self._handle_write(m)
+        async def wrap_write(c, m): await handle_write(self, m)
 
         @self.client.on_message(filters.command("agent", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_agent(c, m): await self._handle_agent(m)
+        async def wrap_agent(c, m): await handle_agent(self, m)
 
         @self.client.on_message(filters.command("diagnose", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_diagnose(c, m): await self._handle_diagnose(m)
+        async def wrap_diagnose(c, m): await handle_diagnose(self, m)
 
         # Обработка обычных сообщений и медиа
         @self.client.on_message((filters.text | filters.photo) & ~filters.bot, group=0)
@@ -383,258 +400,6 @@ class KraabUserbot:
             logger.error("process_message_error", error=str(e))
             await message.reply(f"🦀❌ **Ошибка в клешнях:** `{str(e)}`")
 
-    async def _handle_search(self, message: Message):
-        """Ручной веб-поиск через Brave"""
-        query = self._get_command_args(message)
-        if not query or query.lower() in ["search", "!search"]:
-            await message.reply("🔍 Что ищем? Напиши: `!search <запрос>`")
-            message.stop_propagation()
-            return
-            
-        msg = await message.reply(f"🔍 **Краб ищет в сети:** `{query}`...")
-        try:
-            results = await search_brave(query)
-            
-            # Если ответ слишком длинный, режем его
-            if len(results) > 4000:
-                results = results[:3900] + "..."
-                
-            await msg.edit(f"🔍 **Результаты поиска:**\n\n{results}")
-        except Exception as e:
-             await msg.edit(f"❌ Ошибка поиска: {e}")
-        
-        message.stop_propagation()
-
-    async def _handle_remember(self, message: Message):
-        """Запомнить факт"""
-        text = self._get_command_args(message)
-        if not text:
-            await message.reply("🧠 Что запомнить? Напиши: `!remember <текст>`")
-            return
-            
-        try:
-            success = memory_manager.save_fact(text)
-            if success:
-                await message.reply(f"🧠 **Запомнил:** `{text}`")
-            else:
-                await message.reply("❌ Ошибка памяти.")
-        except Exception as e:
-            await message.reply(f"❌ Critical Memory Error: {e}")
-        
-        message.stop_propagation()
-
-    async def _handle_recall(self, message: Message):
-        """Вспомнить факт"""
-        text = self._get_command_args(message)
-        if not text:
-            await message.reply("🧠 Что вспомнить? Напиши: `!recall <запрос>`")
-            return
-            
-        try:
-            facts = memory_manager.recall(text)
-            if facts:
-                await message.reply(f"🧠 **Вспомнил:**\n\n{facts}")
-            else:
-                await message.reply("🧠 Ничего не нашел по этому запросу.")
-        except Exception as e:
-            await message.reply(f"❌ Recalling Error: {e}")
-
-        message.stop_propagation()
-
-    async def _handle_ls(self, message: Message):
-        """Список файлов"""
-        path = self._get_command_args(message) or str(config.BASE_DIR)
-        
-        # Защита от выхода выше (хотя MCP тоже защищает, но добавим)
-        if ".." in path and not config.is_valid(): # Просто заглушка, лучше довериться MCP
-            pass
-
-        msg = await message.reply("📂 Scanning...")
-        try:
-            result = await mcp_manager.list_directory(path)
-            await msg.edit(f"📂 **Files in {path}:**\n\n`{result[:3900]}`")
-        except Exception as e:
-            await msg.edit(f"❌ Error listing: {e}")
-            
-        message.stop_propagation()
-
-    async def _handle_read(self, message: Message):
-        """Чтение файла"""
-        path = self._get_command_args(message)
-        if not path:
-            await message.reply("📂 Какой файл читать? `!read <path>`")
-            return
-
-        # Если путь относительный, добавляем BASE_DIR
-        if not path.startswith("/"):
-             path = os.path.join(config.BASE_DIR, path)
-
-        msg = await message.reply("📂 Reading...")
-        try:
-             content = await mcp_manager.read_file(path)
-             
-             if len(content) > 4000:
-                 filename = os.path.basename(path)
-                 content = content[:1000] + "\n... [truncated]"
-                 
-             await msg.edit(f"📂 **Content of {os.path.basename(path)}:**\n\n```\n{content}\n```")
-        except Exception as e:
-             await msg.edit(f"❌ Reading error: {e}")
-        
-        message.stop_propagation()
-
-    async def _handle_write(self, message: Message):
-        """Запись файла (опасно!)"""
-        # Формат: !write filename [new line] content
-        text = self._get_command_args(message)
-        if not text: 
-            await message.reply("📂 Формат: `!write <filename> <content>`")
-            return
-            
-        parts = text.split("\n", 1)
-        if len(parts) < 2:
-            # Попробуем разделить по пробелу если одна строка
-            parts = text.split(" ", 1)
-            if len(parts) < 2:
-                await message.reply("📂 Нет контента для записи.")
-                return
-
-        path = parts[0].strip()
-        content = parts[1]
-        
-        if not path.startswith("/"):
-             path = os.path.join(config.BASE_DIR, path)
-             
-        # Простая защита: не перезаписывать .py файлы без подтверждения (пока без подтверждения)
-        # if path.endswith(".py"): ...
-        
-        result = await mcp_manager.write_file(path, content)
-        await message.reply(result)
-        
-        message.stop_propagation()
-
-    async def _handle_status(self, message: Message):
-        """Статус системы и ресурсов"""
-        ram = model_manager.get_ram_usage()
-        is_ok = await openclaw_client.health_check()
-        text = f"""
-🦀 **Системный статус Краба**
----------------------------
-📡 **Gateway (OpenClaw):** {'✅ Online' if is_ok else '❌ Offline'}
-🧠 **Модель:** `{config.MODEL}`
-🎭 **Роль:** `{self.current_role}`
-🎙️ **Голос:** `{'ВКЛ' if self.voice_mode else 'ВЫКЛ'}`
-💻 **RAM:** [{ "▓" * int(ram['percent']/10) + "░" * (10-int(ram['percent']/10)) }] {ram['percent']}%
-"""
-        await (message.edit(text) if message.from_user.id == self.me.id else message.reply(text))
-
-    async def _handle_model(self, message: Message):
-        """Управление загрузкой AI моделей"""
-        args = message.text.split()
-        if len(args) < 2:
-            await self._handle_status(message)
-            return
-            
-        cmd = args[1].lower()
-        if cmd == "list":
-            models = await model_manager.discover_models()
-            lines = [f"{('☁️' if m.type.name == 'CLOUD_GEMINI' else '💻')} `{m.id}`" for m in models]
-            await message.reply("**Доступные модели:**\n\n" + "\n".join(lines[:15]))
-        elif cmd == "load" and len(args) > 2:
-            mid = args[2]
-            msg = await message.reply(f"⏳ Переключаюсь на `{mid}`...")
-            if await model_manager.load_model(mid):
-                config.update_setting("MODEL", mid)
-                await msg.edit(f"✅ Успешно! Текущая модель: `{mid}`")
-            else:
-                await msg.edit(f"❌ Не удалось загрузить `{mid}`")
-
-    async def _handle_clear(self, message: Message):
-        """Очистка истории диалога"""
-        openclaw_client.clear_session(str(message.chat.id))
-        res = "🧹 **Память очищена. Клешни как новые!**"
-        await (message.edit(res) if message.from_user.id == self.me.id else message.reply(res))
-
-    async def _handle_config(self, message: Message):
-        """Просмотр текущих настроек"""
-        text = f"""
-⚙️ **Конфигурация Краба**
-----------------------
-👤 **Владелец:** `{config.OWNER_USERNAME}`
-🎯 **Триггеры:** `{', '.join(config.TRIGGER_PREFIXES)}`
-🧠 **Память (RAM):** `{config.MAX_RAM_GB}GB`
-"""
-        await message.reply(text)
-
-    async def _handle_set(self, message: Message):
-        """Изменение настроек на лету"""
-        args = message.text.split(maxsplit=2)
-        if len(args) < 3:
-            await message.reply("⚙️ `!set <KEY> <VAL>`")
-            return
-        if config.update_setting(args[1], args[2]):
-            await message.reply(f"✅ `{args[1]}` обновлено!")
-        else:
-            await message.reply("❌ Ошибка обновления.")
-
-    async def _handle_role(self, message: Message):
-        """Смена системного промпта (личности)"""
-        args = message.text.split()
-        if len(args) < 2 or args[1] == "list":
-            await message.reply(f"🎭 **Роли:**\n{list_roles()}")
-        else:
-            role = args[1] if len(args) == 2 else args[2]
-            if role in ROLES:
-                self.current_role = role
-                await message.reply(f"🎭 Теперь я: `{role}`")
-            else:
-                await message.reply("❌ Роль не найдена.")
-
-    async def _handle_voice(self, message: Message):
-        """Переключение голосовых ответов"""
-        self.voice_mode = not self.voice_mode
-        await message.reply(f"🎙️ Голосовой режим: `{'ВКЛ' if self.voice_mode else 'ВЫКЛ'}`")
-
-    async def _handle_web(self, message: Message):
-        """Автоматизация браузера"""
-        from .web_session import web_manager
-        args = message.text.split()
-        if len(args) < 2:
-            from urllib.parse import quote
-            link = lambda c: f"https://t.me/share/url?url={quote(c)}"
-            await message.reply(f"🌏 **Web Control**\n\n[🔑 Login]({link('!web login')}) | [📸 Screen]({link('!web screen')})\n[🤖 GPT]({link('!web gpt привет')})", disable_web_page_preview=True)
-            return
-        
-        sub = args[1].lower()
-        if sub == "login":
-            await message.reply(await web_manager.login_mode())
-        elif sub == "screen":
-            path = await web_manager.take_screenshot()
-            if path:
-                await message.reply_photo(path)
-                os.remove(path)
-        elif sub == "stop":
-            await web_manager.stop()
-            await message.reply("🛑 Web остановлен.")
-        elif sub == "self-test":
-             await self._run_self_test(message)
-
-    async def _handle_sysinfo(self, message: Message):
-        """Расширенная информация о хосте"""
-        import psutil, platform
-        text = f"🖥️ **System:** `{platform.system()}`\n🔥 **CPU:** `{psutil.cpu_percent()}%`"
-        await message.reply(text)
-
-    async def _handle_panel(self, message: Message):
-        """Графическая панель управления"""
-        await self._handle_status(message)
-
-    async def _handle_restart(self, message: Message):
-        """Мягкая перезагрузка процесса"""
-        await message.reply("🔄 Перезапускаюсь...")
-        import sys
-        sys.exit(42)
-
     async def _run_self_test(self, message: Message):
         """Вызов внешнего теста здоровья"""
         await message.reply("🧪 Запуск теста...")
@@ -646,36 +411,6 @@ class KraabUserbot:
         )
         asyncio.create_task(proc.wait())  # reap in background
         await message.reply("✅ Тест запущен в фоне. Проверьте `health_check.log`.")
-
-
-# kraab = KraabUserbot() # REMOVED GLOBAL INSTANCE
-    async def _handle_agent(self, message: Message):
-        """Управление агентами: !agent new <name> <prompt>"""
-        # !agent new python_expert "Ты эксперт по Python..."
-        text = self._get_command_args(message)
-        if not text:
-            await message.reply("🕵️‍♂️ Использование: `!agent new <имя> <промпт>`\nИли: `!agent list`")
-            return
-            
-        if text.startswith("list"):
-            await message.reply(f"🕵️‍♂️ **Доступные агенты:**\n\n{list_roles()}")
-            return
-            
-        if text.startswith("new"):
-            parts = text[3:].strip().split(" ", 1)
-            if len(parts) < 2:
-                 await message.reply("❌ Ошибка: укажите имя и промпт.")
-                 return
-                 
-            name = parts[0].strip()
-            prompt = parts[1].strip().strip('"').strip("'")
-            
-            if save_role(name, prompt):
-                await message.reply(f"🕵️‍♂️ **Агент создан:** `{name}`\n\nТеперь можно использовать: `стань {name}`")
-            else:
-                 await message.reply("❌ Ошибка при сохранении агента.")
-        
-        message.stop_propagation()
 
     async def _get_chat_context(self, chat_id: int, limit: int = 10) -> str:
         """Получает контекст чата (последние сообщения)"""
@@ -690,34 +425,3 @@ class KraabUserbot:
             return "\n".join(reversed(messages))
         except Exception:
             return ""
-
-    async def _handle_diagnose(self, message: Message):
-        """Диагностика системы (!diagnose)"""
-        msg = await message.reply("🏥 **Запускаю диагностику системы...**")
-        
-        report = []
-        
-        # 1. Config Check
-        report.append(f"**Config:**")
-        report.append(f"- OPENCLAW_URL: `{config.OPENCLAW_URL}`")
-        report.append(f"- LM_STUDIO_URL: `{config.LM_STUDIO_URL}`")
-        
-        # 2. LM Studio Check (общая утилита — Фаза 2.3)
-        if await is_lm_studio_available(config.LM_STUDIO_URL, timeout=2.0):
-            report.append(f"- LM Studio: ✅ OK (Available)")
-        else:
-            report.append(f"- LM Studio: ❌ Offline")
-            
-        # 3. OpenClaw Check
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(f"{config.OPENCLAW_URL}/health")
-                if resp.status_code == 200:
-                    report.append(f"- OpenClaw: ✅ OK (Healthy)")
-                else:
-                    report.append(f"- OpenClaw: ⚠️ Error ({resp.status_code})")
-        except Exception as e:
-            report.append(f"- OpenClaw: ❌ Unreachable ({str(e)})")
-            report.append(f"  _Совет: Проверьте, запущен ли Gateway и совпадает ли порт (обычно 18792)_")
-
-        await msg.edit("\n".join(report))
