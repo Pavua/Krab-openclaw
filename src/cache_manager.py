@@ -6,13 +6,14 @@
 без изменения публичного API (get/set/clear_expired).
 """
 
+import os
 import sqlite3
 import time
-import os
 from typing import Optional
 
-from src.core.logger import get_logger
 from src.core.exceptions import CacheError
+from src.core.logger import get_logger
+
 from .config import config
 
 logger = get_logger(__name__)
