@@ -1,0 +1,24 @@
+services:
+  krab-bot:
+    build: .
+    container_name: krab-ai-bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./logs:/app/logs
+      # Сессия Telegram (имя файла = TELEGRAM_SESSION_NAME, по умолчанию kraab.session).
+      # Для другого имени добавьте строку вида: - ./имя.session:/app/имя.session
+      - ./kraab.session:/app/kraab.session
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# В будущем здесь можно добавить блок для Redis (Фаза 6.3):
+#  redis:
+#    image: redis:alpine
+#    container_name: krab-redis
+

@@ -23,6 +23,7 @@ logs/
 # Sessions & Local Data
 *.session
 *.session-journal
+*.db
 memory_db/
 browser_data/
 backups/
