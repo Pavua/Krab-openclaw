@@ -2,14 +2,13 @@
 Точка входа в приложение Краб (Фаза 4/6.2: декомпозиция на bootstrap).
 """
 import asyncio
-import logging
 import sys
 
-import structlog
-
+from src.core.logger import get_logger, setup_logger
 from .bootstrap import validate_config, run_app
 
-logging.basicConfig(level=logging.INFO)
+setup_logger(level="INFO")
+logger = get_logger(__name__)
 
 
 async def main() -> None:

@@ -26,9 +26,9 @@ def setup_logger(level: str = "INFO") -> None:
 
     structlog.configure(
         processors=[
-            structlog.processors.add_log_level(),
+            structlog.processors.add_log_level,
             CallsiteParameterAdder([CallsiteParameter.MODULE]),
-            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M.%S", utc=False),
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
             structlog.dev.ConsoleRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
