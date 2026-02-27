@@ -134,3 +134,25 @@ class RouterError(KrabError):
             user_message=user_message or message,
             **kwargs,
         )
+
+
+class CacheError(KrabError):
+    """
+    Ошибка кэша (SQLite/Redis): недоступность, повреждение, таймаут.
+    По умолчанию retryable=True (временные сбои хранилища).
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        retryable: bool = True,
+        user_message: str = "",
+        **kwargs: object,
+    ) -> None:
+        super().__init__(
+            message,
+            retryable=retryable,
+            user_message=user_message or "Ошибка кэша. Попробуй позже.",
+            **kwargs,
+        )
