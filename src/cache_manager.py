@@ -6,9 +6,9 @@
 без изменения публичного API (get/set/clear_expired).
 """
 
+import os
 import sqlite3
 import time
-import os
 from typing import Optional
 
 from src.core.logger import get_logger
@@ -116,6 +116,18 @@ class CacheManager:
         except sqlite3.Error as e:
             logger.warning("cache_clear_expired_error", error=str(e))
 
+    def delete(self, key: str) -> None:
+        """Удаляет запись по ключу (для инвалидации, например при !clear)."""
+        try:
+            self._backend_delete(key)
+            logger.debug("cache_delete", key=key)
+        except sqlite3.Error as e:
+            logger.warning("cache_delete_error", key=key, error=str(e))
+
 
 # Singleton для кэша поиска
 search_cache = CacheManager("search_cache.db")
+
+# Кэш окна истории диалогов (Фаза 6): восстановление после рестарта
+HISTORY_CACHE_TTL = 86400  # 24 часа
+history_cache = CacheManager("chat_history.db")

@@ -3,23 +3,25 @@ OpenClaw Client - Клиент для взаимодействия с OpenClaw G
 
 Фаза 2.1: использует единый модуль ошибок роутинга (auth, quota, network, timeout).
 Fail-fast для некорректируемых ошибок (auth, quota) — без retry и без fallback на LM Studio.
+Фаза 6: скользящее окно истории диалога (sliding window) + логирование операций с памятью.
 """
 import asyncio
 import json
 from typing import AsyncIterator, Optional, Dict, Any, List
 
 import httpx
-import structlog
 
+from .cache_manager import history_cache, HISTORY_CACHE_TTL
 from .config import config
 from .core.exceptions import ProviderAuthError, ProviderError
+from .core.logger import get_logger
 from .core.lm_studio_health import is_lm_studio_available
 from .core.routing_errors import (
     RouterError,
     RouterQuotaError,
 )
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenClawClient:
@@ -37,6 +39,68 @@ class OpenClawClient:
         )
         self._sessions: Dict[str, list] = {}  # chat_id -> history
         self._usage_stats = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    @staticmethod
+    def _messages_size(messages: List[Dict[str, Any]]) -> int:
+        """Суммарное количество символов в истории (для лимита по размеру)."""
+        total = 0
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        total += len(part.get("text", ""))
+        return total
+
+    def _apply_sliding_window(self, chat_id: str, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Скользящее окно: оставляет последние N сообщений и/или обрезает по суммарному размеру.
+        Логирует обрезку через structlog.
+        """
+        max_msgs = getattr(config, "HISTORY_WINDOW_MESSAGES", 50)
+        max_chars = getattr(config, "HISTORY_WINDOW_MAX_CHARS", None)
+        if len(messages) <= max_msgs and (max_chars is None or self._messages_size(messages) <= max_chars):
+            return messages
+
+        # Сохраняем первый элемент (system) если есть
+        out = []
+        if messages and messages[0].get("role") == "system":
+            out.append(messages[0])
+            rest = messages[1:]
+            slot_for_tail = max_msgs - 1  # чтобы итого было ровно max_msgs с учётом system
+        else:
+            rest = messages
+            slot_for_tail = max_msgs
+
+        # Берём последние slot_for_tail не-системных сообщений (или все rest если меньше)
+        tail = rest[-slot_for_tail:] if len(rest) > slot_for_tail else rest
+        if max_chars is not None:
+            current = 0
+            new_tail = []
+            for m in reversed(tail):
+                sz = self._messages_size([m])
+                if current + sz > max_chars and new_tail:
+                    break
+                new_tail.append(m)
+                current += sz
+            tail = list(reversed(new_tail))
+        out.extend(tail)
+
+        dropped = len(messages) - len(out)
+        total_chars = self._messages_size(messages)
+        window_chars = self._messages_size(out)
+        logger.info(
+            "history_trimmed",
+            chat_id=chat_id,
+            dropped_messages=dropped,
+            before_count=len(messages),
+            after_count=len(out),
+            before_chars=total_chars,
+            after_chars=window_chars,
+        )
+        return out
 
     async def health_check(self) -> bool:
         """Проверка доступности OpenClaw"""
@@ -72,11 +136,21 @@ class OpenClawClient:
         force_cloud: если True, локальный путь (fallback на LM Studio) не используется —
         при ошибке облака возвращается сообщение о деградации с подсказкой !model local.
         """
-        # Инициализация сессии если нет
+        # Инициализация сессии: из памяти, из кэша (после рестарта) или новая
         if chat_id not in self._sessions:
-            self._sessions[chat_id] = []
-            if system_prompt:
+            cached = history_cache.get(f"chat_history:{chat_id}")
+            if cached:
+                try:
+                    self._sessions[chat_id] = json.loads(cached)
+                    logger.info("history_restored_from_cache", chat_id=chat_id, messages=len(self._sessions[chat_id]))
+                except (json.JSONDecodeError, TypeError):
+                    self._sessions[chat_id] = []
+            else:
+                self._sessions[chat_id] = []
+            if system_prompt and not self._sessions[chat_id]:
                 self._sessions[chat_id].append({"role": "system", "content": system_prompt})
+            elif system_prompt and self._sessions[chat_id][0].get("role") != "system":
+                self._sessions[chat_id].insert(0, {"role": "system", "content": system_prompt})
         
         if images:
             # Vision payload
@@ -92,9 +166,11 @@ class OpenClawClient:
             self._sessions[chat_id].append({"role": "user", "content": message})
         
         model_id = getattr(config, "MODEL", "google/gemini-2.0-flash")
-        
+
+        # Скользящее окно: в API уходят только последние N сообщений (и/или по размеру)
+        messages_to_send = self._apply_sliding_window(chat_id, self._sessions[chat_id])
         payload = {
-            "messages": self._sessions[chat_id],
+            "messages": messages_to_send,
             "stream": True,
             "model": model_id
         }
@@ -164,11 +240,18 @@ class OpenClawClient:
             # Сохраняем ответ ассистента в историю
             if full_response:
                 self._sessions[chat_id].append({"role": "assistant", "content": full_response})
-            
-            # Ограничиваем историю (последние 20 сообщений)
-            if len(self._sessions[chat_id]) > 20:
-                self._sessions[chat_id] = self._sessions[chat_id][-20:]
-                
+
+            # Скользящее окно: обрезаем историю в памяти (логирование внутри _apply_sliding_window)
+            self._sessions[chat_id] = self._apply_sliding_window(chat_id, self._sessions[chat_id])
+            try:
+                history_cache.set(
+                    f"chat_history:{chat_id}",
+                    json.dumps(self._sessions[chat_id], ensure_ascii=False),
+                    ttl=HISTORY_CACHE_TTL,
+                )
+            except Exception as e:
+                logger.warning("history_cache_set_failed", chat_id=chat_id, error=str(e))
+
         except RouterError:
             # Ошибка роутинга (например RouterQuotaError) — пробрасываем
             raise
@@ -203,8 +286,9 @@ class OpenClawClient:
                 yield "⚠️ OpenClaw Error. Falling back to LM Studio...\n\n"
                 try:
                     async with httpx.AsyncClient(base_url=f"{config.LM_STUDIO_URL}/v1", timeout=120) as lm_client:
+                        lm_messages = self._apply_sliding_window(chat_id, self._sessions[chat_id])
                         payload = {
-                            "messages": self._sessions[chat_id],
+                            "messages": lm_messages,
                             "stream": False,
                             "model": "local",
                         }
@@ -213,6 +297,15 @@ class OpenClawClient:
                             data = resp.json()
                             content = data["choices"][0]["message"]["content"]
                             self._sessions[chat_id].append({"role": "assistant", "content": content})
+                            self._sessions[chat_id] = self._apply_sliding_window(chat_id, self._sessions[chat_id])
+                            try:
+                                history_cache.set(
+                                    f"chat_history:{chat_id}",
+                                    json.dumps(self._sessions[chat_id], ensure_ascii=False),
+                                    ttl=HISTORY_CACHE_TTL,
+                                )
+                            except Exception as e:
+                                logger.warning("history_cache_set_failed", chat_id=chat_id, error=str(e))
                             yield content
                             return
                         yield "❌ OpenClaw и LM Studio вернули ошибку. Попробуй позже или !model local."
@@ -222,10 +315,11 @@ class OpenClawClient:
                 yield "❌ Ошибка облака. Попробуй позже или переключись на локальную модель: !model local."
 
     def clear_session(self, chat_id: str):
-        """Очищает историю чата"""
+        """Очищает историю чата (память и кэш)."""
         if chat_id in self._sessions:
             del self._sessions[chat_id]
-            logger.info("session_cleared", chat_id=chat_id)
+        history_cache.delete(f"chat_history:{chat_id}")
+        logger.info("session_cleared", chat_id=chat_id)
 
     def get_usage_stats(self) -> Dict[str, int]:
         """Возвращает статистику использования токенов"""

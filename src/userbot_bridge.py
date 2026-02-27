@@ -471,16 +471,31 @@ class KraabUserbot:
         asyncio.create_task(proc.wait())  # reap in background
         await message.reply("✅ Тест запущен в фоне. Проверьте `health_check.log`.")
 
-    async def _get_chat_context(self, chat_id: int, limit: int = 10) -> str:
-        """Получает контекст чата (последние сообщения)"""
+    async def _get_chat_context(self, chat_id: int, limit: int = 20, max_chars: int = 8000) -> str:
+        """
+        Получает контекст чата (последние сообщения) для групп.
+        Скользящее окно: не более limit сообщений и не более max_chars символов.
+        """
         try:
             messages = []
+            total_chars = 0
             async for m in self.client.get_chat_history(chat_id, limit=limit):
-                if m.text:
+                if m.text and len(messages) < limit:
                     sender = m.from_user.first_name if m.from_user else "Unknown"
-                    messages.append(f"{sender}: {m.text}")
+                    line = f"{sender}: {m.text}"
+                    if total_chars + len(line) > max_chars:
+                        logger.debug(
+                            "chat_context_trimmed",
+                            chat_id=chat_id,
+                            reason="max_chars",
+                            total_chars=total_chars,
+                            max_chars=max_chars,
+                        )
+                        break
+                    messages.append(line)
+                    total_chars += len(line)
 
-            # Reverse to chronological order
             return "\n".join(reversed(messages))
-        except Exception:
+        except Exception as e:
+            logger.warning("chat_context_error", chat_id=chat_id, error=str(e))
             return ""

@@ -44,6 +44,12 @@ class Config:
     
     # Memory limits
     MAX_RAM_GB: int = int(os.getenv("MAX_RAM_GB", "24"))
+
+    # Dialog history: sliding window (Phase 6)
+    HISTORY_WINDOW_MESSAGES: int = int(os.getenv("HISTORY_WINDOW_MESSAGES", "50"))
+    HISTORY_WINDOW_MAX_CHARS: Optional[int] = (
+        int(x) if (x := os.getenv("HISTORY_WINDOW_MAX_CHARS", "").strip()) else None
+    )
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
