@@ -8,6 +8,7 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 - Управляет моделями через ModelManager
 - Имеет систему прав доступа (Owner Only)
 """
+
 import asyncio
 import time
 from typing import Optional
@@ -20,7 +21,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from .config import config
-from .core.exceptions import KrabError
+from .core.exceptions import KrabError, UserInputError
 from .core.routing_errors import RouterError, user_message_for_surface
 from .employee_templates import ROLES, get_role_prompt, list_roles
 from .handlers import (
@@ -60,7 +61,7 @@ class KraabUserbot:
     Основной мост между Telegram и AI-движком OpenClaw.
     Управляет сессией, обрабатывает команды и генерирует ответы.
     """
-    
+
     SYSTEM_PROMPT = """
     Ты - Краб 🦀, элитный AI-ассистент, работающий в режиме Userbot.
     Твой создатель и владелец - @yung_nagato (Павел). Ты предан ему до последней капли масла в своих клешнях.
@@ -80,7 +81,7 @@ class KraabUserbot:
         self.client = Client(
             config.TELEGRAM_SESSION_NAME,
             api_id=config.TELEGRAM_API_ID,
-            api_hash=config.TELEGRAM_API_HASH
+            api_hash=config.TELEGRAM_API_HASH,
         )
         self.me = None
         self.current_role = "default"
@@ -89,26 +90,26 @@ class KraabUserbot:
 
     def _setup_handlers(self):
         """Регистрация обработчиков событий и команд"""
-        
+
         # Custom Filter: Владелец или разрешенные пользователи
         def check_allowed(_, __, m):
             if not m.from_user:
                 return False
-            
+
             username = (m.from_user.username or "").lower()
             user_id = str(m.from_user.id)
-            
+
             allowed_ids = [str(x) for x in config.ALLOWED_USERS if str(x).isdigit()]
             allowed_names = [str(x).lower() for x in config.ALLOWED_USERS if not str(x).isdigit()]
-            
+
             is_me = m.from_user.id == self.me.id
             is_id_allowed = user_id in allowed_ids
             is_name_allowed = username in allowed_names
-            
+
             is_me = m.from_user.id == self.me.id
             is_id_allowed = user_id in allowed_ids
             is_name_allowed = username in allowed_names
-            
+
             result = is_me or is_id_allowed or is_name_allowed
             if not result:
                 logger.warning("access_denied", user=username, id=user_id, chat=m.chat.id)
@@ -117,67 +118,101 @@ class KraabUserbot:
         is_allowed = filters.create(check_allowed)
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
+        async def run_cmd(handler, m):
+            try:
+                await handler(self, m)
+            except UserInputError as e:
+                await m.reply(e.user_message or str(e))
+
         # Регистрация командных оберток (Фаза 4.4: модульные хендлеры)
         @self.client.on_message(filters.command("status", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_status(c, m): await handle_status(self, m)
+        async def wrap_status(c, m):
+            await run_cmd(handle_status, m)
 
         @self.client.on_message(filters.command("model", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_model(c, m): await handle_model(self, m)
+        async def wrap_model(c, m):
+            await run_cmd(handle_model, m)
 
         @self.client.on_message(filters.command("clear", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_clear(c, m): await handle_clear(self, m)
+        async def wrap_clear(c, m):
+            await run_cmd(handle_clear, m)
 
         @self.client.on_message(filters.command("config", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_config(c, m): await handle_config(self, m)
+        async def wrap_config(c, m):
+            await run_cmd(handle_config, m)
 
         @self.client.on_message(filters.command("set", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_set(c, m): await handle_set(self, m)
+        async def wrap_set(c, m):
+            await run_cmd(handle_set, m)
 
         @self.client.on_message(filters.command("role", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_role(c, m): await handle_role(self, m)
+        async def wrap_role(c, m):
+            await run_cmd(handle_role, m)
 
         @self.client.on_message(filters.command("voice", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_voice(c, m): await handle_voice(self, m)
+        async def wrap_voice(c, m):
+            await run_cmd(handle_voice, m)
 
         @self.client.on_message(filters.command("web", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_web(c, m): await handle_web(self, m)
+        async def wrap_web(c, m):
+            await run_cmd(handle_web, m)
 
-        @self.client.on_message(filters.command("sysinfo", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_sysinfo(c, m): await handle_sysinfo(self, m)
+        @self.client.on_message(
+            filters.command("sysinfo", prefixes=prefixes) & is_allowed, group=-1
+        )
+        async def wrap_sysinfo(c, m):
+            await run_cmd(handle_sysinfo, m)
 
         @self.client.on_message(filters.command("panel", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_panel(c, m): await handle_panel(self, m)
+        async def wrap_panel(c, m):
+            await run_cmd(handle_panel, m)
 
-        @self.client.on_message(filters.command("restart", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_restart(c, m): await handle_restart(self, m)
+        @self.client.on_message(
+            filters.command("restart", prefixes=prefixes) & is_allowed, group=-1
+        )
+        async def wrap_restart(c, m):
+            await run_cmd(handle_restart, m)
 
         @self.client.on_message(filters.command("search", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_search(c, m): await handle_search(self, m)
+        async def wrap_search(c, m):
+            await run_cmd(handle_search, m)
 
-        @self.client.on_message(filters.command("remember", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_remember(c, m): await handle_remember(self, m)
+        @self.client.on_message(
+            filters.command("remember", prefixes=prefixes) & is_allowed, group=-1
+        )
+        async def wrap_remember(c, m):
+            await run_cmd(handle_remember, m)
 
         @self.client.on_message(filters.command("recall", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_recall(c, m): await handle_recall(self, m)
+        async def wrap_recall(c, m):
+            await run_cmd(handle_recall, m)
 
         @self.client.on_message(filters.command("ls", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_ls(c, m): await handle_ls(self, m)
+        async def wrap_ls(c, m):
+            await run_cmd(handle_ls, m)
 
         @self.client.on_message(filters.command("read", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_read(c, m): await handle_read(self, m)
+        async def wrap_read(c, m):
+            await run_cmd(handle_read, m)
 
         @self.client.on_message(filters.command("write", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_write(c, m): await handle_write(self, m)
+        async def wrap_write(c, m):
+            await run_cmd(handle_write, m)
 
         @self.client.on_message(filters.command("agent", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_agent(c, m): await handle_agent(self, m)
+        async def wrap_agent(c, m):
+            await run_cmd(handle_agent, m)
 
-        @self.client.on_message(filters.command("diagnose", prefixes=prefixes) & is_allowed, group=-1)
-        async def wrap_diagnose(c, m): await handle_diagnose(self, m)
+        @self.client.on_message(
+            filters.command("diagnose", prefixes=prefixes) & is_allowed, group=-1
+        )
+        async def wrap_diagnose(c, m):
+            await run_cmd(handle_diagnose, m)
 
         # Обработка обычных сообщений и медиа
         @self.client.on_message((filters.text | filters.photo) & ~filters.bot, group=0)
-        async def wrap_message(c, m): await self._process_message(m)
+        async def wrap_message(c, m):
+            await self._process_message(m)
 
     async def start(self):
         """Запуск юзербота"""
@@ -185,18 +220,21 @@ class KraabUserbot:
         await self.client.start()
         self.me = await self.client.get_me()
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
-        
+
         # WAKE UP CHECK
         try:
-             # Wait for OpenClaw to spin up (up to 10s)
-             logger.info("waiting_for_openclaw")
-             is_claw_ready = await openclaw_client.wait_for_healthy(timeout=10)
-             
-             status_emoji = "✅" if is_claw_ready else "⚠️"
-             status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
-             
-             await self.client.send_message("me", f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.")
-             logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
+            # Wait for OpenClaw to spin up (up to 10s)
+            logger.info("waiting_for_openclaw")
+            is_claw_ready = await openclaw_client.wait_for_healthy(timeout=10)
+
+            status_emoji = "✅" if is_claw_ready else "⚠️"
+            status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
+
+            await self.client.send_message(
+                "me",
+                f"🦀 **Krab System Online**\nGateway: {status_emoji} {status_text}\nReady to serve.",
+            )
+            logger.info("wake_up_message_sent", gateway_ready=is_claw_ready)
         except Exception as e:
             logger.error("wake_up_failed", error=str(e))
 
@@ -206,12 +244,12 @@ class KraabUserbot:
     async def _safe_maintenance(self):
         """Безопасный запуск maintenance"""
         try:
-             logger.info("maintenance_task_start")
-             await model_manager.start_maintenance()
+            logger.info("maintenance_task_start")
+            await model_manager.start_maintenance()
         except asyncio.CancelledError:
-             logger.info("maintenance_task_cancelled")
+            logger.info("maintenance_task_cancelled")
         except Exception as e:
-             logger.error("maintenance_task_error", error=str(e))
+            logger.error("maintenance_task_error", error=str(e))
 
     async def stop(self):
         """Остановка юзербота"""
@@ -225,29 +263,30 @@ class KraabUserbot:
         if not text:
             return False
         text_lower = text.strip().lower()
-        
+
         # Основные префиксы из конфига (!краб, @краб и т.д.)
         for prefix in config.TRIGGER_PREFIXES:
             if text_lower.startswith(prefix.lower()):
                 return True
-        
+
         # Просто упоминание имени в начале или конце (опционально)
         # Но по просьбе пользователя: "может и просто откликаться на Краб"
         if text_lower.startswith("краб"):
             return True
-            
+
         return False
 
     def _get_clean_text(self, text: str) -> str:
         """Убирает триггер из текста"""
-        if not text: return ""
+        if not text:
+            return ""
         text_lower = text.lower()
-        
+
         # Сначала проверяем длинные префиксы
         sorted_prefixes = sorted(config.TRIGGER_PREFIXES + ["краб"], key=len, reverse=True)
         for prefix in sorted_prefixes:
             if text_lower.startswith(prefix.lower()):
-                clean = text[len(prefix):].strip()
+                clean = text[len(prefix) :].strip()
                 # Убираем запятую если она была после имени (Краб, привет)
                 if clean.startswith(","):
                     clean = clean[1:].strip()
@@ -265,8 +304,9 @@ class KraabUserbot:
 
     def _get_command_args(self, message: Message) -> str:
         """Извлекает аргументы команды, убирая саму команду"""
-        if not message.text: return ""
-        
+        if not message.text:
+            return ""
+
         # Если это не команда (нет префикса), возвращаем весь текст через clean_text
         # Но здесь мы знаем, что это хендлер команды
         parts = message.text.split(maxsplit=1)
@@ -278,29 +318,37 @@ class KraabUserbot:
         """Главный обработчик входящих сообщений"""
         try:
             user = message.from_user
-            if not user or user.is_bot: return
+            if not user or user.is_bot:
+                return
 
             text = message.text or message.caption or ""
             # Если нет текста и нет фото - игнорируем
-            if not text and not message.photo: return
+            if not text and not message.photo:
+                return
 
             chat_id = str(message.chat.id)
             is_self = user.id == self.me.id
             has_trigger = self._is_trigger(text)
-            
+
             is_reply_to_me = (
-                message.reply_to_message and 
-                message.reply_to_message.from_user and 
-                message.reply_to_message.from_user.id == self.me.id
+                message.reply_to_message
+                and message.reply_to_message.from_user
+                and message.reply_to_message.from_user.id == self.me.id
             )
-            
+
             if not (has_trigger or message.chat.type == enums.ChatType.PRIVATE or is_reply_to_me):
                 return
 
             query = self._get_clean_text(text)
-            if not query and not message.photo and not is_reply_to_me: return
+            if not query and not message.photo and not is_reply_to_me:
+                return
 
-            logger.info("processing_ai_request", chat_id=chat_id, user=user.username, has_photo=bool(message.photo))
+            logger.info(
+                "processing_ai_request",
+                chat_id=chat_id,
+                user=user.username,
+                has_photo=bool(message.photo),
+            )
             action = enums.ChatAction.RECORD_AUDIO if self.voice_mode else enums.ChatAction.TYPING
             await self.client.send_chat_action(message.chat.id, action)
 
@@ -322,24 +370,26 @@ class KraabUserbot:
             images = []
             if message.photo:
                 try:
-                    if is_self: await message.edit(f"🦀 {query}\n\n👀 *Разглядываю фото...*")
-                    else: await temp_msg.edit("👀 *Разглядываю фото...*")
-                    
+                    if is_self:
+                        await message.edit(f"🦀 {query}\n\n👀 *Разглядываю фото...*")
+                    else:
+                        await temp_msg.edit("👀 *Разглядываю фото...*")
+
                     # in_memory=True returns BytesIO
                     photo_obj = await self.client.download_media(message, in_memory=True)
                     if photo_obj:
-                         img_bytes = photo_obj.getvalue()
-                         b64_img = base64.b64encode(img_bytes).decode('utf-8')
-                         images.append(b64_img)
+                        img_bytes = photo_obj.getvalue()
+                        b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                        images.append(b64_img)
                 except Exception as e:
                     logger.error("photo_processing_error", error=str(e))
 
             full_response = ""
             current_chunk = ""
             last_edit_time = 0
-            
+
             system_prompt = get_role_prompt(self.current_role)
-            
+
             # CONTEXT: Добавляем контекст чата для групп
             if message.chat.type != enums.ChatType.PRIVATE:
                 context = await self._get_chat_context(message.chat.id)
@@ -355,7 +405,7 @@ class KraabUserbot:
             ):
                 full_response += chunk
                 current_chunk += chunk
-                
+
                 if time.time() - last_edit_time > 1.5:
                     last_edit_time = time.time()
                     try:
@@ -364,35 +414,39 @@ class KraabUserbot:
                             await message.edit(f"🦀 {query}\n\n{display}")
                         else:
                             await temp_msg.edit(display)
-                    except Exception: pass
+                    except Exception:
+                        pass
 
             if not full_response:
                 full_response = "❌ Модель не вернула ответ."
-            
+
             if not full_response:
                 full_response = "❌ Модель не вернула ответ."
-            
+
             # SPLIT LOGIC: Отправка длинных сообщений частями
-            parts = self._split_message(f"🦀 {query}\n\n{full_response}" if is_self else full_response)
-            
+            parts = self._split_message(
+                f"🦀 {query}\n\n{full_response}" if is_self else full_response
+            )
+
             if is_self:
                 # Первую часть редактируем (чтобы заменить "думаю...")
                 await message.edit(parts[0])
                 # Остальные отправляем следом
                 for part in parts[1:]:
-                     await message.reply(part)
+                    await message.reply(part)
             else:
                 # Первую часть редактируем
                 await temp_msg.edit(parts[0])
                 # Остальные отправляем
                 for part in parts[1:]:
-                     await message.reply(part)
+                    await message.reply(part)
 
             if self.voice_mode:
                 voice_path = await text_to_speech(full_response)
                 if voice_path:
                     await self.client.send_voice(message.chat.id, voice_path)
-                    if os.path.exists(voice_path): os.remove(voice_path)
+                    if os.path.exists(voice_path):
+                        os.remove(voice_path)
 
         except KrabError as e:
             logger.warning("provider_error", error=str(e), retryable=e.retryable)
@@ -424,7 +478,7 @@ class KraabUserbot:
                 if m.text:
                     sender = m.from_user.first_name if m.from_user else "Unknown"
                     messages.append(f"{sender}: {m.text}")
-            
+
             # Reverse to chronological order
             return "\n".join(reversed(messages))
         except Exception:

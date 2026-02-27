@@ -3,9 +3,9 @@
 Обработчики Telegram-команд, вынесенные из userbot_bridge (Фаза 4.4).
 Каждая функция принимает (bot, message) для тестируемости и уплощения register_handlers.
 """
+
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 from typing import TYPE_CHECKING
@@ -14,10 +14,11 @@ import httpx
 from pyrogram.types import Message
 
 from ..config import config
+from ..core.exceptions import UserInputError
 from ..core.lm_studio_health import is_lm_studio_available
 from ..employee_templates import ROLES, list_roles, save_role
-from ..memory_engine import memory_manager
 from ..mcp_client import mcp_manager
+from ..memory_engine import memory_manager
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from ..search_engine import search_brave
@@ -30,9 +31,7 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
     """Ручной веб-поиск через Brave."""
     query = bot._get_command_args(message)
     if not query or query.lower() in ["search", "!search"]:
-        await message.reply("🔍 Что ищем? Напиши: `!search <запрос>`")
-        message.stop_propagation()
-        return
+        raise UserInputError(user_message="🔍 Что ищем? Напиши: `!search <запрос>`")
     msg = await message.reply(f"🔍 **Краб ищет в сети:** `{query}`...")
     try:
         results = await search_brave(query)
@@ -48,8 +47,7 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
     """Запомнить факт."""
     text = bot._get_command_args(message)
     if not text:
-        await message.reply("🧠 Что запомнить? Напиши: `!remember <текст>`")
-        return
+        raise UserInputError(user_message="🧠 Что запомнить? Напиши: `!remember <текст>`")
     try:
         success = memory_manager.save_fact(text)
         if success:
@@ -65,8 +63,7 @@ async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
     """Вспомнить факт."""
     text = bot._get_command_args(message)
     if not text:
-        await message.reply("🧠 Что вспомнить? Напиши: `!recall <запрос>`")
-        return
+        raise UserInputError(user_message="🧠 Что вспомнить? Напиши: `!recall <запрос>`")
     try:
         facts = memory_manager.recall(text)
         if facts:
@@ -96,8 +93,7 @@ async def handle_read(bot: "KraabUserbot", message: Message) -> None:
     """Чтение файла."""
     path = bot._get_command_args(message)
     if not path:
-        await message.reply("📂 Какой файл читать? `!read <path>`")
-        return
+        raise UserInputError(user_message="📂 Какой файл читать? `!read <path>`")
     if not path.startswith("/"):
         path = os.path.join(config.BASE_DIR, path)
     msg = await message.reply("📂 Reading...")
@@ -105,9 +101,7 @@ async def handle_read(bot: "KraabUserbot", message: Message) -> None:
         content = await mcp_manager.read_file(path)
         if len(content) > 4000:
             content = content[:1000] + "\n... [truncated]"
-        await msg.edit(
-            f"📂 **Content of {os.path.basename(path)}:**\n\n```\n{content}\n```"
-        )
+        await msg.edit(f"📂 **Content of {os.path.basename(path)}:**\n\n```\n{content}\n```")
     except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
         await msg.edit(f"❌ Reading error: {e}")
     message.stop_propagation()
@@ -117,14 +111,12 @@ async def handle_write(bot: "KraabUserbot", message: Message) -> None:
     """Запись файла (опасно!)."""
     text = bot._get_command_args(message)
     if not text:
-        await message.reply("📂 Формат: `!write <filename> <content>`")
-        return
+        raise UserInputError(user_message="📂 Формат: `!write <filename> <content>`")
     parts = text.split("\n", 1)
     if len(parts) < 2:
         parts = text.split(" ", 1)
         if len(parts) < 2:
-            await message.reply("📂 Нет контента для записи.")
-            return
+            raise UserInputError(user_message="📂 Нет контента для записи.")
     path = parts[0].strip()
     content = parts[1]
     if not path.startswith("/"):
@@ -142,11 +134,11 @@ async def handle_status(bot: "KraabUserbot", message: Message) -> None:
     text = f"""
 🦀 **Системный статус Краба**
 ---------------------------
-📡 **Gateway (OpenClaw):** {'✅ Online' if is_ok else '❌ Offline'}
+📡 **Gateway (OpenClaw):** {"✅ Online" if is_ok else "❌ Offline"}
 🧠 **Модель:** `{config.MODEL}`
 🎭 **Роль:** `{bot.current_role}`
-🎙️ **Голос:** `{'ВКЛ' if bot.voice_mode else 'ВЫКЛ'}`
-💻 **RAM:** [{bar}] {ram['percent']}%
+🎙️ **Голос:** `{"ВКЛ" if bot.voice_mode else "ВЫКЛ"}`
+💻 **RAM:** [{bar}] {ram["percent"]}%
 """
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(text)
@@ -163,10 +155,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
     cmd = args[1].lower()
     if cmd == "list":
         models = await model_manager.discover_models()
-        lines = [
-            f"{('☁️' if m.type.name == 'CLOUD_GEMINI' else '💻')} `{m.id}`"
-            for m in models
-        ]
+        lines = [f"{('☁️' if m.type.name == 'CLOUD_GEMINI' else '💻')} `{m.id}`" for m in models]
         await message.reply("**Доступные модели:**\n\n" + "\n".join(lines[:15]))
     elif cmd == "load" and len(args) > 2:
         mid = args[2]
@@ -194,7 +183,7 @@ async def handle_config(bot: "KraabUserbot", message: Message) -> None:
 ⚙️ **Конфигурация Краба**
 ----------------------
 👤 **Владелец:** `{config.OWNER_USERNAME}`
-🎯 **Триггеры:** `{', '.join(config.TRIGGER_PREFIXES)}`
+🎯 **Триггеры:** `{", ".join(config.TRIGGER_PREFIXES)}`
 🧠 **Память (RAM):** `{config.MAX_RAM_GB}GB`
 """
     await message.reply(text)
@@ -204,8 +193,7 @@ async def handle_set(bot: "KraabUserbot", message: Message) -> None:
     """Изменение настроек на лету."""
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
-        await message.reply("⚙️ `!set <KEY> <VAL>`")
-        return
+        raise UserInputError(user_message="⚙️ `!set <KEY> <VAL>`")
     if config.update_setting(args[1], args[2]):
         await message.reply(f"✅ `{args[1]}` обновлено!")
     else:
@@ -223,15 +211,13 @@ async def handle_role(bot: "KraabUserbot", message: Message) -> None:
             bot.current_role = role
             await message.reply(f"🎭 Теперь я: `{role}`")
         else:
-            await message.reply("❌ Роль не найдена.")
+            raise UserInputError(user_message="❌ Роль не найдена.")
 
 
 async def handle_voice(bot: "KraabUserbot", message: Message) -> None:
     """Переключение голосовых ответов."""
     bot.voice_mode = not bot.voice_mode
-    await message.reply(
-        f"🎙️ Голосовой режим: `{'ВКЛ' if bot.voice_mode else 'ВЫКЛ'}`"
-    )
+    await message.reply(f"🎙️ Голосовой режим: `{'ВКЛ' if bot.voice_mode else 'ВЫКЛ'}`")
 
 
 async def handle_web(bot: "KraabUserbot", message: Message) -> None:
@@ -274,10 +260,7 @@ async def handle_sysinfo(bot: "KraabUserbot", message: Message) -> None:
 
     import psutil
 
-    text = (
-        f"🖥️ **System:** `{platform.system()}`\n"
-        f"🔥 **CPU:** `{psutil.cpu_percent()}%`"
-    )
+    text = f"🖥️ **System:** `{platform.system()}`\n🔥 **CPU:** `{psutil.cpu_percent()}%`"
     await message.reply(text)
 
 
@@ -296,24 +279,21 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
     """Управление агентами: !agent new <name> <prompt>."""
     text = bot._get_command_args(message)
     if not text:
-        await message.reply(
-            "🕵️‍♂️ Использование: `!agent new <имя> <промпт>`\nИли: `!agent list`"
+        raise UserInputError(
+            user_message="🕵️‍♂️ Использование: `!agent new <имя> <промпт>`\nИли: `!agent list`"
         )
-        return
     if text.startswith("list"):
         await message.reply(f"🕵️‍♂️ **Доступные агенты:**\n\n{list_roles()}")
         return
     if text.startswith("new"):
         parts = text[3:].strip().split(" ", 1)
         if len(parts) < 2:
-            await message.reply("❌ Ошибка: укажите имя и промпт.")
-            return
+            raise UserInputError(user_message="❌ Ошибка: укажите имя и промпт.")
         name = parts[0].strip()
         prompt = parts[1].strip().strip('"').strip("'")
         if save_role(name, prompt):
             await message.reply(
-                f"🕵️‍♂️ **Агент создан:** `{name}`\n\n"
-                f"Теперь можно использовать: `стань {name}`"
+                f"🕵️‍♂️ **Агент создан:** `{name}`\n\nТеперь можно использовать: `стань {name}`"
             )
         else:
             await message.reply("❌ Ошибка при сохранении агента.")
@@ -340,7 +320,5 @@ async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:
                 report.append(f"- OpenClaw: ⚠️ Error ({resp.status_code})")
     except (httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, OSError) as e:
         report.append(f"- OpenClaw: ❌ Unreachable ({str(e)})")
-        report.append(
-            "  _Совет: Проверьте, запущен ли Gateway и совпадает ли порт (обычно 18792)_"
-        )
+        report.append("  _Совет: Проверьте, запущен ли Gateway и совпадает ли порт (обычно 18792)_")
     await msg.edit("\n".join(report))
