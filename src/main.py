@@ -1,6 +1,7 @@
 """
 Точка входа в приложение Краб (Фаза 4/6.2: декомпозиция на bootstrap).
 """
+
 import asyncio
 import sys
 

@@ -13,7 +13,6 @@ import asyncio
 import time
 from typing import Optional
 
-import structlog
 import os
 import base64
 import textwrap
@@ -52,7 +51,9 @@ from .openclaw_client import openclaw_client
 from .search_engine import search_brave, close_search
 from .voice_engine import text_to_speech
 
-logger = structlog.get_logger(__name__)
+from .core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class KraabUserbot:

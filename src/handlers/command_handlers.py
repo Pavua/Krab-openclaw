@@ -16,12 +16,15 @@ from pyrogram.types import Message
 from ..config import config
 from ..core.exceptions import UserInputError
 from ..core.lm_studio_health import is_lm_studio_available
+from ..core.logger import get_logger
 from ..employee_templates import ROLES, list_roles, save_role
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from ..search_engine import search_brave
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from ..userbot_bridge import KraabUserbot
