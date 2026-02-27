@@ -19,8 +19,8 @@ async def test_model_discovery_with_gemini():
     assert "google/gemini-2.0-flash-exp" in gemini_ids
 
 @pytest.mark.asyncio
-async def test_select_best_model_fallback():
+async def test_get_best_model_fallback():
     """Проверка fallback на Gemini"""
     with patch.object(model_manager, 'discover_models', return_value=[]):
-        best = await model_manager.select_best_model("chat")
+        best = await model_manager.get_best_model()
         assert best == config.MODEL

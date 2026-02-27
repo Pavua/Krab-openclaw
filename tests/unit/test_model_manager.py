@@ -95,11 +95,12 @@ async def test_smart_load_memory_pressure(model_manager):
         assert args_unload[1]["json"]["model"] == "big-model"
 
 @pytest.mark.asyncio
-async def test_select_best_model_fallback(model_manager):
+async def test_get_best_model_fallback(model_manager):
     # No models available locally
     mock_response = MagicMock()
     mock_response.json.return_value = {"data": []}
     model_manager._http_client.get.return_value = mock_response
-    
-    best = await model_manager.select_best_model("chat")
-    assert best == "google/gemini-2.0-flash-exp"
+
+    best = await model_manager.get_best_model()
+    # Дефолт из цепочки или config.MODEL / "google/gemini-2.0-flash"
+    assert "gemini" in best

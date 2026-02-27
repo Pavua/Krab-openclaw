@@ -4,12 +4,11 @@ Model Manager - Умное управление моделями LM Studio
 Функции:
 - Автодетект доступных моделей через API
 - Мониторинг RAM
-- Smart fallback на облачные модели
+- Smart fallback на облачные модели (делегирует в core.cloud_gateway)
 - Загрузка/выгрузка моделей (Smart Loading)
 - Maintenance loop для авто-выгрузки
 """
 import asyncio
-import json
 import time
 from typing import Optional
 
@@ -18,6 +17,11 @@ import psutil
 import structlog
 
 from .config import config
+from .core.cloud_gateway import (
+    fetch_google_models as cloud_fetch_google_models,
+    get_cloud_fallback_chain,
+    verify_gemini_access as cloud_verify_gemini_access,
+)
 from .core.local_health import discover_models as discover_models_impl
 from .core.model_types import ModelInfo, ModelStatus, ModelType
 
@@ -41,88 +45,40 @@ class ModelManager:
         self._lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task] = None
         
-        # Fallback chain
+        # Fallback chain: local затем облачные тиры из cloud_gateway
+        cloud_chain = get_cloud_fallback_chain()
         self.fallback_chain = [
-            "local",  # LM Studio loaded model
+            "local",
             "lmstudio/seed-oss-36b-instruct-mlx",
-            "google/gemini-2.0-flash-exp",
-            "google/gemini-1.5-pro-latest",
+            *cloud_chain,
         ]
     
     async def discover_models(self) -> list[ModelInfo]:
-        """Обнаруживает все доступные модели (LM Studio + облако) через local_health."""
+        """Обнаруживает все доступные модели (LM Studio + облако) через local_health и cloud_gateway."""
+        async def _fetch_google() -> list[ModelInfo]:
+            return await cloud_fetch_google_models(
+                config.GEMINI_API_KEY,
+                self._http_client,
+                models_cache=self._models_cache,
+            )
         return await discover_models_impl(
             self.lm_studio_url,
             self._http_client,
             models_cache=self._models_cache,
-            fetch_google_models_async=self._fetch_google_models,
+            fetch_google_models_async=_fetch_google,
         )
 
-    async def _fetch_google_models(self) -> list[ModelInfo]:
-        """Запрашивает список моделей у Google"""
-        if not config.GEMINI_API_KEY:
-            return []
-            
-        models = []
-        try:
-            url = "https://generativelanguage.googleapis.com/v1beta/models"
-            params = {"key": config.GEMINI_API_KEY}
-            
-            response = await self._http_client.get(url, params=params)
-            if response.status_code == 200:
-                data = response.json()
-                for m in data.get("models", []):
-                    # Filter only gemini models to avoid clutter (e.g. text-bison)
-                    if "gemini" not in m["name"].lower():
-                        continue
-                        
-                    m_id = m["name"].replace("models/", "google/")
-                    
-                    # Check supports
-                    is_vision = "vision" in m_id or "flash" in m_id or "pro" in m_id
-                    
-                    model = ModelInfo(
-                        id=m_id,
-                        name=m.get("displayName", m_id),
-                        type=ModelType.CLOUD_GEMINI,
-                        status=ModelStatus.AVAILABLE,
-                        size_gb=0.0,
-                        supports_vision=is_vision
-                    )
-                    models.append(model)
-                    self._models_cache[m_id] = model
-            else:
-                 logger.warning("google_api_error", status=response.status_code)
-                 
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError, OSError) as e:
-            logger.error("google_api_exception", error=str(e))
-            
-        return models
-
     async def verify_model_access(self, model_id: str) -> bool:
-        """Проверяет доступность модели перед переключением"""
-        # 1. Local check
+        """Проверяет доступность модели перед переключением (локальные — по кэшу, облако — через cloud_gateway)."""
         if self._detect_model_type(model_id) != ModelType.CLOUD_GEMINI:
-             # For local/LMS, just check if it can be loaded or is in list
-             if model_id in self._models_cache:
-                  # Try to get info
-                  # TODO: Add real ping check for LMS
-                  return True
-             return False
-
-        # 2. Google check
-        if not config.GEMINI_API_KEY: return False
-        
-        try:
-            # Simple generateContent call with 1 token to test auth and model existence
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id.replace('google/', '')}:generateContent"
-            params = {"key": config.GEMINI_API_KEY}
-            json_body = {"contents": [{"parts": [{"text": "Hi"}]}]}
-            
-            response = await self._http_client.post(url, params=params, json=json_body)
-            return response.status_code == 200
-        except (httpx.HTTPError, OSError):
+            if model_id in self._models_cache:
+                return True
             return False
+        return await cloud_verify_gemini_access(
+            model_id,
+            config.GEMINI_API_KEY,
+            self._http_client,
+        )
     
     def _detect_model_type(self, model_id: str) -> ModelType:
         """Определяет тип модели по ID"""
@@ -279,19 +235,6 @@ class ModelManager:
                 break
             except (httpx.HTTPError, OSError) as e:
                 logger.error("maintenance_error", error=str(e))
-            if target.split("/")[1] in m.id: # Simple match
-                best_local = m.id
-                break
-        
-        if best_local:
-            if await self.load_model(best_local):
-                return best_local
-                
-        # 2. Fallback to Gemini if configured
-        if config.GEMINI_API_KEY:
-            return config.MODEL
-            
-        return "local"
 
     async def health_check(self) -> dict:
         """Проверка здоровья"""
