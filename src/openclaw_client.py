@@ -12,6 +12,7 @@ import httpx
 import structlog
 
 from .config import config
+from .core.lm_studio_health import is_lm_studio_available
 from .core.routing_errors import (
     RouterAuthError,
     RouterError,
@@ -186,8 +187,8 @@ class OpenClawClient:
                     "❌ Облачный сервис временно недоступен. Попробуй позже или переключись на локальную модель: !model local."
                 )
                 return
-            # Только для непредвиденных ошибок и не force_cloud пробуем fallback на LM Studio
-            if config.LM_STUDIO_URL:
+            # Только для непредвиденных ошибок и не force_cloud пробуем fallback на LM Studio (Фаза 2.3: общая проверка доступности)
+            if config.LM_STUDIO_URL and await is_lm_studio_available(config.LM_STUDIO_URL, timeout=5.0):
                 logger.info("falling_back_to_lm_studio")
                 yield "⚠️ OpenClaw Error. Falling back to LM Studio...\n\n"
                 try:

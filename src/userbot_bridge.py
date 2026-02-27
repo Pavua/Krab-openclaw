@@ -21,6 +21,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 
 from .config import config
+from .core.lm_studio_health import is_lm_studio_available
 from .core.routing_errors import RouterError, user_message_for_surface
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -701,17 +702,11 @@ class KraabUserbot:
         report.append(f"- OPENCLAW_URL: `{config.OPENCLAW_URL}`")
         report.append(f"- LM_STUDIO_URL: `{config.LM_STUDIO_URL}`")
         
-        # 2. LM Studio Check
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(f"{config.LM_STUDIO_URL}/v1/models")
-                if resp.status_code == 200:
-                    report.append(f"- LM Studio: ✅ OK (Available)")
-                else:
-                    report.append(f"- LM Studio: ⚠️ Error ({resp.status_code})")
-        except Exception as e:
-            report.append(f"- LM Studio: ❌ Offline ({str(e)})")
+        # 2. LM Studio Check (общая утилита — Фаза 2.3)
+        if await is_lm_studio_available(config.LM_STUDIO_URL, timeout=2.0):
+            report.append(f"- LM Studio: ✅ OK (Available)")
+        else:
+            report.append(f"- LM Studio: ❌ Offline")
             
         # 3. OpenClaw Check
         try:

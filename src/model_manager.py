@@ -19,6 +19,7 @@ import psutil
 import structlog
 
 from .config import config
+from .core.lm_studio_health import fetch_lm_studio_models_list
 
 logger = structlog.get_logger(__name__)
 
@@ -87,26 +88,21 @@ class ModelManager:
         Обнаруживает все доступные модели в LM Studio
         """
         models = []
-        
-        try:
-            response = await self._http_client.get(
-                f"{self.lm_studio_url}/v1/models"
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            for model_data in data.get("data", []):
+        model_list = await fetch_lm_studio_models_list(
+            self.lm_studio_url, client=self._http_client
+        )
+        if not model_list:
+            logger.warning("lm_studio_offline")
+        else:
+            for model_data in model_list:
                 model_id = model_data.get("id", "")
                 model_type = self._detect_model_type(model_id)
-                
-                # Попытка угадать размер (просто эвристика по имени)
                 size = 8.0
                 if "7b" in model_id.lower(): size = 5.0
                 if "13b" in model_id.lower(): size = 10.0
                 if "30b" in model_id.lower() or "32b" in model_id.lower(): size = 18.0
                 if "70b" in model_id.lower(): size = 40.0
                 if "q4" in model_id.lower(): size *= 0.6
-                
                 model = ModelInfo(
                     id=model_id,
                     name=model_data.get("name", model_id),
@@ -117,12 +113,7 @@ class ModelManager:
                 )
                 models.append(model)
                 self._models_cache[model_id] = model
-            
             logger.info("models_discovered", count=len(models))
-            
-        except httpx.HTTPError as e:
-            # Silently fail if LMS is offline, just log simple warning
-            logger.warning("lm_studio_offline")
             
         # Get Google Models
         google_models = await self._fetch_google_models()
@@ -237,27 +228,7 @@ class ModelManager:
                 
         # Default fallback
         return "google/gemini-2.0-flash"
-        """Получает список загруженных моделей"""
-        try:
-            response = await self._http_client.get(
-                f"{self.lm_studio_url}/v1/models"
-            )
-            if response.status_code != 200:
-                return []
-            data = response.json()
-            # Фильтруем (нужно проверять специфичные для LM Studio поля loaded)
-            # Но для v1/models API возвращает список доступных.
-            # Для LM Studio: loaded models usually explicitly managed via GUI or load API.
-            # Но API v1/models листит ВСЕ.
-            # Мы будем считать "Local Loaded Model" или просто проверять текущий статус.
-            # LM Studio API /v1/models returns all available models.
-            # To get LOADED models, we might need to check if we loaded it via `_current_model`.
-            # Or try to list only those with certain state if API supported it.
-            # For now, return all available to allow user to pick any.
-            return [m.get("id") for m in data.get("data", [])]
-        except Exception:
-            return []
-            
+
     def get_ram_usage(self) -> dict:
         """Получает текущее использование RAM"""
         mem = psutil.virtual_memory()
