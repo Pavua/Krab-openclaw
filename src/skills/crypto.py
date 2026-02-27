@@ -15,5 +15,5 @@ async def get_crypto_price(symbol: str = "bitcoin") -> str:
                 price = data[symbol]['usd']
                 return f"💰 {symbol.upper()}: ${price}"
             return f"❌ Не нашел {symbol}"
-    except Exception as e:
+    except (httpx.HTTPError, OSError, KeyError) as e:
         return f"Error: {str(e)}"

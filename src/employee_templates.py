@@ -142,7 +142,7 @@ def load_roles() -> dict:
             with open(ROLES_FILE, 'r', encoding='utf-8') as f:
                 custom_roles = json.load(f)
                 roles.update(custom_roles)
-        except Exception as e:
+        except (OSError, json.JSONDecodeError, KeyError) as e:
             logger.error("roles_load_error", error=str(e))
     return roles
 
@@ -163,7 +163,7 @@ def save_role(name: str, prompt: str) -> bool:
         global ROLES
         ROLES = load_roles()
         return True
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, TypeError) as e:
         logger.error("role_save_error", error=str(e))
         return False
 

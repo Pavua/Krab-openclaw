@@ -23,7 +23,7 @@ async def search_brave(query: str) -> str:
             search_cache.set(query, results, ttl=3600)
             
         return results
-    except Exception as e:
+    except (OSError, ValueError, KeyError, AttributeError, RuntimeError) as e:
         logger.error("search_brave_failed", error=str(e))
         return f"❌ Ошибка поиска: {str(e)}"
 

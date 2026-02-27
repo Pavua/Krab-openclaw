@@ -50,7 +50,7 @@ class MCPClientManager:
             self.sessions[name] = session
             logger.info("mcp_server_ready", name=name)
             return True
-        except Exception as e:
+        except (OSError, ConnectionError, ValueError, KeyError) as e:
             logger.error("mcp_server_failed", name=name, error=str(e))
             return False
 
@@ -64,7 +64,7 @@ class MCPClientManager:
         try:
             result = await session.call_tool(tool_name, arguments)
             return result
-        except Exception as e:
+        except (ConnectionError, ValueError, AttributeError, RuntimeError) as e:
             logger.error("mcp_tool_error", server=server_name, tool=tool_name, error=str(e))
             return None
 
@@ -108,7 +108,7 @@ class MCPClientManager:
                     text_results.append(item.text)
             
             return "\n\n".join(text_results)
-        except Exception:
+        except (AttributeError, IndexError, KeyError, TypeError):
             return str(result)
 
     async def read_file(self, path: str) -> str:
@@ -123,7 +123,7 @@ class MCPClientManager:
         
         try:
             return result.content[0].text
-        except Exception:
+        except (AttributeError, IndexError, KeyError, TypeError):
             return str(result)
 
     async def write_file(self, path: str, content: str) -> str:
@@ -148,7 +148,7 @@ class MCPClientManager:
         try:
             # Обычно возвращает список строк
             return result.content[0].text
-        except Exception:
+        except (AttributeError, IndexError, KeyError, TypeError):
             return str(result)
 
     async def stop_all(self):

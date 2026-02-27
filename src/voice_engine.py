@@ -59,7 +59,7 @@ async def text_to_speech(text: str, filename: str = "voice.ogg", speed: float = 
             logger.error("ffmpeg_failed", path=output_ogg)
             return ""
             
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.error("tts_error", error=str(e))
         return ""
     finally:

@@ -42,7 +42,7 @@ class MemoryManager:
             )
             logger.info("fact_saved", text=text[:50])
             return True
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, TypeError) as e:
             logger.error("save_fact_error", error=str(e))
             return False
 
@@ -60,7 +60,7 @@ class MemoryManager:
             # Форматируем найденные факты
             facts = results['documents'][0]
             return "\n".join([f"- {fact}" for fact in facts])
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, KeyError, IndexError, TypeError) as e:
             logger.error("recall_error", error=str(e))
             return ""
 

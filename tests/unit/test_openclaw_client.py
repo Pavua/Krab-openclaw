@@ -94,7 +94,8 @@ def test_clear_session(client):
 @pytest.mark.asyncio
 async def test_force_cloud_no_lm_studio_fallback(client):
     """При force_cloud=True при ошибке OpenClaw не делаем fallback на LM Studio (Фаза 2.2)."""
-    client._http_client.stream = MagicMock(side_effect=Exception("gateway down"))
+    # Ошибка, попадающая в блок (HTTPError, OSError, ValueError, KeyError), не в RequestError
+    client._http_client.stream = MagicMock(side_effect=ValueError("gateway down"))
     chunks = []
     async for chunk in client.send_message_stream("Hi", "chat-1", force_cloud=True):
         chunks.append(chunk)

@@ -9,6 +9,7 @@ Model Manager - Умное управление моделями LM Studio
 - Maintenance loop для авто-выгрузки
 """
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -157,7 +158,7 @@ class ModelManager:
             else:
                  logger.warning("google_api_error", status=response.status_code)
                  
-        except Exception as e:
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, OSError) as e:
             logger.error("google_api_exception", error=str(e))
             
         return models
@@ -184,7 +185,7 @@ class ModelManager:
             
             response = await self._http_client.post(url, params=params, json=json_body)
             return response.status_code == 200
-        except Exception:
+        except (httpx.HTTPError, OSError):
             return False
     
     def _detect_model_type(self, model_id: str) -> ModelType:
@@ -223,7 +224,7 @@ class ModelManager:
                     if config.GEMINI_API_KEY:
                         return model_id
                         
-            except Exception:
+            except (httpx.HTTPError, OSError):
                 continue
                 
         # Default fallback
@@ -289,7 +290,7 @@ class ModelManager:
                     logger.error("load_failed", status=response.status_code)
                     return False
                     
-            except Exception as e:
+            except (httpx.HTTPError, OSError) as e:
                 logger.error("load_exception", error=str(e))
                 return False
 
@@ -302,7 +303,7 @@ class ModelManager:
                 json={"model": model_id}
             )
             logger.info("model_unloaded", model=model_id)
-        except Exception:
+        except (httpx.HTTPError, OSError):
             pass
 
     async def unload_all(self):
@@ -340,7 +341,7 @@ class ModelManager:
                             
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except (httpx.HTTPError, OSError) as e:
                 logger.error("maintenance_error", error=str(e))
             if target.split("/")[1] in m.id: # Simple match
                 best_local = m.id
@@ -365,7 +366,7 @@ class ModelManager:
                 "models_count": len(models),
                 "ram": self.get_ram_usage()
             }
-        except Exception as e:
+        except (httpx.HTTPError, OSError, KeyError, ValueError) as e:
             return {"status": "error", "error": str(e)}
 
     async def close(self):

@@ -39,7 +39,7 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
         if len(results) > 4000:
             results = results[:3900] + "..."
         await msg.edit(f"🔍 **Результаты поиска:**\n\n{results}")
-    except Exception as e:
+    except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
         await msg.edit(f"❌ Ошибка поиска: {e}")
     message.stop_propagation()
 
@@ -56,7 +56,7 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"🧠 **Запомнил:** `{text}`")
         else:
             await message.reply("❌ Ошибка памяти.")
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         await message.reply(f"❌ Critical Memory Error: {e}")
     message.stop_propagation()
 
@@ -73,7 +73,7 @@ async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"🧠 **Вспомнил:**\n\n{facts}")
         else:
             await message.reply("🧠 Ничего не нашел по этому запросу.")
-    except Exception as e:
+    except (ValueError, RuntimeError, OSError) as e:
         await message.reply(f"❌ Recalling Error: {e}")
     message.stop_propagation()
 
@@ -87,7 +87,7 @@ async def handle_ls(bot: "KraabUserbot", message: Message) -> None:
     try:
         result = await mcp_manager.list_directory(path)
         await msg.edit(f"📂 **Files in {path}:**\n\n`{result[:3900]}`")
-    except Exception as e:
+    except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
         await msg.edit(f"❌ Error listing: {e}")
     message.stop_propagation()
 
@@ -108,7 +108,7 @@ async def handle_read(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(
             f"📂 **Content of {os.path.basename(path)}:**\n\n```\n{content}\n```"
         )
-    except Exception as e:
+    except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
         await msg.edit(f"❌ Reading error: {e}")
     message.stop_propagation()
 
@@ -313,7 +313,7 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
         if save_role(name, prompt):
             await message.reply(
                 f"🕵️‍♂️ **Агент создан:** `{name}`\n\n"
-                "Теперь можно использовать: `стань {name}`"
+                f"Теперь можно использовать: `стань {name}`"
             )
         else:
             await message.reply("❌ Ошибка при сохранении агента.")
@@ -338,7 +338,7 @@ async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:
                 report.append("- OpenClaw: ✅ OK (Healthy)")
             else:
                 report.append(f"- OpenClaw: ⚠️ Error ({resp.status_code})")
-    except Exception as e:
+    except (httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, OSError) as e:
         report.append(f"- OpenClaw: ❌ Unreachable ({str(e)})")
         report.append(
             "  _Совет: Проверьте, запущен ли Gateway и совпадает ли порт (обычно 18792)_"

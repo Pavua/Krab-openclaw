@@ -45,7 +45,7 @@ class OpenClawClient:
         try:
             response = await self._http_client.get(f"{self.base_url}/health")
             return response.status_code == 200
-        except Exception as e:
+        except (httpx.RequestError, httpx.ConnectError, httpx.TimeoutException, OSError) as e:
             logger.error("openclaw_health_check_failed", error=str(e))
             return False
     async def wait_for_healthy(self, timeout: int = 15) -> bool:
@@ -179,7 +179,7 @@ class OpenClawClient:
                 user_message="Сетевая ошибка при обращении к OpenClaw. Проверь доступность сервиса. Можно переключиться на локальную модель: !model local.",
                 details={"error": str(e)},
             )
-        except Exception as e:
+        except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
             logger.error("openclaw_stream_error", error=str(e))
             # force_cloud: не использовать локальный путь (Фаза 2.2) — сообщение о деградации облака
             if force_cloud:
@@ -206,7 +206,7 @@ class OpenClawClient:
                             yield content
                             return
                         yield "❌ OpenClaw и LM Studio вернули ошибку. Попробуй позже или !model local."
-                except Exception as lme:
+                except (httpx.HTTPError, OSError, json.JSONDecodeError, KeyError, IndexError) as lme:
                     yield f"❌ Критическая ошибка: {str(lme)}"
             else:
                 yield "❌ Ошибка облака. Попробуй позже или переключись на локальную модель: !model local."

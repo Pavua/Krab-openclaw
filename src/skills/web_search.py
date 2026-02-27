@@ -43,6 +43,6 @@ async def search_web(query: str) -> str:
             
             return "🔍 **Результаты поиска:**\n\n" + "\n\n".join(formatted_results)
             
-    except Exception as e:
+    except (httpx.HTTPError, OSError, KeyError) as e:
         logger.error("brave_search_failed", error=str(e))
         return f"❌ Ошибка при поиске: {str(e)}"

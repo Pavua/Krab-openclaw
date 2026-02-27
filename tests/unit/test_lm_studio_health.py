@@ -48,10 +48,12 @@ async def test_fetch_lm_studio_models_list_returns_list_on_success():
 
 @pytest.mark.asyncio
 async def test_fetch_lm_studio_models_list_returns_empty_on_failure():
-    with patch("src.core.lm_studio_health.httpx") as mock_httpx:
+    import httpx
+    # Патчим только AsyncClient, чтобы httpx.HTTPError оставался настоящим классом в except
+    with patch("src.core.lm_studio_health.httpx.AsyncClient") as mock_ac:
         mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
-        mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+        mock_ac.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ac.return_value.__aexit__ = AsyncMock(return_value=None)
         result = await fetch_lm_studio_models_list("http://127.0.0.1:1234", timeout=2.0)
     assert result == []

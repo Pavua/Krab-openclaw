@@ -176,7 +176,7 @@ class ProvisioningService:
         """
         try:
             draft = self.get_draft(draft_id)
-        except Exception as e:
+        except (KeyError, ValueError, OSError, TypeError) as e:
             return {
                 "ok": False,
                 "errors": [f"Системная ошибка: {e}"],
@@ -352,7 +352,7 @@ class ProvisioningService:
             with path.open("r", encoding="utf-8") as fp:
                 payload = yaml.safe_load(fp) or {}
                 return payload if isinstance(payload, dict) else {}
-        except Exception:
+        except (OSError, yaml.YAMLError):
             return {}
 
     def _write_yaml(self, path: Path, payload: dict[str, Any]) -> None:

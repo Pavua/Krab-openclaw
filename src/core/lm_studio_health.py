@@ -31,13 +31,13 @@ async def is_lm_studio_available(
         try:
             resp = await client.get(url, timeout=timeout)
             return resp.status_code == 200
-        except Exception:
+        except (httpx.HTTPError, OSError):
             return False
     async with httpx.AsyncClient(timeout=timeout) as ac:
         try:
             resp = await ac.get(url)
             return resp.status_code == 200
-        except Exception:
+        except (httpx.HTTPError, OSError):
             return False
 
 
@@ -61,7 +61,7 @@ async def fetch_lm_studio_models_list(
                 return []
             data = resp.json()
             return list(data.get("data", []))
-        except Exception:
+        except (httpx.HTTPError, OSError, ValueError):
             return []
     async with httpx.AsyncClient(timeout=timeout) as ac:
         try:
@@ -70,5 +70,5 @@ async def fetch_lm_studio_models_list(
                 return []
             data = resp.json()
             return list(data.get("data", []))
-        except Exception:
+        except (httpx.HTTPError, OSError, ValueError):
             return []
