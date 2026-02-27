@@ -1,0 +1,36 @@
+Python: кэш и временные файлы
+
+pycache/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+Git: история и конфигурация
+
+.git/
+.gitignore
+
+Данные приложения: сессии и локальные БД
+
+Мы не копируем их, чтобы контейнер был чистым
+
+*.session
+*.session-journal
+artifacts/
+logs/
+*.db
+
+Конфигурация и секреты
+
+.env
+config.local.py
+
+Системные и IDE файлы
+
+.cursor/
+.vscode/
+.idea/
+.DS_Store
