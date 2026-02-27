@@ -24,6 +24,15 @@ from .core.cloud_gateway import (
 )
 from .core.cost_analytics import cost_analytics
 from .core.local_health import discover_models as discover_models_impl
+from .core.model_config import (
+    DEFAULT_UNKNOWN_MODEL_SIZE_GB,
+    FALLBACK_CHAIN_LOCAL,
+    IDLE_UNLOAD_SEC,
+    LM_LOAD_TIMEOUT_SEC,
+    LM_LOAD_TTL,
+    MAINTENANCE_INTERVAL_SEC,
+    RAM_BUFFER_GB,
+)
 from .core.model_router import ModelRouter
 from .core.model_types import ModelInfo, ModelStatus, ModelType
 
@@ -49,11 +58,7 @@ class ModelManager:
         
         # Fallback chain: local затем облачные тиры из cloud_gateway
         cloud_chain = get_cloud_fallback_chain()
-        self.fallback_chain = [
-            "local",
-            "lmstudio/seed-oss-36b-instruct-mlx",
-            *cloud_chain,
-        ]
+        self.fallback_chain = [*FALLBACK_CHAIN_LOCAL, *cloud_chain]
         self._router = ModelRouter(
             lm_studio_url=self.lm_studio_url,
             gemini_api_key=config.GEMINI_API_KEY,
@@ -125,10 +130,9 @@ class ModelManager:
     
     def can_load_model(self, size_gb: float) -> bool:
         """Проверяет можно ли загрузить модель"""
-        # Проверяем доступную память + буфер 2GB
         mem = psutil.virtual_memory()
         available_gb = mem.available / (1024**3)
-        return available_gb > (size_gb + 2.0)
+        return available_gb > (size_gb + RAM_BUFFER_GB)
     
     async def load_model(self, model_id: str) -> bool:
         """Загружает модель (Smart Loading)"""
@@ -140,7 +144,7 @@ class ModelManager:
             model_info = self._models_cache.get(model_id)
             if not model_info:
                 logger.warning("model_unknown_loading_anyway", model=model_id)
-                size_gb = 8.0
+                size_gb = DEFAULT_UNKNOWN_MODEL_SIZE_GB
             else:
                 size_gb = model_info.size_gb
 
@@ -156,8 +160,8 @@ class ModelManager:
                 logger.info("loading_model_start", model=model_id)
                 response = await self._http_client.post(
                     f"{self.lm_studio_url}/v1/models/load",
-                    json={"model": model_id, "ttl": -1},  # No auto-unload by LMS itself
-                    timeout=600.0
+                    json={"model": model_id, "ttl": LM_LOAD_TTL},
+                    timeout=LM_LOAD_TIMEOUT_SEC,
                 )
                 
                 if response.status_code == 200:
@@ -210,13 +214,11 @@ class ModelManager:
         logger.info("maintenance_started")
         while True:
             try:
-                await asyncio.sleep(300)  # Проверка каждые 5 мин
-                
+                await asyncio.sleep(MAINTENANCE_INTERVAL_SEC)
                 now = time.time()
-                # Выгружаем если простой > 15 мин
                 if self._current_model:
                     last = self._last_access.get(self._current_model, 0)
-                    if now - last > 900:  # 15 min
+                    if now - last > IDLE_UNLOAD_SEC:
                         logger.info("auto_unload_idle", model=self._current_model)
                         async with self._lock:
                             await self.unload_model(self._current_model)
