@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ops Center V2</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="nano_theme.css">
+    <style>
+        /* ----- PAGE SPECIFIC (Ops Center) ----- */
+        /* Status Pill */
+        .system-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--state-ok);
+        }
+
+        .system-status.critical {
+            border-color: rgba(239, 68, 68, 0.4);
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--state-bad);
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 24px;
+        }
+
+        /* Alerts List */
+        .alert-item {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 16px;
+            margin-bottom: 12px;
+            border-left: 4px solid var(--text-muted);
+        }
+
+        .alert-item.warn {
+            border-left-color: var(--state-warn);
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .alert-item.critical {
+            border-left-color: var(--state-bad);
+            background: rgba(239, 68, 68, 0.08);
+        }
+
+        .alert-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .alert-title {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .alert-time {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .alert-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            line-height: 1.4;
+        }
+
+        /* Small Buttons inside Cards */
+        .card button {
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-family: var(--font-main);
+            font-weight: 500;
+            font-size: 0.8rem;
+            background: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--border-subtle);
+        }
+
+        .card button:hover {
+            background: var(--bg-surface-hover);
+            border-color: var(--text-muted);
+        }
+
+        .card button.btn-ack {
+            color: var(--text-main);
+            background: var(--bg-surface);
+        }
+
+        .card button.btn-ack:hover {
+            background: rgba(14, 165, 233, 0.1);
+            border-color: rgba(14, 165, 233, 0.5);
+        }
+
+        /* Journal Table */
+        .journal-container {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--font-main);
+        }
+
+        .journal-container th {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-card);
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.85rem;
+            letter-spacing: 0.02em;
+        }
+
+        .journal-container td {
+            padding: 14px 12px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-main);
+            font-size: 0.9rem;
+        }
+
+        .journal-row:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .c-time {
+            font-family: var(--font-mono);
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            white-space: nowrap;
+        }
+
+        .c-level {
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .c-level.info {
+            color: var(--accent-cyan);
+        }
+
+        .c-level.warn {
+            color: var(--state-warn);
+        }
+
+        .c-level.error {
+            color: var(--state-bad);
+        }
+
+        .c-source {
+            color: var(--text-muted);
+        }
+
+        .c-msg {
+            max-width: 400px;
+            word-wrap: break-word;
+            word-break: break-word;
+            line-height: 1.4;
+        }
+
+        /* Responsive Layout Overrides */
+        @media (max-width: 1000px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Ops/Monitoring Center</h1>
+                <p class="subtitle">System Health & Live Event Journal</p>
+            </div>
+            <div class="system-status" id="sysStatePill" tabindex="0" aria-live="polite" aria-atomic="true"
+                aria-label="Статус системы: В норме">
+                <span class="led" aria-hidden="true"
+                    style="display:inline-block; width:8px; height:8px; border-radius:50%; background:currentColor; margin-right:4px;"></span>
+                ALL SYSTEMS NOMINAL
+            </div>
+        </header>
+
+        <div class="layout">
+            <!-- Left panel: Active Alerts -->
+            <div class="card">
+                <h3 class="card-title">Active Alerts</h3>
+
+                <div id="alertsContainer">
+                    <div class="alert-item warn" id="alert-1" role="alert">
+                        <div class="alert-header">
+                            <span class="alert-title">Signal API Rate Limit</span>
+                            <span class="alert-time" aria-label="2 минуты назад">2m ago</span>
+                        </div>
+                        <div class="alert-desc break-word">OpenClaw caught 429 Too Many Requests from signal-cli
+                            provider.</div>
+                        <button class="btn-ack" onclick="ackAlert('alert-1')"
+                            aria-label="Подтвердить алерт Signal API Rate Limit">Acknowledge</button>
+                    </div>
+
+                    <div class="alert-item critical" id="alert-2" role="alert">
+                        <div class="alert-header">
+                            <span class="alert-title">LM Studio Offline</span>
+                            <span class="alert-time" aria-label="4 минуты назад">4m ago</span>
+                        </div>
+                        <div class="alert-desc break-word">Local model inference failed. Failed to connect to
+                            127.0.0.1:1234. Used
+                            fallback.</div>
+                        <button class="btn-ack" onclick="ackAlert('alert-2')"
+                            aria-label="Подтвердить алерт LM Studio Offline">Acknowledge</button>
+                    </div>
+                </div>
+
+                <div id="noAlertsMsg"
+                    style="display: none; color: var(--text-muted); font-size: 0.9rem; text-align: center; margin-top: 32px;">
+                    No pending alerts.
+                </div>
+            </div>
+
+            <!-- Right panel: Live Journal -->
+            <div class="card">
+                <h3 class="card-title">Live Journal Events</h3>
+                <div style="overflow-x: auto;">
+                    <table class="journal-container">
+                        <thead>
+                            <tr>
+                                <th>TIME</th>
+                                <th>LEVEL</th>
+                                <th>SOURCE</th>
+                                <th>MESSAGE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="journalBody">
+                            <tr class="journal-row">
+                                <td class="c-time">16:42:01</td>
+                                <td class="c-level info">INFO</td>
+                                <td class="c-source">Gateway</td>
+                                <td class="c-msg">Incoming Telegram hook processed in 45ms.</td>
+                            </tr>
+                            <tr class="journal-row state-error">
+                                <td class="c-time">16:40:22</td>
+                                <td class="c-level error">ERROR</td>
+                                <td class="c-source">Router</td>
+                                <td class="c-msg word-wrap">Provider connection reset: 127.0.0.1:1234. Switch to Gemni.
+                                    Exception traceback included in logs.</td>
+                            </tr>
+                            <tr class="journal-row state-warn">
+                                <td class="c-time">16:38:15</td>
+                                <td class="c-level warn">WARN</td>
+                                <td class="c-source">Signal</td>
+                                <td class="c-msg">Warning API Rate Limit threshold 80% reached.</td>
+                            </tr>
+                            <tr class="journal-row">
+                                <td class="c-time">16:35:00</td>
+                                <td class="c-level info">INFO</td>
+                                <td class="c-source">KrabEar</td>
+                                <td class="c-msg">Userbot session established for @p0lrd.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="emptyJournalMsg" class="empty-state" style="display: none; height: 300px;">
+                    <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"
+                        style="margin-bottom:16px; color: var(--text-placeholder)">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                            d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z">
+                        </path>
+                    </svg>
+                    <div style="font-weight: 500; color: var(--text-main); margin-bottom: 8px;">No Journal Events</div>
+                    <div style="font-size: 0.9rem">System is running, but no recent events have been logged.</div>
+                    <button class="primary" style="margin-top: 16px;" onclick="addSimulatedEvent()"
+                        aria-label="Симулировать системное событие в журнале">Simulate
+                        Event</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function checkAlertsState() {
+            const container = document.getElementById('alertsContainer');
+            const noAlertsMsg = document.getElementById('noAlertsMsg');
+            const remaining = container.querySelectorAll('.alert-item:not(.acked)').length;
+
+            if (remaining === 0) {
+                const pill = document.getElementById('sysStatePill');
+                pill.className = 'system-status';
+                pill.innerHTML = '<span class="led pulse-ok" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:currentColor; margin-right:4px;"></span> ALL SYSTEMS NOMINAL';
+                noAlertsMsg.style.display = 'block';
+                document.body.classList.remove('state-error'); // Remove emergency state
+            }
+        }
+
+        function ackAlert(id) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.opacity = '0.5';
+                const btn = el.querySelector('button');
+                btn.innerText = 'Acknowledged';
+                btn.disabled = true;
+
+                // Keep classes but mark as acked
+                el.classList.add('acked');
+                el.classList.remove('warn', 'critical');
+                el.style.borderLeftColor = 'var(--text-muted)';
+                el.style.background = 'var(--bg-surface)';
+            }
+            checkAlertsState();
+        }
+
+        function addSimulatedEvent() {
+            document.getElementById('emptyJournalMsg').style.display = 'none';
+            document.querySelector('.journal-container').style.display = 'table';
+
+            const tbody = document.getElementById('journalBody');
+            const newRow = document.createElement('tr');
+            newRow.className = 'journal-row state-success';
+
+            const now = new Date();
+            const timeStr = now.getHours().toString().padStart(2, '0') + ':' +
+                now.getMinutes().toString().padStart(2, '0') + ':' +
+                now.getSeconds().toString().padStart(2, '0');
+
+            newRow.innerHTML = `
+                <td class="c-time">${timeStr}</td>
+                <td class="c-level info">INFO</td>
+                <td class="c-source">Simulator</td>
+                <td class="c-msg word-wrap">Test event triggered manually by operator.</td>
+            `;
+
+            tbody.insertBefore(newRow, tbody.firstChild);
+
+            // Remove success highlight after 2s
+            setTimeout(() => newRow.classList.remove('state-success'), 2000);
+        }
+
+        // Mock an initial critical state (Emergency Mode)
+        document.getElementById('sysStatePill').className = 'system-status critical';
+        document.getElementById('sysStatePill').innerHTML = '<span class="led pulse-error" aria-hidden="true" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:currentColor; margin-right:4px;"></span> VARIOUS ATTENTION REQUIRED';
+        document.getElementById('sysStatePill').setAttribute('aria-label', 'Статус системы: Критическая ошибка');
+        document.body.classList.add('state-error'); // Trigger global emergency state visually
+
+        // Initial setup for empty journal demo (simulating user manually clearing it)
+        // Set this to true to test empty state
+        const DEMO_EMPTY_JOURNAL = false;
+        if (DEMO_EMPTY_JOURNAL) {
+            document.getElementById('journalBody').innerHTML = '';
+            document.querySelector('.journal-container').style.display = 'none';
+            document.getElementById('emptyJournalMsg').style.display = 'flex';
+        }
+
+    </script>
+</body>
+
+</html>
