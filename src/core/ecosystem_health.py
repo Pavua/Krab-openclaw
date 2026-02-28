@@ -26,12 +26,10 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-import aiohttp
+import httpx
 
 
-# [R20] Таймаут поверх individual корутин — чуть меньше общего,
-# чтобы gather не ждал зависших и мог завершиться вовремя.
-_PER_SOURCE_EXTRA_SEC = 0.0  # без запаса: timeout_sec = точный дедлайн
+_PER_SOURCE_EXTRA_SEC = 0.0
 
 
 class EcosystemHealthService:
@@ -132,19 +130,19 @@ class EcosystemHealthService:
         voice_check    = _get_res(2, "voice_gateway")
         ear_check      = _get_res(3, "krab_ear")
 
-        # [R11] Сбор системных метрик и бюджета
         resources = self._collect_resource_metrics()
-        budget = self.router.cost_engine.get_budget_status() if hasattr(self.router, "cost_engine") else {}
+        ca = getattr(self.router, "cost_analytics", None) or getattr(self.router, "cost_engine", None)
+        budget = ca.get_budget_status() if ca and hasattr(ca, "get_budget_status") else {}
 
-        # [R15] Метрики очереди задач и статус токена
         queue_metrics = {}
         token_status = {"is_configured": False, "masked_key": None}
 
         if hasattr(self.router, "task_queue") and self.router.task_queue:
             queue_metrics = self.router.task_queue.get_metrics()
 
-        if hasattr(self.router, "openclaw_client") and self.router.openclaw_client:
-            token_status = self.router.openclaw_client.get_token_info()
+        oc = self.openclaw_client
+        if oc and hasattr(oc, "get_token_info"):
+            token_status = oc.get_token_info()
 
         cloud_ok = bool(openclaw_check["ok"])
         local_ok = bool(local_check["ok"])
@@ -256,16 +254,17 @@ class EcosystemHealthService:
             return {"error": str(e)}
 
     async def _check_local_health(self) -> dict[str, Any]:
-        """Проверка локального AI канала через ModelRouter."""
+        """Проверка локального AI канала через ModelManager.health_check()."""
         started = time.monotonic()
         try:
-            ok = bool(await self.router.check_local_health())
+            result = await self.router.health_check()
+            ok = result.get("status") == "healthy" if isinstance(result, dict) else bool(result)
             latency_ms = int((time.monotonic() - started) * 1000)
             return {
                 "ok":         ok,
                 "status":     "ok" if ok else "unavailable",
                 "latency_ms": latency_ms,
-                "source":     "router.check_local_health",
+                "source":     "model_manager.health_check",
             }
         except Exception as exc:
             latency_ms = int((time.monotonic() - started) * 1000)
@@ -273,7 +272,7 @@ class EcosystemHealthService:
                 "ok":         False,
                 "status":     f"error: {exc}",
                 "latency_ms": latency_ms,
-                "source":     "router.check_local_health",
+                "source":     "model_manager.health_check",
             }
 
     async def _check_client_health(self, client: Any | None, source_name: str) -> dict[str, Any]:
@@ -307,25 +306,16 @@ class EcosystemHealthService:
             }
 
     async def _check_krab_ear_health(self) -> dict[str, Any]:
-        """
-        Проверка Krab Ear:
-        - если передан клиент с health_check -> используем его;
-        - иначе проверяем HTTP backend `/health`.
-
-        [R20] Strict HTTP-логика для Krab Ear сохранена без изменений,
-        дополнительный timeout управляется через _safe_run в collect().
-        """
+        """Проверка Krab Ear backend через HTTP /health."""
         if self.krab_ear_client and hasattr(self.krab_ear_client, "health_check"):
             return await self._check_client_health(self.krab_ear_client, "krab_ear_client")
 
         url = f"{self.krab_ear_backend_url}/health"
-        # [R20] timeout для aiohttp = self.timeout_sec (согласован с per-source guard)
-        timeout = aiohttp.ClientTimeout(total=self.timeout_sec)
         started = time.monotonic()
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
-                    status = int(response.status)
+            async with httpx.AsyncClient(timeout=self.timeout_sec) as client:
+                response = await client.get(url)
+                status = response.status_code
             latency_ms = int((time.monotonic() - started) * 1000)
             ok = status == 200
             return {

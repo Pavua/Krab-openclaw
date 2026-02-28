@@ -197,6 +197,58 @@ def get_cloud_fallback_chain(
     return chain
 
 
+async def resolve_working_gemini_key(
+    api_key_free: Optional[str],
+    api_key_paid: Optional[str],
+    client: "AsyncClient",
+    *,
+    test_model: str = "gemini-2.0-flash",
+    _cache: dict[str, Optional[str]] = {},
+) -> Optional[str]:
+    """
+    Returns the first working Gemini API key: tries free first, then paid.
+    Caches the result for the process lifetime so we don't re-verify every request.
+    """
+    if "resolved" in _cache:
+        return _cache["resolved"]
+
+    for label, key in [("free", api_key_free), ("paid", api_key_paid)]:
+        if not key:
+            continue
+        ok = await verify_gemini_access(test_model, key, client, timeout=10.0)
+        if ok:
+            logger.info("gemini_key_resolved", tier=label)
+            _cache["resolved"] = key
+            return key
+        logger.warning("gemini_key_failed", tier=label)
+
+    _cache["resolved"] = api_key_free or api_key_paid or None
+    return _cache["resolved"]
+
+
+def reset_gemini_key_cache() -> None:
+    """Clear the resolved key cache (useful when keys change at runtime)."""
+    resolve_working_gemini_key.__defaults__[3].pop("resolved", None)  # type: ignore[union-attr]
+
+
+async def fetch_google_models_with_fallback(
+    api_key_free: Optional[str],
+    api_key_paid: Optional[str],
+    client: "AsyncClient",
+    *,
+    models_cache: dict[str, ModelInfo],
+    timeout: float = 30.0,
+) -> list[ModelInfo]:
+    """Tries free key first for model listing; falls back to paid."""
+    for key in [api_key_free, api_key_paid]:
+        if not key:
+            continue
+        result = await fetch_google_models(key, client, models_cache=models_cache, timeout=timeout)
+        if result:
+            return result
+    return []
+
+
 async def get_best_cloud_model(
     api_key: Optional[str],
     client: "AsyncClient",

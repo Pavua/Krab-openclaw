@@ -1,49 +1,59 @@
 #!/bin/bash
-# Script to launch Krab Userbot on macOS
-# Get the directory where this script is located
+# 🦀 Krab Userbot — Standalone Launcher (macOS)
+
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
-# Launch Terminal if not waiting
 echo "🦀 Launching Krab Userbot..."
 echo "📂 Directory: $DIR"
 
-# Check for venv
-if [ ! -d "venv" ]; then
-    echo "❌ Virtual environment 'venv' not found!"
-    echo "Please run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
+# === Виртуальное окружение ===
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+elif [ -d "venv" ]; then
+    source venv/bin/activate
+else
+    echo "❌ Virtual environment not found (.venv or venv)!"
+    echo "Run: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
     read -p "Press Enter to exit..."
     exit 1
 fi
 
-# Activate venv
-# Activate venv
-source venv/bin/activate
-
-# Start OpenClaw Gateway in background
-echo "🦀 Starting OpenClaw Gateway..."
-# Assuming OpenCrawl is a sibling directory
-OPENCLAW_BIN="$DIR/../OpenCrawl/node_modules/.bin/openclaw"
-
-if [ -f "$OPENCLAW_BIN" ]; then
-    "$OPENCLAW_BIN" gateway --port 18792 > openclaw.log 2>&1 &
-    OPENCLAW_PID=$!
-    echo "✅ OpenClaw started (PID $OPENCLAW_PID)"
+# === Загрузка .env ===
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
 else
-    echo "⚠️ OpenClaw binary not found at $OPENCLAW_BIN"
-    echo "Please ensure 'OpenCrawl' project is adjacent to this folder."
+    echo "⚠️ .env file not found!"
 fi
 
-# Give it a moment to initialize
-sleep 3
+# === OpenClaw Gateway ===
+OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
+if [ ! -x "$OPENCLAW_BIN" ]; then
+    OPENCLAW_BIN=$(which openclaw 2>/dev/null)
+fi
 
-# Run the bot
-# Run the bot in a loop for auto-restart
+if [ -n "$OPENCLAW_BIN" ]; then
+    if ! pgrep -f "openclaw gateway" > /dev/null; then
+        echo "🦞 Starting OpenClaw Gateway..."
+        nohup "$OPENCLAW_BIN" gateway > openclaw.log 2>&1 &
+        echo $! > .openclaw.pid
+        echo "✅ OpenClaw started (PID $!)"
+        sleep 3
+    else
+        echo "✅ OpenClaw Gateway already running"
+    fi
+else
+    echo "⚠️ OpenClaw binary not found. AI features may not work."
+fi
+
+# === Запуск бота с авто-рестартом ===
 while true; do
-    echo "🚀 Starting Python Bot..."
-    python3 -m src.main
+    echo "🚀 Starting Krab..."
+    python -m src.main
     EXIT_CODE=$?
-    
+
     if [ $EXIT_CODE -eq 42 ]; then
         echo "🔄 Restart requested (Code 42)..."
         sleep 1
@@ -57,12 +67,12 @@ while true; do
     fi
 done
 
-# Keep window open if it crashes
-# Cleanup on exit
-if [ -n "$OPENCLAW_PID" ]; then
-    kill "$OPENCLAW_PID"
-    echo "🛑 OpenClaw stopped."
+# === Cleanup ===
+if [ -f .openclaw.pid ]; then
+    PID=$(cat .openclaw.pid)
+    kill "$PID" 2>/dev/null && echo "🛑 OpenClaw stopped."
+    rm -f .openclaw.pid
 fi
 
-echo "⚠️ Krab stopped."
+echo "🦀 Krab stopped."
 read -p "Press Enter to close..."

@@ -4,12 +4,10 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
-# Делаем скрипты исполняемыми
-chmod +x *.command
-chmod +x *.sh
-chmod +x scripts/*.sh
+chmod +x *.command 2>/dev/null
+chmod +x *.sh 2>/dev/null
+chmod +x scripts/*.command 2>/dev/null
 
-# Открываем терминал с заголовком и запускаем
 osascript -e "tell application \"Terminal\" 
     activate
     do script \"cd '$DIR' && printf '\\\033]2;🦀 KRAB USERBOT\\\007' && ./run_krab.sh\"

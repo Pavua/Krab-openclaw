@@ -159,7 +159,6 @@ class OpenClawClient:
                 self._sessions[chat_id].insert(0, {"role": "system", "content": system_prompt})
         
         if images:
-            # Vision payload
             content_parts = [{"type": "text", "text": message}]
             for img_b64 in images:
                 content_parts.append({
@@ -168,10 +167,15 @@ class OpenClawClient:
                 })
             self._sessions[chat_id].append({"role": "user", "content": content_parts})
         else:
-            # Standard text payload
             self._sessions[chat_id].append({"role": "user", "content": message})
         
-        model_id = getattr(config, "MODEL", "google/gemini-2.0-flash")
+        # Dynamic model routing via ModelManager (lazy import to avoid circular dep)
+        from .model_manager import model_manager
+        model_id = await model_manager.get_best_model()
+
+        # Auto-load local model if needed (skip in cloud-only mode)
+        if not force_cloud and model_manager.is_local_model(model_id):
+            await model_manager.ensure_model_loaded(model_id)
 
         # Скользящее окно: в API уходят только последние N сообщений (и/или по размеру)
         messages_to_send = self._apply_sliding_window(chat_id, self._sessions[chat_id])

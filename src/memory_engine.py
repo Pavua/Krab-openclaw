@@ -1,4 +1,5 @@
 
+import shutil
 import chromadb
 from chromadb.utils import embedding_functions
 from structlog import get_logger
@@ -7,6 +8,7 @@ from .config import config
 
 logger = get_logger(__name__)
 
+
 class MemoryManager:
     """
     Управляет долгосрочной памятью бота используя Vector Database (ChromaDB).
@@ -14,19 +16,31 @@ class MemoryManager:
     """
     def __init__(self):
         self.persist_directory = os.path.join(config.BASE_DIR, "memory_db")
-        
-        # Используем локальный или in-memory клиент
-        self.client = chromadb.PersistentClient(path=self.persist_directory)
-        
-        # Используем стандартный модель (all-MiniLM-L6-v2) - он легкий и быстрый
-        # ChromaDB скачает его автоматически при первом запуске
         self.embedding_fn = embedding_functions.DefaultEmbeddingFunction()
-        
+        self.client = self._init_client()
         self.collection = self.client.get_or_create_collection(
             name="krab_facts",
-            embedding_function=self.embedding_fn
+            embedding_function=self.embedding_fn,
         )
         logger.info("memory_manager_initialized", path=self.persist_directory)
+
+    def _init_client(self) -> chromadb.ClientAPI:
+        """Инициализирует chromadb. При повреждённой БД — бэкапит и пересоздаёт."""
+        try:
+            return chromadb.PersistentClient(path=self.persist_directory)
+        except BaseException as exc:
+            logger.warning(
+                "chromadb_init_failed_resetting",
+                error=str(exc),
+                path=self.persist_directory,
+            )
+            backup = self.persist_directory + "_backup"
+            if os.path.exists(backup):
+                shutil.rmtree(backup)
+            if os.path.exists(self.persist_directory):
+                shutil.move(self.persist_directory, backup)
+                logger.info("chromadb_db_backed_up", backup=backup)
+            return chromadb.PersistentClient(path=self.persist_directory)
 
     def save_fact(self, text: str, metadata: dict = None) -> bool:
         """Сохраняет факт в память"""

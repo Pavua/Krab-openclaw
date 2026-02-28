@@ -24,23 +24,32 @@ class Config:
     TELEGRAM_SESSION_NAME: str = os.getenv("TELEGRAM_SESSION_NAME", "kraab")
     
     # OpenClaw
-    OPENCLAW_URL: str = os.getenv("OPENCLAW_URL", "http://127.0.0.1:18792")
-    OPENCLAW_TOKEN: str = os.getenv("OPENCLAW_GATEWAY_TOKEN", os.getenv("OPENCLAW_TOKEN", ""))
+    OPENCLAW_URL: str = os.getenv("OPENCLAW_URL", os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"))
+    OPENCLAW_TOKEN: str = os.getenv("OPENCLAW_GATEWAY_TOKEN", os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")))
     
     # LM Studio
     LM_STUDIO_URL: str = os.getenv("LM_STUDIO_URL", "http://192.168.0.171:1234")
     
-    # Gemini (fallback)
-    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
+    # Gemini (fallback): free key first, paid key as fallback
+    GEMINI_API_KEY_FREE: Optional[str] = os.getenv("GEMINI_API_KEY_FREE")
+    GEMINI_API_KEY_PAID: Optional[str] = os.getenv("GEMINI_API_KEY_PAID")
+    GEMINI_API_KEY: Optional[str] = (
+        os.getenv("GEMINI_API_KEY_FREE")
+        or os.getenv("GEMINI_API_KEY_PAID")
+        or os.getenv("GEMINI_API_KEY")
+    )
     GEMINI_MODELS: list[str] = [
-        "google/gemini-pro-latest",  # Stable
-        "google/gemini-2.0-flash",   # Fast & New
-        "google/gemini-flash-latest", # Fallback
+        "google/gemini-pro-latest",
+        "google/gemini-2.0-flash",
+        "google/gemini-flash-latest",
     ]
     MODEL: str = os.getenv("MODEL", "google/gemini-pro-latest")
     
+    # LM Studio: preferred local model (substring match)
+    LOCAL_PREFERRED_MODEL: str = os.getenv("LOCAL_PREFERRED_MODEL", "")
+    
     # Skills / APIs
-    BRAVE_SEARCH_API_KEY: Optional[str] = os.getenv("BRAVE_SEARCH_API_KEY")
+    BRAVE_SEARCH_API_KEY: Optional[str] = os.getenv("BRAVE_SEARCH_API_KEY", os.getenv("BRAVE_API_KEY"))
     
     # Memory limits
     MAX_RAM_GB: int = int(os.getenv("MAX_RAM_GB", "24"))
@@ -58,7 +67,7 @@ class Config:
     FORCE_CLOUD: bool = os.getenv("FORCE_CLOUD", "0").strip().lower() in ("1", "true", "yes")
     
     # User settings
-    OWNER_USERNAME: str = "@yung_nagato"
+    OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "@yung_nagato")
     ALLOWED_USERS: list[str] = [u.strip().lstrip("@") for u in os.getenv("ALLOWED_USERS", "pablito,admin").split(",") if u.strip()]
     TRIGGER_PREFIXES: list[str] = [p.strip() for p in os.getenv("TRIGGER_PREFIXES", "!краб,@краб,/краб,Краб,,краб,").split(",") if p.strip()]
     

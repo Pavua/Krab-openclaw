@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Жизненный цикл приложения: health checks, старт/остановка userbot (Фаза 4/6.2).
+Жизненный цикл приложения: health checks, старт/остановка userbot + web panel (Фаза 4/6.2).
 """
 from __future__ import annotations
 
 import asyncio
+import os
 
 import structlog
 
@@ -16,9 +17,48 @@ from ..userbot_bridge import KraabUserbot
 logger = structlog.get_logger(__name__)
 
 
+async def _start_web_panel() -> object | None:
+    """Starts the web panel on WEB_PORT (default 8080). Returns the WebApp instance or None."""
+    try:
+        from ..modules.web_app import WebApp
+        from ..modules.web_router_compat import WebRouterCompat
+        from ..core.ecosystem_health import EcosystemHealthService
+        from ..core.provisioning_service import ProvisioningService
+
+        router_compat = WebRouterCompat(model_manager, openclaw_client)
+
+        deps = {
+            "router": router_compat,
+            "openclaw_client": openclaw_client,
+            "black_box": None,
+            "health_service": EcosystemHealthService(
+                router=router_compat,
+                openclaw_client=openclaw_client,
+            ),
+            "provisioning_service": ProvisioningService(),
+            "ai_runtime": None,
+            "reaction_engine": None,
+            "voice_gateway_client": None,
+            "krab_ear_client": None,
+            "perceptor": None,
+            "watchdog": None,
+            "queue": None,
+        }
+
+        port = int(os.getenv("WEB_PORT", "8080"))
+        host = os.getenv("WEB_HOST", "127.0.0.1")
+        web = WebApp(deps, port=port, host=host)
+        await web.start()
+        logger.info("web_panel_started", url=f"http://{host}:{port}")
+        return web
+    except Exception as e:
+        logger.warning("web_panel_start_failed", error=str(e))
+        return None
+
+
 async def run_app() -> None:
     """
-    Запускает приложение: баннер, проверки здоровья, userbot start → wait → stop.
+    Запускает приложение: баннер, проверки здоровья, web panel, userbot start → wait → stop.
     Вызывать после validate_config().
     """
     print(f"""
@@ -34,6 +74,8 @@ async def run_app() -> None:
 
     if not claw_health:
         logger.warning("openclaw_unreachable", url=config.OPENCLAW_URL)
+
+    web_panel = await _start_web_panel()
 
     kraab = KraabUserbot()
     try:

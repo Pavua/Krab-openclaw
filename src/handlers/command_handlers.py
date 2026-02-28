@@ -43,7 +43,6 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"🔍 **Результаты поиска:**\n\n{results}")
     except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
         await msg.edit(f"❌ Ошибка поиска: {e}")
-    message.stop_propagation()
 
 
 async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
@@ -59,7 +58,6 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
             await message.reply("❌ Ошибка памяти.")
     except (ValueError, RuntimeError, OSError) as e:
         await message.reply(f"❌ Critical Memory Error: {e}")
-    message.stop_propagation()
 
 
 async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
@@ -75,7 +73,6 @@ async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
             await message.reply("🧠 Ничего не нашел по этому запросу.")
     except (ValueError, RuntimeError, OSError) as e:
         await message.reply(f"❌ Recalling Error: {e}")
-    message.stop_propagation()
 
 
 async def handle_ls(bot: "KraabUserbot", message: Message) -> None:
@@ -89,7 +86,6 @@ async def handle_ls(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"📂 **Files in {path}:**\n\n`{result[:3900]}`")
     except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
         await msg.edit(f"❌ Error listing: {e}")
-    message.stop_propagation()
 
 
 async def handle_read(bot: "KraabUserbot", message: Message) -> None:
@@ -107,7 +103,6 @@ async def handle_read(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"📂 **Content of {os.path.basename(path)}:**\n\n```\n{content}\n```")
     except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
         await msg.edit(f"❌ Reading error: {e}")
-    message.stop_propagation()
 
 
 async def handle_write(bot: "KraabUserbot", message: Message) -> None:
@@ -126,7 +121,6 @@ async def handle_write(bot: "KraabUserbot", message: Message) -> None:
         path = os.path.join(config.BASE_DIR, path)
     result = await mcp_manager.write_file(path, content)
     await message.reply(result)
-    message.stop_propagation()
 
 
 async def handle_status(bot: "KraabUserbot", message: Message) -> None:
@@ -150,24 +144,94 @@ async def handle_status(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_model(bot: "KraabUserbot", message: Message) -> None:
-    """Управление загрузкой AI моделей."""
+    """Управление маршрутизацией и загрузкой AI моделей."""
     args = message.text.split()
-    if len(args) < 2:
-        await handle_status(bot, message)
-        return
-    cmd = args[1].lower()
-    if cmd == "list":
-        models = await model_manager.discover_models()
-        lines = [f"{('☁️' if m.type.name == 'CLOUD_GEMINI' else '💻')} `{m.id}`" for m in models]
-        await message.reply("**Доступные модели:**\n\n" + "\n".join(lines[:15]))
-    elif cmd == "load" and len(args) > 2:
-        mid = args[2]
-        msg = await message.reply(f"⏳ Переключаюсь на `{mid}`...")
-        if await model_manager.load_model(mid):
-            config.update_setting("MODEL", mid)
-            await msg.edit(f"✅ Успешно! Текущая модель: `{mid}`")
+    sub = args[1].lower() if len(args) > 1 else ""
+
+    if not sub:
+        force_cloud = getattr(config, "FORCE_CLOUD", False)
+        if force_cloud:
+            mode_label = "☁️ cloud (принудительно)"
         else:
-            await msg.edit(f"❌ Не удалось загрузить `{mid}`")
+            mode_label = "🤖 auto"
+        current = model_manager._current_model or "нет"
+        cloud_model = config.MODEL or "не задана"
+        text = (
+            "🧭 **Маршрутизация моделей**\n"
+            f"---------------------------\n"
+            f"**Режим:** {mode_label}\n"
+            f"**Активная модель:** `{current}`\n"
+            f"**Облачная модель:** `{cloud_model}`\n"
+            f"**LM Studio URL:** `{config.LM_STUDIO_URL}`\n"
+            f"**FORCE_CLOUD:** `{force_cloud}`\n\n"
+            "_Подкоманды: `local`, `cloud`, `auto`, `load <name>`, `unload`, `scan`_"
+        )
+        await message.reply(text)
+        return
+
+    if sub == "local":
+        config.FORCE_CLOUD = False
+        await message.reply("💻 Режим: **local** — используется локальная модель (LM Studio).")
+        return
+
+    if sub == "cloud":
+        config.FORCE_CLOUD = True
+        await message.reply(f"☁️ Режим: **cloud** — используется `{config.MODEL}`.")
+        return
+
+    if sub == "auto":
+        config.FORCE_CLOUD = False
+        await message.reply("🤖 Режим: **auto** — автоматический выбор лучшей модели.")
+        return
+
+    if sub == "load":
+        if len(args) < 3:
+            raise UserInputError(user_message="⚙️ Укажите модель: `!model load <name>`")
+        mid = args[2]
+        msg = await message.reply(f"⏳ Загружаю `{mid}`...")
+        try:
+            ok = await model_manager.load_model(mid)
+            if ok:
+                config.update_setting("MODEL", mid)
+                await msg.edit(f"✅ Модель загружена: `{mid}`")
+            else:
+                await msg.edit(f"❌ Не удалось загрузить `{mid}`")
+        except Exception as e:
+            await msg.edit(f"❌ Ошибка загрузки: `{str(e)[:200]}`")
+        return
+
+    if sub == "unload":
+        msg = await message.reply("⏳ Выгружаю модели...")
+        try:
+            await model_manager.unload_all()
+            await msg.edit("✅ Все модели выгружены. VRAM освобождена.")
+        except Exception as e:
+            await msg.edit(f"❌ Ошибка выгрузки: `{str(e)[:200]}`")
+        return
+
+    if sub in ("scan", "list"):
+        msg = await message.reply("🔍 Сканирую доступные модели...")
+        try:
+            models = await model_manager.discover_models()
+            if not models:
+                await msg.edit("🔍 Моделей не обнаружено.")
+                return
+            lines = []
+            for m in models:
+                icon = "☁️" if m.type.name.startswith("CLOUD") else "💻"
+                loaded = " ✅" if m.id == model_manager._current_model else ""
+                lines.append(f"{icon} `{m.id}`{loaded}")
+            await msg.edit("🔍 **Доступные модели:**\n\n" + "\n".join(lines[:20]))
+        except Exception as e:
+            await msg.edit(f"❌ Ошибка сканирования: `{str(e)[:200]}`")
+        return
+
+    raise UserInputError(
+        user_message=(
+            f"❓ Неизвестная подкоманда `{sub}`.\n"
+            "Доступные: `local`, `cloud`, `auto`, `load`, `unload`, `scan`"
+        )
+    )
 
 
 async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
@@ -300,7 +364,50 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
             )
         else:
             await message.reply("❌ Ошибка при сохранении агента.")
-    message.stop_propagation()
+
+
+async def handle_help(bot: "KraabUserbot", message: Message) -> None:
+    """Справка по командам (v7.2 categories)."""
+    text = """🦀 **Команды Краба**
+
+**Core**
+`!status` — статус системы
+`!clear` — очистить историю диалога
+`!config` — текущие настройки
+`!set <KEY> <VAL>` — изменить настройку
+`!restart` — перезапуск бота
+`!help` — эта справка
+
+**AI / Model**
+`!model` — статус маршрутизации
+`!model local` — принудительно локальная модель
+`!model cloud` — принудительно облачная модель
+`!model auto` — автоматический выбор
+`!model load <name>` — загрузить модель
+`!model unload` — выгрузить модель
+`!model scan` — список доступных моделей
+
+**Tools**
+`!search <query>` — веб-поиск
+`!remember <text>` — запомнить факт
+`!recall <query>` — вспомнить факт
+`!role [name|list]` — смена личности
+
+**System**
+`!ls [path]` — список файлов
+`!read <path>` — чтение файла
+`!write <file> <content>` — запись файла
+`!sysinfo` — информация о хосте
+`!diagnose` — диагностика подключений
+
+**Dev**
+`!agent new <name> <prompt>` — создать агента
+`!agent list` — список агентов
+`!voice` — голосовой режим
+`!web` — управление браузером
+`!panel` — панель управления (soon)
+"""
+    await message.reply(text)
 
 
 async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:

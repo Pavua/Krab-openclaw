@@ -28,6 +28,7 @@ from .handlers import (
     handle_clear,
     handle_config,
     handle_diagnose,
+    handle_help,
     handle_ls,
     handle_model,
     handle_panel,
@@ -77,6 +78,8 @@ class KraabUserbot:
     6. Ты умеешь запоминать факты (!remember) и работать с файлами (!ls, !read). Ищи информацию в памяти, если пользователь спрашивает о прошлом.
     """
 
+    _known_commands: set[str] = set()
+
     def __init__(self):
         """Инициализация юзербота и клиента Pyrogram"""
         self.client = Client(
@@ -119,11 +122,23 @@ class KraabUserbot:
         is_allowed = filters.create(check_allowed)
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
+        self._known_commands = {
+            "status", "model", "clear", "config", "set", "role",
+            "voice", "web", "sysinfo", "panel", "restart", "search",
+            "remember", "recall", "ls", "read", "write", "agent",
+            "diagnose", "help",
+        }
+
         async def run_cmd(handler, m):
             try:
                 await handler(self, m)
             except UserInputError as e:
                 await m.reply(e.user_message or str(e))
+            except Exception as e:
+                logger.error("command_error", handler=handler.__name__, error=str(e))
+                await m.reply(f"Ошибка: {str(e)[:200]}")
+            finally:
+                m.stop_propagation()
 
         # Регистрация командных оберток (Фаза 4.4: модульные хендлеры)
         @self.client.on_message(filters.command("status", prefixes=prefixes) & is_allowed, group=-1)
@@ -209,6 +224,10 @@ class KraabUserbot:
         )
         async def wrap_diagnose(c, m):
             await run_cmd(handle_diagnose, m)
+
+        @self.client.on_message(filters.command("help", prefixes=prefixes) & is_allowed, group=-1)
+        async def wrap_help(c, m):
+            await run_cmd(handle_help, m)
 
         # Обработка обычных сообщений и медиа
         @self.client.on_message((filters.text | filters.photo) & ~filters.bot, group=0)
@@ -323,7 +342,12 @@ class KraabUserbot:
                 return
 
             text = message.text or message.caption or ""
-            # Если нет текста и нет фото - игнорируем
+
+            if text and text.lstrip()[:1] in ("!", "/", "."):
+                cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
+                if cmd_word in self._known_commands:
+                    return
+
             if not text and not message.photo:
                 return
 

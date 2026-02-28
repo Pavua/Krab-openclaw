@@ -18,8 +18,9 @@ import structlog
 
 from .config import config
 from .core.cloud_gateway import (
-    fetch_google_models as cloud_fetch_google_models,
+    fetch_google_models_with_fallback as cloud_fetch_google_models_fb,
     get_cloud_fallback_chain,
+    resolve_working_gemini_key,
     verify_gemini_access as cloud_verify_gemini_access,
 )
 from .core.cost_analytics import cost_analytics
@@ -74,11 +75,20 @@ class ModelManager:
         """Аналитика затрат: токены, стоимость, бюджет, отчёты."""
         return self._cost_analytics
 
+    async def _resolve_gemini_key(self) -> Optional[str]:
+        """Returns the best working Gemini API key (free -> paid -> legacy)."""
+        return await resolve_working_gemini_key(
+            config.GEMINI_API_KEY_FREE,
+            config.GEMINI_API_KEY_PAID,
+            self._http_client,
+        )
+
     async def discover_models(self) -> list[ModelInfo]:
         """Обнаруживает все доступные модели (LM Studio + облако) через local_health и cloud_gateway."""
         async def _fetch_google() -> list[ModelInfo]:
-            return await cloud_fetch_google_models(
-                config.GEMINI_API_KEY,
+            return await cloud_fetch_google_models_fb(
+                config.GEMINI_API_KEY_FREE,
+                config.GEMINI_API_KEY_PAID,
                 self._http_client,
                 models_cache=self._models_cache,
             )
@@ -95,9 +105,10 @@ class ModelManager:
             if model_id in self._models_cache:
                 return True
             return False
+        key = await self._resolve_gemini_key()
         return await cloud_verify_gemini_access(
             model_id,
-            config.GEMINI_API_KEY,
+            key,
             self._http_client,
         )
     
@@ -117,6 +128,44 @@ class ModelManager:
     async def get_best_model(self) -> str:
         """Возвращает лучшую доступную модель из цепочки fallback (делегирует в ModelRouter)."""
         return await self._router.get_best_model()
+
+    def is_local_model(self, model_id: str) -> bool:
+        """True if model_id refers to a local (LM Studio) model, not a cloud one."""
+        return self._detect_model_type(model_id) != ModelType.CLOUD_GEMINI
+
+    async def resolve_preferred_local_model(self) -> Optional[str]:
+        """Finds a local model matching LOCAL_PREFERRED_MODEL substring in discovered models."""
+        preferred = config.LOCAL_PREFERRED_MODEL
+        if not preferred:
+            return None
+        if not self._models_cache:
+            await self.discover_models()
+        preferred_lower = preferred.lower()
+        for mid, info in self._models_cache.items():
+            if info.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF):
+                if preferred_lower in mid.lower():
+                    return mid
+        return None
+
+    async def ensure_model_loaded(self, model_id: str) -> bool:
+        """
+        Ensures a model is loaded in LM Studio before sending a request.
+        If model_id is 'local' or generic, resolves to LOCAL_PREFERRED_MODEL.
+        Skips if the model is already loaded and recently accessed.
+        """
+        if model_id.lower() in ("local", "lmstudio"):
+            resolved = await self.resolve_preferred_local_model()
+            if resolved:
+                model_id = resolved
+            else:
+                logger.warning("no_preferred_local_model_found")
+                return False
+
+        if self._current_model == model_id:
+            self.touch(model_id)
+            return True
+
+        return await self.load_model(model_id)
 
     def get_ram_usage(self) -> dict:
         """Получает текущее использование RAM"""

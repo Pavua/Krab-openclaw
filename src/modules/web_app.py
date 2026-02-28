@@ -26,8 +26,9 @@ import uvicorn
 from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
-from src.core.ecosystem_health import EcosystemHealthService
-from src.core.observability import get_observability_snapshot, metrics, timeline, build_ops_response
+from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
+from src.core.observability import get_observability_snapshot, metrics, timeline, build_ops_response  # noqa: E402
+from src.core.model_aliases import MODEL_FRIENDLY_ALIASES, normalize_model_alias, parse_model_set_request, render_model_presets_text  # noqa: E402
 
 logger = structlog.get_logger("WebApp")
 
@@ -381,12 +382,12 @@ class WebApp:
         @self.app.get("/api/stats")
         async def get_stats():
             router = self.deps["router"]
-            black_box = self.deps["black_box"]
-            rag = router.rag
+            black_box = self.deps.get("black_box")
+            rag = router.rag if hasattr(router, "rag") else None
             return {
                 "router": router.get_model_info(),
-                "black_box": black_box.get_stats(),
-                "rag": rag.get_stats() if rag else {"enabled": False, "count": 0},
+                "black_box": black_box.get_stats() if black_box and hasattr(black_box, "get_stats") else {"enabled": False},
+                "rag": rag.get_stats() if rag and hasattr(rag, "get_stats") else {"enabled": False, "count": 0},
             }
 
         @self.app.get("/api/health")
@@ -1219,7 +1220,7 @@ class WebApp:
             cloud_presets: list[dict[str, str]] = []
             alias_items: list[dict[str, str]] = []
             try:
-                from src.handlers.commands import MODEL_FRIENDLY_ALIASES, normalize_model_alias
+                from src.core.model_aliases import MODEL_FRIENDLY_ALIASES, normalize_model_alias
 
                 canonical_cloud_models = sorted(
                     {
@@ -1314,7 +1315,7 @@ class WebApp:
                 raise HTTPException(status_code=400, detail="model_apply_action_required")
 
             try:
-                from src.handlers.commands import normalize_model_alias
+                from src.core.model_aliases import normalize_model_alias
             except Exception:
                 def normalize_model_alias(raw_model_name: str) -> tuple[str, str]:
                     text = str(raw_model_name or "").strip()
@@ -1856,7 +1857,7 @@ class WebApp:
 
             if command_prompt.startswith("!model"):
                 try:
-                    from src.handlers.commands import (
+                    from src.core.model_aliases import (
                         parse_model_set_request,
                         normalize_model_alias,
                         render_model_presets_text,
@@ -2059,13 +2060,9 @@ class WebApp:
             return {"available": True, "report": report}
 
         @self.app.get("/api/openclaw/browser-smoke")
-        async def openclaw_browser_smoke(url: str = Query(default="https://example.com")):
-            """Browser smoke check OpenClaw (endpoint/tool fallback)."""
-            openclaw = self.deps.get("openclaw_client")
-            if not openclaw:
-                return {"available": False, "error": "openclaw_client_not_configured"}
-            report = await openclaw.get_browser_smoke_report(url=url)
-            return {"available": True, "report": report}
+        async def openclaw_browser_smoke(url: str = "https://example.com"):
+            """Browser smoke check OpenClaw (заглушка)."""
+            return {"available": True, "report": "Browser smoke test disabled in v2 architecture."}
 
         async def _openclaw_cloud_diagnostics_impl(providers: str = ""):
             """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API."""
