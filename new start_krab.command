@@ -83,6 +83,12 @@ unset GOOGLE_CLOUD_LOCATION
 unset VERTEXAI
 unset VERTEX_AI
 
+# === Runtime repair OpenClaw (безопасная автопочинка перед стартом) ===
+if [ -f "scripts/openclaw_runtime_repair.py" ]; then
+    echo "🛠️ Repairing OpenClaw runtime config..."
+    python3 scripts/openclaw_runtime_repair.py --dm-policy keep >/dev/null 2>&1 || true
+fi
+
 # === OpenClaw Gateway ===
 OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
 if [ ! -x "$OPENCLAW_BIN" ]; then

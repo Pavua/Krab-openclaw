@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 
 import structlog
 
@@ -78,10 +79,25 @@ async def run_app() -> None:
     web_panel = await _start_web_panel()
 
     kraab = KraabUserbot()
+    stop_event = asyncio.Event()
+
+    def _request_stop(reason: str) -> None:
+        """Запрашивает штатную остановку приложения без форс-килла."""
+        if not stop_event.is_set():
+            logger.info("stop_requested", reason=reason)
+            stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig, reason in ((signal.SIGTERM, "sigterm"), (signal.SIGINT, "sigint")):
+        try:
+            loop.add_signal_handler(sig, lambda r=reason: _request_stop(r))
+        except NotImplementedError:
+            # На некоторых окружениях add_signal_handler недоступен (например, ограниченный runtime).
+            pass
+
     try:
         await kraab.start()
         logger.info("kraab_running")
-        stop_event = asyncio.Event()
         await stop_event.wait()
     except asyncio.CancelledError:
         logger.info("stopping_signal_received")

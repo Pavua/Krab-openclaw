@@ -81,6 +81,16 @@ class Config:
     OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "@yung_nagato")
     ALLOWED_USERS: list[str] = [u.strip().lstrip("@") for u in os.getenv("ALLOWED_USERS", "pablito,admin").split(",") if u.strip()]
     TRIGGER_PREFIXES: list[str] = [p.strip() for p in os.getenv("TRIGGER_PREFIXES", "!краб,@краб,/краб,Краб,,краб,").split(",") if p.strip()]
+    # Опциональный дисклеймер в начале диалога: честный автоответчик без маскировки.
+    AI_DISCLOSURE_ENABLED: bool = os.getenv("AI_DISCLOSURE_ENABLED", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    AI_DISCLOSURE_TEXT: str = os.getenv(
+        "AI_DISCLOSURE_TEXT",
+        "Я автоассистент Краб 🦀. Пишу от имени владельца и могу помочь по его задачам.",
+    )
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -122,6 +132,10 @@ class Config:
                     cls.LOCAL_PREFERRED_VISION_MODEL = value
                 elif key == "SINGLE_LOCAL_MODEL_MODE":
                     cls.SINGLE_LOCAL_MODEL_MODE = value.strip().lower() in ("1", "true", "yes")
+                elif key == "AI_DISCLOSURE_ENABLED":
+                    cls.AI_DISCLOSURE_ENABLED = value.strip().lower() in ("1", "true", "yes")
+                elif key == "AI_DISCLOSURE_TEXT":
+                    cls.AI_DISCLOSURE_TEXT = value
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
                 elif key == "BRAVE_SEARCH_API_KEY":

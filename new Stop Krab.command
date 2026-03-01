@@ -30,13 +30,28 @@ clear_web_port() {
 # 0. Кидаем "ядовитую таблетку", чтобы скрипт старта сам вышел из цикла!
 touch .stop_krab
 
-# 1. Убиваем скрипты авто-рестарта
-pkill -f "start_krab" || true
-pkill -f "run_krab" || true
+# 1. Мягко просим завершиться, чтобы Pyrogram успел сохранить/закрыть сессию.
+pkill -TERM -f "$DIR/src/main" >/dev/null 2>&1 || true
+pkill -TERM -f "python.*src\.main" >/dev/null 2>&1 || true
 
-# 2. Убиваем Python-процессы, запущенные из папки Краба
-pkill -f "$DIR/src/main" && echo "✅ Userbot (main) stopped." || true
-pkill -f "python.*src\.main" && echo "✅ Userbot (fallback) stopped." || true
+# Даём процессу время закрыться корректно.
+for i in 1 2 3 4 5 6 7 8; do
+    sleep 0.5
+    if ! pgrep -f "python.*src\.main" >/dev/null 2>&1; then
+        echo "✅ Userbot stopped gracefully."
+        break
+    fi
+done
+
+# Если всё ещё жив — только тогда форс.
+if pgrep -f "python.*src\.main" >/dev/null 2>&1; then
+    echo "⚠️ Userbot still running, forcing stop..."
+    pkill -KILL -f "python.*src\.main" >/dev/null 2>&1 || true
+fi
+
+# 2. Останавливаем скрипты авто-рестарта
+pkill -f "start_krab" >/dev/null 2>&1 || true
+pkill -f "run_krab" >/dev/null 2>&1 || true
 
 # 3. Чистим порт web-панели.
 clear_web_port 8080

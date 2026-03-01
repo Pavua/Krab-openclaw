@@ -89,6 +89,7 @@ class KraabUserbot:
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._session_recovery_lock = asyncio.Lock()
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
+        self._disclosure_sent_for_chat_ids: set[str] = set()
         self._recreate_client()
 
     def _get_session_dirs(self) -> list[Path]:
@@ -522,6 +523,27 @@ class KraabUserbot:
             f"- Cloud tier: `{tier}`"
         )
 
+    def _apply_optional_disclosure(self, *, chat_id: str, text: str) -> str:
+        """
+        Опционально добавляет дисклеймер в первый ответ для конкретного чата.
+        Это снижает риск «неожиданности» для новых собеседников и остается честным.
+        """
+        if not bool(getattr(config, "AI_DISCLOSURE_ENABLED", False)):
+            return text
+        chat_key = str(chat_id or "").strip()
+        if not chat_key:
+            return text
+        if chat_key in self._disclosure_sent_for_chat_ids:
+            return text
+        disclosure = str(getattr(config, "AI_DISCLOSURE_TEXT", "") or "").strip()
+        if not disclosure:
+            return text
+        self._disclosure_sent_for_chat_ids.add(chat_key)
+        body = str(text or "").strip()
+        if not body:
+            return disclosure
+        return f"{disclosure}\n\n{body}"
+
     @staticmethod
     def _is_message_not_modified_error(exc: Exception) -> bool:
         """Определяет типичную ошибку Telegram при повторном edit того же текста."""
@@ -713,6 +735,11 @@ class KraabUserbot:
                         route_meta = {}
                 if route_meta:
                     full_response = self._build_runtime_model_status(route_meta)
+
+            full_response = self._apply_optional_disclosure(
+                chat_id=chat_id,
+                text=full_response,
+            )
 
             # SPLIT LOGIC: Отправка длинных сообщений частями
             parts = self._split_message(

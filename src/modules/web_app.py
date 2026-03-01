@@ -746,7 +746,7 @@ class WebApp:
             Требует WEB_API_KEY.
             """
             self._assert_write_access(x_krab_web_key, token)
-            script_path = "/Users/pablito/Antigravity_AGENTS/Краб/openclaw_runtime_repair.command"
+            script_path = str(self._project_root() / "openclaw_runtime_repair.command")
 
             try:
                 proc = await asyncio.create_subprocess_exec(
