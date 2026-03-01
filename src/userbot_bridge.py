@@ -12,9 +12,11 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 import asyncio
 import base64
 import os
+import signal
 import textwrap
 import time
 from pathlib import Path
+from typing import Optional
 
 from pyrogram import Client, enums, filters
 from pyrogram.types import Message
@@ -87,6 +89,9 @@ class KraabUserbot:
         self.me = None
         self.current_role = "default"
         self.voice_mode = False
+        self.maintenance_task: Optional[asyncio.Task] = None
+        self._telegram_watchdog_task: Optional[asyncio.Task] = None
+        self._session_recovery_lock = asyncio.Lock()
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -237,8 +242,7 @@ class KraabUserbot:
         try:
             await self.client.start()
         except Exception as exc:  # noqa: BLE001
-            error_text = str(exc).lower()
-            if "auth key not found" in error_text or "auth_key_unregistered" in error_text:
+            if self._is_auth_key_invalid(exc):
                 removed_files = self._purge_telegram_session_files()
                 logger.warning(
                     "telegram_session_invalid_auto_purge",
@@ -271,6 +275,64 @@ class KraabUserbot:
 
         # Запуск фоновых задач (Safe Start)
         self.maintenance_task = asyncio.create_task(self._safe_maintenance())
+        self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
+
+    @staticmethod
+    def _is_auth_key_invalid(exc: Exception) -> bool:
+        """True, если исключение связано с протухшей Telegram auth key."""
+        text = str(exc).lower()
+        return "auth key not found" in text or "auth_key_unregistered" in text
+
+    async def _recover_telegram_session(self, reason: str) -> None:
+        """
+        Автовосстановление протухшей Telegram-сессии:
+        stop -> purge session files -> start (интерактивный логин при необходимости).
+        """
+        if self._session_recovery_lock.locked():
+            return
+        async with self._session_recovery_lock:
+            logger.warning("telegram_session_recovery_started", reason=reason)
+            try:
+                if self.client.is_connected:
+                    await self.client.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("telegram_session_recovery_stop_failed", error=str(exc))
+
+            removed_files = self._purge_telegram_session_files()
+            logger.warning("telegram_session_files_purged", removed_files=removed_files)
+
+            try:
+                await self.client.start()
+                self.me = await self.client.get_me()
+                logger.info(
+                    "telegram_session_recovered",
+                    me=(self.me.username if self.me else None),
+                    id=(self.me.id if self.me else None),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("telegram_session_recovery_failed", error=str(exc))
+                # Передаем управление авто-рестартеру launcher-скрипта.
+                os.kill(os.getpid(), signal.SIGTERM)
+
+    async def _telegram_session_watchdog(self) -> None:
+        """
+        Периодически проверяет валидность Telegram-сессии.
+        Если auth key протухла, запускает auto-recovery без ручного удаления файлов.
+        """
+        interval_sec = int(getattr(config, "TELEGRAM_SESSION_HEARTBEAT_SEC", 45))
+        while True:
+            try:
+                await asyncio.sleep(max(15, interval_sec))
+                if not self.client.is_connected:
+                    continue
+                await self.client.get_me()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001
+                if self._is_auth_key_invalid(exc):
+                    await self._recover_telegram_session(reason=str(exc))
+                else:
+                    logger.warning("telegram_watchdog_probe_failed", error=str(exc))
 
     def _purge_telegram_session_files(self) -> list[str]:
         """
@@ -305,6 +367,8 @@ class KraabUserbot:
 
     async def stop(self):
         """Остановка юзербота"""
+        if self._telegram_watchdog_task:
+            self._telegram_watchdog_task.cancel()
         if self.client.is_connected:
             await self.client.stop()
         await model_manager.close()
@@ -562,6 +626,10 @@ class KraabUserbot:
             logger.warning("routing_error", code=e.code, error=str(e))
             await message.reply(user_message_for_surface(e, telegram=True))
         except Exception as e:
+            if self._is_auth_key_invalid(e):
+                logger.error("telegram_session_invalid_in_handler", error=str(e))
+                await self._recover_telegram_session(reason=str(e))
+                return
             logger.error("process_message_error", error=str(e))
             await message.reply(f"🦀❌ **Ошибка в клешнях:** `{str(e)}`")
 
