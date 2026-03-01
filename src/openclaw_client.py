@@ -366,6 +366,19 @@ class OpenClawClient:
         except (httpx.HTTPError, OSError, ValueError, KeyError, IndexError):
             return None
 
+    def _finalize_chat_response(self, chat_id: str, final_response: str) -> None:
+        """Сохраняет ответ ассистента в историю и кэш."""
+        self._sessions[chat_id].append({"role": "assistant", "content": final_response})
+        self._sessions[chat_id] = self._apply_sliding_window(chat_id, self._sessions[chat_id])
+        try:
+            history_cache.set(
+                f"chat_history:{chat_id}",
+                json.dumps(self._sessions[chat_id], ensure_ascii=False),
+                ttl=HISTORY_CACHE_TTL,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("history_cache_set_failed", chat_id=chat_id, error=str(exc))
+
     async def health_check(self) -> bool:
         """Проверка доступности OpenClaw."""
         try:
@@ -449,6 +462,21 @@ class OpenClawClient:
             has_photo=has_photo,
             force_cloud=force_cloud,
         )
+
+        # Жесткий local-first: если выбран локальный маршрут, сначала бьем напрямую в LM Studio.
+        # Это исключает ситуацию, когда OpenClaw runtime игнорирует модель и уходит в cloud.
+        if not force_cloud and model_manager.is_local_model(selected_model):
+            lm_text = await self._direct_lm_fallback(
+                chat_id=chat_id,
+                messages_to_send=messages_to_send,
+                model_hint=selected_model,
+            )
+            if lm_text:
+                logger.info("local_direct_path_used", chat_id=chat_id, model=selected_model)
+                self._finalize_chat_response(chat_id, lm_text)
+                yield lm_text
+                return
+            logger.warning("local_direct_path_failed_fallback_openclaw", chat_id=chat_id, model=selected_model)
 
         tried_paid = False
         tried_openai = False
@@ -540,16 +568,7 @@ class OpenClawClient:
             if not final_response:
                 final_response = "❌ Модель не вернула ответ."
 
-            self._sessions[chat_id].append({"role": "assistant", "content": final_response})
-            self._sessions[chat_id] = self._apply_sliding_window(chat_id, self._sessions[chat_id])
-            try:
-                history_cache.set(
-                    f"chat_history:{chat_id}",
-                    json.dumps(self._sessions[chat_id], ensure_ascii=False),
-                    ttl=HISTORY_CACHE_TTL,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("history_cache_set_failed", chat_id=chat_id, error=str(exc))
+            self._finalize_chat_response(chat_id, final_response)
 
             yield final_response
 
