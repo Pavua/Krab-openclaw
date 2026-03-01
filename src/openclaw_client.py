@@ -73,6 +73,45 @@ class OpenClawClient:
             "last_recovery_action": "none",
             "last_probe_at": None,
         }
+        # Последний фактически использованный маршрут ответа (источник истины для web/UI).
+        self._last_runtime_route: dict[str, Any] = {}
+
+    @staticmethod
+    def _provider_from_model(model_id: str) -> str:
+        """Возвращает имя провайдера по идентификатору модели."""
+        raw = str(model_id or "").strip()
+        if "/" in raw:
+            return raw.split("/", 1)[0]
+        return "unknown"
+
+    def _set_last_runtime_route(
+        self,
+        *,
+        channel: str,
+        model: str,
+        route_reason: str,
+        route_detail: str = "",
+        status: str = "ok",
+        error_code: str | None = None,
+        force_cloud: bool = False,
+    ) -> None:
+        """Фиксирует последний runtime-маршрут запроса без секретов."""
+        self._last_runtime_route = {
+            "timestamp": int(time.time()),
+            "channel": channel,
+            "provider": self._provider_from_model(model),
+            "model": str(model or ""),
+            "active_tier": self.active_tier,
+            "force_cloud": bool(force_cloud),
+            "status": status,
+            "error_code": error_code,
+            "route_reason": route_reason,
+            "route_detail": route_detail,
+        }
+
+    def get_last_runtime_route(self) -> dict[str, Any]:
+        """Возвращает snapshot последнего фактического маршрута."""
+        return dict(self._last_runtime_route)
 
     @staticmethod
     def _messages_size(messages: List[Dict[str, Any]]) -> int:
@@ -462,6 +501,13 @@ class OpenClawClient:
             has_photo=has_photo,
             force_cloud=force_cloud,
         )
+        self._set_last_runtime_route(
+            channel="planning",
+            model=selected_model,
+            route_reason="selected_model",
+            route_detail="Определена целевая модель перед выполнением запроса",
+            force_cloud=force_cloud,
+        )
 
         # Жесткий local-first: если выбран локальный маршрут, сначала бьем напрямую в LM Studio.
         # Это исключает ситуацию, когда OpenClaw runtime игнорирует модель и уходит в cloud.
@@ -473,6 +519,13 @@ class OpenClawClient:
             )
             if lm_text:
                 logger.info("local_direct_path_used", chat_id=chat_id, model=selected_model)
+                self._set_last_runtime_route(
+                    channel="local_direct",
+                    model=selected_model,
+                    route_reason="local_direct_primary",
+                    route_detail="Ответ получен напрямую из LM Studio",
+                    force_cloud=force_cloud,
+                )
                 self._finalize_chat_response(chat_id, lm_text)
                 yield lm_text
                 return
@@ -550,10 +603,26 @@ class OpenClawClient:
                     )
                     if lm_text:
                         final_response = lm_text
+                        self._set_last_runtime_route(
+                            channel="local_direct",
+                            model=attempt_model,
+                            route_reason="local_direct_recovery",
+                            route_detail="Семантическая ошибка OpenClaw, восстановление через прямой LM Studio",
+                            force_cloud=force_cloud,
+                        )
                         semantic_after = None
 
             if semantic_after:
                 code = semantic_after["code"]
+                self._set_last_runtime_route(
+                    channel="error",
+                    model=attempt_model,
+                    route_reason="semantic_error",
+                    route_detail=semantic_after["message"],
+                    status="error",
+                    error_code=code,
+                    force_cloud=force_cloud,
+                )
                 if code == "quota_exceeded":
                     user_text = "❌ Квота облачных ключей исчерпана. Переключись на локальную модель: !model local"
                 elif code in {"auth_invalid", "unsupported_key_type"}:
@@ -567,6 +636,20 @@ class OpenClawClient:
 
             if not final_response:
                 final_response = "❌ Модель не вернула ответ."
+
+            if not self._last_runtime_route or self._last_runtime_route.get("status") != "ok":
+                route_channel = (
+                    "openclaw_local"
+                    if model_manager.is_local_model(attempt_model)
+                    else "openclaw_cloud"
+                )
+                self._set_last_runtime_route(
+                    channel=route_channel,
+                    model=attempt_model,
+                    route_reason="openclaw_response_ok",
+                    route_detail="Ответ получен через OpenClaw API",
+                    force_cloud=force_cloud,
+                )
 
             self._finalize_chat_response(chat_id, final_response)
 
@@ -601,8 +684,24 @@ class OpenClawClient:
                 model_hint=attempt_model,
             )
             if lm_text:
+                self._set_last_runtime_route(
+                    channel="local_direct",
+                    model=attempt_model,
+                    route_reason="local_direct_exception_fallback",
+                    route_detail="Ошибка OpenClaw транспорта, выполнен прямой fallback в LM Studio",
+                    force_cloud=force_cloud,
+                )
                 yield lm_text
                 return
+            self._set_last_runtime_route(
+                channel="error",
+                model=attempt_model,
+                route_reason="transport_error",
+                route_detail=str(exc),
+                status="error",
+                error_code="transport_error",
+                force_cloud=force_cloud,
+            )
             yield "❌ Ошибка облака. Попробуй позже или переключись на локальную модель: !model local."
 
     def clear_session(self, chat_id: str):

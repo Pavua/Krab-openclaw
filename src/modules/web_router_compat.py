@@ -137,6 +137,24 @@ class WebRouterCompat:
         ):
             chunks.append(chunk)
         self.active_tier = getattr(self.openclaw_client, "active_tier", self.active_tier)
+        route_meta: dict[str, Any] = {}
+        if hasattr(self.openclaw_client, "get_last_runtime_route"):
+            try:
+                route_meta = self.openclaw_client.get_last_runtime_route() or {}
+            except Exception:  # noqa: BLE001
+                route_meta = {}
+        self._last_route = {
+            "route_reason": str(route_meta.get("route_reason", "")).strip() or "unknown",
+            "route_detail": str(route_meta.get("route_detail", "")).strip(),
+            "channel": str(route_meta.get("channel", "")).strip() or "unknown",
+            "provider": str(route_meta.get("provider", "")).strip() or "unknown",
+            "model": str(route_meta.get("model", "")).strip() or str(config.MODEL),
+            "status": str(route_meta.get("status", "")).strip() or "unknown",
+            "error_code": route_meta.get("error_code"),
+            "active_tier": str(route_meta.get("active_tier", self.active_tier)),
+            "force_cloud": bool(route_meta.get("force_cloud", config.FORCE_CLOUD)),
+            "timestamp": route_meta.get("timestamp"),
+        }
         return "".join(chunks)
 
     # --- Explain / Preflight / Recommendation ---
