@@ -7,19 +7,19 @@ Web App Module (Phase 15+).
 from __future__ import annotations
 
 import asyncio
-import os
-from pathlib import Path
-import time
-import json
-import shlex
 import hashlib
 import io
+import json
 import mimetypes
+import os
 import re
+import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import structlog
 import uvicorn
@@ -27,8 +27,18 @@ from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, 
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
-from src.core.observability import get_observability_snapshot, metrics, timeline, build_ops_response  # noqa: E402
-from src.core.model_aliases import MODEL_FRIENDLY_ALIASES, normalize_model_alias, parse_model_set_request, render_model_presets_text  # noqa: E402
+from src.core.model_aliases import (  # noqa: E402
+    MODEL_FRIENDLY_ALIASES,
+    normalize_model_alias,
+    parse_model_set_request,
+    render_model_presets_text,
+)
+from src.core.observability import (  # noqa: E402
+    build_ops_response,
+    get_observability_snapshot,
+    metrics,
+    timeline,
+)
 
 logger = structlog.get_logger("WebApp")
 
@@ -688,7 +698,7 @@ class WebApp:
                     }
 
                 raw_output = stdout.decode("utf-8", errors="replace")
-                
+
                 # Поиск варнингов в выводе (обычно в блоке 'Warnings:' или строки с 'WARN')
                 warnings = []
                 capture_warnings = False
@@ -737,7 +747,7 @@ class WebApp:
             """
             self._assert_write_access(x_krab_web_key, token)
             script_path = "/Users/pablito/Antigravity_AGENTS/Краб/openclaw_runtime_repair.command"
-            
+
             try:
                 proc = await asyncio.create_subprocess_exec(
                     script_path,
@@ -767,7 +777,7 @@ class WebApp:
             """
             self._assert_write_access(x_krab_web_key, token)
             script_path = "/Users/pablito/Antigravity_AGENTS/Краб/scripts/signal_ops_guard.command"
-            
+
             try:
                 # Запускаем с флагом --once для разовой проверки
                 proc = await asyncio.create_subprocess_exec(
@@ -812,14 +822,14 @@ class WebApp:
             router = self.deps.get("router")
             if not router:
                  return {"ok": False, "error": "router_not_found"}
-            
+
             # Получаем свежие данные через health_service
             health_service = self.deps.get("health_service")
             if not health_service:
                 health_service = EcosystemHealthService(router=router)
-            
+
             health_data = await health_service.collect()
-            
+
             status = "ok"
             if not router.is_local_available:
                 status = "degraded"
@@ -827,7 +837,7 @@ class WebApp:
                     status = "failed"
             elif getattr(router, "active_tier", "") == "paid":
                 status = "degraded"
-            
+
             return {
                 "ok": True,
                 "status": status,
@@ -889,13 +899,13 @@ class WebApp:
             router = self.deps.get("router")
             if not router:
                 return {"ok": False, "error": "router_not_found"}
-                
+
             task_queue = self.deps.get("queue")
             queue_stats = task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
-            
+
             openclaw = router.openclaw_client
             tier_state = openclaw.get_tier_state_export() if getattr(openclaw, "get_tier_state_export", None) else {}
-            
+
             return {
                 "ok": True,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -928,27 +938,27 @@ class WebApp:
             router = self.deps.get("router")
             if not router:
                 return {"ok": False, "error": "router_not_found"}
-            
+
             action = payload.get("action")
             model_name = payload.get("model")
-            
+
             try:
                 if action == "load":
                     if not model_name:
                         return {"ok": False, "error": "model_name_required"}
                     success = await router.load_local_model(model_name)
                     return {"ok": success, "action": action, "model": model_name}
-                
+
                 elif action == "unload":
                     if not model_name:
                         return {"ok": False, "error": "model_name_required"}
                     success = await router.unload_model_manual(model_name)
                     return {"ok": success, "action": action, "model": model_name}
-                
+
                 elif action == "unload_all":
                     await router.unload_models_manual()
                     return {"ok": True, "action": action}
-                
+
                 else:
                     return {"ok": False, "error": "invalid_action", "supported": ["load", "unload", "unload_all"]}
             except Exception as e:
@@ -1066,7 +1076,7 @@ class WebApp:
             preferred = getattr(router, "local_preferred_model", None)
             if not preferred:
                 return {"ok": False, "error": "no_preferred_model_configured"}
-            
+
             # Используем существующий механизм smart_load
             success = await router._smart_load(preferred, reason="web_forced")
             return {"ok": success, "model": preferred}
@@ -1079,7 +1089,7 @@ class WebApp:
             """Выгружает все локальные модели для освобождения памяти (write endpoint)."""
             self._assert_write_access(x_krab_web_key, token)
             router = self.deps["router"]
-            
+
             freed_gb = 0.0
             if hasattr(router, "_evict_idle_models"):
                 # Вызываем с огромным нужным объемом или просто через unload_local_model
@@ -1090,10 +1100,10 @@ class WebApp:
                     if success:
                         router.active_local_model = None
                         return {"ok": True, "unloaded": active}
-                
+
                 # Если активной нет, но есть загруженные (по данным _evict_idle_models)
                 freed_gb = await router._evict_idle_models(needed_gb=100.0) # Попытаемся выгрузить всё
-            
+
             return {"ok": True, "freed_gb_estimate": round(freed_gb, 1)}
 
         @self.app.get("/api/model/explain")
@@ -1220,8 +1230,6 @@ class WebApp:
             cloud_presets: list[dict[str, str]] = []
             alias_items: list[dict[str, str]] = []
             try:
-                from src.core.model_aliases import MODEL_FRIENDLY_ALIASES, normalize_model_alias
-
                 canonical_cloud_models = sorted(
                     {
                         str(model_id).strip()
@@ -1314,13 +1322,6 @@ class WebApp:
             if not action:
                 raise HTTPException(status_code=400, detail="model_apply_action_required")
 
-            try:
-                from src.core.model_aliases import normalize_model_alias
-            except Exception:
-                def normalize_model_alias(raw_model_name: str) -> tuple[str, str]:
-                    text = str(raw_model_name or "").strip()
-                    return text, ""
-
             result_payload: dict[str, object] = {}
             message_text = "✅ Изменения применены."
 
@@ -1372,7 +1373,7 @@ class WebApp:
                     getattr(router, "active_local_model", "") or ""
                 )
                 if not local_override:
-                    local_override = "zai-org/glm-4.6v-flash"
+                    local_override = os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip() or "nvidia/nemotron-3-nano"
 
                 presets: dict[str, dict[str, object]] = {
                     "balanced_auto": {
@@ -1857,18 +1858,6 @@ class WebApp:
 
             if command_prompt.startswith("!model"):
                 try:
-                    from src.core.model_aliases import (
-                        parse_model_set_request,
-                        normalize_model_alias,
-                        render_model_presets_text,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"assistant_command_import_failed: {exc}",
-                    ) from exc
-
-                try:
                     tokens = shlex.split(command_prompt[1:])
                 except Exception:
                     tokens = command_prompt[1:].split()
@@ -1905,6 +1894,9 @@ class WebApp:
                     return response_payload
 
                 if subcommand == "set":
+                    # Короткий формат: !model set <model_id> -> slot=chat.
+                    if len(tokens) == 3:
+                        tokens = [tokens[0], tokens[1], "chat", tokens[2]]
                     parsed = parse_model_set_request(tokens, list(router.models.keys()))
                     if not parsed.get("ok"):
                         response_payload = {
@@ -2038,7 +2030,12 @@ class WebApp:
             openclaw = self.deps.get("openclaw_client")
             if not openclaw:
                 return {"available": False, "error": "openclaw_client_not_configured"}
-            report = await openclaw.get_health_report()
+            if not hasattr(openclaw, "get_health_report"):
+                return {"available": False, "error": "openclaw_report_not_supported"}
+            try:
+                report = await openclaw.get_health_report()
+            except Exception as exc:
+                return {"available": False, "error": "openclaw_report_failed", "detail": str(exc)}
             return {"available": True, "report": report}
 
         @self.app.get("/api/openclaw/deep-check")
@@ -2047,7 +2044,12 @@ class WebApp:
             openclaw = self.deps.get("openclaw_client")
             if not openclaw:
                 return {"available": False, "error": "openclaw_client_not_configured"}
-            report = await openclaw.get_deep_health_report()
+            if not hasattr(openclaw, "get_deep_health_report"):
+                return {"available": False, "error": "openclaw_deep_check_not_supported"}
+            try:
+                report = await openclaw.get_deep_health_report()
+            except Exception as exc:
+                return {"available": False, "error": "openclaw_deep_check_failed", "detail": str(exc)}
             return {"available": True, "report": report}
 
         @self.app.get("/api/openclaw/remediation-plan")
@@ -2056,7 +2058,12 @@ class WebApp:
             openclaw = self.deps.get("openclaw_client")
             if not openclaw:
                 return {"available": False, "error": "openclaw_client_not_configured"}
-            report = await openclaw.get_remediation_plan()
+            if not hasattr(openclaw, "get_remediation_plan"):
+                return {"available": False, "error": "openclaw_remediation_not_supported"}
+            try:
+                report = await openclaw.get_remediation_plan()
+            except Exception as exc:
+                return {"available": False, "error": "openclaw_remediation_failed", "detail": str(exc)}
             return {"available": True, "report": report}
 
         @self.app.get("/api/openclaw/browser-smoke")
@@ -2090,6 +2097,43 @@ class WebApp:
         async def openclaw_cloud_diagnostics_legacy(providers: str = Query(default="")):
             """Совместимость со старым UI-клиентом (legacy alias)."""
             return await _openclaw_cloud_diagnostics_impl(providers=providers)
+
+        @self.app.get("/api/openclaw/cloud/runtime-check")
+        async def openclaw_cloud_runtime_check():
+            """Runtime-check cloud key chain (masked)."""
+            openclaw = self.deps.get("openclaw_client")
+            if not openclaw:
+                return {"available": False, "error": "openclaw_client_not_configured"}
+            if not hasattr(openclaw, "get_cloud_runtime_check"):
+                return {"available": False, "error": "cloud_runtime_check_not_supported"}
+            try:
+                report = await openclaw.get_cloud_runtime_check()
+            except Exception as exc:
+                return {"available": False, "error": "cloud_runtime_check_failed", "detail": str(exc)}
+            return {"available": True, "report": report}
+
+        @self.app.post("/api/openclaw/cloud/switch-tier")
+        async def openclaw_cloud_switch_tier(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Ручное переключение cloud-tier (free/paid) + secrets reload."""
+            self._assert_write_access(x_krab_web_key, token)
+            openclaw = self.deps.get("openclaw_client")
+            if not openclaw:
+                return {"ok": False, "error": "openclaw_client_not_configured"}
+            if not hasattr(openclaw, "switch_cloud_tier"):
+                return {"ok": False, "error": "switch_cloud_tier_not_supported"}
+
+            tier = str((payload or {}).get("tier", "free")).strip().lower()
+            if tier not in {"free", "paid"}:
+                return {"ok": False, "error": "invalid_tier", "detail": "Допустимо: free|paid"}
+            try:
+                result = await openclaw.switch_cloud_tier(tier)
+                return {"ok": bool(result.get("ok")), "result": result}
+            except Exception as exc:
+                return {"ok": False, "error": "switch_cloud_tier_failed", "detail": str(exc)}
 
         @self.app.get("/api/openclaw/cloud/tier/state")
         async def openclaw_cloud_tier_state():
@@ -2134,37 +2178,11 @@ class WebApp:
                     return build_ops_response(status="failed", error_code="openclaw_client_not_configured", summary="Openclaw client not configured")
                 if not hasattr(openclaw, "reset_cloud_tier"):
                     return build_ops_response(status="failed", error_code="tier_reset_not_supported", summary="Tier reset not supported")
-                
+
                 result = await openclaw.reset_cloud_tier()
                 return build_ops_response(status="ok", data={"result": result})
             except Exception as exc:
                 return build_ops_response(status="failed", error_code="tier_reset_error", summary=str(exc))
-
-        @self.app.get("/api/ops/runtime_snapshot")
-        async def ops_runtime_snapshot():
-            """[R25] Снапшот рантайма с маскировкой секретов."""
-            try:
-                data = get_observability_snapshot()
-                return build_ops_response(status="ok", data=data)
-            except Exception as exc:
-                return build_ops_response(status="failed", error_code="snapshot_error", summary=str(exc))
-
-        @self.app.get("/api/ops/metrics")
-        async def ops_metrics():
-            """[R25] Метрики в унифицированном формате."""
-            try:
-                return build_ops_response(status="ok", data=metrics.get_snapshot())
-            except Exception as exc:
-                return build_ops_response(status="failed", error_code="metrics_error", summary=str(exc))
-
-        @self.app.get("/api/ops/timeline")
-        async def ops_timeline():
-            """[R25] Таймлайн событий с маскировкой."""
-            try:
-                data = {"events": get_observability_snapshot().get("timeline_tail", [])}
-                return build_ops_response(status="ok", data=data)
-            except Exception as exc:
-                return build_ops_response(status="failed", error_code="timeline_error", summary=str(exc))
 
         def _run_openclaw_model_autoswitch(*, dry_run: bool) -> dict:
             """

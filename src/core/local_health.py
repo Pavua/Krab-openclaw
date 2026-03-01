@@ -61,6 +61,30 @@ async def is_lm_studio_available(
             return False
 
 
+def _bytes_to_gb(value: int | float) -> float:
+    """Переводит байты в гигабайты (GiB) с округлением."""
+    return round(float(value) / (1024**3), 2)
+
+
+def _normalize_lm_models(raw: list[dict]) -> list[dict]:
+    """Нормализует ответ LM Studio (v1 или OpenAI-compat) в список {id, name, vision, size_gb}."""
+    out: list[dict] = []
+    for m in raw:
+        mid = m.get("key") or m.get("id", "")
+        name = m.get("display_name") or m.get("name", mid)
+        caps = m.get("capabilities") or {}
+        vision = caps.get("vision", False) if isinstance(caps, dict) else False
+        size_gb = 0.0
+        size_bytes = m.get("size_bytes")
+        try:
+            if size_bytes is not None and float(size_bytes) > 0:
+                size_gb = _bytes_to_gb(float(size_bytes))
+        except (TypeError, ValueError):
+            size_gb = 0.0
+        out.append({**m, "id": mid, "name": name, "vision": vision, "size_gb": size_gb})
+    return out
+
+
 async def fetch_lm_studio_models_list(
     base_url: str,
     *,
@@ -68,30 +92,32 @@ async def fetch_lm_studio_models_list(
     client: Optional["AsyncClient"] = None,
 ) -> list[dict]:
     """
-    Запрашивает GET {base_url}/v1/models и возвращает список моделей из JSON.
+    Запрашивает список моделей LM Studio с fallback: /api/v1/models -> /v1/models.
 
-    Ответ LM Studio: {"data": [{"id": "...", "name": "...", ...}, ...]}.
-    Возвращает data.get("data", []) при успехе, иначе [].
+    v1 API: {"models": [{"key": "...", "display_name": "...", "capabilities": {"vision": bool}}]}.
+    OpenAI-compat: {"data": [{"id": "...", "name": "..."}]}.
     """
-    url = f"{base_url.rstrip('/')}/v1/models"
-    if client is not None:
+    base = base_url.rstrip("/")
+    urls = [f"{base}/api/v1/models", f"{base}/v1/models"]
+    used_client = client
+
+    for url in urls:
         try:
-            resp = await client.get(url, timeout=timeout)
+            if used_client:
+                resp = await used_client.get(url, timeout=timeout)
+            else:
+                async with httpx.AsyncClient(timeout=timeout) as ac:
+                    resp = await ac.get(url, timeout=timeout)
             if resp.status_code != 200:
-                return []
+                continue
             data = resp.json()
-            return list(data.get("data", []))
+            # v1: {"models": [...]}
+            raw = data.get("models", data.get("data", []))
+            if raw:
+                return _normalize_lm_models(raw)
         except (httpx.HTTPError, OSError, ValueError):
-            return []
-    async with httpx.AsyncClient(timeout=timeout) as ac:
-        try:
-            resp = await ac.get(url, timeout=timeout)
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            return list(data.get("data", []))
-        except (httpx.HTTPError, OSError, ValueError):
-            return []
+            continue
+    return []
 
 
 async def discover_models(
@@ -117,30 +143,39 @@ async def discover_models(
         for model_data in model_list:
             model_id = model_data.get("id", "")
             model_type = _detect_model_type(model_id)
-            size = 8.0
-            if "7b" in model_id.lower():
-                size = 5.0
-            if "13b" in model_id.lower():
-                size = 10.0
-            if "30b" in model_id.lower() or "32b" in model_id.lower():
-                size = 18.0
-            if "70b" in model_id.lower():
-                size = 40.0
-            if "q4" in model_id.lower():
-                size *= 0.6
+            # В приоритете используем фактический размер из LM Studio API v1.
+            size = float(model_data.get("size_gb") or 0.0)
+            if size <= 0:
+                # Fallback-эвристика для старого/урезанного API.
+                size = 8.0
+                if "7b" in model_id.lower():
+                    size = 5.0
+                if "13b" in model_id.lower():
+                    size = 10.0
+                if "30b" in model_id.lower() or "32b" in model_id.lower():
+                    size = 18.0
+                if "70b" in model_id.lower():
+                    size = 40.0
+                if "q4" in model_id.lower():
+                    size *= 0.6
+            # Vision: из capabilities.vision (v1 API) или эвристика
+            vision_api = model_data.get("vision", False)
+            vision_heuristic = (
+                "vl" in model_id.lower()
+                or "vision" in model_id.lower()
+                or "glm-4" in model_id.lower()
+            )
             model = ModelInfo(
                 id=model_id,
                 name=model_data.get("name", model_id),
                 type=model_type,
                 status=ModelStatus.AVAILABLE,
                 size_gb=size,
-                supports_vision=(
-                    "vl" in model_id.lower() or "vision" in model_id.lower()
-                ),
+                supports_vision=vision_api or vision_heuristic,
             )
             models.append(model)
             models_cache[model_id] = model
-        logger.info("models_discovered", count=len(models))
+        logger.debug("models_discovered", count=len(models))
 
     google_models = await fetch_google_models_async()
     models.extend(google_models)

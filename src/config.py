@@ -13,23 +13,23 @@ load_dotenv()
 
 class Config:
     """Центральная конфигурация приложения"""
-    
+
     # Paths
     BASE_DIR: Path = Path(__file__).parent.parent
-    
+
     # Telegram
     TELEGRAM_API_ID: int = int(os.getenv("TELEGRAM_API_ID", "0"))
     TELEGRAM_API_HASH: str = os.getenv("TELEGRAM_API_HASH", "")
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")  # Optional fallback
     TELEGRAM_SESSION_NAME: str = os.getenv("TELEGRAM_SESSION_NAME", "kraab")
-    
+
     # OpenClaw
     OPENCLAW_URL: str = os.getenv("OPENCLAW_URL", os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"))
     OPENCLAW_TOKEN: str = os.getenv("OPENCLAW_GATEWAY_TOKEN", os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")))
-    
-    # LM Studio
-    LM_STUDIO_URL: str = os.getenv("LM_STUDIO_URL", "http://192.168.0.171:1234")
-    
+
+    # LM Studio (trailing slash stripped for API calls)
+    LM_STUDIO_URL: str = os.getenv("LM_STUDIO_URL", "http://192.168.0.171:1234").rstrip("/")
+
     # Gemini (fallback): free key first, paid key as fallback
     GEMINI_API_KEY_FREE: Optional[str] = os.getenv("GEMINI_API_KEY_FREE")
     GEMINI_API_KEY_PAID: Optional[str] = os.getenv("GEMINI_API_KEY_PAID")
@@ -39,18 +39,29 @@ class Config:
         or os.getenv("GEMINI_API_KEY")
     )
     GEMINI_MODELS: list[str] = [
-        "google/gemini-pro-latest",
-        "google/gemini-2.0-flash",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-pro",
         "google/gemini-flash-latest",
     ]
-    MODEL: str = os.getenv("MODEL", "google/gemini-pro-latest")
-    
+    MODEL: str = os.getenv("MODEL", "google/gemini-2.5-flash")
+
     # LM Studio: preferred local model (substring match)
-    LOCAL_PREFERRED_MODEL: str = os.getenv("LOCAL_PREFERRED_MODEL", "")
-    
+    LOCAL_PREFERRED_MODEL: str = os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano")
+    # LM Studio: preferred local vision model (для фото/изображений)
+    LOCAL_PREFERRED_VISION_MODEL: str = os.getenv(
+        "LOCAL_PREFERRED_VISION_MODEL",
+        "auto",
+    )
+    # Держать только одну локальную модель в памяти (минимизация RAM/SWAP)
+    SINGLE_LOCAL_MODEL_MODE: bool = os.getenv("SINGLE_LOCAL_MODEL_MODE", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     # Skills / APIs
     BRAVE_SEARCH_API_KEY: Optional[str] = os.getenv("BRAVE_SEARCH_API_KEY", os.getenv("BRAVE_API_KEY"))
-    
+
     # Memory limits
     MAX_RAM_GB: int = int(os.getenv("MAX_RAM_GB", "24"))
 
@@ -59,30 +70,30 @@ class Config:
     HISTORY_WINDOW_MAX_CHARS: Optional[int] = (
         int(x) if (x := os.getenv("HISTORY_WINDOW_MAX_CHARS", "").strip()) else None
     )
-    
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # Routing: force_cloud полностью обходит локальный путь (Фаза 2.2)
     FORCE_CLOUD: bool = os.getenv("FORCE_CLOUD", "0").strip().lower() in ("1", "true", "yes")
-    
+
     # User settings
     OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "@yung_nagato")
     ALLOWED_USERS: list[str] = [u.strip().lstrip("@") for u in os.getenv("ALLOWED_USERS", "pablito,admin").split(",") if u.strip()]
     TRIGGER_PREFIXES: list[str] = [p.strip() for p in os.getenv("TRIGGER_PREFIXES", "!краб,@краб,/краб,Краб,,краб,").split(",") if p.strip()]
-    
+
     @classmethod
     def validate(cls) -> list[str]:
         """Проверяет обязательные настройки и возвращает список ошибок"""
         errors = []
-        
+
         if not cls.TELEGRAM_API_ID:
             errors.append("TELEGRAM_API_ID не установлен")
         if not cls.TELEGRAM_API_HASH:
             errors.append("TELEGRAM_API_HASH не установлен")
-            
+
         return errors
-    
+
     @classmethod
     def is_valid(cls) -> bool:
         """Проверяет валидность конфигурации"""
@@ -105,11 +116,17 @@ class Config:
                     cls.MODEL = value
                 elif key == "FORCE_CLOUD":
                     cls.FORCE_CLOUD = value.strip().lower() in ("1", "true", "yes")
+                elif key == "LOCAL_PREFERRED_MODEL":
+                    cls.LOCAL_PREFERRED_MODEL = value
+                elif key == "LOCAL_PREFERRED_VISION_MODEL":
+                    cls.LOCAL_PREFERRED_VISION_MODEL = value
+                elif key == "SINGLE_LOCAL_MODEL_MODE":
+                    cls.SINGLE_LOCAL_MODEL_MODE = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
                 elif key == "BRAVE_SEARCH_API_KEY":
                     cls.BRAVE_SEARCH_API_KEY = value
-                
+
             # Обновляем .env файл для сохранения между перезапусками
             env_path = cls.BASE_DIR / ".env"
             if not env_path.exists():
@@ -131,11 +148,11 @@ class Config:
                     found = True
                 else:
                     new_lines.append(line)
-            
+
             if not found:
                 # Добавляем новую настройку в конец, но перед пустыми строками если можно
                 new_lines.append(f"{key}={value}")
-                
+
             env_path.write_text("\n".join(new_lines) + "\n")
             return True
         except Exception as e:

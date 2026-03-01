@@ -17,6 +17,7 @@ from ..config import config
 from ..core.exceptions import UserInputError
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
+from ..core.model_aliases import normalize_model_alias
 from ..employee_templates import ROLES, list_roles, save_role
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
@@ -28,6 +29,47 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from ..userbot_bridge import KraabUserbot
+
+
+def _format_size_gb(size_gb: float) -> str:
+    """Форматирует размер модели для человекочитаемого вывода."""
+    try:
+        value = float(size_gb)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value <= 0:
+        return "n/a"
+    return f"{value:.2f} GB"
+
+
+def _split_text_for_telegram(text: str, limit: int = 3900) -> list[str]:
+    """
+    Делит длинный текст на части с сохранением границ строк.
+    Telegram ограничивает текст сообщения примерно 4096 символами.
+    """
+    lines = text.splitlines()
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        if len(line) <= limit:
+            current = line
+        else:
+            # На случай сверхдлинной строки режем принудительно.
+            for i in range(0, len(line), limit):
+                part = line[i:i + limit]
+                if len(part) == limit:
+                    chunks.append(part)
+                else:
+                    current = part
+    if current:
+        chunks.append(current)
+    return chunks or [text[:limit]]
 
 
 async def handle_search(bot: "KraabUserbot", message: Message) -> None:
@@ -148,6 +190,21 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
     args = message.text.split()
     sub = args[1].lower() if len(args) > 1 else ""
 
+    async def _is_local_model(model_id: str) -> bool:
+        """Определяет, относится ли model_id к локальным моделям LM Studio."""
+        normalized = str(model_id or "").strip().lower()
+        if normalized in {"local", "lmstudio/local"} or normalized.startswith("lmstudio/"):
+            return True
+        try:
+            models = await model_manager.discover_models()
+            return any(
+                m.id == model_id and m.type.name.startswith("LOCAL")
+                for m in models
+            )
+        except Exception:
+            # Если discovery недоступен, используем безопасную эвристику.
+            return normalized.startswith("local/") or "mlx" in normalized
+
     if not sub:
         force_cloud = getattr(config, "FORCE_CLOUD", False)
         if force_cloud:
@@ -164,7 +221,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             f"**Облачная модель:** `{cloud_model}`\n"
             f"**LM Studio URL:** `{config.LM_STUDIO_URL}`\n"
             f"**FORCE_CLOUD:** `{force_cloud}`\n\n"
-            "_Подкоманды: `local`, `cloud`, `auto`, `load <name>`, `unload`, `scan`_"
+            "_Подкоманды: `local`, `cloud`, `auto`, `set <model_id>`, `load <name>`, `unload`, `scan`_"
         )
         await message.reply(text)
         return
@@ -182,6 +239,35 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
     if sub == "auto":
         config.FORCE_CLOUD = False
         await message.reply("🤖 Режим: **auto** — автоматический выбор лучшей модели.")
+        return
+
+    if sub == "set":
+        if len(args) < 3:
+            raise UserInputError(user_message="⚙️ Формат: `!model set <model_id>`")
+
+        raw_id = args[2].strip()
+        resolved_id, alias_note = normalize_model_alias(raw_id)
+        is_local = await _is_local_model(resolved_id)
+
+        if is_local:
+            config.update_setting("LOCAL_PREFERRED_MODEL", resolved_id)
+            config.FORCE_CLOUD = False
+            await message.reply(
+                "💻 Зафиксирована локальная модель.\n"
+                f"**Model:** `{resolved_id}`\n"
+                f"{f'ℹ️ Alias: {alias_note}' if alias_note else ''}\n"
+                "Режим переключен в `auto/local` (без принудительного cloud)."
+            )
+            return
+
+        config.update_setting("MODEL", resolved_id)
+        config.FORCE_CLOUD = True
+        await message.reply(
+            "☁️ Зафиксирована облачная модель.\n"
+            f"**Model:** `{resolved_id}`\n"
+            f"{f'ℹ️ Alias: {alias_note}' if alias_note else ''}\n"
+            "Режим переключен в `cloud`."
+        )
         return
 
     if sub == "load":
@@ -213,15 +299,38 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
         msg = await message.reply("🔍 Сканирую доступные модели...")
         try:
             models = await model_manager.discover_models()
-            if not models:
-                await msg.edit("🔍 Моделей не обнаружено.")
-                return
-            lines = []
-            for m in models:
-                icon = "☁️" if m.type.name.startswith("CLOUD") else "💻"
+            from ..core.cloud_gateway import get_cloud_fallback_chain
+            cloud_ids = [c for c in get_cloud_fallback_chain() if "gemini" in c.lower()]
+            local_models = [m for m in models if m.type.name.startswith("LOCAL")]
+            cloud_from_api = [m for m in models if m.type.name.startswith("CLOUD")]
+            cloud_seen = {m.id for m in cloud_from_api}
+            for cid in cloud_ids:
+                if cid not in cloud_seen:
+                    from ..core.model_types import ModelInfo, ModelStatus, ModelType
+                    cloud_from_api.append(
+                        ModelInfo(
+                            id=cid,
+                            name=cid,
+                            type=ModelType.CLOUD_GEMINI,
+                            status=ModelStatus.AVAILABLE,
+                            size_gb=0.0,
+                            supports_vision=True,
+                        )
+                    )
+                    cloud_seen.add(cid)
+            lines = [f"🔍 **Доступные модели** (local={len(local_models)}, cloud={len(cloud_from_api)})\n", "☁️ **Облачные**\n"]
+            for m in sorted(cloud_from_api, key=lambda x: x.id):
                 loaded = " ✅" if m.id == model_manager._current_model else ""
-                lines.append(f"{icon} `{m.id}`{loaded}")
-            await msg.edit("🔍 **Доступные модели:**\n\n" + "\n".join(lines[:20]))
+                lines.append(f"☁️ `{m.id}` · `{_format_size_gb(getattr(m, 'size_gb', 0.0))}`{loaded}")
+            lines.append("\n💻 **Локальные**\n")
+            for m in sorted(local_models, key=lambda x: x.id):
+                loaded = " ✅" if m.id == model_manager._current_model else ""
+                lines.append(f"💻 `{m.id}` · `{_format_size_gb(getattr(m, 'size_gb', 0.0))}`{loaded}")
+            text = "\n".join(lines)
+            chunks = _split_text_for_telegram(text)
+            await msg.edit(chunks[0])
+            for part in chunks[1:]:
+                await message.reply(part)
         except Exception as e:
             await msg.edit(f"❌ Ошибка сканирования: `{str(e)[:200]}`")
         return
@@ -229,7 +338,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
     raise UserInputError(
         user_message=(
             f"❓ Неизвестная подкоманда `{sub}`.\n"
-            "Доступные: `local`, `cloud`, `auto`, `load`, `unload`, `scan`"
+            "Доступные: `local`, `cloud`, `auto`, `set`, `load`, `unload`, `scan`"
         )
     )
 
@@ -383,6 +492,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!model local` — принудительно локальная модель
 `!model cloud` — принудительно облачная модель
 `!model auto` — автоматический выбор
+`!model set <model_id>` — выбрать конкретную модель (из `!model scan`)
 `!model load <name>` — загрузить модель
 `!model unload` — выгрузить модель
 `!model scan` — список доступных моделей

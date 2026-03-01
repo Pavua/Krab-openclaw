@@ -13,10 +13,11 @@ import structlog
 
 from .cloud_gateway import (
     get_best_cloud_model,
+)
+from .cloud_gateway import (
     verify_gemini_access as cloud_verify_gemini_access,
 )
 from .local_health import is_lm_studio_available
-from .model_types import ModelInfo, ModelStatus, ModelType
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 # Дефолтная облачная модель при отсутствии выбора
-DEFAULT_CLOUD_MODEL = "google/gemini-2.0-flash"
+DEFAULT_CLOUD_MODEL = "google/gemini-2.5-flash"
 
 
 class ModelRouter:
@@ -48,12 +49,21 @@ class ModelRouter:
         self.fallback_chain = fallback_chain
         self.config_model = config_model
 
-    async def get_best_model(self) -> str:
+    async def get_best_model(self, *, has_photo: bool = False) -> str:
         """
-        Возвращает лучшую доступную модель: явная из конфига, затем локаль (LM Studio), затем облако.
+        Возвращает лучшую доступную модель.
+        При has_photo=True возвращает облачную vision-модель (fallback).
         """
         if self.config_model and self.config_model != "auto":
             return self.config_model
+
+        if has_photo:
+            return await get_best_cloud_model(
+                self.gemini_api_key,
+                self._http_client,
+                config_model="google/gemini-2.5-flash",
+                verify_fn=cloud_verify_gemini_access,
+            )
 
         # Сначала пробуем локаль по цепочке
         for model_id in self.fallback_chain:
@@ -71,9 +81,8 @@ class ModelRouter:
                             error=str(e),
                         )
                         continue
-                break  # дальше по цепочке не ищем локаль
+                break
 
-        # Облачный fallback через cloud_gateway
         return await get_best_cloud_model(
             self.gemini_api_key,
             self._http_client,

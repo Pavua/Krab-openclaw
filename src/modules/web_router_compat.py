@@ -9,14 +9,12 @@ doesn't crash — it just shows "not configured" in the UI.
 """
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import structlog
 
 from ..config import config
-from ..core.local_health import is_lm_studio_available
 
 logger = structlog.get_logger(__name__)
 
@@ -34,6 +32,8 @@ class WebRouterCompat:
         self._last_route: dict[str, Any] = {}
         self._feedback: list[dict[str, Any]] = []
         self.force_mode: Optional[str] = None
+        self.active_tier: str = getattr(openclaw_client, "active_tier", "free")
+        self.cloud_soft_cap_reached: bool = False
         self.rag = None
         self.models: dict[str, str] = {"chat": config.MODEL}
 
@@ -136,6 +136,7 @@ class WebRouterCompat:
             prompt, chat_id="web_assistant", force_cloud=config.FORCE_CLOUD
         ):
             chunks.append(chunk)
+        self.active_tier = getattr(self.openclaw_client, "active_tier", self.active_tier)
         return "".join(chunks)
 
     # --- Explain / Preflight / Recommendation ---
@@ -206,6 +207,7 @@ class WebRouterCompat:
             "model": config.MODEL,
             "ram": self._mm.get_ram_usage(),
             "usage": self.get_usage_summary(),
+            "active_tier": getattr(self.openclaw_client, "active_tier", self.active_tier),
             "alerts": [],
         }
 

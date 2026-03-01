@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 import httpx
 import structlog
 
+from .cloud_key_probe import is_ai_studio_key
 from .model_types import ModelInfo, ModelStatus, ModelType
 
 if TYPE_CHECKING:
@@ -26,19 +27,21 @@ logger = structlog.get_logger(__name__)
 
 # --- Облачные тиры (порядок приоритета: tier_1 быстрее/дешевле, далее дороже/мощнее) ---
 CLOUD_TIER_1_IDS = [
-    "google/gemini-2.0-flash-exp",
-    "google/gemini-2.0-flash",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "google/gemini-3-flash-preview",
     "google/gemini-flash-latest",
 ]
 CLOUD_TIER_2_IDS = [
+    "google/gemini-2.5-pro",
+    "google/gemini-2.0-flash",
+]
+CLOUD_TIER_3_IDS = [
     "google/gemini-1.5-pro-latest",
     "google/gemini-1.5-pro",
 ]
-CLOUD_TIER_3_IDS = [
-    "google/gemini-pro-latest",
-]
 
-DEFAULT_CLOUD_MODEL = "google/gemini-2.0-flash"
+DEFAULT_CLOUD_MODEL = "google/gemini-2.5-flash"
 
 
 class CloudErrorKind(Enum):
@@ -202,7 +205,7 @@ async def resolve_working_gemini_key(
     api_key_paid: Optional[str],
     client: "AsyncClient",
     *,
-    test_model: str = "gemini-2.0-flash",
+    test_model: str = "gemini-2.5-flash",
     _cache: dict[str, Optional[str]] = {},
 ) -> Optional[str]:
     """
@@ -215,6 +218,9 @@ async def resolve_working_gemini_key(
     for label, key in [("free", api_key_free), ("paid", api_key_paid)]:
         if not key:
             continue
+        if not is_ai_studio_key(key):
+            logger.warning("gemini_key_invalid_format", tier=label)
+            continue
         ok = await verify_gemini_access(test_model, key, client, timeout=10.0)
         if ok:
             logger.info("gemini_key_resolved", tier=label)
@@ -222,7 +228,7 @@ async def resolve_working_gemini_key(
             return key
         logger.warning("gemini_key_failed", tier=label)
 
-    _cache["resolved"] = api_key_free or api_key_paid or None
+    _cache["resolved"] = None
     return _cache["resolved"]
 
 
@@ -242,6 +248,8 @@ async def fetch_google_models_with_fallback(
     """Tries free key first for model listing; falls back to paid."""
     for key in [api_key_free, api_key_paid]:
         if not key:
+            continue
+        if not is_ai_studio_key(key):
             continue
         result = await fetch_google_models(key, client, models_cache=models_cache, timeout=timeout)
         if result:
