@@ -118,5 +118,20 @@ class CacheManager:
             logger.warning("cache_clear_expired_error", error=str(e))
 
 
+    def delete(self, key: str) -> None:
+        """Удаляет запись по ключу. При ошибке молча логирует."""
+        try:
+            self._backend_delete(key)
+            logger.debug("cache_delete", key=key)
+        except sqlite3.Error as e:
+            logger.warning("cache_delete_error", key=key, error=str(e))
+
+
+# TTL для истории чатов (24 часа) — переживает рестарт бота
+HISTORY_CACHE_TTL = 86400
+
 # Singleton для кэша поиска
 search_cache = CacheManager("search_cache.db")
+
+# Singleton для кэша истории диалогов
+history_cache = CacheManager("history_cache.db")

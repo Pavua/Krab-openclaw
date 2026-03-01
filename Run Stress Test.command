@@ -1,8 +1,28 @@
 #!/bin/bash
-# 🧪 Run Stress Test 🦀
+# 🧪 Run Tests 🦀
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
-echo "🧪 Launching Stress Test in new window..."
-osascript -e "tell application \"Terminal\" to do script \"cd '$DIR' && ./scripts/stress_tester.sh\""
+echo "🧪 Launching Tests..."
+
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+elif [ -d "venv" ]; then
+    source venv/bin/activate
+fi
+
+echo "--- Unit Tests ---"
+python -m pytest tests/unit/ -v
+
+echo ""
+echo "--- Integration Tests ---"
+python -m pytest tests/integration/ -v
+
+echo ""
+echo "--- E2E Tests ---"
+python -m pytest tests/e2e/ -v
+
+echo ""
+echo "✅ All tests completed."
+read -p "Press Enter to close..."

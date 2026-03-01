@@ -6,19 +6,19 @@ cd "$DIR"
 
 echo "🛑 Stopping Krab System..."
 
-# Убиваем юзербота
+# Останавливаем юзербота
 pkill -f "src.main" && echo "✅ Userbot stopped." || echo "ℹ️ Userbot not running."
 
-# Убиваем OpenClaw
+# Останавливаем OpenClaw
 if [ -f .openclaw.pid ]; then
     PID=$(cat .openclaw.pid)
-    kill $PID 2>/dev/null && echo "✅ OpenClaw Gateway stopped."
-    rm .openclaw.pid
+    kill $PID 2>/dev/null && echo "✅ OpenClaw Gateway stopped (PID $PID)."
+    rm -f .openclaw.pid
 else
     pkill -f "openclaw gateway" && echo "✅ OpenClaw Gateway killed." || echo "ℹ️ OpenClaw not running."
 fi
 
-# Очистка логов
+# Очистка временных файлов
 echo "🧹 Cleaning session files..."
 rm -f *.session-journal *.session-wal
 

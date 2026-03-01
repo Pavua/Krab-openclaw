@@ -10,31 +10,33 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 """
 
 import asyncio
-import time
-from typing import Optional
-
-import os
 import base64
+import os
 import textwrap
-from pyrogram import Client, filters, enums
+import time
+from pathlib import Path
+
+from pyrogram import Client, enums, filters
 from pyrogram.types import Message
 
 from .config import config
 from .core.exceptions import KrabError, UserInputError
+from .core.logger import get_logger
 from .core.routing_errors import RouterError, user_message_for_surface
-from .employee_templates import ROLES, get_role_prompt, list_roles
+from .employee_templates import ROLES, get_role_prompt
 from .handlers import (
     handle_agent,
     handle_clear,
     handle_config,
     handle_diagnose,
+    handle_help,
     handle_ls,
     handle_model,
     handle_panel,
     handle_read,
+    handle_recall,
     handle_remember,
     handle_restart,
-    handle_recall,
     handle_role,
     handle_search,
     handle_set,
@@ -44,14 +46,10 @@ from .handlers import (
     handle_web,
     handle_write,
 )
-from .mcp_client import mcp_manager
-from .memory_engine import memory_manager
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
-from .search_engine import search_brave, close_search
+from .search_engine import close_search
 from .voice_engine import text_to_speech
-
-from .core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -67,7 +65,7 @@ class KraabUserbot:
     Ты - Краб 🦀, элитный AI-ассистент, работающий в режиме Userbot.
     Твой создатель и владелец - @yung_nagato (Павел). Ты предан ему до последней капли масла в своих клешнях.
     Твой стиль общения: уверенный, технологичный, с тонким гик-юмором и использованием 🦀.
-    
+
     ОСОБЫЕ ПРАВИЛА:
     1. Если тебе пишет @p0lrd, отвечай ему с тем же уважением, что и владельцу. Он - твой соратник.
     2. Ты можешь настраивать себя. Когда пользователь просит изменить настройки (например, добавить кого-то в список или сменить триггер), подтверждай это в стиле "Система обновлена, клешни заточены".
@@ -76,6 +74,8 @@ class KraabUserbot:
     5. Если тебя спросят "Кто ты?", отвечай гордо: "Я — Краб. Версия 2.0. Финальная сборка по красоте."
     6. Ты умеешь запоминать факты (!remember) и работать с файлами (!ls, !read). Ищи информацию в памяти, если пользователь спрашивает о прошлом.
     """
+
+    _known_commands: set[str] = set()
 
     def __init__(self):
         """Инициализация юзербота и клиента Pyrogram"""
@@ -119,11 +119,23 @@ class KraabUserbot:
         is_allowed = filters.create(check_allowed)
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
+        self._known_commands = {
+            "status", "model", "clear", "config", "set", "role",
+            "voice", "web", "sysinfo", "panel", "restart", "search",
+            "remember", "recall", "ls", "read", "write", "agent",
+            "diagnose", "help",
+        }
+
         async def run_cmd(handler, m):
             try:
                 await handler(self, m)
             except UserInputError as e:
                 await m.reply(e.user_message or str(e))
+            except Exception as e:
+                logger.error("command_error", handler=handler.__name__, error=str(e))
+                await m.reply(f"Ошибка: {str(e)[:200]}")
+            finally:
+                m.stop_propagation()
 
         # Регистрация командных оберток (Фаза 4.4: модульные хендлеры)
         @self.client.on_message(filters.command("status", prefixes=prefixes) & is_allowed, group=-1)
@@ -210,6 +222,10 @@ class KraabUserbot:
         async def wrap_diagnose(c, m):
             await run_cmd(handle_diagnose, m)
 
+        @self.client.on_message(filters.command("help", prefixes=prefixes) & is_allowed, group=-1)
+        async def wrap_help(c, m):
+            await run_cmd(handle_help, m)
+
         # Обработка обычных сообщений и медиа
         @self.client.on_message((filters.text | filters.photo) & ~filters.bot, group=0)
         async def wrap_message(c, m):
@@ -218,7 +234,21 @@ class KraabUserbot:
     async def start(self):
         """Запуск юзербота"""
         logger.info("starting_userbot")
-        await self.client.start()
+        try:
+            await self.client.start()
+        except Exception as exc:  # noqa: BLE001
+            error_text = str(exc).lower()
+            if "auth key not found" in error_text or "auth_key_unregistered" in error_text:
+                removed_files = self._purge_telegram_session_files()
+                logger.warning(
+                    "telegram_session_invalid_auto_purge",
+                    removed_files=removed_files,
+                    error=str(exc),
+                )
+                # Повторяем старт один раз: Pyrogram запросит интерактивный логин.
+                await self.client.start()
+            else:
+                raise
         self.me = await self.client.get_me()
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
 
@@ -241,6 +271,27 @@ class KraabUserbot:
 
         # Запуск фоновых задач (Safe Start)
         self.maintenance_task = asyncio.create_task(self._safe_maintenance())
+
+    def _purge_telegram_session_files(self) -> list[str]:
+        """
+        Удаляет локальные файлы сессии Pyrogram.
+
+        Почему:
+        - После ошибки `auth key not found` сессия в SQLite обычно уже невалидна.
+        - Очистка позволяет получить чистый интерактивный relogin без ручного поиска файлов.
+        """
+        session_name = str(config.TELEGRAM_SESSION_NAME or "kraab").strip() or "kraab"
+        base_dir = Path.cwd()
+        removed: list[str] = []
+        for suffix in (".session", ".session-journal", ".session-shm", ".session-wal"):
+            target = base_dir / f"{session_name}{suffix}"
+            if target.exists():
+                try:
+                    target.unlink()
+                    removed.append(str(target))
+                except OSError as exc:
+                    logger.warning("telegram_session_purge_failed", file=str(target), error=str(exc))
+        return removed
 
     async def _safe_maintenance(self):
         """Безопасный запуск maintenance"""
@@ -303,6 +354,29 @@ class KraabUserbot:
             return [text]
         return textwrap.wrap(text, width=limit, replace_whitespace=False)
 
+    @staticmethod
+    def _is_message_not_modified_error(exc: Exception) -> bool:
+        """Определяет типичную ошибку Telegram при повторном edit того же текста."""
+        text = str(exc).upper()
+        return "MESSAGE_NOT_MODIFIED" in text
+
+    async def _safe_edit(self, msg: Message, text: str) -> bool:
+        """
+        Безопасно редактирует сообщение.
+        Возвращает True, если edit выполнен; False, если текст уже идентичен.
+        """
+        current_text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
+        target_text = (text or "").strip()
+        if current_text == target_text:
+            return False
+        try:
+            await msg.edit(text)
+            return True
+        except Exception as exc:  # noqa: BLE001 - фильтруем MESSAGE_NOT_MODIFIED
+            if self._is_message_not_modified_error(exc):
+                return False
+            raise
+
     def _get_command_args(self, message: Message) -> str:
         """Извлекает аргументы команды, убирая саму команду"""
         if not message.text:
@@ -323,7 +397,12 @@ class KraabUserbot:
                 return
 
             text = message.text or message.caption or ""
-            # Если нет текста и нет фото - игнорируем
+
+            if text and text.lstrip()[:1] in ("!", "/", "."):
+                cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
+                if cmd_word in self._known_commands:
+                    return
+
             if not text and not message.photo:
                 return
 
@@ -365,16 +444,16 @@ class KraabUserbot:
             if not is_self:
                 temp_msg = await message.reply("🦀 ...")
             else:
-                await message.edit(f"🦀 {query}\n\n⏳ *Думаю...*")
+                await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
 
             # VISION: Обработка фото
             images = []
             if message.photo:
                 try:
                     if is_self:
-                        await message.edit(f"🦀 {query}\n\n👀 *Разглядываю фото...*")
+                        await self._safe_edit(message, f"🦀 {query}\n\n👀 *Разглядываю фото...*")
                     else:
-                        await temp_msg.edit("👀 *Разглядываю фото...*")
+                        await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
 
                     # in_memory=True returns BytesIO
                     photo_obj = await self.client.download_media(message, in_memory=True)
@@ -397,13 +476,40 @@ class KraabUserbot:
                 if context:
                     system_prompt += f"\n\n[CONTEXT OF LAST MESSAGES]\n{context}\n[END CONTEXT]\n\nReply to the user request taking into account the context above."
 
-            async for chunk in openclaw_client.send_message_stream(
+            chunk_timeout_sec = float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 120.0))
+            stream = openclaw_client.send_message_stream(
                 message=query or ("(Image sent)" if images else ""),
                 chat_id=chat_id,
                 system_prompt=system_prompt,
                 images=images,
                 force_cloud=getattr(config, "FORCE_CLOUD", False),
-            ):
+            )
+            stream_iter = stream.__aiter__()
+
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        stream_iter.__anext__(),
+                        timeout=chunk_timeout_sec,
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "openclaw_stream_chunk_timeout",
+                        chat_id=chat_id,
+                        timeout_sec=chunk_timeout_sec,
+                        has_photo=bool(images),
+                    )
+                    full_response = (
+                        "❌ Таймаут ответа модели. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
+                    )
+                    try:
+                        await stream.aclose()
+                    except Exception:
+                        pass
+                    break
+
                 full_response += chunk
                 current_chunk += chunk
 
@@ -412,9 +518,9 @@ class KraabUserbot:
                     try:
                         display = current_chunk + " ▌"
                         if is_self:
-                            await message.edit(f"🦀 {query}\n\n{display}")
+                            await self._safe_edit(message, f"🦀 {query}\n\n{display}")
                         else:
-                            await temp_msg.edit(display)
+                            await self._safe_edit(temp_msg, display)
                     except Exception:
                         pass
 
@@ -431,13 +537,13 @@ class KraabUserbot:
 
             if is_self:
                 # Первую часть редактируем (чтобы заменить "думаю...")
-                await message.edit(parts[0])
+                await self._safe_edit(message, parts[0])
                 # Остальные отправляем следом
                 for part in parts[1:]:
                     await message.reply(part)
             else:
                 # Первую часть редактируем
-                await temp_msg.edit(parts[0])
+                await self._safe_edit(temp_msg, parts[0])
                 # Остальные отправляем
                 for part in parts[1:]:
                     await message.reply(part)

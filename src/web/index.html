@@ -1,0 +1,2984 @@
+<!doctype html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Krab Web Panel V2</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/nano_theme.css" />
+  <style>
+    /* ----- GRID SYSTEM (Page Specific) ----- */
+    .grid-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .grid-middle {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    /* ----- SPECIFIC COMPONENTS ----- */
+    /* Assistant Section */
+    .assistant-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--border-subtle);
+    }
+
+    .assistant-output {
+      margin-top: 20px;
+      white-space: pre-wrap;
+      line-height: 1.6;
+      font-size: 0.95rem;
+      font-family: var(--font-mono);
+      min-height: 180px;
+      max-height: 500px;
+      overflow-y: auto;
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      background: #090a0c;
+      /* Scrollbar styling */
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-subtle) transparent;
+    }
+
+    .assistant-output::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .assistant-output::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .assistant-output::-webkit-scrollbar-thumb {
+      background: var(--border-subtle);
+      border-radius: 4px;
+    }
+
+    .assistant-output::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+
+    /* Links & Lists (Card Specific) */
+    .link-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .link-list a {
+      color: var(--accent-cyan);
+      text-decoration: none;
+      font-size: 0.9rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .link-list a:hover {
+      color: var(--text-main);
+    }
+
+    .link-list a::before {
+      content: "→";
+      opacity: 0.5;
+      transition: transform 0.2s;
+    }
+
+    .link-list a:hover::before {
+      transform: translateX(3px);
+      color: var(--accent-cyan);
+      opacity: 1;
+    }
+
+    /* Ops Alerts List */
+    .ops-history {
+      margin-top: 16px;
+      max-height: 200px;
+      overflow-y: auto;
+      border-radius: var(--radius-sm);
+      background: rgba(0, 0, 0, 0.3);
+      padding: 12px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      word-break: break-word;
+      line-height: 1.4;
+    }
+
+    @media (max-width: 900px) {
+      .grid-middle {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* --- Assistant Refactor CSS --- */
+    .route-badge {
+      font-size: 0.75rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+    }
+
+    .route-badge.local {
+      color: var(--accent-orange);
+      border-color: var(--accent-orange);
+    }
+
+    .route-badge.cloud {
+      color: var(--accent-cyan);
+      border-color: var(--accent-cyan);
+    }
+
+    .route-badge.auto {
+      color: var(--accent-purple);
+      border-color: var(--accent-purple);
+    }
+
+    .error-class {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: rgba(239, 68, 68, 0.1);
+      border-left: 3px solid var(--state-error);
+      color: var(--state-error);
+      font-size: 0.85rem;
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+
+    .assistant-history {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--border-card);
+      max-height: 250px;
+      overflow-y: auto;
+    }
+
+    @keyframes skeleton-loading {
+      0% {
+        opacity: 0.5;
+      }
+
+      50% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0.5;
+      }
+    }
+
+    .skeleton-text {
+      animation: skeleton-loading 1.5s infinite ease-in-out;
+      color: transparent !important;
+      background: rgba(255, 255, 255, 0.1) !important;
+      border-radius: 4px;
+      min-width: 40px;
+      display: inline-block;
+    }
+
+    .history-item {
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      margin-bottom: 8px;
+      font-size: 0.8rem;
+    }
+
+    .history-prompt {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-main);
+      margin-bottom: 4px;
+    }
+
+    @media (max-width: 390px) {
+      body {
+        overflow-x: hidden;
+      }
+
+      .container {
+        padding: 12px;
+        max-width: 100vw;
+        box-sizing: border-box;
+      }
+
+      .grid-metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .card {
+        padding: 16px !important;
+        box-sizing: border-box;
+      }
+
+      .assistant-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .assistant-actions button {
+        width: 100%;
+        margin-bottom: 6px;
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr !important;
+      }
+
+      .card button {
+        white-space: normal;
+        height: auto;
+      }
+
+
+      .assistant-output {
+        min-height: 120px;
+        font-size: 0.85rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="toastContainer"
+    style="position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 10000; pointer-events: none;">
+  </div>
+  <div class="container">
+    <div id="fileProtocolWarning" class="card"
+      style="display:none; border-color: var(--state-warn); margin-bottom: 16px;">
+      <h4 class="card-title" style="color: var(--state-warn);">Неверный режим открытия</h4>
+      <p class="card-meta">
+        Панель открыта как файл (`file://`). Для корректной работы API открой через `http://127.0.0.1:8080`.
+      </p>
+    </div>
+
+    <header>
+      <div class="header-titles" style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <h1>Krab Web Panel V2</h1>
+          <div id="tokenStatusBadge" class="badge warn"
+            style="display: flex; align-items: center; gap: 6px; border-radius:12px; font-size: 0.75rem; padding: 4px 10px; font-family: var(--font-mono); transition: all 0.3s ease;">
+            <div class="pulse-warn" id="tokenPulse"
+              style="width:6px; height:6px; background:currentColor; border-radius:50%;"></div>
+            <span id="tokenStatusText">Missing Token</span>
+          </div>
+        </div>
+        <p class="subtitle">Nexus Orchestration & Local LM Gateway</p>
+      </div>
+      <button id="refreshBtn" class="primary" aria-label="Синхронизировать данные">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 1.95-10.42L2 7" />
+        </svg>
+        Sync Data
+      </button>
+    </header>
+
+    <!-- --- CORE HEALTH --- -->
+    <div class="grid-metrics" style="margin-bottom: 24px;">
+      <div class="card" style="border-left: 3px solid var(--accent-cyan); display: flex; flex-direction: column;">
+        <h3 class="card-title" style="display: flex; align-items: center; justify-content: space-between;">
+          Core Liveness (Lite)
+          <div id="coreLivenessPulse" class="pulse-warn"
+            style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></div>
+        </h3>
+        <p class="card-value" id="coreLivenessStatus" style="font-size: 1.2rem; margin-top: 8px;">—</p>
+        <p class="card-meta" id="coreLivenessTime"
+          style="margin-top: auto; padding-top: 12px; font-family: var(--font-mono); font-size: 0.75rem;">Waiting for
+          ping...</p>
+      </div>
+
+      <div class="card" style="border-left: 3px solid var(--accent-purple); display: flex; flex-direction: column;">
+        <h3 class="card-title" style="display: flex; align-items: center; justify-content: space-between;">
+          Ecosystem Deep Health
+          <span id="deepHealthRisk" class="badge"
+            style="background: rgba(255,255,255,0.1); border-color: transparent;">—</span>
+        </h3>
+        <p class="card-value" id="deepHealthStatus" style="font-size: 1.2rem; margin-top: 8px;">—</p>
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 8px; line-height: 1.4;"
+          id="deepHealthDegradation">—</div>
+        <p class="card-meta" id="deepHealthTime"
+          style="margin-top: auto; padding-top: 12px; font-family: var(--font-mono); font-size: 0.75rem;">Waiting for
+          deep scan...</p>
+      </div>
+    </div>
+
+    <!-- --- METRICS --- -->
+    <div class="grid-metrics">
+      <div class="card">
+        <h3 class="card-title">Система</h3>
+        <p class="card-value break-word" id="degradation">—</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Black Box</h3>
+        <p class="card-value" id="bb_total">—</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">RAG Docs</h3>
+        <p class="card-value" id="rag_total">—</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Local Model</h3>
+        <p class="card-value break-word" id="local_model">—</p>
+      </div>
+    </div>
+
+    <!-- --- SERVICES & OPS --- -->
+    <div class="grid-middle">
+      <div class="form-group" style="gap: 16px">
+        <div class="card state-container" style="padding: 20px;">
+          <h3 class="card-title">Сервисы & Интеграции</h3>
+          <div id="checks" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">—</div>
+          <div class="card-meta" id="updated_at" style="font-family: var(--font-mono); font-size: 0.75rem;">Waiting for
+            sync...</div>
+        </div>
+
+        <div class="card state-container"
+          style="background: linear-gradient(145deg, var(--bg-surface), var(--bg-panel)); padding: 20px;">
+          <h3 class="card-title">Рекомендовано (Routing)</h3>
+          <p class="card-value text-info" id="recommended_model"
+            style="font-size: 1.4rem; text-shadow: var(--accent-glow); margin-bottom: 8px;">
+            —
+          </p>
+          <p class="card-meta" id="recommended_meta" style="line-height: 1.5;"></p>
+        </div>
+
+        <div class="card state-container" style="padding: 20px;">
+          <details>
+            <summary class="card-title"
+              style="cursor: pointer; margin: 0; display: flex; align-items: center; justify-content: space-between;">
+              <span>Диагностика & API Ссылки</span>
+              <span style="opacity: 0.5;">▼</span>
+            </summary>
+            <div class="link-list" id="links"
+              style="margin-top: 16px; max-height: 200px; overflow-y: auto; padding-right: 8px;">
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="card state-container" style="display: flex; flex-direction: column;">
+        <h3 class="card-title" style="color: var(--text-main); margin-bottom: 16px;">
+          Ops Center v2
+        </h3>
+
+        <!-- Queue and Routing Blocks -->
+        <div class="ops-v2-grid" style="display: grid; gap: 16px; margin-bottom: 24px;">
+          <!-- Queue Stability Card -->
+          <div class="card state-container queue-status-ok" id="queueStabilityContainer"
+            style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+            <h4 class="form-label" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+              <div id="queueStabilityPulse"
+                style="width: 8px; height: 8px; border-radius: 50%; background: var(--state-ok);" class="pulse-ok">
+              </div>
+              Queue Stability
+            </h4>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+              <span class="card-meta" style="margin: 0;">Глубина очереди:</span>
+              <span id="opsQueueLength" class="card-value"
+                style="font-size: 0.95rem; font-family: var(--font-mono);">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Активные задачи:</span>
+              <span id="opsActiveTasks" class="card-value" style="font-size: 0.9rem; color: var(--text-main);">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Среднее время (с):</span>
+              <span id="opsAvgTaskTime" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-main);">0.0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Возраст старейшей:</span>
+              <span id="opsOldestTaskAge" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">0s</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Застрявшие задачи:</span>
+              <span id="opsStuckTasks" class="card-value"
+                style="font-size: 0.9rem; color: var(--state-ok); font-weight: 600;">0</span>
+            </div>
+            <!-- R17 Phase 3: Queue Observability -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Task Aborts/Retries:</span>
+              <span id="opsTaskAborts" class="card-value" style="font-size: 0.9rem; color: var(--text-main);">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Guard Triggers:</span>
+              <span id="opsGuardTriggers" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-main);">0</span>
+            </div>
+          </div>
+
+          <!-- Cloud Routing Card -->
+          <div class="card state-container"
+            style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+            <h4 class="form-label"
+              style="margin-bottom: 12px; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);"
+                class="pulse-ai"></div>
+              Cloud Routing UX
+            </h4>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+              <span class="card-meta" style="margin: 0;">Активный тир:</span>
+              <span id="opsCloudActiveTier" class="badge cloud-tier-badge">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Использован Fallback:</span>
+              <span id="opsCloudFallbackUsed" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">No</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Причина Fallback:</span>
+              <span id="opsCloudFallbackReason" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; color: var(--text-muted); max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Код последней ошибки:</span>
+              <span id="opsCloudErrorCode" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">None</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Заблокировано (Preflight):</span>
+              <span id="opsCloudBlockedProviders" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; color: var(--state-warn); max-width: 130px; text-align: right;">0</span>
+            </div>
+          </div>
+
+          <!-- SLA Metrics Card -->
+          <div class="card state-container"
+            style="padding: 16px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);">
+            <h4 class="form-label"
+              style="margin-bottom: 12px; color: var(--state-purple); display: flex; align-items: center; gap: 8px;">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--state-purple);"
+                class="pulse-ai"></div>
+              SLA & Performance
+            </h4>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 6px; margin-bottom: 6px;">
+              <span class="card-meta" style="margin: 0;">Success Rate:</span>
+              <span id="opsSlaSuccessRate" class="card-value skeleton-text"
+                style="font-size: 0.95rem; font-family: var(--font-mono);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Latency p50:</span>
+              <span id="opsSlaP50" class="card-value skeleton-text"
+                style="font-size: 0.9rem; color: var(--text-main);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Latency p95:</span>
+              <span id="opsSlaP95" class="card-value skeleton-text"
+                style="font-size: 0.9rem; color: var(--text-main);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span class="card-meta" style="margin: 0;">Fail-Fast Count:</span>
+              <span id="opsSlaFailFast" class="card-value skeleton-text"
+                style="font-size: 0.9rem; color: var(--state-warn);">—</span>
+            </div>
+          </div>
+        </div>
+
+        <h4 class="form-label" style="margin-bottom: 12px; color: var(--state-warn)">Alerts & Guardrails</h4>
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <input id="opsAlertSearch" class="field" placeholder="Поиск по коду alert..." style="flex:1;"
+            oninput="filterAlerts()" />
+        </div>
+        <div id="opsAlerts" class="card-meta"
+          style="max-height: 180px; overflow-y: auto; padding-right: 4px; margin-bottom: 12px; border-radius: var(--radius-sm);">
+          —</div>
+        <p class="card-meta" id="opsUsageMeta"
+          style="border-top: 1px dashed var(--border-card); padding-top: 12px; line-height: 1.5;"></p>
+
+        <div
+          style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-subtle); background: rgba(0,0,0,0.2); margin-left: -24px; margin-right: -24px; padding-left: 24px; padding-right: 24px;">
+          <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap: 12px;">
+            <input id="opsAlertCode" class="field" placeholder="Alert Code (ex: cloud_share)"
+              style="background: var(--bg-panel);" />
+            <input id="opsAlertNote" class="field" placeholder="Note (opt)" style="background: var(--bg-panel);" />
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 12px;">
+            <button id="opsAckBtn" class="primary" style="flex: 1;">Acknowledge</button>
+            <button id="opsUnackBtn" style="flex: 1;">Revoke Ack</button>
+          </div>
+          <p class="card-meta" id="opsActionMeta" style="margin-top: 12px; text-align: center;">Ожидание...</p>
+        </div>
+
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; flex-wrap: wrap; gap: 8px;">
+          <h4 class="form-label" style="margin: 0;">Event Timeline (Timeline UI)</h4>
+          <div style="display: flex; gap: 6px;">
+            <select id="tlFilterSeverity" class="field" style="padding: 2px 6px; font-size: 0.75rem;">
+              <option value="all">All Sev</option>
+              <option value="info">Info</option>
+              <option value="warn">Warn</option>
+              <option value="error">Error</option>
+            </select>
+            <select id="tlFilterChannel" class="field" style="padding: 2px 6px; font-size: 0.75rem;">
+              <option value="all">All Chan</option>
+              <option value="local">Local</option>
+              <option value="cloud">Cloud</option>
+            </select>
+            <select id="tlFilterType" class="field" style="padding: 2px 6px; font-size: 0.75rem;">
+              <option value="all">All Types</option>
+              <option value="metrics">Metrics</option>
+              <option value="routing">Routing</option>
+              <option value="lifecycle">Lifecycle</option>
+            </select>
+          </div>
+        </div>
+        <div id="opsHistory" class="ops-history empty"
+          style="flex: 1; border: 1px solid var(--border-subtle); background: var(--bg-panel); margin-top: 8px; color: var(--text-main); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);">
+          <div class="empty-state skeleton-box" style="padding: 24px 0">
+            <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"
+              style="margin-bottom: 12px; color: var(--text-placeholder)">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z">
+              </path>
+            </svg>
+            <div style="font-size: 0.85rem">
+              Loading timeline events...
+            </div>
+          </div>
+        </div>
+
+        <!-- --- RUNTIME CONTROLS --- -->
+        <h4 class="form-label" style="margin-top: 24px; color: var(--accent-orange);">Runtime Controls</h4>
+        <div
+          style="display: flex; gap: 16px; margin-bottom: 12px; font-size: 0.85rem; padding-bottom: 8px; border-bottom: 1px dashed var(--border-card);">
+          <div><span class="card-meta">Channel State:</span> <span id="rtChannelState" class="badge">Wait...</span>
+          </div>
+          <div><span class="card-meta">Breaker State:</span> <span id="rtBreakerState" class="badge">Wait...</span>
+          </div>
+        </div>
+        <div class="form-grid"
+          style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px;">
+          <button id="rtRepairCoreBtn" style="padding: 6px 10px; font-size: 0.8rem; justify-content: center;">Repair
+            Core</button>
+          <button id="rtClearCacheBtn" style="padding: 6px 10px; font-size: 0.8rem; justify-content: center;">Clear
+            Cache</button>
+          <button id="rtResetTierBtn"
+            style="padding: 6px 10px; font-size: 0.8rem; justify-content: center; border-color: var(--state-error); color: var(--state-error);">Reset
+            Cloud Tier</button>
+          <button id="rtSmokeTriggerBtn"
+            style="padding: 6px 10px; font-size: 0.8rem; justify-content: center; border-color: var(--accent-cyan); color: var(--accent-cyan);">Run
+            Smoke Trigger</button>
+        </div>
+        <p class="card-meta" id="rtControlMeta" style="margin-top: 8px;">Ready.</p>
+      </div>
+    </div>
+
+    <!-- --- ANTI-413 RECOVERY --- -->
+    <div class="card" style="
+          border-top: 2px solid var(--state-warn);
+          padding: 24px;
+          margin-bottom: 24px;
+        ">
+      <h3 class="card-title" style="margin-bottom: 8px; color: var(--text-main);">
+        Anti-413 Recovery
+      </h3>
+      <p class="card-meta" style="margin-bottom: 10px;">
+        Быстрые действия для перехода в новый чат без потери контекста.
+      </p>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+        <button id="ctxCheckpointBtn" class="primary">Create Checkpoint</button>
+        <button id="ctxTransitionPackBtn">Build Transition Pack</button>
+        <button id="ctxRefreshBtn">Refresh Context Links</button>
+      </div>
+      <p id="ctxContextMeta" class="card-meta" style="margin-top: 12px;">Ожидание...</p>
+      <div id="ctxContextLinks" class="link-list" style="margin-top: 8px;">
+        <span class="card-meta">—</span>
+      </div>
+    </div>
+
+    <!-- --- OPENCLAW CONTROL CENTER --- -->
+    <div class="card" style="
+          border-top: 2px solid var(--accent-orange);
+          padding: 32px;
+          margin-bottom: 24px;
+        ">
+      <h3 class="card-title" style="
+            margin-bottom: 24px;
+            color: var(--text-main);
+            font-size: 1.1rem;
+          ">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          style="color: var(--accent-orange)">
+          <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+        </svg>
+        OpenClaw Control Center
+      </h3>
+
+      <div class="grid-metrics" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+        <!-- Status & Mode -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; color: var(--accent-orange); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange);"
+              class="pulse-warn"></div>
+            Route & Model
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Режим роутинга:</span>
+              <span id="ocForceMode" class="badge"
+                style="border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(14, 165, 233, 0.1);">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Локальный узел:</span>
+              <span id="ocLocalModel" class="card-value"
+                style="font-size: 0.95rem; font-family: var(--font-mono); color: var(--text-main);">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Облачные слоты:</span>
+              <span id="ocCloudSlots" class="card-value" style="font-size: 0.95rem; color: var(--text-main);">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Channels -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);" class="pulse-ok">
+            </div>
+            Channels Health
+          </h4>
+          <div id="ocChannelsList"
+            style="display: flex; flex-direction: column; gap: 10px; max-height: 120px; overflow-y: auto; padding-right: 4px;">
+            <span class="card-meta">—</span>
+          </div>
+          <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display:flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--border-card); padding-top: 8px;">
+              <span class="card-meta" style="margin: 0;">Relay reachable:</span>
+              <span id="ocRelayReachable" class="badge warn">—</span>
+            </div>
+            <div style="display:flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Tab attached:</span>
+              <span id="ocTabAttached" class="badge warn">—</span>
+            </div>
+            <div style="display:flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Last browser call:</span>
+              <span id="ocBrowserLast" class="card-meta text-ellipsis" style="max-width: 140px; text-align: right;">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Autoswitch -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label" style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+            Autoswitch & Queue
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Статус:</span>
+              <span id="ocAutoswitchStatus" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Последнее перекл.:</span>
+              <span id="ocLastSwitch" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Причина:</span>
+              <span id="ocSwitchReason" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right; color: var(--text-muted);">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Local Model Lifecycle -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label" style="margin-bottom: 16px;">
+            Local Model Engine
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Статус:</span>
+              <span id="ocLocalLifecycleStatus" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Загруженная модель:</span>
+              <span id="ocLocalLifecycleModel" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 150px; text-align: right;">—</span>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button id="ocLocalLoadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Загрузить по
+              умолчанию</button>
+            <button id="ocLocalUnloadBtn" style="flex: 1; padding: 6px 10px; font-size: 0.8rem;">Выгрузить</button>
+            <button id="ocLocalRefreshBtn"
+              style="width: 100%; padding: 6px 10px; margin-top: 4px; font-size: 0.8rem;">Синхронизировать
+              статус</button>
+          </div>
+        </div>
+
+
+        <!-- Control UI Compat -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label" style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+            Совместимость Control UI
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Runtime:</span>
+              <span id="ocCompatRuntime" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Schema Warning:</span>
+              <span id="ocCompatWarn" class="badge ok">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Уровень влияния:</span>
+              <span id="ocCompatImpact" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right; color: var(--text-muted);">—</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span class="card-meta" style="margin: 0;">Рекомендация:</span>
+              <span id="ocCompatAction" class="card-value text-ellipsis"
+                style="font-size: 0.85rem; text-align: left; color: var(--accent-cyan); white-space: normal;">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Effective Routing -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px; color: var(--accent-orange);">
+            Эффективный роутинг
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Запрошено:</span>
+              <span id="ocrouteReq" class="badge">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Эффективный:</span>
+              <span id="ocrouteEff" class="badge"
+                style="border-color: var(--accent-cyan); color: var(--accent-cyan);">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Активный слот/модель:</span>
+              <span id="ocrouteActive" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Cloud Fallback:</span>
+              <span id="ocrouteFallback" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">—</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span class="card-meta" style="margin: 0;">Decision notes:</span>
+              <span id="ocrouteNotes" class="card-value"
+                style="font-size: 0.8rem; text-align: left; color: var(--text-muted); white-space: normal;">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cloud Keys Diagnostics [R17] -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-cyan);" class="pulse-warn"
+              id="cloudKeysPulse"></div>
+            Cloud Keys Diagnostics
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">OpenClaw (OpenAI):</span>
+              <div style="text-align: right; line-height: 1.2;">
+                <span id="keyOpenClawStatus" class="badge">—</span><br />
+                <span id="keyOpenClawMask" class="card-meta" style="font-size: 0.75rem;">—</span>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="card-meta" style="margin: 0;">Google Gemini:</span>
+              <div style="text-align: right; line-height: 1.2;">
+                <span id="keyGeminiStatus" class="badge">—</span><br />
+                <span id="keyGeminiMask" class="card-meta" style="font-size: 0.75rem;">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="cloudKeyErrorHint"
+            style="display: none; padding: 12px; background: rgba(239, 68, 68, 0.1); border-left: 3px solid var(--state-error); border-radius: 4px; font-size: 0.85rem; margin-top: 12px; color: var(--text-main);">
+            <strong style="color: var(--state-error)">Error Detected:</strong> <span
+              id="cloudKeyErrorText"></span><br />
+            <span id="cloudKeyErrorNextStep" style="color: var(--text-muted); display: block; margin-top: 4px;"></span>
+          </div>
+          <button id="keyCheckOpenClawBtn"
+            style="width: 100%; padding: 6px 10px; margin-top: 12px; font-size: 0.8rem;">Deep Check OpenClaw
+            Connection</button>
+        </div>
+
+        <!-- Cloud Tier Status -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3); margin-top: 16px;">
+          <h4 class="form-label" style="margin-bottom: 16px; color: var(--accent-purple);">
+            Cloud Tier Status
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Active Tier:</span>
+              <span id="ocTierActive" class="badge auto">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Configured:</span>
+              <span id="ocTierLoaded" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right;">—</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span class="card-meta" style="margin: 0;">Last Error:</span>
+              <span id="ocTierLastError" class="card-value text-ellipsis"
+                style="font-size: 0.85rem; text-align: left; color: var(--text-muted); white-space: normal;">—</span>
+            </div>
+          </div>
+          <button id="ocCloudDiagBtn" class="primary" style="width: 100%; padding: 6px 10px; font-size: 0.85rem;"
+            onclick="runCloudDiag()">Run cloud diag</button>
+        </div>
+      </div>
+
+      <div class="assistant-actions" style="margin-top: 24px">
+        <button id="ocCloudProbeBtn" class="card-probe-btn" style="position: relative; overflow: hidden;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            style="margin-right: -4px;">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+            <polyline points="22 4 12 14.01 9 11.01" />
+          </svg>
+          Cloud Probe
+        </button>
+        <button id="ocApplyAutoswitchBtn" class="primary">
+          Apply Autoswitch
+        </button>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button id="ocModeLocalBtn" class="primary" style="flex:1">Режим Local</button>
+          <button id="ocModeAutoBtn" class="primary" style="flex:1">Режим Auto</button>
+          <button id="ocModeCloudBtn" class="primary" style="flex:1">Режим Cloud</button>
+          <button id="ocRefreshBtn" style="flex:1">Обновить статус</button>
+        </div>
+        <span class="card-meta" id="ocMeta" style="margin-left: auto; color: var(--text-main)">Готов</span>
+      </div>
+    </div>
+
+    <!-- --- AI ASSISTANT --- -->
+    <div class="card" style="border-top: 2px solid var(--accent-cyan); padding: 32px">
+      <h3 class="card-title" style="
+            margin-bottom: 24px;
+            color: var(--text-main);
+            font-size: 1.1rem;
+          ">
+        <svg id="assistantPulseIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" style="color: var(--accent-cyan); transition: all 0.3s ease;">
+          <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+        </svg>
+        Интерфейс AI Ассистента
+      </h3>
+
+      <!-- AI Engine Config -->
+      <div class="form-grid">
+        <div class="form-group">
+          <span class="form-label">Режим Роутинга</span>
+          <select id="modelModeSelect" class="field">
+            <option value="auto">Auto (Local-First)</option>
+            <option value="local">Local (Force)</option>
+            <option value="cloud">Cloud (Force)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <span class="form-label">Пресет</span>
+          <select id="modelPresetSelect" class="field">
+            <option value="balanced_auto">Balanced Auto</option>
+            <option value="local_focus">Local Focus</option>
+            <option value="cloud_reasoning">Cloud Reasoning</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <span class="form-label">Слот / Модель</span>
+          <div style="display: flex; gap: 8px">
+            <select id="modelSlotSelect" class="field" style="flex: 1">
+              <option value="chat">Chat</option>
+            </select>
+            <select id="modelChoiceSelect" class="field" style="flex: 2">
+              <option value="google/gemini-2.5-flash">
+                gemini-2.5-flash
+              </option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="assistant-actions">
+        <button id="modelCatalogReloadBtn">Обновить каталог</button>
+        <button id="modelApplyModeBtn">Применить режим</button>
+        <button id="modelApplyPresetBtn">Применить пресет</button>
+        <button id="modelApplySlotBtn">Сохранить слот</button>
+        <span class="card-meta" id="modelControlMeta" style="margin-left: auto">Каталог моделей загружен.</span>
+      </div>
+
+      <!-- Task Parameters -->
+      <div class="form-grid" style="
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border-subtle);
+          ">
+        <div class="form-group">
+          <span class="form-label">Тип Задачи</span>
+          <select id="assistantTaskType" class="field">
+            <option value="chat">Chat</option>
+            <option value="reasoning">Reasoning</option>
+            <option value="coding">Coding</option>
+            <option value="review">Review</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <span class="form-label">Глубина</span>
+          <select id="assistantReasoningDepth" class="field">
+            <option value="auto">Auto</option>
+            <option value="fast">Fast</option>
+            <option value="deep">Deep</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <span class="form-label">RAG Контекст</span>
+          <select id="assistantUseRag" class="field">
+            <option value="off">Off</option>
+            <option value="on">On</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <span class="form-label">API Key</span>
+          <input id="assistantApiKey" class="field" placeholder="API Ключ (опционально)" />
+        </div>
+      </div>
+
+      <textarea id="assistantPrompt" class="field" placeholder="Введите задачу, промпт или фрагмент кода..."></textarea>
+
+      <div class="assistant-actions" style="margin-top: 16px; flex-wrap: wrap; align-items: flex-start;">
+        <div style="display: flex; gap: 8px; flex: 1; min-width: 200px;">
+          <button id="assistantRunBtn" class="primary" aria-label="Запустить ассистента" style="flex: 1;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            Запустить
+          </button>
+          <button id="assistantPlanBtn" aria-label="Собрать preflight-план" style="flex: 1;">
+            План (Preflight)
+          </button>
+        </div>
+
+        <div id="assistantMetaContainer"
+          style="margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 180px;">
+          <div style="display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap;">
+            <span class="card-meta" style="margin:0;font-size:0.75rem;">Rule:</span>
+            <span id="assistantForceBadge" class="route-badge auto"
+              style="display: none; border-color: var(--text-muted); color: var(--text-muted);">Auto</span>
+            <span class="card-meta" style="margin:0;font-size:0.75rem;margin-left:4px;">Exec:</span>
+            <span id="assistantRouteBadge" class="route-badge auto" style="display: none;">—</span>
+            <span id="assistantModelBadge" class="card-meta"
+              style="margin: 0; margin-left:8px; font-size: 0.8rem;">Готов к
+              запуску</span>
+          </div>
+          <span id="assistantRouteDetail" class="card-meta"
+            style="font-size: 0.75rem; color: var(--text-muted); display: none; text-align: right; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+        </div>
+      </div>
+
+      <div id="assistantRetryContainer" style="display: none; margin-top: 12px; justify-content: flex-end; gap: 8px;">
+        <!-- Filled dynamically by JS -->
+      </div>
+
+      <div id="assistantOutput" class="assistant-output empty" style="margin-top: 12px;">
+        <div class="empty-state" style="height: 100%">
+          <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"
+            style="margin-bottom: 16px; color: var(--text-placeholder)">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z">
+            </path>
+          </svg>
+          <div style="
+                font-weight: 500;
+                color: var(--text-main);
+                margin-bottom: 8px;
+              ">
+            Ожидаю запрос
+          </div>
+          <div style="font-size: 0.9rem">
+            Запусти ассистента или используй быстрые утилиты ниже.
+          </div>
+        </div>
+      </div>
+
+      <div id="assistantHistory" class="assistant-history" style="display: none;">
+        <h4 class="form-label" style="margin-bottom: 12px; font-size: 0.85rem;">История запросов</h4>
+        <div id="assistantHistoryList"></div>
+      </div>
+
+      <!-- Quick Actions Tools -->
+      <div style="margin-top: 32px">
+        <h4 class="form-label" style="margin-bottom: 12px; font-size: 0.9rem">
+          Быстрые утилиты
+        </h4>
+        <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(170px, 1fr))">
+          <div class="form-group">
+            <input id="quickWebQuery" class="field" placeholder="Поисковый запрос..." />
+            <button id="quickWebBtn" style="width: 100%" aria-label="Искать в вебе">
+              Поиск
+            </button>
+          </div>
+          <div class="form-group">
+            <input id="quickDeepTopic" class="field" placeholder="Тема deep research..." />
+            <button id="quickDeepBtn" style="width: 100%" aria-label="Начать глубокое исследование">
+              Глубокое исследование
+            </button>
+          </div>
+          <div class="form-group">
+            <input id="quickSourceUrl" class="field" placeholder="URL для разбора..." />
+            <button id="quickUrlBtn" style="width: 100%" aria-label="Анализировать ссылку">
+              Анализ URL
+            </button>
+          </div>
+          <div class="form-group">
+            <input id="assistantFileInput" class="field" type="file" style="padding: 6px"
+              aria-label="Выбрать файл для загрузки" />
+            <button id="assistantAttachBtn" style="width: 100%" aria-label="Прикрепить файл">
+              Прикрепить файл
+            </button>
+          </div>
+        </div>
+        <p class="card-meta" id="quickActionMeta">
+          Используй утилиты для автоподготовки качественного промпта.
+        </p>
+      </div>
+
+      <!-- Feedback -->
+      <div class="form-grid" style="
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border-card);
+            grid-template-columns: 80px 140px 1fr auto auto;
+            align-items: center;
+            gap: 8px;
+          ">
+        <input id="feedbackScore" class="field" type="number" min="1" max="5" value="5" placeholder="1-5" />
+        <input id="feedbackProfile" class="field" placeholder="Профиль (опц)" />
+        <input id="feedbackNote" class="field" placeholder="Комментарии к отзыву..." />
+        <button id="feedbackSendBtn" class="primary">Отправить отзыв</button>
+        <button id="feedbackStatsBtn">Показать стату</button>
+      </div>
+      <p class="card-meta" id="feedbackMeta">
+        Score is applied to the latest engine run profile.
+      </p>
+    </div>
+  </div>
+
+  <!-- Legacy API JS integration stays intact to ensure 0 regression with the backend -->
+  <script>
+    if (window.location.protocol === 'file:') {
+      const warnBanner = document.getElementById('fileProtocolWarning');
+      if (warnBanner) warnBanner.style.display = 'block';
+    }
+
+    function badge(ok, label) {
+      const cls = ok ? "ok" : "warn";
+      return `<span class="badge ${cls}">${ok ? "ON" : "OFF"} ${label}</span>`;
+    }
+
+    function setText(id, value) {
+      const node = document.getElementById(id);
+      if (node) node.textContent = value;
+    }
+
+    function showApiError(id, actionName, error) {
+      const node = document.getElementById(id);
+      if (node) {
+        node.innerHTML = `<span style="color: var(--state-bad);">⚠️ Ошибка [${actionName}]: ${error.message}</span>`;
+      }
+      console.error(`[${actionName}]`, error);
+    }
+
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function showToast(msg, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      if (!container) return;
+      const el = document.createElement('div');
+      const bg = type === 'error' ? 'var(--state-critical)' : (type === 'warn' ? 'var(--state-warn)' : 'var(--state-ok)');
+      el.style = `background: ${bg}; color: var(--bg-panel); padding: 10px 16px; border-radius: 6px; font-size: 0.9rem; font-weight: 500; font-family: var(--font-main); box-shadow: 0 4px 12px rgba(0,0,0,0.5); opacity: 0; transform: translateY(10px); transition: all 0.3s ease; pointer-events: auto;`;
+      el.textContent = msg;
+      container.appendChild(el);
+
+      requestAnimationFrame(() => {
+        el.style.opacity = '1';
+        el.style.transform = 'translateY(0)';
+      });
+
+      setTimeout(() => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(10px)';
+        setTimeout(() => el.remove(), 300);
+      }, 3000);
+    }
+
+    function escapeHtml(text) {
+      return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function readWebApiKey() {
+      return (document.getElementById("assistantApiKey").value || "").trim();
+    }
+
+    async function postJson(url, body, withKey = true, method = "POST") {
+      const headers = { "Content-Type": "application/json" };
+      if (withKey) {
+        const webApiKey = readWebApiKey();
+        if (webApiKey) {
+          headers["X-Krab-Web-Key"] = webApiKey;
+        }
+      }
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: method === "DELETE" ? undefined : JSON.stringify(body || {}),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.detail || `HTTP ${response.status}`);
+      }
+      return payload;
+    }
+
+    function renderContextLinks(payload) {
+      const root = document.getElementById("ctxContextLinks");
+      if (!root) return;
+      const items = [
+        ["Latest checkpoint", payload?.latest_checkpoint_path],
+        ["Latest pack dir", payload?.latest_pack_dir],
+        ["Transfer prompt", payload?.latest_transfer_prompt_path],
+        ["Files to attach", payload?.latest_files_to_attach_path],
+      ].filter(([, value]) => !!value);
+
+      if (!items.length) {
+        root.innerHTML = '<span class="card-meta">Артефакты ещё не созданы.</span>';
+        return;
+      }
+
+      root.innerHTML = items
+        .map(([name, value]) => {
+          const rawPath = String(value || "");
+          const href = rawPath.startsWith("/") ? `file://${encodeURI(rawPath)}` : rawPath;
+          return `<a href="${href}" target="_blank" rel="noreferrer">${escapeHtml(name)}: ${escapeHtml(rawPath)}</a>`;
+        })
+        .join("");
+    }
+
+    async function loadContextLatest(showStatus = true) {
+      try {
+        if (showStatus) setText("ctxContextMeta", "Загружаю последние anti-413 артефакты...");
+        const payload = await fetchJson("/api/context/latest");
+        renderContextLinks(payload);
+        if (showStatus) setText("ctxContextMeta", "Список артефактов обновлен.");
+      } catch (error) {
+        setText("ctxContextMeta", `Ошибка загрузки контекста: ${error.message}`);
+      }
+    }
+
+    async function runContextCheckpoint() {
+      try {
+        setText("ctxContextMeta", "Создаю checkpoint...");
+        const payload = await postJson("/api/context/checkpoint", {}, true, "POST");
+        setText("ctxContextMeta", `Checkpoint готов: ${payload.artifact_path || "-"}`);
+        await loadContextLatest(false);
+      } catch (error) {
+        setText("ctxContextMeta", `Checkpoint не создан: ${error.message}`);
+      }
+    }
+
+    async function runContextTransitionPack() {
+      try {
+        setText("ctxContextMeta", "Собираю transition-pack...");
+        const payload = await postJson("/api/context/transition-pack", {}, true, "POST");
+        setText("ctxContextMeta", `Transition-pack готов: ${payload.pack_dir || "-"}`);
+        await loadContextLatest(false);
+      } catch (error) {
+        setText("ctxContextMeta", `Transition-pack не собран: ${error.message}`);
+      }
+    }
+
+    function withBtnState(btnId, loadingText, fetchPromiseFn) {
+      return async (e) => {
+        const btn = document.getElementById(btnId);
+        const isInput = btn && btn.nodeName === 'INPUT';
+        const origText = btn ? (isInput ? btn.value : btn.innerHTML) : "";
+        if (btn) {
+          btn.disabled = true;
+          if (loadingText) {
+            if (isInput) btn.value = loadingText;
+            else btn.innerHTML = loadingText;
+          }
+        }
+        try {
+          await fetchPromiseFn(e);
+        } finally {
+          if (btn) {
+            btn.disabled = false;
+            if (loadingText) {
+              if (isInput) btn.value = origText;
+              else btn.innerHTML = origText;
+            }
+          }
+        }
+      };
+    }
+
+    let modelCatalogState = null;
+
+    function normalizedForceMode(rawMode) {
+      const normalized = String(rawMode || "")
+        .trim()
+        .toLowerCase();
+      if (normalized === "force_local" || normalized === "local")
+        return "local";
+      if (normalized === "force_cloud" || normalized === "cloud")
+        return "cloud";
+      return "auto";
+    }
+
+    function fillSelect(nodeId, options, selectedValue = "") {
+      const node = document.getElementById(nodeId);
+      if (!node) return;
+      const current = String(selectedValue || "");
+      const html = options
+        .map((item) => {
+          const value = String(item.value ?? "");
+          const label = String(item.label ?? value);
+          const selected = value === current ? " selected" : "";
+          return `<option value="${value}"${selected}>${label}</option>`;
+        })
+        .join("");
+      node.innerHTML = html || '<option value="">(пусто)</option>';
+    }
+
+    function getModelOptionsFromCatalog(catalog) {
+      const result = [];
+      const localModels = Array.isArray(catalog?.local_models)
+        ? catalog.local_models
+        : [];
+      const cloudPresets = Array.isArray(catalog?.cloud_presets)
+        ? catalog.cloud_presets
+        : [];
+      const cloudSlots = catalog?.cloud_slots || {};
+
+      for (const item of localModels) {
+        const modelId = String(item?.id || "").trim();
+        if (!modelId) continue;
+        const loadedSuffix = item?.loaded ? " • loaded" : "";
+        const sizeSuffix = item?.size_human ? ` • ${item.size_human}` : "";
+        result.push({
+          value: modelId,
+          label: `LOCAL • ${modelId}${loadedSuffix}${sizeSuffix}`,
+        });
+      }
+
+      for (const item of cloudPresets) {
+        const modelId = String(item?.id || "").trim();
+        if (!modelId) continue;
+        result.push({
+          value: modelId,
+          label: `CLOUD • ${modelId}`,
+        });
+      }
+
+      for (const modelId of Object.values(cloudSlots)) {
+        const text = String(modelId || "").trim();
+        if (!text) continue;
+        result.push({
+          value: text,
+          label: `CURRENT • ${text}`,
+        });
+      }
+
+      const dedup = [];
+      const seen = new Set();
+      for (const item of result) {
+        if (seen.has(item.value)) continue;
+        seen.add(item.value);
+        dedup.push(item);
+      }
+      return dedup;
+    }
+
+    function syncSlotModelSelection() {
+      const slotNode = document.getElementById("modelSlotSelect");
+      const modelNode = document.getElementById("modelChoiceSelect");
+      if (!slotNode || !modelNode || !modelCatalogState) return;
+      const slot = String(slotNode.value || "").trim();
+      const currentModel = String(
+        (modelCatalogState.cloud_slots || {})[slot] || "",
+      ).trim();
+      if (!currentModel) return;
+      const found = Array.from(modelNode.options).some(
+        (option) => option.value === currentModel,
+      );
+      if (found) {
+        modelNode.value = currentModel;
+      }
+    }
+
+    function syncModelControls(catalog) {
+      modelCatalogState = catalog || {};
+      const mode = normalizedForceMode(catalog?.force_mode);
+      const slotNames = Array.isArray(catalog?.slots) ? catalog.slots : [];
+      const quickPresets = Array.isArray(catalog?.quick_presets)
+        ? catalog.quick_presets
+        : [];
+      const selectedSlot = String(
+        document.getElementById("modelSlotSelect")?.value || "",
+      );
+
+      fillSelect(
+        "modelModeSelect",
+        [
+          { value: "auto", label: "auto (local-first)" },
+          { value: "local", label: "local (force_local)" },
+          { value: "cloud", label: "cloud (force_cloud)" },
+        ],
+        mode,
+      );
+      fillSelect(
+        "modelPresetSelect",
+        quickPresets.length
+          ? quickPresets.map((item) => ({
+            value: item.id,
+            label: `${item.title} — ${item.description}`,
+          }))
+          : [{ value: "balanced_auto", label: "Balanced Auto" }],
+        String(
+          document.getElementById("modelPresetSelect")?.value ||
+          "balanced_auto",
+        ),
+      );
+      fillSelect(
+        "modelSlotSelect",
+        slotNames.length
+          ? slotNames.map((slot) => ({ value: slot, label: slot }))
+          : [{ value: "chat", label: "chat" }],
+        selectedSlot && slotNames.includes(selectedSlot)
+          ? selectedSlot
+          : slotNames[0] || "chat",
+      );
+
+      const modelOptions = getModelOptionsFromCatalog(catalog);
+      fillSelect(
+        "modelChoiceSelect",
+        modelOptions.length
+          ? modelOptions
+          : [{ value: "", label: "(модели не обнаружены)" }],
+        "",
+      );
+      syncSlotModelSelection();
+
+      const localState = catalog?.local_available
+        ? "local=online"
+        : "local=offline";
+      const active = catalog?.local_active_model
+        ? ` • active=${catalog.local_active_model}`
+        : "";
+      setText(
+        "modelControlMeta",
+        `Каталог обновлен • mode=${mode} • ${localState}${active}`,
+      );
+    }
+
+    async function loadModelCatalog(showStatus = true) {
+      try {
+        const payload = await fetchJson("/api/model/catalog");
+        if (!payload?.ok) {
+          throw new Error(payload?.error || "model_catalog_failed");
+        }
+        syncModelControls(payload.catalog || {});
+        if (showStatus) {
+          setText("modelControlMeta", "Каталог моделей готов.");
+        }
+      } catch (error) {
+        setText(
+          "modelControlMeta",
+          `Ошибка каталога моделей: ${error.message}`,
+        );
+      }
+    }
+
+    async function applyModelAction(action, extraPayload = {}) {
+      try {
+        setText("modelControlMeta", "Применяю изменения...");
+        const payload = await postJson(
+          "/api/model/apply",
+          { action, ...extraPayload },
+          true,
+          "POST",
+        );
+        if (!payload?.ok) {
+          throw new Error(payload?.error || "model_apply_failed");
+        }
+        syncModelControls(payload.catalog || {});
+        if (payload.message) {
+          document.getElementById("assistantOutput").textContent = String(
+            payload.message,
+          );
+        }
+        setText(
+          "modelControlMeta",
+          payload.message || "Изменения применены.",
+        );
+        await updateStats();
+      } catch (error) {
+        showApiError("modelControlMeta", "Model Action", error);
+      }
+    }
+
+    function appendPromptChunk(chunk) {
+      const node = document.getElementById("assistantPrompt");
+      const existing = String(node.value || "").trim();
+      const incoming = String(chunk || "").trim();
+      if (!incoming) return;
+      node.value = existing ? `${existing}\n\n${incoming}` : incoming;
+    }
+
+    async function attachSelectedFileToPrompt() {
+      const input = document.getElementById("assistantFileInput");
+      const files = input?.files || [];
+      if (!files.length) {
+        setText("quickActionMeta", "Выбери файл перед добавлением в prompt.");
+        return;
+      }
+      const file = files[0];
+      try {
+        setText("quickActionMeta", `Загружаю файл: ${file.name}...`);
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const headers = {};
+        const webApiKey = readWebApiKey();
+        if (webApiKey) {
+          headers["X-Krab-Web-Key"] = webApiKey;
+        }
+
+        const response = await fetch("/api/assistant/attachment", {
+          method: "POST",
+          headers,
+          body: formData,
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.detail || `HTTP ${response.status}`);
+        }
+        const attachment = payload?.attachment || {};
+        appendPromptChunk(String(attachment.prompt_snippet || ""));
+        setText(
+          "quickActionMeta",
+          `Файл добавлен: ${attachment.file_name || file.name} • ${attachment.kind || "attachment"}`,
+        );
+      } catch (error) {
+        setText("quickActionMeta", `Ошибка загрузки файла: ${error.message}`);
+      }
+    }
+
+    async function runQuickWebSearch() {
+      const query = (
+        document.getElementById("quickWebQuery").value || ""
+      ).trim();
+      if (!query) {
+        setText("quickActionMeta", "Введи запрос для web-search.");
+        return;
+      }
+      document.getElementById("assistantTaskType").value = "chat";
+      document.getElementById("assistantReasoningDepth").value = "auto";
+      appendPromptChunk(
+        `Сделай web-search по теме: "${query}".
+Нужен краткий отчет: ключевые факты, 3-5 надежных источников и практические выводы.`,
+      );
+      setText(
+        "quickActionMeta",
+        "Шаблон web-search подготовлен. Запускаю...",
+      );
+      await assistantQuery();
+    }
+
+    async function runQuickDeepResearch() {
+      const topic = (
+        document.getElementById("quickDeepTopic").value || ""
+      ).trim();
+      if (!topic) {
+        setText("quickActionMeta", "Введи тему для deep research.");
+        return;
+      }
+      document.getElementById("assistantTaskType").value = "reasoning";
+      document.getElementById("assistantReasoningDepth").value = "deep";
+      appendPromptChunk(
+        `Deep research по теме: "${topic}".
+Собери структурированный отчет:
+1) краткое резюме,
+2) ключевые риски/возможности,
+3) сравнение подходов,
+4) пошаговый план действий,
+5) ссылки на проверяемые источники.`,
+      );
+      setText(
+        "quickActionMeta",
+        "Шаблон deep research подготовлен. Запускаю...",
+      );
+      await assistantQuery();
+    }
+
+    async function runQuickUrlReview() {
+      const sourceUrl = (
+        document.getElementById("quickSourceUrl").value || ""
+      ).trim();
+      if (!sourceUrl) {
+        setText("quickActionMeta", "Введи URL для разбора.");
+        return;
+      }
+      document.getElementById("assistantTaskType").value = "reasoning";
+      document.getElementById("assistantReasoningDepth").value = "auto";
+      appendPromptChunk(
+        `Разбери материал по ссылке: ${sourceUrl}
+Нужно:
+- краткое содержание;
+- ключевые тезисы/факты;
+- что это значит practically для меня;
+- если это YouTube: выдели главные выводы и тайм-коды (если доступны).`,
+      );
+      setText(
+        "quickActionMeta",
+        "Шаблон URL-анализа подготовлен. Запускаю...",
+      );
+      await assistantQuery();
+    }
+
+    async function opsAckAction(isAck) {
+      const code = (
+        document.getElementById("opsAlertCode").value || ""
+      ).trim();
+      const note = (
+        document.getElementById("opsAlertNote").value || ""
+      ).trim();
+      if (!code) {
+        setText("opsActionMeta", "Ошибка: укажи alert code");
+        return;
+      }
+      setText("opsActionMeta", `${isAck ? "Ack" : "Unack"} в процессе...`);
+      try {
+        if (isAck) {
+          await postJson(`/api/ops/ack/${encodeURIComponent(code)}`, {
+            actor: "web_panel",
+            note,
+          });
+          setText("opsActionMeta", `OK: alert ${code} подтвержден`);
+        } else {
+          await postJson(
+            `/api/ops/ack/${encodeURIComponent(code)}`,
+            {},
+            true,
+            "DELETE",
+          );
+          setText("opsActionMeta", `OK: alert ${code} снят с подтверждения`);
+        }
+        await updateStats();
+      } catch (error) {
+        setText("opsActionMeta", `Ошибка: ${error.message}`);
+      }
+    }
+
+    let assistantReqHistory = [];
+
+    function parseErrorClass(errorDetail) {
+      const msg = (errorDetail || "").toLowerCase();
+      if (msg.includes("quota") || msg.includes("rate limit") || msg.includes("insufficient_quota") || msg.includes("billing_error")) return { type: "quota", label: "Превышена квота/Баланс (Quota)" };
+      if (msg.includes("auth") || msg.includes("token") || msg.includes("invalid header") || msg.includes("unauthorized") || msg.includes("forbidden") || msg.includes("api key") || msg.includes("401")) return { type: "auth", label: "Ошибка авторизации (Auth)" };
+      if (msg.includes("network") || msg.includes("timeout") || msg.includes("connection refused") || msg.includes("econnrefused")) return { type: "network", label: "Проблема сети (Network)" };
+      if (msg.includes("not found") || msg.includes("model_not_found") || msg.includes("404")) return { type: "model_not_found", label: "Модель не найдена (Model Not Found)" };
+      if (msg.includes("bad gateway") || msg.includes("502") || msg.includes("openclaw gateway")) return { type: "gateway", label: "Ошибка шлюза (Gateway)" };
+      return { type: "unknown", label: "Внутренняя ошибка" };
+    }
+
+    function renderRetryButtons(forceMode, errClass) {
+      const cnt = document.getElementById("assistantRetryContainer");
+      cnt.innerHTML = "";
+
+      let btn = null;
+      if (forceMode === "force_cloud") {
+        btn = document.createElement("button");
+        btn.textContent = "Retry cloud only";
+        btn.onclick = () => assistantQuery("force_cloud");
+      } else if (forceMode === "auto") {
+        btn = document.createElement("button");
+        btn.textContent = "Try local once";
+        btn.onclick = () => assistantQuery("force_local");
+      }
+
+      if (btn) {
+        btn.className = "secondary";
+        btn.style.padding = "4px 10px";
+        btn.style.fontSize = "0.80rem";
+        btn.style.borderColor = "var(--border-subtle)";
+        btn.style.color = "var(--text-main)";
+        btn.style.background = "rgba(0,0,0,0.2)";
+        cnt.appendChild(btn);
+        cnt.style.display = "flex";
+      } else {
+        cnt.style.display = "none";
+      }
+    }
+
+    function renderAssistantHistory() {
+      const histEl = document.getElementById("assistantHistory");
+      const listEl = document.getElementById("assistantHistoryList");
+      if (assistantReqHistory.length === 0) {
+        histEl.style.display = "none";
+        return;
+      }
+      histEl.style.display = "block";
+      listEl.innerHTML = "";
+      assistantReqHistory.forEach(item => {
+        const div = document.createElement("div");
+        div.className = "history-item";
+        let statusHtml = item.error ? `<span style="color:var(--state-error)">Error: ${item.error}</span>` : `<span style="color:var(--text-muted)">OK</span>`;
+        div.innerHTML = `
+          <div class="history-prompt">
+            <span style="color:var(--text-muted); margin-right:6px;">${item.time}</span>
+            <strong>${item.snippet}</strong>
+          </div>
+          <div style="display:flex; justify-content:space-between; color:var(--text-muted); font-size: 0.75rem; margin-top:4px;">
+            <span>[${item.forceMode}] ${item.channel} ${item.model !== "-" ? "→ " + item.model : ""}</span>
+            <span>${item.elapsed}s | ${statusHtml}</span>
+          </div>
+        `;
+        listEl.appendChild(div);
+      });
+    }
+
+    function addAssistantHistory(prompt, route, forceMode, elapsed, errorLabel) {
+      const snippet = prompt.length > 50 ? prompt.substring(0, 50) + "..." : prompt;
+      let d = new Date();
+      let timeStr = d.getHours().toString().padStart(2, '0') + ":" + d.getMinutes().toString().padStart(2, '0') + ":" + d.getSeconds().toString().padStart(2, '0');
+
+      assistantReqHistory.unshift({
+        time: timeStr,
+        snippet,
+        channel: route.channel || "-",
+        model: route.model || "-",
+        forceMode,
+        elapsed,
+        error: errorLabel
+      });
+      if (assistantReqHistory.length > 30) assistantReqHistory.pop();
+      renderAssistantHistory();
+    }
+
+    function updateAssistantMetaUI(route, forceMode, elapsedS) {
+      const routeBadge = document.getElementById("assistantRouteBadge");
+      const forceBadge = document.getElementById("assistantForceBadge");
+      const modelBadge = document.getElementById("assistantModelBadge");
+      const detailEl = document.getElementById("assistantRouteDetail");
+
+      if (route.channel) {
+        routeBadge.textContent = route.channel.toUpperCase();
+        routeBadge.className = `route-badge ${route.channel}`;
+        routeBadge.style.display = "inline-block";
+      } else {
+        routeBadge.style.display = "none";
+      }
+
+      if (forceMode) {
+        forceBadge.textContent = forceMode === "force_cloud" ? "Force Cloud" : (forceMode === "force_local" ? "Force Local" : "Auto");
+        forceBadge.className = forceMode === "auto" ? "route-badge auto" : "route-badge";
+        if (forceMode !== "auto") {
+          forceBadge.style.borderColor = "var(--state-warn)";
+          forceBadge.style.color = "var(--state-warn)";
+        } else {
+          forceBadge.style.borderColor = "var(--text-muted)";
+          forceBadge.style.color = "var(--text-muted)";
+        }
+        forceBadge.style.display = "inline-block";
+      } else {
+        forceBadge.style.display = "none";
+      }
+
+      modelBadge.textContent = `${route.model || "-"} [${elapsedS}s]`;
+      detailEl.textContent = `Provider: ${route.provider || "-"} | Region: ${route.region || "-"}`;
+      detailEl.style.display = "block";
+    }
+
+    async function runCloudDiag() {
+      const btn = document.getElementById("ocCloudDiagBtn");
+      btn.textContent = "Running...";
+      btn.disabled = true;
+      try {
+        await fetch("/api/openclaw/cloud", { method: "GET" }).catch(() => { });
+        await updateStats();
+      } catch (e) {
+        console.error("Cloud diag failed:", e);
+      } finally {
+        btn.textContent = "Run cloud diag";
+        btn.disabled = false;
+      }
+    }
+
+    async function assistantQuery(overrideForceMode = null) {
+      const prompt = (
+        document.getElementById("assistantPrompt").value || ""
+      ).trim();
+      const taskTypeRaw = (
+        document.getElementById("assistantTaskType").value || "chat"
+      ).trim();
+      const depthRaw = (
+        document.getElementById("assistantReasoningDepth").value || "auto"
+      )
+        .trim()
+        .toLowerCase();
+      const ragRaw = (
+        document.getElementById("assistantUseRag").value || "off"
+      )
+        .trim()
+        .toLowerCase();
+      const webApiKey = (
+        document.getElementById("assistantApiKey").value || ""
+      ).trim();
+      const selectedMode = overrideForceMode || (
+        document.getElementById("modelModeSelect")?.value || ""
+      )
+        .trim()
+        .toLowerCase();
+      const selectedModel = (
+        document.getElementById("modelChoiceSelect")?.value || ""
+      ).trim();
+      let taskType = taskTypeRaw || "chat";
+      const confirmExpensive = depthRaw === "deep";
+
+      if (taskType === "chat" && depthRaw === "deep") {
+        taskType = "reasoning";
+      }
+
+      if (!prompt) {
+        document.getElementById("assistantModelBadge").textContent = "Ошибка: пустой prompt";
+        return;
+      }
+
+      const useRag = ["1", "on", "true", "yes", "y"].includes(ragRaw);
+      const headers = { "Content-Type": "application/json" };
+      if (webApiKey) {
+        headers["X-Krab-Web-Key"] = webApiKey;
+      }
+
+      const outputEl = document.getElementById("assistantOutput");
+      const retryContainer = document.getElementById("assistantRetryContainer");
+
+      document.getElementById("assistantModelBadge").textContent = "Выполняю запрос...";
+      document.getElementById("assistantRouteBadge").style.display = "none";
+      document.getElementById("assistantForceBadge").style.display = "none";
+      document.getElementById("assistantRouteDetail").style.display = "none";
+      retryContainer.style.display = "none";
+
+      outputEl.innerHTML = "⏳ Выполнение...";
+      outputEl.classList.remove("empty");
+
+      const requestStartTime = Date.now();
+
+      try {
+        const response = await fetch("/api/assistant/query", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            prompt,
+            task_type: taskType || "chat",
+            use_rag: useRag,
+            force_mode: selectedMode || undefined,
+            preferred_model: selectedModel || undefined,
+            confirm_expensive: confirmExpensive,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw { detail: payload?.detail || `HTTP ${response.status}` };
+        }
+
+        outputEl.textContent = payload.reply || "(пустой ответ)";
+
+        const elapsedS = ((Date.now() - requestStartTime) / 1000).toFixed(1);
+        const lastRoute = payload.last_route || {};
+        const effectiveMode = String(payload.effective_force_mode || selectedMode || "auto");
+
+        updateAssistantMetaUI(lastRoute, effectiveMode, elapsedS);
+        addAssistantHistory(prompt, lastRoute, effectiveMode, elapsedS, null);
+
+        if (lastRoute.profile) {
+          document.getElementById("feedbackProfile").value = String(
+            lastRoute.profile,
+          );
+        }
+        if (lastRoute.model || lastRoute.channel) {
+          setText(
+            "feedbackMeta",
+            `Последний прогон: ${lastRoute.model || "-"} (${lastRoute.channel || "-"})`,
+          );
+        }
+      } catch (error) {
+        const elapsedS = ((Date.now() - requestStartTime) / 1000).toFixed(1);
+        const errDetail = error.detail || error.message || "Unknown error";
+        const errClass = parseErrorClass(errDetail);
+
+        outputEl.innerHTML = `<span class="error-class">${errClass.label}</span><br/><br/>${errDetail}`;
+        document.getElementById("assistantModelBadge").textContent = "Запрос завершился с ошибкой";
+
+        const effectiveMode = selectedMode || "auto";
+        addAssistantHistory(prompt, {}, effectiveMode, elapsedS, errClass.label);
+
+        renderRetryButtons(effectiveMode, errClass);
+      }
+    }
+
+    async function assistantPreflight() {
+      const prompt = (
+        document.getElementById("assistantPrompt").value || ""
+      ).trim();
+      const taskTypeRaw = (
+        document.getElementById("assistantTaskType").value || "chat"
+      ).trim();
+      const depthRaw = (
+        document.getElementById("assistantReasoningDepth").value || "auto"
+      )
+        .trim()
+        .toLowerCase();
+      const webApiKey = (
+        document.getElementById("assistantApiKey").value || ""
+      ).trim();
+      const selectedModel = (
+        document.getElementById("modelChoiceSelect").value || ""
+      ).trim();
+      let taskType = taskTypeRaw || "chat";
+      const confirmExpensive = depthRaw === "deep";
+
+      if (taskType === "chat" && depthRaw === "deep") {
+        taskType = "reasoning";
+      }
+
+      if (!prompt) {
+        document.getElementById("assistantModelBadge").textContent = "Ошибка: пустой prompt";
+        return;
+      }
+
+      const headers = { "Content-Type": "application/json" };
+      if (webApiKey) {
+        headers["X-Krab-Web-Key"] = webApiKey;
+      }
+
+      document.getElementById("assistantModelBadge").textContent = "Собираю preflight-план...";
+      document.getElementById("assistantOutput").textContent =
+        "⏳ Анализ маршрута...";
+
+      try {
+        const response = await fetch("/api/model/preflight", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            prompt,
+            task_type: taskType || "chat",
+            preferred_model: selectedModel || null,
+            confirm_expensive: confirmExpensive,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.detail || `HTTP ${response.status}`);
+        }
+        if (!payload?.ok) {
+          throw new Error(payload?.error || "preflight_failed");
+        }
+
+        const plan = payload.preflight || {};
+        const execution = plan.execution || {};
+        const warnings = plan.warnings || [];
+        const reasons = plan.reasons || [];
+        const warningText = warnings.length
+          ? warnings.map((item) => `- ${item}`).join("\n")
+          : "- нет";
+        const reasonText = reasons.length
+          ? reasons.map((item) => `- ${item}`).join("\n")
+          : "- нет";
+
+        document.getElementById("assistantOutput").textContent = `Preflight:
+task_type=${plan.task_type || "-"}
+profile=${plan.profile || "-"}
+critical=${plan.critical ? "yes" : "no"}
+channel=${execution.channel || "-"}
+model=${execution.model || "-"}
+can_run_now=${execution.can_run_now ? "yes" : "no"}
+requires_confirm=${execution.requires_confirm_expensive ? "yes" : "no"}
+marginal_cost_usd=${plan.cost_hint?.marginal_call_cost_usd ?? 0}
+
+reasons:
+${reasonText}
+
+warnings:
+${warningText}
+
+next_step: ${plan.next_step || "Можно запускать задачу."}`;
+
+        document.getElementById("assistantModelBadge").textContent = `Preflight OK • профиль: ${plan.profile || "-"} • канал: ${execution.channel || "-"} • depth: ${depthRaw}`;
+      } catch (error) {
+        document.getElementById("assistantOutput").textContent =
+          `Ошибка preflight: ${error.message}`;
+        document.getElementById("assistantModelBadge").textContent = "Preflight завершился с ошибкой: " + error.message;
+      }
+    }
+
+    async function submitModelFeedback() {
+      const scoreRaw = (
+        document.getElementById("feedbackScore").value || ""
+      ).trim();
+      const profileRaw = (
+        document.getElementById("feedbackProfile").value || ""
+      ).trim();
+      const noteRaw = (
+        document.getElementById("feedbackNote").value || ""
+      ).trim();
+      const score = Number.parseInt(scoreRaw, 10);
+
+      if (!Number.isInteger(score) || score < 1 || score > 5) {
+        setText("feedbackMeta", "Ошибка: score должен быть от 1 до 5");
+        return;
+      }
+
+      setText("feedbackMeta", "Сохраняю feedback...");
+      try {
+        const payload = { score, note: noteRaw };
+        if (profileRaw) {
+          payload.profile = profileRaw.toLowerCase();
+        }
+        const response = await postJson(
+          "/api/model/feedback",
+          payload,
+          true,
+          "POST",
+        );
+        if (!response?.ok) {
+          throw new Error(response?.error || "feedback_submit_failed");
+        }
+
+        const result = response.result || {};
+        setText(
+          "feedbackMeta",
+          `OK: ${result.model || "-"} (${result.profile || "-"}) → ${result.profile_model_stats?.avg ?? 0}/5`,
+        );
+      } catch (error) {
+        setText("feedbackMeta", `Ошибка feedback: ${error.message}`);
+      }
+    }
+
+    async function loadModelFeedbackStats() {
+      const profileRaw = (
+        document.getElementById("feedbackProfile").value || ""
+      ).trim();
+      const query = profileRaw
+        ? `?profile=${encodeURIComponent(profileRaw.toLowerCase())}&top=5`
+        : "?top=5";
+      setText("feedbackMeta", "Загружаю feedback-статистику...");
+
+      try {
+        const payload = await fetchJson(`/api/model/feedback${query}`);
+        if (!payload?.ok) {
+          throw new Error(payload?.error || "feedback_summary_failed");
+        }
+        const feedback = payload.feedback || {};
+        const models = feedback.top_models || [];
+        const channels = feedback.top_channels || [];
+        const modelsText = models.length
+          ? models
+            .map(
+              (item) =>
+                `- ${item.model} (${item.profile}): ${item.avg_score}/5, n=${item.count}`,
+            )
+            .join("\n")
+          : "- нет данных";
+        const channelsText = channels.length
+          ? channels
+            .map(
+              (item) =>
+                `- ${item.channel}: ${item.avg_score}/5, n=${item.count}`,
+            )
+            .join("\n")
+          : "- нет данных";
+        document.getElementById("assistantOutput").textContent =
+          `Feedback summary:
+profile=${feedback.profile || "all"}
+total_feedback=${feedback.total_feedback || 0}
+
+top models:
+${modelsText}
+
+top channels:
+${channelsText}`;
+        setText(
+          "feedbackMeta",
+          `Feedback loaded • total=${feedback.total_feedback || 0}`,
+        );
+      } catch (error) {
+        setText("feedbackMeta", `Ошибка feedback stats: ${error.message}`);
+      }
+    }
+
+    function filterAlerts() {
+      const query = (document.getElementById('opsAlertSearch')?.value || '').toLowerCase();
+      const items = document.querySelectorAll('#opsAlerts .alert-item');
+      items.forEach(el => {
+        if (query === '' || el.getAttribute('data-code').includes(query) || el.textContent.toLowerCase().includes(query)) {
+          el.style.display = 'flex';
+        } else {
+          el.style.display = 'none';
+        }
+      });
+    }
+
+    window.__runtimeGatewayTokenPresent = false;
+    window.__runtimeGatewayTokenMasked = "";
+    function resolveGatewayTokenStatus() {
+      const runtimePresent = Boolean(window.__runtimeGatewayTokenPresent);
+      const runtimeMasked = String(window.__runtimeGatewayTokenMasked || "").trim();
+      const manualPresent = Boolean((document.getElementById("assistantApiKey")?.value || "").trim());
+      return {
+        configured: runtimePresent || manualPresent,
+        source: runtimePresent ? "runtime" : (manualPresent ? "manual" : "missing"),
+        masked: runtimeMasked,
+      };
+    }
+
+    async function updateStats() {
+      try {
+        const [
+          stats,
+          health,
+          links,
+          recommend,
+          feedbackPayload,
+          usagePayload,
+          alertsPayload,
+          timelinePayload,
+          queuePayload,
+          slaPayload,
+          runtimeConfig,
+        ] = await Promise.all([
+          fetchJson("/api/stats"),
+          fetchJson("/api/health"),
+          fetchJson("/api/links"),
+          fetchJson("/api/model/recommend?profile=chat"),
+          fetchJson("/api/model/feedback?profile=chat&top=1"),
+          fetchJson("/api/ops/usage"),
+          fetchJson("/api/ops/alerts"),
+          fetchJson("/api/timeline?limit=50"),
+          fetchJson("/api/queue").catch(() => ({ ok: false, queue: {} })),
+          fetchJson("/api/sla").catch(() => ({ ok: false })),
+          fetchJson("/api/openclaw/runtime-config").catch(() => ({ ok: false })),
+        ]);
+
+        if (runtimeConfig && runtimeConfig.ok) {
+          window.__runtimeGatewayTokenPresent = Boolean(runtimeConfig.gateway_token_present);
+          window.__runtimeGatewayTokenMasked = String(runtimeConfig.gateway_token_masked || "");
+        }
+        updateTokenStatus();
+
+        const bb = stats.black_box || {};
+        const rag = stats.rag || {};
+        const router = stats.router || {};
+        const lastRoute = router.last_route || {};
+        const cloudKeys = router.cloud_keys || {};
+
+        setText("bb_total", String(bb.total ?? bb.total_messages ?? 0));
+        setText("rag_total", String(rag.count ?? 0));
+        setText("local_model", router.local_model || "Offline");
+        setText("degradation", health.degradation || "unknown");
+
+        // --- Cloud Keys Diagnostics [R17] ---
+        const ocKeys = cloudKeys.openclaw || {};
+        const geminiKeys = cloudKeys.gemini || {};
+        const lastError = cloudKeys.last_error || {};
+
+        setText("keyOpenClawMask", ocKeys.masked_key || "Не задан");
+        const ocBadge = document.getElementById("keyOpenClawStatus");
+        if (ocBadge) {
+          ocBadge.className = ocKeys.is_configured ? "badge ok" : "badge warn";
+          ocBadge.textContent = ocKeys.is_configured ? "Configured" : "Missing";
+        }
+
+        setText("keyGeminiMask", geminiKeys.masked_key || "Не задан");
+        const geminiBadge = document.getElementById("keyGeminiStatus");
+        if (geminiBadge) {
+          if (geminiKeys.has_error) {
+            geminiBadge.className = "badge bad";
+            geminiBadge.textContent = "Error";
+          } else {
+            geminiBadge.className = geminiKeys.is_configured ? "badge ok" : "badge warn";
+            geminiBadge.textContent = geminiKeys.is_configured ? "Configured" : "Missing";
+          }
+        }
+
+        const errHint = document.getElementById("cloudKeyErrorHint");
+        if (lastError.has_error) {
+          setText("cloudKeyErrorText", lastError.summary || "Неизвестная ошибка");
+          let nextStep = "Проверьте логи.";
+          if (lastError.code === "api_key_invalid" || lastError.code === "unauthorized") {
+            nextStep = "Проверьте конфигурацию ключа в ENV или <b>openclaw.json</b>. (<a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OpenClaw Dashboard</a>)";
+          } else if (lastError.code === "quota_exceeded" || lastError.code === "billing_error") {
+            nextStep = "Проверьте баланс на платформе провайдера или смените тир в <a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OC Dashboard</a>.";
+          }
+          document.getElementById("cloudKeyErrorNextStep").innerHTML = "\u2192 Next step: " + nextStep;
+          if (errHint) errHint.style.display = "block";
+
+          const pulse = document.getElementById("cloudKeysPulse");
+          if (pulse) pulse.className = "pulse-bad";
+        } else {
+          if (errHint) errHint.style.display = "none";
+          const pulse = document.getElementById("cloudKeysPulse");
+          if (pulse) pulse.className = (ocKeys.is_configured || geminiKeys.is_configured) ? "pulse-ok" : "pulse-warn";
+        }
+
+
+        // --- Cloud Tier Status ---
+        const activeTierVal = lastRoute.channel === "cloud" ? (geminiKeys.is_configured ? "Gemini" : "OpenClaw") : "None";
+        let loadedTiers = [];
+        if (geminiKeys.is_configured) loadedTiers.push("Gemini");
+        if (ocKeys.is_configured) loadedTiers.push("OpenClaw");
+        setText("ocTierActive", activeTierVal);
+        const ocTierActiveBadge = document.getElementById("ocTierActive");
+        if (ocTierActiveBadge) {
+          ocTierActiveBadge.className = activeTierVal !== "None" ? "badge cloud" : "badge";
+          ocTierActiveBadge.style.color = activeTierVal !== "None" ? "var(--accent-cyan)" : "var(--text-muted)";
+        }
+        setText("ocTierLoaded", loadedTiers.join(", ") || "None");
+        setText("ocTierLastError", (lastError.has_error || lastError.summary) ? (lastError.summary || "Unknown Error") : "Clear");
+
+        const activeTier = lastRoute.channel === "cloud" ? "Cloud" : (lastRoute.channel === "local" ? "Local" : "Auto");
+        const isFallback = Boolean(lastRoute.route_reason && lastRoute.route_reason !== "primary_choice");
+        setText("opsCloudActiveTier", activeTier);
+        setText("opsCloudFallbackUsed", isFallback ? "Yes" : "No");
+        setText("opsCloudFallbackReason", lastRoute.route_reason || "—");
+        setText("opsCloudErrorCode", lastRoute.route_detail || "None");
+        setText("opsCloudBlockedProviders", "0"); // Not exposed by backend yet
+
+        const tierBadge = document.getElementById("opsCloudActiveTier");
+        if (tierBadge) {
+          tierBadge.style.background = activeTier === "Cloud" ? "var(--accent-cyan)" : (activeTier === "Local" ? "var(--state-warn)" : "var(--bg-element)");
+          tierBadge.style.color = activeTier === "Cloud" ? "#fff" : "var(--text-main)";
+        }
+
+        // --- SLA Widget ---
+        if (slaPayload && slaPayload.ok !== false) {
+          setText("opsSlaSuccessRate", `${slaPayload.success_rate_pct ?? 0}%`);
+          setText("opsSlaP50", `${slaPayload.latency_p50_ms ?? 0}ms`);
+          setText("opsSlaP95", `${slaPayload.latency_p95_ms ?? 0}ms`);
+          setText("opsSlaFailFast", String(slaPayload.fail_fast_count ?? 0));
+        } else {
+          setText("opsSlaSuccessRate", "N/A");
+          setText("opsSlaP50", "N/A");
+          setText("opsSlaP95", "N/A");
+          setText("opsSlaFailFast", "N/A");
+        }
+        document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
+
+        // --- Queue Stability Card ---
+        const queueStats = queuePayload.queue || {};
+        const activeTasks = Object.values(queueStats.active_tasks || {});
+        const queueDepth = queueStats.queued_total || 0;
+
+        let oldestAge = 0;
+        let totalSecs = 0;
+        let stuckCount = 0;
+
+        for (const t of activeTasks) {
+          const age = t.elapsed_seconds || 0;
+          totalSecs += age;
+          if (age > oldestAge) oldestAge = age;
+          if (age > (queueStats.task_timeout_seconds || 60) * 0.8) stuckCount++;
+        }
+        const avgSecs = activeTasks.length > 0 ? (totalSecs / activeTasks.length).toFixed(1) : "0.0";
+
+        setText("opsQueueLength", String(queueDepth));
+        setText("opsActiveTasks", String(activeTasks.length));
+        setText("opsAvgTaskTime", String(avgSecs));
+        setText("opsOldestTaskAge", `${oldestAge.toFixed(1)}s`);
+        setText("opsStuckTasks", String(stuckCount));
+        const guardTriggers =
+          queueStats.reply_incomplete_guard_triggered ??
+          queueStats.guard_triggers ??
+          queueStats.guard_blocks ??
+          0;
+        setText("opsTaskAborts", String(queueStats.aborts || queueStats.retries || 0));
+        setText("opsGuardTriggers", String(guardTriggers));
+
+        const queueContainer = document.getElementById("queueStabilityContainer");
+        const queuePulse = document.getElementById("queueStabilityPulse");
+        if (stuckCount > 0) {
+          if (queueContainer) queueContainer.className = "card state-container queue-status-warn";
+          if (queuePulse) queuePulse.className = "pulse-warn";
+          document.getElementById("opsStuckTasks").style.color = "var(--state-warn)";
+        } else {
+          if (queueContainer) queueContainer.className = "card state-container queue-status-ok";
+          if (queuePulse) queuePulse.className = "pulse-ok";
+          document.getElementById("opsStuckTasks").style.color = "var(--state-ok)";
+        }
+
+        const checks = health.checks || {};
+        document.getElementById("checks").innerHTML =
+          badge(!!checks.openclaw, "OpenClaw") +
+          badge(!!checks.local_lm, "Local LM") +
+          badge(!!checks.voice_gateway, "Voice Gateway") +
+          badge(!!checks.krab_ear, "Krab Ear");
+
+        const linksBlock = [
+          ["Dashboard", links.dashboard],
+          ["Stats API", links.stats_api],
+          ["Health API", links.health_api],
+          ["Ecosystem Health API", links.ecosystem_health_api],
+          ["Model Preflight API", `${links.dashboard}/api/model/preflight`],
+          ["Model Feedback API", `${links.dashboard}/api/model/feedback`],
+          [
+            "OpenClaw Deep Check",
+            `${links.dashboard}/api/openclaw/deep-check`,
+          ],
+          [
+            "OpenClaw Remediation Plan",
+            `${links.dashboard}/api/openclaw/remediation-plan`,
+          ],
+          [
+            "OpenClaw Browser Smoke",
+            `${links.dashboard}/api/openclaw/browser-smoke`,
+          ],
+          [
+            "OpenClaw Cloud Diagnostics",
+            `${links.dashboard}/api/openclaw/cloud`,
+          ],
+          [
+            "Context Checkpoint API",
+            links.context_checkpoint_api || `${links.dashboard}/api/context/checkpoint`,
+          ],
+          [
+            "Context Transition Pack API",
+            links.context_transition_pack_api || `${links.dashboard}/api/context/transition-pack`,
+          ],
+          [
+            "Context Latest API",
+            links.context_latest_api || `${links.dashboard}/api/context/latest`,
+          ],
+          [
+            "Assistant Capabilities",
+            `${links.dashboard}/api/assistant/capabilities`,
+          ],
+          ["Ops Cost Report", `${links.dashboard}/api/ops/cost-report`],
+          [
+            "Ops Executive Summary",
+            `${links.dashboard}/api/ops/executive-summary`,
+          ],
+          ["Ops Full Report", `${links.dashboard}/api/ops/report`],
+          ["Ops Bundle Export", `${links.dashboard}/api/ops/bundle/export`],
+          ["OpenClaw", links.openclaw],
+          ["Voice Gateway", links.voice_gateway],
+        ]
+          .filter(([, url]) => !!url)
+          .map(
+            ([name, url]) =>
+              `<a href="${url}" target="_blank" rel="noreferrer">${name}: ${url}</a>`,
+          )
+          .join("");
+        document.getElementById("links").innerHTML = linksBlock || "—";
+
+        setText("recommended_model", recommend.model || "—");
+        const bestFeedback =
+          feedbackPayload?.feedback?.top_models?.[0] || null;
+        if (bestFeedback) {
+          setText(
+            "recommended_meta",
+            `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count})`,
+          );
+        } else {
+          setText(
+            "recommended_meta",
+            `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"}`,
+          );
+        }
+
+        const usage = usagePayload.usage || {};
+        const totals = usage.totals || {};
+        const ratios = usage.ratios || {};
+        const softCap = usage.soft_cap || {};
+        setText(
+          "opsUsageMeta",
+          `Calls: total=${totals.all_calls ?? 0}, cloud=${totals.cloud_calls ?? 0}, local=${totals.local_calls ?? 0} • cloud_share=${ratios.cloud_share ?? 0} • cap_left=${softCap.cloud_remaining_calls ?? 0}`,
+        );
+
+        setText("opsCloudCap", `${totals.cloud_calls ?? 0} / ${softCap.cloud_soft_cap_calls ?? 10000}`);
+        const capReached = softCap.cloud_soft_cap_reached;
+        const capBdge = document.getElementById("opsCloudCapReached");
+        if (capBdge) {
+          capBdge.className = capReached ? "badge bad" : "badge ok";
+          capBdge.innerHTML = capReached ? "True" : "False";
+        }
+
+        const alertsRoot = alertsPayload.alerts || {};
+        const alertsList = alertsRoot.alerts || [];
+        if (!alertsList.length) {
+          document.getElementById("opsAlerts").innerHTML =
+            '<span class="badge ok">OK no active alerts</span>';
+        } else {
+          const html = alertsList
+            .map((item) => {
+              const bg = item.severity === "high" ? "background: var(--state-error-muted); border-left: 3px solid var(--state-error);" : "background: var(--state-warn-muted); border-left: 3px solid var(--state-warn);";
+              const ack = item.acknowledged
+                ? ` <span class="badge ok" title="${item.ack?.actor || ''} at ${item.ack?.ts || ''}">ACK</span>`
+                : (item.revoked ? ` <span class="badge" style="background: var(--bg-element); color: var(--text-placeholder)">REVOKED</span>` : "");
+
+              const statusCls = item.severity === "high" ? "bad" : "warn";
+              return `<div class="alert-item" data-code="${(item.code || '').toLowerCase()}" style="padding: 8px; margin-bottom: 4px; border-radius: 4px; ${bg} display:flex; justify-content:space-between; align-items:flex-start;">
+                <div><span class="badge ${statusCls}">${item.severity || "info"}</span> <strong>${item.code || ""}</strong> <span style="font-size:0.9em">— ${item.message || ""}</span></div>
+                <div>${ack}</div>
+              </div>`;
+            })
+            .join("");
+          document.getElementById("opsAlerts").innerHTML = html;
+        }
+        const alerts = alertsPayload.alerts || [];
+
+        // Update Timeline
+        window.lastTimelineEvents = timelinePayload?.events || [];
+        renderTimeline();
+
+        // Remove SLA skeleton after first successful load
+        document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
+
+        // Extrapolate channel state and breaker state
+        const stChannel = router.channel_state || health.router?.channel_state || (router.cloud_active ? "cloud" : "local");
+        const stBreaker = router.breaker_state || health.router?.breaker_state || "closed";
+
+        const rtChan = document.getElementById("rtChannelState");
+        const rtBrk = document.getElementById("rtBreakerState");
+        if (rtChan) rtChan.textContent = String(stChannel).toUpperCase();
+        if (rtBrk) rtBrk.textContent = String(stBreaker).toUpperCase();
+
+        setText(
+          "updated_at",
+          `Обновлено: ${new Date().toLocaleTimeString()}`,
+        );
+      } catch (error) {
+        console.error("Stats update failed", error);
+        setText("updated_at", `Ошибка обновления: ${error.message}`);
+      }
+    }
+
+    async function refreshAll() {
+      await updateStats();
+      await loadModelCatalog(false);
+      await loadOpenclawStatus(false);
+      await loadContextLatest(false);
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", withBtnState("refreshBtn", "Syncing...", refreshAll));
+    document.getElementById("assistantRunBtn").addEventListener("click", withBtnState("assistantRunBtn", "Running...", assistantQuery));
+    document.getElementById("assistantPlanBtn").addEventListener("click", withBtnState("assistantPlanBtn", "Planning...", assistantPreflight));
+    document.getElementById("feedbackSendBtn").addEventListener("click", withBtnState("feedbackSendBtn", "Sending...", submitModelFeedback));
+    document.getElementById("feedbackStatsBtn").addEventListener("click", withBtnState("feedbackStatsBtn", "Loading...", loadModelFeedbackStats));
+    document.getElementById("opsAckBtn").addEventListener("click", withBtnState("opsAckBtn", "Wait...", () => opsAckAction(true)));
+    document.getElementById("opsUnackBtn").addEventListener("click", withBtnState("opsUnackBtn", "Wait...", () => opsAckAction(false)));
+    document.getElementById("modelCatalogReloadBtn").addEventListener("click", withBtnState("modelCatalogReloadBtn", "Reloading...", () => loadModelCatalog(true)));
+
+    document.getElementById("modelApplyModeBtn").addEventListener("click", withBtnState("modelApplyModeBtn", "Wait...", async () => {
+      const mode = (document.getElementById("modelModeSelect").value || "auto").trim();
+      await applyModelAction("set_mode", { mode });
+    }));
+    document.getElementById("modelApplyPresetBtn").addEventListener("click", withBtnState("modelApplyPresetBtn", "Wait...", async () => {
+      const preset = (document.getElementById("modelPresetSelect").value || "").trim();
+      const localModel = (document.getElementById("modelChoiceSelect").value || "").trim();
+      await applyModelAction("apply_preset", { preset, local_model: localModel });
+    }));
+    document.getElementById("modelApplySlotBtn").addEventListener("click", withBtnState("modelApplySlotBtn", "Wait...", async () => {
+      const slot = (document.getElementById("modelSlotSelect").value || "").trim();
+      const model = (document.getElementById("modelChoiceSelect").value || "").trim();
+      await applyModelAction("set_slot_model", { slot, model });
+    }));
+
+    document.getElementById("modelSlotSelect").addEventListener("change", syncSlotModelSelection);
+    document.getElementById("assistantAttachBtn").addEventListener("click", withBtnState("assistantAttachBtn", "Wait...", attachSelectedFileToPrompt));
+    document.getElementById("quickWebBtn").addEventListener("click", withBtnState("quickWebBtn", "Wait...", runQuickWebSearch));
+    document.getElementById("quickDeepBtn").addEventListener("click", withBtnState("quickDeepBtn", "Wait...", runQuickDeepResearch));
+    document.getElementById("quickUrlBtn").addEventListener("click", withBtnState("quickUrlBtn", "Wait...", runQuickUrlReview));
+    document.getElementById("ctxCheckpointBtn").addEventListener("click", withBtnState("ctxCheckpointBtn", "Creating...", runContextCheckpoint));
+    document.getElementById("ctxTransitionPackBtn").addEventListener("click", withBtnState("ctxTransitionPackBtn", "Building...", runContextTransitionPack));
+    document.getElementById("ctxRefreshBtn").addEventListener("click", withBtnState("ctxRefreshBtn", "Refreshing...", () => loadContextLatest(true)));
+
+    function triggerAssistantPulse() {
+      const icon = document.getElementById("assistantPulseIcon");
+      if (icon) {
+        icon.style.transform = "scale(1.2)";
+        icon.style.filter = "brightness(1.5)";
+        setTimeout(() => {
+          icon.style.transform = "scale(1)";
+          icon.style.filter = "brightness(1)";
+        }, 300);
+      }
+    }
+
+    const apiKeyInput = document.getElementById("assistantApiKey");
+    function updateTokenStatus() {
+      const tokenBadge = document.getElementById("tokenStatusBadge");
+      const tokenText = document.getElementById("tokenStatusText");
+      const tokenPulse = document.getElementById("tokenPulse");
+      if (!tokenBadge) return;
+
+      const tokenStatus = resolveGatewayTokenStatus();
+      if (tokenStatus.configured) {
+        tokenBadge.className = "badge ok";
+        tokenText.innerText = tokenStatus.source === "runtime"
+          ? `Gateway Token: Configured (${tokenStatus.masked || "runtime"})`
+          : "Gateway Token: Manual Override";
+        tokenPulse.className = "pulse-ok";
+        tokenBadge.style.background = "rgba(34, 197, 94, 0.1)";
+        tokenBadge.style.color = "var(--state-ok)";
+        tokenBadge.style.borderColor = "var(--state-ok)";
+      } else {
+        tokenBadge.className = "badge warn";
+        tokenText.innerText = "Gateway Token: Missing";
+        tokenPulse.className = "pulse-warn";
+        tokenBadge.style.background = "rgba(245, 158, 11, 0.1)";
+        tokenBadge.style.color = "var(--state-warn)";
+        tokenBadge.style.borderColor = "var(--state-warn)";
+      }
+    }
+    if (apiKeyInput) {
+      apiKeyInput.addEventListener("input", updateTokenStatus);
+      updateTokenStatus(); // Initial check
+    }
+
+    document.getElementById("ocRefreshBtn").addEventListener("click", withBtnState("ocRefreshBtn", "Wait...", () => loadOpenclawStatus(true)));
+    document.getElementById("ocApplyAutoswitchBtn").addEventListener("click", withBtnState("ocApplyAutoswitchBtn", "Wait...", ocApplyAutoswitch));
+    document.getElementById("ocModeLocalBtn").addEventListener("click", withBtnState("ocModeLocalBtn", "Wait...", () => ocApplyMode("local")));
+    document.getElementById("ocModeAutoBtn").addEventListener("click", withBtnState("ocModeAutoBtn", "Wait...", () => ocApplyMode("auto")));
+    document.getElementById("ocModeCloudBtn").addEventListener("click", withBtnState("ocModeCloudBtn", "Wait...", () => ocApplyMode("cloud")));
+
+    document.getElementById("ocCloudProbeBtn").addEventListener("click", withBtnState("ocCloudProbeBtn", "Probing...", updateStats));
+    document.getElementById("keyCheckOpenClawBtn").addEventListener("click", withBtnState("keyCheckOpenClawBtn", "Checking...", updateStats));
+
+    document.getElementById("ocLocalLoadBtn").addEventListener("click", withBtnState("ocLocalLoadBtn", "Wait...", ocLoadLocal));
+    // Timeline Rendering
+    function renderTimeline() {
+      const events = window.lastTimelineEvents || [];
+      const histDiv = document.getElementById("opsHistory");
+
+      const sevFilter = document.getElementById("tlFilterSeverity").value;
+      const chanFilter = document.getElementById("tlFilterChannel").value;
+      const typeFilter = document.getElementById("tlFilterType").value;
+
+      const filtered = events.filter(e => {
+        if (sevFilter !== "all" && e.severity !== sevFilter) return false;
+        if (chanFilter !== "all") {
+          const chanStr = (e.context?.channel || e.message || "").toLowerCase();
+          if (!chanStr.includes(chanFilter)) return false;
+        }
+        if (typeFilter !== "all" && e.event_type !== typeFilter) return false;
+        return true;
+      });
+
+      histDiv.classList.remove("empty");
+      if (events.length === 0) {
+        histDiv.innerHTML = '<div class="empty-state">Нет событий в памяти</div>';
+        histDiv.classList.add("empty");
+      } else if (filtered.length === 0) {
+        histDiv.innerHTML = '<div class="empty-state">Нет событий по выбранным фильтрам</div>';
+        histDiv.classList.add("empty");
+      } else {
+        histDiv.innerHTML = filtered
+          .map(
+            (e) => `
+                <div class="event-row">
+                  <span class="event-time">${new Date(e.timestamp * 1000).toLocaleTimeString()}</span>
+                  <span class="event-badge badge-${e.severity}">${e.severity}</span>
+                  <span class="event-badge" style="background:var(--bg-panel); color:var(--text-main); border-color:var(--border-subtle);">${e.event_type}</span>
+                  <span class="event-msg">${e.message}</span>
+                </div>
+              `
+          )
+          .join("");
+      }
+    }
+
+    document.getElementById("tlFilterSeverity").addEventListener("change", renderTimeline);
+    document.getElementById("tlFilterChannel").addEventListener("change", renderTimeline);
+    document.getElementById("tlFilterType").addEventListener("change", renderTimeline);
+
+    // Initializations
+    document.getElementById("rtRepairCoreBtn").addEventListener("click", () => {
+      fetchJson("/api/ops/repair", { method: "POST" })
+        .then(() => alert("Repair triggered"))
+        .catch(err => alert("Repair error: " + err.message));
+    });
+
+    document.getElementById("rtResetTierBtn").addEventListener("click", () => {
+      fetchJson("/api/openclaw/tier/reset", { method: "POST" })
+        .then(() => alert("Cloud Tier Reset successfully"))
+        .catch(err => alert(err.message));
+    });
+
+    document.getElementById("rtSmokeTriggerBtn").addEventListener("click", () => {
+      showToast("Triggering Smoke Tests...", "warn");
+      fetchJson("/api/diagnostics/smoke", { method: "POST" })
+        .then(() => showToast("Smoke Test triggered", "success"))
+        .catch(err => showToast("Smoke triggered err: " + err.message, "error"));
+    });
+
+    document.getElementById("rtClearCacheBtn").addEventListener("click", () => alert("Not implemented"));
+    document.getElementById("ocLocalUnloadBtn").addEventListener("click", withBtnState("ocLocalUnloadBtn", "Wait...", ocUnloadLocal));
+    document.getElementById("ocLocalRefreshBtn").addEventListener("click", withBtnState("ocLocalRefreshBtn", "Wait...", () => loadLocalLifecycleStatus(true)));
+
+    document.getElementById("rtRepairCoreBtn").addEventListener("click", withBtnState("rtRepairCoreBtn", "Wait...", async () => {
+      try {
+        const res = await fetch("/api/openclaw/channels/runtime-repair", { method: "POST" });
+        const data = await res.json();
+        setText("rtControlMeta", data.ok ? "Core repaired." : `Error: ${data.error}`);
+        await updateStats();
+      } catch (e) {
+        setText("rtControlMeta", `Error: ${e.message}`);
+      }
+    }));
+
+    document.getElementById("rtClearCacheBtn").addEventListener("click", withBtnState("rtClearCacheBtn", "Wait...", async () => {
+      try {
+        const res = await fetch("/api/openclaw/cache/clear", { method: "POST" });
+        const data = await res.json();
+        setText("rtControlMeta", data.ok ? "Preflight cache cleared." : `Error: ${data.error}`);
+      } catch (e) {
+        setText("rtControlMeta", `Error: ${e.message}`);
+      }
+    }));
+
+    document.getElementById("rtResetTierBtn").addEventListener("click", withBtnState("rtResetTierBtn", "Wait...", async () => {
+      try {
+        const res = await fetch("/api/openclaw/cloud/tier/reset", { method: "POST" });
+        const data = await res.json();
+        setText("rtControlMeta", data.ok ? "Cloud tier reset." : `Error: ${data.error}`);
+        await updateStats();
+      } catch (e) {
+        setText("rtControlMeta", `Error: ${e.message}`);
+      }
+    }));
+
+    async function loadControlCompatStatus(showStatus = true) {
+      try {
+        const res = await fetch("/api/openclaw/control-compat/status");
+        if (res.ok) {
+          const payload = await res.json();
+          const root = document.getElementById("ocCompatRuntime");
+          const warnBadge = document.getElementById("ocCompatWarn");
+          const actionText = document.getElementById("ocCompatAction");
+
+          if (root) {
+            const st = payload.runtime_status || "UNKNOWN";
+            if (st === "OK" && payload.impact_level === "ui_only") {
+              root.innerHTML = `<span class="badge ok">OK</span>`;
+            } else {
+              const stClass = st === 'OK' ? 'ok' : 'bad';
+              root.innerHTML = `<span class="badge ${stClass}">${st}</span>`;
+            }
+          }
+          if (warnBadge) {
+            const hasWarn = payload.has_schema_warning;
+            warnBadge.textContent = hasWarn ? "Да" : "Нет";
+            warnBadge.className = hasWarn ? "badge warn" : "badge ok";
+          }
+          if (actionText) actionText.textContent = payload.recommended_action || "-";
+
+          let impactRU = "нет";
+          if (payload.impact_level === "ui_only") impactRU = "только UI";
+          else if (payload.impact_level === "runtime_risk") impactRU = "риск runtime";
+          setText("ocCompatImpact", impactRU);
+        }
+      } catch (e) {
+        console.error("Control Compat Error:", e);
+      }
+    }
+
+    async function loadEffectiveRouting(showStatus = true) {
+      try {
+        const res = await fetch("/api/openclaw/routing/effective");
+        if (res.ok) {
+          const data = await res.json();
+          setText("ocrouteReq", data.requested_mode || "-");
+          setText("ocrouteEff", data.effective_mode || "-");
+          setText("ocrouteActive", data.active_slot_or_model || "-");
+          setText("ocrouteFallback", data.cloud_fallback ? "Да" : "Нет");
+          setText("ocrouteNotes", data.decision_notes || "-");
+        }
+      } catch (e) {
+        console.error("Effective Routing Error:", e);
+      }
+    }
+
+    async function loadOpenclawStatus(showStatus = true) {
+      try {
+        if (showStatus) setText("ocMeta", "Загружаю статус OpenClaw...");
+        loadControlCompatStatus(false);
+        loadEffectiveRouting(false);
+
+        const [catalogRes, autoswitchRes, channelsRes, browserSmokeRes] = await Promise.all([
+          fetch("/api/model/catalog").catch((e) => ({
+            ok: false,
+            error: e.message,
+          })),
+          fetch("/api/openclaw/model-autoswitch/status").catch((e) => ({
+            ok: false,
+            error: e.message,
+          })),
+          fetch("/api/openclaw/channels/status").catch((e) => ({
+            ok: false,
+            error: e.message,
+          })),
+          fetch("/api/openclaw/browser-smoke?url=https%3A%2F%2Fexample.com").catch((e) => ({
+            ok: false,
+            error: e.message,
+          })),
+        ]);
+
+        // Catalog processing
+        if (catalogRes.ok) {
+          const payload = await catalogRes.json();
+          setText("ocForceMode", payload.catalog?.force_mode || "auto");
+          setText(
+            "ocLocalModel",
+            payload.catalog?.local_active_model || "offline",
+          );
+          const slots = Object.keys(
+            payload.catalog?.cloud_slots || {},
+          ).length;
+          setText("ocCloudSlots", slots > 0 ? `${slots} active` : "none");
+
+          // Updates for Control UX Buttons
+          const m = payload.catalog?.force_mode || "auto";
+          ["local", "auto", "cloud"].forEach(md => {
+            const btn = document.getElementById(`ocMode${md.charAt(0).toUpperCase() + md.slice(1)}Btn`);
+            if (btn) btn.className = (m === md) ? "primary" : "";
+          });
+          setText("opsQueueMode", m);
+
+        } else {
+          setText("ocForceMode", "ERR");
+          setText("ocLocalModel", "ERR");
+          setText("ocCloudSlots", "ERR");
+          setText("opsQueueMode", "ERR");
+        }
+
+        // Autoswitch processing
+        if (autoswitchRes.ok) {
+          const payload = await autoswitchRes.json();
+          const autoswitch = payload.autoswitch || {};
+          const rawSt = String(autoswitch.status || "unknown").toUpperCase();
+          const isOk = rawSt === "ACTIVE" || rawSt === "OK" || rawSt === "ON";
+          const isBad = rawSt === "FAIL" || rawSt === "ERROR";
+          const badgeClass = isOk ? "ok" : (isBad ? "bad" : "warn");
+          const badgeText = isOk ? "OK" : (isBad ? "FAIL" : "WARN");
+          document.getElementById("ocAutoswitchStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
+          setText("ocLastSwitch", autoswitch.last_switch || "-");
+          setText("ocSwitchReason", autoswitch.reason || "-");
+        } else {
+          const errPayload = autoswitchRes.json ? await autoswitchRes.json().catch(() => ({})) : {};
+          const errText = errPayload.detail || autoswitchRes.error || `HTTP ${autoswitchRes.status}`;
+          document.getElementById("ocAutoswitchStatus").innerHTML = `<span class="badge bad">FAIL</span> <span style="font-size: 0.8em; color: var(--state-error);">${errText}</span>`;
+          setText("ocLastSwitch", "-");
+          setText("ocSwitchReason", "-");
+        }
+
+        // Channels processing
+        if (channelsRes.ok) {
+          const payload = await channelsRes.json();
+          const channels = payload.channels || [];
+          if (channels.length === 0) {
+            document.getElementById("ocChannelsList").innerHTML =
+              '<span class="card-meta">No channels data</span>';
+          } else {
+            document.getElementById("ocChannelsList").innerHTML = channels
+              .map((c) => {
+                const rawSt = String(c.status || "unknown").toUpperCase();
+                const badgeClass = rawSt === "OK" ? "ok" : (rawSt === "FAIL" ? "bad" : "warn");
+                const badgeText = rawSt === "OK" ? "OK" : (rawSt === "FAIL" ? "FAIL" : "WARN");
+                return `<div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0;">
+                                <span class="card-meta">${c.name || "channel"}</span>
+                                <span class="badge ${badgeClass}">${badgeText}</span>
+                            </div>`;
+              })
+              .join("");
+          }
+        } else {
+          const errPayload = channelsRes.json ? await channelsRes.json().catch(() => ({})) : {};
+          const errText = errPayload.detail || channelsRes.error || `HTTP ${channelsRes.status}`;
+          document.getElementById("ocChannelsList").innerHTML =
+            `<span class="badge bad">FAIL</span> <span style="font-size: 0.8em; color: var(--state-error);">${errText}</span>`;
+        }
+
+        // Browser relay/tool smoke
+        const relayBadge = document.getElementById("ocRelayReachable");
+        const tabBadge = document.getElementById("ocTabAttached");
+        const lastBrowser = document.getElementById("ocBrowserLast");
+        if (browserSmokeRes.ok) {
+          const payload = await browserSmokeRes.json().catch(() => ({}));
+          const report = payload.report || {};
+          const baseBrowser = report.base?.browser || {};
+          const smoke = report.browser_smoke || {};
+          const relayOk = Boolean(baseBrowser.available);
+          const tabAttached = Boolean(
+            smoke.ok &&
+            (
+              smoke.channel === "endpoint" ||
+              smoke.tool === "browser_open" ||
+              smoke.tool === "browser_navigate" ||
+              smoke.tool === "browser_snapshot"
+            )
+          );
+          const lastCall = smoke.tool || smoke.path || smoke.channel || "n/a";
+
+          if (relayBadge) {
+            relayBadge.className = relayOk ? "badge ok" : "badge bad";
+            relayBadge.textContent = relayOk ? "Yes" : "No";
+          }
+          if (tabBadge) {
+            tabBadge.className = tabAttached ? "badge ok" : "badge warn";
+            tabBadge.textContent = tabAttached ? "Yes" : "No";
+          }
+          if (lastBrowser) {
+            lastBrowser.textContent = String(lastCall);
+          }
+        } else {
+          if (relayBadge) {
+            relayBadge.className = "badge bad";
+            relayBadge.textContent = "No";
+          }
+          if (tabBadge) {
+            tabBadge.className = "badge warn";
+            tabBadge.textContent = "Unknown";
+          }
+          if (lastBrowser) {
+            lastBrowser.textContent = "smoke_error";
+          }
+        }
+
+        if (showStatus) setText("ocMeta", "Статус обновлен");
+      } catch (error) {
+        setText("ocMeta", `Ошибка API: ${error.message}`);
+      }
+    }
+
+    async function ocApplyAutoswitch() {
+      try {
+        setText("ocMeta", "Применяю autoswitch...");
+        const payload = await postJson(
+          "/api/openclaw/model-autoswitch/apply",
+          { toggle: true },
+        );
+        const autoswitch = payload.autoswitch || {};
+        const statusText = String(autoswitch.status || "unknown").toUpperCase();
+        setText("ocMeta", `Autoswitch применен (${statusText})`);
+        await loadOpenclawStatus(false);
+      } catch (error) {
+        showApiError("ocMeta", "Autoswitch", error);
+      }
+    }
+
+    async function ocApplyMode(mode) {
+      try {
+        setText("ocMeta", `Setting mode ${mode}...`);
+        await applyModelAction("set_mode", { mode });
+        setText("ocMeta", `Mode ${mode} applied`);
+        await loadOpenclawStatus(false);
+      } catch (error) {
+        showApiError("ocMeta", "Применить режим", error);
+      }
+    }
+
+    async function loadLocalLifecycleStatus(showStatus = true) {
+      try {
+        if (showStatus) setText("ocMeta", "Загружаю статус local model...");
+        const response = await fetch("/api/model/local/status");
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+        }
+
+        const rawSt = String(payload.status || "unknown").toLowerCase();
+        const badgeClass = rawSt === "loaded" ? "ok" : (rawSt === "not_loaded" ? "warn" : "bad");
+        const badgeText = rawSt === "loaded" ? "OK" : (rawSt === "not_loaded" ? "WARN" : "FAIL");
+        document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
+        document.getElementById("ocLocalLifecycleModel").textContent = payload.model_name || "-";
+
+        if (showStatus) setText("ocMeta", "Статус local model обновлен");
+      } catch (error) {
+        document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge bad">FAIL</span>`;
+        document.getElementById("ocLocalLifecycleModel").textContent = "-";
+        showApiError("ocMeta", "Local Status", error);
+      }
+    }
+
+    async function ocLoadLocal() {
+      try {
+        setText("ocMeta", "Загрузка local model...");
+        await postJson("/api/model/local/load-default", {}, true, "POST");
+        setText("ocMeta", "Local model загружена");
+        await loadLocalLifecycleStatus(false);
+      } catch (error) {
+        showApiError("ocMeta", "Load Model", error);
+      }
+    }
+
+    async function ocUnloadLocal() {
+      try {
+        setText("ocMeta", "Выгрузка local model...");
+        await postJson("/api/model/local/unload", {}, true, "POST");
+        setText("ocMeta", "Local model выгружена");
+        await loadLocalLifecycleStatus(false);
+      } catch (error) {
+        showApiError("ocMeta", "Unload Model", error);
+      }
+    }
+
+    async function startCoreHealthPolling() {
+      // Lite Health (Liveness) - 3 seconds
+      async function pollLite() {
+        try {
+          const res = await fetch("/api/health/lite");
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.status === "ok") {
+            setText("coreLivenessStatus", "Online");
+            document.getElementById("coreLivenessStatus").style.color = "var(--state-ok)";
+            document.getElementById("coreLivenessPulse").className = "pulse-ok";
+            document.getElementById("coreLivenessPulse").style.background = "var(--state-ok)";
+          } else {
+            setText("coreLivenessStatus", "Degraded");
+            document.getElementById("coreLivenessStatus").style.color = "var(--state-warn)";
+            document.getElementById("coreLivenessPulse").className = "pulse-warn";
+            document.getElementById("coreLivenessPulse").style.background = "var(--state-warn)";
+          }
+        } catch (err) {
+          setText("coreLivenessStatus", "Offline / Error");
+          document.getElementById("coreLivenessStatus").style.color = "var(--state-error)";
+          document.getElementById("coreLivenessPulse").className = "";
+          document.getElementById("coreLivenessPulse").style.background = "var(--state-error)";
+        }
+        setText("coreLivenessTime", new Date().toLocaleTimeString());
+        setTimeout(pollLite, 3000);
+      }
+
+      // Deep Health Ecosystem - 20 seconds
+      async function pollDeep() {
+        try {
+          const res = await fetch("/api/health");
+          const data = await res.json().catch(() => ({}));
+
+          if (res.ok && data.status) {
+            setText("deepHealthStatus", data.status.toUpperCase());
+            const statusColor = data.status === "ok" ? "var(--state-ok)" :
+              (data.status === "critical" ? "var(--state-error)" : "var(--state-warn)");
+            document.getElementById("deepHealthStatus").style.color = statusColor;
+
+            setText("deepHealthRisk", data.risk_level ? data.risk_level.toUpperCase() : "UNKNOWN");
+            const riskColor = data.risk_level === "high" ? "var(--state-error)" :
+              (data.risk_level === "medium" ? "var(--state-warn)" : "var(--state-ok)");
+            document.getElementById("deepHealthRisk").className = "badge";
+            document.getElementById("deepHealthRisk").style.color = riskColor;
+            document.getElementById("deepHealthRisk").style.borderColor = riskColor;
+
+            setText("deepHealthDegradation", data.degradation ? data.degradation.replace(/_/g, " ") : "normal");
+            setText("deepHealthTime", data.generated_at ? new Date(data.generated_at).toLocaleTimeString() : new Date().toLocaleTimeString());
+          } else {
+            setText("deepHealthStatus", "ERROR");
+            document.getElementById("deepHealthStatus").style.color = "var(--state-error)";
+            setText("deepHealthRisk", "UNKNOWN");
+            document.getElementById("deepHealthRisk").style.color = "var(--text-muted)";
+            setText("deepHealthDegradation", "Fallback Text: Invalid response or timeout");
+            setText("deepHealthTime", new Date().toLocaleTimeString());
+          }
+        } catch (err) {
+          setText("deepHealthStatus", "OFFLINE");
+          document.getElementById("deepHealthStatus").style.color = "var(--state-error)";
+          setText("deepHealthRisk", "HIGH");
+          document.getElementById("deepHealthRisk").style.color = "var(--state-error)";
+          setText("deepHealthDegradation", "Fallback Text: API Gateway unreachable / timeout");
+          setText("deepHealthTime", new Date().toLocaleTimeString());
+        }
+        setTimeout(pollDeep, 20000);
+      }
+
+      // Start polls
+      pollLite();
+      pollDeep();
+    }
+
+    startCoreHealthPolling();
+
+    setInterval(updateStats, 8000);
+    refreshAll();
+    loadLocalLifecycleStatus(false);
+    loadContextLatest(false);
+  </script>
+</body>
+
+</html>

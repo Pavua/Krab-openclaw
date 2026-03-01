@@ -11,7 +11,7 @@ from __future__ import annotations
 # Первые элементы: "local" (псевдоним LM Studio), затем конкретная локальная модель по умолчанию
 FALLBACK_CHAIN_LOCAL: list[str] = [
     "local",
-    "lmstudio/seed-oss-36b-instruct-mlx",
+    "nvidia/nemotron-3-nano",
 ]
 
 # --- Лимиты контекстных окон ---
