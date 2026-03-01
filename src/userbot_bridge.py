@@ -81,17 +81,25 @@ class KraabUserbot:
 
     def __init__(self):
         """Инициализация юзербота и клиента Pyrogram"""
-        self.client = Client(
-            config.TELEGRAM_SESSION_NAME,
-            api_id=config.TELEGRAM_API_ID,
-            api_hash=config.TELEGRAM_API_HASH,
-        )
+        self.client: Client | None = None
         self.me = None
         self.current_role = "default"
         self.voice_mode = False
         self.maintenance_task: Optional[asyncio.Task] = None
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._session_recovery_lock = asyncio.Lock()
+        self._recreate_client()
+
+    def _recreate_client(self) -> None:
+        """
+        Полностью пересоздает экземпляр Pyrogram Client и регистрирует хендлеры заново.
+        Нужен для recovery после протухшей/битой сессии.
+        """
+        self.client = Client(
+            config.TELEGRAM_SESSION_NAME,
+            api_id=config.TELEGRAM_API_ID,
+            api_hash=config.TELEGRAM_API_HASH,
+        )
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -239,20 +247,48 @@ class KraabUserbot:
     async def start(self):
         """Запуск юзербота"""
         logger.info("starting_userbot")
-        try:
-            await self.client.start()
-        except Exception as exc:  # noqa: BLE001
-            if self._is_auth_key_invalid(exc):
-                removed_files = self._purge_telegram_session_files()
+        start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
+        max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
+
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                assert self.client is not None
+                await asyncio.wait_for(self.client.start(), timeout=max(10, start_timeout_sec))
+                break
+            except asyncio.TimeoutError as exc:
+                last_error = exc
                 logger.warning(
-                    "telegram_session_invalid_auto_purge",
-                    removed_files=removed_files,
-                    error=str(exc),
+                    "telegram_start_timeout",
+                    attempt=attempt,
+                    timeout_sec=start_timeout_sec,
+                    session_name=config.TELEGRAM_SESSION_NAME,
                 )
-                # Повторяем старт один раз: Pyrogram запросит интерактивный логин.
-                await self.client.start()
-            else:
+                # На таймауте транспорт часто застревает. Пересоздаем клиента.
+                self._recreate_client()
+                # Со второго таймаута уже чистим сессию.
+                if attempt >= 2:
+                    removed_files = self._purge_telegram_session_files()
+                    logger.warning("telegram_session_purged_after_timeout", removed_files=removed_files)
+                continue
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if self._is_auth_key_invalid(exc):
+                    removed_files = self._purge_telegram_session_files()
+                    logger.warning(
+                        "telegram_session_invalid_auto_purge",
+                        removed_files=removed_files,
+                        error=str(exc),
+                        attempt=attempt,
+                    )
+                    self._recreate_client()
+                    continue
                 raise
+        else:
+            raise RuntimeError(
+                f"Не удалось запустить Telegram client за {max_attempts} попыток: {last_error}"
+            )
+
         self.me = await self.client.get_me()
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
 
