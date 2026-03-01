@@ -88,7 +88,29 @@ class KraabUserbot:
         self.maintenance_task: Optional[asyncio.Task] = None
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._session_recovery_lock = asyncio.Lock()
+        self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._recreate_client()
+
+    def _get_session_dirs(self) -> list[Path]:
+        """
+        Возвращает список каталогов, где могли лежать session-файлы.
+        Порядок важен: сначала новый канонический путь, затем legacy.
+        """
+        dirs = [
+            self._session_workdir,
+            config.BASE_DIR,
+            config.BASE_DIR / "src",
+            Path.cwd(),
+        ]
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for item in dirs:
+            key = str(item.resolve()) if item.exists() else str(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique
 
     def _recreate_client(self) -> None:
         """
@@ -99,6 +121,13 @@ class KraabUserbot:
             config.TELEGRAM_SESSION_NAME,
             api_id=config.TELEGRAM_API_ID,
             api_hash=config.TELEGRAM_API_HASH,
+            workdir=str(self._session_workdir),
+        )
+        self._session_workdir.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "telegram_client_created",
+            session_name=config.TELEGRAM_SESSION_NAME,
+            workdir=str(self._session_workdir),
         )
         self._setup_handlers()
 
@@ -379,16 +408,16 @@ class KraabUserbot:
         - Очистка позволяет получить чистый интерактивный relogin без ручного поиска файлов.
         """
         session_name = str(config.TELEGRAM_SESSION_NAME or "kraab").strip() or "kraab"
-        base_dir = Path.cwd()
         removed: list[str] = []
-        for suffix in (".session", ".session-journal", ".session-shm", ".session-wal"):
-            target = base_dir / f"{session_name}{suffix}"
-            if target.exists():
-                try:
-                    target.unlink()
-                    removed.append(str(target))
-                except OSError as exc:
-                    logger.warning("telegram_session_purge_failed", file=str(target), error=str(exc))
+        for base_dir in self._get_session_dirs():
+            for suffix in (".session", ".session-journal", ".session-shm", ".session-wal"):
+                target = base_dir / f"{session_name}{suffix}"
+                if target.exists():
+                    try:
+                        target.unlink()
+                        removed.append(str(target))
+                    except OSError as exc:
+                        logger.warning("telegram_session_purge_failed", file=str(target), error=str(exc))
         return removed
 
     async def _safe_maintenance(self):
