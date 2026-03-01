@@ -1850,6 +1850,34 @@ class WebApp:
             requested_force_mode_raw = str(payload.get("force_mode", "")).strip().lower()
             requested_force_mode = requested_force_mode_raw if requested_force_mode_raw in {"auto", "local", "cloud"} else ""
 
+            def _is_model_status_question(text: str) -> bool:
+                low = str(text or "").strip().lower()
+                if not low:
+                    return False
+                patterns = [
+                    "на какой модел",
+                    "какой моделью",
+                    "какая модель",
+                    "на чем работаешь",
+                    "через какую модель",
+                    "what model",
+                    "which model",
+                ]
+                return any(p in low for p in patterns)
+
+            def _build_model_status_from_route(route: dict[str, object]) -> str:
+                channel = str(route.get("channel", "unknown"))
+                model = str(route.get("model", "unknown"))
+                provider = str(route.get("provider", "unknown"))
+                tier = str(route.get("active_tier", "-"))
+                return (
+                    "🧭 Фактический runtime-маршрут:\n"
+                    f"- Канал: `{channel}`\n"
+                    f"- Модель: `{model}`\n"
+                    f"- Провайдер: `{provider}`\n"
+                    f"- Cloud tier: `{tier}`"
+                )
+
             # Web UX-хелпер: поддержка команд вида `.model ...` и `!model ...`
             # прямо из web-assistant input. Иначе команда уходила в LLM как обычный prompt.
             command_prompt = prompt
@@ -2021,6 +2049,9 @@ class WebApp:
                 "last_route": last_route,
                 "reply": reply,
             }
+            # Для вопросов о модели отдаём authoritative-ответ из last_route.
+            if _is_model_status_question(prompt) and isinstance(last_route, dict) and last_route.get("model"):
+                response_payload["reply"] = _build_model_status_from_route(last_route)
             self._idempotency_set("assistant_query", idem_key, response_payload)
             return response_payload
 

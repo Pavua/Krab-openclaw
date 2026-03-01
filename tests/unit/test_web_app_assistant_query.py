@@ -76,3 +76,30 @@ def test_assistant_query_returns_router_last_route():
     assert data["effective_force_mode"] == "force_local"
     assert data["last_route"]["channel"] == "local_direct"
     assert data["last_route"]["model"] == "nvidia/nemotron-3-nano"
+
+
+def test_assistant_query_model_status_uses_authoritative_route():
+    """
+    Если пользователь спрашивает про модель, API должен вернуть факт по last_route,
+    даже если модель могла сгенерировать иной текст.
+    """
+    app = WebApp(
+        deps={
+            "router": _FakeRouter(),
+            "openclaw_client": None,
+            "black_box": None,
+        },
+        host="127.0.0.1",
+        port=18080,
+    )
+    client = TestClient(app.app)
+
+    resp = client.post(
+        "/api/assistant/query",
+        json={"prompt": "На какой модели ты работаешь сейчас?", "force_mode": "local"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert "nvidia/nemotron-3-nano" in data["reply"]
+    assert "local_direct" in data["reply"]

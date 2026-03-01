@@ -484,6 +484,45 @@ class KraabUserbot:
         return textwrap.wrap(text, width=limit, replace_whitespace=False)
 
     @staticmethod
+    def _looks_like_model_status_question(text: str) -> bool:
+        """Эвристика: пользователь спрашивает, на какой модели сейчас ответ."""
+        low = str(text or "").strip().lower()
+        if not low:
+            return False
+        patterns = [
+            "на какой модел",
+            "какой моделью",
+            "какая модель",
+            "на чем работаешь",
+            "через какую модель",
+            "какой модель",
+        ]
+        return any(p in low for p in patterns)
+
+    @staticmethod
+    def _build_runtime_model_status(route: dict) -> str:
+        """Формирует детерминированный статус маршрута по фактическим runtime-метаданным."""
+        channel = str(route.get("channel", "unknown"))
+        model = str(route.get("model", "unknown"))
+        provider = str(route.get("provider", "unknown"))
+        tier = str(route.get("active_tier", "-"))
+        if channel == "local_direct":
+            mode = "local_direct (LM Studio)"
+        elif channel == "openclaw_local":
+            mode = "openclaw_local"
+        elif channel == "openclaw_cloud":
+            mode = "openclaw_cloud"
+        else:
+            mode = channel
+        return (
+            "🧭 Фактический runtime-маршрут:\n"
+            f"- Канал: `{mode}`\n"
+            f"- Модель: `{model}`\n"
+            f"- Провайдер: `{provider}`\n"
+            f"- Cloud tier: `{tier}`"
+        )
+
+    @staticmethod
     def _is_message_not_modified_error(exc: Exception) -> bool:
         """Определяет типичную ошибку Telegram при повторном edit того же текста."""
         text = str(exc).upper()
@@ -496,10 +535,13 @@ class KraabUserbot:
         """
         current_text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
         target_text = (text or "").strip()
+        # Telegram EditMessage не принимает пустой/невидимый текст.
+        if not target_text:
+            target_text = "…"
         if current_text == target_text:
             return False
         try:
-            await msg.edit(text)
+            await msg.edit(target_text)
             return True
         except Exception as exc:  # noqa: BLE001 - фильтруем MESSAGE_NOT_MODIFIED
             if self._is_message_not_modified_error(exc):
@@ -656,8 +698,21 @@ class KraabUserbot:
             if not full_response:
                 full_response = "❌ Модель не вернула ответ."
 
-            if not full_response:
-                full_response = "❌ Модель не вернула ответ."
+            # Нормализация: защита от пустого/невидимого вывода модели.
+            if not str(full_response).strip():
+                full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
+
+            # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
+            # а не доверяем декларативному тексту самой LLM.
+            if self._looks_like_model_status_question(query):
+                route_meta = {}
+                if hasattr(openclaw_client, "get_last_runtime_route"):
+                    try:
+                        route_meta = openclaw_client.get_last_runtime_route() or {}
+                    except Exception:
+                        route_meta = {}
+                if route_meta:
+                    full_response = self._build_runtime_model_status(route_meta)
 
             # SPLIT LOGIC: Отправка длинных сообщений частями
             parts = self._split_message(
