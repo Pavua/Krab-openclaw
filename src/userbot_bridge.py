@@ -13,6 +13,7 @@ import asyncio
 import base64
 import os
 import signal
+import sys
 import textwrap
 import time
 from pathlib import Path
@@ -281,6 +282,7 @@ class KraabUserbot:
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
         purged_for_relogin = False
+        is_interactive_terminal = bool(getattr(sys.stdin, "isatty", lambda: False)())
 
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
@@ -288,8 +290,9 @@ class KraabUserbot:
                 assert self.client is not None
                 needs_interactive_login = purged_for_relogin or (not self._session_file_exists())
                 attempt_timeout = max(10, start_timeout_sec)
-                if needs_interactive_login:
-                    # После purge (или если session-файл отсутствует) даем больше времени на ручной ввод кода.
+                if needs_interactive_login or is_interactive_terminal:
+                    # В интерактивном терминале пользователь может вводить номер/код вручную,
+                    # поэтому short-timeout приводит к ложным отменам и lock sqlite сессии.
                     attempt_timeout = max(attempt_timeout, relogin_timeout_sec)
                     logger.info(
                         "telegram_interactive_login_mode",
@@ -307,6 +310,12 @@ class KraabUserbot:
                     timeout_sec=start_timeout_sec,
                     session_name=config.TELEGRAM_SESSION_NAME,
                 )
+                # Важно: аккуратно закрываем клиент перед пересозданием, чтобы снять sqlite lock.
+                try:
+                    if self.client and self.client.is_connected:
+                        await self.client.stop()
+                except Exception as stop_exc:  # noqa: BLE001
+                    logger.debug("telegram_client_stop_after_timeout_failed", error=str(stop_exc))
                 # На таймауте транспорт часто застревает. Пересоздаем клиента.
                 self._recreate_client()
                 # Если таймаут повторился — делаем одну контролируемую попытку relogin:
@@ -322,6 +331,24 @@ class KraabUserbot:
                 continue
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                if self._is_db_locked_error(exc):
+                    # После прерванного интерактивного старта sqlite может остаться заблокирован.
+                    # Чистим lock/журналы и делаем повторную попытку без удаления основной session.
+                    stale_files = self._cleanup_telegram_session_locks()
+                    logger.warning(
+                        "telegram_session_db_locked_retry",
+                        stale_files=stale_files,
+                        error=str(exc),
+                        attempt=attempt,
+                    )
+                    try:
+                        if self.client and self.client.is_connected:
+                            await self.client.stop()
+                    except Exception as stop_exc:  # noqa: BLE001
+                        logger.debug("telegram_client_stop_after_dblock_failed", error=str(stop_exc))
+                    self._recreate_client()
+                    await asyncio.sleep(1.0)
+                    continue
                 if self._is_auth_key_invalid(exc):
                     removed_files = self._purge_telegram_session_files()
                     logger.warning(
@@ -438,6 +465,29 @@ class KraabUserbot:
                         removed.append(str(target))
                     except OSError as exc:
                         logger.warning("telegram_session_purge_failed", file=str(target), error=str(exc))
+        return removed
+
+    @staticmethod
+    def _is_db_locked_error(exc: Exception) -> bool:
+        """True, если ошибка связана с блокировкой sqlite session-файла."""
+        return "database is locked" in str(exc).lower()
+
+    def _cleanup_telegram_session_locks(self) -> list[str]:
+        """
+        Удаляет только lock/journal файлы sqlite-сессии.
+        Основной `.session` файл не трогаем.
+        """
+        session_name = str(config.TELEGRAM_SESSION_NAME or "kraab").strip() or "kraab"
+        removed: list[str] = []
+        for base_dir in self._get_session_dirs():
+            for suffix in (".session-journal", ".session-shm", ".session-wal"):
+                target = base_dir / f"{session_name}{suffix}"
+                if target.exists():
+                    try:
+                        target.unlink()
+                        removed.append(str(target))
+                    except OSError as exc:
+                        logger.warning("telegram_session_lock_cleanup_failed", file=str(target), error=str(exc))
         return removed
 
     def _session_file_exists(self) -> bool:
