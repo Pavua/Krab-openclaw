@@ -25,8 +25,12 @@ async def _start_web_panel() -> object | None:
         from ..modules.web_router_compat import WebRouterCompat
         from ..core.ecosystem_health import EcosystemHealthService
         from ..core.provisioning_service import ProvisioningService
+        from ..integrations.krab_ear_client import KrabEarClient
+        from ..integrations.voice_gateway_client import VoiceGatewayClient
 
         router_compat = WebRouterCompat(model_manager, openclaw_client)
+        voice_gateway_client = VoiceGatewayClient()
+        krab_ear_client = KrabEarClient()
 
         deps = {
             "router": router_compat,
@@ -35,12 +39,14 @@ async def _start_web_panel() -> object | None:
             "health_service": EcosystemHealthService(
                 router=router_compat,
                 openclaw_client=openclaw_client,
+                voice_gateway_client=voice_gateway_client,
+                krab_ear_client=krab_ear_client,
             ),
             "provisioning_service": ProvisioningService(),
             "ai_runtime": None,
             "reaction_engine": None,
-            "voice_gateway_client": None,
-            "krab_ear_client": None,
+            "voice_gateway_client": voice_gateway_client,
+            "krab_ear_client": krab_ear_client,
             "perceptor": None,
             "watchdog": None,
             "queue": None,

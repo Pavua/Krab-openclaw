@@ -296,10 +296,8 @@ class KraabUserbot:
                 )
                 # На таймауте транспорт часто застревает. Пересоздаем клиента.
                 self._recreate_client()
-                # Со второго таймаута уже чистим сессию.
-                if attempt >= 2:
-                    removed_files = self._purge_telegram_session_files()
-                    logger.warning("telegram_session_purged_after_timeout", removed_files=removed_files)
+                # Важно: по одному лишь timeout не удаляем session-файл.
+                # Иначе можно получить лишние перелогины при временной сетевой деградации.
                 continue
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
