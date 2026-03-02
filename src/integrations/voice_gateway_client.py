@@ -83,7 +83,7 @@ class VoiceGatewayClient:
             status_code, payload = await self._fetch_health_payload()
             return status_code == 200 and self._is_ok_payload(payload)
         except Exception as exc:  # noqa: BLE001 - health должен быть fail-safe
-            logger.warning("voice_gateway_health_failed", error=str(exc), base_url=self.base_url)
+            logger.debug("voice_gateway_health_failed", error=str(exc), base_url=self.base_url)
             return False
 
     async def health_report(self) -> dict[str, Any]:
@@ -107,4 +107,3 @@ class VoiceGatewayClient:
                 "source": f"{self.base_url}/health",
                 "detail": str(exc),
             }
-

@@ -279,12 +279,25 @@ class KraabUserbot:
         logger.info("starting_userbot")
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
+        relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
+        purged_for_relogin = False
 
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
                 assert self.client is not None
-                await asyncio.wait_for(self.client.start(), timeout=max(10, start_timeout_sec))
+                needs_interactive_login = purged_for_relogin or (not self._session_file_exists())
+                attempt_timeout = max(10, start_timeout_sec)
+                if needs_interactive_login:
+                    # После purge (или если session-файл отсутствует) даем больше времени на ручной ввод кода.
+                    attempt_timeout = max(attempt_timeout, relogin_timeout_sec)
+                    logger.info(
+                        "telegram_interactive_login_mode",
+                        attempt=attempt,
+                        timeout_sec=attempt_timeout,
+                    )
+
+                await asyncio.wait_for(self.client.start(), timeout=attempt_timeout)
                 break
             except asyncio.TimeoutError as exc:
                 last_error = exc
@@ -296,8 +309,16 @@ class KraabUserbot:
                 )
                 # На таймауте транспорт часто застревает. Пересоздаем клиента.
                 self._recreate_client()
-                # Важно: по одному лишь timeout не удаляем session-файл.
-                # Иначе можно получить лишние перелогины при временной сетевой деградации.
+                # Если таймаут повторился — делаем одну контролируемую попытку relogin:
+                # очищаем session и следующую попытку запускаем с длинным timeout.
+                if attempt >= 2 and not purged_for_relogin:
+                    removed_files = self._purge_telegram_session_files()
+                    purged_for_relogin = True
+                    logger.warning(
+                        "telegram_session_purged_for_relogin",
+                        removed_files=removed_files,
+                        next_attempt_timeout_sec=max(start_timeout_sec, relogin_timeout_sec),
+                    )
                 continue
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -418,6 +439,15 @@ class KraabUserbot:
                     except OSError as exc:
                         logger.warning("telegram_session_purge_failed", file=str(target), error=str(exc))
         return removed
+
+    def _session_file_exists(self) -> bool:
+        """Проверяет наличие основного session-файла (`*.session`)."""
+        session_name = str(config.TELEGRAM_SESSION_NAME or "kraab").strip() or "kraab"
+        for base_dir in self._get_session_dirs():
+            target = base_dir / f"{session_name}.session"
+            if target.exists():
+                return True
+        return False
 
     async def _safe_maintenance(self):
         """Безопасный запуск maintenance"""

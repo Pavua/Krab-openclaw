@@ -57,17 +57,21 @@ stop_old_krab_processes() {
 
     echo "🧹 Found old Krab processes: $pids"
     echo "$pids" | xargs kill -TERM >/dev/null 2>&1 || true
-    for i in 1 2 3 4 5 6 7 8; do
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         sleep 0.4
         pids=$(pgrep -f "python.*src\.main" || true)
         [ -z "$pids" ] && return 0
     done
 
-    echo "⚠️ Old Krab processes still alive, forcing stop..."
-    echo "$pids" | xargs kill -KILL >/dev/null 2>&1 || true
+    echo "❌ Старый процесс Krab не завершился мягко: $pids"
+    echo "Запусти 'new Stop Krab.command' и повтори запуск."
+    return 1
 }
 
-stop_old_krab_processes
+if ! stop_old_krab_processes; then
+    read -p "Нажми Enter для закрытия окна..."
+    exit 1
+fi
 
 # Чистим порт web-панели до первого запуска.
 clear_web_port 8080 || true

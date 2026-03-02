@@ -42,6 +42,7 @@ async def test_krab_ear_health_ok_from_status(monkeypatch) -> None:
         return 200, {"status": "ok", "service": "krab-ear"}
 
     monkeypatch.setattr(client, "_fetch_health_payload", _fake_fetch)
+    monkeypatch.setattr(client, "_ping_ipc_health", lambda: _fake_ipc_down())
     assert await client.health_check() is True
 
 
@@ -54,9 +55,25 @@ async def test_krab_ear_health_report_contains_source(monkeypatch) -> None:
         return 500, {"status": "error"}
 
     monkeypatch.setattr(client, "_fetch_health_payload", _fake_fetch)
+    monkeypatch.setattr(client, "_ping_ipc_health", lambda: _fake_ipc_down())
     report = await client.health_report()
 
     assert report["ok"] is False
     assert report["status"] == "http_500"
     assert report["source"].endswith("/health")
 
+
+async def _fake_ipc_down() -> tuple[bool, str]:
+    return False, "socket_missing"
+
+
+@pytest.mark.asyncio
+async def test_krab_ear_health_prefers_ipc(monkeypatch) -> None:
+    """Если IPC ping успешен, HTTP fallback не должен быть нужен."""
+    client = KrabEarClient(base_url="")
+
+    async def _fake_ipc_ok() -> tuple[bool, str]:
+        return True, "ok"
+
+    monkeypatch.setattr(client, "_ping_ipc_health", _fake_ipc_ok)
+    assert await client.health_check() is True
