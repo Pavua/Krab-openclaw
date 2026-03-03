@@ -37,6 +37,9 @@ from .core.routing_errors import RouterError, RouterQuotaError
 
 logger = get_logger(__name__)
 
+AUTH_UNAUTHORIZED_CODE = "openclaw_auth_unauthorized"
+LEGACY_AUTH_CODES = {AUTH_UNAUTHORIZED_CODE, "auth_invalid", "unsupported_key_type"}
+
 
 class OpenClawClient:
     """Клиент OpenClaw Gateway API."""
@@ -233,9 +236,11 @@ class OpenClawClient:
             ("quota", "quota_exceeded", "Квота облачного ключа исчерпана"),
             ("429", "quota_exceeded", "Квота облачного ключа исчерпана"),
             ("api keys are not supported", "unsupported_key_type", "Неверный тип облачного ключа"),
-            ("unauthenticated", "auth_invalid", "Ошибка авторизации облачного ключа"),
-            ("invalid api key", "auth_invalid", "Ошибка авторизации облачного ключа"),
-            ("forbidden", "auth_invalid", "Ошибка авторизации облачного ключа"),
+            ("unauthenticated", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
+            ("invalid api key", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
+            ("forbidden", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
+            ("unauthorized", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
+            ("401", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
             ("timeout", "provider_timeout", "Таймаут облачного провайдера"),
         ]
         for pattern, code, message in semantic_patterns:
@@ -253,7 +258,7 @@ class OpenClawClient:
         а HTTP-ошибку/исключение.
         """
         if isinstance(exc, ProviderAuthError):
-            return {"code": "auth_invalid", "message": "Ошибка авторизации облачного ключа"}
+            return {"code": AUTH_UNAUTHORIZED_CODE, "message": "Ошибка авторизации облачного ключа"}
         if isinstance(exc, ProviderError):
             code = "provider_timeout" if getattr(exc, "retryable", False) else "provider_error"
             return {"code": code, "message": str(exc) or "Ошибка провайдера"}
@@ -657,24 +662,23 @@ class OpenClawClient:
                         continue
 
                 # 2) auth/key type/quota -> openai fallback
-                if semantic["code"] in {"auth_invalid", "unsupported_key_type", "quota_exceeded"} and not tried_openai:
+                if semantic["code"] in (LEGACY_AUTH_CODES | {"quota_exceeded"}) and not tried_openai:
                     tried_openai = True
                     attempt_model = "openai/gpt-4o-mini"
                     self._cloud_tier_state["last_recovery_action"] = "switch_to_openai"
                     continue
 
                 # 3) критичные ошибки -> local autoload (если не force_cloud)
-                if semantic["code"] in {
+                local_recovery_codes = {
                     "model_not_loaded",
-                    "auth_invalid",
-                    "unsupported_key_type",
                     "quota_exceeded",
                     "provider_timeout",
                     "provider_error",
                     "transport_error",
                     "lm_empty_stream",
                     "lm_model_crash",
-                } and not force_cloud and not tried_local:
+                } | LEGACY_AUTH_CODES
+                if semantic["code"] in local_recovery_codes and not force_cloud and not tried_local:
                     tried_local = True
                     local_model = await self._resolve_local_model_for_retry(model_manager, attempt_model)
                     if local_model:
@@ -723,7 +727,7 @@ class OpenClawClient:
                 )
                 if code == "quota_exceeded":
                     user_text = "❌ Квота облачных ключей исчерпана. Переключись на локальную модель: !model local"
-                elif code in {"auth_invalid", "unsupported_key_type"}:
+                elif code in LEGACY_AUTH_CODES:
                     user_text = "❌ Облачный ключ невалиден для текущего API. Проверь Gemini ключ формата AIza..."
                 elif code == "model_not_loaded":
                     user_text = "❌ Локальная модель не загружена. Загрузи её в LM Studio или командой !model load <name>."
@@ -772,7 +776,7 @@ class OpenClawClient:
                 error_code=code,
                 force_cloud=force_cloud,
             )
-            if code == "auth_invalid":
+            if code in LEGACY_AUTH_CODES:
                 yield "❌ Облачный ключ не прошёл авторизацию. Проверь ключ/токен."
             else:
                 yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
@@ -978,7 +982,7 @@ class OpenClawClient:
         """План восстановления на основе текущего состояния tier/ошибок."""
         state = self.get_tier_state_export()
         actions: list[str] = []
-        if state.get("last_error_code") in {"auth_invalid", "unsupported_key_type"}:
+        if state.get("last_error_code") in LEGACY_AUTH_CODES:
             actions.append("Проверь и замени paid/free ключ на AI Studio API key формата AIza...")
             actions.append("Запусти sync_openclaw_models.command и затем check_cloud_chain.command")
         elif state.get("last_error_code") == "quota_exceeded":

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import ProviderAuthError
 from src.openclaw_client import OpenClawClient
 
 
@@ -139,3 +140,14 @@ def test_detect_semantic_error_model_crash(client: OpenClawClient) -> None:
     semantic = client._detect_semantic_error("The model has crashed without additional information")
     assert semantic is not None
     assert semantic["code"] == "lm_model_crash"
+
+
+def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenClawClient) -> None:
+    semantic = client._detect_semantic_error("401 Unauthorized: invalid api key")
+    assert semantic is not None
+    assert semantic["code"] == "openclaw_auth_unauthorized"
+
+
+def test_semantic_from_provider_auth_exception_uses_canonical_code(client: OpenClawClient) -> None:
+    semantic = client._semantic_from_provider_exception(ProviderAuthError(message="401", user_message="auth failed"))
+    assert semantic["code"] == "openclaw_auth_unauthorized"

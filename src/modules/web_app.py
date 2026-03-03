@@ -350,15 +350,21 @@ class WebApp:
         if not token:
             return "missing"
 
-        auth_error_codes = {"auth_invalid", "unsupported_key_type"}
+        auth_error_codes = {"auth_invalid", "unsupported_key_type", "openclaw_auth_unauthorized"}
         route_error = str(last_runtime_route.get("error_code") or "").strip().lower()
         tier_error = str(tier_state.get("last_error_code") or "").strip().lower()
         if route_error in auth_error_codes or tier_error in auth_error_codes:
             return "unauthorized"
 
         provider_status = str(tier_state.get("last_provider_status") or "").strip().lower()
+        if provider_status in {"auth", "unauthorized", "forbidden"}:
+            return "unauthorized"
         if provider_status == "ok":
             return "ok"
+
+        route_detail = str(last_runtime_route.get("route_detail") or "").strip().lower()
+        if "401" in route_detail or "unauthorized" in route_detail or "forbidden" in route_detail:
+            return "unauthorized"
         return "configured"
 
     async def _collect_runtime_lite_snapshot(self) -> dict[str, Any]:

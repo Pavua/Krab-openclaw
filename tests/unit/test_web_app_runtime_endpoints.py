@@ -62,10 +62,10 @@ class _FakeHealthClient:
         return self._ok
 
 
-def _make_client() -> TestClient:
+def _make_client(*, openclaw_client=None) -> TestClient:
     deps = {
         "router": _DummyRouter(),
-        "openclaw_client": _FakeOpenClaw(),
+        "openclaw_client": openclaw_client or _FakeOpenClaw(),
         "black_box": None,
         "health_service": None,
         "provisioning_service": None,
@@ -176,3 +176,24 @@ Warnings:
     assert parsed["channels"][1]["name"] == "BlueBubbles default"
     assert parsed["channels"][1]["status"] == "FAIL"
     assert parsed["warnings"] == ["bluebubbles default: Not configured"]
+
+
+def test_health_lite_marks_auth_unauthorized_when_provider_reports_auth(monkeypatch):
+    """`health/lite` должен показывать unauthorized при provider_status=auth."""
+
+    class _OpenClawAuthState(_FakeOpenClaw):
+        def get_tier_state_export(self):
+            return {
+                "active_tier": "free",
+                "last_error_code": None,
+                "last_provider_status": "auth",
+                "last_recovery_action": "switch_provider_or_key",
+            }
+
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("OPENCLAW_TOKEN", "test-token")
+    client = _make_client(openclaw_client=_OpenClawAuthState())
+
+    resp = client.get("/api/health/lite")
+    assert resp.status_code == 200
+    assert resp.json()["openclaw_auth_state"] == "unauthorized"
