@@ -10,6 +10,8 @@ One-click восстановление runtime-конфига OpenClaw для с
 2) Убирает залипшие channel session overrides вида `lmstudio/local`,
    из-за которых каналы Telegram/iMessage/WhatsApp могут падать с
    `400 No models loaded`.
+   Дополнительно снимает global-agent overrides `lmstudio/local` в openclaw.json,
+   чтобы embedded agent не падал с тем же симптомом вне userbot.
 3) По желанию переводит DM policy каналов в `allowlist`, чтобы убрать
    навязчивые pairing-сообщения внешним контактам.
 4) Нормализует allowlist-файлы (например, удаляет слишком широкие маски).
@@ -34,6 +36,14 @@ from dotenv import load_dotenv
 
 LOCAL_MARKERS = {"local", "lmstudio", "lmstudio/local", "google/local"}
 DEFAULT_CHANNELS = ("telegram", "imessage", "whatsapp", "signal", "discord", "slack")
+
+
+def _is_local_marker(value: str) -> bool:
+    """True, если значение похоже на generic local/lmstudio override."""
+    raw = str(value or "").strip().lower()
+    if raw in LOCAL_MARKERS:
+        return True
+    return raw.startswith("lmstudio/")
 
 
 def mask_secret(secret: str) -> str:
@@ -291,6 +301,60 @@ def repair_sessions(
     }
 
 
+def repair_agent_model_overrides(openclaw_path: Path, *, default_model: str) -> dict[str, Any]:
+    """
+    Снимает залипшие global-agent модели `lmstudio/local` в openclaw.json.
+
+    Почему важно:
+    - even при рабочих каналах embedded agent может стартовать через `agents.list[].model`;
+    - generic local-модель без загруженного инстанса даёт `400 No models loaded`.
+    """
+    payload = _read_json(openclaw_path)
+    if not isinstance(payload, dict):
+        return {"path": str(openclaw_path), "changed": False, "fixed": 0, "reason": "not_dict"}
+
+    agents = payload.get("agents")
+    if not isinstance(agents, dict):
+        return {"path": str(openclaw_path), "changed": False, "fixed": 0, "reason": "agents_missing"}
+
+    defaults = agents.get("defaults")
+    changed_entries: list[str] = []
+    fixed = 0
+
+    if isinstance(defaults, dict):
+        subagents = defaults.get("subagents")
+        if isinstance(subagents, dict):
+            sub_model = str(subagents.get("model") or "").strip()
+            if _is_local_marker(sub_model):
+                subagents["model"] = default_model
+                fixed += 1
+                changed_entries.append("agents.defaults.subagents.model")
+
+    agents_list = agents.get("list")
+    if isinstance(agents_list, list):
+        for idx, item in enumerate(agents_list):
+            if not isinstance(item, dict):
+                continue
+            model_value = str(item.get("model") or "").strip()
+            if not _is_local_marker(model_value):
+                continue
+            item["model"] = default_model
+            fixed += 1
+            agent_id = str(item.get("id") or f"#{idx}")
+            changed_entries.append(f"agents.list[{agent_id}].model")
+
+    if fixed > 0:
+        _write_json(openclaw_path, payload)
+
+    return {
+        "path": str(openclaw_path),
+        "changed": fixed > 0,
+        "fixed": fixed,
+        "entries": changed_entries,
+        "default_model": default_model,
+    }
+
+
 def normalize_allowlist(path: Path) -> dict[str, Any]:
     """
     Нормализует allowlist:
@@ -475,6 +539,10 @@ def main() -> int:
     report["steps"]["sync_models_json"] = sync_models_json(models_path, target_key)
     report["steps"]["sync_openclaw_json"] = sync_openclaw_json(openclaw_path, target_key)
     report["steps"]["repair_hooks"] = repair_hooks_config(openclaw_path)
+    report["steps"]["repair_agent_models"] = repair_agent_model_overrides(
+        openclaw_path,
+        default_model=default_model,
+    )
     report["steps"]["repair_sessions"] = repair_sessions(
         sessions_path,
         channels=channels,

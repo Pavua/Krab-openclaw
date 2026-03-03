@@ -18,6 +18,7 @@ from scripts.openclaw_runtime_repair import (
     choose_target_key,
     detect_active_channels,
     normalize_allowlist,
+    repair_agent_model_overrides,
     repair_hooks_config,
     repair_sessions,
 )
@@ -147,3 +148,33 @@ def test_detect_active_channels_fallback_to_defaults_on_empty() -> None:
     channels = detect_active_channels({"channels": {}})
     assert "telegram" in channels
     assert "discord" in channels
+
+
+def test_repair_agent_model_overrides_replaces_generic_local(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "subagents": {"model": "lmstudio/local"},
+                    },
+                    "list": [
+                        {"id": "main", "model": "lmstudio/local"},
+                        {"id": "qa", "model": "google/gemini-2.5-flash"},
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = repair_agent_model_overrides(openclaw_path, default_model="google/gemini-2.5-flash")
+    assert report["changed"] is True
+    assert report["fixed"] == 2
+
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["agents"]["defaults"]["subagents"]["model"] == "google/gemini-2.5-flash"
+    assert payload["agents"]["list"][0]["model"] == "google/gemini-2.5-flash"
+    assert payload["agents"]["list"][1]["model"] == "google/gemini-2.5-flash"
