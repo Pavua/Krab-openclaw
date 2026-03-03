@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
@@ -59,6 +60,7 @@ class OpenClawClient:
 
         # Source-of-truth по моделям/ключам OpenClaw (решение проекта: ~/.openclaw)
         self._models_path = default_openclaw_models_path()
+        self._openclaw_runtime_config_path = Path.home() / ".openclaw" / "openclaw.json"
 
         self.gemini_tiers = {
             "free": str(os.getenv("GEMINI_API_KEY_FREE", "") or "").strip(),
@@ -115,6 +117,44 @@ class OpenClawClient:
     def get_last_runtime_route(self) -> dict[str, Any]:
         """Возвращает snapshot последнего фактического маршрута."""
         return dict(self._last_runtime_route)
+
+    def _refresh_gateway_token_from_runtime(self) -> bool:
+        """
+        Подтягивает gateway token из `~/.openclaw/openclaw.json` и обновляет HTTP headers.
+
+        Зачем:
+        - в non-bootstrap среде `.env` часто содержит устаревший `OPENCLAW_API_KEY`;
+        - реальный gateway token живёт в runtime-конфиге OpenClaw;
+        - при 401 делаем один auto-refresh, чтобы убрать ложные auth-падения.
+        """
+        cfg_path = self._openclaw_runtime_config_path
+        try:
+            if not cfg_path.exists():
+                return False
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+            gateway = payload.get("gateway", {}) if isinstance(payload, dict) else {}
+            auth = gateway.get("auth", {}) if isinstance(gateway, dict) else {}
+            runtime_token = ""
+            if isinstance(auth, dict):
+                runtime_token = str(auth.get("token", "") or "").strip()
+            if not runtime_token and isinstance(gateway, dict):
+                runtime_token = str(gateway.get("token", "") or "").strip()
+            if not runtime_token or runtime_token == self.token:
+                return False
+            self.token = runtime_token
+            self._http_client.headers["Authorization"] = f"Bearer {runtime_token}"
+            logger.warning(
+                "openclaw_gateway_token_refreshed_from_runtime",
+                config_path=str(cfg_path),
+            )
+            return True
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning(
+                "openclaw_gateway_token_refresh_failed",
+                config_path=str(cfg_path),
+                error=str(exc),
+            )
+            return False
 
     @staticmethod
     def _messages_size(messages: List[Dict[str, Any]]) -> int:
@@ -341,6 +381,7 @@ class OpenClawClient:
         *,
         model_id: str,
         messages_to_send: list[dict[str, Any]],
+        allow_auth_retry: bool = True,
     ) -> str:
         """Один запрос к OpenClaw (stream=true) с буферизацией ответа."""
         payload = {
@@ -350,6 +391,7 @@ class OpenClawClient:
         }
 
         full_response = ""
+        retry_after_token_refresh = False
         async with self._http_client.stream(
             "POST",
             f"{self.base_url}/v1/chat/completions",
@@ -362,25 +404,40 @@ class OpenClawClient:
                 body_str = body_bytes.decode("utf-8", errors="ignore")
                 logger.error("openclaw_api_error", status=response.status_code, body=body_str)
                 if response.status_code in (401, 403):
-                    raise ProviderAuthError(
-                        message=f"status={response.status_code} body={body_str[:500]}",
-                        user_message="Ошибка авторизации API",
-                    )
-                if response.status_code == 429:
+                    if allow_auth_retry and self._refresh_gateway_token_from_runtime():
+                        retry_after_token_refresh = True
+                    else:
+                        raise ProviderAuthError(
+                            message=f"status={response.status_code} body={body_str[:500]}",
+                            user_message="Ошибка авторизации API",
+                        )
+                elif response.status_code == 429:
                     raise RouterQuotaError(
                         user_message="Квота исчерпана. Попробуй позже или переключись на локальную модель (!model local).",
                         details={"status": 429},
                     )
-                if response.status_code >= 500:
+                elif response.status_code >= 500:
                     raise ProviderError(
                         message=f"status={response.status_code} body={body_str[:500]}",
                         user_message="Провайдер временно недоступен",
                         retryable=True,
                     )
-                raise ProviderError(
-                    message=f"status={response.status_code} body={body_str[:500]}",
-                    user_message=f"Ошибка API: {response.status_code}",
-                    retryable=False,
+                else:
+                    raise ProviderError(
+                        message=f"status={response.status_code} body={body_str[:500]}",
+                        user_message=f"Ошибка API: {response.status_code}",
+                        retryable=False,
+                    )
+
+            if retry_after_token_refresh:
+                logger.warning(
+                    "openclaw_retry_after_gateway_token_refresh",
+                    model=model_id,
+                )
+                return await self._openclaw_completion_once(
+                    model_id=model_id,
+                    messages_to_send=messages_to_send,
+                    allow_auth_retry=False,
                 )
 
             async for line in response.aiter_lines():
@@ -866,7 +923,11 @@ class OpenClawClient:
             if not final_response:
                 final_response = "❌ Модель не вернула ответ."
 
-            if not self._last_runtime_route or self._last_runtime_route.get("status") != "ok":
+            if (
+                not self._last_runtime_route
+                or self._last_runtime_route.get("status") != "ok"
+                or self._last_runtime_route.get("channel") == "planning"
+            ):
                 route_channel = (
                     "openclaw_local"
                     if model_manager.is_local_model(attempt_model)

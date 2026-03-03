@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -55,6 +56,9 @@ async def test_send_message_stream_success_buffered(client: OpenClawClient) -> N
     assert "".join(chunks) == "Hello World"
     assert len(client._sessions["chat-1"]) == 2
     assert client._sessions["chat-1"][1]["content"] == "Hello World"
+    route = client.get_last_runtime_route()
+    assert route.get("channel") == "openclaw_cloud"
+    assert route.get("status") == "ok"
 
 
 @pytest.mark.asyncio
@@ -191,6 +195,23 @@ def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenC
 def test_semantic_from_provider_auth_exception_uses_canonical_code(client: OpenClawClient) -> None:
     semantic = client._semantic_from_provider_exception(ProviderAuthError(message="401", user_message="auth failed"))
     assert semantic["code"] == "openclaw_auth_unauthorized"
+
+
+def test_refresh_gateway_token_from_runtime_updates_auth_header(client: OpenClawClient, tmp_path: Path) -> None:
+    cfg_path = tmp_path / "openclaw.json"
+    cfg_path.write_text(
+        '{"gateway":{"auth":{"mode":"token","token":"runtime-token-123"}}}',
+        encoding="utf-8",
+    )
+    client._openclaw_runtime_config_path = cfg_path
+    client.token = "stale-token"
+    client._http_client.headers = {"Authorization": "Bearer stale-token"}
+
+    refreshed = client._refresh_gateway_token_from_runtime()
+
+    assert refreshed is True
+    assert client.token == "runtime-token-123"
+    assert client._http_client.headers["Authorization"] == "Bearer runtime-token-123"
 
 
 @pytest.mark.asyncio
