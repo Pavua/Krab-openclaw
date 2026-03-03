@@ -45,7 +45,8 @@ async def test_start_non_interactive_missing_session_goes_degraded(monkeypatch: 
     Ожидаем controlled-state: `login_required`.
     """
     bot = _build_bot_stub()
-    bot._session_file_exists = Mock(return_value=False)
+    bot._restore_primary_session_from_legacy = Mock(return_value=False)
+    bot._primary_session_snapshot = Mock(return_value={"exists": False, "has_user_binding": False})
     bot._cleanup_telegram_session_locks = Mock(return_value=[])
     bot._start_client_serialized = AsyncMock()
     bot._safe_stop_client = AsyncMock()
@@ -65,6 +66,7 @@ async def test_start_non_interactive_missing_session_goes_degraded(monkeypatch: 
     assert bot.get_runtime_state()["startup_state"] == "login_required"
     assert bot.get_runtime_state()["startup_error_code"] == "telegram_session_login_required"
     bot._start_client_serialized.assert_not_called()
+    bot._purge_telegram_session_files.assert_not_called()
     bot._ensure_maintenance_started.assert_called_once()
 
 
@@ -75,7 +77,8 @@ async def test_start_non_interactive_eof_prompt_goes_degraded(monkeypatch: pytes
     runtime не падает, а уходит в controlled-state.
     """
     bot = _build_bot_stub()
-    bot._session_file_exists = Mock(return_value=True)
+    bot._restore_primary_session_from_legacy = Mock(return_value=False)
+    bot._primary_session_snapshot = Mock(return_value={"exists": True, "has_user_binding": True})
     bot._cleanup_telegram_session_locks = Mock(return_value=[])
     bot._start_client_serialized = AsyncMock(side_effect=EOFError("EOF when reading a line"))
     bot._safe_stop_client = AsyncMock()
@@ -97,5 +100,46 @@ async def test_start_non_interactive_eof_prompt_goes_degraded(monkeypatch: pytes
     assert state["startup_error_code"] == "telegram_session_login_required"
     assert "EOF" in state["startup_error"]
     bot._safe_stop_client.assert_awaited_once()
+    bot._purge_telegram_session_files.assert_not_called()
     bot._ensure_maintenance_started.assert_called_once()
 
+
+@pytest.mark.asyncio
+async def test_start_interactive_invalid_session_requires_manual_relogin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    В интерактивном терминале обычный старт не должен залипать на `Enter phone number...`
+    если сессия неавторизована. Ожидаем controlled-state и ручной relogin через отдельный скрипт.
+    """
+    bot = _build_bot_stub()
+    bot._restore_primary_session_from_legacy = Mock(return_value=False)
+    bot._primary_session_snapshot = Mock(return_value={"exists": True, "has_user_binding": False})
+    bot._cleanup_telegram_session_locks = Mock(return_value=[])
+    bot._start_client_serialized = AsyncMock()
+    bot._safe_stop_client = AsyncMock()
+    bot._purge_telegram_session_files = Mock(return_value=[])
+    bot._recreate_client = Mock()
+    bot._ensure_maintenance_started = Mock()
+
+    class _FakeStdin:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    monkeypatch.setattr(userbot_bridge_module.sys, "stdin", _FakeStdin())
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "TELEGRAM_ALLOW_INTERACTIVE_LOGIN",
+        False,
+        raising=False,
+    )
+
+    await bot.start()
+
+    state = bot.get_runtime_state()
+    assert state["startup_state"] == "login_required"
+    assert state["startup_error_code"] == "telegram_session_login_required"
+    bot._start_client_serialized.assert_not_called()
+    bot._purge_telegram_session_files.assert_not_called()
+    bot._ensure_maintenance_started.assert_called_once()

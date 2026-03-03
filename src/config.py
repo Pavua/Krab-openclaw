@@ -22,6 +22,12 @@ class Config:
     TELEGRAM_API_HASH: str = os.getenv("TELEGRAM_API_HASH", "")
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")  # Optional fallback
     TELEGRAM_SESSION_NAME: str = os.getenv("TELEGRAM_SESSION_NAME", "kraab")
+    # Если включено, обычный runtime может запускать интерактивный Telegram login прямо в start().
+    # По умолчанию выключено: relogin выполняется только через telegram_relogin.command.
+    TELEGRAM_ALLOW_INTERACTIVE_LOGIN: bool = os.getenv(
+        "TELEGRAM_ALLOW_INTERACTIVE_LOGIN",
+        "0",
+    ).strip().lower() in ("1", "true", "yes")
 
     # OpenClaw
     OPENCLAW_URL: str = os.getenv("OPENCLAW_URL", os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"))

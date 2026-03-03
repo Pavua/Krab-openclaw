@@ -12,7 +12,7 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 import asyncio
 import base64
 import os
-import signal
+import shutil
 import sqlite3
 import sys
 import textwrap
@@ -119,6 +119,96 @@ class KraabUserbot:
             seen.add(key)
             unique.append(item)
         return unique
+
+    def _session_name(self) -> str:
+        """Нормализованное имя Telegram session-файла."""
+        return str(config.TELEGRAM_SESSION_NAME or "kraab").strip() or "kraab"
+
+    def _primary_session_file(self) -> Path:
+        """Канонический session-файл, который использует текущий Pyrogram client."""
+        return self._session_workdir / f"{self._session_name()}.session"
+
+    def _inspect_session_file(self, session_file: Path) -> dict:
+        """
+        Легковесная диагностика sqlite session-файла:
+        - есть ли auth key;
+        - есть ли user binding (user_id > 0), т.е. завершенный логин.
+        """
+        snapshot = {
+            "path": str(session_file),
+            "exists": session_file.exists(),
+            "has_auth_key": False,
+            "has_user_binding": False,
+            "user_id": 0,
+            "is_bot": None,
+            "error": "",
+        }
+        if not session_file.exists():
+            return snapshot
+        try:
+            with sqlite3.connect(str(session_file), timeout=0.7) as conn:
+                row = conn.execute(
+                    "SELECT length(auth_key), coalesce(user_id,0), is_bot FROM sessions LIMIT 1"
+                ).fetchone()
+            if row:
+                auth_len = int(row[0] or 0)
+                user_id = int(row[1] or 0)
+                is_bot = row[2]
+                snapshot["has_auth_key"] = auth_len > 0
+                snapshot["has_user_binding"] = user_id > 0
+                snapshot["user_id"] = user_id
+                snapshot["is_bot"] = None if is_bot is None else int(is_bot)
+        except Exception as exc:  # noqa: BLE001
+            snapshot["error"] = str(exc)
+        return snapshot
+
+    def _primary_session_snapshot(self) -> dict:
+        """Snapshot канонического session-файла (из рабочего каталога клиента)."""
+        return self._inspect_session_file(self._primary_session_file())
+
+    def _restore_primary_session_from_legacy(self) -> bool:
+        """
+        Восстанавливает канонический session-файл из legacy-пути, если:
+        - в рабочем пути сессия отсутствует или неавторизована;
+        - в одном из legacy-путей найдена валидная авторизованная сессия.
+
+        Это устраняет ложные relogin после миграций путей session-файла.
+        """
+        primary_file = self._primary_session_file()
+        primary_snapshot = self._inspect_session_file(primary_file)
+        if primary_snapshot["has_user_binding"]:
+            return False
+
+        session_name = self._session_name()
+        for base_dir in self._get_session_dirs():
+            if base_dir == self._session_workdir:
+                continue
+            candidate = base_dir / f"{session_name}.session"
+            candidate_snapshot = self._inspect_session_file(candidate)
+            if not candidate_snapshot["has_user_binding"]:
+                continue
+            try:
+                self._session_workdir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(candidate, primary_file)
+                for suffix in (".session-shm", ".session-wal", ".session-journal"):
+                    sidecar = base_dir / f"{session_name}{suffix}"
+                    if sidecar.exists():
+                        shutil.copy2(sidecar, self._session_workdir / sidecar.name)
+                logger.info(
+                    "telegram_session_restored_from_legacy",
+                    source=str(candidate),
+                    target=str(primary_file),
+                    user_id=candidate_snapshot["user_id"],
+                )
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "telegram_session_restore_from_legacy_failed",
+                    source=str(candidate),
+                    target=str(primary_file),
+                    error=str(exc),
+                )
+        return False
 
     def _recreate_client(self) -> None:
         """
@@ -398,14 +488,28 @@ class KraabUserbot:
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
-        purged_for_relogin = False
+        allow_interactive_login = bool(getattr(config, "TELEGRAM_ALLOW_INTERACTIVE_LOGIN", False))
         is_interactive_terminal = bool(getattr(sys.stdin, "isatty", lambda: False)())
+        self._restore_primary_session_from_legacy()
+        session_snapshot = self._primary_session_snapshot()
+        needs_interactive_login = not bool(session_snapshot.get("has_user_binding"))
+
+        if needs_interactive_login and is_interactive_terminal and (not allow_interactive_login):
+            self._mark_manual_relogin_required(
+                reason="session_invalid_manual_relogin_required",
+                error=(
+                    "Сессия Telegram не авторизована. "
+                    "Запусти telegram_relogin.command для одноразового входа."
+                ),
+            )
+            self._ensure_maintenance_started()
+            return
 
         # В non-interactive запуске запрещаем провоцировать pyrogram на input().
-        if not is_interactive_terminal and (not self._session_file_exists()):
+        if not is_interactive_terminal and needs_interactive_login:
             self._mark_manual_relogin_required(
                 reason="session_missing_non_interactive",
-                error="Telegram session отсутствует, интерактивный вход недоступен",
+                error="Telegram session отсутствует или не авторизована, интерактивный вход недоступен",
             )
             self._ensure_maintenance_started()
             return
@@ -416,9 +520,8 @@ class KraabUserbot:
                 assert self.client is not None
                 # Перед каждой попыткой мягко чистим sqlite lock-артефакты.
                 self._cleanup_telegram_session_locks()
-                needs_interactive_login = purged_for_relogin or (not self._session_file_exists())
                 attempt_timeout = max(10, start_timeout_sec)
-                if needs_interactive_login or is_interactive_terminal:
+                if needs_interactive_login and allow_interactive_login:
                     # В интерактивном терминале пользователь может вводить номер/код вручную,
                     # поэтому short-timeout приводит к ложным отменам и lock sqlite сессии.
                     attempt_timeout = max(attempt_timeout, relogin_timeout_sec)
@@ -445,18 +548,6 @@ class KraabUserbot:
                     logger.debug("telegram_client_stop_after_timeout_failed", error=str(stop_exc))
                 # На таймауте транспорт часто застревает. Пересоздаем клиента.
                 self._recreate_client()
-                # Если старт завис/протух, делаем controlled relogin через purge session.
-                # В интерактивном режиме лучше очищать уже после первого таймаута,
-                # иначе пользователь видит бесконечные `auth key not found`.
-                should_purge_for_relogin = (attempt >= 2) or is_interactive_terminal
-                if should_purge_for_relogin and not purged_for_relogin:
-                    removed_files = self._purge_telegram_session_files()
-                    purged_for_relogin = True
-                    logger.warning(
-                        "telegram_session_purged_for_relogin",
-                        removed_files=removed_files,
-                        next_attempt_timeout_sec=max(start_timeout_sec, relogin_timeout_sec),
-                    )
                 continue
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -478,22 +569,21 @@ class KraabUserbot:
                     await asyncio.sleep(1.0)
                     continue
                 if self._is_auth_key_invalid(exc):
-                    removed_files = self._purge_telegram_session_files()
                     logger.warning(
-                        "telegram_session_invalid_auto_purge",
-                        removed_files=removed_files,
+                        "telegram_session_invalid_manual_relogin",
                         error=str(exc),
                         attempt=attempt,
                     )
-                    if not is_interactive_terminal:
-                        self._mark_manual_relogin_required(
-                            reason="auth_key_invalid_non_interactive",
-                            error=str(exc),
-                        )
-                        self._ensure_maintenance_started()
-                        return
-                    self._recreate_client()
-                    continue
+                    try:
+                        await self._safe_stop_client(reason="auth_key_invalid")
+                    except Exception as stop_exc:  # noqa: BLE001
+                        logger.debug("telegram_stop_after_auth_invalid_failed", error=str(stop_exc))
+                    self._mark_manual_relogin_required(
+                        reason="auth_key_invalid",
+                        error=str(exc),
+                    )
+                    self._ensure_maintenance_started()
+                    return
                 if (not is_interactive_terminal) and self._is_interactive_login_required_error(exc):
                     try:
                         await self._safe_stop_client(reason="non_interactive_login_required")
@@ -544,8 +634,10 @@ class KraabUserbot:
 
     async def _recover_telegram_session(self, reason: str) -> None:
         """
-        Автовосстановление протухшей Telegram-сессии:
-        stop -> purge session files -> start (интерактивный логин при необходимости).
+        Контролируемая деградация при невалидной Telegram-сессии:
+        - останавливаем текущий клиент;
+        - НЕ удаляем session-файл автоматически;
+        - переводим runtime в `login_required`.
         """
         if self._session_recovery_lock.locked():
             return
@@ -555,22 +647,15 @@ class KraabUserbot:
                 await self._safe_stop_client(reason="session_recovery")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("telegram_session_recovery_stop_failed", error=str(exc))
-
-            removed_files = self._purge_telegram_session_files()
-            logger.warning("telegram_session_files_purged", removed_files=removed_files)
-
-            try:
-                await self._start_client_serialized()
-                self.me = await self.client.get_me()
-                logger.info(
-                    "telegram_session_recovered",
-                    me=(self.me.username if self.me else None),
-                    id=(self.me.id if self.me else None),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("telegram_session_recovery_failed", error=str(exc))
-                # Передаем управление авто-рестартеру launcher-скрипта.
-                os.kill(os.getpid(), signal.SIGTERM)
+            self._mark_manual_relogin_required(
+                reason="session_recovery_manual_relogin",
+                error=str(reason),
+            )
+            self._ensure_maintenance_started()
+            logger.warning(
+                "telegram_session_recovery_requires_manual_relogin",
+                reason=reason,
+            )
 
     async def _telegram_session_watchdog(self) -> None:
         """
