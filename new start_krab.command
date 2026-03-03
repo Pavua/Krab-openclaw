@@ -38,6 +38,11 @@ clear_web_port() {
     return 0
 }
 
+# Проверка, что OpenClaw gateway реально слушает нужный порт.
+is_gateway_listening() {
+    lsof -t -i "tcp:18789" -sTCP:LISTEN >/dev/null 2>&1
+}
+
 # === 0. Сброс флага остановки и зачистка конкурентов ===
 rm -f .stop_krab
 
@@ -134,8 +139,27 @@ if [ -n "$OPENCLAW_BIN" ]; then
     echo "🦞 Starting OpenClaw Gateway..."
     nohup "$OPENCLAW_BIN" gateway run > openclaw.log 2>&1 &
     echo $! > .openclaw.pid
-    echo "✅ OpenClaw started (PID $!)"
+    echo "✅ OpenClaw старт-команда отправлена (PID $!)"
     sleep 3
+
+    # reliability-first: подтверждаем, что gateway действительно поднялся.
+    if is_gateway_listening; then
+        echo "✅ OpenClaw gateway слушает порт 18789."
+    else
+        echo "⚠️ Gateway не подтвердил старт на 18789, делаю один повтор..."
+        "$OPENCLAW_BIN" gateway stop >/dev/null 2>&1 || true
+        pkill -f "openclaw-gateway" >/dev/null 2>&1 || true
+        pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
+        sleep 1
+        nohup "$OPENCLAW_BIN" gateway run > openclaw.log 2>&1 &
+        echo $! > .openclaw.pid
+        sleep 3
+        if is_gateway_listening; then
+            echo "✅ OpenClaw gateway поднялся после retry."
+        else
+            echo "❌ OpenClaw gateway не слушает 18789 после retry. Проверь openclaw.log."
+        fi
+    fi
 else
     echo "⚠️ OpenClaw binary not found. AI features may not work."
 fi
