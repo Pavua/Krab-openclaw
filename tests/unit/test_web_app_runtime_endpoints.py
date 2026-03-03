@@ -200,12 +200,44 @@ def test_health_lite_marks_auth_unauthorized_when_provider_reports_auth(monkeypa
 
 
 def test_openclaw_cli_env_propagates_runtime_token(monkeypatch):
-    """`openclaw` CLI env должен получать runtime token для channels probe."""
-    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    """`openclaw` CLI env должен получать gateway token без подмены OPENCLAW_TOKEN."""
     monkeypatch.setenv("OPENCLAW_TOKEN", "token-from-runtime")
-    monkeypatch.delenv("OPENCLAW_API_KEY", raising=False)
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "")
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: "gateway-token-from-config"),
+    )
 
     env = WebApp._openclaw_cli_env()
-    assert env["OPENCLAW_GATEWAY_TOKEN"] == "token-from-runtime"
+    assert env["OPENCLAW_GATEWAY_TOKEN"] == "gateway-token-from-config"
     assert env["OPENCLAW_TOKEN"] == "token-from-runtime"
-    assert env["OPENCLAW_API_KEY"] == "token-from-runtime"
+
+
+def test_parse_openclaw_gateway_probe_extracts_reachability():
+    """Парсер gateway probe должен извлекать reachable/detail/local target."""
+    sample = """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok
+""".strip()
+    parsed = WebApp._parse_openclaw_gateway_probe(sample)
+    assert parsed["gateway_reachable"] is True
+    assert parsed["local_target"] == "ws://127.0.0.1:18789"
+    assert "Connect: ok" in parsed["detail"]
+
+
+def test_openclaw_cli_env_fallback_to_env_gateway_token(monkeypatch):
+    """Если в конфиге нет токена, используем OPENCLAW_GATEWAY_TOKEN из env."""
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "gateway-token-from-env")
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: ""),
+    )
+    env = WebApp._openclaw_cli_env()
+    assert env["OPENCLAW_GATEWAY_TOKEN"] == "gateway-token-from-env"

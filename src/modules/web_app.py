@@ -108,30 +108,38 @@ class WebApp:
         return f"{text[:3]}...{text[-3:]}"
 
     @staticmethod
+    def _openclaw_gateway_token_from_config() -> str:
+        """Читает gateway auth token из ~/.openclaw/openclaw.json (если доступен)."""
+        cfg_path = Path.home() / ".openclaw" / "openclaw.json"
+        try:
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return ""
+        gateway = payload.get("gateway")
+        if not isinstance(gateway, dict):
+            return ""
+        auth = gateway.get("auth")
+        if not isinstance(auth, dict):
+            return ""
+        token = str(auth.get("token") or "").strip()
+        return token
+
+    @staticmethod
     def _openclaw_cli_env() -> dict[str, str]:
         """
         Формирует env для вызовов `openclaw` CLI из web-панели.
 
         Почему:
         - `openclaw channels status --probe` должен использовать тот же token,
-          что и runtime/gateway, иначе probe может давать ложный
-          `gateway not reachable` при живом сокете.
+        что и runtime/gateway, иначе probe может давать ложный
+        `gateway not reachable` при живом сокете.
         """
         env = dict(os.environ)
-        runtime_token = str(
-            os.getenv(
-                "OPENCLAW_GATEWAY_TOKEN",
-                os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
-            )
-            or ""
-        ).strip()
-        if runtime_token:
-            if not str(env.get("OPENCLAW_GATEWAY_TOKEN", "")).strip():
-                env["OPENCLAW_GATEWAY_TOKEN"] = runtime_token
-            if not str(env.get("OPENCLAW_TOKEN", "")).strip():
-                env["OPENCLAW_TOKEN"] = runtime_token
-            if not str(env.get("OPENCLAW_API_KEY", "")).strip():
-                env["OPENCLAW_API_KEY"] = runtime_token
+        gateway_token = WebApp._openclaw_gateway_token_from_config()
+        if not gateway_token:
+            gateway_token = str(os.getenv("OPENCLAW_GATEWAY_TOKEN", "") or "").strip()
+        if gateway_token:
+            env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
         return env
 
     def _run_local_script(
@@ -582,6 +590,43 @@ class WebApp:
             "channels": channels,
             "warnings": warnings,
             "gateway_reachable": gateway_reachable,
+        }
+
+    @staticmethod
+    def _parse_openclaw_gateway_probe(raw_output: str) -> dict[str, Any]:
+        """
+        Нормализует stdout `openclaw gateway probe`.
+
+        Возвращает:
+        - `gateway_reachable`: bool;
+        - `local_target`: строка ws://... если найдено;
+        - `detail`: краткая причина/комментарий.
+        """
+        text = str(raw_output or "")
+        lower = text.lower()
+        gateway_reachable = "reachable: yes" in lower
+        local_target = ""
+        detail = ""
+
+        for line in text.splitlines():
+            clean = line.strip()
+            low = clean.lower()
+            if clean.startswith("Local loopback ") and "ws://" in clean:
+                local_target = clean.replace("Local loopback ", "", 1).strip()
+            if "connect: failed -" in low:
+                detail = clean
+            elif "connect: ok" in low:
+                detail = clean
+            elif low.startswith("reachable: ") and not detail:
+                detail = clean
+
+        if not detail:
+            detail = "gateway_probe_no_detail"
+
+        return {
+            "gateway_reachable": gateway_reachable,
+            "local_target": local_target,
+            "detail": detail,
         }
 
     def _web_attachment_max_bytes(self) -> int:
@@ -2651,8 +2696,89 @@ class WebApp:
 
         @self.app.get("/api/openclaw/browser-smoke")
         async def openclaw_browser_smoke(url: str = "https://example.com"):
-            """Browser smoke check OpenClaw (заглушка)."""
-            return {"available": True, "report": "Browser smoke test disabled in v2 architecture."}
+            """
+            Browser relay smoke check с явным attached/not attached статусом.
+
+            Контур:
+            1) `openclaw gateway probe` (reachability gateway ws),
+            2) HTTP probe browser-server (`http://127.0.0.1:18791/`).
+            """
+            gateway_probe_raw = ""
+            gateway_probe_error = ""
+            gateway_reachable = False
+            local_target = ""
+            gateway_detail = ""
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "openclaw",
+                    "gateway",
+                    "probe",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=self._openclaw_cli_env(),
+                )
+                try:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
+                    gateway_probe_raw = stdout.decode("utf-8", errors="replace")
+                    parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
+                    gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
+                    local_target = str(parsed_probe.get("local_target") or "")
+                    gateway_detail = str(parsed_probe.get("detail") or "")
+                except asyncio.TimeoutError:
+                    if proc.returncode is None:
+                        try:
+                            proc.terminate()
+                        except ProcessLookupError:
+                            pass
+                    gateway_probe_error = "gateway_probe_timeout"
+            except Exception as exc:
+                gateway_probe_error = f"gateway_probe_failed: {exc}"
+
+            browser_http_reachable = False
+            browser_http_status: int | None = None
+            browser_http_error = ""
+            try:
+                async with httpx.AsyncClient(timeout=2.5) as client:
+                    resp = await client.get("http://127.0.0.1:18791/")
+                browser_http_status = int(resp.status_code)
+                # 401/403 тоже считаем признаком живого relay endpoint.
+                browser_http_reachable = browser_http_status in {200, 401, 403}
+            except Exception as exc:
+                browser_http_error = str(exc)
+
+            smoke_ok = bool(gateway_reachable and browser_http_reachable)
+            detail_parts: list[str] = []
+            if gateway_detail:
+                detail_parts.append(f"gateway={gateway_detail}")
+            if gateway_probe_error:
+                detail_parts.append(gateway_probe_error)
+            if browser_http_status is not None:
+                detail_parts.append(f"browser_http_status={browser_http_status}")
+            if browser_http_error:
+                detail_parts.append(f"browser_http_error={browser_http_error}")
+
+            return {
+                "available": True,
+                "report": {
+                    "browser_smoke": {
+                        "ok": smoke_ok,
+                        "channel": "endpoint" if smoke_ok else "none",
+                        "tool": "gateway_probe+http_probe",
+                        "path": url,
+                        "gateway_reachable": gateway_reachable,
+                        "browser_http_reachable": browser_http_reachable,
+                        "local_target": local_target,
+                        "detail": "; ".join(detail_parts) if detail_parts else "n/a",
+                    },
+                    "raw": {
+                        "gateway_probe": self._tail_text(gateway_probe_raw, max_chars=4000),
+                        "gateway_probe_error": gateway_probe_error,
+                        "browser_http_status": browser_http_status,
+                        "browser_http_error": browser_http_error,
+                    },
+                },
+            }
 
         async def _openclaw_cloud_diagnostics_impl(providers: str = ""):
             """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API."""
