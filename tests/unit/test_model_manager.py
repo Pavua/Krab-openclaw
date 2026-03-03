@@ -122,3 +122,52 @@ async def test_get_best_model_cloud_when_force_cloud(manager: ModelManager) -> N
         with patch.object(mm._router, "get_best_model", new=AsyncMock(return_value="google/gemini-2.0-flash")):
             best = await mm.get_best_model()
             assert best.startswith("google/")
+
+
+@pytest.mark.asyncio
+async def test_ensure_model_loaded_fallbacks_to_lighter_local_candidate(manager: ModelManager) -> None:
+    manager._models_cache = {
+        "nvidia/nemotron-3-nano": ModelInfo("nvidia/nemotron-3-nano", "Heavy", ModelType.LOCAL_MLX, size_gb=16.57),
+        "text-embedding-nomic-embed-text-v1.5": ModelInfo(
+            "text-embedding-nomic-embed-text-v1.5",
+            "Embedding",
+            ModelType.LOCAL_MLX,
+            size_gb=0.4,
+        ),
+        "qwen2.5-coder-7b-instruct-mlx": ModelInfo("qwen2.5-coder-7b-instruct-mlx", "Light", ModelType.LOCAL_MLX, size_gb=4.0),
+    }
+
+    with patch("src.model_manager.config") as mock_config:
+        mock_config.LOCAL_PREFERRED_MODEL = "nemotron-3-nano"
+        mock_config.LOCAL_PREFERRED_VISION_MODEL = ""
+        mock_config.LOCAL_AUTOLOAD_FALLBACK_LIMIT = 3
+        mock_config.FORCE_CLOUD = False
+        mock_config.MODEL = "auto"
+
+        manager.load_model = AsyncMock(side_effect=[False, True])  # type: ignore[method-assign]
+        ok = await manager.ensure_model_loaded("local")
+
+    assert ok is True
+    assert manager.load_model.await_args_list[0].args[0] == "nvidia/nemotron-3-nano"
+    assert manager.load_model.await_args_list[1].args[0] == "qwen2.5-coder-7b-instruct-mlx"
+
+
+@pytest.mark.asyncio
+async def test_resolve_preferred_local_model_skips_embedding_only_candidates(manager: ModelManager) -> None:
+    manager._models_cache = {
+        "text-embedding-nomic-embed-text-v1.5": ModelInfo(
+            "text-embedding-nomic-embed-text-v1.5",
+            "Embedding",
+            ModelType.LOCAL_MLX,
+            size_gb=0.4,
+        ),
+        "qwen2.5-coder-7b-instruct-mlx": ModelInfo(
+            "qwen2.5-coder-7b-instruct-mlx",
+            "Chat",
+            ModelType.LOCAL_MLX,
+            size_gb=4.0,
+        ),
+    }
+
+    resolved = await manager.resolve_preferred_local_model(has_photo=False)
+    assert resolved == "qwen2.5-coder-7b-instruct-mlx"

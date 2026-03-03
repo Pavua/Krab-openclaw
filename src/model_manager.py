@@ -77,6 +77,41 @@ class ModelManager:
         # Аналитика затрат (Cost Engine, бюджет, отчёты) — Фаза 4.1, Шаг 4
         self._cost_analytics = cost_analytics
 
+    @staticmethod
+    def _is_chat_capable_local_model(model_id: str, info: Optional[ModelInfo] = None) -> bool:
+        """
+        Возвращает True только для локальных моделей, пригодных для chat/completions.
+
+        Почему это важно:
+        - LM Studio может отдавать embedding/reranker/audio модели в общем списке;
+        - если автоподбор выберет такую модель, получаем `EMPTY MESSAGE`/`No models loaded`
+          на рабочем chat-маршруте.
+        """
+        low_id = str(model_id or "").strip().lower()
+        low_name = str(getattr(info, "name", "") or "").strip().lower()
+        haystack = f"{low_id} {low_name}".strip()
+
+        non_chat_markers = (
+            "embedding",
+            "embed",
+            "rerank",
+            "reranker",
+            "cross-encoder",
+            "colbert",
+            "whisper",
+            "speech-to-text",
+            "transcrib",
+            "asr",
+            "stt",
+            "text-to-speech",
+            "tts",
+            "nomic-embed",
+            "bge-",
+            "e5-",
+            "gte-",
+        )
+        return not any(marker in haystack for marker in non_chat_markers)
+
     @property
     def cost_analytics(self):
         """Аналитика затрат: токены, стоимость, бюджет, отчёты."""
@@ -145,33 +180,15 @@ class ModelManager:
             return await self._router.get_best_model(has_photo=has_photo)
 
         if has_photo and not getattr(config, "FORCE_CLOUD", False) and self.lm_studio_url:
-            if not self._models_cache:
-                await self.discover_models()
-            if self._current_model:
-                info = self._models_cache.get(self._current_model)
-                if info and info.supports_vision:
-                    return self._current_model
-            preferred_vision = str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
-            local_vision_models = [
-                (mid, info)
-                for mid, info in self._models_cache.items()
-                if info.supports_vision and info.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF)
-            ]
-            if local_vision_models:
-                if preferred_vision and preferred_vision not in {"auto", "smallest"}:
-                    for mid, _ in local_vision_models:
-                        if preferred_vision in mid.lower():
-                            return mid
-                # По умолчанию выбираем самую лёгкую vision-модель (бережём RAM/Swap).
-                local_vision_models.sort(key=lambda item: float(item[1].size_gb or DEFAULT_UNKNOWN_MODEL_SIZE_GB))
-                return local_vision_models[0][0]
+            preferred_vision = await self.resolve_preferred_local_model(has_photo=True)
+            if preferred_vision:
+                return preferred_vision
 
         # В auto режиме local-first: если LM Studio жив, используем local/предпочтительную локальную.
         if self.lm_studio_url and await is_lm_studio_available(self.lm_studio_url, client=self._http_client):
-            preferred_local = await self.resolve_preferred_local_model()
+            preferred_local = await self.resolve_preferred_local_model(has_photo=False)
             if preferred_local:
                 return preferred_local
-            return "local"
 
         return await self._router.get_best_model(has_photo=has_photo)
 
@@ -179,39 +196,98 @@ class ModelManager:
         """True if model_id refers to a local (LM Studio) model, not a cloud one."""
         return self._detect_model_type(model_id) != ModelType.CLOUD_GEMINI
 
-    async def resolve_preferred_local_model(self) -> Optional[str]:
-        """Finds a local model matching LOCAL_PREFERRED_MODEL substring in discovered models."""
-        preferred = config.LOCAL_PREFERRED_MODEL
-        if not preferred:
-            return None
+    async def _local_candidates(self, *, has_photo: bool = False) -> list[tuple[str, ModelInfo]]:
+        """Возвращает локальные кандидаты, отсортированные от лёгких к тяжёлым."""
         if not self._models_cache:
             await self.discover_models()
-        preferred_lower = preferred.lower()
-        for mid, info in self._models_cache.items():
-            if info.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF):
-                if preferred_lower in mid.lower():
-                    return mid
-        return None
+        candidates = [
+            (mid, info)
+            for mid, info in self._models_cache.items()
+            if info.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF)
+            and self._is_chat_capable_local_model(mid, info)
+            and (not has_photo or bool(getattr(info, "supports_vision", False)))
+        ]
+        candidates.sort(key=lambda item: float(item[1].size_gb or DEFAULT_UNKNOWN_MODEL_SIZE_GB))
+        return candidates
 
-    async def ensure_model_loaded(self, model_id: str) -> bool:
+    async def resolve_preferred_local_model(self, *, has_photo: bool = False) -> Optional[str]:
         """
-        Ensures a model is loaded in LM Studio before sending a request.
-        If model_id is 'local' or generic, resolves to LOCAL_PREFERRED_MODEL.
-        Skips if the model is already loaded and recently accessed.
+        Возвращает целевую локальную модель:
+        1) уже активная (если подходит),
+        2) preferred из конфига,
+        3) самая лёгкая доступная локальная.
         """
+        candidates = await self._local_candidates(has_photo=has_photo)
+        if not candidates:
+            return None
+
+        candidate_ids = {mid for mid, _ in candidates}
+        if self._current_model and self._current_model in candidate_ids:
+            return self._current_model
+
+        preferred_key = "LOCAL_PREFERRED_VISION_MODEL" if has_photo else "LOCAL_PREFERRED_MODEL"
+        preferred = str(getattr(config, preferred_key, "") or "").strip().lower()
+        if preferred and preferred not in {"auto", "smallest"}:
+            for mid, _ in candidates:
+                if preferred in mid.lower():
+                    return mid
+        return candidates[0][0]
+
+    async def get_best_cloud_model(self, *, has_photo: bool = False) -> str:
+        """Явно выбирает облачную модель (используется при local-recovery сбоях)."""
+        return await self._router.get_best_model(has_photo=has_photo)
+
+    def get_current_model(self) -> Optional[str]:
+        """Текущая активная локальная модель (если есть)."""
+        return self._current_model
+
+    async def ensure_model_loaded(self, model_id: str, *, has_photo: bool = False) -> bool:
+        """
+        Гарантирует, что локальная модель реально загружена.
+
+        Если preferred модель не загрузилась (частый кейс после idle-unload/перегруза),
+        пытается несколько более лёгких локальных кандидатов.
+        """
+        resolved_model = model_id
         if model_id.lower() in ("local", "lmstudio"):
-            resolved = await self.resolve_preferred_local_model()
-            if resolved:
-                model_id = resolved
-            else:
-                logger.warning("no_preferred_local_model_found")
+            resolved_model = await self.resolve_preferred_local_model(has_photo=has_photo) or ""
+            if not resolved_model:
+                logger.warning("no_local_candidates_found", has_photo=has_photo)
                 return False
 
-        if self._current_model == model_id:
-            self.touch(model_id)
+        if self._current_model == resolved_model:
+            self.touch(resolved_model)
             return True
 
-        return await self.load_model(model_id)
+        if await self.load_model(resolved_model):
+            return True
+
+        fallback_limit = max(0, int(getattr(config, "LOCAL_AUTOLOAD_FALLBACK_LIMIT", 3)))
+        if fallback_limit == 0:
+            logger.error("local_primary_load_failed_no_fallback", model=resolved_model)
+            return False
+
+        candidates = [mid for mid, _ in await self._local_candidates(has_photo=has_photo) if mid != resolved_model]
+        for candidate in candidates[:fallback_limit]:
+            if await self.load_model(candidate):
+                logger.warning(
+                    "local_model_autoload_fallback_success",
+                    requested=resolved_model,
+                    loaded=candidate,
+                )
+                return True
+            logger.warning(
+                "local_model_autoload_fallback_failed",
+                requested=resolved_model,
+                candidate=candidate,
+            )
+
+        logger.error(
+            "local_autoload_failed_all_candidates",
+            requested=resolved_model,
+            candidates_checked=min(len(candidates), fallback_limit),
+        )
+        return False
 
     def get_ram_usage(self) -> dict:
         """Получает текущее использование RAM"""

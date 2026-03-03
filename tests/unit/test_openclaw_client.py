@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -129,6 +130,45 @@ async def test_semantic_error_returns_user_message_when_force_cloud(client: Open
 
 
 @pytest.mark.asyncio
+async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local")):
+        with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
+            with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=False)):
+                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                    with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")) as completion:
+                        chunks = []
+                        async for chunk in client.send_message_stream("Hi", "chat-local-fallback"):
+                            chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud OK"
+    assert completion.await_count == 1
+    assert completion.await_args.kwargs["model_id"] == "google/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_auth_error_without_openai_key_falls_back_to_local_not_openai(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    completion = AsyncMock(side_effect=["401 Unauthorized: invalid api key", "Локальный ответ"])
+    with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
+        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
+                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                    with patch.object(client, "_resolve_local_model_for_retry", new=AsyncMock(return_value="local/qwen")):
+                        with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)):
+                            with patch.object(client, "_openclaw_completion_once", new=completion):
+                                chunks = []
+                                async for chunk in client.send_message_stream("Hi", "chat-auth-local-fallback"):
+                                    chunks.append(chunk)
+
+    assert "".join(chunks) == "Локальный ответ"
+    assert completion.await_count == 2
+    assert completion.await_args_list[1].kwargs["model_id"] == "local/qwen"
+
+
+@pytest.mark.asyncio
 async def test_tier_export_contains_required_fields(client: OpenClawClient) -> None:
     export = client.get_tier_state_export()
     assert "active_tier" in export
@@ -151,3 +191,26 @@ def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenC
 def test_semantic_from_provider_auth_exception_uses_canonical_code(client: OpenClawClient) -> None:
     semantic = client._semantic_from_provider_exception(ProviderAuthError(message="401", user_message="auth failed"))
     assert semantic["code"] == "openclaw_auth_unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_empty_response_does_not_override_last_auth_error(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
+        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
+                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                    with patch.object(client, "_resolve_local_model_for_retry", new=AsyncMock(return_value=None)):
+                        with patch.object(
+                            client,
+                            "_openclaw_completion_once",
+                            new=AsyncMock(side_effect=ProviderAuthError(message="401", user_message="auth failed")),
+                        ):
+                            chunks = []
+                            async for chunk in client.send_message_stream("Hi", "chat-auth-priority"):
+                                chunks.append(chunk)
+
+    text = "".join(chunks).lower()
+    assert "ключ" in text
+    assert ("авторизац" in text) or ("невалид" in text)

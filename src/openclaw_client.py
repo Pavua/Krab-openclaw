@@ -413,19 +413,83 @@ class OpenClawClient:
 
         return full_response.strip()
 
-    async def _resolve_local_model_for_retry(self, model_manager: Any, preferred: str) -> str | None:
+    async def _resolve_local_model_for_retry(
+        self,
+        model_manager: Any,
+        preferred: str,
+        *,
+        has_photo: bool = False,
+    ) -> str | None:
         """Подбирает локальную модель для аварийного retry."""
         if model_manager.is_local_model(preferred):
             return preferred
-        preferred_local = await model_manager.resolve_preferred_local_model()
+        preferred_local = await model_manager.resolve_preferred_local_model(has_photo=has_photo)
         if preferred_local:
             return preferred_local
+        if hasattr(model_manager, "_local_candidates"):
+            try:
+                candidates = await model_manager._local_candidates(has_photo=has_photo)  # noqa: SLF001
+            except Exception:
+                candidates = []
+            if candidates:
+                return str(candidates[0][0])
         if not model_manager._models_cache:
             await model_manager.discover_models()
+        local_candidates: list[tuple[str, Any]] = []
         for model_id, info in model_manager._models_cache.items():
-            if str(getattr(info.type, "value", "")).startswith("local"):
-                return model_id
+            if not model_manager.is_local_model(model_id):
+                continue
+            if hasattr(model_manager, "_is_chat_capable_local_model"):
+                try:
+                    if not bool(model_manager._is_chat_capable_local_model(model_id, info)):  # noqa: SLF001
+                        continue
+                except Exception:
+                    pass
+            if has_photo and not bool(getattr(info, "supports_vision", False)):
+                continue
+            local_candidates.append((model_id, info))
+        local_candidates.sort(
+            key=lambda item: float(getattr(item[1], "size_gb", 0.0) or 0.0)
+        )
+        if local_candidates:
+            return str(local_candidates[0][0])
         return None
+
+    def _is_cloud_candidate_usable(self, model_id: str, model_manager: Any) -> bool:
+        """
+        Проверяет, что облачный кандидат действительно пригоден для runtime retry.
+
+        Ключевой кейс:
+        - `openai/*` без OPENAI_API_KEY нельзя выбирать как recovery-кандидат,
+          иначе получаем ложный цикл 401 и пропускаем рабочий local/cloud путь.
+        """
+        candidate = str(model_id or "").strip()
+        if not candidate:
+            return False
+        if model_manager.is_local_model(candidate):
+            return False
+
+        provider = self._provider_from_model(candidate)
+        if provider == "openai":
+            return bool(str(os.getenv("OPENAI_API_KEY", "") or "").strip())
+        return True
+
+    async def _pick_cloud_retry_model(
+        self,
+        *,
+        model_manager: Any,
+        current_model: str,
+        has_photo: bool,
+    ) -> str:
+        """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет)."""
+        if not hasattr(model_manager, "get_best_cloud_model"):
+            return ""
+        candidate = str(await model_manager.get_best_cloud_model(has_photo=has_photo) or "").strip()
+        if not candidate or candidate == str(current_model or "").strip():
+            return ""
+        if not self._is_cloud_candidate_usable(candidate, model_manager):
+            return ""
+        return candidate
 
     async def _direct_lm_fallback(
         self,
@@ -556,9 +620,37 @@ class OpenClawClient:
 
         try:
             selected_model = await model_manager.get_best_model(has_photo=has_photo)
-            attempt_model = selected_model
             if not force_cloud and model_manager.is_local_model(selected_model):
-                await model_manager.ensure_model_loaded(selected_model)
+                local_ready = await model_manager.ensure_model_loaded(
+                    selected_model,
+                    has_photo=has_photo,
+                )
+                if local_ready and hasattr(model_manager, "get_current_model"):
+                    current_local = str(model_manager.get_current_model() or "").strip()
+                    if current_local and current_local != selected_model:
+                        logger.warning(
+                            "local_model_remapped_after_autoload",
+                            requested=selected_model,
+                            remapped=current_local,
+                        )
+                        selected_model = current_local
+                if not local_ready:
+                    # Если локальный автозапуск не сработал, не отдаём пользователю silent-empty:
+                    # заранее уходим в cloud-кандидат.
+                    cloud_candidate = await self._pick_cloud_retry_model(
+                        model_manager=model_manager,
+                        current_model=selected_model,
+                        has_photo=has_photo,
+                    )
+                    if cloud_candidate:
+                        logger.warning(
+                            "local_autoload_failed_switching_to_cloud",
+                            requested=selected_model,
+                            cloud_candidate=cloud_candidate,
+                        )
+                        selected_model = cloud_candidate
+
+            attempt_model = selected_model
 
             messages_to_send = self._apply_sliding_window(chat_id, self._sessions[chat_id])
 
@@ -600,8 +692,9 @@ class OpenClawClient:
                 logger.warning("local_direct_path_failed_fallback_openclaw", chat_id=chat_id, model=selected_model)
 
             tried_paid = False
-            tried_openai = False
+            tried_cloud_auth_recovery = False
             tried_local = False
+            tried_cloud_after_local = False
             tried_semantic_retry = False
             final_response = ""
             last_semantic: dict[str, str] | None = None
@@ -661,12 +754,22 @@ class OpenClawClient:
                     if switch_result.get("ok"):
                         continue
 
-                # 2) auth/key type/quota -> openai fallback
-                if semantic["code"] in (LEGACY_AUTH_CODES | {"quota_exceeded"}) and not tried_openai:
-                    tried_openai = True
-                    attempt_model = "openai/gpt-4o-mini"
-                    self._cloud_tier_state["last_recovery_action"] = "switch_to_openai"
-                    continue
+                # 2) auth/key type/quota -> cloud retry без слепого openai fallback
+                if semantic["code"] in (LEGACY_AUTH_CODES | {"quota_exceeded"}) and not tried_cloud_auth_recovery:
+                    tried_cloud_auth_recovery = True
+                    cloud_retry = await self._pick_cloud_retry_model(
+                        model_manager=model_manager,
+                        current_model=attempt_model,
+                        has_photo=has_photo,
+                    )
+                    if cloud_retry:
+                        attempt_model = cloud_retry
+                        self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_retry"
+                        continue
+                    if self._is_cloud_candidate_usable("openai/gpt-4o-mini", model_manager):
+                        attempt_model = "openai/gpt-4o-mini"
+                        self._cloud_tier_state["last_recovery_action"] = "switch_to_openai"
+                        continue
 
                 # 3) критичные ошибки -> local autoload (если не force_cloud)
                 local_recovery_codes = {
@@ -680,20 +783,40 @@ class OpenClawClient:
                 } | LEGACY_AUTH_CODES
                 if semantic["code"] in local_recovery_codes and not force_cloud and not tried_local:
                     tried_local = True
-                    local_model = await self._resolve_local_model_for_retry(model_manager, attempt_model)
+                    local_model = await self._resolve_local_model_for_retry(
+                        model_manager,
+                        attempt_model,
+                        has_photo=has_photo,
+                    )
                     if local_model:
-                        loaded = await model_manager.ensure_model_loaded(local_model)
+                        loaded = await model_manager.ensure_model_loaded(
+                            local_model,
+                            has_photo=has_photo,
+                        )
                         if loaded:
                             attempt_model = local_model
                             self._cloud_tier_state["last_recovery_action"] = "switch_to_local"
+                            continue
+                    if not tried_cloud_after_local:
+                        tried_cloud_after_local = True
+                        cloud_candidate = await self._pick_cloud_retry_model(
+                            model_manager=model_manager,
+                            current_model=attempt_model,
+                            has_photo=has_photo,
+                        )
+                        if cloud_candidate:
+                            attempt_model = cloud_candidate
+                            self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_after_local_failure"
                             continue
 
                 # Больше стратегий нет
                 break
 
-            semantic_after = self._detect_semantic_error(final_response)
-            if semantic_after is None and not final_response and last_semantic is not None:
+            if not final_response and last_semantic is not None:
+                # Не перетираем реальную причину (например auth 401) синтетическим lm_empty_stream.
                 semantic_after = dict(last_semantic)
+            else:
+                semantic_after = self._detect_semantic_error(final_response)
 
             if semantic_after:
                 # Последняя защита: прямой LM fallback
