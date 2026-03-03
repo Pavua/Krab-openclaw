@@ -107,6 +107,33 @@ class WebApp:
             return "*" * len(text)
         return f"{text[:3]}...{text[-3:]}"
 
+    @staticmethod
+    def _openclaw_cli_env() -> dict[str, str]:
+        """
+        Формирует env для вызовов `openclaw` CLI из web-панели.
+
+        Почему:
+        - `openclaw channels status --probe` должен использовать тот же token,
+          что и runtime/gateway, иначе probe может давать ложный
+          `gateway not reachable` при живом сокете.
+        """
+        env = dict(os.environ)
+        runtime_token = str(
+            os.getenv(
+                "OPENCLAW_GATEWAY_TOKEN",
+                os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
+            )
+            or ""
+        ).strip()
+        if runtime_token:
+            if not str(env.get("OPENCLAW_GATEWAY_TOKEN", "")).strip():
+                env["OPENCLAW_GATEWAY_TOKEN"] = runtime_token
+            if not str(env.get("OPENCLAW_TOKEN", "")).strip():
+                env["OPENCLAW_TOKEN"] = runtime_token
+            if not str(env.get("OPENCLAW_API_KEY", "")).strip():
+                env["OPENCLAW_API_KEY"] = runtime_token
+        return env
+
     def _run_local_script(
         self,
         script_path: Path,
@@ -1219,6 +1246,7 @@ class WebApp:
                     "openclaw", "channels", "status", "--probe",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
+                    env=self._openclaw_cli_env(),
                 )
                 try:
                     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=45.0)

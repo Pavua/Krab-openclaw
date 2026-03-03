@@ -197,3 +197,15 @@ def test_health_lite_marks_auth_unauthorized_when_provider_reports_auth(monkeypa
     resp = client.get("/api/health/lite")
     assert resp.status_code == 200
     assert resp.json()["openclaw_auth_state"] == "unauthorized"
+
+
+def test_openclaw_cli_env_propagates_runtime_token(monkeypatch):
+    """`openclaw` CLI env должен получать runtime token для channels probe."""
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setenv("OPENCLAW_TOKEN", "token-from-runtime")
+    monkeypatch.delenv("OPENCLAW_API_KEY", raising=False)
+
+    env = WebApp._openclaw_cli_env()
+    assert env["OPENCLAW_GATEWAY_TOKEN"] == "token-from-runtime"
+    assert env["OPENCLAW_TOKEN"] == "token-from-runtime"
+    assert env["OPENCLAW_API_KEY"] == "token-from-runtime"
