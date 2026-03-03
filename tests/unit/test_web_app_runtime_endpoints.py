@@ -22,6 +22,39 @@ class _DummyRouter:
         return {}
 
 
+class _PhotoModel:
+    """Минимальная модель для photo-smoke тестов."""
+
+    def __init__(self, *, supports_vision: bool, model_type: str):
+        self.supports_vision = supports_vision
+        self.type = model_type
+
+
+class _PhotoModelManager:
+    """Минимальный model manager для проверки `/api/openclaw/photo-smoke`."""
+
+    async def discover_models(self):
+        return [
+            _PhotoModel(supports_vision=True, model_type="local_mlx"),
+            _PhotoModel(supports_vision=False, model_type="local_gguf"),
+        ]
+
+    async def get_best_model(self, *, has_photo: bool = False):
+        assert has_photo is True
+        return "lmstudio/local-vision-model"
+
+    def is_local_model(self, model_id: str) -> bool:
+        return model_id.startswith("lmstudio/")
+
+
+class _PhotoRouter(_DummyRouter):
+    """Роутер-заглушка с подключенным model manager."""
+
+    def __init__(self) -> None:
+        self._mm = _PhotoModelManager()
+        self.is_local_available = True
+
+
 class _FakeOpenClaw:
     """Фейковый OpenClaw клиент для детерминированных тестов runtime endpoint'ов."""
 
@@ -260,6 +293,43 @@ Local loopback ws://127.0.0.1:18789
     assert parsed["gateway_reachable"] is True
     assert parsed["local_target"] == "ws://127.0.0.1:18789"
     assert "Connect: ok" in parsed["detail"]
+
+
+def test_classify_browser_http_probe_auth_required_state():
+    """401/403 в browser probe должны маркироваться как auth_required, но reachable."""
+    parsed = WebApp._classify_browser_http_probe(401, "")
+    assert parsed["state"] == "auth_required"
+    assert parsed["reachable"] is True
+    assert parsed["auth_required"] is True
+
+
+def test_photo_smoke_endpoint_reports_ready_with_local_vision():
+    """`/api/openclaw/photo-smoke` должен подтверждать готовность vision-маршрута."""
+    deps = {
+        "router": _PhotoRouter(),
+        "openclaw_client": _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(ok=True),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": None,
+        "watchdog": None,
+        "queue": None,
+    }
+    app = WebApp(deps, port=18080, host="127.0.0.1")
+    client = TestClient(app.app)
+
+    resp = client.get("/api/openclaw/photo-smoke")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["available"] is True
+    smoke = payload["report"]["photo_smoke"]
+    assert smoke["ok"] is True
+    assert smoke["selected_local"] is True
+    assert smoke["local_vision_count"] == 1
 
 
 def test_openclaw_cli_env_fallback_to_env_gateway_token(monkeypatch):

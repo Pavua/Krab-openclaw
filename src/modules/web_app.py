@@ -629,6 +629,51 @@ class WebApp:
             "detail": detail,
         }
 
+    @staticmethod
+    def _classify_browser_http_probe(status_code: int | None, error_text: str = "") -> dict[str, Any]:
+        """
+        Классифицирует HTTP-пробу browser relay в прозрачное runtime-состояние.
+
+        Состояния:
+        - `attached`: relay доступен и отдает 200;
+        - `auth_required`: relay живой, но требует авторизацию (401/403);
+        - `unavailable`: relay недоступен/ошибка.
+        """
+        code = int(status_code) if isinstance(status_code, int) else None
+        err = str(error_text or "").strip()
+
+        if code == 200:
+            return {
+                "state": "attached",
+                "reachable": True,
+                "auth_required": False,
+                "status_code": code,
+                "detail": "browser relay attached (200)",
+            }
+        if code in {401, 403}:
+            return {
+                "state": "auth_required",
+                "reachable": True,
+                "auth_required": True,
+                "status_code": code,
+                "detail": f"browser relay auth required ({code})",
+            }
+        if code is not None:
+            return {
+                "state": "unavailable",
+                "reachable": False,
+                "auth_required": False,
+                "status_code": code,
+                "detail": f"browser relay unexpected status ({code})",
+            }
+        return {
+            "state": "unavailable",
+            "reachable": False,
+            "auth_required": False,
+            "status_code": None,
+            "detail": err or "browser relay probe failed",
+        }
+
     def _web_attachment_max_bytes(self) -> int:
         """Максимальный размер вложения web-панели в байтах."""
         raw = os.getenv("WEB_ATTACHMENT_MAX_MB", "12").strip()
@@ -2735,17 +2780,19 @@ class WebApp:
             except Exception as exc:
                 gateway_probe_error = f"gateway_probe_failed: {exc}"
 
-            browser_http_reachable = False
             browser_http_status: int | None = None
             browser_http_error = ""
             try:
                 async with httpx.AsyncClient(timeout=2.5) as client:
                     resp = await client.get("http://127.0.0.1:18791/")
                 browser_http_status = int(resp.status_code)
-                # 401/403 тоже считаем признаком живого relay endpoint.
-                browser_http_reachable = browser_http_status in {200, 401, 403}
             except Exception as exc:
                 browser_http_error = str(exc)
+
+            browser_probe = self._classify_browser_http_probe(browser_http_status, browser_http_error)
+            browser_http_reachable = bool(browser_probe.get("reachable"))
+            browser_http_state = str(browser_probe.get("state") or "unavailable")
+            browser_auth_required = bool(browser_probe.get("auth_required"))
 
             smoke_ok = bool(gateway_reachable and browser_http_reachable)
             detail_parts: list[str] = []
@@ -2753,8 +2800,7 @@ class WebApp:
                 detail_parts.append(f"gateway={gateway_detail}")
             if gateway_probe_error:
                 detail_parts.append(gateway_probe_error)
-            if browser_http_status is not None:
-                detail_parts.append(f"browser_http_status={browser_http_status}")
+            detail_parts.append(str(browser_probe.get("detail") or "browser relay state unknown"))
             if browser_http_error:
                 detail_parts.append(f"browser_http_error={browser_http_error}")
 
@@ -2768,6 +2814,8 @@ class WebApp:
                         "path": url,
                         "gateway_reachable": gateway_reachable,
                         "browser_http_reachable": browser_http_reachable,
+                        "browser_http_state": browser_http_state,
+                        "browser_auth_required": browser_auth_required,
                         "local_target": local_target,
                         "detail": "; ".join(detail_parts) if detail_parts else "n/a",
                     },
@@ -2777,6 +2825,86 @@ class WebApp:
                         "browser_http_status": browser_http_status,
                         "browser_http_error": browser_http_error,
                     },
+                },
+            }
+
+        @self.app.get("/api/openclaw/photo-smoke")
+        async def openclaw_photo_smoke():
+            """
+            Легковесная проверка готовности photo/vision маршрута.
+
+            Проверяет:
+            1) доступ к model manager через router;
+            2) наличие vision-capable локальных моделей;
+            3) выбранную модель для `has_photo=True`.
+            """
+            router = self.deps.get("router")
+            if not router:
+                return {"available": False, "error": "router_not_configured"}
+
+            mm = getattr(router, "_mm", None)
+            if mm is None:
+                return {"available": False, "error": "model_manager_not_available"}
+
+            models_count = 0
+            local_vision_count = 0
+            selected_model = ""
+            selected_provider = ""
+            selected_local = False
+            local_available = bool(getattr(router, "is_local_available", False))
+            discovery_error = ""
+            selection_error = ""
+
+            try:
+                discovered = await asyncio.wait_for(mm.discover_models(), timeout=20.0)
+                models_count = len(discovered or [])
+                for model in discovered or []:
+                    supports_vision = bool(getattr(model, "supports_vision", False))
+                    model_type = str(getattr(model, "type", "")).lower()
+                    if supports_vision and "local" in model_type:
+                        local_vision_count += 1
+            except Exception as exc:  # noqa: BLE001
+                discovery_error = str(exc)
+
+            try:
+                selected_model = str(await asyncio.wait_for(mm.get_best_model(has_photo=True), timeout=20.0) or "")
+                selected_local = bool(mm.is_local_model(selected_model)) if selected_model else False
+                if "/" in selected_model:
+                    selected_provider = selected_model.split("/", 1)[0]
+                else:
+                    selected_provider = "local" if selected_local else (selected_model or "unknown")
+            except Exception as exc:  # noqa: BLE001
+                selection_error = str(exc)
+
+            photo_ready = bool(selected_model) and not bool(selection_error)
+            if selected_local and local_vision_count == 0:
+                photo_ready = False
+
+            detail_parts: list[str] = []
+            if selected_model:
+                detail_parts.append(f"selected={selected_model}")
+            if selected_local:
+                detail_parts.append("route=local_vision")
+            elif selected_model:
+                detail_parts.append("route=cloud_vision_fallback")
+            if discovery_error:
+                detail_parts.append(f"discovery_error={discovery_error}")
+            if selection_error:
+                detail_parts.append(f"selection_error={selection_error}")
+
+            return {
+                "available": True,
+                "report": {
+                    "photo_smoke": {
+                        "ok": photo_ready,
+                        "local_available": local_available,
+                        "models_count": models_count,
+                        "local_vision_count": local_vision_count,
+                        "selected_model": selected_model,
+                        "selected_provider": selected_provider,
+                        "selected_local": selected_local,
+                        "detail": "; ".join(detail_parts) if detail_parts else "n/a",
+                    }
                 },
             }
 
