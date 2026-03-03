@@ -276,6 +276,158 @@ def _copy_if_exists(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def _latest_file_by_glob(pattern: str) -> Path | None:
+    """Возвращает самый свежий файл по glob-паттерну относительно ROOT."""
+    matches = [path for path in ROOT.glob(pattern) if path.is_file()]
+    if not matches:
+        return None
+    return max(matches, key=lambda p: p.stat().st_mtime)
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    """Безопасно читает JSON-файл; на ошибке возвращает пустой dict."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _acceptance_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    """Нормализует краткое summary acceptance-артефакта."""
+    summary: dict[str, Any] = {
+        "ok": bool(payload.get("ok")),
+        "generated_at_utc": payload.get("generated_at_utc"),
+    }
+
+    checks = payload.get("checks")
+    if isinstance(checks, dict):
+        failed = [str(name) for name, ok in checks.items() if not bool(ok)]
+        summary["failed_checks"] = failed
+        summary["checks_total"] = len(checks)
+
+    warnings = payload.get("warnings")
+    if isinstance(warnings, list):
+        summary["warnings_count"] = len(warnings)
+
+    channels_summary = (payload.get("channels") or {}).get("summary") if isinstance(payload.get("channels"), dict) else None
+    if isinstance(channels_summary, dict) and channels_summary.get("success_rate") is not None:
+        summary["channels_success_rate"] = channels_summary.get("success_rate")
+
+    kpi = payload.get("kpi")
+    if isinstance(kpi, dict):
+        summary["kpi"] = kpi
+
+    return summary
+
+
+def _collect_acceptance_artifacts(bundle_dir: Path) -> dict[str, Any]:
+    """
+    Подтягивает в bundle последние acceptance-отчёты этапов стабильности/каналов.
+
+    Почему:
+    - новый чат должен видеть не только runtime_snapshot, но и факт закрытия KPI
+      и readiness следующего этапа без ручного поиска файлов в artifacts.
+    """
+    patterns = {
+        "e1e3_acceptance": "artifacts/e1e3_acceptance_*.json",
+        "channels_photo_chrome_acceptance": "artifacts/channels_photo_chrome_acceptance_*.json",
+        "channels_photo_chrome_smoke": "artifacts/channels_photo_chrome_smoke_*.json",
+    }
+    out: dict[str, Any] = {}
+
+    for key, pattern in patterns.items():
+        latest = _latest_file_by_glob(pattern)
+        record: dict[str, Any] = {
+            "source_path": str(latest) if latest else None,
+            "bundle_path": None,
+            "found": bool(latest),
+            "summary": {},
+        }
+        if latest:
+            dst = bundle_dir / latest.name
+            shutil.copy2(latest, dst)
+            record["bundle_path"] = str(dst)
+            record["summary"] = _acceptance_summary(_read_json_file(latest))
+        out[key] = record
+    return out
+
+
+def _build_start_next_chat_md(
+    *,
+    bundle_dir: Path,
+    runtime_snapshot: dict[str, Any],
+    acceptance: dict[str, Any],
+) -> str:
+    """
+    Формирует стартовый чеклист для открытия нового чата без потери контекста.
+    """
+    git = runtime_snapshot.get("git") if isinstance(runtime_snapshot, dict) else {}
+    branch = str((git or {}).get("branch") or "").strip() or "unknown"
+    head = str((git or {}).get("head") or "").strip() or "unknown"
+
+    required_files = [
+        bundle_dir / "MIGRATION_HANDOFF_2026-03-02.md",
+        bundle_dir / "OPEN_ISSUES_CHECKLIST.md",
+        bundle_dir / "NEW_CHAT_BOOTSTRAP_PROMPT.md",
+        bundle_dir / "runtime_snapshot.json",
+        bundle_dir / "known_issues_matrix.md",
+    ]
+    optional_files = [
+        acceptance.get("e1e3_acceptance", {}).get("bundle_path"),
+        acceptance.get("channels_photo_chrome_acceptance", {}).get("bundle_path"),
+        acceptance.get("channels_photo_chrome_smoke", {}).get("bundle_path"),
+    ]
+
+    lines = [
+        "# START NEXT CHAT",
+        "",
+        "Ниже готовый пакет для старта нового окна без потери интеграционного контекста.",
+        "",
+        f"- Сгенерировано (UTC): `{NOW.isoformat()}`",
+        f"- Ветка: `{branch}`",
+        f"- HEAD: `{head}`",
+        "",
+        "## Обязательные файлы (source of truth)",
+    ]
+    for idx, path in enumerate(required_files, start=1):
+        lines.append(f"{idx}. `{path}`")
+
+    lines.extend(
+        [
+            "",
+            "## Рекомендуемые acceptance-артефакты",
+        ]
+    )
+    rec_index = 1
+    for maybe_path in optional_files:
+        if maybe_path:
+            lines.append(f"{rec_index}. `{maybe_path}`")
+            rec_index += 1
+    if rec_index == 1:
+        lines.append("1. (не найдены) Сначала прогоните acceptance-скрипты текущего этапа.")
+
+    lines.extend(
+        [
+            "",
+            "## Стартовый prompt для нового чата",
+            "1. Открой `NEW_CHAT_BOOTSTRAP_PROMPT.md` из этого bundle.",
+            "2. Добавь контекст: текущий этап `E1→E3 закрыт`, активный этап `каналы + фото + Chrome relay`.",
+            "3. Добавь явное требование формата отчёта после каждой итерации:",
+            "   - что изменено;",
+            "   - как проверено;",
+            "   - что осталось.",
+            "",
+            "## Короткая проверка после старта нового чата",
+            "1. Проверить `git status --short --branch`.",
+            "2. Прочитать `runtime_snapshot.json` и `known_issues_matrix.md`.",
+            "3. Продолжить с ближайшего незакрытого пункта roadmap.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def main() -> int:
     BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -345,6 +497,9 @@ def main() -> int:
         "known_issues": issues_rows,
     }
 
+    acceptance_artifacts = _collect_acceptance_artifacts(BUNDLE_DIR)
+    runtime_snapshot["acceptance_artifacts"] = acceptance_artifacts
+
     (BUNDLE_DIR / "runtime_snapshot.json").write_text(
         json.dumps(runtime_snapshot, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -356,11 +511,20 @@ def main() -> int:
     _copy_if_exists(DOCS_DIR / "MIGRATION_HANDOFF_2026-03-02.md", BUNDLE_DIR / "MIGRATION_HANDOFF_2026-03-02.md")
     _copy_if_exists(DOCS_DIR / "OPEN_ISSUES_CHECKLIST.md", BUNDLE_DIR / "OPEN_ISSUES_CHECKLIST.md")
     _copy_if_exists(DOCS_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md", BUNDLE_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md")
+    (BUNDLE_DIR / "START_NEXT_CHAT.md").write_text(
+        _build_start_next_chat_md(
+            bundle_dir=BUNDLE_DIR,
+            runtime_snapshot=runtime_snapshot,
+            acceptance=acceptance_artifacts,
+        ),
+        encoding="utf-8",
+    )
 
     print("=== Handoff Bundle Export ===")
     print(f"OK: {BUNDLE_DIR}")
     print(f"runtime_snapshot: {BUNDLE_DIR / 'runtime_snapshot.json'}")
     print(f"known_issues: {BUNDLE_DIR / 'known_issues_matrix.md'}")
+    print(f"start_packet: {BUNDLE_DIR / 'START_NEXT_CHAT.md'}")
     return 0
 
 
