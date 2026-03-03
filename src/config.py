@@ -58,6 +58,18 @@ class Config:
         "true",
         "yes",
     )
+    # Guarded idle-unload: в режиме стабильности не выгружаем локальную модель автоматически,
+    # чтобы каналы OpenClaw (bot/iMessage/dashboard) не ловили "No models loaded" после простоя.
+    GUARDED_IDLE_UNLOAD: bool = os.getenv("GUARDED_IDLE_UNLOAD", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    # Минимальная пауза (сек) после любого запроса перед авто-выгрузкой модели.
+    # Нужна, чтобы не выгружать модель "на стыке" между соседними сообщениями/каналами.
+    GUARDED_IDLE_UNLOAD_GRACE_SEC: float = float(
+        os.getenv("GUARDED_IDLE_UNLOAD_GRACE_SEC", "90")
+    )
 
     # Skills / APIs
     BRAVE_SEARCH_API_KEY: Optional[str] = os.getenv("BRAVE_SEARCH_API_KEY", os.getenv("BRAVE_API_KEY"))
@@ -91,6 +103,12 @@ class Config:
         "AI_DISCLOSURE_TEXT",
         "Я автоассистент Краб 🦀. Пишу от имени владельца и могу помочь по его задачам.",
     )
+    # Разрешить voice-сообщения в группах как триггер для бота (только от allowed пользователей),
+    # даже если нет текстового упоминания "Краб".
+    GROUP_VOICE_FALLBACK_TRIGGER: bool = os.getenv(
+        "GROUP_VOICE_FALLBACK_TRIGGER",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -132,10 +150,16 @@ class Config:
                     cls.LOCAL_PREFERRED_VISION_MODEL = value
                 elif key == "SINGLE_LOCAL_MODEL_MODE":
                     cls.SINGLE_LOCAL_MODEL_MODE = value.strip().lower() in ("1", "true", "yes")
+                elif key == "GUARDED_IDLE_UNLOAD":
+                    cls.GUARDED_IDLE_UNLOAD = value.strip().lower() in ("1", "true", "yes")
+                elif key == "GUARDED_IDLE_UNLOAD_GRACE_SEC":
+                    cls.GUARDED_IDLE_UNLOAD_GRACE_SEC = float(value)
                 elif key == "AI_DISCLOSURE_ENABLED":
                     cls.AI_DISCLOSURE_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "AI_DISCLOSURE_TEXT":
                     cls.AI_DISCLOSURE_TEXT = value
+                elif key == "GROUP_VOICE_FALLBACK_TRIGGER":
+                    cls.GROUP_VOICE_FALLBACK_TRIGGER = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
                 elif key == "BRAVE_SEARCH_API_KEY":

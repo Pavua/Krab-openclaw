@@ -18,7 +18,7 @@ from ..userbot_bridge import KraabUserbot
 logger = structlog.get_logger(__name__)
 
 
-async def _start_web_panel() -> object | None:
+async def _start_web_panel(*, kraab_userbot: KraabUserbot | None = None) -> object | None:
     """Starts the web panel on WEB_PORT (default 8080). Returns the WebApp instance or None."""
     try:
         from ..modules.web_app import WebApp
@@ -50,6 +50,7 @@ async def _start_web_panel() -> object | None:
             "perceptor": None,
             "watchdog": None,
             "queue": None,
+            "kraab_userbot": kraab_userbot,
         }
 
         port = int(os.getenv("WEB_PORT", "8080"))
@@ -82,9 +83,8 @@ async def run_app() -> None:
     if not claw_health:
         logger.warning("openclaw_unreachable", url=config.OPENCLAW_URL)
 
-    web_panel = await _start_web_panel()
-
     kraab = KraabUserbot()
+    web_panel = await _start_web_panel(kraab_userbot=kraab)
     stop_event = asyncio.Event()
 
     def _request_stop(reason: str) -> None:
@@ -103,7 +103,11 @@ async def run_app() -> None:
 
     try:
         await kraab.start()
-        logger.info("kraab_running")
+        kraab_state = kraab.get_runtime_state()
+        if str(kraab_state.get("startup_state")) == "running":
+            logger.info("kraab_running")
+        else:
+            logger.warning("kraab_degraded_mode", **kraab_state)
         await stop_event.wait()
     except asyncio.CancelledError:
         logger.info("stopping_signal_received")

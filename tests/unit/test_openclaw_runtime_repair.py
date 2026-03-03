@@ -16,7 +16,9 @@ from pathlib import Path
 from scripts.openclaw_runtime_repair import (
     apply_dm_policy,
     choose_target_key,
+    detect_active_channels,
     normalize_allowlist,
+    repair_hooks_config,
     repair_sessions,
 )
 
@@ -66,7 +68,7 @@ def test_repair_sessions_clears_local_overrides(tmp_path: Path) -> None:
         default_model="google/gemini-2.5-flash",
     )
     assert report["changed"] is True
-    assert report["fixed_entries"] == 1
+    assert report["fixed_entries"] == 2
 
     updated = json.loads(sessions_path.read_text(encoding="utf-8"))
     item = updated["agent:main:telegram:direct:312322764"]
@@ -78,6 +80,8 @@ def test_repair_sessions_clears_local_overrides(tmp_path: Path) -> None:
     untouched = updated["agent:main:openai:abc"]
     assert untouched["modelOverride"] == "local"
     assert untouched["providerOverride"] == "lmstudio"
+    assert untouched["modelProvider"] == "google"
+    assert untouched["model"] == "google/gemini-2.5-flash"
 
 
 def test_normalize_allowlist_removes_wildcards_and_duplicates(tmp_path: Path) -> None:
@@ -112,3 +116,34 @@ def test_apply_dm_policy_open_adds_wildcard_allow_from(tmp_path: Path) -> None:
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["telegram"]["allowFrom"] == ["*"]
     assert payload["channels"]["imessage"]["allowFrom"] == ["*"]
+
+
+def test_repair_hooks_disables_enabled_without_token(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps({"hooks": {"enabled": True}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    report = repair_hooks_config(openclaw_path)
+    assert report["changed"] is True
+    assert report["action"] == "disabled_hooks_without_token"
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["hooks"]["enabled"] is False
+
+
+def test_detect_active_channels_uses_enabled_flag_and_legacy_fallback() -> None:
+    payload = {
+        "channels": {
+            "telegram": {"enabled": True},
+            "imessage": {"enabled": False},
+            "slack": {"mode": "socket"},
+        }
+    }
+    channels = detect_active_channels(payload)
+    assert channels == ("telegram", "slack")
+
+
+def test_detect_active_channels_fallback_to_defaults_on_empty() -> None:
+    channels = detect_active_channels({"channels": {}})
+    assert "telegram" in channels
+    assert "discord" in channels

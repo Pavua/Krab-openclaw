@@ -119,6 +119,11 @@ if [ ! -x "$OPENCLAW_BIN" ]; then
 fi
 
 if [ -n "$OPENCLAW_BIN" ]; then
+    # Отключаем lab-демон, который может автоподниматься на 18890 и ломать единый runtime.
+    launchctl remove ai.openclaw.lab >/dev/null 2>&1 || true
+    launchctl bootout gui/$(id -u)/ai.openclaw.lab >/dev/null 2>&1 || true
+    launchctl bootout user/$(id -u)/ai.openclaw.lab >/dev/null 2>&1 || true
+
     # Всегда перезапускаем gateway, чтобы применить актуальное окружение (.env).
     "$OPENCLAW_BIN" gateway stop >/dev/null 2>&1 || true
     pkill -f "openclaw-gateway" >/dev/null 2>&1 || true
@@ -145,7 +150,12 @@ while true; do
     fi
 
     # Превентивная зачистка зависшего порта 8080.
-    clear_web_port 8080 || true
+    # Если порт не освобождается — не пытаемся стартовать, чтобы не зациклить relogin.
+    if ! clear_web_port 8080; then
+        echo "⚠️ Не удалось освободить 8080. Повторная попытка через 3 секунды..."
+        sleep 3
+        continue
+    fi
 
     echo "🚀 Starting Krab..."
     python -m src.main

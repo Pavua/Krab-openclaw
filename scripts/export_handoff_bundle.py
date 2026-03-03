@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Экспортирует Anti-413 handoff-пакет для безопасной миграции в новый чат.
+
+Что делает:
+1) Собирает machine-readable срез runtime в JSON.
+2) Строит матрицу известных проблем по логам.
+3) Копирует ключевые документы миграции в timestamp-бандл.
+
+Зачем:
+- При переполнении контекста/ошибке 413 можно продолжить работу в новом окне
+  без потери фактов о текущем состоянии системы.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DOCS_DIR = ROOT / "docs"
+ARTIFACTS_DIR = ROOT / "artifacts"
+NOW = datetime.now(timezone.utc)
+STAMP = NOW.strftime("%Y%m%d_%H%M%S")
+BUNDLE_DIR = ARTIFACTS_DIR / f"handoff_{STAMP}"
+
+
+def _mask_secret(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 6:
+        return "*" * len(text)
+    return f"{text[:4]}...{text[-4:]}"
+
+
+def _run(cmd: list[str]) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+        }
+    except Exception as exc:  # noqa: BLE001 - это диагностический скрипт
+        return {"ok": False, "returncode": 1, "stdout": "", "stderr": str(exc)}
+
+
+def _http_json(url: str, *, timeout: float = 4.0) -> dict[str, Any]:
+    req = Request(url, method="GET")
+    try:
+        with urlopen(req, timeout=timeout) as resp:  # noqa: S310 - локальные health URL
+            raw = resp.read().decode("utf-8", errors="replace")
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    return {"ok": True, "status": resp.status, "json": json.loads(raw), "raw": ""}
+                except json.JSONDecodeError:
+                    return {"ok": False, "status": resp.status, "json": None, "raw": raw}
+            return {"ok": True, "status": resp.status, "json": None, "raw": raw[:1000]}
+    except URLError as exc:
+        return {"ok": False, "status": None, "json": None, "raw": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "status": None, "json": None, "raw": str(exc)}
+
+
+def _tail(path: Path, *, max_lines: int = 400) -> str:
+    if not path.exists():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(lines[-max_lines:])
+    except OSError:
+        return ""
+
+
+def _tail_recent(path: Path, *, max_lines: int, max_age_hours: float) -> str:
+    """
+    Возвращает tail файла только если лог действительно свежий.
+
+    Зачем:
+    - не подтягивать в handoff матрицу архивные инциденты из старых логов.
+    """
+    if not path.exists():
+        return ""
+    try:
+        age_sec = NOW.timestamp() - path.stat().st_mtime
+        if age_sec > (max_age_hours * 3600):
+            return ""
+    except OSError:
+        return ""
+    return _tail(path, max_lines=max_lines)
+
+
+def _slice_since_last_marker(text: str, *, markers: tuple[str, ...]) -> str:
+    """
+    Возвращает лог только от последнего runtime-маркера старта.
+
+    Почему:
+    - матрица known issues должна отражать текущее состояние спринта,
+      а не исторические инциденты прошлых запусков.
+    """
+    lines = str(text or "").splitlines()
+    if not lines:
+        return ""
+    markers_low = tuple(m.lower() for m in markers if m)
+    if not markers_low:
+        return str(text or "")
+
+    last_idx = -1
+    for idx, line in enumerate(lines):
+        low = str(line or "").lower()
+        if any(marker in low for marker in markers_low):
+            last_idx = idx
+    if last_idx < 0:
+        return str(text or "")
+    return "\n".join(lines[last_idx:])
+
+
+def _count_pattern(text: str, pattern: str) -> int:
+    return text.lower().count(pattern.lower())
+
+
+def _session_state() -> dict[str, Any]:
+    session_name = (os.getenv("TELEGRAM_SESSION_NAME", "kraab") or "kraab").strip()
+    session_dir = ROOT / "data" / "sessions"
+    session_file = session_dir / f"{session_name}.session"
+    wal_file = session_dir / f"{session_name}.session-wal"
+    shm_file = session_dir / f"{session_name}.session-shm"
+
+    db_ok = False
+    db_error = ""
+    if session_file.exists():
+        try:
+            conn = sqlite3.connect(str(session_file), timeout=1)
+            cur = conn.cursor()
+            cur.execute("PRAGMA quick_check;")
+            result = cur.fetchone()
+            db_ok = bool(result and result[0] == "ok")
+            conn.close()
+        except Exception as exc:  # noqa: BLE001
+            db_error = str(exc)
+
+    return {
+        "session_name": session_name,
+        "session_dir": str(session_dir),
+        "session_exists": session_file.exists(),
+        "session_size_bytes": session_file.stat().st_size if session_file.exists() else 0,
+        "wal_exists": wal_file.exists(),
+        "shm_exists": shm_file.exists(),
+        "sqlite_quick_check_ok": db_ok,
+        "sqlite_error": db_error,
+    }
+
+
+def _openclaw_channels_snapshot() -> dict[str, Any]:
+    """
+    Снимает channel-матрицу напрямую из ~/.openclaw/openclaw.json.
+
+    Нужна для динамического контроля всех активных каналов без hardcoded-списков.
+    """
+    openclaw_path = Path.home() / ".openclaw" / "openclaw.json"
+    base = {
+        "path": str(openclaw_path),
+        "configured": [],
+        "enabled": [],
+        "details": {},
+        "error": "",
+    }
+    if not openclaw_path.exists():
+        base["error"] = "openclaw_json_not_found"
+        return base
+    try:
+        payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        base["error"] = str(exc)
+        return base
+
+    channels = payload.get("channels", {})
+    if not isinstance(channels, dict):
+        base["error"] = "channels_not_dict"
+        return base
+
+    configured: list[str] = []
+    enabled: list[str] = []
+    details: dict[str, Any] = {}
+    for raw_name, cfg in channels.items():
+        name = str(raw_name or "").strip().lower()
+        if not name or not isinstance(cfg, dict):
+            continue
+        configured.append(name)
+        enabled_raw = cfg.get("enabled")
+        is_enabled = bool(enabled_raw) if isinstance(enabled_raw, bool) else True
+        if is_enabled:
+            enabled.append(name)
+        details[name] = {
+            "enabled": is_enabled,
+            "dm_policy": str(cfg.get("dmPolicy", "") or "").strip() or None,
+            "group_policy": str(cfg.get("groupPolicy", "") or "").strip() or None,
+            "streaming": str(cfg.get("streaming", "") or "").strip() or None,
+        }
+
+    base["configured"] = configured
+    base["enabled"] = enabled
+    base["details"] = details
+    return base
+
+
+@dataclass
+class IssueRule:
+    code: str
+    title: str
+    pattern: str
+    threshold: int = 1
+
+
+def _build_known_issues_matrix(log_text: str) -> tuple[list[dict[str, Any]], str]:
+    rules = [
+        IssueRule("telegram_auth_key", "Telegram auth key протухла", "auth key not found"),
+        IssueRule("telegram_sqlite_io", "Telegram sqlite disk I/O", "sqlite3.operationalerror: disk i/o error"),
+        IssueRule("no_models_loaded", "LM Studio: No models loaded", "no models loaded"),
+        IssueRule("lm_empty_message", "LM Studio: EMPTY MESSAGE", "empty message"),
+        IssueRule("lm_model_crash", "LM Studio: model crashed", "model has crashed without additional information"),
+        IssueRule("cloud_unauthorized", "Cloud auth 401", "unauthorized"),
+        IssueRule("tg_message_id_invalid", "Telegram MESSAGE_ID_INVALID", "message_id_invalid"),
+        IssueRule("tg_message_empty", "Telegram MESSAGE_EMPTY", "message_empty"),
+        IssueRule("tg_not_modified", "Telegram MESSAGE_NOT_MODIFIED", "message_not_modified"),
+        IssueRule("photo_stuck", "Фото-путь: зависание на разглядывании", "разглядываю фото"),
+    ]
+    rows: list[dict[str, Any]] = []
+    md_lines = [
+        "# Known Issues Matrix",
+        "",
+        f"- Сгенерировано: `{NOW.isoformat()}`",
+        "",
+        "| Код | Проблема | Вхождений (tail) | Статус |",
+        "|---|---|---:|---|",
+    ]
+    for rule in rules:
+        count = _count_pattern(log_text, rule.pattern)
+        status = "ACTIVE" if count >= rule.threshold else "clear"
+        rows.append(
+            {
+                "code": rule.code,
+                "title": rule.title,
+                "count": count,
+                "status": status,
+            }
+        )
+        md_lines.append(f"| `{rule.code}` | {rule.title} | {count} | {status} |")
+    return rows, "\n".join(md_lines) + "\n"
+
+
+def _copy_if_exists(src: Path, dst: Path) -> None:
+    if src.exists():
+        shutil.copy2(src, dst)
+
+
+def main() -> int:
+    BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
+
+    git_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    git_status = _run(["git", "status", "--short", "--branch"])
+    git_head = _run(["git", "rev-parse", "HEAD"])
+
+    web_lite = _http_json("http://127.0.0.1:8080/api/health/lite")
+    web_full = _http_json("http://127.0.0.1:8080/api/health")
+    runtime_handoff = _http_json("http://127.0.0.1:8080/api/runtime/handoff")
+    channels_probe = _http_json("http://127.0.0.1:8080/api/openclaw/channels/status")
+    openclaw_health = _http_json("http://127.0.0.1:18789/health")
+    lm_models = _http_json(f"{os.getenv('LM_STUDIO_URL', 'http://127.0.0.1:1234').rstrip('/')}/api/v1/models")
+
+    krab_log_tail = _slice_since_last_marker(
+        _tail_recent(ROOT / "krab.log", max_lines=2000, max_age_hours=6),
+        markers=(
+            "krab userbot started",
+            "starting_userbot",
+        ),
+    )
+    openclaw_log_tail = _slice_since_last_marker(
+        _tail_recent(ROOT / "openclaw.log", max_lines=2000, max_age_hours=6),
+        markers=(
+            "openclaw started",
+            "starting openclaw gateway",
+            "gateway reachable",
+        ),
+    )
+    combined_tail = f"{krab_log_tail}\n{openclaw_log_tail}"
+    issues_rows, issues_md = _build_known_issues_matrix(combined_tail)
+
+    runtime_snapshot = {
+        "generated_at_utc": NOW.isoformat(),
+        "bundle_dir": str(BUNDLE_DIR),
+        "git": {
+            "branch": git_branch.get("stdout", ""),
+            "head": git_head.get("stdout", ""),
+            "status_short": git_status.get("stdout", ""),
+        },
+        "health": {
+            "web_lite": web_lite,
+            "web_full": web_full,
+            "runtime_handoff": runtime_handoff,
+            "channels_probe": channels_probe,
+            "openclaw_health": openclaw_health,
+            "lmstudio_models": {
+                "ok": lm_models.get("ok", False),
+                "status": lm_models.get("status"),
+                "models_count": (
+                    len((lm_models.get("json") or {}).get("data", []))
+                    if isinstance(lm_models.get("json"), dict)
+                    else None
+                ),
+                "error": lm_models.get("raw", ""),
+            },
+        },
+        "channels": _openclaw_channels_snapshot(),
+        "telegram_session": _session_state(),
+        "secrets_masked": {
+            "openclaw_token": _mask_secret(os.getenv("OPENCLAW_TOKEN", "")),
+            "gemini_free": _mask_secret(os.getenv("GEMINI_API_KEY_FREE", "")),
+            "gemini_paid": _mask_secret(os.getenv("GEMINI_API_KEY_PAID", "")),
+            "openai_api_key": _mask_secret(os.getenv("OPENAI_API_KEY", "")),
+            "web_api_key": _mask_secret(os.getenv("WEB_API_KEY", "")),
+        },
+        "known_issues": issues_rows,
+    }
+
+    (BUNDLE_DIR / "runtime_snapshot.json").write_text(
+        json.dumps(runtime_snapshot, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (BUNDLE_DIR / "known_issues_matrix.md").write_text(issues_md, encoding="utf-8")
+    (BUNDLE_DIR / "krab_log_tail.log").write_text(krab_log_tail, encoding="utf-8")
+    (BUNDLE_DIR / "openclaw_log_tail.log").write_text(openclaw_log_tail, encoding="utf-8")
+
+    _copy_if_exists(DOCS_DIR / "MIGRATION_HANDOFF_2026-03-02.md", BUNDLE_DIR / "MIGRATION_HANDOFF_2026-03-02.md")
+    _copy_if_exists(DOCS_DIR / "OPEN_ISSUES_CHECKLIST.md", BUNDLE_DIR / "OPEN_ISSUES_CHECKLIST.md")
+    _copy_if_exists(DOCS_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md", BUNDLE_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md")
+
+    print("=== Handoff Bundle Export ===")
+    print(f"OK: {BUNDLE_DIR}")
+    print(f"runtime_snapshot: {BUNDLE_DIR / 'runtime_snapshot.json'}")
+    print(f"known_issues: {BUNDLE_DIR / 'known_issues_matrix.md'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -13,6 +13,7 @@ import asyncio
 import base64
 import os
 import signal
+import sqlite3
 import sys
 import textwrap
 import time
@@ -89,8 +90,13 @@ class KraabUserbot:
         self.maintenance_task: Optional[asyncio.Task] = None
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._session_recovery_lock = asyncio.Lock()
+        self._client_lifecycle_lock = asyncio.Lock()
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
+        # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
+        self._startup_state = "initializing"
+        self._startup_error_code = ""
+        self._startup_error = ""
         self._recreate_client()
 
     def _get_session_dirs(self) -> list[Path]:
@@ -271,12 +277,123 @@ class KraabUserbot:
             await run_cmd(handle_help, m)
 
         # Обработка обычных сообщений и медиа
-        @self.client.on_message((filters.text | filters.photo) & ~filters.bot, group=0)
+        @self.client.on_message((filters.text | filters.photo | filters.voice) & ~filters.bot, group=0)
         async def wrap_message(c, m):
             await self._process_message(m)
 
+    @staticmethod
+    def _is_sqlite_io_error(exc: Exception) -> bool:
+        """Определяет non-fatal ошибки sqlite при сохранении сессии Telegram."""
+        if isinstance(exc, sqlite3.OperationalError):
+            low = str(exc).lower()
+            return "disk i/o error" in low or "database is locked" in low
+        low = str(exc).lower()
+        return "disk i/o error" in low or "database is locked" in low
+
+    async def _start_client_serialized(self) -> None:
+        """
+        Сериализованный client.start(), чтобы избежать гонки start/stop над одним sqlite session-файлом.
+        """
+        async with self._client_lifecycle_lock:
+            assert self.client is not None
+            await self.client.start()
+
+    async def _safe_stop_client(self, *, reason: str) -> None:
+        """
+        Безопасный stop Telegram-клиента.
+
+        Почему:
+        - во время shutdown pyrogram может падать на сохранении sqlite-сессии;
+        - такие ошибки должны считаться non-fatal и не валить весь runtime.
+        """
+        async with self._client_lifecycle_lock:
+            if not self.client:
+                return
+            if not self.client.is_connected:
+                return
+            try:
+                await self.client.stop()
+            except Exception as exc:  # noqa: BLE001
+                if self._is_sqlite_io_error(exc):
+                    logger.warning(
+                        "telegram_session_save_failed",
+                        reason=reason,
+                        error=str(exc),
+                        non_fatal=True,
+                    )
+                    return
+                logger.warning(
+                    "telegram_client_stop_failed",
+                    reason=reason,
+                    error=str(exc),
+                    non_fatal=False,
+                )
+                raise
+
+    @staticmethod
+    def _is_interactive_login_required_error(exc: Exception) -> bool:
+        """
+        True, если ошибка указывает, что Pyrogram запросил интерактивный ввод
+        (номер телефона/код), но консоль недоступна.
+        """
+        if isinstance(exc, EOFError):
+            return True
+        text = str(exc).lower()
+        return (
+            "eof when reading a line" in text
+            or "phone number or bot token" in text
+            or "enter phone number" in text
+            or "please enter" in text
+        )
+
+    def _set_startup_state(self, *, state: str, error_code: str = "", error: str = "") -> None:
+        """Обновляет внутреннее состояние старта userbot."""
+        self._startup_state = str(state or "unknown")
+        self._startup_error_code = str(error_code or "")
+        self._startup_error = str(error or "")
+
+    def _mark_manual_relogin_required(self, *, reason: str, error: str) -> None:
+        """
+        Переводит userbot в контролируемый режим `login_required` без падения процесса.
+        """
+        self._set_startup_state(
+            state="login_required",
+            error_code="telegram_session_login_required",
+            error=error,
+        )
+        logger.warning(
+            "telegram_manual_relogin_required",
+            reason=reason,
+            error=error,
+            session_name=config.TELEGRAM_SESSION_NAME,
+            next_action="run_telegram_relogin_command",
+        )
+
+    def _ensure_maintenance_started(self) -> None:
+        """Запускает maintenance-задачу model_manager, если она еще не активна."""
+        if self.maintenance_task and not self.maintenance_task.done():
+            return
+        self.maintenance_task = asyncio.create_task(self._safe_maintenance())
+
+    def get_runtime_state(self) -> dict:
+        """
+        Возвращает runtime-состояние userbot для health/lite и handoff.
+        """
+        client_connected = bool(self.client and self.client.is_connected)
+        me_username = getattr(self.me, "username", None) if self.me else None
+        me_id = getattr(self.me, "id", None) if self.me else None
+        return {
+            "startup_state": self._startup_state,
+            "startup_error_code": self._startup_error_code,
+            "startup_error": self._startup_error,
+            "client_connected": client_connected,
+            "authorized_user": me_username,
+            "authorized_user_id": me_id,
+        }
+
     async def start(self):
         """Запуск юзербота"""
+        self._set_startup_state(state="starting")
         logger.info("starting_userbot")
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
@@ -284,10 +401,21 @@ class KraabUserbot:
         purged_for_relogin = False
         is_interactive_terminal = bool(getattr(sys.stdin, "isatty", lambda: False)())
 
+        # В non-interactive запуске запрещаем провоцировать pyrogram на input().
+        if not is_interactive_terminal and (not self._session_file_exists()):
+            self._mark_manual_relogin_required(
+                reason="session_missing_non_interactive",
+                error="Telegram session отсутствует, интерактивный вход недоступен",
+            )
+            self._ensure_maintenance_started()
+            return
+
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
                 assert self.client is not None
+                # Перед каждой попыткой мягко чистим sqlite lock-артефакты.
+                self._cleanup_telegram_session_locks()
                 needs_interactive_login = purged_for_relogin or (not self._session_file_exists())
                 attempt_timeout = max(10, start_timeout_sec)
                 if needs_interactive_login or is_interactive_terminal:
@@ -300,27 +428,28 @@ class KraabUserbot:
                         timeout_sec=attempt_timeout,
                     )
 
-                await asyncio.wait_for(self.client.start(), timeout=attempt_timeout)
+                await asyncio.wait_for(self._start_client_serialized(), timeout=attempt_timeout)
                 break
             except asyncio.TimeoutError as exc:
                 last_error = exc
                 logger.warning(
                     "telegram_start_timeout",
                     attempt=attempt,
-                    timeout_sec=start_timeout_sec,
+                    timeout_sec=attempt_timeout,
                     session_name=config.TELEGRAM_SESSION_NAME,
                 )
                 # Важно: аккуратно закрываем клиент перед пересозданием, чтобы снять sqlite lock.
                 try:
-                    if self.client and self.client.is_connected:
-                        await self.client.stop()
+                    await self._safe_stop_client(reason="start_timeout")
                 except Exception as stop_exc:  # noqa: BLE001
                     logger.debug("telegram_client_stop_after_timeout_failed", error=str(stop_exc))
                 # На таймауте транспорт часто застревает. Пересоздаем клиента.
                 self._recreate_client()
-                # Если таймаут повторился — делаем одну контролируемую попытку relogin:
-                # очищаем session и следующую попытку запускаем с длинным timeout.
-                if attempt >= 2 and not purged_for_relogin:
+                # Если старт завис/протух, делаем controlled relogin через purge session.
+                # В интерактивном режиме лучше очищать уже после первого таймаута,
+                # иначе пользователь видит бесконечные `auth key not found`.
+                should_purge_for_relogin = (attempt >= 2) or is_interactive_terminal
+                if should_purge_for_relogin and not purged_for_relogin:
                     removed_files = self._purge_telegram_session_files()
                     purged_for_relogin = True
                     logger.warning(
@@ -342,8 +471,7 @@ class KraabUserbot:
                         attempt=attempt,
                     )
                     try:
-                        if self.client and self.client.is_connected:
-                            await self.client.stop()
+                        await self._safe_stop_client(reason="start_db_locked")
                     except Exception as stop_exc:  # noqa: BLE001
                         logger.debug("telegram_client_stop_after_dblock_failed", error=str(stop_exc))
                     self._recreate_client()
@@ -357,8 +485,26 @@ class KraabUserbot:
                         error=str(exc),
                         attempt=attempt,
                     )
+                    if not is_interactive_terminal:
+                        self._mark_manual_relogin_required(
+                            reason="auth_key_invalid_non_interactive",
+                            error=str(exc),
+                        )
+                        self._ensure_maintenance_started()
+                        return
                     self._recreate_client()
                     continue
+                if (not is_interactive_terminal) and self._is_interactive_login_required_error(exc):
+                    try:
+                        await self._safe_stop_client(reason="non_interactive_login_required")
+                    except Exception as stop_exc:  # noqa: BLE001
+                        logger.debug("telegram_stop_after_login_required_failed", error=str(stop_exc))
+                    self._mark_manual_relogin_required(
+                        reason="interactive_prompt_in_non_tty",
+                        error=str(exc),
+                    )
+                    self._ensure_maintenance_started()
+                    return
                 raise
         else:
             raise RuntimeError(
@@ -366,6 +512,7 @@ class KraabUserbot:
             )
 
         self.me = await self.client.get_me()
+        self._set_startup_state(state="running")
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
 
         # WAKE UP CHECK
@@ -386,7 +533,7 @@ class KraabUserbot:
             logger.error("wake_up_failed", error=str(e))
 
         # Запуск фоновых задач (Safe Start)
-        self.maintenance_task = asyncio.create_task(self._safe_maintenance())
+        self._ensure_maintenance_started()
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
 
     @staticmethod
@@ -405,8 +552,7 @@ class KraabUserbot:
         async with self._session_recovery_lock:
             logger.warning("telegram_session_recovery_started", reason=reason)
             try:
-                if self.client.is_connected:
-                    await self.client.stop()
+                await self._safe_stop_client(reason="session_recovery")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("telegram_session_recovery_stop_failed", error=str(exc))
 
@@ -414,7 +560,7 @@ class KraabUserbot:
             logger.warning("telegram_session_files_purged", removed_files=removed_files)
 
             try:
-                await self.client.start()
+                await self._start_client_serialized()
                 self.me = await self.client.get_me()
                 logger.info(
                     "telegram_session_recovered",
@@ -511,12 +657,16 @@ class KraabUserbot:
 
     async def stop(self):
         """Остановка юзербота"""
+        self._set_startup_state(state="stopping")
         if self._telegram_watchdog_task:
             self._telegram_watchdog_task.cancel()
-        if self.client.is_connected:
-            await self.client.stop()
+        try:
+            await self._safe_stop_client(reason="runtime_stop")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram_stop_failed", error=str(exc), non_fatal=True)
         await model_manager.close()
         await close_search()
+        self._set_startup_state(state="stopped")
 
     def _is_trigger(self, text: str) -> bool:
         """Проверяет есть ли триггер в сообщении"""
@@ -628,10 +778,23 @@ class KraabUserbot:
         text = str(exc).upper()
         return "MESSAGE_NOT_MODIFIED" in text
 
-    async def _safe_edit(self, msg: Message, text: str) -> bool:
+    @staticmethod
+    def _is_message_id_invalid_error(exc: Exception) -> bool:
+        """Определяет ошибку Telegram при попытке edit невалидного message id."""
+        return "MESSAGE_ID_INVALID" in str(exc).upper()
+
+    @staticmethod
+    def _is_message_empty_error(exc: Exception) -> bool:
+        """Определяет ошибку Telegram при попытке отправить/отредактировать пустой текст."""
+        return "MESSAGE_EMPTY" in str(exc).upper()
+
+    async def _safe_edit(self, msg: Message, text: str) -> Message:
         """
         Безопасно редактирует сообщение.
-        Возвращает True, если edit выполнен; False, если текст уже идентичен.
+        Возвращает актуальный Message:
+        - исходный, если edit не потребовался;
+        - результат edit;
+        - новый message при fallback на send_message.
         """
         current_text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
         target_text = (text or "").strip()
@@ -639,13 +802,16 @@ class KraabUserbot:
         if not target_text:
             target_text = "…"
         if current_text == target_text:
-            return False
+            return msg
         try:
-            await msg.edit(target_text)
-            return True
+            edited = await msg.edit(target_text)
+            return edited or msg
         except Exception as exc:  # noqa: BLE001 - фильтруем MESSAGE_NOT_MODIFIED
             if self._is_message_not_modified_error(exc):
-                return False
+                return msg
+            if self._is_message_id_invalid_error(exc) or self._is_message_empty_error(exc):
+                logger.warning("telegram_edit_fallback_send_new", error=str(exc))
+                return await self.client.send_message(msg.chat.id, target_text)
             raise
 
     def _get_command_args(self, message: Message) -> str:
@@ -668,13 +834,14 @@ class KraabUserbot:
                 return
 
             text = message.text or message.caption or ""
+            has_voice = bool(getattr(message, "voice", None))
 
             if text and text.lstrip()[:1] in ("!", "/", "."):
                 cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
                 if cmd_word in self._known_commands:
                     return
 
-            if not text and not message.photo:
+            if not text and not message.photo and not has_voice:
                 return
 
             chat_id = str(message.chat.id)
@@ -691,7 +858,9 @@ class KraabUserbot:
                 return
 
             query = self._get_clean_text(text)
-            if not query and not message.photo and not is_reply_to_me:
+            if not query and has_voice:
+                query = "(Голосовое сообщение)"
+            if not query and not message.photo and not has_voice and not is_reply_to_me:
                 return
 
             logger.info(
@@ -715,16 +884,16 @@ class KraabUserbot:
             if not is_self:
                 temp_msg = await message.reply("🦀 ...")
             else:
-                await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
+                message = await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
 
             # VISION: Обработка фото
             images = []
             if message.photo:
                 try:
                     if is_self:
-                        await self._safe_edit(message, f"🦀 {query}\n\n👀 *Разглядываю фото...*")
+                        message = await self._safe_edit(message, f"🦀 {query}\n\n👀 *Разглядываю фото...*")
                     else:
-                        await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
+                        temp_msg = await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
 
                     # in_memory=True returns BytesIO
                     photo_obj = await self.client.download_media(message, in_memory=True)
@@ -789,9 +958,9 @@ class KraabUserbot:
                     try:
                         display = current_chunk + " ▌"
                         if is_self:
-                            await self._safe_edit(message, f"🦀 {query}\n\n{display}")
+                            message = await self._safe_edit(message, f"🦀 {query}\n\n{display}")
                         else:
-                            await self._safe_edit(temp_msg, display)
+                            temp_msg = await self._safe_edit(temp_msg, display)
                     except Exception:
                         pass
 
@@ -826,13 +995,13 @@ class KraabUserbot:
 
             if is_self:
                 # Первую часть редактируем (чтобы заменить "думаю...")
-                await self._safe_edit(message, parts[0])
+                message = await self._safe_edit(message, parts[0])
                 # Остальные отправляем следом
                 for part in parts[1:]:
                     await message.reply(part)
             else:
                 # Первую часть редактируем
-                await self._safe_edit(temp_msg, parts[0])
+                temp_msg = await self._safe_edit(temp_msg, parts[0])
                 # Остальные отправляем
                 for part in parts[1:]:
                     await message.reply(part)

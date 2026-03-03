@@ -17,8 +17,18 @@ VOICE_STOP="$VOICE_DIR/scripts/stop_gateway.command"
 EAR_DIR="${KRAB_EAR_DIR:-$AG_ROOT/Krab Ear}"
 EAR_RUNTIME="$EAR_DIR/native/runtime/KrabEarAgent"
 EAR_LEGACY="$EAR_DIR/native/KrabEarAgent/.build/release/KrabEarAgent"
+EAR_WATCHDOG_PID="$DIR/logs/krab_ear_watchdog.pid"
 
 echo "🛑 Остановка полной экосистемы Krab..."
+
+if [ -f "$EAR_WATCHDOG_PID" ]; then
+  WD_PID="$(cat "$EAR_WATCHDOG_PID" 2>/dev/null || true)"
+  if [ -n "${WD_PID:-}" ] && kill -0 "$WD_PID" >/dev/null 2>&1; then
+    echo "🛡️ Останавливаю Krab Ear Watchdog (PID $WD_PID)..."
+    kill -TERM "$WD_PID" 2>/dev/null || true
+  fi
+  rm -f "$EAR_WATCHDOG_PID"
+fi
 
 if [ -x "$DIR/new Stop Krab.command" ]; then
   "$DIR/new Stop Krab.command" || true
@@ -56,4 +66,3 @@ fi
 
 echo "✅ Полная остановка завершена."
 sleep 1
-

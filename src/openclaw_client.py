@@ -213,10 +213,23 @@ class OpenClawClient:
         payload = (text or "").strip()
         low = payload.lower()
         if not payload:
-            return {"code": "empty_response", "message": "Пустой ответ от модели"}
+            return {"code": "lm_empty_stream", "message": "Пустой ответ от модели"}
 
         semantic_patterns = [
             ("no models loaded", "model_not_loaded", "Локальная модель не загружена"),
+            ("<empty message>", "lm_empty_stream", "LM Studio вернула пустой поток"),
+            ("empty message", "lm_empty_stream", "LM Studio вернула пустой поток"),
+            ("stopiteration", "lm_empty_stream", "LM Studio вернула пустой поток"),
+            (
+                "model has crashed without additional information",
+                "lm_model_crash",
+                "Локальная модель LM Studio аварийно завершилась",
+            ),
+            (
+                "the model has crashed without additional information",
+                "lm_model_crash",
+                "Локальная модель LM Studio аварийно завершилась",
+            ),
             ("quota", "quota_exceeded", "Квота облачного ключа исчерпана"),
             ("429", "quota_exceeded", "Квота облачного ключа исчерпана"),
             ("api keys are not supported", "unsupported_key_type", "Неверный тип облачного ключа"),
@@ -229,6 +242,42 @@ class OpenClawClient:
             if pattern in low:
                 return {"code": code, "message": message}
         return None
+
+    @staticmethod
+    def _semantic_from_provider_exception(exc: Exception) -> dict[str, str]:
+        """
+        Нормализует исключения провайдера в единый semantic error-контракт.
+
+        Это нужно для консистентного fallback-поведения и корректной диагностики
+        в `health/lite`/runtime badges даже когда OpenClaw отдал не текст ошибки,
+        а HTTP-ошибку/исключение.
+        """
+        if isinstance(exc, ProviderAuthError):
+            return {"code": "auth_invalid", "message": "Ошибка авторизации облачного ключа"}
+        if isinstance(exc, ProviderError):
+            code = "provider_timeout" if getattr(exc, "retryable", False) else "provider_error"
+            return {"code": code, "message": str(exc) or "Ошибка провайдера"}
+        return {"code": "transport_error", "message": str(exc) or "Ошибка транспорта"}
+
+    def _build_retry_messages(self, messages_to_send: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Формирует компактный контекст для controlled retry.
+
+        Почему:
+        - при `EMPTY MESSAGE`/`model crashed` повтор с полным длинным контекстом
+          часто воспроизводит ту же деградацию;
+        - сжимаем историю до безопасного ядра: system + последние N сообщений.
+        """
+        if not messages_to_send:
+            return []
+        system_message = messages_to_send[0] if messages_to_send and messages_to_send[0].get("role") == "system" else None
+        tail_source = messages_to_send[1:] if system_message else messages_to_send
+        tail = tail_source[-8:]
+        out: list[dict[str, Any]] = []
+        if system_message:
+            out.append(system_message)
+        out.extend(tail)
+        return out
 
     async def _switch_cloud_tier(self, tier: str, *, reason: str) -> dict[str, Any]:
         """Переключает active tier ключа в OpenClaw models.json и делает secrets reload."""
@@ -487,67 +536,110 @@ class OpenClawClient:
 
         from .model_manager import model_manager  # lazy import
 
+        request_marked = False
+        if hasattr(model_manager, "mark_request_started"):
+            try:
+                model_manager.mark_request_started()
+                request_marked = True
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("model_manager_mark_request_started_failed", error=str(exc))
+
         has_photo = bool(images)
-        selected_model = await model_manager.get_best_model(has_photo=has_photo)
-        if not force_cloud and model_manager.is_local_model(selected_model):
-            await model_manager.ensure_model_loaded(selected_model)
-
-        messages_to_send = self._apply_sliding_window(chat_id, self._sessions[chat_id])
-
-        logger.info(
-            "openclaw_stream_start",
-            chat_id=chat_id,
-            model=selected_model,
-            has_photo=has_photo,
-            force_cloud=force_cloud,
-        )
-        self._set_last_runtime_route(
-            channel="planning",
-            model=selected_model,
-            route_reason="selected_model",
-            route_detail="Определена целевая модель перед выполнением запроса",
-            force_cloud=force_cloud,
-        )
-
-        # Жесткий local-first: если выбран локальный маршрут, сначала бьем напрямую в LM Studio.
-        # Это исключает ситуацию, когда OpenClaw runtime игнорирует модель и уходит в cloud.
-        if not force_cloud and model_manager.is_local_model(selected_model):
-            lm_text = await self._direct_lm_fallback(
-                chat_id=chat_id,
-                messages_to_send=messages_to_send,
-                model_hint=selected_model,
-            )
-            if lm_text:
-                logger.info("local_direct_path_used", chat_id=chat_id, model=selected_model)
-                self._set_last_runtime_route(
-                    channel="local_direct",
-                    model=selected_model,
-                    route_reason="local_direct_primary",
-                    route_detail="Ответ получен напрямую из LM Studio",
-                    force_cloud=force_cloud,
-                )
-                self._finalize_chat_response(chat_id, lm_text)
-                yield lm_text
-                return
-            logger.warning("local_direct_path_failed_fallback_openclaw", chat_id=chat_id, model=selected_model)
-
-        tried_paid = False
-        tried_openai = False
-        tried_local = False
-        final_response = ""
-        attempt_model = selected_model
+        selected_model = ""
+        attempt_model = ""
+        messages_to_send: list[dict[str, Any]] = []
 
         try:
+            selected_model = await model_manager.get_best_model(has_photo=has_photo)
+            attempt_model = selected_model
+            if not force_cloud and model_manager.is_local_model(selected_model):
+                await model_manager.ensure_model_loaded(selected_model)
+
+            messages_to_send = self._apply_sliding_window(chat_id, self._sessions[chat_id])
+
+            logger.info(
+                "openclaw_stream_start",
+                chat_id=chat_id,
+                model=selected_model,
+                has_photo=has_photo,
+                force_cloud=force_cloud,
+            )
+            self._set_last_runtime_route(
+                channel="planning",
+                model=selected_model,
+                route_reason="selected_model",
+                route_detail="Определена целевая модель перед выполнением запроса",
+                force_cloud=force_cloud,
+            )
+
+            # Жесткий local-first: если выбран локальный маршрут, сначала бьем напрямую в LM Studio.
+            # Это исключает ситуацию, когда OpenClaw runtime игнорирует модель и уходит в cloud.
+            if not force_cloud and model_manager.is_local_model(selected_model):
+                lm_text = await self._direct_lm_fallback(
+                    chat_id=chat_id,
+                    messages_to_send=messages_to_send,
+                    model_hint=selected_model,
+                )
+                if lm_text:
+                    logger.info("local_direct_path_used", chat_id=chat_id, model=selected_model)
+                    self._set_last_runtime_route(
+                        channel="local_direct",
+                        model=selected_model,
+                        route_reason="local_direct_primary",
+                        route_detail="Ответ получен напрямую из LM Studio",
+                        force_cloud=force_cloud,
+                    )
+                    self._finalize_chat_response(chat_id, lm_text)
+                    yield lm_text
+                    return
+                logger.warning("local_direct_path_failed_fallback_openclaw", chat_id=chat_id, model=selected_model)
+
+            tried_paid = False
+            tried_openai = False
+            tried_local = False
+            tried_semantic_retry = False
+            final_response = ""
+            last_semantic: dict[str, str] | None = None
+
             for attempt in range(4):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
-                final_response = await self._openclaw_completion_once(
-                    model_id=attempt_model,
-                    messages_to_send=messages_to_send,
-                )
-                semantic = self._detect_semantic_error(final_response)
+                semantic: dict[str, str] | None = None
+                try:
+                    final_response = await self._openclaw_completion_once(
+                        model_id=attempt_model,
+                        messages_to_send=messages_to_send,
+                    )
+                    semantic = self._detect_semantic_error(final_response)
+                except (ProviderAuthError, ProviderError) as exc:
+                    semantic = self._semantic_from_provider_exception(exc)
+                    final_response = ""
+
+                if semantic and semantic["code"] in {"lm_empty_stream", "lm_model_crash"} and not tried_semantic_retry:
+                    tried_semantic_retry = True
+                    retry_messages = self._build_retry_messages(messages_to_send)
+                    logger.warning(
+                        "openclaw_semantic_retry",
+                        code=semantic["code"],
+                        model=attempt_model,
+                        messages_before=len(messages_to_send),
+                        messages_after=len(retry_messages),
+                    )
+                    try:
+                        final_response = await self._openclaw_completion_once(
+                            model_id=attempt_model,
+                            messages_to_send=retry_messages,
+                        )
+                        semantic = self._detect_semantic_error(final_response)
+                        messages_to_send = retry_messages
+                    except (ProviderAuthError, ProviderError) as retry_exc:
+                        semantic = self._semantic_from_provider_exception(retry_exc)
+                        final_response = ""
+
                 if not semantic:
+                    last_semantic = None
                     break
 
+                last_semantic = semantic
                 self._cloud_tier_state["last_error_code"] = semantic["code"]
                 self._cloud_tier_state["last_error_message"] = semantic["message"]
                 logger.warning(
@@ -564,14 +656,14 @@ class OpenClawClient:
                     if switch_result.get("ok"):
                         continue
 
-                # 2) auth/key type -> openai fallback
+                # 2) auth/key type/quota -> openai fallback
                 if semantic["code"] in {"auth_invalid", "unsupported_key_type", "quota_exceeded"} and not tried_openai:
                     tried_openai = True
                     attempt_model = "openai/gpt-4o-mini"
                     self._cloud_tier_state["last_recovery_action"] = "switch_to_openai"
                     continue
 
-                # 3) любые критичные cloud ошибки -> local autoload (если не force_cloud)
+                # 3) критичные ошибки -> local autoload (если не force_cloud)
                 if semantic["code"] in {
                     "model_not_loaded",
                     "auth_invalid",
@@ -579,6 +671,9 @@ class OpenClawClient:
                     "quota_exceeded",
                     "provider_timeout",
                     "provider_error",
+                    "transport_error",
+                    "lm_empty_stream",
+                    "lm_model_crash",
                 } and not force_cloud and not tried_local:
                     tried_local = True
                     local_model = await self._resolve_local_model_for_retry(model_manager, attempt_model)
@@ -593,6 +688,9 @@ class OpenClawClient:
                 break
 
             semantic_after = self._detect_semantic_error(final_response)
+            if semantic_after is None and not final_response and last_semantic is not None:
+                semantic_after = dict(last_semantic)
+
             if semantic_after:
                 # Последняя защита: прямой LM fallback
                 if not force_cloud:
@@ -629,6 +727,10 @@ class OpenClawClient:
                     user_text = "❌ Облачный ключ невалиден для текущего API. Проверь Gemini ключ формата AIza..."
                 elif code == "model_not_loaded":
                     user_text = "❌ Локальная модель не загружена. Загрузи её в LM Studio или командой !model load <name>."
+                elif code == "lm_empty_stream":
+                    user_text = "❌ Модель вернула пустой поток. Повтори запрос или переключись на !model local."
+                elif code == "lm_model_crash":
+                    user_text = "❌ Локальная модель аварийно завершилась. Повтори запрос или переключись на !model cloud."
                 else:
                     user_text = "❌ Облачный сервис временно недоступен. Попробуй позже или !model local."
                 yield user_text
@@ -652,27 +754,52 @@ class OpenClawClient:
                 )
 
             self._finalize_chat_response(chat_id, final_response)
-
             yield final_response
 
         except RouterError:
             raise
-        except (ProviderError, ProviderAuthError):
-            raise
+        except (ProviderError, ProviderAuthError) as exc:
+            semantic = self._semantic_from_provider_exception(exc)
+            code = semantic["code"]
+            self._cloud_tier_state["last_error_code"] = code
+            self._cloud_tier_state["last_error_message"] = semantic["message"]
+            self._set_last_runtime_route(
+                channel="error",
+                model=attempt_model or selected_model,
+                route_reason="provider_exception",
+                route_detail=semantic["message"],
+                status="error",
+                error_code=code,
+                force_cloud=force_cloud,
+            )
+            if code == "auth_invalid":
+                yield "❌ Облачный ключ не прошёл авторизацию. Проверь ключ/токен."
+            else:
+                yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
         except httpx.TimeoutException as exc:
             logger.error("openclaw_stream_timeout", error=str(exc))
-            raise ProviderError(
-                message=str(exc),
-                user_message="Провайдер временно недоступен",
-                retryable=True,
+            self._set_last_runtime_route(
+                channel="error",
+                model=attempt_model or selected_model,
+                route_reason="transport_timeout",
+                route_detail=str(exc),
+                status="error",
+                error_code="provider_timeout",
+                force_cloud=force_cloud,
             )
+            yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
         except (httpx.ConnectError, httpx.RequestError) as exc:
             logger.error("openclaw_stream_connect_error", error=str(exc))
-            raise ProviderError(
-                message=str(exc),
-                user_message="Провайдер временно недоступен",
-                retryable=True,
+            self._set_last_runtime_route(
+                channel="error",
+                model=attempt_model or selected_model,
+                route_reason="transport_connect_error",
+                route_detail=str(exc),
+                status="error",
+                error_code="transport_error",
+                force_cloud=force_cloud,
             )
+            yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
         except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
             logger.error("openclaw_stream_error", error=str(exc))
             if force_cloud:
@@ -681,12 +808,12 @@ class OpenClawClient:
             lm_text = await self._direct_lm_fallback(
                 chat_id=chat_id,
                 messages_to_send=messages_to_send,
-                model_hint=attempt_model,
+                model_hint=attempt_model or selected_model,
             )
             if lm_text:
                 self._set_last_runtime_route(
                     channel="local_direct",
-                    model=attempt_model,
+                    model=attempt_model or selected_model,
                     route_reason="local_direct_exception_fallback",
                     route_detail="Ошибка OpenClaw транспорта, выполнен прямой fallback в LM Studio",
                     force_cloud=force_cloud,
@@ -695,7 +822,7 @@ class OpenClawClient:
                 return
             self._set_last_runtime_route(
                 channel="error",
-                model=attempt_model,
+                model=attempt_model or selected_model,
                 route_reason="transport_error",
                 route_detail=str(exc),
                 status="error",
@@ -703,6 +830,12 @@ class OpenClawClient:
                 force_cloud=force_cloud,
             )
             yield "❌ Ошибка облака. Попробуй позже или переключись на локальную модель: !model local."
+        finally:
+            if request_marked and hasattr(model_manager, "mark_request_finished"):
+                try:
+                    model_manager.mark_request_finished()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("model_manager_mark_request_finished_failed", error=str(exc))
 
     def clear_session(self, chat_id: str):
         """Очищает историю чата (память и кэш)."""
@@ -853,6 +986,12 @@ class OpenClawClient:
             actions.append("Если paid недоступен — включи local fallback (!model local)")
         elif state.get("last_error_code") == "model_not_loaded":
             actions.append("Загрузи локальную модель в LM Studio и повтори запрос")
+        elif state.get("last_error_code") == "lm_empty_stream":
+            actions.append("Повтори запрос с сокращённым контекстом или переключись на другую локальную модель")
+            actions.append("Проверь, что у локальной модели нет аварий в логах LM Studio")
+        elif state.get("last_error_code") == "lm_model_crash":
+            actions.append("Перезапусти проблемную модель в LM Studio и повтори запрос")
+            actions.append("Если сбой повторяется — временно переключись на cloud/local fallback")
         else:
             actions.append("Проверь доступность OpenClaw и LM Studio")
             actions.append("Запусти check_cloud_chain.command для автоматической диагностики")

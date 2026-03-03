@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 
 LOCAL_MARKERS = {"local", "lmstudio", "lmstudio/local", "google/local"}
-DEFAULT_CHANNELS = ("telegram", "imessage", "whatsapp", "signal")
+DEFAULT_CHANNELS = ("telegram", "imessage", "whatsapp", "signal", "discord", "slack")
 
 
 def mask_secret(secret: str) -> str:
@@ -128,6 +128,43 @@ def sync_openclaw_json(path: Path, target_key: str) -> dict[str, Any]:
     }
 
 
+def repair_hooks_config(path: Path) -> dict[str, Any]:
+    """
+    Стабилизирует секцию hooks в openclaw.json.
+
+    Критичный кейс:
+    - hooks.enabled=true и пустой hooks.token
+      => OpenClaw не стартует с ошибкой
+         "hooks.enabled requires hooks.token".
+    """
+    payload = _read_json(path)
+    hooks = payload.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        hooks = {}
+        payload["hooks"] = hooks
+
+    enabled = bool(hooks.get("enabled", False))
+    token = str(hooks.get("token", "") or "").strip()
+
+    changed = False
+    action = "none"
+    if enabled and not token:
+        hooks["enabled"] = False
+        changed = True
+        action = "disabled_hooks_without_token"
+
+    if changed:
+        _write_json(path, payload)
+
+    return {
+        "path": str(path),
+        "changed": changed,
+        "hooks_enabled": bool(hooks.get("enabled", False)),
+        "token_present": bool(str(hooks.get("token", "") or "").strip()),
+        "action": action,
+    }
+
+
 def _default_model_from_openclaw(openclaw_payload: dict[str, Any]) -> tuple[str, str]:
     """
     Возвращает (provider, model) дефолтного primary-маршрута.
@@ -152,6 +189,35 @@ def _default_model_from_openclaw(openclaw_payload: dict[str, Any]) -> tuple[str,
     return "google", "google/gemini-2.5-flash"
 
 
+def detect_active_channels(openclaw_payload: dict[str, Any]) -> tuple[str, ...]:
+    """
+    Возвращает список активных каналов из openclaw.json.
+
+    Правило:
+    - если в `channels.<name>.enabled` есть bool — берём только `True`;
+    - если `enabled` отсутствует, считаем канал активным (legacy-конфиг).
+    """
+    channels_cfg = openclaw_payload.get("channels", {})
+    if not isinstance(channels_cfg, dict):
+        return DEFAULT_CHANNELS
+
+    discovered: list[str] = []
+    for channel_name, channel_cfg in channels_cfg.items():
+        channel = str(channel_name or "").strip().lower()
+        if not channel:
+            continue
+        if not isinstance(channel_cfg, dict):
+            continue
+        enabled_raw = channel_cfg.get("enabled")
+        is_enabled = bool(enabled_raw) if isinstance(enabled_raw, bool) else True
+        if is_enabled:
+            discovered.append(channel)
+
+    if not discovered:
+        return DEFAULT_CHANNELS
+    return tuple(dict.fromkeys(discovered))
+
+
 def repair_sessions(
     sessions_path: Path,
     *,
@@ -171,26 +237,26 @@ def repair_sessions(
     fixed_entries = 0
     cleared_overrides = 0
     replaced_generic_local = 0
+    scanned_entries = 0
 
     for key, meta in payload.items():
         if not isinstance(meta, dict):
             continue
         if not key.startswith("agent:main:"):
             continue
+        scanned_entries += 1
         matched_channel = None
         for channel in channels:
             token = f"agent:main:{channel}:"
             if key.startswith(token):
                 matched_channel = channel
                 break
-        if not matched_channel:
-            continue
 
         changed = False
 
         model_override = str(meta.get("modelOverride", "") or "").strip().lower()
         provider_override = str(meta.get("providerOverride", "") or "").strip().lower()
-        if model_override in LOCAL_MARKERS or provider_override in {"lmstudio", "local"}:
+        if matched_channel and (model_override in LOCAL_MARKERS or provider_override in {"lmstudio", "local"}):
             # Полностью убираем override-фиксацию, чтобы вернуть авто-роутинг.
             if "modelOverride" in meta:
                 meta.pop("modelOverride", None)
@@ -218,6 +284,7 @@ def repair_sessions(
     return {
         "path": str(sessions_path),
         "changed": fixed_entries > 0,
+        "scanned_entries": scanned_entries,
         "fixed_entries": fixed_entries,
         "cleared_overrides": cleared_overrides,
         "replaced_generic_local": replaced_generic_local,
@@ -333,8 +400,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--channels",
-        default="telegram,imessage,whatsapp,signal",
-        help="Список каналов для очистки сессий (через запятую).",
+        default="",
+        help="Список каналов для очистки сессий (через запятую). Пусто = авто из openclaw.json.",
     )
     parser.add_argument(
         "--dm-policy",
@@ -395,7 +462,7 @@ def main() -> int:
     default_provider, default_model = _default_model_from_openclaw(openclaw_payload)
     channels = tuple(item.strip().lower() for item in str(args.channels).split(",") if item.strip())
     if not channels:
-        channels = DEFAULT_CHANNELS
+        channels = detect_active_channels(openclaw_payload)
 
     report: dict[str, Any] = {
         "ok": True,
@@ -407,6 +474,7 @@ def main() -> int:
 
     report["steps"]["sync_models_json"] = sync_models_json(models_path, target_key)
     report["steps"]["sync_openclaw_json"] = sync_openclaw_json(openclaw_path, target_key)
+    report["steps"]["repair_hooks"] = repair_hooks_config(openclaw_path)
     report["steps"]["repair_sessions"] = repair_sessions(
         sessions_path,
         channels=channels,

@@ -59,6 +59,8 @@ class ModelManager:
 
         # Smart Loading State
         self._last_access: dict[str, float] = {}  # model_id -> timestamp
+        self._last_any_activity_ts: float = time.time()
+        self._active_requests: int = 0
         self._lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task] = None
 
@@ -410,7 +412,26 @@ class ModelManager:
 
     def touch(self, model_id: str):
         """Обновляет время последнего доступа"""
-        self._last_access[model_id] = time.time()
+        now = time.time()
+        self._last_access[model_id] = now
+        self._last_any_activity_ts = now
+
+    def mark_request_started(self) -> None:
+        """
+        Отмечает старт пользовательского запроса.
+        Используется guarded idle-unload, чтобы не выгружать модель во время ответа.
+        """
+        self._active_requests += 1
+        self._last_any_activity_ts = time.time()
+
+    def mark_request_finished(self) -> None:
+        """
+        Отмечает завершение пользовательского запроса.
+        Счётчик не уходит в отрицательные значения.
+        """
+        if self._active_requests > 0:
+            self._active_requests -= 1
+        self._last_any_activity_ts = time.time()
 
     async def start_maintenance(self):
         """Запускает фоновую задачу очистки"""
@@ -427,6 +448,27 @@ class ModelManager:
                 if self._current_model:
                     last = self._last_access.get(self._current_model, 0)
                     if now - last > IDLE_UNLOAD_SEC:
+                        # Guarded mode: выгружаем только при реальном простое.
+                        # 1) не выгружаем, пока есть активные запросы;
+                        # 2) не выгружаем сразу после недавней активности (grace window).
+                        if getattr(config, "GUARDED_IDLE_UNLOAD", True):
+                            if self._active_requests > 0:
+                                logger.info(
+                                    "auto_unload_skipped_active_requests",
+                                    model=self._current_model,
+                                    active_requests=self._active_requests,
+                                )
+                                continue
+                            grace_sec = float(getattr(config, "GUARDED_IDLE_UNLOAD_GRACE_SEC", 90.0))
+                            any_idle = now - float(self._last_any_activity_ts or 0.0)
+                            if any_idle < grace_sec:
+                                logger.info(
+                                    "auto_unload_skipped_guarded_grace",
+                                    model=self._current_model,
+                                    any_idle_sec=round(any_idle, 2),
+                                    grace_sec=grace_sec,
+                                )
+                                continue
                         logger.info("auto_unload_idle", model=self._current_model)
                         async with self._lock:
                             await self._do_unload_model(self._current_model)

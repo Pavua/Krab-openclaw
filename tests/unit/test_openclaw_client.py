@@ -56,6 +56,43 @@ async def test_send_message_stream_success_buffered(client: OpenClawClient) -> N
 
 
 @pytest.mark.asyncio
+async def test_send_message_stream_marks_request_lifecycle(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    started = MagicMock()
+    finished = MagicMock()
+
+    with patch.object(model_manager, "mark_request_started", new=started):
+        with patch.object(model_manager, "mark_request_finished", new=finished):
+            with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                with patch.object(model_manager, "is_local_model", return_value=False):
+                    with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")):
+                        chunks = []
+                        async for chunk in client.send_message_stream("Lifecycle", "chat-lifecycle"):
+                            chunks.append(chunk)
+
+    assert "".join(chunks) == "OK"
+    assert started.call_count == 1
+    assert finished.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_retries_on_lm_empty_stream(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    completion = AsyncMock(side_effect=["<EMPTY MESSAGE>", "Нормальный ответ после retry"])
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_openclaw_completion_once", new=completion):
+                chunks = []
+                async for chunk in client.send_message_stream("Hi", "chat-retry-empty"):
+                    chunks.append(chunk)
+
+    assert "retry" in "".join(chunks).lower()
+    assert completion.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_session_management_respects_window(client: OpenClawClient) -> None:
     client._sessions["chat-1"] = [{"role": "user", "content": "1"}] * 25
 
@@ -96,3 +133,9 @@ async def test_tier_export_contains_required_fields(client: OpenClawClient) -> N
     assert "active_tier" in export
     assert "last_error_code" in export
     assert "tiers_configured" in export
+
+
+def test_detect_semantic_error_model_crash(client: OpenClawClient) -> None:
+    semantic = client._detect_semantic_error("The model has crashed without additional information")
+    assert semantic is not None
+    assert semantic["code"] == "lm_model_crash"

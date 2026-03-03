@@ -14,6 +14,7 @@ import mimetypes
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import httpx
 import structlog
 import uvicorn
 from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
@@ -186,6 +188,219 @@ class WebApp:
             reverse=True,
         )
         return items[0] if items else None
+
+    @staticmethod
+    def _bool_env(value: str, default: bool = False) -> bool:
+        """Безопасно нормализует булево значение из env/строки."""
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return default
+        return raw in {"1", "true", "yes", "on"}
+
+    def _git_snapshot(self) -> dict[str, Any]:
+        """Снимает минимальный git-срез (ветка/head/short status) для handoff."""
+        def _run_git(args: list[str]) -> str:
+            try:
+                proc = subprocess.run(
+                    ["git", *args],
+                    cwd=str(self._project_root()),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=5,
+                )
+                if proc.returncode != 0:
+                    return ""
+                return str(proc.stdout or "").strip()
+            except Exception:
+                return ""
+
+        return {
+            "branch": _run_git(["rev-parse", "--abbrev-ref", "HEAD"]),
+            "head": _run_git(["rev-parse", "HEAD"]),
+            "status_short": _run_git(["status", "--short", "--branch"]),
+        }
+
+    def _telegram_session_snapshot(self) -> dict[str, Any]:
+        """
+        Возвращает файловый snapshot Telegram session SQLite.
+
+        Почему так:
+        - `WebApp` не держит прямую ссылку на живой `KraabUserbot`,
+          поэтому для lite/handoff читаем факт состояния через файловый слой.
+        """
+        project_root = self._project_root()
+        session_name = str(os.getenv("TELEGRAM_SESSION_NAME", "kraab") or "kraab").strip() or "kraab"
+        session_dir = project_root / "data" / "sessions"
+        session_file = session_dir / f"{session_name}.session"
+        wal_file = session_dir / f"{session_name}.session-wal"
+        shm_file = session_dir / f"{session_name}.session-shm"
+        journal_file = session_dir / f"{session_name}.session-journal"
+        lock_files = sorted(str(item.name) for item in session_dir.glob(f"{session_name}*.lock"))
+
+        sqlite_ok: bool | None = None
+        sqlite_error = ""
+        if session_file.exists():
+            try:
+                conn = sqlite3.connect(str(session_file), timeout=0.7)
+                cur = conn.cursor()
+                cur.execute("PRAGMA quick_check;")
+                row = cur.fetchone()
+                sqlite_ok = bool(row and str(row[0]).lower() == "ok")
+                conn.close()
+            except Exception as exc:
+                sqlite_ok = False
+                sqlite_error = str(exc)
+
+        if not session_file.exists():
+            state = "missing"
+        elif sqlite_ok is False:
+            state = "corrupted"
+        elif wal_file.exists() or shm_file.exists() or journal_file.exists():
+            state = "open_or_unclean"
+        else:
+            state = "ready"
+
+        return {
+            "state": state,
+            "session_name": session_name,
+            "session_path": str(session_file),
+            "session_exists": session_file.exists(),
+            "session_size_bytes": int(session_file.stat().st_size) if session_file.exists() else 0,
+            "wal_exists": wal_file.exists(),
+            "shm_exists": shm_file.exists(),
+            "journal_exists": journal_file.exists(),
+            "lock_files": lock_files,
+            "sqlite_quick_check_ok": sqlite_ok,
+            "sqlite_error": sqlite_error,
+        }
+
+    async def _lmstudio_model_snapshot(self) -> dict[str, Any]:
+        """
+        Быстрая проверка состояния локальной модели через LM Studio API.
+
+        Возвращает state:
+        - `loaded`   -> есть загруженные инстансы;
+        - `idle`     -> сервер доступен, но инстансов нет;
+        - `down`     -> API недоступен/ошибка транспорта.
+        """
+        base_url = str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234") or "").strip().rstrip("/")
+        if not base_url:
+            return {"state": "down", "base_url": "", "loaded_count": 0, "loaded_models": [], "error": "lm_url_missing"}
+
+        endpoints = [f"{base_url}/api/v1/models", f"{base_url}/v1/models"]
+        errors: list[str] = []
+
+        for endpoint in endpoints:
+            try:
+                async with httpx.AsyncClient(timeout=2.5) as client:
+                    resp = await client.get(endpoint)
+                if resp.status_code != 200:
+                    errors.append(f"{endpoint}:status={resp.status_code}")
+                    continue
+                payload = resp.json()
+                models = payload.get("models", payload.get("data", []))
+                loaded_models: list[str] = []
+                for item in models or []:
+                    key = str(item.get("key") or item.get("id") or "").strip()
+                    instances = item.get("loaded_instances", [])
+                    if isinstance(instances, list) and instances:
+                        if key:
+                            loaded_models.append(key)
+                        for inst in instances:
+                            inst_id = str((inst or {}).get("id") or "").strip()
+                            if inst_id:
+                                loaded_models.append(inst_id)
+                loaded_models = list(dict.fromkeys(loaded_models))
+                return {
+                    "state": "loaded" if loaded_models else "idle",
+                    "base_url": base_url,
+                    "loaded_count": len(loaded_models),
+                    "loaded_models": loaded_models,
+                    "error": "",
+                }
+            except Exception as exc:
+                errors.append(f"{endpoint}:{exc}")
+
+        return {
+            "state": "down",
+            "base_url": base_url,
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": self._tail_text("\n".join(errors), max_chars=400),
+        }
+
+    def _derive_openclaw_auth_state(
+        self,
+        *,
+        last_runtime_route: dict[str, Any],
+        tier_state: dict[str, Any],
+    ) -> str:
+        """
+        Возвращает нормализованный auth-state для UI:
+        `missing`, `unauthorized`, `ok`, `configured`.
+        """
+        token = str(
+            os.getenv(
+                "OPENCLAW_GATEWAY_TOKEN",
+                os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
+            )
+            or ""
+        ).strip()
+        if not token:
+            return "missing"
+
+        auth_error_codes = {"auth_invalid", "unsupported_key_type"}
+        route_error = str(last_runtime_route.get("error_code") or "").strip().lower()
+        tier_error = str(tier_state.get("last_error_code") or "").strip().lower()
+        if route_error in auth_error_codes or tier_error in auth_error_codes:
+            return "unauthorized"
+
+        provider_status = str(tier_state.get("last_provider_status") or "").strip().lower()
+        if provider_status == "ok":
+            return "ok"
+        return "configured"
+
+    async def _collect_runtime_lite_snapshot(self) -> dict[str, Any]:
+        """Собирает легковесный runtime-срез для `/api/health/lite`."""
+        openclaw = self.deps.get("openclaw_client")
+        kraab_userbot = self.deps.get("kraab_userbot")
+        last_runtime_route = {}
+        tier_state = {}
+        telegram_userbot_state: dict[str, Any] = {}
+        if openclaw and hasattr(openclaw, "get_last_runtime_route"):
+            try:
+                last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
+            except Exception:
+                last_runtime_route = {}
+        if openclaw and hasattr(openclaw, "get_tier_state_export"):
+            try:
+                tier_state = dict(openclaw.get_tier_state_export() or {})
+            except Exception:
+                tier_state = {}
+        if kraab_userbot and hasattr(kraab_userbot, "get_runtime_state"):
+            try:
+                telegram_userbot_state = dict(kraab_userbot.get_runtime_state() or {})
+            except Exception:
+                telegram_userbot_state = {}
+
+        telegram_session = self._telegram_session_snapshot()
+        lmstudio = await self._lmstudio_model_snapshot()
+        openclaw_auth_state = self._derive_openclaw_auth_state(
+            last_runtime_route=last_runtime_route,
+            tier_state=tier_state,
+        )
+
+        return {
+            "telegram_session_state": telegram_session.get("state", "unknown"),
+            "telegram_session": telegram_session,
+            "lmstudio_model_state": lmstudio.get("state", "unknown"),
+            "lmstudio": lmstudio,
+            "openclaw_auth_state": openclaw_auth_state,
+            "last_runtime_route": last_runtime_route,
+            "openclaw_tier_state": tier_state,
+            "telegram_userbot": telegram_userbot_state,
+        }
 
     def _assistant_rate_limit_per_min(self) -> int:
         """Возвращает лимит запросов assistant API в минуту на одного клиента."""
@@ -437,9 +652,20 @@ class WebApp:
             - используется daemon-скриптами и uptime-watch для проверки
               «жив ли HTTP-процесс», а не «все ли внешние зависимости сейчас быстрые».
             """
+            runtime = await self._collect_runtime_lite_snapshot()
             return {
                 "ok": True,
                 "status": "up",
+                "telegram_session_state": runtime.get("telegram_session_state"),
+                "telegram_userbot_state": (
+                    (runtime.get("telegram_userbot") or {}).get("startup_state")
+                ),
+                "telegram_userbot_error_code": (
+                    (runtime.get("telegram_userbot") or {}).get("startup_error_code")
+                ),
+                "lmstudio_model_state": runtime.get("lmstudio_model_state"),
+                "openclaw_auth_state": runtime.get("openclaw_auth_state"),
+                "last_runtime_route": runtime.get("last_runtime_route"),
             }
 
         @self.app.get("/api/transcriber/status")
@@ -559,6 +785,8 @@ class WebApp:
                 "ecosystem_health_api": f"{base}/api/ecosystem/health",
                 "links_api": f"{base}/api/links",
                 "openclaw_cloud_api": f"{base}/api/openclaw/cloud",
+                "runtime_handoff_api": f"{base}/api/runtime/handoff",
+                "runtime_recover_api": f"{base}/api/runtime/recover",
                 "context_checkpoint_api": f"{base}/api/context/checkpoint",
                 "context_transition_pack_api": f"{base}/api/context/transition-pack",
                 "context_latest_api": f"{base}/api/context/latest",
@@ -668,6 +896,219 @@ class WebApp:
                 "latest_pack_dir": str(pack_dir) if pack_dir else None,
                 "latest_transfer_prompt_path": str(transfer_prompt) if transfer_prompt and transfer_prompt.exists() else None,
                 "latest_files_to_attach_path": str(files_to_attach) if files_to_attach and files_to_attach.exists() else None,
+            }
+
+        @self.app.get("/api/runtime/handoff")
+        async def runtime_handoff():
+            """
+            Единый runtime-снимок для безопасной миграции в новый чат (Anti-413).
+
+            Формат intentionally machine-readable, чтобы его можно было:
+            - сохранить в артефакты;
+            - приложить в новый диалог без ручной реконструкции контекста.
+            """
+            openclaw = self.deps.get("openclaw_client")
+            voice_gateway = self.deps.get("voice_gateway_client")
+            krab_ear = self.deps.get("krab_ear_client")
+
+            async def _safe_health(client: Any, *, timeout_sec: float = 3.5) -> dict[str, Any]:
+                if not client or not hasattr(client, "health_check"):
+                    return {"ok": False, "state": "not_configured", "error": ""}
+                try:
+                    result = await asyncio.wait_for(client.health_check(), timeout=timeout_sec)
+                    return {"ok": bool(result), "state": "up" if bool(result) else "down", "error": ""}
+                except asyncio.TimeoutError:
+                    return {"ok": False, "state": "down", "error": "timeout"}
+                except Exception as exc:
+                    return {"ok": False, "state": "down", "error": str(exc)}
+
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            openclaw_health = await _safe_health(openclaw, timeout_sec=3.0)
+            voice_health = await _safe_health(voice_gateway, timeout_sec=3.0)
+            krab_ear_health = await _safe_health(krab_ear, timeout_sec=3.0)
+
+            cloud_runtime: dict[str, Any] = {"available": False, "error": "not_supported"}
+            if openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
+                try:
+                    cloud_report = await asyncio.wait_for(openclaw.get_cloud_runtime_check(), timeout=18.0)
+                    cloud_runtime = {"available": True, "report": cloud_report}
+                except asyncio.TimeoutError:
+                    cloud_runtime = {"available": False, "error": "timeout"}
+                except Exception as exc:
+                    cloud_runtime = {"available": False, "error": str(exc)}
+
+            latest_bundle = self._latest_path_by_glob("artifacts/handoff_*")
+            latest_checkpoint = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
+            latest_pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
+            latest_transfer_prompt = (
+                str(latest_pack_dir / "TRANSFER_PROMPT_RU.md")
+                if latest_pack_dir and (latest_pack_dir / "TRANSFER_PROMPT_RU.md").exists()
+                else None
+            )
+
+            return {
+                "ok": True,
+                "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "project_root": str(self._project_root()),
+                "git": self._git_snapshot(),
+                "health_lite": {
+                    "ok": True,
+                    "status": "up",
+                    "telegram_session_state": runtime_lite.get("telegram_session_state"),
+                    "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
+                    "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
+                    "last_runtime_route": runtime_lite.get("last_runtime_route"),
+                },
+                "runtime": runtime_lite,
+                "services": {
+                    "openclaw": openclaw_health,
+                    "voice_gateway": voice_health,
+                    "krab_ear": krab_ear_health,
+                },
+                "cloud_runtime": cloud_runtime,
+                "masked_secrets": {
+                    "openclaw_token": self._mask_secret(
+                        os.getenv(
+                            "OPENCLAW_GATEWAY_TOKEN",
+                            os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
+                        )
+                    ),
+                    "web_api_key": self._mask_secret(os.getenv("WEB_API_KEY", "")),
+                    "gemini_free": self._mask_secret(os.getenv("GEMINI_API_KEY_FREE", "")),
+                    "gemini_paid": self._mask_secret(os.getenv("GEMINI_API_KEY_PAID", "")),
+                    "openai_api_key": self._mask_secret(os.getenv("OPENAI_API_KEY", "")),
+                },
+                "artifacts": {
+                    "latest_handoff_bundle_dir": str(latest_bundle) if latest_bundle else None,
+                    "latest_context_checkpoint": str(latest_checkpoint) if latest_checkpoint else None,
+                    "latest_transition_pack_dir": str(latest_pack_dir) if latest_pack_dir else None,
+                    "latest_transfer_prompt": latest_transfer_prompt,
+                },
+            }
+
+        @self.app.post("/api/runtime/recover")
+        async def runtime_recover(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Безопасный recovery-плейбук для runtime-контуров.
+
+            Что делает:
+            1) `openclaw_runtime_repair.command` (по умолчанию включен),
+            2) `sync_openclaw_models.command` (по умолчанию включен),
+            3) optional manual tier switch (`force_tier=free|paid`),
+            4) optional cloud runtime probe (`probe_cloud_runtime=true`),
+            5) возвращает post-check снимок.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            data = payload or {}
+            run_repair = (
+                data.get("run_openclaw_runtime_repair", True)
+                if isinstance(data.get("run_openclaw_runtime_repair", True), bool)
+                else self._bool_env(str(data.get("run_openclaw_runtime_repair", "1")), True)
+            )
+            run_sync = (
+                data.get("run_sync_openclaw_models", True)
+                if isinstance(data.get("run_sync_openclaw_models", True), bool)
+                else self._bool_env(str(data.get("run_sync_openclaw_models", "1")), True)
+            )
+            probe_cloud = (
+                data.get("probe_cloud_runtime", False)
+                if isinstance(data.get("probe_cloud_runtime", False), bool)
+                else self._bool_env(str(data.get("probe_cloud_runtime", "0")), False)
+            )
+            force_tier = str(data.get("force_tier", "") or "").strip().lower()
+
+            steps: list[dict[str, Any]] = []
+
+            if run_repair:
+                repair_result = self._run_local_script(
+                    self._project_root() / "openclaw_runtime_repair.command",
+                    timeout_seconds=120,
+                )
+                steps.append(
+                    {
+                        "step": "openclaw_runtime_repair",
+                        "ok": bool(repair_result.get("ok")),
+                        "exit_code": int(repair_result.get("exit_code", 1)),
+                        "error": str(repair_result.get("error") or ""),
+                        "stdout_tail": str(repair_result.get("stdout_tail") or ""),
+                    }
+                )
+            else:
+                steps.append({"step": "openclaw_runtime_repair", "ok": True, "skipped": True})
+
+            if run_sync:
+                sync_result = self._run_local_script(
+                    self._project_root() / "sync_openclaw_models.command",
+                    timeout_seconds=120,
+                )
+                steps.append(
+                    {
+                        "step": "sync_openclaw_models",
+                        "ok": bool(sync_result.get("ok")),
+                        "exit_code": int(sync_result.get("exit_code", 1)),
+                        "error": str(sync_result.get("error") or ""),
+                        "stdout_tail": str(sync_result.get("stdout_tail") or ""),
+                    }
+                )
+            else:
+                steps.append({"step": "sync_openclaw_models", "ok": True, "skipped": True})
+
+            openclaw = self.deps.get("openclaw_client")
+            if force_tier in {"free", "paid"}:
+                if not openclaw or not hasattr(openclaw, "switch_cloud_tier"):
+                    steps.append(
+                        {
+                            "step": "switch_cloud_tier",
+                            "ok": False,
+                            "error": "switch_cloud_tier_not_supported",
+                            "requested_tier": force_tier,
+                        }
+                    )
+                else:
+                    try:
+                        tier_result = await openclaw.switch_cloud_tier(force_tier)
+                        steps.append(
+                            {
+                                "step": "switch_cloud_tier",
+                                "ok": bool(tier_result.get("ok")),
+                                "requested_tier": force_tier,
+                                "result": tier_result,
+                            }
+                        )
+                    except Exception as exc:
+                        steps.append(
+                            {
+                                "step": "switch_cloud_tier",
+                                "ok": False,
+                                "requested_tier": force_tier,
+                                "error": str(exc),
+                            }
+                        )
+
+            cloud_runtime: dict[str, Any] | None = None
+            if probe_cloud:
+                if not openclaw or not hasattr(openclaw, "get_cloud_runtime_check"):
+                    cloud_runtime = {"available": False, "error": "cloud_runtime_check_not_supported"}
+                else:
+                    try:
+                        probe = await asyncio.wait_for(openclaw.get_cloud_runtime_check(), timeout=18.0)
+                        cloud_runtime = {"available": True, "report": probe}
+                    except asyncio.TimeoutError:
+                        cloud_runtime = {"available": False, "error": "timeout"}
+                    except Exception as exc:
+                        cloud_runtime = {"available": False, "error": str(exc)}
+
+            runtime_after = await self._collect_runtime_lite_snapshot()
+            ok = all(bool(item.get("ok")) for item in steps)
+            return {
+                "ok": ok,
+                "steps": steps,
+                "runtime_after": runtime_after,
+                "cloud_runtime": cloud_runtime,
             }
 
         @self.app.get("/api/openclaw/channels/status")
