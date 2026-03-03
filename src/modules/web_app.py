@@ -461,6 +461,96 @@ class WebApp:
         lookup_key = f"{namespace}:{key}"
         self._idempotency_state[lookup_key] = (time.time(), dict(payload))
 
+    @staticmethod
+    def _parse_openclaw_channels_probe(raw_output: str) -> dict[str, Any]:
+        """
+        Нормализует stdout `openclaw channels status --probe` в структуру для UI.
+
+        Возвращает:
+        - `channels`: список каналов c полями `name`, `status`, `meta`;
+        - `warnings`: список предупреждений;
+        - `gateway_reachable`: bool.
+        """
+        channels: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        capture_warnings = False
+        gateway_reachable = False
+
+        for line in str(raw_output or "").splitlines():
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+
+            low = clean_line.lower()
+            if "gateway reachable" in low:
+                gateway_reachable = True
+
+            if "warnings:" in low:
+                capture_warnings = True
+                continue
+
+            if capture_warnings:
+                if clean_line.startswith("-"):
+                    warnings.append(clean_line.lstrip("- ").strip())
+                    continue
+                # Если после блока Warnings пошла иная секция — завершаем захват.
+                if ":" in clean_line and not clean_line.startswith("http"):
+                    capture_warnings = False
+                else:
+                    continue
+
+            if not clean_line.startswith("- "):
+                continue
+            if "warnings:" in clean_line.lower():
+                continue
+
+            body = clean_line[2:].strip()
+            if not body:
+                continue
+
+            if ":" in body:
+                left, right = body.split(":", 1)
+            else:
+                left, right = body, ""
+
+            name = left.strip()
+            meta = right.strip()
+            meta_low = meta.lower()
+
+            if (
+                "not configured" in meta_low
+                or "error:" in meta_low
+                or "stopped" in meta_low
+                or "disconnected" in meta_low
+                or "failed" in meta_low
+            ):
+                status = "FAIL"
+            elif "warn" in meta_low:
+                status = "WARN"
+            elif (
+                "works" in meta_low
+                or "running" in meta_low
+                or "connected" in meta_low
+                or "enabled" in meta_low
+            ):
+                status = "OK"
+            else:
+                status = "WARN"
+
+            channels.append(
+                {
+                    "name": name,
+                    "status": status,
+                    "meta": meta,
+                }
+            )
+
+        return {
+            "channels": channels,
+            "warnings": warnings,
+            "gateway_reachable": gateway_reachable,
+        }
+
     def _web_attachment_max_bytes(self) -> int:
         """Максимальный размер вложения web-панели в байтах."""
         raw = os.getenv("WEB_ATTACHMENT_MAX_MB", "12").strip()
@@ -1140,25 +1230,10 @@ class WebApp:
 
                 raw_output = stdout.decode("utf-8", errors="replace")
 
-                # Поиск варнингов в выводе (обычно в блоке 'Warnings:' или строки с 'WARN')
-                warnings = []
-                capture_warnings = False
-                for line in raw_output.splitlines():
-                    clean_line = line.strip()
-                    if not clean_line:
-                        continue
-                    if "Warnings:" in clean_line:
-                        capture_warnings = True
-                        continue
-                    if capture_warnings and clean_line.startswith("-"):
-                        warnings.append(clean_line.lstrip("- ").strip())
-                    elif capture_warnings and clean_line and not clean_line.startswith("-"):
-                        # Если пошел другой блок, прекращаем захват (упрощенно)
-                        if ":" in clean_line and not clean_line.startswith("http"):
-                           capture_warnings = False
-
-                # Дополнительно ищем строки с WARN вне блока Warnings
+                parsed = self._parse_openclaw_channels_probe(raw_output)
+                warnings = list(parsed.get("warnings") or [])
                 if not warnings:
+                    # Дополнительно ищем строки с WARN вне блока Warnings.
                     for line in raw_output.splitlines():
                         if "WARN" in line.upper():
                             warnings.append(line.strip())
@@ -1168,6 +1243,8 @@ class WebApp:
                     "raw": raw_output,
                     "warnings": warnings,
                     "exit_code": proc.returncode,
+                    "channels": parsed.get("channels") or [],
+                    "gateway_reachable": bool(parsed.get("gateway_reachable")),
                 }
             except Exception as exc:
                 logger.error("openclaw_status_failed", error=str(exc))

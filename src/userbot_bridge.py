@@ -888,6 +888,7 @@ class KraabUserbot:
 
             # VISION: Обработка фото
             images = []
+            photo_error = ""
             if message.photo:
                 try:
                     if is_self:
@@ -895,14 +896,39 @@ class KraabUserbot:
                     else:
                         temp_msg = await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
 
-                    # in_memory=True returns BytesIO
-                    photo_obj = await self.client.download_media(message, in_memory=True)
+                    # Защита от зависания media-path: ограничиваем download timeout.
+                    photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
+                    photo_obj = await asyncio.wait_for(
+                        self.client.download_media(message, in_memory=True),
+                        timeout=max(5.0, photo_timeout_sec),
+                    )
                     if photo_obj:
                         img_bytes = photo_obj.getvalue()
                         b64_img = base64.b64encode(img_bytes).decode("utf-8")
                         images.append(b64_img)
+                    else:
+                        photo_error = "❌ Не удалось прочитать фото. Отправь изображение повторно."
+                except asyncio.TimeoutError:
+                    photo_error = "❌ Таймаут загрузки фото. Повтори отправку изображения."
+                    logger.error(
+                        "photo_processing_timeout",
+                        chat_id=chat_id,
+                        timeout_sec=float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0)),
+                    )
                 except Exception as e:
                     logger.error("photo_processing_error", error=str(e))
+                    photo_error = "❌ Ошибка обработки фото. Попробуй отправить его ещё раз."
+
+            # Для фото-пути не продолжаем в AI-stream без успешно загруженного изображения:
+            # это исключает зависание на «Разглядываю фото...» и пустые/необъяснимые ответы.
+            if message.photo and not images:
+                safe_query = (query or "(Фото)").strip()
+                safe_error = photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
+                if is_self:
+                    message = await self._safe_edit(message, f"🦀 {safe_query}\n\n{safe_error}")
+                else:
+                    temp_msg = await self._safe_edit(temp_msg, safe_error)
+                return
 
             full_response = ""
             current_chunk = ""

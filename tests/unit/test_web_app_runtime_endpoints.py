@@ -155,3 +155,24 @@ def test_runtime_recover_minimal_flow(monkeypatch):
     assert data["runtime_after"]["last_runtime_route"]["model"] == "nvidia/nemotron-3-nano"
     assert data["cloud_runtime"]["available"] is True
 
+
+def test_parse_openclaw_channels_probe_returns_normalized_channels():
+    """Парсер channels probe должен отдавать нормализованный список каналов для UI."""
+    sample = """
+Checking channel status (probe)…
+Gateway reachable.
+- Telegram default: enabled, configured, running, works
+- BlueBubbles default: enabled, not configured, stopped, disconnected, error:not configured
+
+Warnings:
+- bluebubbles default: Not configured
+""".strip()
+
+    parsed = WebApp._parse_openclaw_channels_probe(sample)
+    assert parsed["gateway_reachable"] is True
+    assert len(parsed["channels"]) == 2
+    assert parsed["channels"][0]["name"] == "Telegram default"
+    assert parsed["channels"][0]["status"] == "OK"
+    assert parsed["channels"][1]["name"] == "BlueBubbles default"
+    assert parsed["channels"][1]["status"] == "FAIL"
+    assert parsed["warnings"] == ["bluebubbles default: Not configured"]
