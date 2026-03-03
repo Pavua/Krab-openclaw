@@ -199,6 +199,37 @@ def test_health_lite_marks_auth_unauthorized_when_provider_reports_auth(monkeypa
     assert resp.json()["openclaw_auth_state"] == "unauthorized"
 
 
+def test_health_lite_marks_auth_unauthorized_from_runtime_route_401_detail(monkeypatch):
+    """`health/lite` должен помечать unauthorized по route_detail c 401, даже без error_code."""
+
+    class _OpenClawRoute401(_FakeOpenClaw):
+        def get_last_runtime_route(self):
+            return {
+                "channel": "error",
+                "provider": "google",
+                "model": "google/gemini-2.5-flash",
+                "status": "error",
+                "error_code": None,
+                "route_detail": "Provider returned HTTP 401 Unauthorized for current key",
+            }
+
+        def get_tier_state_export(self):
+            return {
+                "active_tier": "free",
+                "last_error_code": None,
+                "last_provider_status": "unknown",
+                "last_recovery_action": "none",
+            }
+
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("OPENCLAW_TOKEN", "test-token")
+    client = _make_client(openclaw_client=_OpenClawRoute401())
+
+    resp = client.get("/api/health/lite")
+    assert resp.status_code == 200
+    assert resp.json()["openclaw_auth_state"] == "unauthorized"
+
+
 def test_openclaw_cli_env_propagates_runtime_token(monkeypatch):
     """`openclaw` CLI env должен получать gateway token без подмены OPENCLAW_TOKEN."""
     monkeypatch.setenv("OPENCLAW_TOKEN", "token-from-runtime")
