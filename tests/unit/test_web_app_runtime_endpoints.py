@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
@@ -342,3 +344,69 @@ def test_openclaw_cli_env_fallback_to_env_gateway_token(monkeypatch):
     )
     env = WebApp._openclaw_cli_env()
     assert env["OPENCLAW_GATEWAY_TOKEN"] == "gateway-token-from-env"
+
+
+def test_model_autoswitch_status_passes_current_profile(monkeypatch):
+    """`/api/openclaw/model-autoswitch/status` должен запускать скрипт с `--profile current`."""
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("OPENCLAW_TOKEN", "test-token")
+
+    calls = []
+
+    class _Proc:
+        def __init__(self):
+            self.returncode = 0
+            self.stdout = json.dumps({"ok": True, "status": "OK", "reason": "unit_test"})
+            self.stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _Proc()
+
+    monkeypatch.setattr("src.modules.web_app.subprocess.run", _fake_run)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/model-autoswitch/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["autoswitch"]["status"] == "OK"
+    assert calls, "subprocess.run не был вызван"
+    cmd = calls[-1]
+    assert "--dry-run" in cmd
+    assert "--profile" in cmd
+    assert "current" in cmd
+
+
+def test_model_autoswitch_apply_honors_toggle_payload(monkeypatch):
+    """`/api/openclaw/model-autoswitch/apply` должен передавать `--profile toggle` при body.toggle=true."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    calls = []
+
+    class _Proc:
+        def __init__(self):
+            self.returncode = 0
+            self.stdout = json.dumps({"ok": True, "status": "OK", "reason": "unit_test"})
+            self.stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _Proc()
+
+    monkeypatch.setattr("src.modules.web_app.subprocess.run", _fake_run)
+    client = _make_client()
+
+    resp = client.post(
+        "/api/openclaw/model-autoswitch/apply",
+        json={"toggle": True},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert calls, "subprocess.run не был вызван"
+    cmd = calls[-1]
+    assert "--dry-run" not in cmd
+    assert "--profile" in cmd
+    assert "toggle" in cmd

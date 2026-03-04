@@ -3030,7 +3030,12 @@ class WebApp:
             except Exception as exc:
                 return build_ops_response(status="failed", error_code="tier_reset_error", summary=str(exc))
 
-        def _run_openclaw_model_autoswitch(*, dry_run: bool) -> dict:
+        def _run_openclaw_model_autoswitch(
+            *,
+            dry_run: bool,
+            profile: str = "",
+            toggle: bool = False,
+        ) -> dict:
             """
             Запускает autoswitch-утилиту OpenClaw.
             dry_run=True: только диагностика, без изменения конфигурации.
@@ -3045,6 +3050,13 @@ class WebApp:
                 python_bin = Path(sys.executable or "python3")
 
             cmd = [str(python_bin), str(script_path)]
+            requested_profile = str(profile or "").strip().lower()
+            if toggle:
+                requested_profile = "toggle"
+            elif not requested_profile:
+                requested_profile = "current" if dry_run else "local-first"
+            if requested_profile:
+                cmd.extend(["--profile", requested_profile])
             if dry_run:
                 cmd.append("--dry-run")
 
@@ -3078,19 +3090,45 @@ class WebApp:
             return payload
 
         @self.app.get("/api/openclaw/model-autoswitch/status")
-        async def openclaw_model_autoswitch_status():
+        async def openclaw_model_autoswitch_status(
+            profile: str = Query(default="current"),
+        ):
             """Статус autoswitch без изменения runtime-конфига."""
-            payload = _run_openclaw_model_autoswitch(dry_run=True)
+            payload = _run_openclaw_model_autoswitch(dry_run=True, profile=profile, toggle=False)
             return {"ok": True, "autoswitch": payload}
 
         @self.app.post("/api/openclaw/model-autoswitch/apply")
         async def openclaw_model_autoswitch_apply(
+            request: Request,
             x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
             token: str = Query(default=""),
+            profile: str = Query(default=""),
         ):
             """Применяет autoswitch runtime-конфига OpenClaw (write endpoint)."""
             self._assert_write_access(x_krab_web_key, token)
-            payload = _run_openclaw_model_autoswitch(dry_run=False)
+            body: dict[str, Any] = {}
+            try:
+                body_raw = await request.json()
+                if isinstance(body_raw, dict):
+                    body = body_raw
+            except Exception:
+                body = {}
+
+            body_profile = str(body.get("profile") or "").strip()
+            body_toggle_raw = body.get("toggle")
+            body_toggle = False
+            if isinstance(body_toggle_raw, bool):
+                body_toggle = body_toggle_raw
+            elif body_toggle_raw is not None:
+                body_toggle = str(body_toggle_raw).strip().lower() in {"1", "true", "yes", "on"}
+
+            effective_profile = body_profile or profile
+            effective_toggle = body_toggle or (not effective_profile)
+            payload = _run_openclaw_model_autoswitch(
+                dry_run=False,
+                profile=effective_profile,
+                toggle=effective_toggle,
+            )
             return {"ok": True, "autoswitch": payload}
 
         @self.app.get("/api/openclaw/control-compat/status")
