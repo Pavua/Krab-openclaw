@@ -9,7 +9,9 @@ Model Manager - Умное управление моделями LM Studio
 - Maintenance loop для авто-выгрузки
 """
 import asyncio
+import errno
 import time
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -44,6 +46,11 @@ from .core.model_types import ModelInfo, ModelType
 
 logger = structlog.get_logger(__name__)
 
+try:
+    import fcntl  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - не на POSIX
+    fcntl = None  # type: ignore[assignment]
+
 
 class ModelManager:
     """
@@ -63,6 +70,16 @@ class ModelManager:
         self._active_requests: int = 0
         self._lock = asyncio.Lock()
         self._maintenance_task: Optional[asyncio.Task] = None
+        # Временное исключение локальных моделей, которые гарантированно не загружаются
+        # (например, битые пути/удалённые файлы в LM Studio registry).
+        self._local_model_excluded_until: dict[str, float] = {}
+        self._local_model_exclude_reason: dict[str, str] = {}
+        # Поддержка legacy /v1/models/load|unload: определяем один раз и дальше
+        # не долбим неподдерживаемый endpoint на каждой загрузке/выгрузке.
+        self._legacy_load_endpoint_supported: Optional[bool] = None
+        self._legacy_unload_endpoint_supported: Optional[bool] = None
+        base_dir = Path(getattr(config, "BASE_DIR", Path.cwd()))
+        self._interprocess_load_lock_path = base_dir / "data" / "locks" / "lmstudio_model_load.lock"
 
         # Fallback chain: local затем облачные тиры из cloud_gateway
         cloud_chain = get_cloud_fallback_chain()
@@ -111,6 +128,69 @@ class ModelManager:
             "gte-",
         )
         return not any(marker in haystack for marker in non_chat_markers)
+
+    def _is_local_model_temporarily_excluded(self, model_id: str) -> bool:
+        """Проверяет, исключена ли локальная модель из кандидатов до истечения TTL."""
+        until = float(self._local_model_excluded_until.get(model_id, 0.0) or 0.0)
+        if until <= 0:
+            return False
+        now = time.time()
+        if now >= until:
+            self._local_model_excluded_until.pop(model_id, None)
+            self._local_model_exclude_reason.pop(model_id, None)
+            return False
+        return True
+
+    def _exclude_local_model(self, model_id: str, *, reason: str, ttl_sec: float) -> None:
+        """Временно исключает локальную модель из авто-кандидатов."""
+        self._local_model_excluded_until[model_id] = time.time() + max(30.0, float(ttl_sec))
+        self._local_model_exclude_reason[model_id] = reason
+        logger.warning(
+            "local_model_temporarily_excluded",
+            model=model_id,
+            reason=reason,
+            ttl_sec=round(float(ttl_sec), 2),
+        )
+
+    async def _acquire_interprocess_model_lock(self, timeout_sec: float = 180.0):
+        """
+        Межпроцессный lock на загрузку локальной модели.
+
+        Нужен, чтобы два Python-процесса Krab не запускали `POST /models/load`
+        одновременно (иначе LM Studio может поднять `model` и `model:2`).
+        """
+        self._interprocess_load_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self._interprocess_load_lock_path.open("a+", encoding="utf-8")
+        if fcntl is None:
+            return handle
+
+        deadline = time.time() + max(5.0, float(timeout_sec))
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return handle
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                    handle.close()
+                    raise
+                if time.time() >= deadline:
+                    handle.close()
+                    raise TimeoutError("interprocess_model_lock_timeout")
+                await asyncio.sleep(0.25)
+
+    def _release_interprocess_model_lock(self, handle) -> None:
+        """Освобождает межпроцессный lock."""
+        if handle is None:
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            handle.close()
+        except OSError:
+            pass
 
     @property
     def cost_analytics(self):
@@ -205,6 +285,7 @@ class ModelManager:
             for mid, info in self._models_cache.items()
             if info.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF)
             and self._is_chat_capable_local_model(mid, info)
+            and not self._is_local_model_temporarily_excluded(mid)
             and (not has_photo or bool(getattr(info, "supports_vision", False)))
         ]
         candidates.sort(key=lambda item: float(item[1].size_gb or DEFAULT_UNKNOWN_MODEL_SIZE_GB))
@@ -359,6 +440,23 @@ class ModelManager:
             return True
         return False
 
+    @staticmethod
+    def _classify_lm_load_failure(resp: httpx.Response) -> str:
+        """
+        Классифицирует причину фейла загрузки локальной модели.
+        Нужна для runtime-исключения "мертвых" записей LM Studio.
+        """
+        body = (resp.text or "").lower()
+        if "no such file or directory" in body or "filenotfounderror" in body:
+            return "model_path_missing"
+        if "unexpected endpoint or method" in body:
+            return "endpoint_unsupported"
+        if "model_load_failed" in body:
+            return "model_load_failed"
+        if "out of memory" in body or "insufficient" in body:
+            return "memory_error"
+        return "load_failed"
+
     def _is_successful_lm_response(self, resp: httpx.Response) -> bool:
         """Единая проверка успешности LM Studio mutating-эндпоинтов."""
         if resp.status_code not in (200, 201, 202, 204):
@@ -371,17 +469,30 @@ class ModelManager:
         """Внутренняя загрузка с fallback API v1 -> v0."""
         load_endpoints = [
             # REST API v1: ttl больше не поддерживается в теле запроса.
-            (f"{self.lm_studio_url}/api/v1/models/load", {"model": model_id}),
-            # Legacy fallback (старые версии LM Studio / OpenAI-compatible shim).
-            (f"{self.lm_studio_url}/v1/models/load", {"model": model_id, "ttl": LM_LOAD_TTL}),
+            ("v1", f"{self.lm_studio_url}/api/v1/models/load", {"model": model_id}),
         ]
-        for url, payload in load_endpoints:
+        if self._legacy_load_endpoint_supported is not False:
+            # Legacy fallback (старые версии LM Studio / OpenAI-compatible shim).
+            load_endpoints.append(
+                ("legacy", f"{self.lm_studio_url}/v1/models/load", {"model": model_id, "ttl": LM_LOAD_TTL})
+            )
+        strongest_failure = ""
+        for endpoint_kind, url, payload in load_endpoints:
             try:
                 resp = await self._http_client.post(
                     url, json=payload, timeout=LM_LOAD_TIMEOUT_SEC
                 )
                 if self._is_successful_lm_response(resp):
+                    if endpoint_kind == "legacy" and self._legacy_load_endpoint_supported is None:
+                        self._legacy_load_endpoint_supported = True
                     return True
+                failure_code = self._classify_lm_load_failure(resp)
+                if endpoint_kind == "legacy" and failure_code == "endpoint_unsupported":
+                    self._legacy_load_endpoint_supported = False
+                if failure_code == "model_path_missing":
+                    strongest_failure = "model_path_missing"
+                elif not strongest_failure:
+                    strongest_failure = failure_code
                 logger.warning(
                     "lm_load_endpoint_failed",
                     model=model_id,
@@ -391,19 +502,44 @@ class ModelManager:
                 )
             except (httpx.HTTPError, OSError):
                 continue
+        if strongest_failure == "model_path_missing":
+            # Файлы модели отсутствуют на диске — охлаждаем попытки надолго.
+            self._exclude_local_model(
+                model_id,
+                reason="model_path_missing",
+                ttl_sec=float(getattr(config, "LOCAL_MISSING_MODEL_COOLDOWN_SEC", 3600)),
+            )
+        elif strongest_failure == "endpoint_unsupported":
+            self._exclude_local_model(
+                model_id,
+                reason="endpoint_unsupported",
+                ttl_sec=float(getattr(config, "LOCAL_LOAD_FAIL_COOLDOWN_SEC", 300)),
+            )
+        elif strongest_failure:
+            self._exclude_local_model(
+                model_id,
+                reason=strongest_failure,
+                ttl_sec=float(getattr(config, "LOCAL_LOAD_FAIL_COOLDOWN_SEC", 300)),
+            )
         return False
 
     async def _do_unload_model(self, model_id: str) -> bool:
         """Внутренняя выгрузка с fallback API v1 (instance_id) -> v0 (model)."""
         unload_endpoints = [
-            (f"{self.lm_studio_url}/api/v1/models/unload", {"instance_id": model_id}),
-            (f"{self.lm_studio_url}/v1/models/unload", {"model": model_id}),
+            ("v1", f"{self.lm_studio_url}/api/v1/models/unload", {"instance_id": model_id}),
         ]
-        for url, payload in unload_endpoints:
+        if self._legacy_unload_endpoint_supported is not False:
+            unload_endpoints.append(("legacy", f"{self.lm_studio_url}/v1/models/unload", {"model": model_id}))
+
+        for endpoint_kind, url, payload in unload_endpoints:
             try:
                 resp = await self._http_client.post(url, json=payload, timeout=30.0)
                 if self._is_successful_lm_response(resp):
+                    if endpoint_kind == "legacy" and self._legacy_unload_endpoint_supported is None:
+                        self._legacy_unload_endpoint_supported = True
                     return True
+                if endpoint_kind == "legacy" and self._classify_lm_load_failure(resp) == "endpoint_unsupported":
+                    self._legacy_unload_endpoint_supported = False
                 logger.warning(
                     "lm_unload_endpoint_failed",
                     model=model_id,
@@ -417,51 +553,66 @@ class ModelManager:
 
     async def load_model(self, model_id: str) -> bool:
         """Загружает модель (Smart Loading) с Lock и API v1 fallback."""
-        async with self._lock:
-            if not self._models_cache:
-                await self.discover_models()
-            model_info = self._models_cache.get(model_id)
-            size_gb = model_info.size_gb if model_info else DEFAULT_UNKNOWN_MODEL_SIZE_GB
-            if not model_info:
-                logger.warning("model_unknown_loading_anyway", model=model_id)
+        lock_handle = None
+        try:
+            lock_handle = await self._acquire_interprocess_model_lock(
+                timeout_sec=float(getattr(config, "LOCAL_MODEL_LOAD_LOCK_TIMEOUT_SEC", 240))
+            )
+            async with self._lock:
+                if not self._models_cache:
+                    await self.discover_models()
+                model_info = self._models_cache.get(model_id)
+                size_gb = model_info.size_gb if model_info else DEFAULT_UNKNOWN_MODEL_SIZE_GB
+                if not model_info:
+                    logger.warning("model_unknown_loading_anyway", model=model_id)
 
-            loaded = await self.get_loaded_models()
-            if model_id in loaded:
-                self._current_model = model_id
-                self.touch(model_id)
-                return True
+                loaded = await self.get_loaded_models()
+                if model_id in loaded:
+                    self._current_model = model_id
+                    self.touch(model_id)
+                    return True
 
-            # Политика single-model: не держим несколько локальных моделей в памяти.
-            # Это снижает риск ухода в swap на 36GB RAM машинах.
-            if (
-                getattr(config, "SINGLE_LOCAL_MODEL_MODE", True)
-                and self._current_model
-                and self._current_model != model_id
-            ):
-                await self._do_unload_model(self._current_model)
-                logger.info(
-                    "model_unloaded_before_switch",
-                    previous_model=self._current_model,
-                    next_model=model_id,
-                )
-                self._current_model = None
+                # Политика single-model: не держим несколько локальных моделей в памяти.
+                # Это снижает риск ухода в swap на 36GB RAM машинах.
+                if (
+                    getattr(config, "SINGLE_LOCAL_MODEL_MODE", True)
+                    and self._current_model
+                    and self._current_model != model_id
+                ):
+                    await self._do_unload_model(self._current_model)
+                    logger.info(
+                        "model_unloaded_before_switch",
+                        previous_model=self._current_model,
+                        next_model=model_id,
+                    )
+                    self._current_model = None
 
-            need_free = not self.can_load_model(size_gb)
-        if need_free:
-            logger.info("memory_pressure", needed=size_gb)
-            await self.free_vram()
-            await asyncio.sleep(2.0)
+                need_free = not self.can_load_model(size_gb)
+            if need_free:
+                logger.info("memory_pressure", needed=size_gb)
+                await self.free_vram()
+                await asyncio.sleep(2.0)
 
-        async with self._lock:
-            logger.info("loading_model_start", model=model_id)
-            ok = await self._do_load_model(model_id, size_gb)
-            if ok:
-                logger.info("model_loaded", model=model_id)
-                self._current_model = model_id
-                self.touch(model_id)
-                return True
-            logger.error("load_failed", model=model_id)
-            return False
+            async with self._lock:
+                # Повторная проверка после wait/free: модель могла уже загрузиться
+                # другим процессом, который держал lock до нас.
+                loaded = await self.get_loaded_models()
+                if model_id in loaded:
+                    self._current_model = model_id
+                    self.touch(model_id)
+                    return True
+
+                logger.info("loading_model_start", model=model_id)
+                ok = await self._do_load_model(model_id, size_gb)
+                if ok:
+                    logger.info("model_loaded", model=model_id)
+                    self._current_model = model_id
+                    self.touch(model_id)
+                    return True
+                logger.error("load_failed", model=model_id)
+                return False
+        finally:
+            self._release_interprocess_model_lock(lock_handle)
 
     async def free_vram(self) -> None:
         """Выгружает все модели и синхронизирует _current_model. VRAM cooling 1.5s после выгрузки."""

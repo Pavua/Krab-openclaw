@@ -171,3 +171,46 @@ async def test_resolve_preferred_local_model_skips_embedding_only_candidates(man
 
     resolved = await manager.resolve_preferred_local_model(has_photo=False)
     assert resolved == "qwen2.5-coder-7b-instruct-mlx"
+
+
+@pytest.mark.asyncio
+async def test_missing_local_model_path_is_temporarily_excluded_from_candidates(manager: ModelManager) -> None:
+    manager._models_cache = {
+        "broken-local-model": ModelInfo(
+            "broken-local-model",
+            "Broken",
+            ModelType.LOCAL_MLX,
+            size_gb=2.0,
+        ),
+        "healthy-local-model": ModelInfo(
+            "healthy-local-model",
+            "Healthy",
+            ModelType.LOCAL_MLX,
+            size_gb=3.0,
+        ),
+    }
+
+    missing_resp = MagicMock()
+    missing_resp.status_code = 500
+    missing_resp.text = (
+        "FileNotFoundError: [Errno 2] No such file or directory: "
+        "'/Volumes/4TB SSD/LMStudio_models/.../config.json'"
+    )
+    missing_resp.json.return_value = {"error": {"type": "model_load_failed"}}
+
+    legacy_unsupported = MagicMock()
+    legacy_unsupported.status_code = 200
+    legacy_unsupported.text = '{"error":"Unexpected endpoint or method. (POST /v1/models/load)"}'
+    legacy_unsupported.json.return_value = {"error": {"message": "Unexpected endpoint or method"}}
+
+    manager._http_client.post.side_effect = [missing_resp, legacy_unsupported]
+    ok = await manager._do_load_model("broken-local-model", size_gb=2.0)
+
+    assert ok is False
+    assert manager._is_local_model_temporarily_excluded("broken-local-model") is True
+    assert manager._legacy_load_endpoint_supported is False
+
+    candidates = await manager._local_candidates(has_photo=False)
+    candidate_ids = [mid for mid, _ in candidates]
+    assert "broken-local-model" not in candidate_ids
+    assert "healthy-local-model" in candidate_ids

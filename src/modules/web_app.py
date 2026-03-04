@@ -386,16 +386,25 @@ class WebApp:
             return "missing"
 
         auth_error_codes = {"auth_invalid", "unsupported_key_type", "openclaw_auth_unauthorized"}
-        route_error = str(last_runtime_route.get("error_code") or "").strip().lower()
-        tier_error = str(tier_state.get("last_error_code") or "").strip().lower()
-        if route_error in auth_error_codes or tier_error in auth_error_codes:
-            return "unauthorized"
-
         provider_status = str(tier_state.get("last_provider_status") or "").strip().lower()
-        if provider_status in {"auth", "unauthorized", "forbidden"}:
-            return "unauthorized"
+        # Если runtime-probe провайдера явно "ok", не залипаем на архивных last_error_code.
         if provider_status == "ok":
             return "ok"
+
+        route_error = str(last_runtime_route.get("error_code") or "").strip().lower()
+        if route_error in auth_error_codes:
+            return "unauthorized"
+
+        tier_error = str(tier_state.get("last_error_code") or "").strip().lower()
+        tier_last_probe_at = float(tier_state.get("last_probe_at") or 0.0)
+        tier_auth_fresh = False
+        if tier_last_probe_at > 0:
+            tier_auth_fresh = (time.time() - tier_last_probe_at) <= 900.0
+        if tier_error in auth_error_codes and tier_auth_fresh:
+            return "unauthorized"
+
+        if provider_status in {"auth", "unauthorized", "forbidden"}:
+            return "unauthorized"
 
         route_detail = str(last_runtime_route.get("route_detail") or "").strip().lower()
         if "401" in route_detail or "unauthorized" in route_detail or "forbidden" in route_detail:

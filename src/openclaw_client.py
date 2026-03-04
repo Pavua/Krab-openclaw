@@ -876,8 +876,10 @@ class OpenClawClient:
                 semantic_after = self._detect_semantic_error(final_response)
 
             if semantic_after:
-                # Последняя защита: прямой LM fallback
-                if not force_cloud:
+                # Последняя защита: прямой LM fallback.
+                # Для auth-ошибок fallback не применяем, чтобы не маскировать
+                # реальную проблему "configured but unauthorized".
+                if not force_cloud and semantic_after["code"] not in LEGACY_AUTH_CODES:
                     lm_text = await self._direct_lm_fallback(
                         chat_id=chat_id,
                         messages_to_send=messages_to_send,
