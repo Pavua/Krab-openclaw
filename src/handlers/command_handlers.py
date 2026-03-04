@@ -18,6 +18,7 @@ from ..core.exceptions import UserInputError
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
+from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
 from ..employee_templates import ROLES, list_roles, save_role
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
@@ -370,8 +371,17 @@ async def handle_set(bot: "KraabUserbot", message: Message) -> None:
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
         raise UserInputError(user_message="⚙️ `!set <KEY> <VAL>`")
-    if config.update_setting(args[1], args[2]):
-        await message.reply(f"✅ `{args[1]}` обновлено!")
+    key = str(args[1] or "").upper()
+    if config.update_setting(key, args[2]):
+        extra = ""
+        if key == "SCHEDULER_ENABLED" and hasattr(bot, "_sync_scheduler_runtime"):
+            try:
+                bot._sync_scheduler_runtime()
+                state = "ON" if bool(getattr(config, "SCHEDULER_ENABLED", False)) else "OFF"
+                extra = f"\n⏰ Scheduler runtime: `{state}`"
+            except Exception as exc:  # noqa: BLE001
+                extra = f"\n⚠️ Scheduler sync warning: `{str(exc)[:120]}`"
+        await message.reply(f"✅ `{key}` обновлено!{extra}")
     else:
         await message.reply("❌ Ошибка обновления.")
 
@@ -502,6 +512,10 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!remember <text>` — запомнить факт
 `!recall <query>` — вспомнить факт
 `!role [name|list]` — смена личности
+`!remind <время> | <текст>` — поставить напоминание
+`!reminders` — список активных напоминаний
+`!rm_remind <id>` — удалить напоминание
+`!cronstatus` — статус scheduler
 
 **System**
 `!ls [path]` — список файлов
@@ -542,3 +556,122 @@ async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:
         report.append(f"- OpenClaw: ❌ Unreachable ({str(e)})")
         report.append("  _Совет: Проверьте, запущен ли Gateway и совпадает ли порт (обычно 18792)_")
     await msg.edit("\n".join(report))
+
+
+async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Добавляет reminder-задачу в runtime scheduler.
+
+    Форматы:
+    - `!remind 10m | купить воду`
+    - `!remind через 20 минут проверить почту`
+    - `!remind в 18:30 созвон`
+    """
+    if not bool(getattr(config, "SCHEDULER_ENABLED", False)):
+        raise UserInputError(
+            user_message=(
+                "⏰ Scheduler сейчас выключен (`SCHEDULER_ENABLED=0`).\n"
+                "Включи его (`!set SCHEDULER_ENABLED 1`) и перезапусти Krab."
+            )
+        )
+
+    raw_args = bot._get_command_args(message)
+    if not raw_args:
+        raise UserInputError(
+            user_message=(
+                "⏰ Формат:\n"
+                "`!remind <время> | <текст>`\n\n"
+                "Примеры:\n"
+                "- `!remind 10m | выпить воды`\n"
+                "- `!remind через 20 минут проверить почту`\n"
+                "- `!remind в 18:30 созвон`"
+            )
+        )
+
+    time_spec, reminder_text = split_reminder_input(raw_args)
+    if not time_spec or not reminder_text:
+        raise UserInputError(
+            user_message=(
+                "⏰ Не удалось разобрать время/текст.\n"
+                "Используй формат: `!remind <время> | <текст>`"
+            )
+        )
+
+    try:
+        due_at = parse_due_time(time_spec)
+    except ValueError:
+        raise UserInputError(
+            user_message=(
+                "❌ Не удалось распознать время.\n"
+                "Поддерживается: `10m`, `через 20 минут`, `в 18:30`, `2026-03-05 09:00`."
+            )
+        )
+
+    if hasattr(bot, "_sync_scheduler_runtime"):
+        try:
+            bot._sync_scheduler_runtime()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scheduler_runtime_sync_failed_in_remind", error=str(exc))
+
+    if not krab_scheduler.is_started:
+        try:
+            krab_scheduler.start()
+        except RuntimeError:
+            raise UserInputError(user_message="❌ Scheduler не запущен в runtime loop.")
+
+    reminder_id = krab_scheduler.add_reminder(
+        chat_id=str(message.chat.id),
+        text=reminder_text,
+        due_at=due_at,
+    )
+    due_label = due_at.astimezone().strftime("%d.%m.%Y %H:%M")
+    await message.reply(
+        "✅ Напоминание создано.\n"
+        f"- ID: `{reminder_id}`\n"
+        f"- Когда: `{due_label}`\n"
+        f"- Текст: {reminder_text}"
+    )
+
+
+async def handle_reminders(bot: "KraabUserbot", message: Message) -> None:
+    """Показывает pending reminders текущего чата."""
+    rows = krab_scheduler.list_reminders(chat_id=str(message.chat.id))
+    if not rows:
+        await message.reply("⏰ Активных напоминаний нет.")
+        return
+    lines = ["⏰ **Активные напоминания:**"]
+    for item in rows:
+        due = str(item.get("due_at_iso") or "")
+        text = str(item.get("text") or "")
+        rid = str(item.get("reminder_id") or "")
+        lines.append(f"- `{rid}` · `{due}` · {text}")
+    payload = "\n".join(lines)
+    chunks = _split_text_for_telegram(payload, limit=3600)
+    await message.reply(chunks[0])
+    for part in chunks[1:]:
+        await message.reply(part)
+
+
+async def handle_rm_remind(bot: "KraabUserbot", message: Message) -> None:
+    """Удаляет reminder по ID."""
+    raw_args = bot._get_command_args(message).strip()
+    if not raw_args:
+        raise UserInputError(user_message="🗑️ Формат: `!rm_remind <id>`")
+    ok = krab_scheduler.remove_reminder(raw_args)
+    if ok:
+        await message.reply(f"🗑️ Напоминание `{raw_args}` удалено.")
+    else:
+        await message.reply(f"⚠️ Напоминание `{raw_args}` не найдено.")
+
+
+async def handle_cronstatus(bot: "KraabUserbot", message: Message) -> None:
+    """Отдает runtime-статус scheduler."""
+    status = krab_scheduler.get_status()
+    await message.reply(
+        "🧭 **Scheduler status**\n"
+        f"- enabled (config): `{status.get('scheduler_enabled')}`\n"
+        f"- started: `{status.get('started')}`\n"
+        f"- pending: `{status.get('pending_count')}`\n"
+        f"- next_due_at: `{status.get('next_due_at') or '-'}`\n"
+        f"- storage: `{status.get('storage_path')}`"
+    )

@@ -28,11 +28,13 @@ from .config import config
 from .core.exceptions import KrabError, UserInputError
 from .core.logger import get_logger
 from .core.routing_errors import RouterError, user_message_for_surface
+from .core.scheduler import krab_scheduler
 from .employee_templates import ROLES, get_role_prompt
 from .handlers import (
     handle_agent,
     handle_clear,
     handle_config,
+    handle_cronstatus,
     handle_diagnose,
     handle_help,
     handle_ls,
@@ -40,9 +42,12 @@ from .handlers import (
     handle_panel,
     handle_read,
     handle_recall,
+    handle_remind,
+    handle_reminders,
     handle_remember,
     handle_restart,
     handle_role,
+    handle_rm_remind,
     handle_search,
     handle_set,
     handle_status,
@@ -258,7 +263,7 @@ class KraabUserbot:
             "status", "model", "clear", "config", "set", "role",
             "voice", "web", "sysinfo", "panel", "restart", "search",
             "remember", "recall", "ls", "read", "write", "agent",
-            "diagnose", "help",
+            "diagnose", "help", "remind", "reminders", "rm_remind", "cronstatus",
         }
 
         async def run_cmd(handler, m):
@@ -361,6 +366,22 @@ class KraabUserbot:
         async def wrap_help(c, m):
             await run_cmd(handle_help, m)
 
+        @self.client.on_message(filters.command("remind", prefixes=prefixes) & is_allowed, group=-1)
+        async def wrap_remind(c, m):
+            await run_cmd(handle_remind, m)
+
+        @self.client.on_message(filters.command("reminders", prefixes=prefixes) & is_allowed, group=-1)
+        async def wrap_reminders(c, m):
+            await run_cmd(handle_reminders, m)
+
+        @self.client.on_message(filters.command("rm_remind", prefixes=prefixes) & is_allowed, group=-1)
+        async def wrap_rm_remind(c, m):
+            await run_cmd(handle_rm_remind, m)
+
+        @self.client.on_message(filters.command("cronstatus", prefixes=prefixes) & is_allowed, group=-1)
+        async def wrap_cronstatus(c, m):
+            await run_cmd(handle_cronstatus, m)
+
         # Обработка обычных сообщений и медиа
         @self.client.on_message((filters.text | filters.photo | filters.voice) & ~filters.bot, group=0)
         async def wrap_message(c, m):
@@ -459,6 +480,52 @@ class KraabUserbot:
         if self.maintenance_task and not self.maintenance_task.done():
             return
         self.maintenance_task = asyncio.create_task(self._safe_maintenance())
+
+    async def _send_scheduled_message(self, chat_id: str, text: str) -> None:
+        """
+        Отправляет сообщение из scheduler в Telegram-чат.
+
+        Почему отдельный метод:
+        - scheduler должен быть изолирован от деталей Telegram API;
+        - здесь централизуем валидацию и безопасную нарезку длинных сообщений.
+        """
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError("telegram_client_not_ready")
+
+        payload = str(text or "").strip()
+        if not payload:
+            raise ValueError("scheduled_message_empty")
+
+        target_chat: int | str = str(chat_id or "").strip()
+        if re.fullmatch(r"-?\d+", str(target_chat)):
+            target_chat = int(str(target_chat))
+
+        for part in self._split_message(payload):
+            await self.client.send_message(target_chat, part)
+
+    def _sync_scheduler_runtime(self) -> None:
+        """
+        Синхронизирует состояние scheduler с runtime:
+        - при enabled + connected: bind sender и старт;
+        - иначе: безопасная остановка.
+        """
+        scheduler_enabled = bool(getattr(config, "SCHEDULER_ENABLED", False))
+        client_connected = bool(self.client and self.client.is_connected)
+
+        if scheduler_enabled and client_connected:
+            krab_scheduler.bind_sender(self._send_scheduled_message)
+            if not krab_scheduler.is_started:
+                krab_scheduler.start()
+                logger.info("scheduler_runtime_started")
+            return
+
+        if krab_scheduler.is_started:
+            krab_scheduler.stop()
+            logger.info(
+                "scheduler_runtime_stopped",
+                scheduler_enabled=scheduler_enabled,
+                client_connected=client_connected,
+            )
 
     def get_runtime_state(self) -> dict:
         """
@@ -599,6 +666,10 @@ class KraabUserbot:
         self.me = await self.client.get_me()
         self._set_startup_state(state="running")
         logger.info("userbot_started", me=self.me.username, id=self.me.id)
+        try:
+            self._sync_scheduler_runtime()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scheduler_runtime_sync_failed", error=str(exc))
 
         # WAKE UP CHECK
         try:
@@ -738,6 +809,11 @@ class KraabUserbot:
     async def stop(self):
         """Остановка юзербота"""
         self._set_startup_state(state="stopping")
+        if krab_scheduler.is_started:
+            try:
+                krab_scheduler.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("scheduler_stop_failed", error=str(exc), non_fatal=True)
         if self._telegram_watchdog_task:
             self._telegram_watchdog_task.cancel()
         try:

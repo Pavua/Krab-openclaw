@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from src.userbot_bridge import KraabUserbot
 import src.userbot_bridge as userbot_bridge_module
 
@@ -66,3 +68,59 @@ def test_deferred_action_guard_noop_when_scheduler_enabled(monkeypatch) -> None:
     text = "Хорошо, сделаю это завтра утром по таймеру."
     guarded = KraabUserbot._apply_deferred_action_guard(text)
     assert guarded == text
+
+
+def test_sync_scheduler_runtime_starts_when_enabled_and_connected(monkeypatch) -> None:
+    """Scheduler должен запускаться при enabled + активном Telegram-клиенте."""
+    bot = _make_bot_stub()
+    bot.client = SimpleNamespace(is_connected=True)
+
+    class _FakeScheduler:
+        def __init__(self) -> None:
+            self.is_started = False
+            self.sender = None
+
+        def bind_sender(self, sender) -> None:
+            self.sender = sender
+
+        def start(self) -> None:
+            self.is_started = True
+
+        def stop(self) -> None:
+            self.is_started = False
+
+    fake = _FakeScheduler()
+    monkeypatch.setattr(userbot_bridge_module, "krab_scheduler", fake, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
+
+    bot._sync_scheduler_runtime()
+
+    assert fake.is_started is True
+    assert callable(fake.sender)
+
+
+def test_sync_scheduler_runtime_stops_when_disabled(monkeypatch) -> None:
+    """Scheduler должен останавливаться, если флаг выключен."""
+    bot = _make_bot_stub()
+    bot.client = SimpleNamespace(is_connected=True)
+
+    class _FakeScheduler:
+        def __init__(self) -> None:
+            self.is_started = True
+
+        def bind_sender(self, sender) -> None:
+            return None
+
+        def start(self) -> None:
+            self.is_started = True
+
+        def stop(self) -> None:
+            self.is_started = False
+
+    fake = _FakeScheduler()
+    monkeypatch.setattr(userbot_bridge_module, "krab_scheduler", fake, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", False, raising=False)
+
+    bot._sync_scheduler_runtime()
+
+    assert fake.is_started is False
