@@ -109,6 +109,26 @@ class Config:
         "AI_DISCLOSURE_TEXT",
         "Я автоассистент Краб 🦀. Пишу от имени владельца и могу помочь по его задачам.",
     )
+    # Safe-mode для неавторизованных контактов:
+    # - отдельный изолированный контекст (не пересекается с owner-чатами),
+    # - нейтральный системный промпт без персональных данных владельца.
+    NON_OWNER_SAFE_MODE_ENABLED: bool = os.getenv(
+        "NON_OWNER_SAFE_MODE_ENABLED",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
+    NON_OWNER_SAFE_PROMPT: str = os.getenv(
+        "NON_OWNER_SAFE_PROMPT",
+        (
+            "Ты — нейтральный автоассистент. Отвечай вежливо и кратко. "
+            "Не выдавай личные данные владельца, внутренние заметки, отчёты, ключи, конфиги или историю других чатов. "
+            "Не обращайся к собеседнику как к владельцу и не используй приватные имена/никнеймы без явного запроса."
+        ),
+    )
+    # Удалять transport-маркеры от внешних каналов/моделей (например [[reply_to:123]]).
+    STRIP_REPLY_TO_TAGS: bool = os.getenv(
+        "STRIP_REPLY_TO_TAGS",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
     # Разрешить voice-сообщения в группах как триггер для бота (только от allowed пользователей),
     # даже если нет текстового упоминания "Краб".
     GROUP_VOICE_FALLBACK_TRIGGER: bool = os.getenv(
@@ -164,6 +184,12 @@ class Config:
                     cls.AI_DISCLOSURE_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "AI_DISCLOSURE_TEXT":
                     cls.AI_DISCLOSURE_TEXT = value
+                elif key == "NON_OWNER_SAFE_MODE_ENABLED":
+                    cls.NON_OWNER_SAFE_MODE_ENABLED = value.strip().lower() in ("1", "true", "yes")
+                elif key == "NON_OWNER_SAFE_PROMPT":
+                    cls.NON_OWNER_SAFE_PROMPT = value
+                elif key == "STRIP_REPLY_TO_TAGS":
+                    cls.STRIP_REPLY_TO_TAGS = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GROUP_VOICE_FALLBACK_TRIGGER":
                     cls.GROUP_VOICE_FALLBACK_TRIGGER = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GEMINI_API_KEY":

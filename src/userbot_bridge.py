@@ -12,6 +12,7 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 import asyncio
 import base64
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -80,6 +81,7 @@ class KraabUserbot:
     """
 
     _known_commands: set[str] = set()
+    _reply_to_tag_pattern = re.compile(r"\[\[\s*reply_to\s*:[^\]]+\]\]\s*", re.IGNORECASE)
 
     def __init__(self):
         """Инициализация юзербота и клиента Pyrogram"""
@@ -236,24 +238,14 @@ class KraabUserbot:
         def check_allowed(_, __, m):
             if not m.from_user:
                 return False
-
-            username = (m.from_user.username or "").lower()
-            user_id = str(m.from_user.id)
-
-            allowed_ids = [str(x) for x in config.ALLOWED_USERS if str(x).isdigit()]
-            allowed_names = [str(x).lower() for x in config.ALLOWED_USERS if not str(x).isdigit()]
-
-            is_me = m.from_user.id == self.me.id
-            is_id_allowed = user_id in allowed_ids
-            is_name_allowed = username in allowed_names
-
-            is_me = m.from_user.id == self.me.id
-            is_id_allowed = user_id in allowed_ids
-            is_name_allowed = username in allowed_names
-
-            result = is_me or is_id_allowed or is_name_allowed
+            result = self._is_allowed_sender(m.from_user)
             if not result:
-                logger.warning("access_denied", user=username, id=user_id, chat=m.chat.id)
+                logger.warning(
+                    "access_denied",
+                    user=(m.from_user.username or "").lower(),
+                    id=str(m.from_user.id),
+                    chat=m.chat.id,
+                )
             return result
 
         is_allowed = filters.create(check_allowed)
@@ -771,6 +763,67 @@ class KraabUserbot:
 
         return False
 
+    @staticmethod
+    def _normalize_username(value: str) -> str:
+        """Нормализует username для сравнений ACL."""
+        return str(value or "").strip().lstrip("@").lower()
+
+    def _is_allowed_sender(self, user: object) -> bool:
+        """
+        Проверяет, является ли отправитель владельцем или входит в allowlist.
+        """
+        if not user:
+            return False
+        user_id = str(getattr(user, "id", "") or "")
+        username = self._normalize_username(getattr(user, "username", ""))
+
+        me_id = getattr(self.me, "id", None)
+        if me_id and str(me_id) == user_id:
+            return True
+
+        allowed_ids = {str(x) for x in config.ALLOWED_USERS if str(x).isdigit()}
+        allowed_names = {self._normalize_username(x) for x in config.ALLOWED_USERS if not str(x).isdigit()}
+        return (user_id in allowed_ids) or (username and username in allowed_names)
+
+    def _build_runtime_chat_scope_id(self, *, chat_id: str, user_id: int, is_allowed_sender: bool) -> str:
+        """
+        Возвращает ключ сессии для LLM-контекста.
+
+        Для неавторизованных пользователей включаем изоляцию, чтобы исключить
+        смешивание истории с owner-контекстом и риск утечки персональных данных.
+        """
+        if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
+            return str(chat_id)
+        return f"guest:{chat_id}:{user_id}"
+
+    def _build_system_prompt_for_sender(self, *, is_allowed_sender: bool) -> str:
+        """
+        Возвращает системный промпт в зависимости от доверия к отправителю.
+        """
+        if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
+            return get_role_prompt(self.current_role)
+        safe_prompt = str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
+        if safe_prompt:
+            return safe_prompt
+        return (
+            "Ты — нейтральный автоассистент. Не раскрывай персональные данные владельца "
+            "и внутренние рабочие сведения."
+        )
+
+    @classmethod
+    def _strip_transport_markup(cls, text: str) -> str:
+        """
+        Удаляет служебные транспортные теги из пользовательского текста.
+        Пример: `[[reply_to:12345]]`.
+        """
+        raw = str(text or "")
+        if not raw:
+            return ""
+        cleaned = cls._reply_to_tag_pattern.sub("", raw)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
     def _get_clean_text(self, text: str) -> str:
         """Убирает триггер из текста"""
         if not text:
@@ -917,6 +970,7 @@ class KraabUserbot:
             user = message.from_user
             if not user or user.is_bot:
                 return
+            is_allowed_sender = self._is_allowed_sender(user)
 
             text = message.text or message.caption or ""
             has_voice = bool(getattr(message, "voice", None))
@@ -930,6 +984,11 @@ class KraabUserbot:
                 return
 
             chat_id = str(message.chat.id)
+            runtime_chat_id = self._build_runtime_chat_scope_id(
+                chat_id=chat_id,
+                user_id=int(user.id),
+                is_allowed_sender=is_allowed_sender,
+            )
             is_self = user.id == self.me.id
             has_trigger = self._is_trigger(text)
 
@@ -1016,13 +1075,15 @@ class KraabUserbot:
                 return
 
             full_response = ""
-            current_chunk = ""
+            full_response_raw = ""
             last_edit_time = 0
 
-            system_prompt = get_role_prompt(self.current_role)
+            system_prompt = self._build_system_prompt_for_sender(
+                is_allowed_sender=is_allowed_sender,
+            )
 
             # CONTEXT: Добавляем контекст чата для групп
-            if message.chat.type != enums.ChatType.PRIVATE:
+            if is_allowed_sender and message.chat.type != enums.ChatType.PRIVATE:
                 context = await self._get_chat_context(message.chat.id)
                 if context:
                     system_prompt += f"\n\n[CONTEXT OF LAST MESSAGES]\n{context}\n[END CONTEXT]\n\nReply to the user request taking into account the context above."
@@ -1030,7 +1091,7 @@ class KraabUserbot:
             chunk_timeout_sec = float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 120.0))
             stream = openclaw_client.send_message_stream(
                 message=query or ("(Image sent)" if images else ""),
-                chat_id=chat_id,
+                chat_id=runtime_chat_id,
                 system_prompt=system_prompt,
                 images=images,
                 force_cloud=getattr(config, "FORCE_CLOUD", False),
@@ -1061,13 +1122,17 @@ class KraabUserbot:
                         pass
                     break
 
-                full_response += chunk
-                current_chunk += chunk
+                full_response_raw += chunk
+                full_response = (
+                    self._strip_transport_markup(full_response_raw)
+                    if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True))
+                    else full_response_raw
+                )
 
                 if time.time() - last_edit_time > 1.5:
                     last_edit_time = time.time()
                     try:
-                        display = current_chunk + " ▌"
+                        display = (full_response or "…") + " ▌"
                         if is_self:
                             message = await self._safe_edit(message, f"🦀 {query}\n\n{display}")
                         else:
@@ -1082,9 +1147,14 @@ class KraabUserbot:
             if not str(full_response).strip():
                 full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
 
+            if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True)):
+                full_response = self._strip_transport_markup(full_response)
+                if not full_response:
+                    full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
+
             # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
             # а не доверяем декларативному тексту самой LLM.
-            if self._looks_like_model_status_question(query):
+            if is_allowed_sender and self._looks_like_model_status_question(query):
                 route_meta = {}
                 if hasattr(openclaw_client, "get_last_runtime_route"):
                     try:
