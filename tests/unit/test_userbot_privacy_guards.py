@@ -47,5 +47,22 @@ def test_build_system_prompt_for_non_owner_uses_safe_prompt(monkeypatch) -> None
     bot = _make_bot_stub()
     monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)
     monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_PROMPT", "SAFE_PROMPT_TEST", raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
     prompt = bot._build_system_prompt_for_sender(is_allowed_sender=False)
     assert prompt == "SAFE_PROMPT_TEST"
+
+
+def test_deferred_action_guard_adds_warning_when_scheduler_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", False, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "DEFERRED_ACTION_GUARD_ENABLED", True, raising=False)
+    text = "Хорошо, сделаю это завтра утром по таймеру."
+    guarded = KraabUserbot._apply_deferred_action_guard(text)
+    assert "⚠️ Важно: фоновый cron/таймер сейчас не активен" in guarded
+
+
+def test_deferred_action_guard_noop_when_scheduler_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "DEFERRED_ACTION_GUARD_ENABLED", True, raising=False)
+    text = "Хорошо, сделаю это завтра утром по таймеру."
+    guarded = KraabUserbot._apply_deferred_action_guard(text)
+    assert guarded == text

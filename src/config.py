@@ -129,6 +129,17 @@ class Config:
         "STRIP_REPLY_TO_TAGS",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+    # Фоновые deferred-задачи (cron/reminders) в текущем userbot контуре.
+    # Пока false по умолчанию: чтобы ассистент не обещал "сделать позже",
+    # когда реального scheduler-исполнения нет.
+    SCHEDULER_ENABLED: bool = os.getenv(
+        "SCHEDULER_ENABLED",
+        "0",
+    ).strip().lower() in ("1", "true", "yes")
+    DEFERRED_ACTION_GUARD_ENABLED: bool = os.getenv(
+        "DEFERRED_ACTION_GUARD_ENABLED",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
     # Разрешить voice-сообщения в группах как триггер для бота (только от allowed пользователей),
     # даже если нет текстового упоминания "Краб".
     GROUP_VOICE_FALLBACK_TRIGGER: bool = os.getenv(
@@ -190,6 +201,10 @@ class Config:
                     cls.NON_OWNER_SAFE_PROMPT = value
                 elif key == "STRIP_REPLY_TO_TAGS":
                     cls.STRIP_REPLY_TO_TAGS = value.strip().lower() in ("1", "true", "yes")
+                elif key == "SCHEDULER_ENABLED":
+                    cls.SCHEDULER_ENABLED = value.strip().lower() in ("1", "true", "yes")
+                elif key == "DEFERRED_ACTION_GUARD_ENABLED":
+                    cls.DEFERRED_ACTION_GUARD_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GROUP_VOICE_FALLBACK_TRIGGER":
                     cls.GROUP_VOICE_FALLBACK_TRIGGER = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GEMINI_API_KEY":

@@ -82,6 +82,9 @@ class KraabUserbot:
 
     _known_commands: set[str] = set()
     _reply_to_tag_pattern = re.compile(r"\[\[\s*reply_to\s*:[^\]]+\]\]\s*", re.IGNORECASE)
+    _deferred_intent_pattern = re.compile(
+        r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
+    )
 
     def __init__(self):
         """Инициализация юзербота и клиента Pyrogram"""
@@ -801,14 +804,33 @@ class KraabUserbot:
         Возвращает системный промпт в зависимости от доверия к отправителю.
         """
         if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
-            return get_role_prompt(self.current_role)
-        safe_prompt = str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
-        if safe_prompt:
-            return safe_prompt
-        return (
-            "Ты — нейтральный автоассистент. Не раскрывай персональные данные владельца "
-            "и внутренние рабочие сведения."
-        )
+            base_prompt = get_role_prompt(self.current_role)
+        else:
+            safe_prompt = str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
+            if safe_prompt:
+                base_prompt = safe_prompt
+            else:
+                base_prompt = (
+                    "Ты — нейтральный автоассистент. Не раскрывай персональные данные владельца "
+                    "и внутренние рабочие сведения."
+                )
+        return self._append_runtime_constraints(base_prompt)
+
+    @staticmethod
+    def _append_runtime_constraints(prompt: str) -> str:
+        """
+        Добавляет runtime-ограничения, которые не должны теряться между ролями.
+        """
+        base = str(prompt or "").strip()
+        if not bool(getattr(config, "SCHEDULER_ENABLED", False)):
+            guard = (
+                "Важное ограничение runtime: фоновый scheduler/cron сейчас выключен. "
+                "Не обещай, что что-то будет выполнено позже автоматически. "
+                "Вместо этого честно предлагай выполнить действие сейчас или напомнить пользователю вручную при следующем сообщении."
+            )
+            if guard not in base:
+                base = f"{base}\n\n{guard}".strip()
+        return base
 
     @classmethod
     def _strip_transport_markup(cls, text: str) -> str:
@@ -823,6 +845,28 @@ class KraabUserbot:
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
+
+    @classmethod
+    def _apply_deferred_action_guard(cls, text: str) -> str:
+        """
+        Защищает от ложных обещаний "сделаю позже", когда scheduler выключен.
+        """
+        raw = str(text or "").strip()
+        if not raw:
+            return raw
+        if bool(getattr(config, "SCHEDULER_ENABLED", False)):
+            return raw
+        if not bool(getattr(config, "DEFERRED_ACTION_GUARD_ENABLED", True)):
+            return raw
+        if not cls._deferred_intent_pattern.search(raw):
+            return raw
+        note = (
+            "⚠️ Важно: фоновый cron/таймер сейчас не активен, "
+            "поэтому отложенная задача автоматически не запустится."
+        )
+        if note in raw:
+            return raw
+        return f"{raw}\n\n{note}"
 
     def _get_clean_text(self, text: str) -> str:
         """Убирает триггер из текста"""
@@ -1151,6 +1195,7 @@ class KraabUserbot:
                 full_response = self._strip_transport_markup(full_response)
                 if not full_response:
                     full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
+            full_response = self._apply_deferred_action_guard(full_response)
 
             # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
             # а не доверяем декларативному тексту самой LLM.
