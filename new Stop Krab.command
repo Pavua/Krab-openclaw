@@ -23,7 +23,7 @@ is_openclaw_gateway_pid() {
     [ -n "${pid:-}" ] || return 1
     local cmd
     cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
-    echo "$cmd" | grep -E "openclaw( |$).*gateway run|openclaw-gateway" >/dev/null 2>&1
+    echo "$cmd" | grep -E "openclaw( |$).*gateway( |$)|openclaw-gateway" >/dev/null 2>&1
 }
 
 disable_legacy_launchd_core() {

@@ -214,3 +214,47 @@ async def test_missing_local_model_path_is_temporarily_excluded_from_candidates(
     candidate_ids = [mid for mid, _ in candidates]
     assert "broken-local-model" not in candidate_ids
     assert "healthy-local-model" in candidate_ids
+
+
+@pytest.mark.asyncio
+async def test_single_local_mode_unloads_extra_models_when_target_already_loaded(
+    manager: ModelManager,
+) -> None:
+    """
+    В SINGLE_LOCAL_MODEL_MODE при наличии целевой модели и лишних loaded-инстансов
+    менеджер должен выгрузить лишнее и оставить только target.
+    """
+    manager._models_cache = {
+        "nvidia/nemotron-3-nano": ModelInfo(
+            "nvidia/nemotron-3-nano",
+            "Nemotron",
+            ModelType.LOCAL_MLX,
+            size_gb=17.79,
+        ),
+        "zai-org/glm-4.6v-flash": ModelInfo(
+            "zai-org/glm-4.6v-flash",
+            "GLM Vision",
+            ModelType.LOCAL_MLX,
+            size_gb=7.09,
+        ),
+    }
+    manager.get_loaded_models = AsyncMock(
+        return_value=["nvidia/nemotron-3-nano", "zai-org/glm-4.6v-flash"]
+    )
+
+    with patch("src.model_manager.psutil.virtual_memory") as mock_mem:
+        mock_mem.return_value.available = 20 * 1024**3
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.text = "{}"
+        ok_resp.json.return_value = {}
+        manager._http_client.post.return_value = ok_resp
+
+        result = await manager.load_model("nvidia/nemotron-3-nano")
+
+        assert result is True
+        assert manager._current_model == "nvidia/nemotron-3-nano"
+        unload_call = manager._http_client.post.call_args_list[0]
+        assert unload_call.args[0].endswith("/api/v1/models/unload")
+        assert unload_call.kwargs["json"].get("instance_id") == "zai-org/glm-4.6v-flash"

@@ -25,7 +25,7 @@ is_openclaw_gateway_pid() {
     [ -n "${pid:-}" ] || return 1
     local cmd
     cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
-    echo "$cmd" | grep -E "openclaw( |$).*gateway run|openclaw-gateway" >/dev/null 2>&1
+    echo "$cmd" | grep -E "openclaw( |$).*gateway( |$)|openclaw-gateway" >/dev/null 2>&1
 }
 
 acquire_launcher_lock() {
@@ -240,7 +240,9 @@ if [ -n "$OPENCLAW_BIN" ]; then
         "$OPENCLAW_BIN" gateway stop >/dev/null 2>&1 || true
 
         echo "🦞 Starting OpenClaw Gateway..."
-        nohup "$OPENCLAW_BIN" gateway run > openclaw.log 2>&1 &
+        # В текущих версиях OpenClaw стабильный RPC/browser relay контур
+        # поднимается через `openclaw gateway` (без `run`).
+        nohup "$OPENCLAW_BIN" gateway --port 18789 > openclaw.log 2>&1 &
         NEW_GATEWAY_PID=$!
         echo "$NEW_GATEWAY_PID" > "$OPENCLAW_PID_FILE"
         echo "$$" > "$OPENCLAW_OWNER_FILE"

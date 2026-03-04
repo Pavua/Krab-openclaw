@@ -558,7 +558,9 @@ class ModelManager:
             lock_handle = await self._acquire_interprocess_model_lock(
                 timeout_sec=float(getattr(config, "LOCAL_MODEL_LOAD_LOCK_TIMEOUT_SEC", 240))
             )
+            already_pruned_models: set[str] = set()
             async with self._lock:
+                single_local_mode = bool(getattr(config, "SINGLE_LOCAL_MODEL_MODE", True))
                 if not self._models_cache:
                     await self.discover_models()
                 model_info = self._models_cache.get(model_id)
@@ -567,6 +569,27 @@ class ModelManager:
                     logger.warning("model_unknown_loading_anyway", model=model_id)
 
                 loaded = await self.get_loaded_models()
+                if single_local_mode and loaded:
+                    # SINGLE_LOCAL_MODEL_MODE: в памяти должна оставаться только целевая модель.
+                    # Выгружаем любые лишние инстансы/модели (включая клоны вида `model:2`).
+                    extra_loaded = [
+                        mid
+                        for mid in dict.fromkeys(loaded)
+                        if mid and mid != model_id and mid not in already_pruned_models
+                    ]
+                    if extra_loaded:
+                        for extra_model in extra_loaded:
+                            await self._do_unload_model(extra_model)
+                        already_pruned_models.update(extra_loaded)
+                        logger.info(
+                            "single_local_mode_pruned_models",
+                            target=model_id,
+                            unloaded=extra_loaded,
+                        )
+                        if self._current_model in set(extra_loaded):
+                            self._current_model = None
+                        loaded = [mid for mid in loaded if mid == model_id]
+
                 if model_id in loaded:
                     self._current_model = model_id
                     self.touch(model_id)
@@ -575,7 +598,7 @@ class ModelManager:
                 # Политика single-model: не держим несколько локальных моделей в памяти.
                 # Это снижает риск ухода в swap на 36GB RAM машинах.
                 if (
-                    getattr(config, "SINGLE_LOCAL_MODEL_MODE", True)
+                    single_local_mode
                     and self._current_model
                     and self._current_model != model_id
                 ):
@@ -597,6 +620,24 @@ class ModelManager:
                 # Повторная проверка после wait/free: модель могла уже загрузиться
                 # другим процессом, который держал lock до нас.
                 loaded = await self.get_loaded_models()
+                if single_local_mode and loaded:
+                    extra_loaded = [
+                        mid
+                        for mid in dict.fromkeys(loaded)
+                        if mid and mid != model_id and mid not in already_pruned_models
+                    ]
+                    if extra_loaded:
+                        for extra_model in extra_loaded:
+                            await self._do_unload_model(extra_model)
+                        already_pruned_models.update(extra_loaded)
+                        logger.info(
+                            "single_local_mode_pruned_models_post_wait",
+                            target=model_id,
+                            unloaded=extra_loaded,
+                        )
+                        if self._current_model in set(extra_loaded):
+                            self._current_model = None
+                        loaded = [mid for mid in loaded if mid == model_id]
                 if model_id in loaded:
                     self._current_model = model_id
                     self.touch(model_id)
