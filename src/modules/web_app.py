@@ -28,6 +28,7 @@ import uvicorn
 from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
+from src.config import config  # noqa: E402
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.model_aliases import (  # noqa: E402
     MODEL_FRIENDLY_ALIASES,
@@ -328,7 +329,10 @@ class WebApp:
 
         for endpoint in endpoints:
             try:
-                async with httpx.AsyncClient(timeout=2.5) as client:
+                # Для локального LM Studio probe отключаем trust_env/verify:
+                # это исключает ложные `FileNotFoundError` из системных cert/proxy
+                # и не влияет на безопасность, т.к. endpoint строго локальный/LAN.
+                async with httpx.AsyncClient(timeout=2.5, trust_env=False, verify=False) as client:
                     resp = await client.get(endpoint)
                 if resp.status_code != 200:
                     errors.append(f"{endpoint}:status={resp.status_code}")
@@ -450,6 +454,10 @@ class WebApp:
             "last_runtime_route": last_runtime_route,
             "openclaw_tier_state": tier_state,
             "telegram_userbot": telegram_userbot_state,
+            "scheduler_enabled": bool(getattr(config, "SCHEDULER_ENABLED", False)),
+            "voice_gateway_configured": bool(
+                str(os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090") or "").strip()
+            ),
         }
 
     def _assistant_rate_limit_per_min(self) -> int:
@@ -888,6 +896,8 @@ class WebApp:
                 "lmstudio_model_state": runtime.get("lmstudio_model_state"),
                 "openclaw_auth_state": runtime.get("openclaw_auth_state"),
                 "last_runtime_route": runtime.get("last_runtime_route"),
+                "scheduler_enabled": runtime.get("scheduler_enabled"),
+                "voice_gateway_configured": runtime.get("voice_gateway_configured"),
             }
 
         @self.app.get("/api/transcriber/status")
