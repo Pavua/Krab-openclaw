@@ -27,12 +27,12 @@ if [[ -z "$TRELLO_API_KEY" || -z "$TRELLO_TOKEN" ]]; then
 fi
 
 echo "🔧 Записываю переменные в OpenClaw..."
-openclaw config env set TRELLO_API_KEY "$TRELLO_API_KEY"
-openclaw config env set TRELLO_TOKEN "$TRELLO_TOKEN"
+openclaw config set env.TRELLO_API_KEY "$TRELLO_API_KEY"
+openclaw config set env.TRELLO_TOKEN "$TRELLO_TOKEN"
 
 echo
-echo "🔄 Обновляю gateway (если gateway запущен как foreground-процесс, команда может сообщить, что service не загружен — это не критично)."
-openclaw gateway restart || true
+echo "🔄 Применяю секреты/конфиг в runtime..."
+openclaw secrets reload || openclaw gateway restart || true
 
 echo
 echo "🩺 Проверяю статус skills..."

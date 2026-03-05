@@ -13,6 +13,8 @@ cd "$PROJECT_DIR"
 echo "🫧 Настройка BlueBubbles для OpenClaw"
 echo "📂 Проект: $PROJECT_DIR"
 echo
+echo "Подсказка: если значения уже подходят, просто нажимай Enter для значений по умолчанию."
+echo
 
 read -rp "Server URL [$DEFAULT_URL]: " BLUEBUBBLES_URL
 BLUEBUBBLES_URL="${BLUEBUBBLES_URL:-$DEFAULT_URL}"
