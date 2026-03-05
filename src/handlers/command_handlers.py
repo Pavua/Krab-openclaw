@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from pyrogram.types import Message
@@ -19,7 +19,8 @@ from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
 from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
-from ..employee_templates import ROLES, list_roles, save_role
+from ..core.swarm import AgentRoom
+from ..employee_templates import ROLES, get_role_prompt, list_roles, save_role
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
 from ..model_manager import model_manager
@@ -71,6 +72,40 @@ def _split_text_for_telegram(text: str, limit: int = 3900) -> list[str]:
     if current:
         chunks.append(current)
     return chunks or [text[:limit]]
+
+
+class _AgentRoomRouterAdapter:
+    """
+    Легковесный адаптер роевого запуска для userbot-команд.
+
+    Почему отдельно:
+    - AgentRoom ожидает контракт `route_query(prompt, skip_swarm=True)`;
+    - userbot работает напрямую через `openclaw_client.send_message_stream`;
+    - адаптер связывает эти два слоя без изменения core-логики.
+    """
+
+    def __init__(self, *, chat_id: str, system_prompt: str) -> None:
+        self.chat_id = chat_id
+        self.system_prompt = system_prompt
+
+    async def route_query(self, prompt: str, skip_swarm: bool = False, **_: Any) -> str:
+        """
+        Выполняет один роевой шаг через OpenClaw stream.
+
+        `skip_swarm` принят для совместимости контракта AgentRoom.
+        """
+        del skip_swarm
+        chunks: list[str] = []
+        max_output_tokens = int(getattr(config, "SWARM_ROLE_MAX_OUTPUT_TOKENS", 700) or 700)
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=self.chat_id,
+            system_prompt=self.system_prompt,
+            force_cloud=bool(getattr(config, "FORCE_CLOUD", False)),
+            max_output_tokens=max_output_tokens,
+        ):
+            chunks.append(str(chunk))
+        return "".join(chunks).strip()
 
 
 async def handle_search(bot: "KraabUserbot", message: Message) -> None:
@@ -466,10 +501,36 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(
-            user_message="🕵️‍♂️ Использование: `!agent new <имя> <промпт>`\nИли: `!agent list`"
+            user_message=(
+                "🕵️‍♂️ Использование:\n"
+                "- `!agent new <имя> <промпт>`\n"
+                "- `!agent list`\n"
+                "- `!agent swarm <тема>`"
+            )
         )
     if text.startswith("list"):
         await message.reply(f"🕵️‍♂️ **Доступные агенты:**\n\n{list_roles()}")
+        return
+    if text.startswith("swarm"):
+        topic = text[5:].strip()
+        if not topic:
+            raise UserInputError(
+                user_message="🐝 Формат: `!agent swarm <тема>`"
+            )
+
+        status = await message.reply("🐝 Запускаю роевой раунд: аналитик → критик → интегратор...")
+        room = AgentRoom()
+        role_prompt = get_role_prompt(getattr(bot, "current_role", "default"))
+        room_chat_id = f"swarm:{message.chat.id}"
+        router = _AgentRoomRouterAdapter(
+            chat_id=room_chat_id,
+            system_prompt=role_prompt,
+        )
+        result = await room.run_round(topic, router)
+        chunks = _split_text_for_telegram(result)
+        await status.edit(chunks[0])
+        for part in chunks[1:]:
+            await message.reply(part)
         return
     if text.startswith("new"):
         parts = text[3:].strip().split(" ", 1)
@@ -527,6 +588,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 **Dev**
 `!agent new <name> <prompt>` — создать агента
 `!agent list` — список агентов
+`!agent swarm <тема>` — роевой раунд (аналитик/критик/интегратор)
 `!voice` — голосовой режим
 `!web` — управление браузером
 `!panel` — панель управления (soon)
