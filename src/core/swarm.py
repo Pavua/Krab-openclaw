@@ -164,3 +164,54 @@ class AgentRoom:
 
         logger.info("agent_room_round_completed", topic=topic)
         return header + body.strip()
+
+    async def run_loop(
+        self,
+        topic: str,
+        router: Any,
+        *,
+        rounds: int = 2,
+        max_rounds: int = 3,
+        next_round_clip: int = 4000,
+    ) -> str:
+        """
+        Запускает несколько раундов роя с итеративной доработкой результата.
+
+        Идея:
+        - Раунд 1 создает первичное решение.
+        - Следующие раунды перерабатывают решение с учетом критики из предыдущего шага.
+        """
+        safe_max = max(1, int(max_rounds))
+        safe_rounds = max(1, min(int(rounds), safe_max))
+        safe_clip = max(500, int(next_round_clip))
+
+        logger.info(
+            "agent_room_loop_started",
+            topic=topic,
+            rounds=safe_rounds,
+            max_rounds=safe_max,
+        )
+
+        base_topic = str(topic or "").strip()
+        current_topic = base_topic
+        sections: list[str] = []
+
+        for idx in range(safe_rounds):
+            round_no = idx + 1
+            round_result = await self.run_round(current_topic, router)
+            sections.append(f"## Раунд {round_no}/{safe_rounds}\n{round_result}")
+
+            if round_no >= safe_rounds:
+                continue
+
+            # Для следующего раунда даем сжатый контекст предыдущего результата.
+            clipped = round_result[:safe_clip]
+            current_topic = (
+                "Улучши и уточни предыдущее решение. "
+                "Сделай более практичный, проверяемый и устойчивый план.\n\n"
+                f"Исходная тема:\n{base_topic}\n\n"
+                f"Результат предыдущего раунда:\n{clipped}"
+            )
+
+        logger.info("agent_room_loop_completed", topic=topic, rounds=safe_rounds)
+        return f"🐝 **Swarm Loop: {base_topic}**\n\n" + "\n\n".join(sections)

@@ -114,3 +114,94 @@ async def test_agent_swarm_runs_three_role_round(monkeypatch: pytest.MonkeyPatch
     assert "Аналитик" in merged
     assert "Критик" in merged
     assert "Интегратор" in merged
+
+
+@pytest.mark.asyncio
+async def test_agent_swarm_loop_requires_topic() -> None:
+    """`!agent swarm loop` без темы должен вернуть user-ошибку."""
+    bot = _BotStub(args="swarm loop")
+    message = _MessageStub(text="!agent swarm loop")
+
+    with pytest.raises(UserInputError):
+        await command_handlers.handle_agent(bot, message)
+
+
+@pytest.mark.asyncio
+async def test_agent_swarm_loop_runs_multiple_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`!agent swarm loop 2 ...` выполняет 2 раунда x 3 роли."""
+    calls: list[dict[str, str]] = []
+
+    async def fake_send_message_stream(
+        message: str,
+        chat_id: str,
+        system_prompt: str | None = None,
+        force_cloud: bool = False,
+        max_output_tokens: int | None = None,
+        images=None,
+    ):
+        del force_cloud, max_output_tokens, images
+        calls.append(
+            {
+                "message": message,
+                "chat_id": chat_id,
+                "system_prompt": str(system_prompt or ""),
+            }
+        )
+        idx = len(calls)
+        yield f"loop_ответ_{idx}"
+
+    monkeypatch.setattr(
+        command_handlers.openclaw_client,
+        "send_message_stream",
+        fake_send_message_stream,
+    )
+
+    bot = _BotStub(args="swarm loop 2 Стратегия развития")
+    message = _MessageStub(text="!agent swarm loop 2 Стратегия развития")
+
+    await command_handlers.handle_agent(bot, message)
+
+    # 2 раунда * 3 роли.
+    assert len(calls) == 6
+    assert all(item["chat_id"] == "swarm:123" for item in calls)
+    assert any("роевой loop" in text for text in message.reply_calls)
+
+    all_edits: list[str] = []
+    for status in message._status_messages:
+        all_edits.extend(status.edits)
+    merged = "\n".join(all_edits)
+    assert "Swarm Loop: Стратегия развития" in merged
+    assert "Раунд 1/2" in merged
+    assert "Раунд 2/2" in merged
+
+
+@pytest.mark.asyncio
+async def test_agent_swarm_loop_respects_max_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Loop ограничивается `SWARM_LOOP_MAX_ROUNDS` при завышенном N."""
+    calls: list[str] = []
+
+    async def fake_send_message_stream(
+        message: str,
+        chat_id: str,
+        system_prompt: str | None = None,
+        force_cloud: bool = False,
+        max_output_tokens: int | None = None,
+        images=None,
+    ):
+        del message, system_prompt, force_cloud, max_output_tokens, images
+        calls.append(chat_id)
+        yield "ok"
+
+    monkeypatch.setattr(
+        command_handlers.openclaw_client,
+        "send_message_stream",
+        fake_send_message_stream,
+    )
+    monkeypatch.setattr(command_handlers.config, "SWARM_LOOP_MAX_ROUNDS", 2, raising=False)
+
+    bot = _BotStub(args="swarm loop 9 Тема")
+    message = _MessageStub(text="!agent swarm loop 9 Тема")
+    await command_handlers.handle_agent(bot, message)
+
+    # Должно ограничиться 2 раундами => 6 вызовов.
+    assert len(calls) == 6

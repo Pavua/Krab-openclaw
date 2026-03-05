@@ -505,20 +505,49 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
                 "🕵️‍♂️ Использование:\n"
                 "- `!agent new <имя> <промпт>`\n"
                 "- `!agent list`\n"
-                "- `!agent swarm <тема>`"
+                "- `!agent swarm <тема>`\n"
+                "- `!agent swarm loop [N] <тема>`"
             )
         )
     if text.startswith("list"):
         await message.reply(f"🕵️‍♂️ **Доступные агенты:**\n\n{list_roles()}")
         return
     if text.startswith("swarm"):
-        topic = text[5:].strip()
-        if not topic:
-            raise UserInputError(
-                user_message="🐝 Формат: `!agent swarm <тема>`"
-            )
+        swarm_args = text[5:].strip()
+        if not swarm_args:
+            raise UserInputError(user_message="🐝 Формат: `!agent swarm <тема>`")
 
-        status = await message.reply("🐝 Запускаю роевой раунд: аналитик → критик → интегратор...")
+        topic = swarm_args
+        is_loop = False
+        loop_rounds = 2
+        if swarm_args.startswith("loop"):
+            is_loop = True
+            loop_payload = swarm_args[4:].strip()
+            if not loop_payload:
+                raise UserInputError(
+                    user_message="🐝 Формат: `!agent swarm loop [N] <тема>`"
+                )
+            first, *rest = loop_payload.split(" ", 1)
+            if first.isdigit():
+                loop_rounds = int(first)
+                topic = rest[0].strip() if rest else ""
+            else:
+                topic = loop_payload
+            if not topic:
+                raise UserInputError(
+                    user_message="🐝 Формат: `!agent swarm loop [N] <тема>`"
+                )
+
+        max_rounds = int(getattr(config, "SWARM_LOOP_MAX_ROUNDS", 3) or 3)
+        next_round_clip = int(getattr(config, "SWARM_LOOP_NEXT_ROUND_CLIP", 4000) or 4000)
+        safe_rounds = max(1, min(loop_rounds, max_rounds))
+
+        if is_loop:
+            status = await message.reply(
+                f"🐝 Запускаю роевой loop: {safe_rounds} раунд(а), роли аналитик → критик → интегратор..."
+            )
+        else:
+            status = await message.reply("🐝 Запускаю роевой раунд: аналитик → критик → интегратор...")
         room = AgentRoom()
         role_prompt = get_role_prompt(getattr(bot, "current_role", "default"))
         room_chat_id = f"swarm:{message.chat.id}"
@@ -526,7 +555,16 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
             chat_id=room_chat_id,
             system_prompt=role_prompt,
         )
-        result = await room.run_round(topic, router)
+        if is_loop:
+            result = await room.run_loop(
+                topic,
+                router,
+                rounds=safe_rounds,
+                max_rounds=max_rounds,
+                next_round_clip=next_round_clip,
+            )
+        else:
+            result = await room.run_round(topic, router)
         chunks = _split_text_for_telegram(result)
         await status.edit(chunks[0])
         for part in chunks[1:]:
@@ -589,6 +627,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!agent new <name> <prompt>` — создать агента
 `!agent list` — список агентов
 `!agent swarm <тема>` — роевой раунд (аналитик/критик/интегратор)
+`!agent swarm loop [N] <тема>` — несколько роевых раундов (итеративная доработка)
 `!voice` — голосовой режим
 `!web` — управление браузером
 `!panel` — панель управления (soon)
