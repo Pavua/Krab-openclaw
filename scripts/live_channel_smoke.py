@@ -20,6 +20,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -54,6 +55,10 @@ PATTERN_SPECS: list[tuple[str, re.Pattern[str], str]] = [
         "warn",
     ),
 ]
+ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+TIMESTAMP_RE = re.compile(
+    r"(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"
+)
 
 
 def _tail_lines(path: Path, max_lines: int) -> list[str]:
@@ -96,17 +101,22 @@ def _scan_patterns(
 
 def _parse_line_timestamp_utc(line: str) -> datetime | None:
     """
-    Пытается распарсить UTC timestamp из начала строки лога.
+    Пытается распарсить UTC timestamp из строки лога.
 
     Поддержка:
     - `YYYY-MM-DDTHH:MM:SS.sssZ ...`
     - `YYYY-MM-DDTHH:MM:SSZ ...`
+    - `YYYY-MM-DD HH:MM:SS ...`
+    - строки с ANSI-escape-последовательностями.
     """
-    raw = str(line or "").strip()
-    if len(raw) < 20:
+    # В боевых логах Krab часто есть ANSI-коды и timestamp не обязательно
+    # стоит в самом начале строки, поэтому сначала очищаем строку и ищем regex.
+    raw = ANSI_RE.sub("", str(line or "")).strip()
+    match = TIMESTAMP_RE.search(raw)
+    if not match:
         return None
-    prefix = raw.split(" ", 1)[0]
-    candidate = prefix.replace("Z", "+00:00")
+    candidate = match.group("ts").replace(" ", "T")
+    candidate = candidate.replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(candidate)
     except ValueError:
@@ -148,6 +158,25 @@ def _fetch_json(url: str, timeout_sec: float = 8.0) -> tuple[dict[str, Any], str
             return json.loads(body), None
     except (error.URLError, error.HTTPError, TimeoutError, ValueError) as exc:
         return {}, str(exc)
+
+
+def _fetch_json_with_retries(
+    url: str,
+    *,
+    timeout_sec: float = 8.0,
+    attempts: int = 1,
+) -> tuple[dict[str, Any], str | None]:
+    """Повторяет HTTP-запрос endpoint'а для устойчивости к кратковременным флапам."""
+    safe_attempts = max(1, int(attempts))
+    last_payload: dict[str, Any] = {}
+    last_error: str | None = None
+    for _ in range(safe_attempts):
+        payload, err = _fetch_json(url, timeout_sec=timeout_sec)
+        if err is None:
+            return payload, None
+        last_payload = payload
+        last_error = err
+    return last_payload, last_error
 
 
 def _classify_channels(channels_payload: dict[str, Any]) -> dict[str, Any]:
@@ -196,6 +225,43 @@ def _classify_channels(channels_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_transient_disconnect_failure(entry: dict[str, Any]) -> bool:
+    """Определяет временный disconnected-флап (а не постоянную misconfig)."""
+    meta = str(entry.get("meta") or "").lower()
+    if "not configured" in meta:
+        return False
+    return "disconnected" in meta
+
+
+def _fetch_stable_channels_payload(url: str) -> tuple[dict[str, Any], str | None]:
+    """
+    Получает channels/status с коротким settle-окном для transient reconnect.
+
+    Нужен, чтобы не заваливать smoke единичным статусом `disconnected` в моменте,
+    когда health-monitor уже перезапускает провайдер.
+    """
+    payload, err = _fetch_json_with_retries(url, timeout_sec=8.0, attempts=3)
+    if err is not None:
+        return payload, err
+
+    current_payload = payload
+    current_summary = _classify_channels(current_payload)
+    for _ in range(2):
+        failed = current_summary.get("failed") or []
+        if not failed:
+            return current_payload, None
+        if not all(_is_transient_disconnect_failure(item) for item in failed):
+            return current_payload, None
+        time.sleep(1.2)
+        next_payload, next_err = _fetch_json_with_retries(url, timeout_sec=8.0, attempts=1)
+        if next_err is not None:
+            return current_payload, None
+        current_payload = next_payload
+        current_summary = _classify_channels(current_payload)
+
+    return current_payload, None
+
+
 def build_report(
     *,
     channels_url: str,
@@ -205,8 +271,8 @@ def build_report(
     max_age_minutes: float,
 ) -> dict[str, Any]:
     """Собирает единый smoke-отчет E1→E3."""
-    channels_payload, channels_error = _fetch_json(channels_url)
-    health_payload, health_error = _fetch_json(health_url)
+    channels_payload, channels_error = _fetch_stable_channels_payload(channels_url)
+    health_payload, health_error = _fetch_json_with_retries(health_url, timeout_sec=8.0, attempts=2)
 
     findings: list[dict[str, Any]] = []
     scanned_logs: list[dict[str, Any]] = []

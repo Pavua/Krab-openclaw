@@ -69,6 +69,25 @@ def _fetch_json(url: str, timeout_sec: float = 8.0) -> tuple[dict[str, Any], str
         return {}, str(exc)
 
 
+def _fetch_json_with_retries(
+    url: str,
+    *,
+    timeout_sec: float = 8.0,
+    attempts: int = 1,
+) -> tuple[dict[str, Any], str | None]:
+    """Повторяет HTTP-запрос endpoint'а для устойчивости к кратковременным сбоям."""
+    safe_attempts = max(1, int(attempts))
+    last_payload: dict[str, Any] = {}
+    last_error: str | None = None
+    for _ in range(safe_attempts):
+        payload, err = _fetch_json(url, timeout_sec=timeout_sec)
+        if err is None:
+            return payload, None
+        last_payload = payload
+        last_error = err
+    return last_payload, last_error
+
+
 def _parse_line_timestamp_utc(line: str) -> datetime | None:
     raw = ANSI_RE.sub("", str(line or "")).strip()
     match = TIMESTAMP_RE.search(raw)
@@ -302,6 +321,42 @@ def _classify_channels(channels_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_transient_disconnect_failure(entry: dict[str, Any]) -> bool:
+    """Признак краткого flapping окна у канала во время auto-reconnect."""
+    meta = str(entry.get("meta") or "").lower()
+    if "not configured" in meta:
+        return False
+    return "disconnected" in meta
+
+
+def _fetch_stable_channels_payload(url: str) -> tuple[dict[str, Any], str | None]:
+    """
+    Берёт channels/status и делает short-settle retry для transient disconnected.
+
+    Это уменьшает ложные красные acceptance-падения на моменте health-monitor restart.
+    """
+    payload, err = _fetch_json_with_retries(url, timeout_sec=10.0, attempts=3)
+    if err is not None:
+        return payload, err
+
+    current_payload = payload
+    current_summary = _classify_channels(current_payload)
+    for _ in range(2):
+        failed = current_summary.get("failed") or []
+        if not failed:
+            return current_payload, None
+        if not all(_is_transient_disconnect_failure(item) for item in failed):
+            return current_payload, None
+        time.sleep(1.2)
+        next_payload, next_err = _fetch_json_with_retries(url, timeout_sec=10.0, attempts=1)
+        if next_err is not None:
+            return current_payload, None
+        current_payload = next_payload
+        current_summary = _classify_channels(current_payload)
+
+    return current_payload, None
+
+
 def build_acceptance_report(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).expanduser().resolve()
     log_files = [Path(p).expanduser() for p in args.log_files] or DEFAULT_LOG_FILES
@@ -315,8 +370,8 @@ def build_acceptance_report(args: argparse.Namespace) -> dict[str, Any]:
         per_cycle_timeout_sec=int(args.restart_timeout_sec),
     )
 
-    health_payload, health_error = _fetch_json(args.health_url)
-    channels_payload, channels_error = _fetch_json(args.channels_url)
+    health_payload, health_error = _fetch_json_with_retries(args.health_url, timeout_sec=8.0, attempts=2)
+    channels_payload, channels_error = _fetch_stable_channels_payload(args.channels_url)
     channels = _classify_channels(channels_payload)
 
     kpi_scan = _scan_kpi_patterns(

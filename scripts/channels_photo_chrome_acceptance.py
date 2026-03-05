@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib import error, request
@@ -36,6 +37,25 @@ def _fetch_json(url: str, timeout_sec: float = 10.0) -> tuple[dict[str, Any], st
             return json.loads(body), None
     except (error.URLError, error.HTTPError, TimeoutError, ValueError) as exc:
         return {}, str(exc)
+
+
+def _fetch_json_with_retries(
+    url: str,
+    *,
+    timeout_sec: float = 10.0,
+    attempts: int = 1,
+) -> tuple[dict[str, Any], str | None]:
+    """Повторяет запрос endpoint'а, чтобы сгладить кратковременные timeout-скачки."""
+    safe_attempts = max(1, int(attempts))
+    last_payload: dict[str, Any] = {}
+    last_error: str | None = None
+    for _ in range(safe_attempts):
+        payload, err = _fetch_json(url, timeout_sec=timeout_sec)
+        if err is None:
+            return payload, None
+        last_payload = payload
+        last_error = err
+    return last_payload, last_error
 
 
 def _classify_channels(channels_payload: dict[str, Any]) -> dict[str, Any]:
@@ -72,6 +92,56 @@ def _classify_channels(channels_payload: dict[str, Any]) -> dict[str, Any]:
         "success_rate": success_rate,
         "gateway_reachable": bool(channels_payload.get("gateway_reachable")),
     }
+
+
+def _is_transient_disconnect_failure(entry: dict[str, Any]) -> bool:
+    """
+    Определяет кратковременный канал-флап, который обычно лечится health-monitor.
+
+    Признак: канал в failed и meta содержит `disconnected`, но это не permanent `not configured`.
+    """
+    meta = str(entry.get("meta") or "").lower()
+    if "not configured" in meta:
+        return False
+    return "disconnected" in meta
+
+
+def _fetch_stable_channels_payload(
+    url: str,
+    *,
+    timeout_sec: float = 14.0,
+    attempts: int = 3,
+    settle_attempts: int = 2,
+    settle_delay_sec: float = 1.2,
+) -> tuple[dict[str, Any], str | None]:
+    """
+    Забирает channels/status и сглаживает короткие флап-окна reconnect.
+
+    Логика:
+    - сначала обычные HTTP retries;
+    - если endpoint успешен, но есть только `disconnected` фейлы — делаем
+      короткие повторные пробы перед тем, как считать acceptance красным.
+    """
+    payload, err = _fetch_json_with_retries(url, timeout_sec=timeout_sec, attempts=attempts)
+    if err is not None:
+        return payload, err
+
+    current_payload = payload
+    current_summary = _classify_channels(current_payload)
+    for _ in range(max(0, int(settle_attempts))):
+        failed = current_summary.get("failed") or []
+        if not failed:
+            return current_payload, None
+        if not all(_is_transient_disconnect_failure(item) for item in failed):
+            return current_payload, None
+        time.sleep(max(0.0, float(settle_delay_sec)))
+        next_payload, next_err = _fetch_json_with_retries(url, timeout_sec=timeout_sec, attempts=1)
+        if next_err is not None:
+            return current_payload, None
+        current_payload = next_payload
+        current_summary = _classify_channels(current_payload)
+
+    return current_payload, None
 
 
 def _run_cli_json(cmd: list[str], timeout_sec: float = 20.0) -> tuple[dict[str, Any], str | None]:
@@ -171,6 +241,19 @@ def _run_browser_action_probe(url: str = "https://example.com") -> dict[str, Any
         timeout_sec=20.0,
     )
     if snapshot_err:
+        low = str(snapshot_err).lower()
+        # На macOS/Chrome в некоторых режимах CDP может быть ограничен политикой
+        # безопасности браузера. Это не означает, что relay недоступен: маршрут
+        # может быть "gateway reachable + auth required". Для readiness считаем
+        # это explainable-деградацией, а не жёстким блокером.
+        if "target.attachtobrowsertarget" in low and "not allowed" in low:
+            return {
+                "ok": False,
+                "state": "snapshot_auth_not_allowed",
+                "blocking": False,
+                "detail": "CDP snapshot недоступен (Not allowed). Нужна авторизация/attach в Chrome relay.",
+                "tabs_count": len(tabs),
+            }
         return {
             "ok": False,
             "state": "snapshot_failed",
@@ -197,11 +280,31 @@ def build_report(
     strict_browser_action: bool = False,
 ) -> dict[str, Any]:
     base = base_url.rstrip("/")
-    health, health_err = _fetch_json(f"{base}/api/health/lite")
-    channels_payload, channels_err = _fetch_json(f"{base}/api/openclaw/channels/status")
-    browser_payload, browser_err = _fetch_json(f"{base}/api/openclaw/browser-smoke")
-    photo_payload, photo_err = _fetch_json(f"{base}/api/openclaw/photo-smoke")
-    compat_payload, compat_err = _fetch_json(f"{base}/api/openclaw/control-compat/status")
+    health, health_err = _fetch_json_with_retries(
+        f"{base}/api/health/lite",
+        timeout_sec=10.0,
+        attempts=2,
+    )
+    channels_payload, channels_err = _fetch_stable_channels_payload(
+        f"{base}/api/openclaw/channels/status",
+        timeout_sec=14.0,
+        attempts=3,
+    )
+    browser_payload, browser_err = _fetch_json_with_retries(
+        f"{base}/api/openclaw/browser-smoke",
+        timeout_sec=12.0,
+        attempts=2,
+    )
+    photo_payload, photo_err = _fetch_json_with_retries(
+        f"{base}/api/openclaw/photo-smoke",
+        timeout_sec=12.0,
+        attempts=3,
+    )
+    compat_payload, compat_err = _fetch_json_with_retries(
+        f"{base}/api/openclaw/control-compat/status",
+        timeout_sec=12.0,
+        attempts=2,
+    )
 
     channels = _classify_channels(channels_payload)
 
@@ -248,6 +351,11 @@ def build_report(
         warnings.append(
             "Chrome relay: вкладка не подключена к расширению OpenClaw (tab_not_connected). "
             "Для полного action-flow подключи вкладку и повтори acceptance."
+        )
+    if str(browser_action.get("state") or "") == "snapshot_auth_not_allowed":
+        warnings.append(
+            "Chrome relay: snapshot через CDP отклонён (Not allowed). "
+            "Для полного action-flow авторизуй relay в Chrome и повтори acceptance."
         )
 
     return {
