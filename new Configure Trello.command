@@ -32,7 +32,17 @@ openclaw config set env.TRELLO_TOKEN "$TRELLO_TOKEN"
 
 echo
 echo "🔄 Применяю секреты/конфиг в runtime..."
-openclaw secrets reload || openclaw gateway restart || true
+if openclaw health >/dev/null 2>&1; then
+  # Если gateway уже запущен, применяем новые секреты сразу в текущий runtime.
+  if ! openclaw secrets reload >/dev/null 2>&1; then
+    echo "⚠️ Не удалось сделать hot-reload секретов. Они всё равно применятся при следующем запуске gateway."
+  else
+    echo "✅ Секреты применены в активном runtime."
+  fi
+else
+  # Нормальная ситуация для foreground-запуска через локальный скрипт.
+  echo "ℹ️ Gateway сейчас недоступен по ws://127.0.0.1:18789; секреты уже сохранены в конфиг и применятся при следующем старте."
+fi
 
 echo
 echo "🩺 Проверяю статус skills..."
