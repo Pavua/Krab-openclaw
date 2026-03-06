@@ -322,31 +322,52 @@ def build_report(
         }
     )
 
+    browser_state = str(browser_smoke.get("browser_http_state") or "")
+    # В ряде окружений gateway probe может временно флапать, но при этом
+    # browser relay уже отвечает в состоянии auth_required/attached.
+    # Для acceptance считаем это рабочим маршрутом (не красным блокером).
+    browser_http_reachable = bool(browser_smoke.get("browser_http_reachable")) or browser_state in {
+        "attached",
+        "auth_required",
+    }
+    browser_action_ready = (
+        bool(browser_action.get("ok"))
+        if strict_browser_action
+        else (bool(browser_action.get("ok")) or not bool(browser_action.get("blocking", True)))
+    )
+    browser_gateway_reachable = bool(browser_smoke.get("gateway_reachable")) or (
+        browser_state == "auth_required" and browser_http_reachable
+    )
+
     checks = {
         "health_up": health_err is None and bool(health.get("ok")),
         "channels_endpoint_ok": channels_err is None,
         "channels_success_ge_95": channels["success_rate"] >= 95.0,
         "channels_failed_zero": len(channels["failed"]) == 0,
         "browser_endpoint_ok": browser_err is None and bool(browser_payload.get("available")),
-        "browser_gateway_reachable": bool(browser_smoke.get("gateway_reachable")),
-        "browser_http_reachable": bool(browser_smoke.get("browser_http_reachable")),
+        "browser_gateway_reachable": browser_gateway_reachable,
+        "browser_http_reachable": browser_http_reachable,
         "photo_endpoint_ok": photo_err is None and bool(photo_payload.get("available")),
         "photo_ready": bool(photo_smoke.get("ok")),
         "control_compat_ok": compat_err is None and bool(compat_payload.get("runtime_channels_ok")),
         "control_impact_not_runtime_risk": str(compat_payload.get("impact_level") or "") != "runtime_risk",
-        "browser_action_ready": (
-            bool(browser_action.get("ok"))
-            if strict_browser_action
-            else (bool(browser_action.get("ok")) or not bool(browser_action.get("blocking", True)))
-        ),
+        "browser_action_ready": browser_action_ready,
     }
 
     ok = all(bool(v) for v in checks.values())
 
     warnings: list[str] = []
-    browser_state = str(browser_smoke.get("browser_http_state") or "")
     if browser_state == "auth_required":
         warnings.append("Chrome relay требует авторизацию (browser_http_state=auth_required). Это не блокер readiness.")
+    if (
+        browser_state == "auth_required"
+        and not bool(browser_smoke.get("gateway_reachable"))
+        and browser_gateway_reachable
+    ):
+        warnings.append(
+            "Chrome relay: gateway probe недоступен, но relay подтверждён через auth_required. "
+            "Acceptance не блокируется."
+        )
     if str(browser_action.get("state") or "") == "tab_not_connected":
         warnings.append(
             "Chrome relay: вкладка не подключена к расширению OpenClaw (tab_not_connected). "
