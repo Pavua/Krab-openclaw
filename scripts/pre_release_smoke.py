@@ -77,10 +77,52 @@ def _mk_result(
 
 
 def _python_bin() -> str:
+    """
+    Выбирает python для smoke так, чтобы в нём были базовые модули:
+    - pytest (unit-гейты),
+    - dotenv (autoswitch dry-run).
+
+    Почему:
+    после рефакторинга часть окружений содержит `.venv/bin/python` без pip/pytest,
+    из-за чего pre-release smoke ложно падает до реальной проверки.
+    """
+    candidates: list[str] = []
     venv = ROOT / ".venv" / "bin" / "python"
     if venv.exists():
-        return str(venv)
-    return sys.executable or "python3"
+        candidates.append(str(venv))
+    if sys.executable:
+        candidates.append(sys.executable)
+    for fallback in ("python3", "python"):
+        resolved = shutil.which(fallback)
+        if resolved:
+            candidates.append(resolved)
+
+    required_modules = ("pytest", "dotenv")
+    seen: set[str] = set()
+    for py in candidates:
+        if py in seen:
+            continue
+        seen.add(py)
+        try:
+            code, _, _ = _run(
+                [
+                    py,
+                    "-c",
+                    "import importlib.util as u; "
+                    f"mods={required_modules!r}; "
+                    "ok=all(u.find_spec(m) is not None for m in mods); "
+                    "raise SystemExit(0 if ok else 1)",
+                ],
+                timeout=20,
+            )
+        except Exception:
+            continue
+        if code == 0:
+            return py
+
+    # Без полного набора модулей возвращаем первый доступный python,
+    # чтобы smoke хотя бы дал диагностируемый отчёт.
+    return candidates[0] if candidates else (sys.executable or "python3")
 
 
 def _script_exists(rel_path: str) -> bool:
