@@ -782,6 +782,26 @@ class OpenClawClient:
 
         try:
             selected_model = await model_manager.get_best_model(has_photo=has_photo)
+            # В force_cloud режиме не позволяем оставаться на локальной модели,
+            # иначе runtime-route показывает local и ломает "cloud truth".
+            if force_cloud and model_manager.is_local_model(selected_model):
+                cloud_candidate = await self._pick_cloud_retry_model(
+                    model_manager=model_manager,
+                    current_model=selected_model,
+                    has_photo=has_photo,
+                )
+                if cloud_candidate:
+                    logger.warning(
+                        "force_cloud_remapped_local_selection",
+                        requested=selected_model,
+                        remapped=cloud_candidate,
+                    )
+                    selected_model = cloud_candidate
+                else:
+                    logger.warning(
+                        "force_cloud_no_cloud_candidate_available",
+                        requested=selected_model,
+                    )
             if not force_cloud and model_manager.is_local_model(selected_model):
                 local_ready = await model_manager.ensure_model_loaded(
                     selected_model,

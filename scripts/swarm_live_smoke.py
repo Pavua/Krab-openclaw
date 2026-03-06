@@ -226,6 +226,7 @@ async def _run_live(
     max_output_tokens: int,
     timeout_sec: float,
     clear_session: bool,
+    require_cloud_channel: bool,
 ) -> dict[str, Any]:
     room = AgentRoom()
     router = _LiveRouter(
@@ -257,6 +258,11 @@ async def _run_live(
     elapsed = round(time.perf_counter() - started, 3)
     channels = {str(item.get("channel") or "") for item in router.routes}
     statuses = {str(item.get("status") or "") for item in router.routes}
+    has_ok_cloud_channel = any(
+        str(item.get("status") or "") == "ok"
+        and str(item.get("channel") or "") == "openclaw_cloud"
+        for item in router.routes
+    )
     checks = {
         "roles_count_is_3": len(room.roles) == 3,
         "response_not_empty": _is_response_non_empty(result),
@@ -271,6 +277,8 @@ async def _run_live(
     }
     if force_cloud:
         checks["route_force_cloud_reflected"] = all(bool(item.get("force_cloud")) for item in router.routes)
+    if require_cloud_channel:
+        checks["route_has_ok_cloud_channel"] = has_ok_cloud_channel
 
     return {
         "mode": "live",
@@ -282,6 +290,7 @@ async def _run_live(
         "force_cloud": bool(force_cloud),
         "max_output_tokens": int(max_output_tokens),
         "timeout_sec": float(timeout_sec),
+        "require_cloud_channel": bool(require_cloud_channel),
         "checks": checks,
         "calls_count": len(router.calls),
         "routes_count": len(router.routes),
@@ -315,6 +324,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-clear-session",
         action="store_true",
         help="Live: не очищать тестовую сессию после прогона.",
+    )
+    parser.add_argument(
+        "--require-cloud-channel",
+        action="store_true",
+        help="Live: считать smoke успешным только если есть хотя бы один OK route через openclaw_cloud.",
     )
     parser.add_argument(
         "--output",
@@ -361,6 +375,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         max_output_tokens=int(args.max_output_tokens),
         timeout_sec=float(args.timeout_sec),
         clear_session=not bool(args.no_clear_session),
+        require_cloud_channel=bool(args.require_cloud_channel),
     )
 
 

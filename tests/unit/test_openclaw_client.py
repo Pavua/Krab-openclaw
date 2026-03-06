@@ -180,6 +180,27 @@ async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenCl
 
 
 @pytest.mark.asyncio
+async def test_force_cloud_remaps_local_selected_model_to_cloud_candidate(client: OpenClawClient) -> None:
+    """При force_cloud локальная первичная модель должна быть заменена на cloud-кандидат."""
+    from src.model_manager import model_manager
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")):
+        with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
+            with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")) as completion:
+                    chunks = []
+                    async for chunk in client.send_message_stream("Hi", "chat-force-cloud", force_cloud=True):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud OK"
+    assert completion.await_count == 1
+    assert completion.await_args.kwargs["model_id"] == "google/gemini-2.5-flash"
+    route = client.get_last_runtime_route()
+    assert route.get("channel") == "openclaw_cloud"
+    assert route.get("force_cloud") is True
+
+
+@pytest.mark.asyncio
 async def test_send_message_stream_passes_text_max_output_tokens(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
