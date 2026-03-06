@@ -119,42 +119,85 @@ async def _probe_openclaw_chat(base_url: str, token: str) -> dict[str, Any]:
         }
 
 
-async def _probe_openclaw_models(base_url: str, token: str) -> dict[str, Any]:
-    """Ненавязчивая проверка OpenClaw без запуска генерации."""
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+async def _probe_openclaw_api_non_invasive(base_url: str, token: str) -> dict[str, Any]:
+    """
+    Ненавязчивая проверка OpenClaw API без запуска генерации.
+
+    Техника:
+    - отправляем заведомо невалидный запрос (`messages=[]`) в `/v1/chat/completions`;
+    - ожидаем controlled-ошибку 400 от валидного API;
+    - если получили 401/403, HTML, 404 или network_error — считаем деградацией.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    } if token else {"Content-Type": "application/json"}
+    payload = {
+        "model": "google/gemini-2.5-flash",
+        "messages": [],
+        "stream": False,
+    }
     try:
         async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-            response = await client.get(f"{base_url.rstrip('/')}/v1/models")
+            response = await client.post(
+                f"{base_url.rstrip('/')}/v1/chat/completions",
+                json=payload,
+            )
         body = response.text[:1200]
-        if response.status_code != 200:
+        content_type = str(response.headers.get("content-type", "") or "").lower()
+        if response.status_code in (401, 403):
             return {
                 "ok": False,
                 "status": response.status_code,
-                "error": "http_error",
+                "error": "auth_error",
                 "body": body,
-                "has_gemini_25_flash": False,
             }
-        has_gemini = False
+        if "application/json" not in content_type:
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": "non_json_chat_endpoint",
+                "body": body,
+            }
         try:
             payload = response.json()
-            models = payload.get("data", []) if isinstance(payload, dict) else []
-            model_ids = [str(item.get("id", "") or "") for item in models if isinstance(item, dict)]
-            has_gemini = "google/gemini-2.5-flash" in model_ids
+            if not isinstance(payload, dict) or "error" not in payload:
+                return {
+                    "ok": False,
+                    "status": response.status_code,
+                    "error": "invalid_chat_payload",
+                    "body": body,
+                }
+            err = payload.get("error", {})
+            err_type = str(err.get("type", "") or "")
+            err_msg = str(err.get("message", "") or "")
+            # Ожидаем controlled invalid_request_error из-за пустого messages.
+            if response.status_code == 400 and err_type == "invalid_request_error":
+                return {
+                    "ok": True,
+                    "status": 400,
+                    "error": "ok_controlled_400",
+                    "body": err_msg[:500],
+                }
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": f"unexpected_chat_response:{err_type or 'unknown'}",
+                "body": body,
+            }
         except Exception:  # noqa: BLE001
-            pass
-        return {
-            "ok": True,
-            "status": 200,
-            "error": "ok",
-            "has_gemini_25_flash": has_gemini,
-        }
+            return {
+                "ok": False,
+                "status": response.status_code,
+                "error": "chat_json_decode_error",
+                "body": body,
+            }
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
             "status": 0,
             "error": "network_error",
             "body": str(exc),
-            "has_gemini_25_flash": False,
         }
 
 
@@ -178,7 +221,7 @@ async def main_async(*, chat_probe: bool) -> dict[str, Any]:
         key_source="env:GEMINI_API_KEY_PAID",
         key_tier="paid",
     )
-    openclaw_models_probe = await _probe_openclaw_models(openclaw_base, openclaw_token)
+    openclaw_api_probe = await _probe_openclaw_api_non_invasive(openclaw_base, openclaw_token)
     if chat_probe:
         openclaw_chat_probe = await _probe_openclaw_chat(openclaw_base, openclaw_token)
     else:
@@ -199,14 +242,14 @@ async def main_async(*, chat_probe: bool) -> dict[str, Any]:
     ready = bool(
         free_probe.provider_status == "ok"
         and paid_probe.provider_status == "ok"
-        and openclaw_models_probe.get("ok")
+        and openclaw_api_probe.get("ok")
     )
 
     summary = {
         "status": "READY" if ready else "DEGRADED",
         "free": free_probe.to_dict(),
         "paid": paid_probe.to_dict(),
-        "openclaw_models": openclaw_models_probe,
+        "openclaw_api": openclaw_api_probe,
         "openclaw_chat": openclaw_chat_probe,
         "runtime_google_key_masked": mask_secret(runtime_google_key),
         "env_free_key_masked": mask_secret(free_key),
@@ -232,7 +275,7 @@ def main() -> int:
     print(f"Итог: {result['status']}")
     print(f"Free key status: {result['free']['provider_status']}")
     print(f"Paid key status: {result['paid']['provider_status']}")
-    print(f"OpenClaw models ok: {result['openclaw_models'].get('ok')}")
+    print(f"OpenClaw API probe ok: {result['openclaw_api'].get('ok')}")
     print(f"OpenClaw chat probe: {result['openclaw_chat'].get('error')}")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "READY" else 2
