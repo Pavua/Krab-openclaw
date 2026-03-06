@@ -422,3 +422,38 @@ async def test_empty_response_does_not_override_last_auth_error(client: OpenClaw
     text = "".join(chunks).lower()
     assert "ключ" in text
     assert ("авторизац" in text) or ("невалид" in text)
+
+
+@pytest.mark.asyncio
+async def test_force_cloud_empty_stream_switches_to_openai_quality_retry(client: OpenClawClient) -> None:
+    """
+    При force_cloud и пустом облачном ответе пробуем cloud-quality recovery,
+    в том числе переключение на openai/gpt-4o-mini (если ключ доступен).
+    """
+    from src.model_manager import model_manager
+
+    completion = AsyncMock(
+        side_effect=[
+            "<EMPTY MESSAGE>",
+            "<EMPTY MESSAGE>",
+            "Cloud recovery OK",
+        ]
+    )
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-quality"}, clear=False):
+        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-3-flash-preview")):
+            with patch.object(model_manager, "is_local_model", return_value=False):
+                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-3-flash-preview")):
+                    with patch.object(client, "_openclaw_completion_once", new=completion):
+                        chunks = []
+                        async for chunk in client.send_message_stream(
+                            "Hi",
+                            "chat-force-cloud-quality-retry",
+                            force_cloud=True,
+                        ):
+                            chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud recovery OK"
+    assert completion.await_count == 3
+    assert completion.await_args_list[-1].kwargs["model_id"] == "openai/gpt-4o-mini"
+    route = client.get_last_runtime_route()
+    assert route.get("channel") == "openclaw_cloud"

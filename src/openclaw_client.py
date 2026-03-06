@@ -878,6 +878,7 @@ class OpenClawClient:
 
             tried_paid = False
             tried_cloud_auth_recovery = False
+            tried_cloud_quality_recovery = False
             tried_local = False
             tried_cloud_after_local = False
             tried_semantic_retry = False
@@ -956,6 +957,32 @@ class OpenClawClient:
                     if self._is_cloud_candidate_usable("openai/gpt-4o-mini", model_manager):
                         attempt_model = "openai/gpt-4o-mini"
                         self._cloud_tier_state["last_recovery_action"] = "switch_to_openai"
+                        continue
+
+                # 2.25) Cloud quality recovery:
+                # если облачный ответ пустой/битый/таймаутный — пробуем другой cloud-кандидат,
+                # не переключаясь в local.
+                if (
+                    semantic["code"] in {"lm_empty_stream", "lm_malformed_response", "provider_timeout", "provider_error"}
+                    and not tried_cloud_quality_recovery
+                    and not model_manager.is_local_model(attempt_model)
+                ):
+                    tried_cloud_quality_recovery = True
+                    cloud_retry = await self._pick_cloud_retry_model(
+                        model_manager=model_manager,
+                        current_model=attempt_model,
+                        has_photo=has_photo,
+                    )
+                    if cloud_retry:
+                        attempt_model = cloud_retry
+                        self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_quality_retry"
+                        continue
+                    if (
+                        attempt_model != "openai/gpt-4o-mini"
+                        and self._is_cloud_candidate_usable("openai/gpt-4o-mini", model_manager)
+                    ):
+                        attempt_model = "openai/gpt-4o-mini"
+                        self._cloud_tier_state["last_recovery_action"] = "switch_to_openai_quality_retry"
                         continue
 
                 # 2.5) Фото пришло в локальную модель без vision add-on:
