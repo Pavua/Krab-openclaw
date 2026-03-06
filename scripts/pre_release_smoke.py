@@ -193,6 +193,13 @@ def main() -> int:
                 [py, "scripts/live_channel_smoke.py", "--max-age-minutes", "60"],
             )
         )
+    if _script_exists("scripts/swarm_live_smoke.py"):
+        diagnostics.append(
+            (
+                "swarm_live_smoke_mock",
+                [py, "scripts/swarm_live_smoke.py", "--mode", "mock", "--rounds", "1"],
+            )
+        )
     if _script_exists("scripts/e1e3_acceptance.py"):
         diagnostics.append(
             (
