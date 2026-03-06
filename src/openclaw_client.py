@@ -89,6 +89,19 @@ class OpenClawClient:
             return raw.split("/", 1)[0]
         return "unknown"
 
+    @staticmethod
+    def _local_recovery_enabled(*, force_cloud: bool) -> bool:
+        """
+        Разрешён ли аварийный fallback cloud -> local.
+
+        Логика:
+        - при force_cloud локальный recovery всегда выключен;
+        - иначе управляется флагом LOCAL_FALLBACK_ENABLED.
+        """
+        if force_cloud:
+            return False
+        return bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True))
+
     def _set_last_runtime_route(
         self,
         *,
@@ -258,8 +271,38 @@ class OpenClawClient:
         if not payload:
             return {"code": "lm_empty_stream", "message": "Пустой ответ от модели"}
 
+        # Некоторые локальные модели могут вернуть служебный tool-трейс в контент вместо
+        # нормального ответа (например `<tool_response>{"status":"error"}` + im-токены).
+        # Такой ответ не должен уходить пользователю как есть.
+        if "<tool_response>" in low and '"status": "error"' in low:
+            return {
+                "code": "lm_malformed_response",
+                "message": "Локальная модель вернула служебный/битый ответ",
+            }
+        if "<|im_start|>" in low and "<|im_end|>" in low and '"status": "error"' in low:
+            return {
+                "code": "lm_malformed_response",
+                "message": "Локальная модель вернула служебный/битый ответ",
+            }
+
         semantic_patterns = [
             ("no models loaded", "model_not_loaded", "Локальная модель не загружена"),
+            ("model unloaded", "model_not_loaded", "Локальная модель выгружена"),
+            (
+                "vision add-on is not loaded",
+                "vision_addon_missing",
+                "Локальная модель запущена без vision add-on",
+            ),
+            (
+                "missing image config",
+                "vision_addon_missing",
+                "Локальная модель запущена без vision add-on",
+            ),
+            (
+                "images were provided for processing",
+                "vision_addon_missing",
+                "Локальная модель запущена без vision add-on",
+            ),
             ("<empty message>", "lm_empty_stream", "LM Studio вернула пустой поток"),
             ("empty message", "lm_empty_stream", "LM Studio вернула пустой поток"),
             ("stopiteration", "lm_empty_stream", "LM Studio вернула пустой поток"),
@@ -300,6 +343,18 @@ class OpenClawClient:
         if isinstance(exc, ProviderAuthError):
             return {"code": AUTH_UNAUTHORIZED_CODE, "message": "Ошибка авторизации облачного ключа"}
         if isinstance(exc, ProviderError):
+            low = str(exc).lower()
+            if (
+                "vision add-on is not loaded" in low
+                or "missing image config" in low
+                or "images were provided for processing" in low
+            ):
+                return {
+                    "code": "vision_addon_missing",
+                    "message": "Локальная модель запущена без vision add-on",
+                }
+            if "model unloaded" in low or "no models loaded" in low:
+                return {"code": "model_not_loaded", "message": "Локальная модель выгружена"}
             code = "provider_timeout" if getattr(exc, "retryable", False) else "provider_error"
             return {"code": code, "message": str(exc) or "Ошибка провайдера"}
         return {"code": "transport_error", "message": str(exc) or "Ошибка транспорта"}
@@ -323,6 +378,47 @@ class OpenClawClient:
             out.append(system_message)
         out.extend(tail)
         return out
+
+    @staticmethod
+    def _strip_image_parts_for_text_route(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        Удаляет image-блоки из истории для текстового маршрута.
+
+        Почему:
+        - после фото-сообщений в истории остаются multimodal parts;
+        - на чисто текстовой модели это может вызывать ошибки вида
+          "Vision add-on is not loaded..." даже при новом текстовом запросе.
+        """
+        sanitized: list[dict[str, Any]] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                sanitized.append(msg)
+                continue
+
+            text_chunks: list[str] = []
+            had_image = False
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type", "") or "").strip().lower()
+                if part_type == "text":
+                    text_value = str(part.get("text", "") or "").strip()
+                    if text_value:
+                        text_chunks.append(text_value)
+                    continue
+                if part_type in {"image_url", "image_file", "input_image"}:
+                    had_image = True
+
+            replacement = "\n".join(text_chunks).strip()
+            if had_image:
+                replacement = (replacement + "\n" if replacement else "") + "[Изображение в контексте пропущено для текстовой модели]"
+            cloned = dict(msg)
+            cloned["content"] = replacement
+            sanitized.append(cloned)
+        return sanitized
 
     async def _switch_cloud_tier(self, tier: str, *, reason: str) -> dict[str, Any]:
         """Переключает active tier ключа в OpenClaw models.json и делает secrets reload."""
@@ -381,6 +477,7 @@ class OpenClawClient:
         *,
         model_id: str,
         messages_to_send: list[dict[str, Any]],
+        max_output_tokens: int | None = None,
         allow_auth_retry: bool = True,
     ) -> str:
         """Один запрос к OpenClaw (stream=true) с буферизацией ответа."""
@@ -389,6 +486,9 @@ class OpenClawClient:
             "stream": True,
             "model": model_id,
         }
+        if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+            # Совместимый лимит длины ответа для OpenAI-совместимых /v1/chat/completions.
+            payload["max_tokens"] = max_output_tokens
 
         full_response = ""
         retry_after_token_refresh = False
@@ -437,6 +537,7 @@ class OpenClawClient:
                 return await self._openclaw_completion_once(
                     model_id=model_id,
                     messages_to_send=messages_to_send,
+                    max_output_tokens=max_output_tokens,
                     allow_auth_retry=False,
                 )
 
@@ -554,6 +655,7 @@ class OpenClawClient:
         chat_id: str,
         messages_to_send: list[dict[str, Any]],
         model_hint: str,
+        max_output_tokens: int | None = None,
     ) -> str | None:
         """Прямой fallback в LM Studio (минуя OpenClaw)."""
         if not config.LM_STUDIO_URL:
@@ -568,6 +670,8 @@ class OpenClawClient:
                     "stream": False,
                     "model": model_hint if model_hint else "local",
                 }
+                if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+                    payload["max_tokens"] = max_output_tokens
                 resp = await client.post("/chat/completions", json=payload)
                 if resp.status_code != 200:
                     return None
@@ -620,6 +724,7 @@ class OpenClawClient:
         system_prompt: Optional[str] = None,
         images: Optional[List[str]] = None,
         force_cloud: bool = False,
+        max_output_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         """
         Отправляет сообщение в OpenClaw с recovery policy.
@@ -710,6 +815,8 @@ class OpenClawClient:
             attempt_model = selected_model
 
             messages_to_send = self._apply_sliding_window(chat_id, self._sessions[chat_id])
+            if not has_photo:
+                messages_to_send = self._strip_image_parts_for_text_route(messages_to_send)
 
             logger.info(
                 "openclaw_stream_start",
@@ -733,6 +840,7 @@ class OpenClawClient:
                     chat_id=chat_id,
                     messages_to_send=messages_to_send,
                     model_hint=selected_model,
+                    max_output_tokens=max_output_tokens,
                 )
                 if lm_text:
                     logger.info("local_direct_path_used", chat_id=chat_id, model=selected_model)
@@ -763,6 +871,7 @@ class OpenClawClient:
                     final_response = await self._openclaw_completion_once(
                         model_id=attempt_model,
                         messages_to_send=messages_to_send,
+                        max_output_tokens=max_output_tokens,
                     )
                     semantic = self._detect_semantic_error(final_response)
                 except (ProviderAuthError, ProviderError) as exc:
@@ -783,6 +892,7 @@ class OpenClawClient:
                         final_response = await self._openclaw_completion_once(
                             model_id=attempt_model,
                             messages_to_send=retry_messages,
+                            max_output_tokens=max_output_tokens,
                         )
                         semantic = self._detect_semantic_error(final_response)
                         messages_to_send = retry_messages
@@ -828,17 +938,70 @@ class OpenClawClient:
                         self._cloud_tier_state["last_recovery_action"] = "switch_to_openai"
                         continue
 
+                # 2.5) Фото пришло в локальную модель без vision add-on:
+                # исключаем текущую локальную модель для фото и уходим на альтернативу.
+                if semantic["code"] == "vision_addon_missing" and has_photo:
+                    if (
+                        not force_cloud
+                        and model_manager.is_local_model(attempt_model)
+                        and hasattr(model_manager, "_exclude_local_model")
+                    ):
+                        try:
+                            model_manager._exclude_local_model(  # noqa: SLF001
+                                attempt_model,
+                                reason="vision_addon_missing",
+                                ttl_sec=1800.0,
+                            )
+                        except Exception:
+                            pass
+
+                    alt_local = ""
+                    if not force_cloud and hasattr(model_manager, "_local_candidates"):
+                        try:
+                            local_candidates = await model_manager._local_candidates(has_photo=True)  # noqa: SLF001
+                        except Exception:
+                            local_candidates = []
+                        for candidate_id, _ in local_candidates:
+                            if str(candidate_id or "").strip() != str(attempt_model or "").strip():
+                                alt_local = str(candidate_id or "").strip()
+                                break
+                    if alt_local:
+                        loaded = await model_manager.ensure_model_loaded(
+                            alt_local,
+                            has_photo=True,
+                        )
+                        if loaded:
+                            attempt_model = alt_local
+                            self._cloud_tier_state["last_recovery_action"] = "switch_to_alt_local_vision"
+                            continue
+
+                    cloud_candidate = await self._pick_cloud_retry_model(
+                        model_manager=model_manager,
+                        current_model=attempt_model,
+                        has_photo=True,
+                    )
+                    if cloud_candidate:
+                        attempt_model = cloud_candidate
+                        self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_on_vision_addon_missing"
+                        continue
+
                 # 3) критичные ошибки -> local autoload (если не force_cloud)
                 local_recovery_codes = {
                     "model_not_loaded",
+                    "vision_addon_missing",
                     "quota_exceeded",
                     "provider_timeout",
                     "provider_error",
                     "transport_error",
                     "lm_empty_stream",
                     "lm_model_crash",
+                    "lm_malformed_response",
                 } | LEGACY_AUTH_CODES
-                if semantic["code"] in local_recovery_codes and not force_cloud and not tried_local:
+                if (
+                    semantic["code"] in local_recovery_codes
+                    and self._local_recovery_enabled(force_cloud=force_cloud)
+                    and not tried_local
+                ):
                     tried_local = True
                     local_model = await self._resolve_local_model_for_retry(
                         model_manager,
@@ -879,11 +1042,15 @@ class OpenClawClient:
                 # Последняя защита: прямой LM fallback.
                 # Для auth-ошибок fallback не применяем, чтобы не маскировать
                 # реальную проблему "configured but unauthorized".
-                if not force_cloud and semantic_after["code"] not in LEGACY_AUTH_CODES:
+                if (
+                    self._local_recovery_enabled(force_cloud=force_cloud)
+                    and semantic_after["code"] not in LEGACY_AUTH_CODES
+                ):
                     lm_text = await self._direct_lm_fallback(
                         chat_id=chat_id,
                         messages_to_send=messages_to_send,
                         model_hint=attempt_model,
+                        max_output_tokens=max_output_tokens,
                     )
                     if lm_text:
                         final_response = lm_text
@@ -917,6 +1084,10 @@ class OpenClawClient:
                     user_text = "❌ Модель вернула пустой поток. Повтори запрос или переключись на !model local."
                 elif code == "lm_model_crash":
                     user_text = "❌ Локальная модель аварийно завершилась. Повтори запрос или переключись на !model cloud."
+                elif code == "lm_malformed_response":
+                    user_text = "❌ Локальная модель вернула служебный/повреждённый ответ. Повтори запрос или переключись на !model cloud."
+                elif code == "vision_addon_missing":
+                    user_text = "❌ Локальная модель не поддерживает обработку фото в текущей конфигурации. Переключи vision-модель или попробуй !model cloud."
                 else:
                     user_text = "❌ Облачный сервис временно недоступен. Попробуй позже или !model local."
                 yield user_text
@@ -995,21 +1166,23 @@ class OpenClawClient:
             if force_cloud:
                 yield "❌ Облачный сервис временно недоступен. Попробуй позже или переключись на !model local."
                 return
-            lm_text = await self._direct_lm_fallback(
-                chat_id=chat_id,
-                messages_to_send=messages_to_send,
-                model_hint=attempt_model or selected_model,
-            )
-            if lm_text:
-                self._set_last_runtime_route(
-                    channel="local_direct",
-                    model=attempt_model or selected_model,
-                    route_reason="local_direct_exception_fallback",
-                    route_detail="Ошибка OpenClaw транспорта, выполнен прямой fallback в LM Studio",
-                    force_cloud=force_cloud,
+            if self._local_recovery_enabled(force_cloud=force_cloud):
+                lm_text = await self._direct_lm_fallback(
+                    chat_id=chat_id,
+                    messages_to_send=messages_to_send,
+                    model_hint=attempt_model or selected_model,
+                    max_output_tokens=max_output_tokens,
                 )
-                yield lm_text
-                return
+                if lm_text:
+                    self._set_last_runtime_route(
+                        channel="local_direct",
+                        model=attempt_model or selected_model,
+                        route_reason="local_direct_exception_fallback",
+                        route_detail="Ошибка OpenClaw транспорта, выполнен прямой fallback в LM Studio",
+                        force_cloud=force_cloud,
+                    )
+                    yield lm_text
+                    return
             self._set_last_runtime_route(
                 channel="error",
                 model=attempt_model or selected_model,
@@ -1113,6 +1286,29 @@ class OpenClawClient:
             key_source="env:GEMINI_API_KEY_PAID",
             key_tier="paid",
         )
+        # Синхронизируем tier-state по фактическому runtime-check, чтобы health/lite
+        # отражал правду сразу после cold start, а не только после реального запроса.
+        probes: dict[str, CloudProbeResult] = {
+            "free": free_probe,
+            "paid": paid_probe,
+        }
+        selected_probe = probes.get(str(self.active_tier or "").strip().lower()) or free_probe
+        if selected_probe.provider_status != "ok":
+            if free_probe.provider_status == "ok":
+                selected_probe = free_probe
+            elif paid_probe.provider_status == "ok":
+                selected_probe = paid_probe
+
+        self._cloud_tier_state["last_provider_status"] = selected_probe.provider_status
+        self._cloud_tier_state["last_error_code"] = (
+            selected_probe.semantic_error_code if selected_probe.provider_status != "ok" else None
+        )
+        self._cloud_tier_state["last_error_message"] = (
+            selected_probe.detail if selected_probe.provider_status != "ok" else ""
+        )
+        self._cloud_tier_state["last_recovery_action"] = selected_probe.recovery_action
+        self._cloud_tier_state["last_probe_at"] = int(time.time())
+
         return {
             "ok": free_probe.provider_status == "ok" or paid_probe.provider_status == "ok",
             "active_tier": self.active_tier,

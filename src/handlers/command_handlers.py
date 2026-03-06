@@ -263,16 +263,22 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if sub == "local":
+        # Фиксируем режим в .env, чтобы он не слетал после рестартов runtime.
+        config.update_setting("FORCE_CLOUD", "0")
         config.FORCE_CLOUD = False
         await message.reply("💻 Режим: **local** — используется локальная модель (LM Studio).")
         return
 
     if sub == "cloud":
+        # Фиксируем режим в .env, чтобы cloud оставался активным после перезапуска.
+        config.update_setting("FORCE_CLOUD", "1")
         config.FORCE_CLOUD = True
         await message.reply(f"☁️ Режим: **cloud** — используется `{config.MODEL}`.")
         return
 
     if sub == "auto":
+        # Auto = не форсить cloud, отдаём выбор роутеру.
+        config.update_setting("FORCE_CLOUD", "0")
         config.FORCE_CLOUD = False
         await message.reply("🤖 Режим: **auto** — автоматический выбор лучшей модели.")
         return
@@ -287,6 +293,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
 
         if is_local:
             config.update_setting("LOCAL_PREFERRED_MODEL", resolved_id)
+            config.update_setting("FORCE_CLOUD", "0")
             config.FORCE_CLOUD = False
             await message.reply(
                 "💻 Зафиксирована локальная модель.\n"
@@ -297,6 +304,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             return
 
         config.update_setting("MODEL", resolved_id)
+        config.update_setting("FORCE_CLOUD", "1")
         config.FORCE_CLOUD = True
         await message.reply(
             "☁️ Зафиксирована облачная модель.\n"

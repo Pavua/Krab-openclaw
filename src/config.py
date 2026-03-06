@@ -76,6 +76,22 @@ class Config:
     GUARDED_IDLE_UNLOAD_GRACE_SEC: float = float(
         os.getenv("GUARDED_IDLE_UNLOAD_GRACE_SEC", "90")
     )
+    # Таймауты stream-ответа OpenClaw (сек):
+    # - CHUNK: ожидание между чанками;
+    # - FIRST_CHUNK: ожидание первого чанка для текстового запроса;
+    # - PHOTO_FIRST_CHUNK: ожидание первого чанка для фото/vision запроса.
+    OPENCLAW_CHUNK_TIMEOUT_SEC: float = float(os.getenv("OPENCLAW_CHUNK_TIMEOUT_SEC", "180"))
+    OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC: float = float(
+        os.getenv("OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", "420")
+    )
+    OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC: float = float(
+        os.getenv("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "540")
+    )
+    # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
+    USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "520"))
+    USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(
+        os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420")
+    )
 
     # Skills / APIs
     BRAVE_SEARCH_API_KEY: Optional[str] = os.getenv("BRAVE_SEARCH_API_KEY", os.getenv("BRAVE_API_KEY"))
@@ -94,6 +110,13 @@ class Config:
 
     # Routing: force_cloud полностью обходит локальный путь (Фаза 2.2)
     FORCE_CLOUD: bool = os.getenv("FORCE_CLOUD", "0").strip().lower() in ("1", "true", "yes")
+    # Разрешать ли автоматический fallback cloud -> local при ошибках облака.
+    # Важно: это НЕ отключает ручной local-режим (!model local), а только аварийный
+    # автопереход в локаль из cloud-сценариев.
+    LOCAL_FALLBACK_ENABLED: bool = os.getenv(
+        "LOCAL_FALLBACK_ENABLED",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
 
     # User settings
     OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "@yung_nagato")
@@ -130,11 +153,10 @@ class Config:
         "1",
     ).strip().lower() in ("1", "true", "yes")
     # Фоновые deferred-задачи (cron/reminders) в текущем userbot контуре.
-    # Пока false по умолчанию: чтобы ассистент не обещал "сделать позже",
-    # когда реального scheduler-исполнения нет.
+    # По умолчанию включено: reminders должны работать "из коробки" после старта runtime.
     SCHEDULER_ENABLED: bool = os.getenv(
         "SCHEDULER_ENABLED",
-        "0",
+        "1",
     ).strip().lower() in ("1", "true", "yes")
     DEFERRED_ACTION_GUARD_ENABLED: bool = os.getenv(
         "DEFERRED_ACTION_GUARD_ENABLED",
@@ -181,6 +203,8 @@ class Config:
                     cls.MODEL = value
                 elif key == "FORCE_CLOUD":
                     cls.FORCE_CLOUD = value.strip().lower() in ("1", "true", "yes")
+                elif key == "LOCAL_FALLBACK_ENABLED":
+                    cls.LOCAL_FALLBACK_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "LOCAL_PREFERRED_MODEL":
                     cls.LOCAL_PREFERRED_MODEL = value
                 elif key == "LOCAL_PREFERRED_VISION_MODEL":
@@ -191,6 +215,16 @@ class Config:
                     cls.GUARDED_IDLE_UNLOAD = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GUARDED_IDLE_UNLOAD_GRACE_SEC":
                     cls.GUARDED_IDLE_UNLOAD_GRACE_SEC = float(value)
+                elif key == "OPENCLAW_CHUNK_TIMEOUT_SEC":
+                    cls.OPENCLAW_CHUNK_TIMEOUT_SEC = float(value)
+                elif key == "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC":
+                    cls.OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC = float(value)
+                elif key == "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC":
+                    cls.OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC = float(value)
+                elif key == "USERBOT_MAX_OUTPUT_TOKENS":
+                    cls.USERBOT_MAX_OUTPUT_TOKENS = int(value)
+                elif key == "USERBOT_PHOTO_MAX_OUTPUT_TOKENS":
+                    cls.USERBOT_PHOTO_MAX_OUTPUT_TOKENS = int(value)
                 elif key == "AI_DISCLOSURE_ENABLED":
                     cls.AI_DISCLOSURE_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "AI_DISCLOSURE_TEXT":

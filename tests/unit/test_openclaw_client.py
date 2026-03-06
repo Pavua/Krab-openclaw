@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import ProviderAuthError
+from src.core.cloud_key_probe import CloudProbeResult
+from src.core.exceptions import ProviderAuthError, ProviderError
 from src.openclaw_client import OpenClawClient
 
 
@@ -19,6 +20,7 @@ def client() -> OpenClawClient:
         mock_config.OPENCLAW_URL = "http://mock-claw"
         mock_config.OPENCLAW_TOKEN = "token"
         mock_config.LM_STUDIO_URL = "http://mock-lm"
+        mock_config.LOCAL_FALLBACK_ENABLED = True
         mock_config.HISTORY_WINDOW_MESSAGES = 20
         mock_config.HISTORY_WINDOW_MAX_CHARS = None
         inst = OpenClawClient()
@@ -80,6 +82,32 @@ async def test_send_message_stream_marks_request_lifecycle(client: OpenClawClien
     assert "".join(chunks) == "OK"
     assert started.call_count == 1
     assert finished.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_text_request_strips_legacy_image_parts(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    client._sessions["chat-with-image"] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,abc"}},
+            ],
+        }
+    ]
+    completion = AsyncMock(return_value="OK")
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_openclaw_completion_once", new=completion):
+                chunks = []
+                async for chunk in client.send_message_stream("текст", "chat-with-image"):
+                    chunks.append(chunk)
+
+    assert "".join(chunks) == "OK"
+    sent_messages = completion.await_args.kwargs["messages_to_send"]
+    assert isinstance(sent_messages[0]["content"], str)
+    assert "Изображение в контексте пропущено" in sent_messages[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -152,6 +180,48 @@ async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenCl
 
 
 @pytest.mark.asyncio
+async def test_send_message_stream_passes_text_max_output_tokens(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    completion = AsyncMock(return_value="Короткий ответ")
+    with patch("src.openclaw_client.config.USERBOT_MAX_OUTPUT_TOKENS", 333):
+        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(model_manager, "is_local_model", return_value=False):
+                with patch.object(client, "_openclaw_completion_once", new=completion):
+                    chunks = []
+                    async for chunk in client.send_message_stream(
+                        "Hi",
+                        "chat-max-out-text",
+                        max_output_tokens=333,
+                    ):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "Короткий ответ"
+    assert completion.await_args.kwargs["max_output_tokens"] == 333
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_passes_photo_max_output_tokens(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    completion = AsyncMock(return_value="Фото-ответ")
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_openclaw_completion_once", new=completion):
+                chunks = []
+                async for chunk in client.send_message_stream(
+                    "Describe image",
+                    "chat-max-out-photo",
+                    images=["ZmFrZS1pbWFnZS1iNjQ="],
+                    max_output_tokens=222,
+                ):
+                    chunks.append(chunk)
+
+    assert "".join(chunks) == "Фото-ответ"
+    assert completion.await_args.kwargs["max_output_tokens"] == 222
+
+
+@pytest.mark.asyncio
 async def test_auth_error_without_openai_key_falls_back_to_local_not_openai(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
@@ -173,6 +243,34 @@ async def test_auth_error_without_openai_key_falls_back_to_local_not_openai(clie
 
 
 @pytest.mark.asyncio
+async def test_provider_timeout_does_not_use_local_recovery_when_disabled(client: OpenClawClient) -> None:
+    """
+    Если LOCAL_FALLBACK_ENABLED=0, cloud-ошибка не должна запускать
+    автопереход в локальный recovery.
+    """
+    from src.model_manager import model_manager
+
+    with patch("src.openclaw_client.config.LOCAL_FALLBACK_ENABLED", False):
+        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(model_manager, "is_local_model", return_value=False):
+                with patch.object(
+                    client,
+                    "_openclaw_completion_once",
+                    new=AsyncMock(return_value="provider timeout"),
+                ):
+                    with patch.object(client, "_resolve_local_model_for_retry", new=AsyncMock(return_value="local/qwen")) as to_local:
+                        with patch.object(client, "_direct_lm_fallback", new=AsyncMock(return_value="Локальный ответ")) as direct_local:
+                            chunks = []
+                            async for chunk in client.send_message_stream("Hi", "chat-no-local-recovery"):
+                                chunks.append(chunk)
+
+    text = "".join(chunks).lower()
+    assert "облачный сервис" in text
+    to_local.assert_not_awaited()
+    direct_local.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_tier_export_contains_required_fields(client: OpenClawClient) -> None:
     export = client.get_tier_state_export()
     assert "active_tier" in export
@@ -180,10 +278,68 @@ async def test_tier_export_contains_required_fields(client: OpenClawClient) -> N
     assert "tiers_configured" in export
 
 
+@pytest.mark.asyncio
+async def test_cloud_runtime_check_updates_tier_state_from_probe(client: OpenClawClient) -> None:
+    with patch(
+        "src.openclaw_client.probe_gemini_key",
+        new=AsyncMock(
+            side_effect=[
+                CloudProbeResult(
+                    provider_status="ok",
+                    key_source="env:GEMINI_API_KEY_FREE",
+                    key_tier="free",
+                    semantic_error_code="ok",
+                    recovery_action="none",
+                    http_status=200,
+                    detail="",
+                ),
+                CloudProbeResult(
+                    provider_status="auth",
+                    key_source="env:GEMINI_API_KEY_PAID",
+                    key_tier="paid",
+                    semantic_error_code="auth_invalid",
+                    recovery_action="switch_provider_or_key",
+                    http_status=401,
+                    detail="unauthorized",
+                ),
+            ]
+        ),
+    ):
+        report = await client.get_cloud_runtime_check()
+
+    assert report["ok"] is True
+    state = client.get_tier_state_export()
+    assert state["last_provider_status"] == "ok"
+    assert state["last_error_code"] is None
+    assert state["last_probe_at"] is not None
+
+
 def test_detect_semantic_error_model_crash(client: OpenClawClient) -> None:
     semantic = client._detect_semantic_error("The model has crashed without additional information")
     assert semantic is not None
     assert semantic["code"] == "lm_model_crash"
+
+
+def test_detect_semantic_error_model_unloaded(client: OpenClawClient) -> None:
+    semantic = client._detect_semantic_error("Model unloaded.")
+    assert semantic is not None
+    assert semantic["code"] == "model_not_loaded"
+
+
+def test_detect_semantic_error_tool_response_error_blob(client: OpenClawClient) -> None:
+    semantic = client._detect_semantic_error(
+        '<|im_start|>user\n<tool_response>{"status": "error"}</tool_response>\n<|im_end|>'
+    )
+    assert semantic is not None
+    assert semantic["code"] == "lm_malformed_response"
+
+
+def test_detect_semantic_error_vision_addon_missing(client: OpenClawClient) -> None:
+    semantic = client._detect_semantic_error(
+        "ValueError: Vision add-on is not loaded, but images were provided for processing"
+    )
+    assert semantic is not None
+    assert semantic["code"] == "vision_addon_missing"
 
 
 def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenClawClient) -> None:
@@ -195,6 +351,16 @@ def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenC
 def test_semantic_from_provider_auth_exception_uses_canonical_code(client: OpenClawClient) -> None:
     semantic = client._semantic_from_provider_exception(ProviderAuthError(message="401", user_message="auth failed"))
     assert semantic["code"] == "openclaw_auth_unauthorized"
+
+
+def test_semantic_from_provider_exception_maps_vision_addon_missing(client: OpenClawClient) -> None:
+    semantic = client._semantic_from_provider_exception(
+        ProviderError(
+            message="Error in iterating prediction stream: ValueError: Vision add-on is not loaded, but images were provided for processing",
+            user_message="backend error",
+        )
+    )
+    assert semantic["code"] == "vision_addon_missing"
 
 
 def test_refresh_gateway_token_from_runtime_updates_auth_header(client: OpenClawClient, tmp_path: Path) -> None:
