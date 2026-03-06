@@ -6,8 +6,9 @@ One-click диагностика cloud chain для Krab/OpenClaw.
 Проверяет:
 1) Формат и доступность free/paid ключей Gemini.
 2) Текущий runtime key в OpenClaw models.json.
-3) Ответ OpenClaw /v1/chat/completions на тестовый запрос
-   (с детекцией ложного 200/"No models loaded").
+3) Ненавязчивый probe OpenClaw API без запуска генерации
+   (controlled 400 на /v1/chat/completions с пустым `messages`).
+4) Опционально: глубокий chat-probe с реальной генерацией (`--chat-probe`).
 
 Итог:
 - Печатает читаемый отчёт + финальный JSON статус READY/DEGRADED.
@@ -236,7 +237,7 @@ async def main_async(*, chat_probe: bool) -> dict[str, Any]:
         Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"
     )
 
-    # READY = ключи валидны + gateway отвечает на /v1/models.
+    # READY = ключи валидны + gateway отвечает на non-invasive API probe.
     # Глубокий chat-probe (с реальной генерацией) запускаем только явным флагом,
     # чтобы не триггерить локальный fallback и не грузить LM Studio в фоне.
     ready = bool(
