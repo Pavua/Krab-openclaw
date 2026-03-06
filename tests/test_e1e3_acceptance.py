@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _load_module():
@@ -73,3 +74,68 @@ def test_classify_channels_skips_not_configured():
     assert len(stats["passed"]) == 1
     assert len(stats["failed"]) == 1
     assert len(stats["skipped"]) == 1
+
+
+def test_normalize_probe_channels_payload_maps_cli_probe_contract():
+    module = _load_module()
+    payload = {
+        "channels": {
+            "telegram": {"configured": True, "running": True, "probe": {"ok": True}},
+            "bluebubbles": {"configured": False, "running": False, "probe": {"ok": False}},
+            "slack": {"configured": True, "running": True, "probe": {"ok": False, "error": "unauthorized"}},
+        }
+    }
+
+    normalized = module._normalize_probe_channels_payload(payload)
+    channels = {item["name"]: item for item in normalized["channels"]}
+
+    assert channels["telegram"]["status"] == "OK"
+    assert channels["bluebubbles"]["status"] == "WARN"
+    assert "not configured" in channels["bluebubbles"]["meta"]
+    assert channels["slack"]["status"] == "FAIL"
+    assert "probe failed" in channels["slack"]["meta"]
+
+
+def test_fetch_channels_with_fallback_returns_probe_source_and_web_error(monkeypatch):
+    module = _load_module()
+
+    monkeypatch.setattr(module, "_fetch_stable_channels_payload", lambda _url: ({}, "connection reset"))
+    monkeypatch.setattr(
+        module,
+        "_fetch_probe_channels_payload",
+        lambda: (
+            {
+                "gateway_reachable": True,
+                "channels": [{"name": "telegram", "status": "OK", "meta": "works"}],
+            },
+            None,
+        ),
+    )
+
+    payload, err, source, web_error = module._fetch_channels_with_fallback(
+        "http://127.0.0.1:8080/api/openclaw/channels/status"
+    )
+    assert err is None
+    assert source == "gateway_probe"
+    assert web_error == "connection reset"
+    assert payload["channels"][0]["status"] == "OK"
+
+
+def test_fetch_probe_channels_payload_reports_non_json_output(monkeypatch):
+    module = _load_module()
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="Gateway service not loaded.\nStart with: openclaw gateway",
+            stderr="",
+        ),
+    )
+
+    payload, err = module._fetch_probe_channels_payload()
+    assert payload == {}
+    assert err is not None
+    assert "probe_json_not_found" in err
+    assert "Gateway service not loaded." in err

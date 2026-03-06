@@ -357,6 +357,120 @@ def _fetch_stable_channels_payload(url: str) -> tuple[dict[str, Any], str | None
     return current_payload, None
 
 
+def _normalize_probe_channels_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Нормализует JSON от `openclaw channels status --probe --json`
+    к формату `channels/status`.
+    """
+    raw_channels = payload.get("channels") if isinstance(payload, dict) else {}
+    if not isinstance(raw_channels, dict):
+        return {}
+
+    normalized_channels: list[dict[str, Any]] = []
+    for channel_id, info in raw_channels.items():
+        if not isinstance(info, dict):
+            continue
+
+        configured = bool(info.get("configured"))
+        running = bool(info.get("running"))
+        probe = info.get("probe") if isinstance(info.get("probe"), dict) else {}
+        probe_ok = bool(probe.get("ok")) if isinstance(probe, dict) else False
+
+        meta_parts: list[str] = []
+        if not configured:
+            status = "WARN"
+            meta_parts.append("not configured")
+        elif not running:
+            status = "FAIL"
+            meta_parts.append("disconnected")
+        elif probe_ok:
+            status = "OK"
+            meta_parts.append("works")
+        else:
+            status = "FAIL"
+            probe_error = (
+                str(probe.get("error") or probe.get("status") or "").strip()
+                if isinstance(probe, dict)
+                else ""
+            )
+            meta_parts.append(f"probe failed: {probe_error or 'unknown'}")
+
+        normalized_channels.append(
+            {
+                "name": str(channel_id),
+                "status": status,
+                "meta": ", ".join(meta_parts),
+            }
+        )
+
+    return {
+        "gateway_reachable": True,
+        "channels": normalized_channels,
+    }
+
+
+def _fetch_probe_channels_payload() -> tuple[dict[str, Any], str | None]:
+    """
+    Берёт состояние каналов через `openclaw channels status --probe --json`.
+    """
+    try:
+        proc = subprocess.run(
+            ["openclaw", "channels", "status", "--probe", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=40,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc) or exc.__class__.__name__
+
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    combined = "\n".join(item for item in (stdout, stderr) if item).strip()
+    if proc.returncode != 0:
+        tail = "\n".join(combined.splitlines()[-6:]).strip()
+        return {}, f"probe_rc={proc.returncode} {tail}".strip()
+
+    json_start = stdout.find("{")
+    if json_start < 0:
+        tail = "\n".join(combined.splitlines()[-6:]).strip()
+        detail = f": {tail}" if tail else ""
+        return {}, f"probe_json_not_found{detail}"
+
+    try:
+        payload = json.loads(stdout[json_start:])
+    except ValueError as exc:
+        return {}, f"probe_json_decode_error: {exc}"
+
+    normalized = _normalize_probe_channels_payload(payload)
+    channels = normalized.get("channels")
+    if not isinstance(channels, list) or len(channels) == 0:
+        return {}, "probe_channels_empty"
+    return normalized, None
+
+
+def _fetch_channels_with_fallback(channels_url: str) -> tuple[dict[str, Any], str | None, str, str | None]:
+    """
+    Возвращает channels payload с fallback на CLI probe.
+
+    Возвращает:
+    - payload
+    - критическую ошибку (None если итоговый источник доступен)
+    - источник truth (`web_endpoint` | `gateway_probe` | `unavailable`)
+    - web_error (для диагностики even when fallback succeeded)
+    """
+    channels_payload, channels_error = _fetch_stable_channels_payload(channels_url)
+    if channels_error is None:
+        return channels_payload, None, "web_endpoint", None
+
+    probe_payload, probe_error = _fetch_probe_channels_payload()
+    if probe_error is None:
+        return probe_payload, None, "gateway_probe", channels_error
+
+    combined_error = f"web_error={channels_error}; probe_error={probe_error}"
+    return channels_payload, combined_error, "unavailable", channels_error
+
+
 def build_acceptance_report(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).expanduser().resolve()
     log_files = [Path(p).expanduser() for p in args.log_files] or DEFAULT_LOG_FILES
@@ -371,7 +485,9 @@ def build_acceptance_report(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     health_payload, health_error = _fetch_json_with_retries(args.health_url, timeout_sec=8.0, attempts=2)
-    channels_payload, channels_error = _fetch_stable_channels_payload(args.channels_url)
+    channels_payload, channels_error, channels_source, channels_web_error = _fetch_channels_with_fallback(
+        args.channels_url
+    )
     channels = _classify_channels(channels_payload)
 
     kpi_scan = _scan_kpi_patterns(
@@ -431,6 +547,8 @@ def build_acceptance_report(args: argparse.Namespace) -> dict[str, Any]:
         },
         "channels": {
             "error": channels_error,
+            "source": channels_source,
+            "web_error": channels_web_error,
             "payload": channels_payload,
             "summary": channels,
         },

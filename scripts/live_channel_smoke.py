@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -262,6 +263,119 @@ def _fetch_stable_channels_payload(url: str) -> tuple[dict[str, Any], str | None
     return current_payload, None
 
 
+def _normalize_probe_channels_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Приводит ответ `openclaw channels status --probe --json` к web-формату channels/status.
+
+    Нужен для fallback-сценария, когда web endpoint временно недоступен.
+    """
+    raw_channels = payload.get("channels") if isinstance(payload, dict) else {}
+    if not isinstance(raw_channels, dict):
+        return {}
+
+    normalized_channels: list[dict[str, Any]] = []
+    for channel_id, info in raw_channels.items():
+        if not isinstance(info, dict):
+            continue
+
+        configured = bool(info.get("configured"))
+        running = bool(info.get("running"))
+        probe = info.get("probe") if isinstance(info.get("probe"), dict) else {}
+        probe_ok = bool(probe.get("ok")) if isinstance(probe, dict) else False
+
+        meta_parts: list[str] = []
+        if not configured:
+            status = "WARN"
+            meta_parts.append("not configured")
+        elif not running:
+            status = "FAIL"
+            meta_parts.append("disconnected")
+        elif probe_ok:
+            status = "OK"
+            meta_parts.append("works")
+        else:
+            status = "FAIL"
+            probe_error = (
+                str(probe.get("error") or probe.get("status") or "").strip()
+                if isinstance(probe, dict)
+                else ""
+            )
+            meta_parts.append(f"probe failed: {probe_error or 'unknown'}")
+
+        normalized_channels.append(
+            {
+                "name": str(channel_id),
+                "status": status,
+                "meta": ", ".join(meta_parts),
+            }
+        )
+
+    return {
+        "gateway_reachable": True,
+        "channels": normalized_channels,
+    }
+
+
+def _fetch_probe_channels_payload() -> tuple[dict[str, Any], str | None]:
+    """
+    Пытается получить truth каналов через CLI probe.
+
+    Важно: не запускает генерации LLM, только health/probe каналов gateway.
+    """
+    try:
+        proc = subprocess.run(
+            ["openclaw", "channels", "status", "--probe", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=40,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc) or exc.__class__.__name__
+
+    stdout = str(proc.stdout or "").strip()
+    stderr = str(proc.stderr or "").strip()
+    combined = "\n".join(item for item in (stdout, stderr) if item).strip()
+    if proc.returncode != 0:
+        tail = "\n".join(combined.splitlines()[-6:]).strip()
+        return {}, f"probe_rc={proc.returncode} {tail}".strip()
+
+    json_start = stdout.find("{")
+    if json_start < 0:
+        tail = "\n".join(combined.splitlines()[-6:]).strip()
+        detail = f": {tail}" if tail else ""
+        return {}, f"probe_json_not_found{detail}"
+
+    try:
+        payload = json.loads(stdout[json_start:])
+    except ValueError as exc:
+        return {}, f"probe_json_decode_error: {exc}"
+
+    normalized = _normalize_probe_channels_payload(payload)
+    channels = normalized.get("channels")
+    if not isinstance(channels, list) or len(channels) == 0:
+        return {}, "probe_channels_empty"
+    return normalized, None
+
+
+def _fetch_channels_with_fallback(channels_url: str) -> tuple[dict[str, Any], str | None, str]:
+    """
+    Возвращает channels payload с fallback:
+    1) web endpoint;
+    2) gateway CLI probe.
+    """
+    channels_payload, channels_error = _fetch_stable_channels_payload(channels_url)
+    if channels_error is None:
+        return channels_payload, None, "web_endpoint"
+
+    probe_payload, probe_error = _fetch_probe_channels_payload()
+    if probe_error is None:
+        return probe_payload, None, "gateway_probe"
+
+    combined_error = f"web_error={channels_error}; probe_error={probe_error}"
+    return channels_payload, combined_error, "unavailable"
+
+
 def build_report(
     *,
     channels_url: str,
@@ -271,7 +385,7 @@ def build_report(
     max_age_minutes: float,
 ) -> dict[str, Any]:
     """Собирает единый smoke-отчет E1→E3."""
-    channels_payload, channels_error = _fetch_stable_channels_payload(channels_url)
+    channels_payload, channels_error, channels_source = _fetch_channels_with_fallback(channels_url)
     health_payload, health_error = _fetch_json_with_retries(health_url, timeout_sec=8.0, attempts=2)
 
     findings: list[dict[str, Any]] = []
@@ -318,6 +432,7 @@ def build_report(
         },
         "channels": {
             "error": channels_error,
+            "source": channels_source,
             "gateway_reachable": channel_stats["gateway_reachable"],
             "success_rate": channel_stats["success_rate"],
             "required_total": channel_stats["required_total"],

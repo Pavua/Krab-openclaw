@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,10 +44,49 @@ def _now_utc() -> str:
 
 
 def _python_bin() -> str:
+    """
+    Выбирает python-интерпретатор, где реально доступен pytest.
+
+    Почему так:
+    в части окружений локальный `.venv/bin/python` существует, но pytest
+    туда не установлен. Тогда merge gate падает ложно до фактической проверки.
+    """
+    candidates: list[str] = []
     local = ROOT / ".venv" / "bin" / "python"
     if local.exists():
-        return str(local)
-    return "python3"
+        candidates.append(str(local))
+    if sys.executable:
+        candidates.append(sys.executable)
+    for fallback in ("python3", "python"):
+        resolved = shutil.which(fallback)
+        if resolved:
+            candidates.append(resolved)
+
+    seen: set[str] = set()
+    for py in candidates:
+        if py in seen:
+            continue
+        seen.add(py)
+        try:
+            probe = subprocess.run(
+                [
+                    py,
+                    "-c",
+                    "import importlib.util as u; "
+                    "raise SystemExit(0 if u.find_spec('pytest') else 1)",
+                ],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if probe.returncode == 0:
+            return py
+
+    return candidates[0] if candidates else "python3"
 
 
 def _run_cmd(name: str, cmd: list[str], required: bool = True, timeout: int = 240) -> CheckResult:
@@ -69,6 +110,35 @@ def _run_cmd(name: str, cmd: list[str], required: bool = True, timeout: int = 24
         detail = str(exc) or exc.__class__.__name__
     duration_ms = int((time.monotonic() - started) * 1000)
     return CheckResult(name=name, required=required, ok=ok, duration_ms=duration_ms, detail=detail[:1600])
+
+
+def _resolve_pytest_targets() -> list[str]:
+    """
+    Возвращает валидный набор pytest-таргетов для web/health gate.
+
+    Почему:
+    исторические файлы могли быть переименованы при рефакторинге.
+    Гейт должен проверять нужный слой, но не падать с `no tests ran`.
+    """
+    preferred = [
+        "tests/test_web_app.py",
+        "tests/test_ecosystem_health.py",
+    ]
+    fallback = [
+        "tests/unit/test_web_app_runtime_endpoints.py",
+        "tests/test_krab_core_health_watch.py",
+    ]
+
+    selected = [item for item in preferred if (ROOT / item).exists()]
+    for item in fallback:
+        if len(selected) >= 2:
+            break
+        if (ROOT / item).exists() and item not in selected:
+            selected.append(item)
+
+    if not selected:
+        return ["tests/unit/test_web_app_runtime_endpoints.py"]
+    return selected
 
 
 def _http_probe(name: str, url: str, required: bool, timeout: float = 3.0) -> CheckResult:
@@ -99,10 +169,11 @@ def main() -> int:
     py = _python_bin()
     checks: list[CheckResult] = []
 
+    pytest_targets = _resolve_pytest_targets()
     checks.append(
         _run_cmd(
             name="pytest_targeted_r20",
-            cmd=[py, "-m", "pytest", "-q", "tests/test_web_app.py", "tests/test_ecosystem_health.py"],
+            cmd=[py, "-m", "pytest", "-q", *pytest_targets],
             required=True,
             timeout=420,
         )
