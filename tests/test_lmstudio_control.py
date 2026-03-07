@@ -70,6 +70,8 @@ def test_load_model_uses_post_for_all_endpoints() -> None:
     module = _load_module()
     seen_calls = []
 
+    module._fetch_models = lambda _base_url: module.HttpResult(ok=False, status=0, payload=None, error="offline")
+
     def fake_http_json(method, url, body=None, timeout=10.0):
         seen_calls.append((method, url, body, timeout))
         return module.HttpResult(ok=True, status=200, payload={"model": body["model"]})
@@ -87,3 +89,36 @@ def test_load_model_uses_post_for_all_endpoints() -> None:
             600.0,
         )
     ]
+
+
+def test_load_model_skips_duplicate_when_model_already_loaded() -> None:
+    module = _load_module()
+    seen_calls = []
+
+    module._fetch_models = lambda _base_url: module.HttpResult(
+        ok=True,
+        status=200,
+        payload={
+            "models": [
+                {
+                    "key": "nvidia/nemotron-3-nano",
+                    "selected_variant": "nvidia/nemotron-3-nano@4bit",
+                    "loaded_instances": [{"id": "nvidia/nemotron-3-nano"}],
+                }
+            ]
+        },
+    )
+
+    def fake_http_json(method, url, body=None, timeout=10.0):
+        seen_calls.append((method, url, body, timeout))
+        return module.HttpResult(ok=True, status=200, payload={"model": body["model"]})
+
+    module._http_json = fake_http_json
+
+    attempts = module.load_model("http://127.0.0.1:1234", "nvidia/nemotron-3-nano", 3600)
+
+    assert len(attempts) == 1
+    assert attempts[0][0] == "already_loaded"
+    assert attempts[0][2].payload["already_loaded"] is True
+    assert attempts[0][2].payload["instances"] == 1
+    assert seen_calls == []

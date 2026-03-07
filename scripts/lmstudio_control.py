@@ -115,6 +115,42 @@ def _extract_loaded_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]
     return loaded
 
 
+def _collect_model_aliases(item: dict[str, Any]) -> set[str]:
+    """Собирает все известные алиасы модели, чтобы не грузить дубль."""
+    aliases: set[str] = set()
+    for key in ("id", "key", "model", "display_name", "selected_variant"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            aliases.add(value.strip().lower())
+
+    variants = item.get("variants")
+    if isinstance(variants, list):
+        for value in variants:
+            if isinstance(value, str) and value.strip():
+                aliases.add(value.strip().lower())
+
+    loaded_instances = item.get("loaded_instances")
+    if isinstance(loaded_instances, list):
+        for instance in loaded_instances:
+            if isinstance(instance, dict):
+                for key in ("id", "instance_id", "instanceReference"):
+                    value = instance.get(key)
+                    if isinstance(value, str) and value.strip():
+                        aliases.add(value.strip().lower())
+    return aliases
+
+
+def _find_matching_loaded_model(models: list[dict[str, Any]], requested_model: str) -> dict[str, Any] | None:
+    """Ищет уже загруженную модель по любому известному алиасу."""
+    target = (requested_model or "").strip().lower()
+    if not target:
+        return None
+    for item in _extract_loaded_models(models):
+        if target in _collect_model_aliases(item):
+            return item
+    return None
+
+
 def _build_unload_attempts(models: list[dict[str, Any]]) -> list[tuple[str, dict[str, Any]]]:
     """Собирает каскад безопасных payload для unload всех моделей."""
     attempts: list[tuple[str, dict[str, Any]]] = [("all", {"all": True})]
@@ -156,6 +192,28 @@ def unload_all_models(base_url: str) -> tuple[bool, list[dict[str, Any]], list[t
 
 def load_model(base_url: str, model: str, ttl: int) -> list[tuple[str, dict[str, Any], HttpResult]]:
     """Пытается загрузить модель через основной и legacy-эндпоинты."""
+    models_result = _fetch_models(base_url)
+    if models_result.ok:
+        loaded_match = _find_matching_loaded_model(_extract_models(models_result.payload), model)
+        if loaded_match is not None:
+            loaded_instances = loaded_match.get("loaded_instances")
+            instances_count = len(loaded_instances) if isinstance(loaded_instances, list) else 1
+            return [
+                (
+                    "already_loaded",
+                    {"model": model},
+                    HttpResult(
+                        ok=True,
+                        status=200,
+                        payload={
+                            "model": model,
+                            "already_loaded": True,
+                            "instances": instances_count,
+                        },
+                    ),
+                )
+            ]
+
     attempts: list[tuple[str, dict[str, Any], HttpResult]] = []
     payloads = [
         ("v1", f"{base_url}/api/v1/models/load", {"model": model}),
@@ -252,6 +310,10 @@ def _cmd_load(args: argparse.Namespace) -> int:
     for label, payload, result in attempts:
         print(f"- {label}: status={result.status} ok={result.ok} payload={payload}")
         if result.ok:
+            if label == "already_loaded":
+                instances = result.payload.get("instances", "?") if isinstance(result.payload, dict) else "?"
+                print(f"ℹ️ Модель уже загружена: {args.model} (instances: {instances})")
+                return 0
             print(f"✅ Модель загружена: {args.model}")
             return 0
     print(f"❌ Не удалось загрузить модель: {args.model}")
