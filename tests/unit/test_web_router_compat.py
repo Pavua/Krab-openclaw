@@ -103,11 +103,13 @@ async def test_route_query_exposes_runtime_route_meta():
     assert last_route["route_reason"] == "local_direct_primary"
 
 
-def test_get_profile_recommendation_returns_ui_compatible_contract():
+def test_get_profile_recommendation_returns_ui_compatible_contract(monkeypatch):
     """
     Recommendation-контракт должен содержать поля, которые использует web UI:
     `model`, `recommended_model`, `channel`, `profile`.
     """
+    # Изолируем от реального .env: force_cloud=False гарантирует local-first поведение
+    monkeypatch.setattr(config, "FORCE_CLOUD", False)
     router = WebRouterCompat(_FakeModelManager(), _FakeOpenClawClient())
 
     recommend = router.get_profile_recommendation("chat")

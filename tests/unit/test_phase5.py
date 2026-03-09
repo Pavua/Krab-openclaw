@@ -2,7 +2,7 @@
 import pytest
 import json
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from src import employee_templates
 from src.openclaw_client import OpenClawClient
 
@@ -33,23 +33,41 @@ class TestPhase5:
 
     @pytest.mark.asyncio
     async def test_vision_payload(self):
-        """Test formatting of vision payload"""
+        """Тест форматирования vision-payload с изображениями."""
         client = OpenClawClient()
         client._http_client = MagicMock()
         client._http_client.stream = MagicMock()
         
-        # Mock stream context manager
+        # Mock async iterable для aiter_lines — обязательно async generator
+        async def _empty_aiter():
+            return
+            yield  # noqa: RET504  — делает функцию async generator
+
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_response.aiter_lines.return_value = []
+        mock_response.aiter_lines = _empty_aiter
         
         cm = AsyncMock()
         cm.__aenter__.return_value = mock_response
         client._http_client.stream.return_value = cm
+
+        # Mock model_manager: покрываем все async-методы, вызываемые send_message_stream
+        mock_mm = MagicMock()
+        mock_mm.get_best_model = AsyncMock(return_value="google/gemini-2.5-flash")
+        mock_mm.get_best_cloud_model = AsyncMock(return_value="google/gemini-2.5-flash")
+        mock_mm.ensure_model_loaded = AsyncMock(return_value=True)
+        mock_mm.resolve_preferred_local_model = AsyncMock(return_value=None)
+        mock_mm.is_local_model = MagicMock(return_value=False)
+        mock_mm.mark_request_started = MagicMock()
+        mock_mm.mark_request_finished = MagicMock()
+        mock_mm.get_current_model = MagicMock(return_value=None)
+        mock_mm._models_cache = {}
+        mock_mm._local_candidates = AsyncMock(return_value=[])
         
-        # Call with images
-        gen = client.send_message_stream("Look at this", "123", images=["base64string"])
-        async for _ in gen: pass # Consume generator
+        with patch("src.model_manager.model_manager", mock_mm):
+            gen = client.send_message_stream("Look at this", "123", images=["base64string"])
+            async for _ in gen:
+                pass
         
         # Verify payload construction
         call_args = client._http_client.stream.call_args
@@ -62,3 +80,4 @@ class TestPhase5:
         assert isinstance(last_msg['content'], list)
         assert last_msg['content'][0] == {"type": "text", "text": "Look at this"}
         assert last_msg['content'][1] == {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,base64string"}}
+

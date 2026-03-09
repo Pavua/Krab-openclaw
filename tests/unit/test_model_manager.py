@@ -220,10 +220,19 @@ async def test_discover_models_uses_dedicated_cloud_client_without_lm_headers(ma
 
 @pytest.mark.asyncio
 async def test_get_best_model_local_first_in_auto(manager: ModelManager) -> None:
-    with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)):
-        with patch.object(manager, "resolve_preferred_local_model", new=AsyncMock(return_value="local/abc")):
-            best = await manager.get_best_model()
+    with patch("src.model_manager.config") as mock_config:
+        mock_config.FORCE_CLOUD = False
+        mock_config.MODEL = "auto"
+        mock_config.LM_STUDIO_URL = "http://mock-url"
+        mock_config.LM_STUDIO_API_KEY = ""
+        mock_config.LOCAL_PREFERRED_MODEL = ""
+        mock_config.LOCAL_PREFERRED_VISION_MODEL = ""
+        # lm_studio_url уже установлен в fixture, но config.FORCE_CLOUD — нет
+        with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)):
+            with patch.object(manager, "resolve_preferred_local_model", new=AsyncMock(return_value="local/abc")):
+                best = await manager.get_best_model()
     assert best == "local/abc"
+
 
 
 @pytest.mark.asyncio
