@@ -35,6 +35,12 @@ class Config:
 
     # LM Studio (trailing slash stripped for API calls)
     LM_STUDIO_URL: str = os.getenv("LM_STUDIO_URL", "http://192.168.0.171:1234").rstrip("/")
+    # Каноничный токен локального LM Studio API.
+    # `LM_STUDIO_AUTH_TOKEN` оставляем как legacy alias, чтобы не ломать старые env.
+    LM_STUDIO_API_KEY: str = os.getenv(
+        "LM_STUDIO_API_KEY",
+        os.getenv("LM_STUDIO_AUTH_TOKEN", ""),
+    ).strip()
 
     # Gemini (fallback): free key first, paid key as fallback
     GEMINI_API_KEY_FREE: Optional[str] = os.getenv("GEMINI_API_KEY_FREE")
@@ -88,9 +94,32 @@ class Config:
         os.getenv("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "540")
     )
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
-    USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "520"))
+    USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(
         os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420")
+    )
+    # Фото-path userbot по умолчанию всегда уводим в cloud.
+    # Почему так:
+    # - внешние чаты важнее держать предсказуемыми, чем экспериментировать с локальным VL;
+    # - это не даёт выгружать Nemotron ради случайной маленькой vision-модели;
+    # - локальный vision остаётся доступен только через явный opt-in флаг.
+    USERBOT_FORCE_CLOUD_FOR_PHOTO: bool = os.getenv(
+        "USERBOT_FORCE_CLOUD_FOR_PHOTO",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
+    # Нативный local-direct путь LM Studio:
+    # - reasoning по умолчанию отключаем только на API-уровне нашего клиента,
+    #   чтобы скрытое "мышление" не съедало бюджет ответа в Telegram/user-facing каналах;
+    # - при насыщении лимита можем автоматически запросить продолжение.
+    LM_STUDIO_NATIVE_REASONING_MODE: str = os.getenv(
+        "LM_STUDIO_NATIVE_REASONING_MODE",
+        "off",
+    ).strip().lower()
+    LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS: int = int(
+        os.getenv("LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS", "2")
+    )
+    LM_STUDIO_NATIVE_OUTPUT_CAP_MARGIN: int = int(
+        os.getenv("LM_STUDIO_NATIVE_OUTPUT_CAP_MARGIN", "8")
     )
 
     # Skills / APIs
@@ -104,6 +133,22 @@ class Config:
     HISTORY_WINDOW_MAX_CHARS: Optional[int] = (
         int(x) if (x := os.getenv("HISTORY_WINDOW_MAX_CHARS", "").strip()) else None
     )
+    # Более жёсткое окно для локального inference-маршрута.
+    # Почему отдельно:
+    # - LM Studio на длинных диалогах начинает aggressively truncate context;
+    # - это повышает шанс `EMPTY MESSAGE`, долгого prompt-processing и аварийных сбоев.
+    # Cloud-маршрут при этом может жить с более широким окном.
+    LOCAL_HISTORY_WINDOW_MESSAGES: int = int(os.getenv("LOCAL_HISTORY_WINDOW_MESSAGES", "18"))
+    LOCAL_HISTORY_WINDOW_MAX_CHARS: Optional[int] = (
+        int(x) if (x := os.getenv("LOCAL_HISTORY_WINDOW_MAX_CHARS", "12000").strip()) else None
+    )
+    # Controlled retry после `EMPTY MESSAGE` / `model crashed`.
+    # Почему отдельно:
+    # - повтор с тем же длинным хвостом часто воспроизводит тот же сбой;
+    # - retry-контекст должен быть заметно компактнее основного local budget.
+    RETRY_HISTORY_WINDOW_MESSAGES: int = int(os.getenv("RETRY_HISTORY_WINDOW_MESSAGES", "8"))
+    RETRY_HISTORY_WINDOW_MAX_CHARS: int = int(os.getenv("RETRY_HISTORY_WINDOW_MAX_CHARS", "4000"))
+    RETRY_MESSAGE_MAX_CHARS: int = int(os.getenv("RETRY_MESSAGE_MAX_CHARS", "1200"))
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -191,6 +236,8 @@ class Config:
         """Обновляет настройку в памяти и в .env файле"""
         try:
             key = key.upper()
+            if key == "LM_STUDIO_AUTH_TOKEN":
+                key = "LM_STUDIO_API_KEY"
             # Обновляем в текущем процессе
             if hasattr(cls, key):
                 if key == "ALLOWED_USERS":
@@ -209,6 +256,8 @@ class Config:
                     cls.LOCAL_PREFERRED_MODEL = value
                 elif key == "LOCAL_PREFERRED_VISION_MODEL":
                     cls.LOCAL_PREFERRED_VISION_MODEL = value
+                elif key == "LM_STUDIO_API_KEY":
+                    cls.LM_STUDIO_API_KEY = value
                 elif key == "SINGLE_LOCAL_MODEL_MODE":
                     cls.SINGLE_LOCAL_MODEL_MODE = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GUARDED_IDLE_UNLOAD":
@@ -225,6 +274,14 @@ class Config:
                     cls.USERBOT_MAX_OUTPUT_TOKENS = int(value)
                 elif key == "USERBOT_PHOTO_MAX_OUTPUT_TOKENS":
                     cls.USERBOT_PHOTO_MAX_OUTPUT_TOKENS = int(value)
+                elif key == "USERBOT_FORCE_CLOUD_FOR_PHOTO":
+                    cls.USERBOT_FORCE_CLOUD_FOR_PHOTO = value.strip().lower() in ("1", "true", "yes")
+                elif key == "LM_STUDIO_NATIVE_REASONING_MODE":
+                    cls.LM_STUDIO_NATIVE_REASONING_MODE = value.strip().lower()
+                elif key == "LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS":
+                    cls.LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS = int(value)
+                elif key == "LM_STUDIO_NATIVE_OUTPUT_CAP_MARGIN":
+                    cls.LM_STUDIO_NATIVE_OUTPUT_CAP_MARGIN = int(value)
                 elif key == "AI_DISCLOSURE_ENABLED":
                     cls.AI_DISCLOSURE_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "AI_DISCLOSURE_TEXT":

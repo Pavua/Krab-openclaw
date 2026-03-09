@@ -1,0 +1,231 @@
+{
+  "generated_at_utc": "2026-03-06T21:54:41.501224+00:00",
+  "ok": true,
+  "inputs": {
+    "base_url": "http://127.0.0.1:8080"
+  },
+  "health_lite": {
+    "error": null,
+    "payload": {
+      "ok": true,
+      "status": "up",
+      "telegram_session_state": "open_or_unclean",
+      "telegram_userbot_state": "running",
+      "telegram_userbot_error_code": "",
+      "lmstudio_model_state": "loaded",
+      "openclaw_auth_state": "configured",
+      "last_runtime_route": {
+        "timestamp": 1772810797,
+        "channel": "local_direct",
+        "provider": "unknown",
+        "model": "qwen2-vl-2b-instruct-abliterated-mlx",
+        "active_tier": "free",
+        "force_cloud": false,
+        "status": "ok",
+        "error_code": null,
+        "route_reason": "local_direct_primary",
+        "route_detail": "Ответ получен напрямую из LM Studio"
+      },
+      "scheduler_enabled": true,
+      "voice_gateway_configured": true
+    }
+  },
+  "channels": {
+    "error": null,
+    "payload": {
+      "ok": true,
+      "raw": "[plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)\nChecking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:open, allow:*\n- Discord default: enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, configured, running, connected, url:http://127.0.0.1:12345, works\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).\n",
+      "warnings": [],
+      "exit_code": 0,
+      "channels": [
+        {
+          "name": "Telegram default",
+          "status": "OK",
+          "meta": "enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works"
+        },
+        {
+          "name": "WhatsApp default",
+          "status": "OK",
+          "meta": "enabled, configured, linked, running, connected, dm:open, allow:*"
+        },
+        {
+          "name": "Discord default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works"
+        },
+        {
+          "name": "Slack default",
+          "status": "OK",
+          "meta": "enabled, configured, running, bot:config, app:config, works"
+        },
+        {
+          "name": "Signal default",
+          "status": "OK",
+          "meta": "enabled, configured, running, url:http://127.0.0.1:18080, works"
+        },
+        {
+          "name": "iMessage default",
+          "status": "OK",
+          "meta": "enabled, configured, running, works"
+        },
+        {
+          "name": "BlueBubbles default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, url:http://127.0.0.1:12345, works"
+        }
+      ],
+      "gateway_reachable": true
+    },
+    "summary": {
+      "passed": [
+        {
+          "name": "Telegram default",
+          "status": "OK",
+          "meta": "enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works"
+        },
+        {
+          "name": "WhatsApp default",
+          "status": "OK",
+          "meta": "enabled, configured, linked, running, connected, dm:open, allow:*"
+        },
+        {
+          "name": "Discord default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works"
+        },
+        {
+          "name": "Slack default",
+          "status": "OK",
+          "meta": "enabled, configured, running, bot:config, app:config, works"
+        },
+        {
+          "name": "Signal default",
+          "status": "OK",
+          "meta": "enabled, configured, running, url:http://127.0.0.1:18080, works"
+        },
+        {
+          "name": "iMessage default",
+          "status": "OK",
+          "meta": "enabled, configured, running, works"
+        },
+        {
+          "name": "BlueBubbles default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, url:http://127.0.0.1:12345, works"
+        }
+      ],
+      "failed": [],
+      "skipped": [],
+      "required_total": 7,
+      "success_rate": 100.0,
+      "gateway_reachable": true
+    }
+  },
+  "browser_smoke": {
+    "error": null,
+    "payload": {
+      "available": true,
+      "report": {
+        "browser_smoke": {
+          "ok": true,
+          "channel": "endpoint",
+          "tool": "gateway_probe+http_probe",
+          "path": "https://example.com",
+          "gateway_reachable": true,
+          "browser_http_reachable": true,
+          "browser_http_state": "auth_required",
+          "browser_auth_required": true,
+          "local_target": "ws://127.0.0.1:18789",
+          "detail": "gateway=Connect: ok (18ms) · RPC: ok; browser relay auth required (401)"
+        },
+        "raw": {
+          "gateway_probe": "Gateway Status\nReachable: yes\nProbe budget: 3000ms\n\nDiscovery (this machine)\nFound 1 gateway(s) via Bonjour (local.)\n\nTargets\nLocal loopback ws://127.0.0.1:18789\n  Connect: ok (18ms) · RPC: ok\n  Gateway: MacBook-Pro-Pablito.local (192.168.0.171) · macos 26.4 · app unknown\n  Wide-area discovery: unknown\n\n",
+          "gateway_probe_error": "",
+          "browser_http_status": 401,
+          "browser_http_error": ""
+        }
+      }
+    },
+    "summary": {
+      "ok": true,
+      "channel": "endpoint",
+      "tool": "gateway_probe+http_probe",
+      "path": "https://example.com",
+      "gateway_reachable": true,
+      "browser_http_reachable": true,
+      "browser_http_state": "auth_required",
+      "browser_auth_required": true,
+      "local_target": "ws://127.0.0.1:18789",
+      "detail": "gateway=Connect: ok (18ms) · RPC: ok; browser relay auth required (401)"
+    }
+  },
+  "browser_action": {
+    "ok": true,
+    "state": "ok",
+    "blocking": false,
+    "detail": "Browser action probe выполнен: navigate + snapshot.",
+    "tabs_count": 1,
+    "snapshot_keys": [
+      "format",
+      "nodes",
+      "ok",
+      "targetId",
+      "url"
+    ]
+  },
+  "photo_smoke": {
+    "error": null,
+    "payload": {
+      "available": true,
+      "report": {
+        "photo_smoke": {
+          "ok": true,
+          "local_available": false,
+          "models_count": 91,
+          "local_vision_count": 27,
+          "selected_model": "qwen2-vl-2b-instruct-abliterated-mlx",
+          "selected_provider": "local",
+          "selected_local": true,
+          "detail": "selected=qwen2-vl-2b-instruct-abliterated-mlx; route=local_vision"
+        }
+      }
+    },
+    "summary": {
+      "ok": true,
+      "local_available": false,
+      "models_count": 91,
+      "local_vision_count": 27,
+      "selected_model": "qwen2-vl-2b-instruct-abliterated-mlx",
+      "selected_provider": "local",
+      "selected_local": true,
+      "detail": "selected=qwen2-vl-2b-instruct-abliterated-mlx; route=local_vision"
+    }
+  },
+  "control_compat": {
+    "error": null,
+    "payload": {
+      "ok": true,
+      "runtime_channels_ok": true,
+      "control_schema_warnings": [],
+      "impact_level": "none",
+      "recommended_action": "Все каналы работают нормально. Предупреждений нет."
+    }
+  },
+  "checks": {
+    "health_up": true,
+    "channels_endpoint_ok": true,
+    "channels_success_ge_95": true,
+    "channels_failed_zero": true,
+    "browser_endpoint_ok": true,
+    "browser_gateway_reachable": true,
+    "browser_http_reachable": true,
+    "photo_endpoint_ok": true,
+    "photo_ready": true,
+    "control_compat_ok": true,
+    "control_impact_not_runtime_risk": true,
+    "browser_action_ready": true
+  },
+  "warnings": [
+    "Chrome relay требует авторизацию (browser_http_state=auth_required). Это не блокер readiness."
+  ]
+}

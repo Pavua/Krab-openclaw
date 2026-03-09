@@ -85,6 +85,10 @@ pkill -f "run_krab" >/dev/null 2>&1 || true
 clear_web_port 8080
 
 # 4. Останавливаем OpenClaw
+"${DIR}/.venv/bin/openclaw" browser stop >/dev/null 2>&1 || openclaw browser stop >/dev/null 2>&1 || true
+# Подчищаем именно automation Chrome relay OpenClaw, не трогая обычный профиль пользователя.
+pkill -f "remote-debugging-port=18800" >/dev/null 2>&1 || true
+pkill -f "${HOME}/.openclaw/browser/openclaw/user-data" >/dev/null 2>&1 || true
 "${DIR}/.venv/bin/openclaw" gateway stop >/dev/null 2>&1 || openclaw gateway stop >/dev/null 2>&1 || true
 
 if [ -f "$OPENCLAW_PID_FILE" ]; then

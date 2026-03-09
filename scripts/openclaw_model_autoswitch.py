@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -96,6 +99,23 @@ def _pick_local_model_key(openclaw_payload: dict[str, Any], override: str = "") 
                     if key:
                         return key
     return "lmstudio/local"
+
+
+def _resolve_local_override(openclaw_payload: dict[str, Any], explicit_override: str = "") -> str:
+    """
+    Возвращает local override c приоритетом:
+    1) явный `--local-model`,
+    2) `LOCAL_PREFERRED_MODEL` из env/.env.
+    """
+    known_providers = _known_provider_names(openclaw_payload)
+    explicit = str(explicit_override or "").strip()
+    if explicit:
+        return _normalize_model_key("lmstudio", explicit, known_providers)
+
+    env_preferred = str(os.getenv("LOCAL_PREFERRED_MODEL", "") or "").strip()
+    if not env_preferred or env_preferred.lower() in {"auto", "smallest"}:
+        return ""
+    return _normalize_model_key("lmstudio", env_preferred, known_providers)
 
 
 def _pick_cloud_model_key(openclaw_payload: dict[str, Any], override: str = "") -> str:
@@ -267,6 +287,8 @@ def _utc_now_iso() -> str:
 
 
 def main() -> int:
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="OpenClaw model autoswitch (local/cloud profiles)")
     parser.add_argument("--dry-run", action="store_true", help="Только диагностика, без записи файлов")
     parser.add_argument(
@@ -304,7 +326,8 @@ def main() -> int:
         )
         return 1
 
-    local_model = _pick_local_model_key(openclaw_payload, override=args.local_model)
+    local_override = _resolve_local_override(openclaw_payload, explicit_override=args.local_model)
+    local_model = _pick_local_model_key(openclaw_payload, override=local_override)
     cloud_model = _pick_cloud_model_key(openclaw_payload, override=args.cloud_model)
     current_profile = _detect_current_profile(openclaw_payload)
     effective_profile = _resolve_requested_profile(args.profile, current_profile)

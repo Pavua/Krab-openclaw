@@ -1,0 +1,85 @@
+{
+  "id": "krab-output-sanitizer",
+  "name": "Krab Output Sanitizer",
+  "description": "Очищает служебные артефакты и удерживает внешние каналы в truthful text-first режиме.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Включает/выключает фильтрацию."
+      },
+      "fallbackText": {
+        "type": "string",
+        "default": "На связи. Сформулируй запрос ещё раз, если нужен подробный ответ.",
+        "description": "Короткий ответ, если после фильтрации текст полностью пуст."
+      },
+      "runtimeFailureFallback": {
+        "type": "string",
+        "default": "Секунду, локальная модель перезапускается.",
+        "description": "Fallback-текст при runtime-ошибках модели."
+      },
+      "guestModeEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Включает guest-guard для неавторизованных DM-контактов."
+      },
+      "guestInstruction": {
+        "type": "string",
+        "description": "Дополнительная инструкция для LLM в guest-режиме."
+      },
+      "guestToolGuardEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Ограничивает набор инструментов для guest-режима."
+      },
+      "guestAllowedTools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Список tool-имен, разрешённых в guest-режиме."
+      },
+      "externalChannelGuardEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Включает truthful-инструкцию для внешних messaging-каналов."
+      },
+      "externalChannelToolGuardEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Ограничивает tool-path внешних messaging-каналов безопасным минимумом."
+      },
+      "externalInstruction": {
+        "type": "string",
+        "description": "Дополнительная инструкция для внешних каналов."
+      },
+      "externalChannelAllowedTools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Список tool-имен, разрешённых для внешних messaging-каналов."
+      },
+      "ownerAliases": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Алиасы владельца для удаления из ответов guest-режима."
+      },
+      "trustedPeers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": "Карта доверенных peer-id по каналам (channel -> [peer])."
+      }
+    }
+  }
+}

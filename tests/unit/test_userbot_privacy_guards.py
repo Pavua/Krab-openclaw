@@ -31,6 +31,30 @@ def test_strip_transport_markup_reply_to_tag() -> None:
     assert "Как дела?" in cleaned
 
 
+def test_strip_transport_markup_removes_llm_service_tokens() -> None:
+    raw = (
+        '<|im_start|>user\n'
+        '<tool_response>\n{"status": "error"}\n</tool_response>\n'
+        '<|im_end|>\n'
+        "Нормальный текст ответа"
+    )
+    cleaned = KraabUserbot._strip_transport_markup(raw)
+    assert "<|im_start|>" not in cleaned
+    assert "<|im_end|>" not in cleaned
+    assert "<tool_response>" not in cleaned
+    assert '"status": "error"' not in cleaned
+    assert "Нормальный текст ответа" in cleaned
+
+
+def test_strip_transport_markup_removes_think_and_final_envelope() -> None:
+    raw = "<think>служебные рассуждения</think><final>Готовый ответ</final>"
+    cleaned = KraabUserbot._strip_transport_markup(raw)
+    assert "<think>" not in cleaned
+    assert "<final>" not in cleaned
+    assert "служебные рассуждения" not in cleaned
+    assert cleaned == "Готовый ответ"
+
+
 def test_build_runtime_chat_scope_isolated_for_non_owner(monkeypatch) -> None:
     bot = _make_bot_stub()
     monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)

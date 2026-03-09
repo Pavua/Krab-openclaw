@@ -1,0 +1,16 @@
+{
+  "generated_at_utc": "2026-03-06T16:34:55.684659+00:00",
+  "ok": true,
+  "checks": {
+    "roles_count_is_3": true,
+    "round_contains_header": true,
+    "round_contains_all_roles": true,
+    "loop_contains_header": true,
+    "loop_contains_round_1": true,
+    "loop_contains_round_2": true,
+    "router_called_enough": true
+  },
+  "calls_count": 9,
+  "round_preview": "🐝 **Swarm Room: Проверка роя после рефакторинга**\n\n**🔬 Аналитик:**\nАнализ: ключевые факторы и входные данные выделены.\n\n**🎯 Критик:**\nКритика: найден риск перегруза контекста и неучтённый edge-case.\n\n**🧠 Интегратор:**\nИтог: применить guard, прогнать smoke, зафиксировать отчёт.",
+  "loop_preview": "🐝 **Swarm Loop: Проверка роя после рефакторинга**\n\n## Раунд 1/2\n🐝 **Swarm Room: Проверка роя после рефакторинга**\n\n**🔬 Аналитик:**\nАнализ: ключевые факторы и входные данные выделены.\n\n**🎯 Критик:**\nКритика: найден риск перегруза контекста и неучтённый edge-case.\n\n**🧠 Интегратор:**\nИтог: применить guard, прогнать smoke, зафиксировать отчёт.\n\n## Раунд 2/2\n🐝 **Swarm Room: Улучши и уточни предыдущее р"
+}

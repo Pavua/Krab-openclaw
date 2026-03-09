@@ -1301,6 +1301,47 @@
       return "auto";
     }
 
+    function resolveLocalRuntimeLabel(router) {
+      const modelId = String(router?.local_model || "").trim();
+      if (modelId) return modelId;
+
+      const runtimeState = String(router?.local_runtime_state || "")
+        .trim()
+        .toLowerCase();
+      if (runtimeState === "loading") return "Loading...";
+      if (runtimeState === "loaded") return "Loaded";
+
+      // Доступный, но незагруженный local runtime — это idle/not loaded,
+      // а не offline. Иначе панель показывает противоречивые состояния.
+      if (
+        runtimeState === "idle"
+        || runtimeState === "not_loaded"
+        || Boolean(router?.is_local_available)
+      ) {
+        return "Idle";
+      }
+
+      return "Offline";
+    }
+
+    function resolveCatalogLocalLabel(catalog) {
+      const modelId = String(catalog?.local_active_model || "").trim();
+      if (modelId) return modelId;
+      return catalog?.local_available ? "idle" : "offline";
+    }
+
+    function resolveLocalLifecycleLabel(payload) {
+      const modelId = String(payload?.model_name || "").trim();
+      if (modelId) return modelId;
+
+      const lifecycle = String(payload?.status || "")
+        .trim()
+        .toLowerCase();
+      if (lifecycle === "not_loaded") return "not loaded";
+      if (lifecycle === "loading") return "loading";
+      return "-";
+    }
+
     function fillSelect(nodeId, options, selectedValue = "") {
       const node = document.getElementById(nodeId);
       if (!node) return;
@@ -1487,7 +1528,7 @@
           "modelControlMeta",
           payload.message || "Изменения применены.",
         );
-        await updateStats();
+        await updateStats(true);
       } catch (error) {
         showApiError("modelControlMeta", "Model Action", error);
       }
@@ -1640,7 +1681,7 @@
           );
           setText("opsActionMeta", `OK: alert ${code} снят с подтверждения`);
         }
-        await updateStats();
+        await updateStats(true);
       } catch (error) {
         setText("opsActionMeta", `Ошибка: ${error.message}`);
       }
@@ -1772,7 +1813,7 @@
       btn.disabled = true;
       try {
         await fetch("/api/openclaw/cloud", { method: "GET" }).catch(() => { });
-        await updateStats();
+        await updateStats(true);
       } catch (e) {
         console.error("Cloud diag failed:", e);
       } finally {
@@ -2098,6 +2139,147 @@ ${channelsText}`;
 
     window.__runtimeGatewayTokenPresent = false;
     window.__runtimeGatewayTokenMasked = "";
+    let updateStatsInFlight = null;
+    let dashboardStatsLastLoadedAt = 0;
+    const DASHBOARD_POLL_LEADER_KEY = "krab:web-panel:poll-leader:v1";
+    const DASHBOARD_POLL_LEADER_TTL_MS = 12000;
+    const DASHBOARD_POLL_HEARTBEAT_MS = 4000;
+    const DASHBOARD_LITE_POLL_VISIBLE_MS = 15000;
+    const DASHBOARD_LITE_POLL_HIDDEN_MS = 60000;
+    const DASHBOARD_DEEP_POLL_VISIBLE_MS = 60000;
+    const DASHBOARD_DEEP_POLL_HIDDEN_MS = 120000;
+    const DASHBOARD_STATS_POLL_VISIBLE_MS = 30000;
+    const DASHBOARD_STATS_POLL_HIDDEN_MS = 90000;
+    const DASHBOARD_DEEP_HEALTH_CACHE_MAX_AGE_MS = 75000;
+    const DASHBOARD_VISIBILITY_REFRESH_MIN_MS = 8000;
+    const dashboardTabId = (() => {
+      try {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") {
+          return window.crypto.randomUUID();
+        }
+      } catch (error) {
+        console.warn("poll_tab_id_random_uuid_unavailable", error);
+      }
+      return `krab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    })();
+    let pollLeaderHeartbeatHandle = null;
+    let dashboardDeepHealthCache = { ts: 0, payload: null };
+
+    function isDashboardTabVisible() {
+      return document.visibilityState !== "hidden";
+    }
+
+    function rememberDeepHealthPayload(payload) {
+      dashboardDeepHealthCache = {
+        ts: Date.now(),
+        payload: payload && typeof payload === "object" ? payload : null,
+      };
+      return dashboardDeepHealthCache.payload;
+    }
+
+    function getCachedDeepHealthPayload(maxAgeMs = DASHBOARD_DEEP_HEALTH_CACHE_MAX_AGE_MS) {
+      const ts = Number(dashboardDeepHealthCache?.ts || 0);
+      const payload = dashboardDeepHealthCache?.payload || null;
+      if (!payload || !ts) {
+        return null;
+      }
+      if ((Date.now() - ts) > maxAgeMs) {
+        return null;
+      }
+      return payload;
+    }
+
+    function readPollLeaderState() {
+      try {
+        const raw = window.localStorage.getItem(DASHBOARD_POLL_LEADER_KEY);
+        if (!raw) {
+          return { tabId: "", ts: 0 };
+        }
+        const payload = JSON.parse(raw);
+        return {
+          tabId: String(payload?.tabId || "").trim(),
+          ts: Number(payload?.ts || 0),
+        };
+      } catch (error) {
+        console.warn("poll_leader_state_read_failed", error);
+        return { tabId: "", ts: 0 };
+      }
+    }
+
+    function isPollLeaderStateFresh(state) {
+      const ts = Number(state?.ts || 0);
+      if (!ts) {
+        return false;
+      }
+      return (Date.now() - ts) <= DASHBOARD_POLL_LEADER_TTL_MS;
+    }
+
+    function writePollLeaderState() {
+      const payload = {
+        tabId: dashboardTabId,
+        ts: Date.now(),
+      };
+      try {
+        window.localStorage.setItem(DASHBOARD_POLL_LEADER_KEY, JSON.stringify(payload));
+      } catch (error) {
+        console.warn("poll_leader_state_write_failed", error);
+      }
+      return payload;
+    }
+
+    function clearPollLeaderStateIfOwned() {
+      const state = readPollLeaderState();
+      if (state.tabId !== dashboardTabId) {
+        return;
+      }
+      try {
+        window.localStorage.removeItem(DASHBOARD_POLL_LEADER_KEY);
+      } catch (error) {
+        console.warn("poll_leader_state_clear_failed", error);
+      }
+    }
+
+    function refreshPollLeadership(force = false) {
+      if (!isDashboardTabVisible()) {
+        clearPollLeaderStateIfOwned();
+        return false;
+      }
+
+      const state = readPollLeaderState();
+      if (force || !isPollLeaderStateFresh(state) || state.tabId === dashboardTabId) {
+        writePollLeaderState();
+        return true;
+      }
+      return state.tabId === dashboardTabId;
+    }
+
+    function isAutoPollLeader() {
+      if (!isDashboardTabVisible()) {
+        return false;
+      }
+      const state = readPollLeaderState();
+      return state.tabId === dashboardTabId && isPollLeaderStateFresh(state);
+    }
+
+    function isAutoPollAllowed() {
+      return isDashboardTabVisible() && isAutoPollLeader();
+    }
+
+    function startPollLeadershipHeartbeat() {
+      if (pollLeaderHeartbeatHandle) {
+        return;
+      }
+      refreshPollLeadership(true);
+      pollLeaderHeartbeatHandle = window.setInterval(() => {
+        refreshPollLeadership(false);
+      }, DASHBOARD_POLL_HEARTBEAT_MS);
+    }
+
+    function isLiteRuntimeHealthy(data) {
+      const status = String(data?.status || "").trim().toLowerCase();
+      return data?.ok === true && (status === "up" || status === "ok");
+    }
+
     function resolveGatewayTokenStatus() {
       const runtimePresent = Boolean(window.__runtimeGatewayTokenPresent);
       const runtimeMasked = String(window.__runtimeGatewayTokenMasked || "").trim();
@@ -2109,328 +2291,360 @@ ${channelsText}`;
       };
     }
 
-    async function updateStats() {
-      try {
-        const [
-          stats,
-          health,
-          links,
-          recommend,
-          feedbackPayload,
-          usagePayload,
-          alertsPayload,
-          timelinePayload,
-          queuePayload,
-          slaPayload,
-          runtimeConfig,
-        ] = await Promise.all([
-          fetchJson("/api/stats"),
-          fetchJson("/api/health"),
-          fetchJson("/api/links"),
-          fetchJson("/api/model/recommend?profile=chat"),
-          fetchJson("/api/model/feedback?profile=chat&top=1"),
-          fetchJson("/api/ops/usage"),
-          fetchJson("/api/ops/alerts"),
-          fetchJson("/api/timeline?limit=50"),
-          fetchJson("/api/queue").catch(() => ({ ok: false, queue: {} })),
-          fetchJson("/api/sla").catch(() => ({ ok: false })),
-          fetchJson("/api/openclaw/runtime-config").catch(() => ({ ok: false })),
-        ]);
+    async function updateStats(force = false) {
+      if (!force && !isAutoPollAllowed()) {
+        return null;
+      }
+      if (updateStatsInFlight) {
+        return updateStatsInFlight;
+      }
 
-        if (runtimeConfig && runtimeConfig.ok) {
-          window.__runtimeGatewayTokenPresent = Boolean(runtimeConfig.gateway_token_present);
-          window.__runtimeGatewayTokenMasked = String(runtimeConfig.gateway_token_masked || "");
-        }
-        updateTokenStatus();
+      updateStatsInFlight = (async () => {
+        try {
+          const cachedHealth = !force ? getCachedDeepHealthPayload() : null;
+          const [
+            stats,
+            health,
+            links,
+            recommend,
+            feedbackPayload,
+            usagePayload,
+            alertsPayload,
+            timelinePayload,
+            queuePayload,
+            slaPayload,
+            runtimeConfig,
+          ] = await Promise.all([
+            fetchJson("/api/stats"),
+            cachedHealth ? Promise.resolve(cachedHealth) : fetchJson("/api/health"),
+            fetchJson("/api/links"),
+            fetchJson("/api/model/recommend?profile=chat"),
+            fetchJson("/api/model/feedback?profile=chat&top=1"),
+            fetchJson("/api/ops/usage"),
+            fetchJson("/api/ops/alerts"),
+            fetchJson("/api/timeline?limit=50"),
+            fetchJson("/api/queue").catch(() => ({ ok: false, queue: {} })),
+            fetchJson("/api/sla").catch(() => ({ ok: false })),
+            fetchJson("/api/openclaw/runtime-config").catch(() => ({ ok: false })),
+          ]);
 
-        const bb = stats.black_box || {};
-        const rag = stats.rag || {};
-        const router = stats.router || {};
-        const lastRoute = router.last_route || {};
-        const cloudKeys = router.cloud_keys || {};
+          if (!cachedHealth && health && typeof health === "object") {
+            rememberDeepHealthPayload(health);
+          }
 
-        setText("bb_total", String(bb.total ?? bb.total_messages ?? 0));
-        setText("rag_total", String(rag.count ?? 0));
-        setText("local_model", router.local_model || "Offline");
-        setText("degradation", health.degradation || "unknown");
+          if (runtimeConfig && runtimeConfig.ok) {
+            window.__runtimeGatewayTokenPresent = Boolean(runtimeConfig.gateway_token_present);
+            window.__runtimeGatewayTokenMasked = String(runtimeConfig.gateway_token_masked || "");
+          }
+          updateTokenStatus();
 
-        // --- Cloud Keys Diagnostics [R17] ---
-        const ocKeys = cloudKeys.openclaw || {};
-        const geminiKeys = cloudKeys.gemini || {};
-        const lastError = cloudKeys.last_error || {};
+          const bb = stats.black_box || {};
+          const rag = stats.rag || {};
+          const router = stats.router || {};
+          const lastRoute = router.last_route || {};
+          const cloudKeys = router.cloud_keys || {};
+          const cloudTier = router.cloud_tier || {};
 
-        setText("keyOpenClawMask", ocKeys.masked_key || "Не задан");
-        const ocBadge = document.getElementById("keyOpenClawStatus");
-        if (ocBadge) {
-          ocBadge.className = ocKeys.is_configured ? "badge ok" : "badge warn";
-          ocBadge.textContent = ocKeys.is_configured ? "Configured" : "Missing";
-        }
+          setText("bb_total", String(bb.total ?? bb.total_messages ?? 0));
+          setText("rag_total", String(rag.count ?? 0));
+          setText("local_model", resolveLocalRuntimeLabel(router));
+          setText("degradation", health.degradation || "unknown");
 
-        setText("keyGeminiMask", geminiKeys.masked_key || "Не задан");
-        const geminiBadge = document.getElementById("keyGeminiStatus");
-        if (geminiBadge) {
-          if (geminiKeys.has_error) {
-            geminiBadge.className = "badge bad";
-            geminiBadge.textContent = "Error";
+          // --- Cloud Keys Diagnostics [R17] ---
+          const ocKeys = cloudKeys.openclaw || {};
+          const geminiKeys = cloudKeys.gemini || {};
+          const lastError = cloudKeys.last_error || {};
+
+          setText("keyOpenClawMask", ocKeys.masked_key || "Не задан");
+          const ocBadge = document.getElementById("keyOpenClawStatus");
+          if (ocBadge) {
+            ocBadge.className = ocKeys.is_configured ? "badge ok" : "badge warn";
+            ocBadge.textContent = ocKeys.is_configured ? "Configured" : "Missing";
+          }
+
+          setText("keyGeminiMask", geminiKeys.masked_key || "Не задан");
+          const geminiBadge = document.getElementById("keyGeminiStatus");
+          if (geminiBadge) {
+            if (geminiKeys.has_error) {
+              geminiBadge.className = "badge bad";
+              geminiBadge.textContent = "Error";
+            } else {
+              geminiBadge.className = geminiKeys.is_configured ? "badge ok" : "badge warn";
+              geminiBadge.textContent = geminiKeys.is_configured ? "Configured" : "Missing";
+            }
+          }
+
+          const errHint = document.getElementById("cloudKeyErrorHint");
+          if (lastError.has_error) {
+            setText("cloudKeyErrorText", lastError.summary || "Неизвестная ошибка");
+            let nextStep = "Проверьте логи.";
+            if (lastError.code === "api_key_invalid" || lastError.code === "unauthorized") {
+              nextStep = "Проверьте конфигурацию ключа в ENV или <b>openclaw.json</b>. (<a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OpenClaw Dashboard</a>)";
+            } else if (lastError.code === "quota_exceeded" || lastError.code === "billing_error") {
+              nextStep = "Проверьте баланс на платформе провайдера или смените тир в <a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OC Dashboard</a>.";
+            }
+            document.getElementById("cloudKeyErrorNextStep").innerHTML = "\u2192 Next step: " + nextStep;
+            if (errHint) errHint.style.display = "block";
+
+            const pulse = document.getElementById("cloudKeysPulse");
+            if (pulse) pulse.className = "pulse-bad";
           } else {
-            geminiBadge.className = geminiKeys.is_configured ? "badge ok" : "badge warn";
-            geminiBadge.textContent = geminiKeys.is_configured ? "Configured" : "Missing";
+            if (errHint) errHint.style.display = "none";
+            const pulse = document.getElementById("cloudKeysPulse");
+            if (pulse) pulse.className = (ocKeys.is_configured || geminiKeys.is_configured) ? "pulse-ok" : "pulse-warn";
           }
-        }
 
-        const errHint = document.getElementById("cloudKeyErrorHint");
-        if (lastError.has_error) {
-          setText("cloudKeyErrorText", lastError.summary || "Неизвестная ошибка");
-          let nextStep = "Проверьте логи.";
-          if (lastError.code === "api_key_invalid" || lastError.code === "unauthorized") {
-            nextStep = "Проверьте конфигурацию ключа в ENV или <b>openclaw.json</b>. (<a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OpenClaw Dashboard</a>)";
-          } else if (lastError.code === "quota_exceeded" || lastError.code === "billing_error") {
-            nextStep = "Проверьте баланс на платформе провайдера или смените тир в <a href='http://127.0.0.1:8000' target='_blank' style='color:var(--accent-cyan); text-decoration:underline;'>OC Dashboard</a>.";
+
+          // --- Cloud Tier Status ---
+          const activeTierVal =
+            cloudTier.active_display ||
+            (geminiKeys.is_configured
+              ? String(geminiKeys.active_tier || "configured").toUpperCase()
+              : (ocKeys.is_configured ? "OPENCLAW" : "None"));
+          const loadedTiers =
+            Array.isArray(cloudTier.configured_labels) && cloudTier.configured_labels.length
+              ? cloudTier.configured_labels
+              : [
+                  ...(geminiKeys.is_configured ? ["Gemini"] : []),
+                  ...(ocKeys.is_configured ? ["OpenClaw"] : []),
+                ];
+          setText("ocTierActive", activeTierVal);
+          const ocTierActiveBadge = document.getElementById("ocTierActive");
+          if (ocTierActiveBadge) {
+            ocTierActiveBadge.className = activeTierVal !== "None" ? "badge cloud" : "badge";
+            ocTierActiveBadge.style.color = activeTierVal !== "None" ? "var(--accent-cyan)" : "var(--text-muted)";
           }
-          document.getElementById("cloudKeyErrorNextStep").innerHTML = "\u2192 Next step: " + nextStep;
-          if (errHint) errHint.style.display = "block";
+          setText("ocTierLoaded", loadedTiers.join(", ") || "None");
+          const tierLastError =
+            cloudTier.last_error_summary ||
+            ((lastError.has_error || lastError.summary) ? (lastError.summary || "Unknown Error") : "Clear");
+          setText("ocTierLastError", tierLastError);
 
-          const pulse = document.getElementById("cloudKeysPulse");
-          if (pulse) pulse.className = "pulse-bad";
-        } else {
-          if (errHint) errHint.style.display = "none";
-          const pulse = document.getElementById("cloudKeysPulse");
-          if (pulse) pulse.className = (ocKeys.is_configured || geminiKeys.is_configured) ? "pulse-ok" : "pulse-warn";
-        }
+          const activeTier = lastRoute.channel === "cloud" ? "Cloud" : (lastRoute.channel === "local" ? "Local" : "Auto");
+          const isFallback = Boolean(lastRoute.route_reason && lastRoute.route_reason !== "primary_choice");
+          setText("opsCloudActiveTier", activeTier);
+          setText("opsCloudFallbackUsed", isFallback ? "Yes" : "No");
+          setText("opsCloudFallbackReason", lastRoute.route_reason || "—");
+          setText("opsCloudErrorCode", lastRoute.route_detail || "None");
+          setText("opsCloudBlockedProviders", "0"); // Not exposed by backend yet
 
+          const tierBadge = document.getElementById("opsCloudActiveTier");
+          if (tierBadge) {
+            tierBadge.style.background = activeTier === "Cloud" ? "var(--accent-cyan)" : (activeTier === "Local" ? "var(--state-warn)" : "var(--bg-element)");
+            tierBadge.style.color = activeTier === "Cloud" ? "#fff" : "var(--text-main)";
+          }
 
-        // --- Cloud Tier Status ---
-        const activeTierVal = lastRoute.channel === "cloud" ? (geminiKeys.is_configured ? "Gemini" : "OpenClaw") : "None";
-        let loadedTiers = [];
-        if (geminiKeys.is_configured) loadedTiers.push("Gemini");
-        if (ocKeys.is_configured) loadedTiers.push("OpenClaw");
-        setText("ocTierActive", activeTierVal);
-        const ocTierActiveBadge = document.getElementById("ocTierActive");
-        if (ocTierActiveBadge) {
-          ocTierActiveBadge.className = activeTierVal !== "None" ? "badge cloud" : "badge";
-          ocTierActiveBadge.style.color = activeTierVal !== "None" ? "var(--accent-cyan)" : "var(--text-muted)";
-        }
-        setText("ocTierLoaded", loadedTiers.join(", ") || "None");
-        setText("ocTierLastError", (lastError.has_error || lastError.summary) ? (lastError.summary || "Unknown Error") : "Clear");
+          // --- SLA Widget ---
+          if (slaPayload && slaPayload.ok !== false) {
+            setText("opsSlaSuccessRate", `${slaPayload.success_rate_pct ?? 0}%`);
+            setText("opsSlaP50", `${slaPayload.latency_p50_ms ?? 0}ms`);
+            setText("opsSlaP95", `${slaPayload.latency_p95_ms ?? 0}ms`);
+            setText("opsSlaFailFast", String(slaPayload.fail_fast_count ?? 0));
+          } else {
+            setText("opsSlaSuccessRate", "N/A");
+            setText("opsSlaP50", "N/A");
+            setText("opsSlaP95", "N/A");
+            setText("opsSlaFailFast", "N/A");
+          }
+          document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
 
-        const activeTier = lastRoute.channel === "cloud" ? "Cloud" : (lastRoute.channel === "local" ? "Local" : "Auto");
-        const isFallback = Boolean(lastRoute.route_reason && lastRoute.route_reason !== "primary_choice");
-        setText("opsCloudActiveTier", activeTier);
-        setText("opsCloudFallbackUsed", isFallback ? "Yes" : "No");
-        setText("opsCloudFallbackReason", lastRoute.route_reason || "—");
-        setText("opsCloudErrorCode", lastRoute.route_detail || "None");
-        setText("opsCloudBlockedProviders", "0"); // Not exposed by backend yet
+          // --- Queue Stability Card ---
+          const queueStats = queuePayload.queue || {};
+          const activeTasks = Object.values(queueStats.active_tasks || {});
+          const queueDepth = queueStats.queued_total || 0;
 
-        const tierBadge = document.getElementById("opsCloudActiveTier");
-        if (tierBadge) {
-          tierBadge.style.background = activeTier === "Cloud" ? "var(--accent-cyan)" : (activeTier === "Local" ? "var(--state-warn)" : "var(--bg-element)");
-          tierBadge.style.color = activeTier === "Cloud" ? "#fff" : "var(--text-main)";
-        }
+          let oldestAge = 0;
+          let totalSecs = 0;
+          let stuckCount = 0;
 
-        // --- SLA Widget ---
-        if (slaPayload && slaPayload.ok !== false) {
-          setText("opsSlaSuccessRate", `${slaPayload.success_rate_pct ?? 0}%`);
-          setText("opsSlaP50", `${slaPayload.latency_p50_ms ?? 0}ms`);
-          setText("opsSlaP95", `${slaPayload.latency_p95_ms ?? 0}ms`);
-          setText("opsSlaFailFast", String(slaPayload.fail_fast_count ?? 0));
-        } else {
-          setText("opsSlaSuccessRate", "N/A");
-          setText("opsSlaP50", "N/A");
-          setText("opsSlaP95", "N/A");
-          setText("opsSlaFailFast", "N/A");
-        }
-        document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
+          for (const t of activeTasks) {
+            const age = t.elapsed_seconds || 0;
+            totalSecs += age;
+            if (age > oldestAge) oldestAge = age;
+            if (age > (queueStats.task_timeout_seconds || 60) * 0.8) stuckCount++;
+          }
+          const avgSecs = activeTasks.length > 0 ? (totalSecs / activeTasks.length).toFixed(1) : "0.0";
 
-        // --- Queue Stability Card ---
-        const queueStats = queuePayload.queue || {};
-        const activeTasks = Object.values(queueStats.active_tasks || {});
-        const queueDepth = queueStats.queued_total || 0;
+          setText("opsQueueLength", String(queueDepth));
+          setText("opsActiveTasks", String(activeTasks.length));
+          setText("opsAvgTaskTime", String(avgSecs));
+          setText("opsOldestTaskAge", `${oldestAge.toFixed(1)}s`);
+          setText("opsStuckTasks", String(stuckCount));
+          const guardTriggers =
+            queueStats.reply_incomplete_guard_triggered ??
+            queueStats.guard_triggers ??
+            queueStats.guard_blocks ??
+            0;
+          setText("opsTaskAborts", String(queueStats.aborts || queueStats.retries || 0));
+          setText("opsGuardTriggers", String(guardTriggers));
 
-        let oldestAge = 0;
-        let totalSecs = 0;
-        let stuckCount = 0;
+          const queueContainer = document.getElementById("queueStabilityContainer");
+          const queuePulse = document.getElementById("queueStabilityPulse");
+          if (stuckCount > 0) {
+            if (queueContainer) queueContainer.className = "card state-container queue-status-warn";
+            if (queuePulse) queuePulse.className = "pulse-warn";
+            document.getElementById("opsStuckTasks").style.color = "var(--state-warn)";
+          } else {
+            if (queueContainer) queueContainer.className = "card state-container queue-status-ok";
+            if (queuePulse) queuePulse.className = "pulse-ok";
+            document.getElementById("opsStuckTasks").style.color = "var(--state-ok)";
+          }
 
-        for (const t of activeTasks) {
-          const age = t.elapsed_seconds || 0;
-          totalSecs += age;
-          if (age > oldestAge) oldestAge = age;
-          if (age > (queueStats.task_timeout_seconds || 60) * 0.8) stuckCount++;
-        }
-        const avgSecs = activeTasks.length > 0 ? (totalSecs / activeTasks.length).toFixed(1) : "0.0";
+          const checks = health.checks || {};
+          document.getElementById("checks").innerHTML =
+            badge(!!checks.openclaw, "OpenClaw") +
+            badge(!!checks.local_lm, "Local LM") +
+            badge(!!checks.voice_gateway, "Voice Gateway") +
+            badge(!!checks.krab_ear, "Krab Ear");
 
-        setText("opsQueueLength", String(queueDepth));
-        setText("opsActiveTasks", String(activeTasks.length));
-        setText("opsAvgTaskTime", String(avgSecs));
-        setText("opsOldestTaskAge", `${oldestAge.toFixed(1)}s`);
-        setText("opsStuckTasks", String(stuckCount));
-        const guardTriggers =
-          queueStats.reply_incomplete_guard_triggered ??
-          queueStats.guard_triggers ??
-          queueStats.guard_blocks ??
-          0;
-        setText("opsTaskAborts", String(queueStats.aborts || queueStats.retries || 0));
-        setText("opsGuardTriggers", String(guardTriggers));
-
-        const queueContainer = document.getElementById("queueStabilityContainer");
-        const queuePulse = document.getElementById("queueStabilityPulse");
-        if (stuckCount > 0) {
-          if (queueContainer) queueContainer.className = "card state-container queue-status-warn";
-          if (queuePulse) queuePulse.className = "pulse-warn";
-          document.getElementById("opsStuckTasks").style.color = "var(--state-warn)";
-        } else {
-          if (queueContainer) queueContainer.className = "card state-container queue-status-ok";
-          if (queuePulse) queuePulse.className = "pulse-ok";
-          document.getElementById("opsStuckTasks").style.color = "var(--state-ok)";
-        }
-
-        const checks = health.checks || {};
-        document.getElementById("checks").innerHTML =
-          badge(!!checks.openclaw, "OpenClaw") +
-          badge(!!checks.local_lm, "Local LM") +
-          badge(!!checks.voice_gateway, "Voice Gateway") +
-          badge(!!checks.krab_ear, "Krab Ear");
-
-        const linksBlock = [
-          ["Dashboard", links.dashboard],
-          ["Stats API", links.stats_api],
-          ["Health API", links.health_api],
-          ["Ecosystem Health API", links.ecosystem_health_api],
-          ["Model Preflight API", `${links.dashboard}/api/model/preflight`],
-          ["Model Feedback API", `${links.dashboard}/api/model/feedback`],
-          [
-            "OpenClaw Deep Check",
-            `${links.dashboard}/api/openclaw/deep-check`,
-          ],
-          [
-            "OpenClaw Remediation Plan",
-            `${links.dashboard}/api/openclaw/remediation-plan`,
-          ],
-          [
-            "OpenClaw Browser Smoke",
-            `${links.dashboard}/api/openclaw/browser-smoke`,
-          ],
-          [
-            "OpenClaw Cloud Diagnostics",
-            `${links.dashboard}/api/openclaw/cloud`,
-          ],
-          [
-            "Context Checkpoint API",
-            links.context_checkpoint_api || `${links.dashboard}/api/context/checkpoint`,
-          ],
-          [
-            "Context Transition Pack API",
-            links.context_transition_pack_api || `${links.dashboard}/api/context/transition-pack`,
-          ],
-          [
-            "Context Latest API",
-            links.context_latest_api || `${links.dashboard}/api/context/latest`,
-          ],
-          [
-            "Assistant Capabilities",
-            `${links.dashboard}/api/assistant/capabilities`,
-          ],
-          ["Ops Cost Report", `${links.dashboard}/api/ops/cost-report`],
-          [
-            "Ops Executive Summary",
-            `${links.dashboard}/api/ops/executive-summary`,
-          ],
-          ["Ops Full Report", `${links.dashboard}/api/ops/report`],
-          ["Ops Bundle Export", `${links.dashboard}/api/ops/bundle/export`],
-          ["OpenClaw", links.openclaw],
-          ["Voice Gateway", links.voice_gateway],
-        ]
-          .filter(([, url]) => !!url)
-          .map(
-            ([name, url]) =>
-              `<a href="${url}" target="_blank" rel="noreferrer">${name}: ${url}</a>`,
-          )
-          .join("");
-        document.getElementById("links").innerHTML = linksBlock || "—";
-
-        setText("recommended_model", recommend.model || "—");
-        const bestFeedback =
-          feedbackPayload?.feedback?.top_models?.[0] || null;
-        if (bestFeedback) {
-          setText(
-            "recommended_meta",
-            `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count})`,
-          );
-        } else {
-          setText(
-            "recommended_meta",
-            `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"}`,
-          );
-        }
-
-        const usage = usagePayload.usage || {};
-        const totals = usage.totals || {};
-        const ratios = usage.ratios || {};
-        const softCap = usage.soft_cap || {};
-        setText(
-          "opsUsageMeta",
-          `Calls: total=${totals.all_calls ?? 0}, cloud=${totals.cloud_calls ?? 0}, local=${totals.local_calls ?? 0} • cloud_share=${ratios.cloud_share ?? 0} • cap_left=${softCap.cloud_remaining_calls ?? 0}`,
-        );
-
-        setText("opsCloudCap", `${totals.cloud_calls ?? 0} / ${softCap.cloud_soft_cap_calls ?? 10000}`);
-        const capReached = softCap.cloud_soft_cap_reached;
-        const capBdge = document.getElementById("opsCloudCapReached");
-        if (capBdge) {
-          capBdge.className = capReached ? "badge bad" : "badge ok";
-          capBdge.innerHTML = capReached ? "True" : "False";
-        }
-
-        const alertsRoot = alertsPayload.alerts || {};
-        const alertsList = alertsRoot.alerts || [];
-        if (!alertsList.length) {
-          document.getElementById("opsAlerts").innerHTML =
-            '<span class="badge ok">OK no active alerts</span>';
-        } else {
-          const html = alertsList
-            .map((item) => {
-              const bg = item.severity === "high" ? "background: var(--state-error-muted); border-left: 3px solid var(--state-error);" : "background: var(--state-warn-muted); border-left: 3px solid var(--state-warn);";
-              const ack = item.acknowledged
-                ? ` <span class="badge ok" title="${item.ack?.actor || ''} at ${item.ack?.ts || ''}">ACK</span>`
-                : (item.revoked ? ` <span class="badge" style="background: var(--bg-element); color: var(--text-placeholder)">REVOKED</span>` : "");
-
-              const statusCls = item.severity === "high" ? "bad" : "warn";
-              return `<div class="alert-item" data-code="${(item.code || '').toLowerCase()}" style="padding: 8px; margin-bottom: 4px; border-radius: 4px; ${bg} display:flex; justify-content:space-between; align-items:flex-start;">
-                <div><span class="badge ${statusCls}">${item.severity || "info"}</span> <strong>${item.code || ""}</strong> <span style="font-size:0.9em">— ${item.message || ""}</span></div>
-                <div>${ack}</div>
-              </div>`;
-            })
+          const linksBlock = [
+            ["Dashboard", links.dashboard],
+            ["Stats API", links.stats_api],
+            ["Health API", links.health_api],
+            ["Ecosystem Health API", links.ecosystem_health_api],
+            ["Model Preflight API", `${links.dashboard}/api/model/preflight`],
+            ["Model Feedback API", `${links.dashboard}/api/model/feedback`],
+            [
+              "OpenClaw Deep Check",
+              `${links.dashboard}/api/openclaw/deep-check`,
+            ],
+            [
+              "OpenClaw Remediation Plan",
+              `${links.dashboard}/api/openclaw/remediation-plan`,
+            ],
+            [
+              "OpenClaw Browser Smoke",
+              `${links.dashboard}/api/openclaw/browser-smoke`,
+            ],
+            [
+              "OpenClaw Cloud Diagnostics",
+              `${links.dashboard}/api/openclaw/cloud`,
+            ],
+            [
+              "Context Checkpoint API",
+              links.context_checkpoint_api || `${links.dashboard}/api/context/checkpoint`,
+            ],
+            [
+              "Context Transition Pack API",
+              links.context_transition_pack_api || `${links.dashboard}/api/context/transition-pack`,
+            ],
+            [
+              "Context Latest API",
+              links.context_latest_api || `${links.dashboard}/api/context/latest`,
+            ],
+            [
+              "Assistant Capabilities",
+              `${links.dashboard}/api/assistant/capabilities`,
+            ],
+            ["Ops Cost Report", `${links.dashboard}/api/ops/cost-report`],
+            [
+              "Ops Executive Summary",
+              `${links.dashboard}/api/ops/executive-summary`,
+            ],
+            ["Ops Full Report", `${links.dashboard}/api/ops/report`],
+            ["Ops Bundle Export", `${links.dashboard}/api/ops/bundle/export`],
+            ["OpenClaw", links.openclaw],
+            ["Voice Gateway", links.voice_gateway],
+          ]
+            .filter(([, url]) => !!url)
+            .map(
+              ([name, url]) =>
+                `<a href="${url}" target="_blank" rel="noreferrer">${name}: ${url}</a>`,
+            )
             .join("");
-          document.getElementById("opsAlerts").innerHTML = html;
+          document.getElementById("links").innerHTML = linksBlock || "—";
+
+          setText("recommended_model", recommend.model || "—");
+          const bestFeedback =
+            feedbackPayload?.feedback?.top_models?.[0] || null;
+          if (bestFeedback) {
+            setText(
+              "recommended_meta",
+              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count})`,
+            );
+          } else {
+            setText(
+              "recommended_meta",
+              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"}`,
+            );
+          }
+
+          const usage = usagePayload.usage || {};
+          const totals = usage.totals || {};
+          const ratios = usage.ratios || {};
+          const softCap = usage.soft_cap || {};
+          setText(
+            "opsUsageMeta",
+            `Calls: total=${totals.all_calls ?? 0}, cloud=${totals.cloud_calls ?? 0}, local=${totals.local_calls ?? 0} • cloud_share=${ratios.cloud_share ?? 0} • cap_left=${softCap.cloud_remaining_calls ?? 0}`,
+          );
+
+          setText("opsCloudCap", `${totals.cloud_calls ?? 0} / ${softCap.cloud_soft_cap_calls ?? 10000}`);
+          const capReached = softCap.cloud_soft_cap_reached;
+          const capBdge = document.getElementById("opsCloudCapReached");
+          if (capBdge) {
+            capBdge.className = capReached ? "badge bad" : "badge ok";
+            capBdge.innerHTML = capReached ? "True" : "False";
+          }
+
+          const alertsRoot = alertsPayload.alerts || {};
+          const alertsList = alertsRoot.alerts || [];
+          if (!alertsList.length) {
+            document.getElementById("opsAlerts").innerHTML =
+              '<span class="badge ok">OK no active alerts</span>';
+          } else {
+            const html = alertsList
+              .map((item) => {
+                const bg = item.severity === "high" ? "background: var(--state-error-muted); border-left: 3px solid var(--state-error);" : "background: var(--state-warn-muted); border-left: 3px solid var(--state-warn);";
+                const ack = item.acknowledged
+                  ? ` <span class="badge ok" title="${item.ack?.actor || ''} at ${item.ack?.ts || ''}">ACK</span>`
+                  : (item.revoked ? ` <span class="badge" style="background: var(--bg-element); color: var(--text-placeholder)">REVOKED</span>` : "");
+
+                const statusCls = item.severity === "high" ? "bad" : "warn";
+                return `<div class="alert-item" data-code="${(item.code || '').toLowerCase()}" style="padding: 8px; margin-bottom: 4px; border-radius: 4px; ${bg} display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div><span class="badge ${statusCls}">${item.severity || "info"}</span> <strong>${item.code || ""}</strong> <span style="font-size:0.9em">— ${item.message || ""}</span></div>
+                  <div>${ack}</div>
+                </div>`;
+              })
+              .join("");
+            document.getElementById("opsAlerts").innerHTML = html;
+          }
+
+          // Update Timeline
+          window.lastTimelineEvents = timelinePayload?.events || [];
+          renderTimeline();
+
+          // Remove SLA skeleton after first successful load
+          document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
+
+          // Extrapolate channel state and breaker state
+          const stChannel = router.channel_state || health.router?.channel_state || (router.cloud_active ? "cloud" : "local");
+          const stBreaker = router.breaker_state || health.router?.breaker_state || "closed";
+
+          const rtChan = document.getElementById("rtChannelState");
+          const rtBrk = document.getElementById("rtBreakerState");
+          if (rtChan) rtChan.textContent = String(stChannel).toUpperCase();
+          if (rtBrk) rtBrk.textContent = String(stBreaker).toUpperCase();
+
+          setText(
+            "updated_at",
+            `Обновлено: ${new Date().toLocaleTimeString()}`,
+          );
+          dashboardStatsLastLoadedAt = Date.now();
+        } catch (error) {
+          console.error("Stats update failed", error);
+          setText("updated_at", `Ошибка обновления: ${error.message}`);
         }
-        const alerts = alertsPayload.alerts || [];
+      })();
 
-        // Update Timeline
-        window.lastTimelineEvents = timelinePayload?.events || [];
-        renderTimeline();
-
-        // Remove SLA skeleton after first successful load
-        document.querySelectorAll('.skeleton-text').forEach(el => el.classList.remove('skeleton-text'));
-
-        // Extrapolate channel state and breaker state
-        const stChannel = router.channel_state || health.router?.channel_state || (router.cloud_active ? "cloud" : "local");
-        const stBreaker = router.breaker_state || health.router?.breaker_state || "closed";
-
-        const rtChan = document.getElementById("rtChannelState");
-        const rtBrk = document.getElementById("rtBreakerState");
-        if (rtChan) rtChan.textContent = String(stChannel).toUpperCase();
-        if (rtBrk) rtBrk.textContent = String(stBreaker).toUpperCase();
-
-        setText(
-          "updated_at",
-          `Обновлено: ${new Date().toLocaleTimeString()}`,
-        );
-      } catch (error) {
-        console.error("Stats update failed", error);
-        setText("updated_at", `Ошибка обновления: ${error.message}`);
+      try {
+        return await updateStatsInFlight;
+      } finally {
+        updateStatsInFlight = null;
       }
     }
 
     async function refreshAll() {
-      await updateStats();
+      await updateStats(true);
       await loadModelCatalog(false);
       await loadOpenclawStatus(false);
       await loadContextLatest(false);
@@ -2518,8 +2732,8 @@ ${channelsText}`;
     document.getElementById("ocModeAutoBtn").addEventListener("click", withBtnState("ocModeAutoBtn", "Wait...", () => ocApplyMode("auto")));
     document.getElementById("ocModeCloudBtn").addEventListener("click", withBtnState("ocModeCloudBtn", "Wait...", () => ocApplyMode("cloud")));
 
-    document.getElementById("ocCloudProbeBtn").addEventListener("click", withBtnState("ocCloudProbeBtn", "Probing...", updateStats));
-    document.getElementById("keyCheckOpenClawBtn").addEventListener("click", withBtnState("keyCheckOpenClawBtn", "Checking...", updateStats));
+    document.getElementById("ocCloudProbeBtn").addEventListener("click", withBtnState("ocCloudProbeBtn", "Probing...", () => updateStats(true)));
+    document.getElementById("keyCheckOpenClawBtn").addEventListener("click", withBtnState("keyCheckOpenClawBtn", "Checking...", () => updateStats(true)));
 
     document.getElementById("ocLocalLoadBtn").addEventListener("click", withBtnState("ocLocalLoadBtn", "Wait...", ocLoadLocal));
     // Timeline Rendering
@@ -2597,7 +2811,7 @@ ${channelsText}`;
         const res = await fetch("/api/openclaw/channels/runtime-repair", { method: "POST" });
         const data = await res.json();
         setText("rtControlMeta", data.ok ? "Core repaired." : `Error: ${data.error}`);
-        await updateStats();
+        await updateStats(true);
       } catch (e) {
         setText("rtControlMeta", `Error: ${e.message}`);
       }
@@ -2618,7 +2832,7 @@ ${channelsText}`;
         const res = await fetch("/api/openclaw/cloud/tier/reset", { method: "POST" });
         const data = await res.json();
         setText("rtControlMeta", data.ok ? "Cloud tier reset." : `Error: ${data.error}`);
-        await updateStats();
+        await updateStats(true);
       } catch (e) {
         setText("rtControlMeta", `Error: ${e.message}`);
       }
@@ -2667,8 +2881,15 @@ ${channelsText}`;
           setText("ocrouteReq", data.requested_mode || "-");
           setText("ocrouteEff", data.effective_mode || "-");
           setText("ocrouteActive", data.active_slot_or_model || "-");
-          setText("ocrouteFallback", data.cloud_fallback ? "Да" : "Нет");
-          setText("ocrouteNotes", data.decision_notes || "-");
+          let fallbackText = data.cloud_fallback ? "Да" : "Нет";
+          if (data.cloud_fallback_state === "standby") fallbackText = "Резерв";
+          else if (data.cloud_fallback_state === "active") fallbackText = "Да";
+          else if (data.cloud_fallback_state === "disabled") fallbackText = "Нет";
+          setText("ocrouteFallback", fallbackText);
+          const routingNotes = Array.isArray(data.decision_notes)
+            ? data.decision_notes.join(" ")
+            : (data.decision_notes || "-");
+          setText("ocrouteNotes", routingNotes);
         }
       } catch (e) {
         console.error("Effective Routing Error:", e);
@@ -2706,7 +2927,7 @@ ${channelsText}`;
           setText("ocForceMode", payload.catalog?.force_mode || "auto");
           setText(
             "ocLocalModel",
-            payload.catalog?.local_active_model || "offline",
+            resolveCatalogLocalLabel(payload.catalog),
           );
           const slots = Object.keys(
             payload.catalog?.cloud_slots || {},
@@ -2784,17 +3005,16 @@ ${channelsText}`;
           const report = payload.report || {};
           const baseBrowser = report.base?.browser || {};
           const smoke = report.browser_smoke || {};
-          const relayOk = Boolean(baseBrowser.available);
-          const tabAttached = Boolean(
-            smoke.ok &&
-            (
-              smoke.channel === "endpoint" ||
-              smoke.tool === "browser_open" ||
-              smoke.tool === "browser_navigate" ||
-              smoke.tool === "browser_snapshot"
-            )
+          const relayOk = Boolean(
+            smoke.relay_reachable ||
+            smoke.browser_http_reachable ||
+            baseBrowser.available
           );
-          const lastCall = smoke.tool || smoke.path || smoke.channel || "n/a";
+          const tabAttached = Boolean(
+            smoke.tab_attached ||
+            smoke.browser_http_state === "attached"
+          );
+          const lastCall = smoke.detail || smoke.tool || smoke.path || smoke.channel || "n/a";
 
           if (relayBadge) {
             relayBadge.className = relayOk ? "badge ok" : "badge bad";
@@ -2868,22 +3088,31 @@ ${channelsText}`;
         const badgeClass = rawSt === "loaded" ? "ok" : (rawSt === "not_loaded" ? "warn" : "bad");
         const badgeText = rawSt === "loaded" ? "OK" : (rawSt === "not_loaded" ? "WARN" : "FAIL");
         document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
-        document.getElementById("ocLocalLifecycleModel").textContent = payload.model_name || "-";
+        document.getElementById("ocLocalLifecycleModel").textContent = resolveLocalLifecycleLabel(payload);
 
         if (showStatus) setText("ocMeta", "Статус local model обновлен");
+        return payload;
       } catch (error) {
         document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge bad">FAIL</span>`;
         document.getElementById("ocLocalLifecycleModel").textContent = "-";
         showApiError("ocMeta", "Local Status", error);
+        return null;
       }
     }
 
     async function ocLoadLocal() {
       try {
         setText("ocMeta", "Загрузка local model...");
-        await postJson("/api/model/local/load-default", {}, true, "POST");
-        setText("ocMeta", "Local model загружена");
-        await loadLocalLifecycleStatus(false);
+        const payload = await postJson("/api/model/local/load-default", {}, true, "POST");
+        const lifecycle = await loadLocalLifecycleStatus(false);
+        if (payload?.ok === false) {
+          throw new Error(payload?.error || "local_model_load_failed");
+        }
+        if (String(lifecycle?.status || "").toLowerCase() !== "loaded") {
+          throw new Error("local_model_not_confirmed_loaded");
+        }
+        const modelName = String(lifecycle?.model_name || payload?.model || "").trim();
+        setText("ocMeta", modelName ? `Local model загружена: ${modelName}` : "Local model загружена");
       } catch (error) {
         showApiError("ocMeta", "Load Model", error);
       }
@@ -2901,12 +3130,20 @@ ${channelsText}`;
     }
 
     async function startCoreHealthPolling() {
-      // Lite Health (Liveness) - 3 seconds
+      // Автополлинг запускает только одна активная вкладка,
+      // чтобы не дублировать LM Studio probe между окнами панели.
       async function pollLite() {
+        const nextDelayMs = isDashboardTabVisible()
+          ? DASHBOARD_LITE_POLL_VISIBLE_MS
+          : DASHBOARD_LITE_POLL_HIDDEN_MS;
+        if (!isAutoPollAllowed()) {
+          setTimeout(pollLite, nextDelayMs);
+          return;
+        }
         try {
           const res = await fetch("/api/health/lite");
           const data = await res.json().catch(() => ({}));
-          if (res.ok && data.status === "ok") {
+          if (res.ok && isLiteRuntimeHealthy(data)) {
             setText("coreLivenessStatus", "Online");
             document.getElementById("coreLivenessStatus").style.color = "var(--state-ok)";
             document.getElementById("coreLivenessPulse").className = "pulse-ok";
@@ -2924,14 +3161,23 @@ ${channelsText}`;
           document.getElementById("coreLivenessPulse").style.background = "var(--state-error)";
         }
         setText("coreLivenessTime", new Date().toLocaleTimeString());
-        setTimeout(pollLite, 3000);
+        setTimeout(pollLite, nextDelayMs);
       }
 
-      // Deep Health Ecosystem - 20 seconds
       async function pollDeep() {
+        const nextDelayMs = isDashboardTabVisible()
+          ? DASHBOARD_DEEP_POLL_VISIBLE_MS
+          : DASHBOARD_DEEP_POLL_HIDDEN_MS;
+        if (!isAutoPollAllowed()) {
+          setTimeout(pollDeep, nextDelayMs);
+          return;
+        }
         try {
           const res = await fetch("/api/health");
           const data = await res.json().catch(() => ({}));
+          if (res.ok && data && typeof data === "object") {
+            rememberDeepHealthPayload(data);
+          }
 
           if (res.ok && data.status) {
             setText("deepHealthStatus", data.status.toUpperCase());
@@ -2964,7 +3210,7 @@ ${channelsText}`;
           setText("deepHealthDegradation", "Fallback Text: API Gateway unreachable / timeout");
           setText("deepHealthTime", new Date().toLocaleTimeString());
         }
-        setTimeout(pollDeep, 20000);
+        setTimeout(pollDeep, nextDelayMs);
       }
 
       // Start polls
@@ -2972,12 +3218,53 @@ ${channelsText}`;
       pollDeep();
     }
 
-    startCoreHealthPolling();
+    async function startDashboardStatsPolling() {
+      async function tick() {
+        const nextDelayMs = isDashboardTabVisible()
+          ? DASHBOARD_STATS_POLL_VISIBLE_MS
+          : DASHBOARD_STATS_POLL_HIDDEN_MS;
+        if (isAutoPollAllowed()) {
+          try {
+            await updateStats(false);
+          } catch (error) {
+            console.error("dashboard_stats_poll_failed", error);
+          }
+        }
+        setTimeout(tick, nextDelayMs);
+      }
 
-    setInterval(updateStats, 8000);
+      const initialDelayMs = isDashboardTabVisible()
+        ? DASHBOARD_STATS_POLL_VISIBLE_MS
+        : DASHBOARD_STATS_POLL_HIDDEN_MS;
+      setTimeout(tick, initialDelayMs);
+    }
+
+    window.addEventListener("storage", (event) => {
+      if (event.key === DASHBOARD_POLL_LEADER_KEY && isDashboardTabVisible()) {
+        refreshPollLeadership(false);
+      }
+    });
+    window.addEventListener("beforeunload", clearPollLeaderStateIfOwned);
+    window.addEventListener("pagehide", clearPollLeaderStateIfOwned);
+
+    startPollLeadershipHeartbeat();
+    startCoreHealthPolling();
+    startDashboardStatsPolling();
+    document.addEventListener("visibilitychange", () => {
+      if (isDashboardTabVisible()) {
+        refreshPollLeadership(true);
+        const isStatsFresh =
+          dashboardStatsLastLoadedAt > 0 &&
+          (Date.now() - dashboardStatsLastLoadedAt) < DASHBOARD_VISIBILITY_REFRESH_MIN_MS;
+        if (!isStatsFresh) {
+          updateStats(true).catch((error) => console.error("updateStats_visibility_refresh_failed", error));
+        }
+      } else {
+        clearPollLeaderStateIfOwned();
+      }
+    });
     refreshAll();
     loadLocalLifecycleStatus(false);
-    loadContextLatest(false);
   </script>
 </body>
 

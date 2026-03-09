@@ -37,6 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.integrations.krab_ear_client import KrabEarClient
+from src.core.lm_studio_auth import build_lm_studio_auth_headers
 from src.integrations.voice_gateway_client import VoiceGatewayClient
 
 
@@ -171,7 +172,10 @@ async def main() -> int:
     # HTTP/REST checks (быстрый внешний срез).
     checks_http = {
         "openclaw": await _http_ok(f"{openclaw_base}/health"),
-        "local_lm": await _http_ok(_normalize_lm_models_url(lm_studio_url)),
+        "local_lm": await _http_ok(
+            _normalize_lm_models_url(lm_studio_url),
+            headers=build_lm_studio_auth_headers() or None,
+        ),
         "voice_gateway": await _http_ok(f"{voice_base}/health"),
         "krab_ear": await _http_ok(f"{krab_ear_base}/health"),
     }

@@ -30,6 +30,11 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.core.lm_studio_auth import build_lm_studio_auth_headers
+
 DOCS_DIR = ROOT / "docs"
 ARTIFACTS_DIR = ROOT / "artifacts"
 NOW = datetime.now(timezone.utc)
@@ -67,7 +72,11 @@ def _run(cmd: list[str]) -> dict[str, Any]:
 
 
 def _http_json(url: str, *, timeout: float = 4.0) -> dict[str, Any]:
-    req = Request(url, method="GET")
+    lm_base = str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234") or "").strip().rstrip("/")
+    headers = {"Accept": "application/json"}
+    if lm_base and (url.startswith(f"{lm_base}/api/v1/") or url.startswith(f"{lm_base}/v1/")):
+        headers = build_lm_studio_auth_headers(include_json_accept=True)
+    req = Request(url, method="GET", headers=headers)
     try:
         with urlopen(req, timeout=timeout) as resp:  # noqa: S310 - локальные health URL
             raw = resp.read().decode("utf-8", errors="replace")

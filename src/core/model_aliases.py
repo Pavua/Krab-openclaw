@@ -10,10 +10,14 @@ MODEL_FRIENDLY_ALIASES: dict[str, str] = {
     "gemini-flash": "google/gemini-2.5-flash",
     "gemini-2.5-flash": "google/gemini-2.5-flash",
     "gemini-flash-latest": "google/gemini-2.5-flash",
-    "gemini-3-pro": "google/gemini-3-pro-preview",
-    "gemini-3-pro-latest": "google/gemini-3-pro-preview",
-    "gemini-pro": "google/gemini-3-pro-preview",
-    "gemini-pro-latest": "google/gemini-3-pro-preview",
+    # На 2026-03-08 актуальный "умный" preview-таргет — 3.1 pro.
+    # Старые алиасы `gemini-3-pro*` сохраняем совместимыми и ведём на новый id.
+    "gemini-3-pro": "google/gemini-3.1-pro-preview",
+    "gemini-3-pro-latest": "google/gemini-3.1-pro-preview",
+    "gemini-pro": "google/gemini-3.1-pro-preview",
+    "gemini-pro-latest": "google/gemini-3.1-pro-preview",
+    "gemini-3.1-pro": "google/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
     "gemini-2.5-pro": "google/gemini-2.5-pro",
     # OpenAI
     "gpt-4o-mini": "openai/gpt-4o-mini",
@@ -92,7 +96,7 @@ def render_model_presets_text() -> str:
         "🧩 **Быстрые пресеты моделей:**\n\n"
         "**Cloud (Gemini):**\n"
         "• `!model set chat gemini-flash` → `google/gemini-2.5-flash`\n"
-        "• `!model set pro gemini-3-pro-latest` → `google/gemini-3-pro-preview`\n"
+        "• `!model set pro gemini-3-pro-latest` → `google/gemini-3.1-pro-preview`\n"
         "• `!model set thinking gemini-2.5-pro` → `google/gemini-2.5-pro`\n\n"
         "**Cloud (OpenAI):**\n"
         "• `!model set chat gpt-4o-mini` → `openai/gpt-4o-mini`\n"

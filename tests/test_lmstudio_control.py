@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 
 def _load_module():
@@ -122,3 +123,32 @@ def test_load_model_skips_duplicate_when_model_already_loaded() -> None:
     assert attempts[0][2].payload["already_loaded"] is True
     assert attempts[0][2].payload["instances"] == 1
     assert seen_calls == []
+
+
+def test_http_json_adds_auth_headers_from_helper() -> None:
+    module = _load_module()
+
+    class _FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    seen_headers = {}
+
+    def fake_urlopen(req, timeout=10.0):  # noqa: ARG001
+        seen_headers.update(dict(req.headers))
+        return _FakeResponse()
+
+    with patch.object(module, "build_lm_studio_auth_headers", return_value={"Authorization": "Bearer lm-token"}):
+        with patch.object(module.urllib.request, "urlopen", side_effect=fake_urlopen):
+            result = module._http_json("GET", "http://127.0.0.1:1234/v1/models")
+
+    assert result.ok is True
+    assert seen_headers["Authorization"] == "Bearer lm-token"

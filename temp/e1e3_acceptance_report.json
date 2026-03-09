@@ -1,0 +1,182 @@
+{
+  "generated_at_utc": "2026-03-06T21:50:39.560861+00:00",
+  "ok": true,
+  "inputs": {
+    "root": "/Users/pablito/Antigravity_AGENTS/Краб",
+    "health_url": "http://127.0.0.1:8080/api/health/lite",
+    "channels_url": "http://127.0.0.1:8080/api/openclaw/channels/status",
+    "log_files": [
+      "openclaw.log",
+      "krab.log"
+    ],
+    "tail_lines": 1200,
+    "max_age_minutes": 30.0,
+    "restart_cycles": 0,
+    "restart_timeout_sec": 90
+  },
+  "health_lite": {
+    "error": null,
+    "payload": {
+      "ok": true,
+      "status": "up",
+      "telegram_session_state": "open_or_unclean",
+      "telegram_userbot_state": "running",
+      "telegram_userbot_error_code": "",
+      "lmstudio_model_state": "loaded",
+      "openclaw_auth_state": "configured",
+      "last_runtime_route": {
+        "timestamp": 1772810797,
+        "channel": "local_direct",
+        "provider": "unknown",
+        "model": "qwen2-vl-2b-instruct-abliterated-mlx",
+        "active_tier": "free",
+        "force_cloud": false,
+        "status": "ok",
+        "error_code": null,
+        "route_reason": "local_direct_primary",
+        "route_detail": "Ответ получен напрямую из LM Studio"
+      },
+      "scheduler_enabled": true,
+      "voice_gateway_configured": true
+    }
+  },
+  "channels": {
+    "error": null,
+    "source": "web_endpoint",
+    "web_error": null,
+    "payload": {
+      "ok": true,
+      "raw": "[plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)\nChecking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:open, allow:*\n- Discord default: enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, configured, running, connected, url:http://127.0.0.1:12345, works\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).\n",
+      "warnings": [],
+      "exit_code": 0,
+      "channels": [
+        {
+          "name": "Telegram default",
+          "status": "OK",
+          "meta": "enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works"
+        },
+        {
+          "name": "WhatsApp default",
+          "status": "OK",
+          "meta": "enabled, configured, linked, running, connected, dm:open, allow:*"
+        },
+        {
+          "name": "Discord default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works"
+        },
+        {
+          "name": "Slack default",
+          "status": "OK",
+          "meta": "enabled, configured, running, bot:config, app:config, works"
+        },
+        {
+          "name": "Signal default",
+          "status": "OK",
+          "meta": "enabled, configured, running, url:http://127.0.0.1:18080, works"
+        },
+        {
+          "name": "iMessage default",
+          "status": "OK",
+          "meta": "enabled, configured, running, works"
+        },
+        {
+          "name": "BlueBubbles default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, url:http://127.0.0.1:12345, works"
+        }
+      ],
+      "gateway_reachable": true
+    },
+    "summary": {
+      "passed": [
+        {
+          "name": "Telegram default",
+          "status": "OK",
+          "meta": "enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works"
+        },
+        {
+          "name": "WhatsApp default",
+          "status": "OK",
+          "meta": "enabled, configured, linked, running, connected, dm:open, allow:*"
+        },
+        {
+          "name": "Discord default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works"
+        },
+        {
+          "name": "Slack default",
+          "status": "OK",
+          "meta": "enabled, configured, running, bot:config, app:config, works"
+        },
+        {
+          "name": "Signal default",
+          "status": "OK",
+          "meta": "enabled, configured, running, url:http://127.0.0.1:18080, works"
+        },
+        {
+          "name": "iMessage default",
+          "status": "OK",
+          "meta": "enabled, configured, running, works"
+        },
+        {
+          "name": "BlueBubbles default",
+          "status": "OK",
+          "meta": "enabled, configured, running, connected, url:http://127.0.0.1:12345, works"
+        }
+      ],
+      "failed": [],
+      "skipped": [],
+      "required_total": 7,
+      "success_rate": 100.0,
+      "gateway_reachable": true
+    }
+  },
+  "restart": {
+    "enabled": false,
+    "cycles": 0,
+    "attempts": [],
+    "all_running": true
+  },
+  "kpi": {
+    "no_models_loaded_outside_userbot": 0,
+    "empty_message_user_visible": 0,
+    "manual_relogin_required_events": 0,
+    "cloud_unauthorized_events": 0,
+    "channel_smoke_success_rate": 100.0,
+    "channel_smoke_required_total": 7,
+    "channel_smoke_failed_count": 0,
+    "restart_cycles_requested": 0,
+    "restart_cycles_all_running": true
+  },
+  "kpi_matches": {
+    "no_models_loaded": [],
+    "empty_message_user_visible": [],
+    "lm_model_crash": [],
+    "manual_relogin_required": [],
+    "cloud_unauthorized": []
+  },
+  "logs_scanned": [
+    {
+      "path": "openclaw.log",
+      "tail_lines": 1200,
+      "recent_lines": 9
+    },
+    {
+      "path": "krab.log",
+      "tail_lines": 1200,
+      "recent_lines": 1087
+    }
+  ],
+  "exit_checks": {
+    "kpi_no_models_loaded_zero": true,
+    "kpi_empty_message_zero": true,
+    "kpi_manual_relogin_zero": true,
+    "kpi_cloud_false_ok_zero": true,
+    "kpi_channel_success_ge_95": true,
+    "health_endpoint_available": true,
+    "channels_endpoint_available": true,
+    "restart_cycles_running": true
+  }
+}

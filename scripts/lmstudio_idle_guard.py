@@ -32,6 +32,11 @@ from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.core.lm_studio_auth import build_lm_studio_auth_headers
+
 ARTIFACTS_DIR = ROOT / "artifacts" / "ops"
 DEFAULT_LOGS_DIR = Path.home() / ".lmstudio" / "server-logs"
 
@@ -67,7 +72,7 @@ def _normalize_lm_base_url(raw: str) -> str:
 
 def _http_json(method: str, url: str, body: dict[str, Any] | None = None, timeout: float = 6.0) -> HttpResult:
     raw_data = None
-    headers = {"Accept": "application/json"}
+    headers = build_lm_studio_auth_headers(include_json_accept=True)
     if body is not None:
         raw_data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"

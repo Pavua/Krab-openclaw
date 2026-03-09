@@ -27,6 +27,7 @@ from pyrogram.types import Message
 from .config import config
 from .core.exceptions import KrabError, UserInputError
 from .core.logger import get_logger
+from .core.mcp_registry import resolve_managed_server_launch
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .employee_templates import ROLES, get_role_prompt
@@ -64,6 +65,36 @@ from .voice_engine import text_to_speech
 logger = get_logger(__name__)
 
 
+def _resolve_openclaw_stream_timeouts(*, has_photo: bool) -> tuple[float, float]:
+    """
+    Возвращает (first_chunk_timeout_sec, chunk_timeout_sec) для OpenClaw stream.
+
+    Почему отдельный таймаут первого чанка:
+    - тяжёлые локальные модели (например Qwen 27B) могут долго выдавать первый токен;
+    - после старта стрима интервалы между чанками обычно заметно меньше.
+    """
+    chunk_timeout_sec = float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0))
+    default_first = 540.0 if has_photo else 420.0
+    # Для фото-разбора допускаем отдельный override первого чанка:
+    # vision-модели/большие контексты стабильно дольше выходят на первый токен.
+    if has_photo:
+        first_key = "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC"
+    else:
+        first_key = "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC"
+    first_chunk_timeout_sec = float(
+        getattr(
+            config,
+            first_key,
+            max(chunk_timeout_sec, default_first),
+        )
+    )
+
+    # Нижние границы для защиты от слишком маленьких env-значений.
+    chunk_timeout_sec = max(15.0, chunk_timeout_sec)
+    first_chunk_timeout_sec = max(chunk_timeout_sec, 30.0, first_chunk_timeout_sec)
+    return first_chunk_timeout_sec, chunk_timeout_sec
+
+
 class KraabUserbot:
     """
     Класс KraabUserbot.
@@ -86,7 +117,19 @@ class KraabUserbot:
     """
 
     _known_commands: set[str] = set()
-    _reply_to_tag_pattern = re.compile(r"\[\[\s*reply_to\s*:[^\]]+\]\]\s*", re.IGNORECASE)
+    _reply_to_tag_pattern = re.compile(
+        r"\[\[\s*(?:reply_to_current|reply_to\s*:[^\]]+|reply_to_[^\]]+)\s*\]\]\s*",
+        re.IGNORECASE,
+    )
+    _tool_response_block_pattern = re.compile(
+        r"(?is)<tool_response>.*?(?:<\|im_end\|>|$)"
+    )
+    _llm_transport_tokens_pattern = re.compile(
+        r"(?i)<\|[^|>]+?\|>|</?tool_response>"
+    )
+    _think_block_pattern = re.compile(r"(?is)<think>.*?</think>")
+    _final_block_pattern = re.compile(r"(?is)<final>(.*?)</final>")
+    _think_final_tag_pattern = re.compile(r"(?i)</?(?:think|final)>")
     _deferred_intent_pattern = re.compile(
         r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
     )
@@ -912,15 +955,44 @@ class KraabUserbot:
     def _strip_transport_markup(cls, text: str) -> str:
         """
         Удаляет служебные транспортные теги из пользовательского текста.
-        Пример: `[[reply_to:12345]]`.
+        Примеры:
+        - `[[reply_to:12345]]`
+        - `[[reply_to_current]]`
+        - `<|im_start|>...<|im_end|>`
+        - `<tool_response>{...}</tool_response>`
+        - `<think>...</think>` / `<final>...</final>`
         """
         raw = str(text or "")
         if not raw:
             return ""
         cleaned = cls._reply_to_tag_pattern.sub("", raw)
+        cleaned = cls._think_block_pattern.sub("", cleaned)
+        cleaned = cls._final_block_pattern.sub(lambda match: str(match.group(1) or ""), cleaned)
+        cleaned = cls._think_final_tag_pattern.sub("", cleaned)
+        cleaned = cls._tool_response_block_pattern.sub("", cleaned)
+        cleaned = cls._llm_transport_tokens_pattern.sub("", cleaned)
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r"(?mi)^\s*(assistant|user|system)\s*$", "", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
+
+    @staticmethod
+    def _should_force_cloud_for_photo_route(*, has_images: bool) -> bool:
+        """
+        Жёстко уводит фото userbot в cloud по умолчанию.
+
+        Почему это нужно:
+        - пользователь не ждёт, что текстовый Nemotron будет выгружен ради
+          случайной маленькой VL-модели;
+        - для userbot важнее предсказуемая доставка и язык ответа, чем локальный
+          vision-эксперимент с автопереключением.
+        Локальный vision остаётся только как явный opt-in через конфиг.
+        """
+        if not has_images:
+            return False
+        if not bool(getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)):
+            return False
+        return True
 
     @classmethod
     def _apply_deferred_action_guard(cls, text: str) -> str:
@@ -963,12 +1035,70 @@ class KraabUserbot:
 
     def _split_message(self, text: str, limit: int = 4000) -> list[str]:
         """
-        Разбивает сообщение на части, если оно превышает лимит Telegram (4096).
-        Оставляет запас символов (limit=4000) для безопасности.
+        Разбивает длинный ответ на Telegram-friendly части.
+
+        Почему не обычный `textwrap.wrap`:
+        - длинный ответ в Telegram визуально выглядит «оборванным», если следующая
+          часть приходит отдельным сообщением без явного маркера;
+        - для списков и markdown-ответов важно по возможности сохранять границы строк;
+        - нам нужен запас до лимита Telegram (4096), поэтому `limit=4000` сохраняем.
         """
-        if len(text) <= limit:
-            return [text]
-        return textwrap.wrap(text, width=limit, replace_whitespace=False)
+        normalized = str(text or "")
+        if len(normalized) <= limit:
+            return [normalized]
+
+        # Резерв под префикс вида `[Часть 2/3]`, чтобы не выйти за safe-limit.
+        marker_reserve = 48
+        body_limit = max(32, limit - marker_reserve)
+
+        chunks: list[str] = []
+        current = ""
+
+        def _flush_current() -> None:
+            nonlocal current
+            if current:
+                chunks.append(current)
+                current = ""
+
+        for line in normalized.splitlines():
+            candidate = f"{current}\n{line}" if current else line
+            if len(candidate) <= body_limit:
+                current = candidate
+                continue
+
+            _flush_current()
+            if len(line) <= body_limit:
+                current = line
+                continue
+
+            # Для сверхдлинной строки режем мягко, не схлопывая пробелы.
+            wrapped = textwrap.wrap(
+                line,
+                width=body_limit,
+                replace_whitespace=False,
+                drop_whitespace=False,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            if not wrapped:
+                continue
+            chunks.extend(wrapped[:-1])
+            current = wrapped[-1]
+
+        _flush_current()
+
+        if len(chunks) <= 1:
+            return chunks or [normalized[:limit]]
+
+        total = len(chunks)
+        decorated: list[str] = []
+        for index, chunk in enumerate(chunks, start=1):
+            prefix = f"[Часть {index}/{total}]\n"
+            payload = f"{prefix}{chunk}"
+            if len(payload) > limit:
+                payload = f"{prefix}{chunk[: max(0, limit - len(prefix))]}"
+            decorated.append(payload)
+        return decorated
 
     @staticmethod
     def _looks_like_model_status_question(text: str) -> bool:
@@ -985,6 +1115,106 @@ class KraabUserbot:
             "какой модель",
         ]
         return any(p in low for p in patterns)
+
+    @staticmethod
+    def _looks_like_capability_status_question(text: str) -> bool:
+        """
+        Эвристика: пользователь спрашивает о том, что Краб уже умеет и что пока ограничено.
+
+        Почему отдельный fast-path:
+        - модель часто отвечает устаревшим шаблоном с ложными "не умею";
+        - такой вопрос лучше отдавать из runtime truth, а не из галлюцинирующего
+          narrative-ответа.
+        """
+        low = str(text or "").strip().lower()
+        if not low:
+            return False
+        patterns = [
+            "что ты уме",
+            "что уже уме",
+            "что ты уже уме",
+            "что ты ещё уме",
+            "что ты еще уме",
+            "что ты не уме",
+            "что еще не уме",
+            "что ещё не уме",
+            "что уже можешь",
+            "что можешь",
+            "какие у тебя возможности",
+            "что умеет краб",
+            "что краб умеет",
+        ]
+        return any(pattern in low for pattern in patterns)
+
+    @staticmethod
+    def _looks_like_commands_question(text: str) -> bool:
+        """Эвристика: пользователь спрашивает о доступных командах userbot."""
+        low = str(text or "").strip().lower()
+        if not low:
+            return False
+        patterns = [
+            "какие команды",
+            "список команд",
+            "что есть из команд",
+            "какие у тебя команды",
+            "что умеешь по командам",
+            "какие у тебя есть команды",
+            "что можно через команды",
+        ]
+        return any(pattern in low for pattern in patterns)
+
+    @staticmethod
+    def _looks_like_integrations_question(text: str) -> bool:
+        """Эвристика: пользователь спрашивает про инструменты, MCP и интеграции."""
+        low = str(text or "").strip().lower()
+        if not low:
+            return False
+        patterns = [
+            "какие интеграции",
+            "что подключено",
+            "какие инструменты",
+            "какие сервисы",
+            "какие mcp",
+            "какие у тебя mcp",
+            "какие у тебя интеграции",
+            "чем ты подключен",
+            "что у тебя подключено",
+        ]
+        return any(pattern in low for pattern in patterns)
+
+    @staticmethod
+    def _looks_like_runtime_truth_question(text: str) -> bool:
+        """
+        Эвристика: пользователь просит реальный runtime/self-check, а не общую болтовню.
+
+        Почему это отдельный fast-path:
+        - такие вопросы особенно вредно отдавать на свободную генерацию;
+        - пользователю нужен фактический статус транспорта/модели/интеграций;
+        - это экономит токены и снижает ложные claims про cron, браузер и интернет.
+        """
+        low = str(text or "").strip().lower()
+        if not low:
+            return False
+        patterns = [
+            "проверка связи",
+            "проверь связь",
+            "что работает",
+            "что у тебя работает",
+            "что работает, а что нет",
+            "проверь что работает",
+            "проверь все",
+            "проверь всё",
+            "сделай self-check",
+            "самопровер",
+            "работает ли cron",
+            "работает ли крон",
+            "доступ к браузеру",
+            "есть ли браузер",
+            "можешь использовать браузер",
+            "есть ли интернет",
+            "доступ к интернету",
+        ]
+        return any(pattern in low for pattern in patterns)
 
     @staticmethod
     def _build_runtime_model_status(route: dict) -> str:
@@ -1008,6 +1238,282 @@ class KraabUserbot:
             f"- Провайдер: `{provider}`\n"
             f"- Cloud tier: `{tier}`"
         )
+
+    def _build_runtime_capability_status(self, *, is_allowed_sender: bool) -> str:
+        """
+        Возвращает детерминированный capability-отчёт по реальному runtime.
+
+        Принципы:
+        - не обещаем то, чего реально нет;
+        - не отдаём опасные owner-only возможности посторонним чатам;
+        - не строим "roadmap", а описываем текущее состояние.
+        """
+        current_model = str(model_manager.get_current_model() or "").strip()
+        route_meta = {}
+        if hasattr(openclaw_client, "get_last_runtime_route"):
+            try:
+                route_meta = openclaw_client.get_last_runtime_route() or {}
+            except Exception:
+                route_meta = {}
+
+        route_channel = str(route_meta.get("channel", "") or "").strip()
+        route_model = str(route_meta.get("model", "") or "").strip()
+        active_model = current_model or route_model or str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
+
+        abilities: list[str] = [
+            "- Отвечать на вопросы, объяснять сложные темы, писать тексты и помогать с кодом.",
+            f"- Работать локально через LM Studio. Сейчас активная локальная модель: `{active_model or 'не определена'}`.",
+            "- Поддерживать контекст диалога в текущей сессии и держать историю разговора.",
+            "- Разбирать фото и скриншоты, когда доступен vision-маршрут.",
+        ]
+
+        if bool(getattr(config, "SCHEDULER_ENABLED", False)):
+            abilities.append("- Ставить напоминания и отложенные задачи через `!remind`, `!reminders`, `!rm_remind`.")
+        if is_allowed_sender:
+            abilities.extend(
+                [
+                    "- Искать информацию в вебе по команде `!search`.",
+                    "- Запоминать и вспоминать факты по командам `!remember` и `!recall`.",
+                    "- Работать с файлами по путям через `!ls`, `!read`, `!write`.",
+                    "- Управлять браузерным/веб-контуром через `!web` и открывать панель через `!panel`.",
+                    "- Отправлять голосовой ответ в режиме `!voice`.",
+                ]
+            )
+        else:
+            abilities.extend(
+                [
+                    "- Давать структурированные ответы в виде списков, планов, кратких инструкций и пояснений.",
+                    "- Работать как текстовый ассистент без раскрытия внутренних owner-инструментов.",
+                ]
+            )
+
+        limitations: list[str] = [
+            "- Актуальные данные из интернета подтягиваю не автоматически в каждом ответе, а через явный инструментальный маршрут или команду.",
+            "- Не выполняю физические действия в реальном мире, только даю текстовые инструкции и результаты.",
+            "- Не запоминаю всю переписку навсегда автоматически: долговременная память у меня точечная и управляется отдельно.",
+            "- Качество анализа фото зависит от того, какая модель и какой маршрут сейчас доступны.",
+        ]
+        if is_allowed_sender:
+            limitations.append(
+                "- Голосовой ответ есть, но полноценное понимание входящих голосовых сообщений всё ещё ограничено текущим контуром."
+            )
+            limitations.append(
+                "- Работа с файлами идёт через команды и пути, а не как полностью бесшовная загрузка любых вложений в обычном диалоге."
+            )
+        else:
+            limitations.append(
+                "- Системные инструменты вроде файлов, браузера и admin-команд доступны только доверенному контуру владельца."
+            )
+
+        route_note = ""
+        if route_channel or route_model:
+            route_note = (
+                "\n\n🧭 **Текущий runtime-статус**\n"
+                f"- Канал: `{route_channel or 'unknown'}`\n"
+                f"- Модель: `{route_model or active_model or 'unknown'}`"
+            )
+
+        return (
+            "🦀 **Что я уже умею сейчас**\n"
+            + "\n".join(abilities)
+            + "\n\n🧩 **Что пока ограничено**\n"
+            + "\n".join(limitations)
+            + route_note
+            + "\n\nЕсли хочешь, я могу отдельно показать список **команд**, **инструментов владельца** или **реальных активных интеграций** в этом runtime."
+        )
+
+    def _build_runtime_commands_status(self, *, is_allowed_sender: bool) -> str:
+        """
+        Возвращает truth-summary по доступным Telegram-командам.
+
+        Для гостевого контура не раскрываем owner-only/admin команды.
+        """
+        if not is_allowed_sender:
+            return (
+                "🦀 **Что доступно в обычном диалоге**\n"
+                "- Свободные текстовые запросы без спецкоманд.\n"
+                "- Вопросы, объяснения, помощь с текстом и кодом.\n"
+                "- Уточняющие запросы по текущему диалогу.\n\n"
+                "🔒 **Что скрыто в этом контуре**\n"
+                "- Служебные команды владельца для управления моделями, файлами, вебом и панелью.\n"
+                "- Внутренние admin-инструменты и файловый доступ.\n\n"
+                "Если нужен именно список owner-команд, его можно показать только в доверенном чате."
+            )
+
+        core_commands = [
+            "`!status`, `!clear`, `!config`, `!set`, `!restart`, `!help`",
+        ]
+        model_commands = [
+            "`!model`, `!model local`, `!model cloud`, `!model auto`, `!model set <model_id>`, `!model load <name>`, `!model unload`, `!model scan`",
+        ]
+        tool_commands = [
+            "`!search <запрос>`, `!remember <текст>`, `!recall <запрос>`, `!role`, `!agent ...`",
+        ]
+        system_commands = [
+            "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice`",
+        ]
+        if bool(getattr(config, "SCHEDULER_ENABLED", False)):
+            tool_commands.append("`!remind <время> | <текст>`, `!reminders`, `!rm_remind <id>`, `!cronstatus`")
+
+        return (
+            "🧭 **Команды, которые реально доступны сейчас**\n"
+            "\n**Core**\n- " + "\n- ".join(core_commands)
+            + "\n\n**AI / Model**\n- " + "\n- ".join(model_commands)
+            + "\n\n**Tools**\n- " + "\n- ".join(tool_commands)
+            + "\n\n**System / Dev**\n- " + "\n- ".join(system_commands)
+            + "\n\nЕсли хочешь, я могу следующим сообщением показать короткую шпаргалку **по каждой команде с примерами**."
+        )
+
+    async def _build_runtime_integrations_status(self, *, is_allowed_sender: bool) -> str:
+        """
+        Возвращает truth-summary по активным интеграциям и инструментам runtime.
+
+        Здесь избегаем ложных обещаний:
+        - MCP считаем "configured", если у managed-launch нет missing env;
+        - внешние инструменты, требующие owner-доступ, не раскрываем в гостевом контуре.
+        """
+        local_model = str(model_manager.get_current_model() or "").strip()
+        openclaw_ok = await openclaw_client.health_check()
+        scheduler_on = bool(getattr(config, "SCHEDULER_ENABLED", False))
+        brave_ready = not bool(resolve_managed_server_launch("brave-search").get("missing_env"))
+        context7_ready = not bool(resolve_managed_server_launch("context7").get("missing_env"))
+        firecrawl_ready = not bool(resolve_managed_server_launch("firecrawl").get("missing_env"))
+        browser_ready = not bool(resolve_managed_server_launch("openclaw-browser").get("missing_env"))
+        chrome_profile_ready = not bool(resolve_managed_server_launch("chrome-profile").get("missing_env"))
+
+        public_lines = [
+            f"- OpenClaw Gateway: {'ON' if openclaw_ok else 'OFF'}",
+            f"- LM Studio local: {'ON' if local_model else 'IDLE'}" + (f" (`{local_model}`)" if local_model else ""),
+            f"- Scheduler / reminders: {'ON' if scheduler_on else 'OFF'}",
+            "- Голосовой TTS-ответ: ON",
+        ]
+
+        if not is_allowed_sender:
+            return (
+                "🔌 **Текущие интеграции Краба**\n"
+                + "\n".join(public_lines)
+                + "\n- Внешние owner-инструменты и расширенный tool-контур скрыты в этом чате."
+            )
+
+        owner_lines = [
+            f"- Web search (Brave): {'configured' if brave_ready else 'missing key'}",
+            f"- Context7 docs: {'configured' if context7_ready else 'missing key'}",
+            f"- Firecrawl: {'configured' if firecrawl_ready else 'missing key / credits'}",
+            f"- Browser relay MCP: {'configured' if browser_ready else 'missing config'}",
+            f"- Chrome profile DevTools: {'configured' if chrome_profile_ready else 'missing config'}",
+            "- Memory engine: ON",
+            "- Файловый MCP-контур: ON",
+        ]
+        return (
+            "🔌 **Реальные интеграции и инструменты runtime**\n"
+            + "\n".join(public_lines + owner_lines)
+            + "\n\nЕсли хочешь, я могу отдельно показать статус в формате **что работает / что требует ключ / что требует баланс**."
+        )
+
+    async def _build_runtime_truth_status(self, *, is_allowed_sender: bool) -> str:
+        """
+        Собирает короткий truthful self-check без вызова LLM.
+
+        Это сводка по самым важным для пользователя вещам:
+        - отвечает ли транспорт;
+        - какой фактический маршрут/модель были последними;
+        - включён ли scheduler;
+        - что можно утверждать про браузер и интернет без фантазий.
+        """
+        route_meta = {}
+        if hasattr(openclaw_client, "get_last_runtime_route"):
+            try:
+                route_meta = openclaw_client.get_last_runtime_route() or {}
+            except Exception:
+                route_meta = {}
+
+        openclaw_ok = await openclaw_client.health_check()
+        local_model = str(model_manager.get_current_model() or "").strip()
+        route_channel = str(route_meta.get("channel", "") or "").strip()
+        route_model = str(route_meta.get("model", "") or "").strip()
+        route_provider = str(route_meta.get("provider", "") or "").strip()
+        scheduler_on = bool(getattr(config, "SCHEDULER_ENABLED", False))
+        browser_ready = not bool(resolve_managed_server_launch("openclaw-browser").get("missing_env"))
+        chrome_profile_ready = not bool(resolve_managed_server_launch("chrome-profile").get("missing_env"))
+        brave_ready = not bool(resolve_managed_server_launch("brave-search").get("missing_env"))
+
+        lines: list[str] = [
+            "🧭 **Фактический runtime self-check**",
+            f"- Gateway / transport: {'ON' if openclaw_ok else 'OFF'}",
+            f"- Последний маршрут: `{route_channel or 'не подтверждён'}`",
+            f"- Последняя модель: `{route_model or local_model or 'не подтверждена'}`",
+        ]
+        if route_provider:
+            lines.append(f"- Провайдер: `{route_provider}`")
+        lines.append(f"- Scheduler / reminders: {'включён' if scheduler_on else 'выключен'}")
+        lines.append(
+            "- Браузерный контур: "
+            + (
+                "сконфигурирован, но доступ к конкретной вкладке надо подтверждать отдельным действием"
+                if browser_ready or chrome_profile_ready
+                else "не подтверждён"
+            )
+        )
+        lines.append(
+            "- Интернет / веб-поиск: "
+            + (
+                "доступен через инструментальный маршрут по явному запросу"
+                if is_allowed_sender and brave_ready
+                else "не подтверждается как постоянный фоновой доступ"
+            )
+        )
+        lines.append("- Cron / heartbeat: без отдельной runtime-проверки не считаю их подтверждённо рабочими.")
+
+        return "\n".join(lines)
+
+    async def _deliver_response_parts(
+        self,
+        *,
+        source_message: Message,
+        temp_message: Message,
+        is_self: bool,
+        query: str,
+        full_response: str,
+    ) -> None:
+        """
+        Доставляет готовый ответ в Telegram с безопасным split.
+
+        Почему отдельный helper:
+        - capability/status fast-path должен использовать ту же доставку, что и
+          обычный AI-ответ;
+        - так не дублируем логику split/edit/reply в нескольких ветках.
+        """
+        parts = self._split_message(
+            f"🦀 {query}\n\n{full_response}" if is_self else full_response
+        )
+
+        if is_self:
+            source_message = await self._safe_edit(source_message, parts[0])
+            for part in parts[1:]:
+                await source_message.reply(part)
+            return
+
+        temp_message = await self._safe_edit(temp_message, parts[0])
+        for part in parts[1:]:
+            await source_message.reply(part)
+
+    @staticmethod
+    def _build_effective_user_query(*, query: str, has_images: bool) -> str:
+        """
+        Нормализует текст пользовательского запроса перед отправкой в модель.
+
+        Почему отдельный helper:
+        - раньше фото без подписи уходило как английское `(Image sent)`;
+        - маленькие vision-модели цеплялись за этот placeholder и начинали
+          описывать картинку по-английски, игнорируя тон чата;
+        - для user-facing канала безопаснее отправить явный русский запрос.
+        """
+        normalized = str(query or "").strip()
+        if normalized:
+            return normalized
+        if has_images:
+            return "Опиши присланное изображение на русском языке."
+        return ""
 
     def _apply_optional_disclosure(self, *, chat_id: str, text: str) -> str:
         """
@@ -1150,6 +1656,74 @@ class KraabUserbot:
             else:
                 message = await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
 
+            if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
+                runtime_text = await self._build_runtime_truth_status(
+                    is_allowed_sender=is_allowed_sender,
+                )
+                runtime_text = self._apply_optional_disclosure(
+                    chat_id=chat_id,
+                    text=runtime_text,
+                )
+                await self._deliver_response_parts(
+                    source_message=message,
+                    temp_message=temp_msg,
+                    is_self=is_self,
+                    query=query,
+                    full_response=runtime_text,
+                )
+                return
+
+            if self._looks_like_capability_status_question(query):
+                capability_text = self._build_runtime_capability_status(
+                    is_allowed_sender=is_allowed_sender,
+                )
+                capability_text = self._apply_optional_disclosure(
+                    chat_id=chat_id,
+                    text=capability_text,
+                )
+                await self._deliver_response_parts(
+                    source_message=message,
+                    temp_message=temp_msg,
+                    is_self=is_self,
+                    query=query,
+                    full_response=capability_text,
+                )
+                return
+
+            if self._looks_like_commands_question(query):
+                commands_text = self._build_runtime_commands_status(
+                    is_allowed_sender=is_allowed_sender,
+                )
+                commands_text = self._apply_optional_disclosure(
+                    chat_id=chat_id,
+                    text=commands_text,
+                )
+                await self._deliver_response_parts(
+                    source_message=message,
+                    temp_message=temp_msg,
+                    is_self=is_self,
+                    query=query,
+                    full_response=commands_text,
+                )
+                return
+
+            if self._looks_like_integrations_question(query):
+                integrations_text = await self._build_runtime_integrations_status(
+                    is_allowed_sender=is_allowed_sender,
+                )
+                integrations_text = self._apply_optional_disclosure(
+                    chat_id=chat_id,
+                    text=integrations_text,
+                )
+                await self._deliver_response_parts(
+                    source_message=message,
+                    temp_message=temp_msg,
+                    is_self=is_self,
+                    query=query,
+                    full_response=integrations_text,
+                )
+                return
+
             # VISION: Обработка фото
             images = []
             photo_error = ""
@@ -1208,21 +1782,47 @@ class KraabUserbot:
                 if context:
                     system_prompt += f"\n\n[CONTEXT OF LAST MESSAGES]\n{context}\n[END CONTEXT]\n\nReply to the user request taking into account the context above."
 
-            chunk_timeout_sec = float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 120.0))
+            first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
+                has_photo=bool(images)
+            )
+            max_output_tokens = int(
+                getattr(
+                    config,
+                    "USERBOT_PHOTO_MAX_OUTPUT_TOKENS" if images else "USERBOT_MAX_OUTPUT_TOKENS",
+                    0,
+                )
+                or 0
+            )
+            effective_query = self._build_effective_user_query(
+                query=query,
+                has_images=bool(images),
+            )
+            force_cloud = bool(getattr(config, "FORCE_CLOUD", False))
+            if self._should_force_cloud_for_photo_route(has_images=bool(images)):
+                logger.info(
+                    "userbot_photo_route_forced_to_cloud",
+                    chat_id=chat_id,
+                    preferred_vision=str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or ""),
+                )
+                force_cloud = True
+
             stream = openclaw_client.send_message_stream(
-                message=query or ("(Image sent)" if images else ""),
+                message=effective_query,
                 chat_id=runtime_chat_id,
                 system_prompt=system_prompt,
                 images=images,
-                force_cloud=getattr(config, "FORCE_CLOUD", False),
+                force_cloud=force_cloud,
+                max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
             )
             stream_iter = stream.__aiter__()
+            received_any_chunk = False
 
             while True:
+                wait_timeout = chunk_timeout_sec if received_any_chunk else first_chunk_timeout_sec
                 try:
                     chunk = await asyncio.wait_for(
                         stream_iter.__anext__(),
-                        timeout=chunk_timeout_sec,
+                        timeout=wait_timeout,
                     )
                 except StopAsyncIteration:
                     break
@@ -1230,11 +1830,12 @@ class KraabUserbot:
                     logger.error(
                         "openclaw_stream_chunk_timeout",
                         chat_id=chat_id,
-                        timeout_sec=chunk_timeout_sec,
+                        timeout_sec=wait_timeout,
+                        first_chunk=not received_any_chunk,
                         has_photo=bool(images),
                     )
                     full_response = (
-                        "❌ Таймаут ответа модели. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
+                        "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
                     )
                     try:
                         await stream.aclose()
@@ -1243,6 +1844,7 @@ class KraabUserbot:
                     break
 
                 full_response_raw += chunk
+                received_any_chunk = True
                 full_response = (
                     self._strip_transport_markup(full_response_raw)
                     if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True))
@@ -1290,23 +1892,13 @@ class KraabUserbot:
                 text=full_response,
             )
 
-            # SPLIT LOGIC: Отправка длинных сообщений частями
-            parts = self._split_message(
-                f"🦀 {query}\n\n{full_response}" if is_self else full_response
+            await self._deliver_response_parts(
+                source_message=message,
+                temp_message=temp_msg,
+                is_self=is_self,
+                query=query,
+                full_response=full_response,
             )
-
-            if is_self:
-                # Первую часть редактируем (чтобы заменить "думаю...")
-                message = await self._safe_edit(message, parts[0])
-                # Остальные отправляем следом
-                for part in parts[1:]:
-                    await message.reply(part)
-            else:
-                # Первую часть редактируем
-                temp_msg = await self._safe_edit(temp_msg, parts[0])
-                # Остальные отправляем
-                for part in parts[1:]:
-                    await message.reply(part)
 
             if self.voice_mode:
                 voice_path = await text_to_speech(full_response)

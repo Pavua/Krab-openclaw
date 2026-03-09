@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from src.config import config  # noqa: E402
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
+from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
 from src.core.model_aliases import (  # noqa: E402
     MODEL_FRIENDLY_ALIASES,
     normalize_model_alias,
@@ -61,6 +62,16 @@ class WebApp:
         self._nano_theme_path = self._web_root / "prototypes" / "nano" / "nano_theme.css"
         self._assistant_rate_state: dict[str, list[float]] = {}
         self._idempotency_state: dict[str, tuple[float, dict]] = {}
+        # Короткий runtime-cache LM Studio snapshot.
+        # Нужен, чтобы пачка одновременных `/stats`, `/health/lite`,
+        # `/model/local/status` не превращалась в шквал одинаковых GET /models.
+        self._lmstudio_snapshot_cache: tuple[float, dict[str, Any]] | None = None
+        self._lmstudio_snapshot_lock = asyncio.Lock()
+        # Отдельный короткий cache для всего runtime-lite snapshot.
+        # Он режет повторные `health/lite` вызовы, которые сами по себе могут быть
+        # частыми из UI/watchdog, но не должны каждый раз заново собирать local truth.
+        self._runtime_lite_cache: tuple[float, dict[str, Any]] | None = None
+        self._runtime_lite_lock = asyncio.Lock()
         self._setup_routes()
 
     def _public_base_url(self) -> str:
@@ -142,6 +153,119 @@ class WebApp:
         if gateway_token:
             env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
         return env
+
+    @staticmethod
+    def _clone_jsonish_dict(payload: dict[str, Any]) -> dict[str, Any]:
+        """Возвращает безопасственную неглубокую копию dict/list payload для runtime-cache."""
+        cloned: dict[str, Any] = {}
+        for key, value in dict(payload or {}).items():
+            if isinstance(value, list):
+                cloned[key] = list(value)
+            elif isinstance(value, dict):
+                cloned[key] = dict(value)
+            else:
+                cloned[key] = value
+        return cloned
+
+    @staticmethod
+    def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
+        """Читает float из env с безопасным clamp и без размазывания try/except по коду."""
+        raw = str(os.getenv(name, str(default)) or str(default)).strip()
+        try:
+            value = float(raw)
+        except Exception:
+            value = float(default)
+        return max(float(min_value), min(float(value), float(max_value)))
+
+    @classmethod
+    def _lmstudio_snapshot_ttl_sec(cls) -> float:
+        """Базовый TTL short-cache для LM Studio snapshot."""
+        return cls._float_env(
+            "WEB_LMSTUDIO_SNAPSHOT_TTL_SEC",
+            10.0,
+            min_value=0.0,
+            max_value=30.0,
+        )
+
+    @classmethod
+    def _lmstudio_snapshot_ttl_sec_for_state(cls, state: str) -> float:
+        """
+        Возвращает TTL snapshot-кэша с поправкой на состояние local runtime.
+
+        Почему state-aware TTL:
+        - когда модель уже загружена, truth почти не меняется каждую секунду;
+        - именно loaded-state даёт наибольший log-noise в LM Studio при частых refresh панели;
+        - для down/idle оставляем более короткий TTL, чтобы UI не залипал при подъёме/падении рантайма.
+        """
+        normalized = str(state or "").strip().lower()
+        base_ttl = cls._lmstudio_snapshot_ttl_sec()
+        if normalized == "loaded":
+            return cls._float_env(
+                "WEB_LMSTUDIO_SNAPSHOT_TTL_LOADED_SEC",
+                max(base_ttl, 60.0),
+                min_value=0.0,
+                max_value=120.0,
+            )
+        if normalized == "idle":
+            return cls._float_env(
+                "WEB_LMSTUDIO_SNAPSHOT_TTL_IDLE_SEC",
+                max(base_ttl, 20.0),
+                min_value=0.0,
+                max_value=60.0,
+            )
+        if normalized == "down":
+            return cls._float_env(
+                "WEB_LMSTUDIO_SNAPSHOT_TTL_DOWN_SEC",
+                min(base_ttl, 5.0),
+                min_value=0.0,
+                max_value=15.0,
+            )
+        return base_ttl
+
+    def _invalidate_lmstudio_snapshot_cache(self) -> None:
+        """Сбрасывает snapshot-cache после write-операций load/unload."""
+        self._lmstudio_snapshot_cache = None
+        self._runtime_lite_cache = None
+
+    @classmethod
+    def _runtime_lite_ttl_sec_for_state(cls, lm_state: str) -> float:
+        """
+        TTL для агрегированного runtime-lite snapshot.
+
+        Почему отдельный cache поверх LM snapshot:
+        - `health/lite` дёргают чаще всего и именно он формирует фоновые probe-пачки;
+        - даже когда LM snapshot уже кэширован, многократная сборка одного и того же
+          runtime payload не даёт пользы;
+        - loaded-state можно держать чуть дольше без заметной потери UX.
+        """
+        normalized = str(lm_state or "").strip().lower()
+        if normalized == "loaded":
+            return cls._float_env(
+                "WEB_RUNTIME_LITE_TTL_LOADED_SEC",
+                60.0,
+                min_value=0.0,
+                max_value=120.0,
+            )
+        if normalized == "idle":
+            return cls._float_env(
+                "WEB_RUNTIME_LITE_TTL_IDLE_SEC",
+                20.0,
+                min_value=0.0,
+                max_value=60.0,
+            )
+        if normalized == "down":
+            return cls._float_env(
+                "WEB_RUNTIME_LITE_TTL_DOWN_SEC",
+                5.0,
+                min_value=0.0,
+                max_value=15.0,
+            )
+        return cls._float_env(
+            "WEB_RUNTIME_LITE_TTL_SEC",
+            10.0,
+            min_value=0.0,
+            max_value=30.0,
+        )
 
     def _run_local_script(
         self,
@@ -311,7 +435,7 @@ class WebApp:
             "sqlite_error": sqlite_error,
         }
 
-    async def _lmstudio_model_snapshot(self) -> dict[str, Any]:
+    async def _probe_lmstudio_model_snapshot(self) -> dict[str, Any]:
         """
         Быстрая проверка состояния локальной модели через LM Studio API.
 
@@ -326,13 +450,19 @@ class WebApp:
 
         endpoints = [f"{base_url}/api/v1/models", f"{base_url}/v1/models"]
         errors: list[str] = []
+        headers = build_lm_studio_auth_headers()
 
         for endpoint in endpoints:
             try:
                 # Для локального LM Studio probe отключаем trust_env/verify:
                 # это исключает ложные `FileNotFoundError` из системных cert/proxy
                 # и не влияет на безопасность, т.к. endpoint строго локальный/LAN.
-                async with httpx.AsyncClient(timeout=2.5, trust_env=False, verify=False) as client:
+                async with httpx.AsyncClient(
+                    timeout=2.5,
+                    trust_env=False,
+                    verify=False,
+                    headers=headers or None,
+                ) as client:
                     resp = await client.get(endpoint)
                 if resp.status_code != 200:
                     errors.append(f"{endpoint}:status={resp.status_code}")
@@ -367,6 +497,365 @@ class WebApp:
             "loaded_count": 0,
             "loaded_models": [],
             "error": self._tail_text("\n".join(errors), max_chars=400),
+        }
+
+    async def _lmstudio_model_snapshot(self, *, force_refresh: bool = False) -> dict[str, Any]:
+        """
+        Возвращает LM Studio snapshot с коротким TTL-cache и дедупликацией burst-запросов.
+
+        Почему это решение:
+        - web-панель почти одновременно спрашивает `/stats`, `/health/lite`,
+          `/model/local/status`, а все они читают один и тот же `/models`;
+        - нам нужна живая truth-модель, но без лишнего log-noise и без десятков
+          одинаковых GET при одном refresh панели.
+        """
+        now = time.time()
+
+        if not force_refresh and self._lmstudio_snapshot_cache is not None:
+            cached_ts, cached_payload = self._lmstudio_snapshot_cache
+            ttl_sec = self._lmstudio_snapshot_ttl_sec_for_state(
+                str(cached_payload.get("state") or "")
+            )
+            if (now - cached_ts) <= ttl_sec:
+                return self._clone_jsonish_dict(cached_payload)
+
+        async with self._lmstudio_snapshot_lock:
+            now = time.time()
+            if not force_refresh and self._lmstudio_snapshot_cache is not None:
+                cached_ts, cached_payload = self._lmstudio_snapshot_cache
+                ttl_sec = self._lmstudio_snapshot_ttl_sec_for_state(
+                    str(cached_payload.get("state") or "")
+                )
+                if (now - cached_ts) <= ttl_sec:
+                    return self._clone_jsonish_dict(cached_payload)
+
+            payload = await self._probe_lmstudio_model_snapshot()
+            self._lmstudio_snapshot_cache = (time.time(), self._clone_jsonish_dict(payload))
+            return self._clone_jsonish_dict(payload)
+
+    async def _resolve_local_runtime_truth(self, router_obj: Any, *, force_refresh: bool = False) -> dict[str, Any]:
+        """
+        Возвращает authoritative truth для локального runtime.
+
+        Почему это нужно:
+        - `router.active_local_model` может отставать от реального состояния LM Studio;
+        - web UI должен показывать факт загрузки модели, а не stale-кэш после
+          внешнего переключения через helper/UI LM Studio.
+        """
+        probe = await self._lmstudio_model_snapshot(force_refresh=force_refresh)
+        mm = getattr(router_obj, "_mm", None)
+        probe_state = str(probe.get("state") or "down").strip().lower()
+        probe_loaded = [
+            str(item).strip()
+            for item in (probe.get("loaded_models") or [])
+            if str(item or "").strip()
+        ]
+
+        current_model = str(getattr(router_obj, "active_local_model", "") or "").strip()
+        loaded_models: list[str] = []
+        errors: list[str] = []
+
+        if mm is not None:
+            if hasattr(mm, "get_current_model"):
+                try:
+                    current_model = str(mm.get_current_model() or current_model).strip()
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"get_current_model:{exc}")
+            # Повторный вызов `model_manager.get_loaded_models()` делаем только когда
+            # source-of-truth probe не смог дать полезную картину. Иначе web-запрос
+            # сам создавал второй лишний GET `/api/v1/models` к LM Studio.
+            should_query_manager_loaded = force_refresh or (probe_state == "down" and not probe_loaded)
+            if hasattr(mm, "get_loaded_models") and should_query_manager_loaded:
+                try:
+                    try:
+                        raw_loaded = await mm.get_loaded_models(force_refresh=force_refresh)
+                    except TypeError:
+                        raw_loaded = await mm.get_loaded_models()
+                    if isinstance(raw_loaded, list):
+                        loaded_models.extend(
+                            [
+                                str(item).strip()
+                                for item in raw_loaded
+                                if str(item or "").strip()
+                            ]
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"get_loaded_models:{exc}")
+
+        merged_loaded = list(dict.fromkeys(probe_loaded + loaded_models))
+
+        active_model = ""
+        if current_model and current_model in merged_loaded:
+            active_model = current_model
+        elif merged_loaded:
+            # Предпочитаем каноничный model key, а не instance-id вида `model:2`.
+            plain_candidates = [item for item in merged_loaded if ":" not in item]
+            active_model = plain_candidates[0] if plain_candidates else merged_loaded[0]
+        elif probe_state == "loaded" and current_model:
+            # Крайний страховочный fallback: probe уже сказал "loaded", но список
+            # оказался пустым из-за нестандартного payload. Тогда сохраняем текущую
+            # модель без повторного network round-trip.
+            active_model = current_model
+        runtime_reachable = probe_state in {"loaded", "idle"}
+        is_loaded = probe_state == "loaded" or bool(merged_loaded)
+
+        if is_loaded:
+            state = "loaded"
+        elif runtime_reachable:
+            state = "idle"
+        else:
+            state = "down"
+
+        engine_raw = str(getattr(router_obj, "local_engine", "unknown") or "unknown").strip()
+        runtime_url = str(probe.get("base_url") or "").strip()
+        if not runtime_url:
+            runtime_url = str(getattr(router_obj, "lm_studio_url", "") or "").strip()
+
+        return {
+            "state": state,
+            "probe_state": probe_state,
+            "runtime_reachable": runtime_reachable,
+            "is_loaded": is_loaded,
+            "active_model": active_model,
+            "loaded_models": merged_loaded,
+            "engine": engine_raw,
+            "runtime_url": runtime_url or "n/a",
+            "error": self._tail_text(
+                "\n".join([item for item in [str(probe.get("error") or "").strip(), *errors] if item]),
+                max_chars=400,
+            ),
+        }
+
+    def _build_cloud_keys_payload(self, openclaw_obj: Any, router_obj: Any | None = None) -> dict[str, Any]:
+        """
+        Собирает совместимый cloud-диагностический payload для `/api/stats`.
+
+        Почему:
+        - compat-роутер после refactor не всегда отдает `cloud_keys`;
+        - UI уже завязан на эти поля и без них рисует ложные WARN/Missing;
+        - наружу отдаем только маски, булевы флаги и нормализованный error state.
+        """
+        gateway_token = self._openclaw_gateway_token_from_config()
+        if not gateway_token:
+            gateway_token = str(
+                os.getenv(
+                    "OPENCLAW_GATEWAY_TOKEN",
+                    os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")),
+                )
+                or ""
+            ).strip()
+
+        token_info: dict[str, Any] = {}
+        tier_state: dict[str, Any] = {}
+        mm_cloud_state: dict[str, Any] = {}
+        if openclaw_obj and hasattr(openclaw_obj, "get_token_info"):
+            try:
+                raw_token_info = openclaw_obj.get_token_info() or {}
+                if isinstance(raw_token_info, dict):
+                    token_info = dict(raw_token_info)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("web_stats_cloud_keys_token_info_failed", error=str(exc))
+        if openclaw_obj and hasattr(openclaw_obj, "get_tier_state_export"):
+            try:
+                raw_tier_state = openclaw_obj.get_tier_state_export() or {}
+                if isinstance(raw_tier_state, dict):
+                    tier_state = dict(raw_tier_state)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("web_stats_cloud_keys_tier_state_failed", error=str(exc))
+        mm = getattr(router_obj, "_mm", None) if router_obj is not None else None
+        if mm is not None and hasattr(mm, "get_cloud_runtime_state_export"):
+            try:
+                raw_mm_cloud_state = mm.get_cloud_runtime_state_export() or {}
+                if isinstance(raw_mm_cloud_state, dict):
+                    mm_cloud_state = dict(raw_mm_cloud_state)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("web_stats_cloud_keys_mm_state_failed", error=str(exc))
+
+        active_tier = str(
+            tier_state.get("active_tier") or token_info.get("active_tier") or "free"
+        ).strip().lower() or "free"
+        tiers = token_info.get("tiers") if isinstance(token_info.get("tiers"), dict) else {}
+        active_tier_info = tiers.get(active_tier) if isinstance(tiers.get(active_tier), dict) else {}
+        if not active_tier_info and isinstance(tiers.get("free"), dict):
+            active_tier_info = tiers.get("free") or {}
+
+        current_google_masked = str(
+            token_info.get("current_google_key_masked")
+            or active_tier_info.get("masked_key")
+            or ""
+        ).strip()
+        gemini_configured = bool(active_tier_info.get("is_configured")) or bool(current_google_masked)
+
+        provider_status = str(tier_state.get("last_provider_status") or "").strip().lower()
+        last_probe_at = float(tier_state.get("last_probe_at") or 0.0)
+        last_error_code = str(
+            tier_state.get("last_error_code") or token_info.get("last_error_code") or ""
+        ).strip()
+        last_error_message = str(tier_state.get("last_error_message") or "").strip()
+        mm_provider_status = str(mm_cloud_state.get("last_provider_status") or "").strip().lower()
+        mm_last_probe_at = float(mm_cloud_state.get("last_probe_at") or 0.0)
+        mm_last_error_code = str(mm_cloud_state.get("last_error_code") or "").strip()
+        mm_last_error_message = str(mm_cloud_state.get("last_error_message") or "").strip()
+        mm_active_tier = str(mm_cloud_state.get("active_tier") or "").strip().lower()
+
+        error_is_fresh = False
+        if last_probe_at > 0:
+            error_is_fresh = (time.time() - last_probe_at) <= 900.0
+        mm_error_is_fresh = False
+        if mm_last_probe_at > 0:
+            mm_error_is_fresh = (time.time() - mm_last_probe_at) <= 900.0
+
+        # Если OpenClawClient ещё не обновил tier-state, но ModelManager discovery уже
+        # увидел auth/quota/network ошибку, используем этот state как fallback-истину.
+        if (
+            mm_error_is_fresh
+            and mm_last_error_code
+            and provider_status not in {"ok", "auth", "unauthorized", "forbidden", "quota", "error", "timeout"}
+            and not (last_error_code and error_is_fresh)
+        ):
+            provider_status = mm_provider_status or provider_status
+            last_probe_at = mm_last_probe_at
+            last_error_code = mm_last_error_code
+            last_error_message = mm_last_error_message
+            error_is_fresh = True
+            if mm_active_tier:
+                active_tier = mm_active_tier
+
+        if provider_status == "ok":
+            gemini_has_error = False
+        elif provider_status in {"auth", "unauthorized", "forbidden", "error"}:
+            gemini_has_error = True
+        else:
+            gemini_has_error = bool(last_error_code) and error_is_fresh
+
+        last_error_summary = ""
+        if gemini_has_error:
+            last_error_summary = last_error_message or last_error_code or "cloud_error"
+
+        return {
+            "openclaw": {
+                "is_configured": bool(gateway_token),
+                "masked_key": self._mask_secret(gateway_token),
+            },
+            "gemini": {
+                "is_configured": gemini_configured,
+                "masked_key": current_google_masked,
+                "has_error": gemini_has_error,
+                "active_tier": active_tier,
+            },
+            "last_error": {
+                "has_error": gemini_has_error,
+                "code": last_error_code or "",
+                "summary": last_error_summary,
+            },
+        }
+
+    @staticmethod
+    def _build_cloud_tier_payload(cloud_keys: dict[str, Any]) -> dict[str, Any]:
+        """
+        Нормализует idle/runtime truth для карточки Cloud Tier Status.
+
+        Почему:
+        - отсутствие последнего cloud-route не означает `None`;
+        - UI должен видеть активный tier (`free`/`paid`) даже в idle-сценарии;
+        - при отсутствии Gemini, но наличии gateway, показываем OpenClaw как активный cloud-источник.
+        """
+        gemini = cloud_keys.get("gemini") if isinstance(cloud_keys.get("gemini"), dict) else {}
+        openclaw = cloud_keys.get("openclaw") if isinstance(cloud_keys.get("openclaw"), dict) else {}
+        last_error = cloud_keys.get("last_error") if isinstance(cloud_keys.get("last_error"), dict) else {}
+
+        configured_labels: list[str] = []
+        if bool(gemini.get("is_configured")):
+            configured_labels.append("Gemini")
+        if bool(openclaw.get("is_configured")):
+            configured_labels.append("OpenClaw")
+
+        active_tier = str(gemini.get("active_tier") or "").strip().lower()
+        if bool(gemini.get("is_configured")) and active_tier:
+            active_display = active_tier.upper()
+        elif bool(openclaw.get("is_configured")):
+            active_display = "OPENCLAW"
+        else:
+            active_display = "None"
+
+        return {
+            "active_tier": active_tier,
+            "active_display": active_display,
+            "configured_labels": configured_labels,
+            "configured_count": len(configured_labels),
+            "has_error": bool(last_error.get("has_error")),
+            "last_error_code": str(last_error.get("code") or ""),
+            "last_error_summary": str(last_error.get("summary") or ""),
+        }
+
+    async def _build_stats_router_payload(self, router_obj: Any) -> dict[str, Any]:
+        """
+        Собирает совместимый router payload для `/api/stats`.
+
+        Сохраняем старые поля `get_model_info()`, но поверх них подмешиваем
+        runtime truth, чтобы summary/UI не расходились с реальным LM Studio.
+        """
+        router_info: dict[str, Any] = {}
+        if hasattr(router_obj, "get_model_info"):
+            try:
+                raw_router_info = router_obj.get_model_info() or {}
+                if isinstance(raw_router_info, dict):
+                    router_info = dict(raw_router_info)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("web_stats_router_info_failed", error=str(exc))
+
+        local_truth = await self._resolve_local_runtime_truth(router_obj)
+        openclaw = self.deps.get("openclaw_client")
+
+        last_route: dict[str, Any] = {}
+        if hasattr(router_obj, "get_last_route"):
+            try:
+                raw_last_route = router_obj.get_last_route() or {}
+                if isinstance(raw_last_route, dict):
+                    last_route = dict(raw_last_route)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("web_stats_router_last_route_failed", error=str(exc))
+        if (not last_route or not str(last_route.get("model") or "").strip()) and openclaw and hasattr(openclaw, "get_last_runtime_route"):
+            try:
+                raw_last_runtime_route = openclaw.get_last_runtime_route() or {}
+                if isinstance(raw_last_runtime_route, dict):
+                    last_route = dict(raw_last_runtime_route)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("web_stats_openclaw_last_route_failed", error=str(exc))
+
+        cloud_keys = router_info.get("cloud_keys")
+        if not isinstance(cloud_keys, dict) or not cloud_keys:
+            cloud_keys = self._build_cloud_keys_payload(openclaw, router_obj)
+        cloud_tier = self._build_cloud_tier_payload(cloud_keys)
+
+        local_model = str(local_truth.get("active_model") or "").strip()
+        local_engine = str(
+            local_truth.get("engine")
+            or router_info.get("local_engine")
+            or getattr(router_obj, "local_engine", "")
+            or ""
+        ).strip()
+        runtime_url = str(
+            local_truth.get("runtime_url")
+            or router_info.get("lm_studio_url")
+            or getattr(router_obj, "lm_studio_url", "")
+            or ""
+        ).strip()
+
+        return {
+            **router_info,
+            "local_model": local_model,
+            "active_local_model": local_model,
+            "loaded_local_models": list(local_truth.get("loaded_models") or []),
+            "local_runtime_state": str(local_truth.get("state") or "down"),
+            "local_runtime_probe_state": str(local_truth.get("probe_state") or "down"),
+            "local_runtime_error": str(local_truth.get("error") or ""),
+            "is_local_available": bool(local_truth.get("runtime_reachable")),
+            "local_engine": local_engine,
+            "lm_studio_url": runtime_url,
+            "last_route": last_route if isinstance(last_route, dict) else {},
+            "cloud_keys": cloud_keys,
+            "cloud_tier": cloud_tier,
         }
 
     def _derive_openclaw_auth_state(
@@ -415,8 +904,8 @@ class WebApp:
             return "unauthorized"
         return "configured"
 
-    async def _collect_runtime_lite_snapshot(self) -> dict[str, Any]:
-        """Собирает легковесный runtime-срез для `/api/health/lite`."""
+    async def _build_runtime_lite_snapshot_uncached(self) -> dict[str, Any]:
+        """Собирает легковесный runtime-срез для `/api/health/lite` без cache."""
         openclaw = self.deps.get("openclaw_client")
         kraab_userbot = self.deps.get("kraab_userbot")
         last_runtime_route = {}
@@ -459,6 +948,40 @@ class WebApp:
                 str(os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090") or "").strip()
             ),
         }
+
+    async def _collect_runtime_lite_snapshot(self, *, force_refresh: bool = False) -> dict[str, Any]:
+        """
+        Возвращает runtime-lite snapshot с коротким TTL-cache.
+
+        Почему не только LM snapshot:
+        - UI и внешние health/watch клиенты чаще всего дёргают именно `/api/health/lite`;
+        - при loaded-state этого достаточно, чтобы не опрашивать LM Studio и соседние
+          runtime-срезы на каждый одинаковый тик;
+        - cache сбрасывается на write-path load/unload, так что stale-окно контролируемое.
+        """
+        now = time.time()
+
+        if not force_refresh and self._runtime_lite_cache is not None:
+            cached_ts, cached_payload = self._runtime_lite_cache
+            ttl_sec = self._runtime_lite_ttl_sec_for_state(
+                str(cached_payload.get("lmstudio_model_state") or "")
+            )
+            if (now - cached_ts) <= ttl_sec:
+                return self._clone_jsonish_dict(cached_payload)
+
+        async with self._runtime_lite_lock:
+            now = time.time()
+            if not force_refresh and self._runtime_lite_cache is not None:
+                cached_ts, cached_payload = self._runtime_lite_cache
+                ttl_sec = self._runtime_lite_ttl_sec_for_state(
+                    str(cached_payload.get("lmstudio_model_state") or "")
+                )
+                if (now - cached_ts) <= ttl_sec:
+                    return self._clone_jsonish_dict(cached_payload)
+
+            payload = await self._build_runtime_lite_snapshot_uncached()
+            self._runtime_lite_cache = (time.time(), self._clone_jsonish_dict(payload))
+            return self._clone_jsonish_dict(payload)
 
     def _assistant_rate_limit_per_min(self) -> int:
         """Возвращает лимит запросов assistant API в минуту на одного клиента."""
@@ -840,7 +1363,7 @@ class WebApp:
             black_box = self.deps.get("black_box")
             rag = router.rag if hasattr(router, "rag") else None
             return {
-                "router": router.get_model_info(),
+                "router": await self._build_stats_router_payload(router),
                 "black_box": black_box.get_stats() if black_box and hasattr(black_box, "get_stats") else {"enabled": False},
                 "rag": rag.get_stats() if rag and hasattr(rag, "get_stats") else {"enabled": False, "count": 0},
             }
@@ -852,18 +1375,28 @@ class WebApp:
             openclaw = self.deps.get("openclaw_client")
             voice_gateway = self.deps.get("voice_gateway_client")
             krab_ear = self.deps.get("krab_ear_client")
+            lite_snapshot = await self._collect_runtime_lite_snapshot()
+            lm_state = str(lite_snapshot.get("lmstudio_model_state") or "unknown").strip().lower()
+            local_ok = lm_state in {"loaded", "idle"}
             ecosystem = EcosystemHealthService(
                 router=router,
                 openclaw_client=openclaw,
                 voice_gateway_client=voice_gateway,
                 krab_ear_client=krab_ear,
+                local_health_override={
+                    "ok": local_ok,
+                    "status": "ok" if local_ok else (lm_state or "down"),
+                    "degraded": not local_ok,
+                    "latency_ms": 0,
+                    "source": "web_app.lite_snapshot",
+                },
             )
             report = await ecosystem.collect()
             return {
                 "status": "ok",
                 "checks": {
                     "openclaw": bool(report["checks"]["openclaw"]["ok"]),
-                    "local_lm": bool(report["checks"]["local_lm"]["ok"]),
+                    "local_lm": local_ok,
                     "voice_gateway": bool(report["checks"]["voice_gateway"]["ok"]),
                     "krab_ear": bool(report["checks"]["krab_ear"]["ok"]),
                 },
@@ -1490,9 +2023,10 @@ class WebApp:
                 health_service = EcosystemHealthService(router=router)
 
             health_data = await health_service.collect()
+            local_truth = await self._resolve_local_runtime_truth(router)
 
             status = "ok"
-            if not router.is_local_available:
+            if not bool(local_truth.get("runtime_reachable")):
                 status = "degraded"
                 if getattr(router, "active_tier", "") == "default":
                     status = "failed"
@@ -1506,9 +2040,10 @@ class WebApp:
                 "resources": health_data.get("resources", {}),
                 "budget": health_data.get("budget", {}),
                 "local_ai": {
-                    "engine": router.local_engine,
-                    "model": router.active_local_model,
-                    "available": router.is_local_available
+                    "engine": local_truth.get("engine", getattr(router, "local_engine", "unknown")),
+                    "model": local_truth.get("active_model", ""),
+                    "available": bool(local_truth.get("runtime_reachable")),
+                    "loaded_models": local_truth.get("loaded_models", []),
                 },
                 "watchdog": {
                     "last_recoveries": getattr(self.deps.get("watchdog"), "last_recovery_attempt", {})
@@ -1560,6 +2095,7 @@ class WebApp:
             router = self.deps.get("router")
             if not router:
                 return {"ok": False, "error": "router_not_found"}
+            local_truth = await self._resolve_local_runtime_truth(router)
 
             task_queue = self.deps.get("queue")
             queue_stats = task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
@@ -1571,7 +2107,9 @@ class WebApp:
                 "ok": True,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "router_state": {
-                    "is_local_available": router.is_local_available,
+                    "is_local_available": bool(local_truth.get("runtime_reachable")),
+                    "active_local_model": local_truth.get("active_model", ""),
+                    "loaded_local_models": local_truth.get("loaded_models", []),
                     "active_tier": getattr(router, "active_tier", "default"),
                     "local_failures": router._stats.get("local_failures", 0),
                     "cloud_failures": router._stats.get("cloud_failures", 0)
@@ -1687,19 +2225,11 @@ class WebApp:
         async def model_local_status():
             """Возвращает статус локального рантайма LLM."""
             router = self.deps["router"]
-            is_available = bool(getattr(router, "is_local_available", False))
-            active_model = str(getattr(router, "active_local_model", "") or "").strip()
-            engine_raw = str(getattr(router, "local_engine", "unknown") or "unknown").strip()
-            engine_norm = engine_raw.lower().replace("-", "").replace("_", "")
-
-            if engine_norm == "lmstudio":
-                runtime_url = str(getattr(router, "lm_studio_url", "") or "").strip()
-            elif engine_norm == "ollama":
-                runtime_url = str(getattr(router, "ollama_url", "") or "").strip()
-            else:
-                runtime_url = ""
-
-            lifecycle_status = "loaded" if (is_available and bool(active_model)) else "not_loaded"
+            truth = await self._resolve_local_runtime_truth(router)
+            active_model = str(truth.get("active_model") or "").strip()
+            engine_raw = str(truth.get("engine") or "unknown").strip()
+            runtime_url = str(truth.get("runtime_url") or "n/a").strip()
+            lifecycle_status = "loaded" if bool(truth.get("is_loaded")) else "not_loaded"
 
             return {
                 "ok": True,
@@ -1710,19 +2240,25 @@ class WebApp:
                 "url": runtime_url or "n/a",
                 # Backward compatibility для существующих клиентов.
                 "details": {
-                    "available": is_available,
+                    "available": bool(truth.get("runtime_reachable")),
                     "engine": engine_raw,
                     "active_model": active_model,
                     "is_loaded": lifecycle_status == "loaded",
                     "url": runtime_url or "n/a",
+                    "loaded_models": truth.get("loaded_models", []),
+                    "probe_state": truth.get("probe_state", "down"),
+                    "error": truth.get("error", ""),
                 },
                 # Старый вложенный формат оставляем на переходный период.
                 "status_legacy": {
-                    "available": is_available,
+                    "available": bool(truth.get("runtime_reachable")),
                     "engine": engine_raw,
                     "active_model": active_model,
                     "is_loaded": lifecycle_status == "loaded",
                     "url": runtime_url or "n/a",
+                    "loaded_models": truth.get("loaded_models", []),
+                    "probe_state": truth.get("probe_state", "down"),
+                    "error": truth.get("error", ""),
                 },
             }
 
@@ -1734,12 +2270,19 @@ class WebApp:
             """Загружает предпочтительную локальную модель (write endpoint)."""
             self._assert_write_access(x_krab_web_key, token)
             router = self.deps["router"]
-            preferred = getattr(router, "local_preferred_model", None)
+            preferred = str(getattr(router, "local_preferred_model", "") or "").strip()
+            if not preferred:
+                # Страховка для compat-роутеров/старых инстансов, где поле могло
+                # не быть проброшено, хотя canonical preferred model уже есть в config.
+                fallback_preferred = str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
+                if fallback_preferred.lower() not in {"", "auto", "smallest"}:
+                    preferred = fallback_preferred
             if not preferred:
                 return {"ok": False, "error": "no_preferred_model_configured"}
 
             # Используем существующий механизм smart_load
             success = await router._smart_load(preferred, reason="web_forced")
+            self._invalidate_lmstudio_snapshot_cache()
             return {"ok": success, "model": preferred}
 
         @self.app.post("/api/model/local/unload")
@@ -1760,10 +2303,12 @@ class WebApp:
                     success = await router.unload_local_model(active)
                     if success:
                         router.active_local_model = None
+                        self._invalidate_lmstudio_snapshot_cache()
                         return {"ok": True, "unloaded": active}
 
                 # Если активной нет, но есть загруженные (по данным _evict_idle_models)
                 freed_gb = await router._evict_idle_models(needed_gb=100.0) # Попытаемся выгрузить всё
+                self._invalidate_lmstudio_snapshot_cache()
 
             return {"ok": True, "freed_gb_estimate": round(freed_gb, 1)}
 
@@ -1850,9 +2395,15 @@ class WebApp:
             )
             slot_list = sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
             force_mode = _normalize_force_mode(getattr(router_obj, "force_mode", "auto"))
-            local_engine = str(getattr(router_obj, "local_engine", "") or "")
-            local_active_model = str(getattr(router_obj, "active_local_model", "") or "")
-            local_available = bool(getattr(router_obj, "is_local_available", False))
+            local_truth = await self._resolve_local_runtime_truth(router_obj)
+            local_engine = str(local_truth.get("engine") or getattr(router_obj, "local_engine", "") or "")
+            local_active_model = str(local_truth.get("active_model") or "")
+            local_available = bool(local_truth.get("runtime_reachable"))
+            loaded_model_ids = {
+                str(item).strip()
+                for item in (local_truth.get("loaded_models") or [])
+                if str(item or "").strip()
+            }
 
             local_models: list[dict] = []
             local_models_error = ""
@@ -1869,7 +2420,11 @@ class WebApp:
                             local_models.append(
                                 {
                                     "id": model_id,
-                                    "loaded": bool(item.get("loaded", False)),
+                                    "loaded": bool(
+                                        model_id == local_active_model
+                                        or model_id in loaded_model_ids
+                                        or item.get("loaded", False)
+                                    ),
                                     "type": str(item.get("type", "llm")),
                                     "size_human": str(item.get("size_human", "n/a")),
                                 }
@@ -1925,7 +2480,7 @@ class WebApp:
             if not cloud_presets:
                 cloud_presets = [
                     {"id": "google/gemini-2.5-flash", "provider": "google", "label": "Gemini • gemini-2.5-flash"},
-                    {"id": "google/gemini-3-pro-preview", "provider": "google", "label": "Gemini • gemini-3-pro-preview"},
+                    {"id": "google/gemini-3.1-pro-preview", "provider": "google", "label": "Gemini • gemini-3.1-pro-preview"},
                     {"id": "openai/gpt-5-mini", "provider": "openai", "label": "OpenAI • gpt-5-mini"},
                     {"id": "openai/gpt-5-codex", "provider": "openai", "label": "OpenAI • gpt-5-codex"},
                 ]
@@ -2042,7 +2597,7 @@ class WebApp:
                         "slots": {
                             "chat": "google/gemini-2.5-flash",
                             "thinking": "google/gemini-2.5-pro",
-                            "pro": "google/gemini-3-pro-preview",
+                            "pro": "google/gemini-3.1-pro-preview",
                             "coding": "openai/gpt-5-codex",
                         },
                     },
@@ -2060,7 +2615,7 @@ class WebApp:
                         "slots": {
                             "chat": "google/gemini-2.5-flash",
                             "thinking": "google/gemini-2.5-pro",
-                            "pro": "google/gemini-3-pro-preview",
+                            "pro": "google/gemini-3.1-pro-preview",
                             "coding": "openai/gpt-5-codex",
                         },
                     },
@@ -2812,6 +3367,8 @@ class WebApp:
             browser_http_reachable = bool(browser_probe.get("reachable"))
             browser_http_state = str(browser_probe.get("state") or "unavailable")
             browser_auth_required = bool(browser_probe.get("auth_required"))
+            tab_attached = browser_http_state == "attached"
+            relay_reachable = browser_http_reachable
 
             smoke_ok = bool(gateway_reachable and browser_http_reachable)
             detail_parts: list[str] = []
@@ -2835,6 +3392,8 @@ class WebApp:
                         "browser_http_reachable": browser_http_reachable,
                         "browser_http_state": browser_http_state,
                         "browser_auth_required": browser_auth_required,
+                        "relay_reachable": relay_reachable,
+                        "tab_attached": tab_attached,
                         "local_target": local_target,
                         "detail": "; ".join(detail_parts) if detail_parts else "n/a",
                     },
@@ -3234,7 +3793,9 @@ class WebApp:
             return {
                 "ok": runtime_ok or not has_warnings,
                 "runtime_channels_ok": runtime_ok,
+                "runtime_status": "OK" if runtime_ok else "FAIL",
                 "control_schema_warnings": control_schema_warnings,
+                "has_schema_warning": has_warnings,
                 "impact_level": impact_level,
                 "recommended_action": recommended_action,
             }
@@ -3268,13 +3829,46 @@ class WebApp:
 
             # --- Cloud fallback включен если НЕ принудительный local ---
             cloud_fallback_enabled = force_mode_eff != "local"
+            last_route: dict[str, Any] = {}
+            try:
+                getter = getattr(router, "get_last_route", None)
+                if callable(getter):
+                    candidate = getter() or {}
+                    if isinstance(candidate, dict):
+                        last_route = candidate
+            except Exception:
+                last_route = {}
 
-            # --- Строим decision_notes из состояния роутера ---
-            local_engine = str(getattr(router, "local_engine", "") or "")
-            local_available = bool(getattr(router, "is_local_available", False))
-            active_local_model = str(getattr(router, "active_local_model", "") or "")
+            # --- Строим decision_notes из фактического состояния runtime ---
+            local_truth = await self._resolve_local_runtime_truth(router)
+            local_engine = str(local_truth.get("engine") or getattr(router, "local_engine", "") or "")
+            local_available = bool(local_truth.get("runtime_reachable"))
+            active_local_model = str(local_truth.get("active_model") or "")
             routing_policy = str(getattr(router, "routing_policy", "free_first_hybrid") or "free_first_hybrid")
             cloud_cap_reached = bool(getattr(router, "cloud_soft_cap_reached", False))
+            last_route_status = str(last_route.get("status") or "").strip().lower()
+            last_route_channel = str(last_route.get("channel") or "").strip().lower()
+            last_route_model = str(last_route.get("model") or "").strip()
+
+            current_route_uses_cloud = False
+            if force_mode_eff == "cloud":
+                current_route_uses_cloud = True
+            elif not local_available and cloud_fallback_enabled:
+                current_route_uses_cloud = True
+            elif last_route_status == "ok":
+                # Истина для idle UI: если последнего валидного маршрута нет, считаем fallback резервом,
+                # а не активным состоянием. Это убирает ложное "Да" при уже загруженной local-модели.
+                if last_route_channel in {"openclaw_cloud", "cloud"}:
+                    current_route_uses_cloud = True
+                elif last_route_model and active_local_model and last_route_model != active_local_model:
+                    current_route_uses_cloud = True
+
+            if not cloud_fallback_enabled:
+                cloud_fallback_state = "disabled"
+            elif current_route_uses_cloud:
+                cloud_fallback_state = "active"
+            else:
+                cloud_fallback_state = "standby"
 
             decision_notes: list[str] = []
             if force_mode_raw in {"force_local", "local"}:
@@ -3309,9 +3903,25 @@ class WebApp:
                 decision_notes.append(
                     "Cloud fallback ОТКЛЮЧЕН: force_local режим запрещает обращение к cloud."
                 )
+            elif cloud_fallback_state == "active":
+                decision_notes.append(
+                    "Cloud fallback сейчас задействован как активный маршрут."
+                )
+            else:
+                decision_notes.append(
+                    "Cloud fallback доступен как резерв, но сейчас не задействован."
+                )
+
+            active_slot_or_model = active_local_model or default_model or default_slot
 
             return {
                 "ok": True,
+                "requested_mode": force_mode_raw,
+                "effective_mode": force_mode_eff,
+                "active_slot_or_model": active_slot_or_model,
+                "cloud_fallback": cloud_fallback_enabled,
+                "cloud_fallback_state": cloud_fallback_state,
+                "cloud_fallback_active": current_route_uses_cloud,
                 "force_mode_requested": force_mode_raw,
                 "force_mode_effective": force_mode_eff,
                 "assistant_default_slot": default_slot,

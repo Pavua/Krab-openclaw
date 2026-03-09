@@ -10,10 +10,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi.testclient import TestClient
 
+from src.config import config
 from src.modules.web_app import WebApp
 
 
@@ -116,6 +118,25 @@ def _make_client(*, openclaw_client=None) -> TestClient:
     return TestClient(app.app)
 
 
+def _make_client_with_router(router, *, openclaw_client=None) -> TestClient:
+    deps = {
+        "router": router,
+        "openclaw_client": openclaw_client or _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(ok=True),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": None,
+        "watchdog": None,
+        "queue": None,
+    }
+    app = WebApp(deps, port=18080, host="127.0.0.1")
+    return TestClient(app.app)
+
+
 def test_health_lite_contains_runtime_fields(monkeypatch):
     """
     `/api/health/lite` должен содержать новые runtime-поля,
@@ -134,6 +155,222 @@ def test_health_lite_contains_runtime_fields(monkeypatch):
     assert "lmstudio_model_state" in data
     assert "openclaw_auth_state" in data
     assert "last_runtime_route" in data
+    assert "scheduler_enabled" in data
+    assert "voice_gateway_configured" in data
+
+
+def test_health_reuses_lite_local_truth_without_router_health_probe(monkeypatch):
+    """`/api/health` не должен снова дёргать router.health_check, если local truth уже известен из lite-snapshot."""
+
+    class _RouterWithFailingHealth(_DummyRouter):
+        async def health_check(self):
+            raise AssertionError("router.health_check не должен вызываться из /api/health")
+
+    async def _fake_lite_snapshot(self):
+        return {
+            "telegram_session_state": "ready",
+            "telegram_session": {"state": "ready"},
+            "lmstudio_model_state": "loaded",
+            "lmstudio": {"state": "loaded", "loaded_models": ["nvidia/nemotron-3-nano"]},
+            "openclaw_auth_state": "configured",
+            "last_runtime_route": {},
+            "openclaw_tier_state": {},
+            "telegram_userbot": {},
+            "scheduler_enabled": True,
+            "voice_gateway_configured": True,
+        }
+
+    monkeypatch.setattr(WebApp, "_collect_runtime_lite_snapshot", _fake_lite_snapshot)
+    client = _make_client_with_router(_RouterWithFailingHealth())
+
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["checks"]["local_lm"] is True
+
+
+def test_lmstudio_snapshot_short_cache_reuses_probe_and_invalidates(monkeypatch):
+    """Короткий cache LM Studio snapshot должен схлопывать burst-чтения и сбрасываться вручную."""
+
+    class _Resp:
+        def __init__(self, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    call_counter = {"get": 0}
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str):
+            call_counter["get"] += 1
+            return _Resp(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "nvidia/nemotron-3-nano",
+                            "loaded_instances": [{"id": "nvidia/nemotron-3-nano"}],
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:1234")
+    monkeypatch.setenv("WEB_LMSTUDIO_SNAPSHOT_TTL_SEC", "5")
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+
+    app = WebApp({"router": _DummyRouter()}, port=18080, host="127.0.0.1")
+
+    first = asyncio.run(app._lmstudio_model_snapshot())
+    second = asyncio.run(app._lmstudio_model_snapshot())
+
+    assert first["state"] == "loaded"
+    assert second["state"] == "loaded"
+    assert call_counter["get"] == 1
+
+    app._invalidate_lmstudio_snapshot_cache()
+    third = asyncio.run(app._lmstudio_model_snapshot())
+
+    assert third["state"] == "loaded"
+    assert call_counter["get"] == 2
+
+
+def test_lmstudio_snapshot_loaded_state_uses_extended_ttl(monkeypatch):
+    """Для loaded-state snapshot должен жить дольше базового TTL и не долбить LM Studio без пользы."""
+
+    class _Resp:
+        def __init__(self, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    call_counter = {"get": 0}
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str):
+            call_counter["get"] += 1
+            return _Resp(
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "nvidia/nemotron-3-nano",
+                            "loaded_instances": [{"id": "nvidia/nemotron-3-nano"}],
+                        }
+                    ]
+                },
+            )
+
+    time_marks = iter([100.0, 100.0, 100.1, 114.0, 121.0, 121.0, 121.1])
+
+    def _fake_time() -> float:
+        try:
+            return next(time_marks)
+        except StopIteration:
+            return 121.1
+
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:1234")
+    monkeypatch.setenv("WEB_LMSTUDIO_SNAPSHOT_TTL_SEC", "2")
+    monkeypatch.setenv("WEB_LMSTUDIO_SNAPSHOT_TTL_LOADED_SEC", "20")
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr("src.modules.web_app.time.time", _fake_time)
+
+    app = WebApp({"router": _DummyRouter()}, port=18080, host="127.0.0.1")
+
+    first = asyncio.run(app._lmstudio_model_snapshot())
+    second = asyncio.run(app._lmstudio_model_snapshot())
+    third = asyncio.run(app._lmstudio_model_snapshot())
+
+    assert first["state"] == "loaded"
+    assert second["state"] == "loaded"
+    assert third["state"] == "loaded"
+    assert call_counter["get"] == 2
+
+
+def test_runtime_lite_snapshot_loaded_state_uses_extended_ttl(monkeypatch):
+    """Агрегированный runtime-lite snapshot тоже должен схлопывать частые health/lite тики."""
+
+    build_counter = {"calls": 0}
+    time_marks = iter([100.0, 100.0, 100.1, 114.0, 121.0, 121.0, 121.1])
+
+    async def _fake_build_runtime_lite(self):
+        build_counter["calls"] += 1
+        return {
+            "telegram_session_state": "ready",
+            "telegram_session": {"state": "ready"},
+            "lmstudio_model_state": "loaded",
+            "lmstudio": {"state": "loaded", "loaded_models": ["nvidia/nemotron-3-nano"]},
+            "openclaw_auth_state": "configured",
+            "last_runtime_route": {},
+            "openclaw_tier_state": {},
+            "telegram_userbot": {"startup_state": "running"},
+            "scheduler_enabled": True,
+            "voice_gateway_configured": True,
+        }
+
+    def _fake_time() -> float:
+        try:
+            return next(time_marks)
+        except StopIteration:
+            return 121.1
+
+    monkeypatch.setenv("WEB_RUNTIME_LITE_TTL_SEC", "2")
+    monkeypatch.setenv("WEB_RUNTIME_LITE_TTL_LOADED_SEC", "20")
+    monkeypatch.setattr(WebApp, "_build_runtime_lite_snapshot_uncached", _fake_build_runtime_lite)
+    monkeypatch.setattr("src.modules.web_app.time.time", _fake_time)
+
+    app = WebApp({"router": _DummyRouter()}, port=18080, host="127.0.0.1")
+
+    first = asyncio.run(app._collect_runtime_lite_snapshot())
+    second = asyncio.run(app._collect_runtime_lite_snapshot())
+    third = asyncio.run(app._collect_runtime_lite_snapshot())
+
+    assert first["lmstudio_model_state"] == "loaded"
+    assert second["lmstudio_model_state"] == "loaded"
+    assert third["lmstudio_model_state"] == "loaded"
+    assert build_counter["calls"] == 2
+
+
+def test_loaded_state_default_ttl_is_relaxed_for_live_dashboard(monkeypatch):
+    """Loaded-state по умолчанию должен жить дольше, чтобы не шуметь LM Studio каждые 10-20 секунд."""
+
+    for name in (
+        "WEB_LMSTUDIO_SNAPSHOT_TTL_SEC",
+        "WEB_LMSTUDIO_SNAPSHOT_TTL_LOADED_SEC",
+        "WEB_LMSTUDIO_SNAPSHOT_TTL_IDLE_SEC",
+        "WEB_RUNTIME_LITE_TTL_SEC",
+        "WEB_RUNTIME_LITE_TTL_LOADED_SEC",
+        "WEB_RUNTIME_LITE_TTL_IDLE_SEC",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert WebApp._lmstudio_snapshot_ttl_sec_for_state("loaded") == 60.0
+    assert WebApp._lmstudio_snapshot_ttl_sec_for_state("idle") == 20.0
+    assert WebApp._runtime_lite_ttl_sec_for_state("loaded") == 60.0
+    assert WebApp._runtime_lite_ttl_sec_for_state("idle") == 20.0
 
 
 def test_runtime_handoff_returns_machine_readable_snapshot(monkeypatch):
@@ -191,6 +428,450 @@ def test_runtime_recover_minimal_flow(monkeypatch):
     assert data["cloud_runtime"]["available"] is True
 
 
+def test_model_local_status_uses_runtime_truth_when_router_state_stale(monkeypatch):
+    """`/api/model/local/status` должен брать факт загрузки из runtime, а не из stale router-поля."""
+
+    class _TruthModelManager:
+        def get_current_model(self):
+            return ""
+
+        async def get_loaded_models(self):
+            return ["nvidia/nemotron-3-nano"]
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self._mm = _TruthModelManager()
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 1,
+            "loaded_models": ["nvidia/nemotron-3-nano"],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_TruthRouter())
+
+    resp = client.get("/api/model/local/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["status"] == "loaded"
+    assert data["model_name"] == "nvidia/nemotron-3-nano"
+    assert data["details"]["available"] is True
+    assert data["details"]["is_loaded"] is True
+
+
+def test_model_local_status_does_not_double_probe_model_manager_when_snapshot_is_loaded(monkeypatch):
+    """Runtime truth не должен делать второй `/models` probe через model_manager, если snapshot уже loaded."""
+
+    class _CountingModelManager:
+        def __init__(self) -> None:
+            self.loaded_calls = 0
+
+        def get_current_model(self):
+            return ""
+
+        async def get_loaded_models(self, *args, **kwargs):
+            self.loaded_calls += 1
+            return ["nvidia/nemotron-3-nano"]
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self, mm) -> None:
+            self._mm = mm
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 1,
+            "loaded_models": ["nvidia/nemotron-3-nano"],
+            "error": "",
+        }
+
+    mm = _CountingModelManager()
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_TruthRouter(mm))
+
+    resp = client.get("/api/model/local/status")
+
+    assert resp.status_code == 200
+    assert mm.loaded_calls == 0
+
+
+def test_model_catalog_uses_runtime_truth_for_loaded_flag(monkeypatch):
+    """`/api/model/catalog` должен помечать loaded-модель по runtime truth, даже если router stale."""
+
+    class _TruthModelManager:
+        def get_current_model(self):
+            return ""
+
+        async def get_loaded_models(self):
+            return ["nvidia/nemotron-3-nano"]
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self._mm = _TruthModelManager()
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "google/gemini-2.5-flash"}
+            self.force_mode = None
+
+        async def list_local_models_verbose(self):
+            return [
+                {
+                    "id": "nvidia/nemotron-3-nano",
+                    "loaded": False,
+                    "type": "local_mlx",
+                    "size_human": "16.6 GB",
+                }
+            ]
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 1,
+            "loaded_models": ["nvidia/nemotron-3-nano"],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_TruthRouter())
+
+    resp = client.get("/api/model/catalog")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    catalog = data["catalog"]
+    assert catalog["local_active_model"] == "nvidia/nemotron-3-nano"
+    assert catalog["local_available"] is True
+    assert catalog["local_models"][0]["id"] == "nvidia/nemotron-3-nano"
+    assert catalog["local_models"][0]["loaded"] is True
+
+
+def test_model_local_load_default_falls_back_to_config_preferred_model(monkeypatch):
+    """`/api/model/local/load-default` не должен ломаться, если compat-router не пробросил поле."""
+
+    class _LoadDefaultRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self.loaded_model = None
+            self.load_reason = None
+
+        async def _smart_load(self, model_id: str, reason: str = "") -> bool:
+            self.loaded_model = model_id
+            self.load_reason = reason
+            return True
+
+    previous = config.LOCAL_PREFERRED_MODEL
+    monkeypatch.setattr(config, "LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano")
+    router = _LoadDefaultRouter()
+    client = _make_client_with_router(router)
+
+    try:
+        resp = client.post("/api/model/local/load-default")
+    finally:
+        monkeypatch.setattr(config, "LOCAL_PREFERRED_MODEL", previous)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["model"] == "nvidia/nemotron-3-nano"
+    assert router.loaded_model == "nvidia/nemotron-3-nano"
+    assert router.load_reason == "web_forced"
+
+
+def test_stats_router_payload_uses_runtime_truth_and_openclaw_fallbacks(monkeypatch):
+    """`/api/stats` должен отдавать совместимый router payload из runtime truth и OpenClaw fallback'ов."""
+
+    class _TruthModelManager:
+        def get_current_model(self):
+            return ""
+
+        async def get_loaded_models(self):
+            return ["nvidia/nemotron-3-nano"]
+
+    class _StatsRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self._mm = _TruthModelManager()
+            self.rag = None
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "google/gemini-2.5-flash"}
+
+        def get_model_info(self):
+            return {
+                "current_model": "google/gemini-2.5-flash",
+                "models": {"chat": "google/gemini-2.5-flash"},
+            }
+
+        def get_last_route(self):
+            return {}
+
+    class _StatsOpenClaw(_FakeOpenClaw):
+        def get_token_info(self):
+            return {
+                "active_tier": "free",
+                "tiers": {
+                    "free": {
+                        "is_configured": True,
+                        "masked_key": "AIza...123",
+                        "is_aistudio_key": True,
+                    }
+                },
+                "current_google_key_masked": "AIza...123",
+                "last_error_code": None,
+            }
+
+        def get_tier_state_export(self):
+            return {
+                "active_tier": "free",
+                "last_error_code": None,
+                "last_error_message": "",
+                "last_provider_status": "ok",
+                "last_recovery_action": "none",
+                "last_probe_at": 0,
+                "tiers_configured": {"free": True, "paid": False},
+            }
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 1,
+            "loaded_models": ["nvidia/nemotron-3-nano"],
+            "error": "",
+        }
+
+    monkeypatch.setenv("OPENCLAW_TOKEN", "token-from-runtime")
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: ""),
+    )
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_StatsRouter(), openclaw_client=_StatsOpenClaw())
+
+    resp = client.get("/api/stats")
+    assert resp.status_code == 200
+    router = resp.json()["router"]
+    assert router["local_model"] == "nvidia/nemotron-3-nano"
+    assert router["active_local_model"] == "nvidia/nemotron-3-nano"
+    assert router["is_local_available"] is True
+    assert router["last_route"]["model"] == "nvidia/nemotron-3-nano"
+    assert router["cloud_keys"]["openclaw"]["is_configured"] is True
+    assert router["cloud_keys"]["gemini"]["is_configured"] is True
+    assert router["cloud_keys"]["gemini"]["has_error"] is False
+    assert router["cloud_tier"]["active_display"] == "FREE"
+    assert router["cloud_tier"]["configured_labels"] == ["Gemini", "OpenClaw"]
+    assert router["cloud_tier"]["last_error_summary"] == ""
+
+
+def test_stats_router_payload_uses_model_manager_cloud_error_fallback(monkeypatch):
+    """`/api/stats` должен брать свежий cloud auth-error из ModelManager, если OpenClaw tier-state ещё stale."""
+
+    class _TruthModelManager:
+        def get_current_model(self):
+            return "nvidia/nemotron-3-nano"
+
+        async def get_loaded_models(self):
+            return ["nvidia/nemotron-3-nano"]
+
+        def get_cloud_runtime_state_export(self):
+            return {
+                "active_tier": "free",
+                "last_provider_status": "auth",
+                "last_error_code": "auth_invalid",
+                "last_error_message": "401 unauthorized",
+                "last_probe_at": 9_999_999_999,
+            }
+
+    class _StatsRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self._mm = _TruthModelManager()
+            self.rag = None
+            self.is_local_available = True
+            self.active_local_model = "nvidia/nemotron-3-nano"
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "google/gemini-2.5-flash"}
+
+        def get_model_info(self):
+            return {
+                "current_model": "google/gemini-2.5-flash",
+                "models": {"chat": "google/gemini-2.5-flash"},
+            }
+
+        def get_last_route(self):
+            return {}
+
+    class _StatsOpenClaw(_FakeOpenClaw):
+        def get_token_info(self):
+            return {
+                "active_tier": "free",
+                "tiers": {
+                    "free": {
+                        "is_configured": True,
+                        "masked_key": "AIza...123",
+                        "is_aistudio_key": True,
+                    }
+                },
+                "current_google_key_masked": "AIza...123",
+                "last_error_code": "",
+            }
+
+        def get_tier_state_export(self):
+            return {
+                "active_tier": "free",
+                "last_error_code": "",
+                "last_error_message": "",
+                "last_provider_status": "unknown",
+                "last_recovery_action": "none",
+                "last_probe_at": 0,
+                "tiers_configured": {"free": True, "paid": False},
+            }
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 1,
+            "loaded_models": ["nvidia/nemotron-3-nano"],
+            "error": "",
+        }
+
+    monkeypatch.setenv("OPENCLAW_TOKEN", "token-from-runtime")
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: ""),
+    )
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_StatsRouter(), openclaw_client=_StatsOpenClaw())
+
+    resp = client.get("/api/stats")
+    assert resp.status_code == 200
+    router = resp.json()["router"]
+    assert router["cloud_keys"]["gemini"]["has_error"] is True
+    assert router["cloud_keys"]["last_error"]["code"] == "auth_invalid"
+    assert router["cloud_keys"]["last_error"]["summary"] == "401 unauthorized"
+    assert router["cloud_tier"]["has_error"] is True
+    assert router["cloud_tier"]["last_error_code"] == "auth_invalid"
+
+
+def test_routing_effective_uses_runtime_truth_for_local_availability(monkeypatch):
+    """`/api/openclaw/routing/effective` не должен считать local недоступным по stale router-полю."""
+
+    class _TruthModelManager:
+        def get_current_model(self):
+            return ""
+
+        async def get_loaded_models(self):
+            return ["nvidia/nemotron-3-nano"]
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self._mm = _TruthModelManager()
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "google/gemini-2.5-flash"}
+            self.force_mode = None
+            self.routing_policy = "free_first_hybrid"
+            self.cloud_soft_cap_reached = False
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 1,
+            "loaded_models": ["nvidia/nemotron-3-nano"],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_TruthRouter())
+
+    resp = client.get("/api/openclaw/routing/effective")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["requested_mode"] == "auto"
+    assert data["effective_mode"] == "auto"
+    assert data["active_slot_or_model"] == "nvidia/nemotron-3-nano"
+    assert data["cloud_fallback"] is True
+    assert data["cloud_fallback_state"] == "standby"
+    assert data["cloud_fallback_active"] is False
+    joined_notes = " ".join(data["decision_notes"])
+    assert "Локальный движок 'lm_studio' доступен." in joined_notes
+    assert "nvidia/nemotron-3-nano" in joined_notes
+    assert "недоступен" not in joined_notes.lower()
+    assert "резерв" in joined_notes.lower()
+
+
+def test_routing_effective_marks_cloud_fallback_active_in_force_cloud(monkeypatch):
+    """`/api/openclaw/routing/effective` должен явно помечать активный cloud fallback при force_cloud."""
+
+    class _TruthModelManager:
+        def get_current_model(self):
+            return ""
+
+        async def get_loaded_models(self):
+            return ["nvidia/nemotron-3-nano"]
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self._mm = _TruthModelManager()
+            self.is_local_available = True
+            self.active_local_model = "nvidia/nemotron-3-nano"
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "google/gemini-2.5-flash"}
+            self.force_mode = "force_cloud"
+            self.routing_policy = "free_first_hybrid"
+            self.cloud_soft_cap_reached = False
+
+        def get_last_route(self):
+            return {}
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 1,
+            "loaded_models": ["nvidia/nemotron-3-nano"],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_TruthRouter())
+
+    resp = client.get("/api/openclaw/routing/effective")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["requested_mode"] == "force_cloud"
+    assert data["effective_mode"] == "cloud"
+    assert data["cloud_fallback"] is True
+    assert data["cloud_fallback_state"] == "active"
+    assert data["cloud_fallback_active"] is True
+
+
 def test_parse_openclaw_channels_probe_returns_normalized_channels():
     """Парсер channels probe должен отдавать нормализованный список каналов для UI."""
     sample = """
@@ -211,6 +892,97 @@ Warnings:
     assert parsed["channels"][1]["name"] == "BlueBubbles default"
     assert parsed["channels"][1]["status"] == "FAIL"
     assert parsed["warnings"] == ["bluebubbles default: Not configured"]
+
+
+def test_browser_smoke_marks_auth_required_as_reachable_but_not_attached(monkeypatch):
+    """`/api/openclaw/browser-smoke` должен отличать живой relay с auth-required от реально attached tab."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str, *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, b""
+
+        def terminate(self):
+            return None
+
+    class _Resp:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str):
+            assert url == "http://127.0.0.1:18791/"
+            return _Resp(401)
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        assert cmd[:3] == ("openclaw", "gateway", "probe")
+        stdout_text = """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok (15ms) · RPC: ok
+""".strip()
+        return _Proc(stdout_text, returncode=0)
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/browser-smoke")
+    assert resp.status_code == 200
+    smoke = resp.json()["report"]["browser_smoke"]
+    assert smoke["relay_reachable"] is True
+    assert smoke["browser_http_state"] == "auth_required"
+    assert smoke["tab_attached"] is False
+    assert smoke["browser_auth_required"] is True
+
+
+def test_control_compat_status_returns_legacy_aliases(monkeypatch):
+    """`/api/openclaw/control-compat/status` должен отдавать legacy-алиасы для текущего UI."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str, *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, b""
+
+        def terminate(self):
+            return None
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[:4] == ("openclaw", "channels", "status", "--probe"):
+            return _Proc("channels ok", returncode=0)
+        if cmd[:3] == ("openclaw", "logs", "--tail"):
+            return _Proc("Unsupported schema node in Control UI", returncode=0)
+        raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/control-compat/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["runtime_channels_ok"] is True
+    assert data["runtime_status"] == "OK"
+    assert data["has_schema_warning"] is True
+    assert data["impact_level"] == "ui_only"
 
 
 def test_health_lite_marks_auth_unauthorized_when_provider_reports_auth(monkeypatch):

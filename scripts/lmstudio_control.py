@@ -29,6 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.core.lm_studio_auth import build_lm_studio_auth_headers
 
 DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234"
 DEFAULT_CONTEXT_LENGTH = 32184
@@ -59,7 +64,7 @@ def _normalize_base_url(raw_url: str) -> str:
 def _http_json(method: str, url: str, body: dict[str, Any] | None = None, timeout: float = 10.0) -> HttpResult:
     """Выполняет JSON-запрос и возвращает нормализованный результат."""
     data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {"Accept": "application/json"}
+    headers = build_lm_studio_auth_headers(include_json_accept=True)
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())

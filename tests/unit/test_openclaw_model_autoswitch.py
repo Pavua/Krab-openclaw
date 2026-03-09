@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -52,12 +53,18 @@ def _base_openclaw_payload() -> dict:
     }
 
 
-def _run_script(*args: str) -> dict:
+def _run_script(*args: str, env_overrides: dict[str, str] | None = None) -> dict:
+    env = os.environ.copy()
+    # Изолируем тесты от реального LOCAL_PREFERRED_MODEL из локального .env.
+    env["LOCAL_PREFERRED_MODEL"] = ""
+    if env_overrides:
+        env.update(env_overrides)
     proc = subprocess.run(
         [sys.executable, str(SCRIPT_PATH), *args],
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
     lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
     assert lines, "autoswitch script returned empty output"
@@ -124,3 +131,23 @@ def test_toggle_switches_between_cloud_and_local_profiles(tmp_path):
     openclaw_after_second = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert openclaw_after_second["agents"]["defaults"]["model"]["primary"] == "google/gemini-2.5-flash"
     assert state_path.exists() is True
+
+
+def test_local_first_uses_env_preferred_local_model(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "local-first",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        env_overrides={"LOCAL_PREFERRED_MODEL": "nvidia/nemotron-3-nano"},
+    )
+
+    assert payload["ok"] is True
+    assert payload["details"]["primary_model"] == "lmstudio/nvidia/nemotron-3-nano"

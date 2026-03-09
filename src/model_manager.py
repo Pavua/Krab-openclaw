@@ -29,7 +29,9 @@ from .core.cloud_gateway import (
 from .core.cloud_gateway import (
     verify_gemini_access as cloud_verify_gemini_access,
 )
+from .core.cloud_key_probe import classify_gemini_http_error
 from .core.cost_analytics import cost_analytics
+from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.local_health import discover_models as discover_models_impl
 from .core.local_health import is_lm_studio_available
 from .core.model_config import (
@@ -62,7 +64,16 @@ class ModelManager:
         self.max_ram_gb = config.MAX_RAM_GB
         self._models_cache: dict[str, ModelInfo] = {}
         self._current_model: Optional[str] = None
-        self._http_client = httpx.AsyncClient(timeout=30.0)
+        self._http_client = httpx.AsyncClient(
+            timeout=30.0,
+            headers=build_lm_studio_auth_headers(
+                api_key=getattr(config, "LM_STUDIO_API_KEY", ""),
+            ) or None,
+        )
+        # Отдельный cloud-клиент без LM Studio auth headers.
+        # Иначе Gemini получает чужой Authorization и может отвечать 401,
+        # хотя сам AI Studio key валиден.
+        self._cloud_http_client = httpx.AsyncClient(timeout=30.0)
 
         # Smart Loading State
         self._last_access: dict[str, float] = {}  # model_id -> timestamp
@@ -80,6 +91,21 @@ class ModelManager:
         self._legacy_unload_endpoint_supported: Optional[bool] = None
         base_dir = Path(getattr(config, "BASE_DIR", Path.cwd()))
         self._interprocess_load_lock_path = base_dir / "data" / "locks" / "lmstudio_model_load.lock"
+        # Короткий cache для truth-read запросов к `/api/v1/models`.
+        # Нужен, чтобы web/health probe не долбили LM Studio десятками
+        # одинаковых GET за одну секунду, пока runtime просто читает статус.
+        self._loaded_models_cache: list[str] = []
+        self._loaded_models_cache_ts: float = 0.0
+        # Discovery-state облачного Gemini для UI и короткого backoff.
+        self._cloud_runtime_state: dict[str, object] = {
+            "active_tier": "free" if config.GEMINI_API_KEY_FREE else ("paid" if config.GEMINI_API_KEY_PAID else ""),
+            "last_provider_status": "unknown",
+            "last_error_code": "",
+            "last_error_message": "",
+            "last_probe_at": 0.0,
+        }
+        self._cloud_discovery_backoff_until: float = 0.0
+        self._cloud_models_cache: list[ModelInfo] = []
 
         # Fallback chain: local затем облачные тиры из cloud_gateway
         cloud_chain = get_cloud_fallback_chain()
@@ -87,7 +113,8 @@ class ModelManager:
         self._router = ModelRouter(
             lm_studio_url=self.lm_studio_url,
             gemini_api_key=config.GEMINI_API_KEY,
-            http_client=self._http_client,
+            local_http_client=self._http_client,
+            cloud_http_client=self._cloud_http_client,
             fallback_chain=self.fallback_chain,
             config_model=config.MODEL,
         )
@@ -202,24 +229,122 @@ class ModelManager:
         return await resolve_working_gemini_key(
             config.GEMINI_API_KEY_FREE,
             config.GEMINI_API_KEY_PAID,
-            self._http_client,
+            self._cloud_http_client,
         )
+
+    def _update_cloud_runtime_state(
+        self,
+        *,
+        provider_status: str,
+        error_code: str = "",
+        error_message: str = "",
+        active_tier: str = "",
+    ) -> None:
+        """Обновляет локальный cloud discovery-state без секретов."""
+        tier = str(active_tier or self._cloud_runtime_state.get("active_tier") or "").strip().lower()
+        self._cloud_runtime_state = {
+            "active_tier": tier,
+            "last_provider_status": str(provider_status or "unknown").strip().lower() or "unknown",
+            "last_error_code": str(error_code or "").strip(),
+            "last_error_message": str(error_message or "").strip(),
+            "last_probe_at": float(time.time()),
+        }
+
+    def _update_cloud_runtime_state_from_discovery(
+        self,
+        *,
+        diagnostics: list[dict],
+        models: list[ModelInfo],
+    ) -> None:
+        """
+        Синхронизирует состояние Gemini по пути discovery.
+
+        Это нужно, потому что ошибки `cloud_gateway` могут уже случиться,
+        а `OpenClawClient` ещё не успевает обновить свой tier-state.
+        """
+        if models:
+            tier = ""
+            for item in diagnostics:
+                if int(item.get("status_code") or 0) == 200:
+                    tier = str(item.get("key_tier") or "").strip().lower()
+                    break
+            self._cloud_models_cache = list(models)
+            self._cloud_discovery_backoff_until = 0.0
+            self._update_cloud_runtime_state(provider_status="ok", active_tier=tier)
+            return
+
+        if not diagnostics:
+            return
+
+        selected: dict | None = None
+        for item in diagnostics:
+            if int(item.get("status_code") or 0) in (401, 403, 429):
+                selected = item
+                break
+        if selected is None:
+            for item in diagnostics:
+                if str(item.get("error_kind") or "").strip().lower() in {"network", "timeout", "invalid", "parse"}:
+                    selected = item
+                    break
+        if selected is None:
+            selected = diagnostics[-1]
+
+        status_code = selected.get("status_code")
+        detail = str(selected.get("detail") or "").strip()
+        key_tier = str(selected.get("key_tier") or "").strip().lower()
+        if isinstance(status_code, int):
+            provider_status, error_code, _ = classify_gemini_http_error(status_code, detail)
+        else:
+            error_kind = str(selected.get("error_kind") or "").strip().lower()
+            if error_kind == "invalid":
+                provider_status, error_code = "invalid", "unsupported_key_type"
+            elif error_kind == "network":
+                provider_status, error_code = "error", "network_error"
+            elif error_kind == "timeout":
+                provider_status, error_code = "timeout", "provider_timeout"
+            else:
+                provider_status, error_code = "error", "provider_error"
+
+        self._cloud_models_cache = []
+        self._cloud_discovery_backoff_until = time.time() + 15.0
+        self._update_cloud_runtime_state(
+            provider_status=provider_status,
+            error_code=error_code,
+            error_message=detail,
+            active_tier=key_tier,
+        )
+
+    def get_cloud_runtime_state_export(self) -> dict[str, object]:
+        """Экспорт последнего discovery-state облака для web/UI."""
+        return dict(self._cloud_runtime_state)
 
     async def discover_models(self) -> list[ModelInfo]:
         """Обнаруживает все доступные модели (LM Studio + облако) через local_health и cloud_gateway."""
+        diagnostics: list[dict] = []
+
         async def _fetch_google() -> list[ModelInfo]:
+            diagnostics.clear()
+            if time.time() < float(self._cloud_discovery_backoff_until or 0.0):
+                return list(self._cloud_models_cache)
             return await cloud_fetch_google_models_fb(
                 config.GEMINI_API_KEY_FREE,
                 config.GEMINI_API_KEY_PAID,
-                self._http_client,
+                self._cloud_http_client,
                 models_cache=self._models_cache,
+                diagnostics_sink=diagnostics,
             )
-        return await discover_models_impl(
+        models = await discover_models_impl(
             self.lm_studio_url,
             self._http_client,
             models_cache=self._models_cache,
             fetch_google_models_async=_fetch_google,
         )
+        cloud_models = [item for item in models if getattr(item, "type", None) == ModelType.CLOUD_GEMINI]
+        self._update_cloud_runtime_state_from_discovery(
+            diagnostics=diagnostics,
+            models=cloud_models,
+        )
+        return models
 
     async def verify_model_access(self, model_id: str) -> bool:
         """Проверяет доступность модели перед переключением (локальные — по кэшу, облако — через cloud_gateway)."""
@@ -231,7 +356,7 @@ class ModelManager:
         return await cloud_verify_gemini_access(
             model_id,
             key,
-            self._http_client,
+            self._cloud_http_client,
         )
 
     def _detect_model_type(self, model_id: str) -> ModelType:
@@ -263,6 +388,10 @@ class ModelManager:
             preferred_vision = await self.resolve_preferred_local_model(has_photo=True)
             if preferred_vision:
                 return preferred_vision
+            # Важно: для фото не откатываемся к текстовой local primary,
+            # если явной vision-local модели нет. Иначе Nemotron без vision
+            # перехватывает запрос и ломает мультимодальный маршрут.
+            return await self._router.get_best_model(has_photo=True)
 
         # В auto режиме local-first: если LM Studio жив, используем local/предпочтительную локальную.
         if self.lm_studio_url and await is_lm_studio_available(self.lm_studio_url, client=self._http_client):
@@ -294,24 +423,45 @@ class ModelManager:
     async def resolve_preferred_local_model(self, *, has_photo: bool = False) -> Optional[str]:
         """
         Возвращает целевую локальную модель:
-        1) уже активная (если подходит),
-        2) preferred из конфига,
+        1) preferred из конфига (для фото: сначала LOCAL_PREFERRED_VISION_MODEL, затем LOCAL_PREFERRED_MODEL),
+        2) уже активная (если подходит),
         3) самая лёгкая доступная локальная.
+
+        Почему так:
+        - `self._current_model` может быть stale при внешнем переключении модели (через скрипты/UI LM Studio);
+        - явный preferred из env должен иметь приоритет и детерминированно переопределять "залипший" current.
+        - для фото в режиме `LOCAL_PREFERRED_VISION_MODEL=auto` мы НЕ должны молча
+          пересаживаться на произвольную маленькую vision-модель: если явного vision
+          preference нет и текущая/основная локальная модель не умеет vision, лучше
+          отдать фото в cloud fallback, чем выгрузить текстовую primary-модель.
         """
         candidates = await self._local_candidates(has_photo=has_photo)
         if not candidates:
             return None
 
         candidate_ids = {mid for mid, _ in candidates}
-        if self._current_model and self._current_model in candidate_ids:
-            return self._current_model
+        preferred_vision = ""
+        preferred_hints: list[str] = []
+        if has_photo:
+            preferred_vision = str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
+            if preferred_vision and preferred_vision not in {"auto", "smallest"}:
+                preferred_hints.append(preferred_vision)
 
-        preferred_key = "LOCAL_PREFERRED_VISION_MODEL" if has_photo else "LOCAL_PREFERRED_MODEL"
-        preferred = str(getattr(config, preferred_key, "") or "").strip().lower()
-        if preferred and preferred not in {"auto", "smallest"}:
+        preferred_local = str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip().lower()
+        if preferred_local and preferred_local not in {"auto", "smallest"}:
+            preferred_hints.append(preferred_local)
+
+        for preferred in preferred_hints:
             for mid, _ in candidates:
                 if preferred in mid.lower():
                     return mid
+
+        if self._current_model and self._current_model in candidate_ids:
+            return self._current_model
+        if has_photo:
+            if preferred_vision == "smallest":
+                return candidates[0][0]
+            return None
         return candidates[0][0]
 
     async def get_best_cloud_model(self, *, has_photo: bool = False) -> str:
@@ -386,8 +536,25 @@ class ModelManager:
         available_gb = mem.available / (1024**3)
         return available_gb > (size_gb + RAM_BUFFER_GB)
 
-    async def get_loaded_models(self) -> list[str]:
+    def _invalidate_loaded_models_cache(self) -> None:
+        """Сбрасывает короткий cache списка загруженных моделей."""
+        self._loaded_models_cache = []
+        self._loaded_models_cache_ts = 0.0
+
+    def _store_loaded_models_cache(self, loaded: list[str]) -> list[str]:
+        """Обновляет cache и всегда возвращает дедуплицированный список."""
+        normalized = list(dict.fromkeys([str(item).strip() for item in loaded if str(item or "").strip()]))
+        self._loaded_models_cache = normalized
+        self._loaded_models_cache_ts = time.time()
+        return list(normalized)
+
+    async def get_loaded_models(self, *, force_refresh: bool = False) -> list[str]:
         """Запрашивает у LM Studio список загруженных моделей (API v1 или fallback)."""
+        cache_ttl_sec = 1.0
+        if not force_refresh and self._loaded_models_cache:
+            if (time.time() - self._loaded_models_cache_ts) <= cache_ttl_sec:
+                return list(self._loaded_models_cache)
+
         urls = [f"{self.lm_studio_url}/api/v1/models", f"{self.lm_studio_url}/v1/models"]
         for url in urls:
             try:
@@ -409,13 +576,40 @@ class ModelManager:
                         if key:
                             loaded.append(key)
                 if loaded:
-                    return list(dict.fromkeys(loaded))
+                    return self._store_loaded_models_cache(loaded)
                 if self._current_model:
-                    return [self._current_model]
-                return []
+                    return self._store_loaded_models_cache([self._current_model])
+                return self._store_loaded_models_cache([])
             except (httpx.HTTPError, OSError, ValueError):
                 continue
-        return [self._current_model] if self._current_model else []
+        if self._current_model:
+            return self._store_loaded_models_cache([self._current_model])
+        return self._store_loaded_models_cache([])
+
+    async def _wait_until_model_loaded(
+        self,
+        model_id: str,
+        *,
+        timeout_sec: float,
+        poll_sec: float = 2.0,
+    ) -> bool:
+        """
+        Ждёт, пока LM Studio реально покажет модель в списке loaded instances.
+
+        Почему это нужно:
+        - `POST /models/load` может вернуть 2xx раньше, чем модель реально станет
+          доступной для inference;
+        - без post-load truth-check UI и runtime получают ложный success-path.
+        """
+        deadline = time.time() + max(1.0, float(timeout_sec))
+        while True:
+            loaded = await self.get_loaded_models(force_refresh=True)
+            if model_id in loaded:
+                return True
+            now = time.time()
+            if now >= deadline:
+                return False
+            await asyncio.sleep(min(max(0.2, float(poll_sec)), max(0.2, deadline - now)))
 
     @staticmethod
     def _response_payload_has_error(resp: httpx.Response) -> bool:
@@ -568,7 +762,7 @@ class ModelManager:
                 if not model_info:
                     logger.warning("model_unknown_loading_anyway", model=model_id)
 
-                loaded = await self.get_loaded_models()
+                loaded = await self.get_loaded_models(force_refresh=True)
                 if single_local_mode and loaded:
                     # SINGLE_LOCAL_MODEL_MODE: в памяти должна оставаться только целевая модель.
                     # Выгружаем любые лишние инстансы/модели (включая клоны вида `model:2`).
@@ -619,7 +813,7 @@ class ModelManager:
             async with self._lock:
                 # Повторная проверка после wait/free: модель могла уже загрузиться
                 # другим процессом, который держал lock до нас.
-                loaded = await self.get_loaded_models()
+                loaded = await self.get_loaded_models(force_refresh=True)
                 if single_local_mode and loaded:
                     extra_loaded = [
                         mid
@@ -645,24 +839,40 @@ class ModelManager:
 
                 logger.info("loading_model_start", model=model_id)
                 ok = await self._do_load_model(model_id, size_gb)
-                if ok:
-                    logger.info("model_loaded", model=model_id)
-                    self._current_model = model_id
-                    self.touch(model_id)
-                    return True
-                logger.error("load_failed", model=model_id)
+                if not ok:
+                    logger.error("load_failed", model=model_id)
+                    return False
+
+            verify_timeout_sec = float(getattr(config, "LOCAL_POST_LOAD_VERIFY_SEC", 90.0))
+            if not await self._wait_until_model_loaded(
+                model_id,
+                timeout_sec=verify_timeout_sec,
+            ):
+                logger.warning(
+                    "model_load_not_confirmed",
+                    model=model_id,
+                    verify_timeout_sec=verify_timeout_sec,
+                )
                 return False
+
+            logger.info("model_loaded", model=model_id)
+            async with self._lock:
+                self._current_model = model_id
+                self._store_loaded_models_cache([model_id])
+                self.touch(model_id)
+            return True
         finally:
             self._release_interprocess_model_lock(lock_handle)
 
     async def free_vram(self) -> None:
         """Выгружает все модели и синхронизирует _current_model. VRAM cooling 1.5s после выгрузки."""
         async with self._lock:
-            loaded = await self.get_loaded_models()
+            loaded = await self.get_loaded_models(force_refresh=True)
             for mid in loaded:
                 await self._do_unload_model(mid)
                 logger.info("model_unloaded", model=mid)
             self._current_model = None
+            self._invalidate_loaded_models_cache()
         await asyncio.sleep(1.5)
 
     async def unload_model(self, model_id: str) -> None:
@@ -671,6 +881,7 @@ class ModelManager:
             await self._do_unload_model(model_id)
             if self._current_model == model_id:
                 self._current_model = None
+            self._invalidate_loaded_models_cache()
             logger.info("model_unloaded", model=model_id)
         await asyncio.sleep(1.5)
 
@@ -749,12 +960,33 @@ class ModelManager:
                 logger.error("maintenance_error", error=str(e))
 
     async def health_check(self) -> dict:
-        """Проверка здоровья"""
+        """
+        Лёгкая read-only проверка локального model manager.
+
+        Почему без `discover_models()`:
+        - deep health и diagnostics могут дёргать этот метод часто;
+        - полный discovery заново опрашивает LM Studio и облако, что создаёт
+          лишний шум и не нужно для обычного "жив ли локальный контур?".
+        """
         try:
-            models = await self.discover_models()
+            loaded_cache_is_fresh = (
+                bool(self._loaded_models_cache)
+                and (time.time() - float(self._loaded_models_cache_ts or 0.0)) <= 5.0
+            )
+            loaded_models = list(self._loaded_models_cache) if loaded_cache_is_fresh else []
+
+            if loaded_models:
+                local_ok = True
+            else:
+                local_ok = bool(
+                    self.lm_studio_url
+                    and await is_lm_studio_available(self.lm_studio_url, client=self._http_client)
+                )
+
             return {
-                "status": "healthy",
-                "models_count": len(models),
+                "status": "healthy" if local_ok else "unavailable",
+                "models_count": len(self._models_cache),
+                "loaded_models": loaded_models,
                 "ram": self.get_ram_usage()
             }
         except (httpx.HTTPError, OSError, KeyError, ValueError) as e:
@@ -765,6 +997,7 @@ class ModelManager:
         if self._maintenance_task:
             self._maintenance_task.cancel()
         await self._http_client.aclose()
+        await self._cloud_http_client.aclose()
 
 
 model_manager = ModelManager()

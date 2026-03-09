@@ -31,6 +31,7 @@ from .core.cloud_key_probe import (
     probe_gemini_key,
 )
 from .core.exceptions import ProviderAuthError, ProviderError
+from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.lm_studio_health import is_lm_studio_available
 from .core.logger import get_logger
 from .core.openclaw_secrets_runtime import reload_openclaw_secrets
@@ -56,6 +57,10 @@ class OpenClawClient:
             },
         )
         self._sessions: Dict[str, list] = {}
+        # Состояние нативного LM Studio chat-потока по `chat_id`.
+        # Оно хранит `response_id`, чтобы продолжать локальный диалог через
+        # `/api/v1/chat` без пересылки полного assistant-хвоста.
+        self._lm_native_chat_state: Dict[str, dict[str, str]] = {}
         self._usage_stats = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
         # Source-of-truth по моделям/ключам OpenClaw (решение проекта: ~/.openclaw)
@@ -90,16 +95,23 @@ class OpenClawClient:
         return "unknown"
 
     @staticmethod
-    def _local_recovery_enabled(*, force_cloud: bool) -> bool:
+    def _local_recovery_enabled(*, force_cloud: bool, has_photo: bool = False) -> bool:
         """
         Разрешён ли аварийный fallback cloud -> local.
 
         Логика:
         - при force_cloud локальный recovery всегда выключен;
+        - для фото при `LOCAL_PREFERRED_VISION_MODEL=auto` локальный recovery
+          запрещён, чтобы cloud-ветка не пересаживала запрос на случайную
+          маленькую vision-модель;
         - иначе управляется флагом LOCAL_FALLBACK_ENABLED.
         """
         if force_cloud:
             return False
+        if has_photo:
+            preferred_vision = str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
+            if preferred_vision in {"", "auto"}:
+                return False
         return bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True))
 
     def _set_last_runtime_route(
@@ -182,9 +194,26 @@ class OpenClawClient:
                         total += len(part.get("text", ""))
         return total
 
-    def _apply_sliding_window(self, chat_id: str, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        max_msgs = getattr(config, "HISTORY_WINDOW_MESSAGES", 50)
-        max_chars = getattr(config, "HISTORY_WINDOW_MAX_CHARS", None)
+    def _apply_sliding_window(
+        self,
+        chat_id: str,
+        messages: List[Dict[str, Any]],
+        *,
+        max_msgs: int | None = None,
+        max_chars: int | None = None,
+        trim_reason: str = "history_window",
+    ) -> List[Dict[str, Any]]:
+        """
+        Обрезает историю по числу сообщений и/или символов.
+
+        Важно:
+        - system prompt сохраняется, если он есть;
+        - char-budget учитывает размер сохранённого system prompt, иначе можно
+          формально "обрезать" хвост и всё равно отправить слишком большой пакет.
+        """
+        max_msgs = max(1, int(max_msgs if max_msgs is not None else getattr(config, "HISTORY_WINDOW_MESSAGES", 50)))
+        if max_chars is None:
+            max_chars = getattr(config, "HISTORY_WINDOW_MAX_CHARS", None)
         if len(messages) <= max_msgs and (max_chars is None or self._messages_size(messages) <= max_chars):
             return messages
 
@@ -205,11 +234,15 @@ class OpenClawClient:
             tail = rest
 
         if max_chars is not None:
+            reserved_chars = self._messages_size(out)
+            available_chars = max(0, int(max_chars) - reserved_chars)
             current = 0
             new_tail = []
             for message in reversed(tail):
                 size = self._messages_size([message])
-                if current + size > max_chars and new_tail:
+                if available_chars <= 0 and new_tail:
+                    break
+                if available_chars > 0 and current + size > available_chars and new_tail:
                     break
                 new_tail.append(message)
                 current += size
@@ -218,6 +251,7 @@ class OpenClawClient:
         out.extend(tail)
         logger.info(
             "history_trimmed",
+            reason=trim_reason,
             chat_id=chat_id,
             dropped_messages=len(messages) - len(out),
             before_count=len(messages),
@@ -226,6 +260,45 @@ class OpenClawClient:
             after_chars=self._messages_size(out),
         )
         return out
+
+    def _apply_local_route_history_budget(
+        self,
+        chat_id: str,
+        messages: List[Dict[str, Any]],
+        *,
+        has_photo: bool,
+        trim_reason: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Отдельный budget для локального маршрута.
+
+        Почему:
+        - локальные модели в LM Studio заметно хуже переносят длинный диалоговый хвост;
+        - нам важнее сохранить последние реплики и не раздувать prompt до десятков тысяч
+          токенов, чем пытаться удержать весь исторический контекст любой ценой.
+        """
+        max_msgs = getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18)
+        max_chars = getattr(config, "LOCAL_HISTORY_WINDOW_MAX_CHARS", 12000)
+        trimmed = self._apply_sliding_window(
+            chat_id,
+            messages,
+            max_msgs=max_msgs,
+            max_chars=max_chars,
+            trim_reason=trim_reason,
+        )
+        if len(trimmed) != len(messages) or self._messages_size(trimmed) != self._messages_size(messages):
+            logger.info(
+                "local_route_history_budget_applied",
+                chat_id=chat_id,
+                has_photo=has_photo,
+                max_msgs=max_msgs,
+                max_chars=max_chars,
+                before_count=len(messages),
+                after_count=len(trimmed),
+                before_chars=self._messages_size(messages),
+                after_chars=self._messages_size(trimmed),
+            )
+        return trimmed
 
     def _detect_initial_tier(self) -> str:
         """Определяет активный tier по ключу в OpenClaw models.json."""
@@ -370,14 +443,96 @@ class OpenClawClient:
         """
         if not messages_to_send:
             return []
+        max_msgs = max(1, int(getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8))
+        max_chars = max(400, int(getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000))
+        per_message_max_chars = max(120, int(getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200))
+
         system_message = messages_to_send[0] if messages_to_send and messages_to_send[0].get("role") == "system" else None
         tail_source = messages_to_send[1:] if system_message else messages_to_send
-        tail = tail_source[-8:]
+        tail = tail_source[-max_msgs:]
         out: list[dict[str, Any]] = []
         if system_message:
-            out.append(system_message)
-        out.extend(tail)
-        return out
+            out.append(self._compact_message_for_retry(system_message, max_chars=per_message_max_chars))
+        out.extend(
+            [
+                self._compact_message_for_retry(message, max_chars=per_message_max_chars)
+                for message in tail
+            ]
+        )
+        compacted = self._apply_sliding_window(
+            "semantic_retry",
+            out,
+            max_msgs=max(len(out), 1),
+            max_chars=max_chars,
+            trim_reason="semantic_retry_window",
+        )
+        if len(compacted) != len(messages_to_send) or self._messages_size(compacted) != self._messages_size(messages_to_send):
+            logger.warning(
+                "retry_context_compacted",
+                before_count=len(messages_to_send),
+                after_count=len(compacted),
+                before_chars=self._messages_size(messages_to_send),
+                after_chars=self._messages_size(compacted),
+                max_msgs=max_msgs,
+                max_chars=max_chars,
+                per_message_max_chars=per_message_max_chars,
+            )
+        return compacted
+
+    @staticmethod
+    def _truncate_middle_text(text: str, *, max_chars: int) -> str:
+        """
+        Сокращает длинный текст, сохраняя начало и конец.
+
+        Это безопаснее для retry-контекста, чем слепо отрезать хвост:
+        часто в конце реплики лежит самая свежая инструкция/ошибка.
+        """
+        payload = str(text or "")
+        limit = max(1, int(max_chars))
+        if len(payload) <= limit:
+            return payload
+
+        marker = "\n[...TRUNCATED MIDDLE...]\n"
+        if limit <= len(marker) + 16:
+            return payload[:limit]
+
+        head_len = max(8, (limit - len(marker)) // 2)
+        tail_len = max(8, limit - len(marker) - head_len)
+        return f"{payload[:head_len]}{marker}{payload[-tail_len:]}"
+
+    def _compact_message_for_retry(self, message: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+        """
+        Поджимает отдельное сообщение для retry-бюджета.
+
+        Нужен именно на уровне сообщения, потому что один огромный user-prompt
+        может съесть весь retry budget даже при коротком списке сообщений.
+        """
+        if not isinstance(message, dict):
+            return message
+
+        cloned = dict(message)
+        content = cloned.get("content")
+        if isinstance(content, str):
+            cloned["content"] = self._truncate_middle_text(content, max_chars=max_chars)
+            return cloned
+        if isinstance(content, list):
+            compacted_parts: list[Any] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    compacted_parts.append(part)
+                    continue
+                part_type = str(part.get("type", "") or "").strip().lower()
+                if part_type == "text":
+                    compacted_parts.append(
+                        {
+                            **part,
+                            "text": self._truncate_middle_text(str(part.get("text", "") or ""), max_chars=max_chars),
+                        }
+                    )
+                    continue
+                compacted_parts.append(part)
+            cloned["content"] = compacted_parts
+        return cloned
 
     @staticmethod
     def _strip_image_parts_for_text_route(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -472,6 +627,391 @@ class OpenClawClient:
             return key, "env:OPENAI_API_KEY"
         return "", "missing"
 
+    @staticmethod
+    def _normalize_usage_snapshot(usage: dict[str, Any] | None) -> dict[str, int] | None:
+        """
+        Нормализует usage payload к одному формату.
+
+        Почему это нужно:
+        - разные OpenAI-compatible прокси могут отдавать usage в SSE не на каждом чанке;
+        - нам важно учитывать только осмысленный snapshot, а не пустые `{}`.
+        """
+        payload = usage or {}
+        prompt_tokens = int(payload.get("prompt_tokens", payload.get("input_tokens", 0)) or 0)
+        completion_tokens = int(payload.get("completion_tokens", payload.get("output_tokens", 0)) or 0)
+        total_tokens = int(payload.get("total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+        if prompt_tokens <= 0 and completion_tokens <= 0 and total_tokens <= 0:
+            return None
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    @staticmethod
+    def _extract_text_from_message(message: dict[str, Any]) -> str:
+        """
+        Извлекает текстовую часть message для грубой оценки usage.
+
+        Важно:
+        - считаем только текстовые части;
+        - image/audio payload в оценку не включаем, чтобы не завышать токены.
+        """
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+
+        chunks: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = str(part.get("type", "") or "").strip().lower()
+            if part_type in {"text", "input_text"}:
+                chunks.append(str(part.get("text", "") or ""))
+        return "\n".join(chunk for chunk in chunks if chunk)
+
+    @staticmethod
+    def _estimate_text_tokens(text: str) -> int:
+        """
+        Грубая оценка числа токенов без внешнего tokenizer.
+
+        Почему так:
+        - OpenClaw/Gateway в stream-режиме может не вернуть usage вообще;
+        - для ops/runtime-аналитики лучше иметь честную approximate-оценку,
+          чем вечный `no_usage_yet`.
+        """
+        compact = " ".join(str(text or "").split())
+        if not compact:
+            return 0
+        char_based = max(1, (len(compact) + 3) // 4)
+        word_based = len(compact.split())
+        return min(len(compact), max(char_based, word_based))
+
+    def _estimate_usage_snapshot(
+        self,
+        messages: list[dict[str, Any]],
+        response_text: str,
+    ) -> dict[str, int] | None:
+        """
+        Строит approximate usage, если backend не прислал нативный usage.
+        """
+        prompt_text = "\n".join(
+            fragment
+            for fragment in (self._extract_text_from_message(message) for message in messages)
+            if fragment
+        )
+        prompt_tokens = self._estimate_text_tokens(prompt_text)
+        completion_tokens = self._estimate_text_tokens(response_text)
+        total_tokens = prompt_tokens + completion_tokens
+        if total_tokens <= 0:
+            return None
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    @classmethod
+    def _build_native_lm_input(
+        cls,
+        messages: list[dict[str, Any]],
+        *,
+        previous_response_id: str = "",
+    ) -> str:
+        """
+        Собирает `input` для нативного LM Studio `/api/v1/chat`.
+
+        Почему это отдельно:
+        - нативный endpoint stateful и продолжает диалог через `previous_response_id`;
+        - при cold-start нужно компактно вложить system prompt и уже накопленный
+          текстовый контекст;
+        - на follow-up с `previous_response_id` передаём только новый user turn.
+        """
+        normalized_prev = str(previous_response_id or "").strip()
+
+        latest_user = ""
+        system_prompt = ""
+        dialogue_lines: list[str] = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "") or "").strip().lower()
+            text = cls._extract_text_from_message(item).strip()
+            if not text:
+                continue
+            if role == "system" and not system_prompt:
+                system_prompt = text
+                continue
+            if role == "user":
+                latest_user = text
+                dialogue_lines.append(f"Пользователь: {text}")
+            elif role == "assistant":
+                dialogue_lines.append(f"Ассистент: {text}")
+            else:
+                dialogue_lines.append(f"{role or 'Сообщение'}: {text}")
+
+        if normalized_prev:
+            return latest_user
+
+        sections: list[str] = []
+        if system_prompt:
+            sections.append(f"Системная инструкция:\n{system_prompt}")
+        if dialogue_lines:
+            sections.append("Контекст диалога:\n" + "\n\n".join(dialogue_lines))
+        return "\n\n".join(section for section in sections if section).strip()
+
+    @staticmethod
+    def _extract_native_lm_output_text(payload: dict[str, Any]) -> str:
+        """
+        Извлекает пользовательский текст из ответа `/api/v1/chat`.
+
+        Важно:
+        - reasoning-блоки намеренно игнорируем;
+        - берём только финальные message/output_text фрагменты.
+        """
+        direct_output_text = str(payload.get("output_text", "") or "").strip()
+        if direct_output_text:
+            return direct_output_text
+
+        output = payload.get("output")
+        if not isinstance(output, list):
+            return ""
+
+        chunks: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type", "") or "").strip().lower()
+            if item_type not in {"message", "output_text"}:
+                continue
+            content = item.get("content")
+            if isinstance(content, str):
+                text = content.strip()
+                if text:
+                    chunks.append(text)
+                continue
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = str(part.get("type", "") or "").strip().lower()
+                    if part_type not in {"text", "output_text"}:
+                        continue
+                    text = str(part.get("text", "") or "").strip()
+                    if text:
+                        chunks.append(text)
+        return "\n".join(chunk for chunk in chunks if chunk).strip()
+
+    @staticmethod
+    def _extract_native_lm_stats(payload: dict[str, Any]) -> dict[str, int]:
+        """
+        Нормализует `stats` из LM Studio `/api/v1/chat`.
+
+        Почему это важно:
+        - в текущем API нет явного `finish_reason`, как в `/v1/chat/completions`;
+        - зато есть `stats.total_output_tokens`, по которому видно, что ответ
+          упёрся в установленный лимит.
+        """
+        raw_stats = payload.get("stats")
+        if not isinstance(raw_stats, dict):
+            return {}
+        normalized: dict[str, int] = {}
+        for key in ("input_tokens", "total_output_tokens", "reasoning_output_tokens"):
+            try:
+                normalized[key] = int(raw_stats.get(key) or 0)
+            except (TypeError, ValueError):
+                normalized[key] = 0
+        return normalized
+
+    @staticmethod
+    def _merge_continuation_text(base_text: str, extra_text: str) -> str:
+        """
+        Склеивает основной текст и автопродолжение, убирая простой overlap.
+
+        Почему не просто `base + "\\n\\n" + extra`:
+        - модель иногда повторяет конец предыдущего блока или заголовок;
+        - даже грубый overlap-search заметно улучшает читаемость Telegram-ответа.
+        """
+        base = str(base_text or "").rstrip()
+        extra = str(extra_text or "").lstrip()
+        if not base:
+            return extra
+        if not extra:
+            return base
+        max_overlap = min(len(base), len(extra), 240)
+        for overlap in range(max_overlap, 24, -1):
+            if base[-overlap:] == extra[:overlap]:
+                return (base + extra[overlap:]).strip()
+        return f"{base}\n\n{extra}".strip()
+
+    @staticmethod
+    def _native_lm_hits_output_cap(
+        stats: dict[str, int],
+        *,
+        max_output_tokens: int | None,
+        margin: int = 8,
+    ) -> bool:
+        """
+        Определяет, что нативный ответ, вероятно, уткнулся в лимит вывода.
+
+        Эвристика:
+        - LM Studio `/api/v1/chat` не отдаёт `finish_reason`;
+        - если `total_output_tokens` почти равен `max_output_tokens`, ответ почти
+          наверняка обрезан по лимиту, а не завершён естественно.
+        """
+        if not isinstance(max_output_tokens, int) or max_output_tokens <= 0:
+            return False
+        total_output_tokens = int((stats or {}).get("total_output_tokens") or 0)
+        if total_output_tokens <= 0:
+            return False
+        safe_margin = max(0, int(margin))
+        threshold = max(1, max_output_tokens - safe_margin)
+        return total_output_tokens >= threshold
+
+    async def _direct_lm_native_chat(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        chat_id: str,
+        messages_to_send: list[dict[str, Any]],
+        model_hint: str,
+        max_output_tokens: int | None = None,
+    ) -> str | None:
+        """
+        Прямой нативный запрос в LM Studio `/api/v1/chat`.
+
+        Возвращает готовый текст или `None`, если endpoint не дал финального
+        assistant message. В таком случае верхний слой безопасно уходит в compat fallback.
+        """
+        state = self._lm_native_chat_state.get(chat_id) or {}
+        previous_response_id = ""
+        normalized_model = str(model_hint or "").strip()
+        if str(state.get("model", "") or "").strip() == normalized_model:
+            previous_response_id = str(state.get("response_id", "") or "").strip()
+        elif state:
+            self._lm_native_chat_state.pop(chat_id, None)
+
+        async def _run_once(
+            prev_response_id: str,
+            *,
+            input_override: str = "",
+        ) -> tuple[str, str, dict[str, int]]:
+            input_payload = str(input_override or "").strip()
+            if not input_payload:
+                input_payload = self._build_native_lm_input(
+                    messages_to_send,
+                    previous_response_id=prev_response_id,
+                )
+            if not input_payload:
+                return "", "", {}
+            payload: dict[str, Any] = {
+                "model": normalized_model or "local",
+                "input": input_payload,
+            }
+            if prev_response_id:
+                payload["previous_response_id"] = prev_response_id
+            if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+                payload["max_output_tokens"] = max_output_tokens
+            reasoning_mode = str(
+                getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or ""
+            ).strip().lower()
+            if reasoning_mode:
+                payload["reasoning"] = reasoning_mode
+            response = await client.post("/api/v1/chat", json=payload)
+            if response.status_code != 200:
+                return "", "", {}
+            data = response.json()
+            return (
+                self._extract_native_lm_output_text(data),
+                str(data.get("response_id", "") or "").strip(),
+                self._extract_native_lm_stats(data),
+            )
+
+        text, response_id, stats = await _run_once(previous_response_id)
+        if not text and previous_response_id:
+            # После рестарта LM Studio прежний `response_id` может стать недействительным.
+            # Делаем один stateless retry, а не сохраняем сломанное состояние.
+            self._lm_native_chat_state.pop(chat_id, None)
+            text, response_id, stats = await _run_once("")
+
+        if not text:
+            return None
+
+        merged_text = text
+        current_response_id = response_id
+        auto_continue_rounds = max(
+            0,
+            int(getattr(config, "LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS", 2) or 0),
+        )
+        output_cap_margin = max(
+            0,
+            int(getattr(config, "LM_STUDIO_NATIVE_OUTPUT_CAP_MARGIN", 8) or 0),
+        )
+        continuation_prompt = (
+            "Продолжай ответ с того места, где остановился. "
+            "Не повторяй уже написанное. Закончи мысль и список полностью."
+        )
+
+        for _ in range(auto_continue_rounds):
+            if not current_response_id:
+                break
+            if not self._native_lm_hits_output_cap(
+                stats,
+                max_output_tokens=max_output_tokens,
+                margin=output_cap_margin,
+            ):
+                break
+            next_text, next_response_id, next_stats = await _run_once(
+                current_response_id,
+                input_override=continuation_prompt,
+            )
+            next_text = str(next_text or "").strip()
+            if not next_text:
+                break
+            if self._detect_semantic_error(next_text):
+                break
+            merged_text = self._merge_continuation_text(merged_text, next_text)
+            current_response_id = next_response_id or current_response_id
+            stats = next_stats
+
+        if current_response_id:
+            self._lm_native_chat_state[chat_id] = {
+                "response_id": current_response_id,
+                "model": normalized_model,
+            }
+        return merged_text
+
+    def _commit_usage_snapshot(self, usage: dict[str, Any] | None, *, model_id: str) -> None:
+        """
+        Коммитит usage один раз на completion и зеркалит его в Cost Analytics.
+
+        Это восстанавливает связку, потерянную после рефакторинга:
+        - `_usage_stats` остаётся совместимым источником для старых API;
+        - `cost_analytics` начинает видеть реальные runtime-вызовы.
+        """
+        normalized = self._normalize_usage_snapshot(usage)
+        if not normalized:
+            return
+
+        self._usage_stats["input_tokens"] += int(normalized["prompt_tokens"])
+        self._usage_stats["output_tokens"] += int(normalized["completion_tokens"])
+        self._usage_stats["total_tokens"] += int(normalized["total_tokens"])
+
+        try:
+            from .model_manager import model_manager  # lazy import
+
+            analytics = getattr(model_manager, "cost_analytics", None)
+            if analytics and hasattr(analytics, "record_usage"):
+                analytics.record_usage(normalized, model_id=model_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "cost_analytics_record_usage_failed",
+                model=model_id,
+                error=str(exc),
+            )
+
     async def _openclaw_completion_once(
         self,
         *,
@@ -485,12 +1025,16 @@ class OpenClawClient:
             "messages": messages_to_send,
             "stream": True,
             "model": model_id,
+            # Просим нативный usage у OpenAI-compatible backend, если он умеет
+            # возвращать его в финальном SSE-чанке.
+            "stream_options": {"include_usage": True},
         }
         if isinstance(max_output_tokens, int) and max_output_tokens > 0:
             # Совместимый лимит длины ответа для OpenAI-совместимых /v1/chat/completions.
             payload["max_tokens"] = max_output_tokens
 
         full_response = ""
+        usage_snapshot: dict[str, int] | None = None
         retry_after_token_refresh = False
         async with self._http_client.stream(
             "POST",
@@ -552,10 +1096,9 @@ class OpenClawClient:
                         data = json.loads(data_str)
                     except json.JSONDecodeError:
                         continue
-                    usage = data.get("usage") or {}
-                    self._usage_stats["input_tokens"] += int(usage.get("prompt_tokens", 0) or 0)
-                    self._usage_stats["output_tokens"] += int(usage.get("completion_tokens", 0) or 0)
-                    self._usage_stats["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
+                    normalized_usage = self._normalize_usage_snapshot(data.get("usage"))
+                    if normalized_usage:
+                        usage_snapshot = normalized_usage
                     delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
                     if delta:
                         full_response += delta
@@ -565,10 +1108,24 @@ class OpenClawClient:
                         data = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    normalized_usage = self._normalize_usage_snapshot(data.get("usage"))
+                    if normalized_usage:
+                        usage_snapshot = normalized_usage
                     maybe_content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
                     if maybe_content:
                         full_response += maybe_content
 
+        if not usage_snapshot and full_response.strip():
+            usage_snapshot = self._estimate_usage_snapshot(messages_to_send, full_response)
+            if usage_snapshot:
+                logger.info(
+                    "openclaw_usage_estimated_from_text",
+                    model=model_id,
+                    prompt_tokens=usage_snapshot["prompt_tokens"],
+                    completion_tokens=usage_snapshot["completion_tokens"],
+                    total_tokens=usage_snapshot["total_tokens"],
+                )
+        self._commit_usage_snapshot(usage_snapshot, model_id=model_id)
         return full_response.strip()
 
     async def _resolve_local_model_for_retry(
@@ -649,12 +1206,52 @@ class OpenClawClient:
             return ""
         return candidate
 
+    @staticmethod
+    def _allow_alt_local_vision_recovery() -> bool:
+        """
+        Разрешён ли авто-переход на альтернативную локальную vision-модель.
+
+        Почему ограничиваем:
+        - при `LOCAL_PREFERRED_VISION_MODEL=auto` пользователь ожидает, что фото
+          уйдёт в cloud fallback, если text primary не умеет vision;
+        - без этого recovery-path молча выгружает Nemotron и поднимает случайный
+          маленький VL-кандидат, что даёт неожиданный язык/качество ответа.
+        """
+        preferred = str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
+        return preferred not in {"", "auto"}
+
+    def _should_skip_local_photo_route(
+        self,
+        *,
+        selected_model: str,
+        model_manager: Any,
+        has_photo: bool,
+        force_cloud: bool,
+    ) -> bool:
+        """
+        Нужно ли жёстко увести фото-запрос из локального маршрута в cloud.
+
+        Почему это важно:
+        - при `LOCAL_PREFERRED_VISION_MODEL=auto` пользователь ожидает, что фото
+          не выгрузит текстовый primary-маршрут ради случайной маленькой vision-модели;
+        - на практике это приводило к автоподгрузке `qwen2-vl` и ответам на
+          английском вместо ожидаемого локального/облачного русского контура.
+        """
+        if force_cloud or not has_photo:
+            return False
+        if not str(selected_model or "").strip():
+            return False
+        if not model_manager.is_local_model(selected_model):
+            return False
+        return not self._allow_alt_local_vision_recovery()
+
     async def _direct_lm_fallback(
         self,
         *,
         chat_id: str,
         messages_to_send: list[dict[str, Any]],
         model_hint: str,
+        has_photo: bool = False,
         max_output_tokens: int | None = None,
     ) -> str | None:
         """Прямой fallback в LM Studio (минуя OpenClaw)."""
@@ -663,16 +1260,42 @@ class OpenClawClient:
         if not await is_lm_studio_available(config.LM_STUDIO_URL, timeout=5.0):
             return None
 
+        messages_for_lm = self._apply_local_route_history_budget(
+            chat_id,
+            messages_to_send,
+            has_photo=has_photo,
+            trim_reason="local_direct_fallback",
+        )
+
         try:
-            async with httpx.AsyncClient(base_url=f"{config.LM_STUDIO_URL}/v1", timeout=120) as client:
+            async with httpx.AsyncClient(
+                base_url=str(config.LM_STUDIO_URL or "").rstrip("/"),
+                timeout=120,
+                headers=build_lm_studio_auth_headers(
+                    api_key=getattr(config, "LM_STUDIO_API_KEY", ""),
+                ) or None,
+                verify=False,
+                trust_env=False,
+            ) as client:
+                if not has_photo:
+                    native_text = await self._direct_lm_native_chat(
+                        client=client,
+                        chat_id=chat_id,
+                        messages_to_send=messages_for_lm,
+                        model_hint=model_hint,
+                        max_output_tokens=max_output_tokens,
+                    )
+                    if native_text:
+                        return native_text
+
                 payload = {
-                    "messages": messages_to_send,
+                    "messages": messages_for_lm,
                     "stream": False,
                     "model": model_hint if model_hint else "local",
                 }
                 if isinstance(max_output_tokens, int) and max_output_tokens > 0:
                     payload["max_tokens"] = max_output_tokens
-                resp = await client.post("/chat/completions", json=payload)
+                resp = await client.post("/v1/chat/completions", json=payload)
                 if resp.status_code != 200:
                     return None
                 data = resp.json()
@@ -776,6 +1399,7 @@ class OpenClawClient:
                 logger.debug("model_manager_mark_request_started_failed", error=str(exc))
 
         has_photo = bool(images)
+        effective_force_cloud = bool(force_cloud)
         selected_model = ""
         attempt_model = ""
         messages_to_send: list[dict[str, Any]] = []
@@ -784,7 +1408,7 @@ class OpenClawClient:
             selected_model = await model_manager.get_best_model(has_photo=has_photo)
             # В force_cloud режиме не позволяем оставаться на локальной модели,
             # иначе runtime-route показывает local и ломает "cloud truth".
-            if force_cloud and model_manager.is_local_model(selected_model):
+            if effective_force_cloud and model_manager.is_local_model(selected_model):
                 cloud_candidate = await self._pick_cloud_retry_model(
                     model_manager=model_manager,
                     current_model=selected_model,
@@ -802,7 +1426,34 @@ class OpenClawClient:
                         "force_cloud_no_cloud_candidate_available",
                         requested=selected_model,
                     )
-            if not force_cloud and model_manager.is_local_model(selected_model):
+            elif self._should_skip_local_photo_route(
+                selected_model=selected_model,
+                model_manager=model_manager,
+                has_photo=has_photo,
+                force_cloud=effective_force_cloud,
+            ):
+                # Фото в auto-vision режиме не должно откатываться в локальный recovery:
+                # если локальная vision-модель не задана явно, считаем такой маршрут
+                # фактически force-cloud даже если исходный запрос пришёл без force_cloud.
+                effective_force_cloud = True
+                cloud_candidate = await self._pick_cloud_retry_model(
+                    model_manager=model_manager,
+                    current_model=selected_model,
+                    has_photo=True,
+                )
+                if cloud_candidate:
+                    logger.info(
+                        "photo_auto_mode_remapped_local_selection_to_cloud",
+                        requested=selected_model,
+                        remapped=cloud_candidate,
+                    )
+                    selected_model = cloud_candidate
+                else:
+                    logger.warning(
+                        "photo_auto_mode_no_cloud_candidate_available",
+                        requested=selected_model,
+                    )
+            if not effective_force_cloud and model_manager.is_local_model(selected_model):
                 local_ready = await model_manager.ensure_model_loaded(
                     selected_model,
                     has_photo=has_photo,
@@ -837,29 +1488,37 @@ class OpenClawClient:
             messages_to_send = self._apply_sliding_window(chat_id, self._sessions[chat_id])
             if not has_photo:
                 messages_to_send = self._strip_image_parts_for_text_route(messages_to_send)
+            if not effective_force_cloud and model_manager.is_local_model(selected_model):
+                messages_to_send = self._apply_local_route_history_budget(
+                    chat_id,
+                    messages_to_send,
+                    has_photo=has_photo,
+                    trim_reason="local_primary_route",
+                )
 
             logger.info(
                 "openclaw_stream_start",
                 chat_id=chat_id,
                 model=selected_model,
                 has_photo=has_photo,
-                force_cloud=force_cloud,
+                force_cloud=effective_force_cloud,
             )
             self._set_last_runtime_route(
                 channel="planning",
                 model=selected_model,
                 route_reason="selected_model",
                 route_detail="Определена целевая модель перед выполнением запроса",
-                force_cloud=force_cloud,
+                force_cloud=effective_force_cloud,
             )
 
             # Жесткий local-first: если выбран локальный маршрут, сначала бьем напрямую в LM Studio.
             # Это исключает ситуацию, когда OpenClaw runtime игнорирует модель и уходит в cloud.
-            if not force_cloud and model_manager.is_local_model(selected_model):
+            if not effective_force_cloud and model_manager.is_local_model(selected_model):
                 lm_text = await self._direct_lm_fallback(
                     chat_id=chat_id,
                     messages_to_send=messages_to_send,
                     model_hint=selected_model,
+                    has_photo=has_photo,
                     max_output_tokens=max_output_tokens,
                 )
                 if lm_text:
@@ -869,7 +1528,7 @@ class OpenClawClient:
                         model=selected_model,
                         route_reason="local_direct_primary",
                         route_detail="Ответ получен напрямую из LM Studio",
-                        force_cloud=force_cloud,
+                        force_cloud=effective_force_cloud,
                     )
                     self._finalize_chat_response(chat_id, lm_text)
                     yield lm_text
@@ -989,7 +1648,7 @@ class OpenClawClient:
                 # исключаем текущую локальную модель для фото и уходим на альтернативу.
                 if semantic["code"] == "vision_addon_missing" and has_photo:
                     if (
-                        not force_cloud
+                        not effective_force_cloud
                         and model_manager.is_local_model(attempt_model)
                         and hasattr(model_manager, "_exclude_local_model")
                     ):
@@ -1003,7 +1662,11 @@ class OpenClawClient:
                             pass
 
                     alt_local = ""
-                    if not force_cloud and hasattr(model_manager, "_local_candidates"):
+                    if (
+                        not effective_force_cloud
+                        and self._allow_alt_local_vision_recovery()
+                        and hasattr(model_manager, "_local_candidates")
+                    ):
                         try:
                             local_candidates = await model_manager._local_candidates(has_photo=True)  # noqa: SLF001
                         except Exception:
@@ -1021,6 +1684,14 @@ class OpenClawClient:
                             attempt_model = alt_local
                             self._cloud_tier_state["last_recovery_action"] = "switch_to_alt_local_vision"
                             continue
+                    elif not effective_force_cloud:
+                        logger.info(
+                            "vision_addon_missing_skips_alt_local_auto_mode",
+                            current_model=attempt_model,
+                            preferred_vision=str(
+                                getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or ""
+                            ),
+                        )
 
                     cloud_candidate = await self._pick_cloud_retry_model(
                         model_manager=model_manager,
@@ -1046,7 +1717,7 @@ class OpenClawClient:
                 } | LEGACY_AUTH_CODES
                 if (
                     semantic["code"] in local_recovery_codes
-                    and self._local_recovery_enabled(force_cloud=force_cloud)
+                    and self._local_recovery_enabled(force_cloud=effective_force_cloud, has_photo=has_photo)
                     and not tried_local
                 ):
                     tried_local = True
@@ -1062,6 +1733,12 @@ class OpenClawClient:
                         )
                         if loaded:
                             attempt_model = local_model
+                            messages_to_send = self._apply_local_route_history_budget(
+                                chat_id,
+                                messages_to_send,
+                                has_photo=has_photo,
+                                trim_reason="local_recovery_route",
+                            )
                             self._cloud_tier_state["last_recovery_action"] = "switch_to_local"
                             continue
                     if not tried_cloud_after_local:
@@ -1090,13 +1767,14 @@ class OpenClawClient:
                 # Для auth-ошибок fallback не применяем, чтобы не маскировать
                 # реальную проблему "configured but unauthorized".
                 if (
-                    self._local_recovery_enabled(force_cloud=force_cloud)
+                    self._local_recovery_enabled(force_cloud=effective_force_cloud, has_photo=has_photo)
                     and semantic_after["code"] not in LEGACY_AUTH_CODES
                 ):
                     lm_text = await self._direct_lm_fallback(
                         chat_id=chat_id,
                         messages_to_send=messages_to_send,
                         model_hint=attempt_model,
+                        has_photo=has_photo,
                         max_output_tokens=max_output_tokens,
                     )
                     if lm_text:
@@ -1106,7 +1784,7 @@ class OpenClawClient:
                             model=attempt_model,
                             route_reason="local_direct_recovery",
                             route_detail="Семантическая ошибка OpenClaw, восстановление через прямой LM Studio",
-                            force_cloud=force_cloud,
+                            force_cloud=effective_force_cloud,
                         )
                         semantic_after = None
 
@@ -1119,7 +1797,7 @@ class OpenClawClient:
                     route_detail=semantic_after["message"],
                     status="error",
                     error_code=code,
-                    force_cloud=force_cloud,
+                    force_cloud=effective_force_cloud,
                 )
                 if code == "quota_exceeded":
                     user_text = "❌ Квота облачных ключей исчерпана. Переключись на локальную модель: !model local"
@@ -1158,7 +1836,7 @@ class OpenClawClient:
                     model=attempt_model,
                     route_reason="openclaw_response_ok",
                     route_detail="Ответ получен через OpenClaw API",
-                    force_cloud=force_cloud,
+                    force_cloud=effective_force_cloud,
                 )
 
             self._finalize_chat_response(chat_id, final_response)
@@ -1178,7 +1856,7 @@ class OpenClawClient:
                 route_detail=semantic["message"],
                 status="error",
                 error_code=code,
-                force_cloud=force_cloud,
+                force_cloud=effective_force_cloud,
             )
             if code in LEGACY_AUTH_CODES:
                 yield "❌ Облачный ключ не прошёл авторизацию. Проверь ключ/токен."
@@ -1193,7 +1871,7 @@ class OpenClawClient:
                 route_detail=str(exc),
                 status="error",
                 error_code="provider_timeout",
-                force_cloud=force_cloud,
+                force_cloud=effective_force_cloud,
             )
             yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
         except (httpx.ConnectError, httpx.RequestError) as exc:
@@ -1205,19 +1883,20 @@ class OpenClawClient:
                 route_detail=str(exc),
                 status="error",
                 error_code="transport_error",
-                force_cloud=force_cloud,
+                force_cloud=effective_force_cloud,
             )
             yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
         except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
             logger.error("openclaw_stream_error", error=str(exc))
-            if force_cloud:
+            if effective_force_cloud:
                 yield "❌ Облачный сервис временно недоступен. Попробуй позже или переключись на !model local."
                 return
-            if self._local_recovery_enabled(force_cloud=force_cloud):
+            if self._local_recovery_enabled(force_cloud=effective_force_cloud, has_photo=has_photo):
                 lm_text = await self._direct_lm_fallback(
                     chat_id=chat_id,
                     messages_to_send=messages_to_send,
                     model_hint=attempt_model or selected_model,
+                    has_photo=has_photo,
                     max_output_tokens=max_output_tokens,
                 )
                 if lm_text:
@@ -1226,7 +1905,7 @@ class OpenClawClient:
                         model=attempt_model or selected_model,
                         route_reason="local_direct_exception_fallback",
                         route_detail="Ошибка OpenClaw транспорта, выполнен прямой fallback в LM Studio",
-                        force_cloud=force_cloud,
+                        force_cloud=effective_force_cloud,
                     )
                     yield lm_text
                     return
@@ -1237,7 +1916,7 @@ class OpenClawClient:
                 route_detail=str(exc),
                 status="error",
                 error_code="transport_error",
-                force_cloud=force_cloud,
+                force_cloud=effective_force_cloud,
             )
             yield "❌ Ошибка облака. Попробуй позже или переключись на локальную модель: !model local."
         finally:
@@ -1251,6 +1930,7 @@ class OpenClawClient:
         """Очищает историю чата (память и кэш)."""
         if chat_id in self._sessions:
             del self._sessions[chat_id]
+        self._lm_native_chat_state.pop(chat_id, None)
         history_cache.delete(f"chat_history:{chat_id}")
         logger.info("session_cleared", chat_id=chat_id)
 

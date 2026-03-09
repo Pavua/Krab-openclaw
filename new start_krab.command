@@ -11,6 +11,7 @@ OPENCLAW_PID_FILE="$DIR/.openclaw.pid"
 OPENCLAW_OWNER_FILE="$DIR/.openclaw.owner"
 GATEWAY_OWNED_BY_THIS=0
 KRAB_PROC_PATTERN="[Pp]ython.*src\\.main"
+OPENCLAW_REPAIR_RESTART_RECOMMENDED=0
 
 echo "🦀 Launching Krab Userbot..."
 echo "📂 Directory: $DIR"
@@ -61,6 +62,54 @@ wait_gateway_listening() {
         step=$((step + 1))
     done
     return 1
+}
+
+probe_gateway_health() {
+    [ -n "${OPENCLAW_BIN:-}" ] || return 1
+    OPENCLAW_GATEWAY_BIN="$OPENCLAW_BIN" python3 - <<'PY'
+import os
+import subprocess
+import sys
+
+binary = str(os.environ.get("OPENCLAW_GATEWAY_BIN", "") or "").strip()
+if not binary:
+    raise SystemExit(1)
+
+try:
+    result = subprocess.run(
+        [binary, "status"],
+        capture_output=True,
+        text=True,
+        timeout=6,
+    )
+except Exception:
+    raise SystemExit(1)
+
+combined = ((result.stdout or "") + "\n" + (result.stderr or "")).lower()
+raise SystemExit(0 if "reachable: yes" in combined else 1)
+PY
+}
+
+wait_gateway_healthy() {
+    local timeout_sec="${1:-60}"
+    local step=0
+    local max_steps=$((timeout_sec * 2))
+    while [ "$step" -lt "$max_steps" ]; do
+        if probe_gateway_health; then
+            return 0
+        fi
+        sleep 0.5
+        step=$((step + 1))
+    done
+    return 1
+}
+
+restart_stale_gateway() {
+    local reason="${1:-stale}"
+    echo "🔄 OpenClaw gateway будет перезапущен: $reason"
+    "$OPENCLAW_BIN" gateway stop >/dev/null 2>&1 || true
+    pkill -f "openclaw( |$).*gateway( |$)|openclaw-gateway" >/dev/null 2>&1 || true
+    sleep 1
 }
 
 disable_legacy_launchd_core() {
@@ -196,6 +245,12 @@ else
     echo "⚠️ .env file not found!"
 fi
 
+# Если флаг scheduler явно не задан, включаем runtime-reminders по умолчанию.
+# Это сохраняет стабильное поведение после миграций/чисток .env.
+if [ -z "${SCHEDULER_ENABLED:-}" ]; then
+    export SCHEDULER_ENABLED=1
+fi
+
 # === Gemini auth mode hardening ===
 # Принудительно используем AI Studio API-key режим, а не Vertex/OAuth.
 export GOOGLE_GENAI_USE_VERTEXAI="false"
@@ -208,7 +263,27 @@ unset VERTEX_AI
 # === Runtime repair OpenClaw (безопасная автопочинка перед стартом) ===
 if [ -f "scripts/openclaw_runtime_repair.py" ]; then
     echo "🛠️ Repairing OpenClaw runtime config..."
-    python3 scripts/openclaw_runtime_repair.py --dm-policy keep >/dev/null 2>&1 || true
+    # Внешние каналы не должны держать inline reply-tag'и в пользовательском тексте.
+    OPENCLAW_REPAIR_JSON="$(python3 scripts/openclaw_runtime_repair.py --dm-policy keep --reply-to-mode off 2>/dev/null || true)"
+    if [ -n "${OPENCLAW_REPAIR_JSON:-}" ]; then
+        export OPENCLAW_REPAIR_JSON
+        OPENCLAW_REPAIR_RESTART_RECOMMENDED="$(python3 - <<'PY'
+import json
+import os
+
+raw = str(os.environ.get("OPENCLAW_REPAIR_JSON", "") or "").strip()
+recommended = 0
+if raw:
+    try:
+        payload = json.loads(raw)
+        recommended = 1 if bool(payload.get("gateway_restart_recommended", False)) else 0
+    except Exception:
+        recommended = 0
+print(recommended)
+PY
+)"
+        unset OPENCLAW_REPAIR_JSON
+    fi
 fi
 
 # === OpenClaw Gateway ===
@@ -223,8 +298,20 @@ if [ -n "$OPENCLAW_BIN" ]; then
     launchctl bootout gui/$(id -u)/ai.openclaw.lab >/dev/null 2>&1 || true
     launchctl bootout user/$(id -u)/ai.openclaw.lab >/dev/null 2>&1 || true
 
-    # Если gateway уже поднят, не перезапускаем его без причины: это снижает шанс гонок и SIGTERM-флаппинга.
-    if is_gateway_listening; then
+    # Если repair реально менял runtime-файлы, живой gateway нужно перезапустить,
+    # иначе он может вернуть старые in-memory sessions и откатить fix.
+    if is_gateway_listening && [ "${OPENCLAW_REPAIR_RESTART_RECOMMENDED:-0}" = "1" ]; then
+        restart_stale_gateway "repair изменил runtime-состояние"
+    fi
+
+    # Открытый порт ещё не означает живой gateway: stale-процесс может
+    # держать 18789, но не отвечать на status/RPC и ломать внешние каналы.
+    if is_gateway_listening && ! probe_gateway_health; then
+        restart_stale_gateway "порт 18789 слушает, но health-check не проходит"
+    fi
+
+    # Если gateway уже поднят и repair не трогал state, повторно его не дёргаем.
+    if is_gateway_listening && probe_gateway_health; then
         echo "✅ OpenClaw gateway уже слушает 18789, повторный старт не требуется."
         GATEWAY_OWNED_BY_THIS=0
     else
@@ -240,23 +327,56 @@ if [ -n "$OPENCLAW_BIN" ]; then
         "$OPENCLAW_BIN" gateway stop >/dev/null 2>&1 || true
 
         echo "🦞 Starting OpenClaw Gateway..."
-        # В текущих версиях OpenClaw стабильный RPC/browser relay контур
-        # поднимается через `openclaw gateway` (без `run`).
-        nohup "$OPENCLAW_BIN" gateway --port 18789 > openclaw.log 2>&1 &
+        # Начиная с OpenClaw 2026.3.x foreground-gateway поднимается через
+        # `openclaw gateway run`. Вызов без `run` лишь печатает help и сразу
+        # завершает процесс, из-за чего launcher видел "старт", но порт 18789
+        # так и не начинал слушать.
+        nohup "$OPENCLAW_BIN" gateway run --port 18789 > openclaw.log 2>&1 &
         NEW_GATEWAY_PID=$!
         echo "$NEW_GATEWAY_PID" > "$OPENCLAW_PID_FILE"
         echo "$$" > "$OPENCLAW_OWNER_FILE"
         GATEWAY_OWNED_BY_THIS=1
         echo "✅ OpenClaw старт-команда отправлена (PID $NEW_GATEWAY_PID)"
 
-        if wait_gateway_listening 20; then
-            echo "✅ OpenClaw gateway слушает порт 18789."
+        if wait_gateway_listening 20 && wait_gateway_healthy 60; then
+            echo "✅ OpenClaw gateway слушает порт 18789 и проходит health-check."
         else
-            echo "❌ OpenClaw gateway не слушает 18789 после ожидания. Проверь openclaw.log."
+            # OpenClaw 2026.3.x иногда успевает открыть сокет раньше, чем
+            # CLI `status` начинает стабильно отвечать. Не объявляем жёсткий
+            # fail мгновенно, если порт уже слушает: runtime ещё раз проверит
+            # здоровье gateway своим HTTP/WebSocket контуром.
+            if is_gateway_listening; then
+                echo "⚠️ OpenClaw gateway уже слушает 18789, но CLI health-check ещё не стабилизировался."
+            else
+                echo "❌ OpenClaw gateway не прошёл health-check после старта. Проверь openclaw.log."
+            fi
         fi
     fi
 else
     echo "⚠️ OpenClaw binary not found. AI features may not work."
+fi
+
+# === Browser Relay (OpenClaw Browser) ===
+# По умолчанию не поднимаем relay-browser автоматически:
+# это открывает отдельное automation Chrome окно и мешает основному рабочему профилю.
+# Если нужен старый eager-start режим для acceptance/debug, включается явно через env.
+OPENCLAW_BROWSER_AUTOSTART_VALUE="${OPENCLAW_BROWSER_AUTOSTART:-0}"
+case "$(printf '%s' "$OPENCLAW_BROWSER_AUTOSTART_VALUE" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on)
+        OPENCLAW_BROWSER_AUTOSTART_ENABLED=1
+        ;;
+    *)
+        OPENCLAW_BROWSER_AUTOSTART_ENABLED=0
+        ;;
+esac
+
+if [ -n "$OPENCLAW_BIN" ] && is_gateway_listening; then
+    if [ "$OPENCLAW_BROWSER_AUTOSTART_ENABLED" -eq 1 ]; then
+        echo "🌐 OpenClaw Browser Relay: автозапуск включён через OPENCLAW_BROWSER_AUTOSTART=1"
+        "$OPENCLAW_BIN" browser start >/dev/null 2>&1 || true
+    else
+        echo "ℹ️ OpenClaw Browser Relay: автозапуск отключён. Для eager-start выставь OPENCLAW_BROWSER_AUTOSTART=1"
+    fi
 fi
 
 # === Запуск бота с авто-рестартом ===

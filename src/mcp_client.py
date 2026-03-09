@@ -1,13 +1,21 @@
+# -*- coding: utf-8 -*-
+"""
+Клиент MCP для Krab/OpenClaw.
 
-import asyncio
-import os
-import json
+Связи:
+- использует единый реестр `src.core.mcp_registry`, чтобы runtime и LM Studio
+  поднимали одинаковые MCP-сервера;
+- сохраняет текущие удобные обёртки (`search_web`, `read_file`, `write_file`,
+  `list_directory`), но больше не хардкодит серверы прямо в коде.
+"""
+
 from contextlib import AsyncExitStack
+import os
 from typing import Optional, List, Dict, Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from structlog import get_logger
-from .config import config
+from .core.mcp_registry import get_managed_mcp_servers, resolve_managed_server_launch
 
 logger = get_logger(__name__)
 
@@ -68,48 +76,73 @@ class MCPClientManager:
             logger.error("mcp_tool_error", server=server_name, tool=tool_name, error=str(e))
             return None
 
+    @staticmethod
+    def _format_tool_result(result: Any) -> str:
+        """Нормализует текстовый ToolResult в обычную строку."""
+        if not result or not hasattr(result, "content"):
+            return ""
+        try:
+            text_results = []
+            for item in result.content:
+                if hasattr(item, "text"):
+                    text_results.append(item.text)
+            return "\n\n".join(text_results)
+        except (AttributeError, IndexError, KeyError, TypeError):
+            return str(result)
+
     async def ensure_server(self, name: str):
         """Гарантирует, что сервер запущен"""
         if name in self.sessions:
             return True
-            
-        if name == "brave":
-            server_script = os.path.join(config.BASE_DIR, "mcp-servers/node_modules/@modelcontextprotocol/server-brave-search/dist/index.js")
-            env = {"BRAVE_API_KEY": config.BRAVE_SEARCH_API_KEY}
-            return await self.start_server("brave", "node", [server_script], env=env)
-            
-        elif name == "filesystem":
-            server_script = os.path.join(config.BASE_DIR, "mcp-servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js")
-            # Разрешаем доступ только к папке проекта
-            allowed_dir = str(config.BASE_DIR)
-            return await self.start_server("filesystem", "node", [server_script, allowed_dir])
-            
-        return False
+
+        aliases = {
+            "brave": "brave-search",
+        }
+        resolved_name = aliases.get(name, name)
+        if resolved_name not in get_managed_mcp_servers():
+            logger.warning("mcp_server_unknown", server=name, resolved=resolved_name)
+            return False
+
+        launch = resolve_managed_server_launch(resolved_name)
+        missing_env = list(launch.get("missing_env", []))
+        if missing_env:
+            logger.warning(
+                "mcp_server_missing_env",
+                server=resolved_name,
+                missing_env=missing_env,
+            )
+            return False
+
+        return await self.start_server(
+            resolved_name,
+            launch["command"],
+            list(launch["args"]),
+            env=launch["env"],
+        )
 
     async def search_web(self, query: str) -> str:
-        """Удобная обертка для поиска через Brave Search MCP"""
-        if not await self.ensure_server("brave"):
-            return "❌ Ошибка запуска поискового сервера MCP."
+        """
+        Веб-поиск через MCP с fallback-порядком.
 
-        # Вызываем инструмент brave_web_search
-        # (Название инструмента может отличаться, проверяем в документации MCP сервера)
-        logger.info("executing_web_search", query=query)
-        result = await self.call_tool("brave", "brave_web_search", {"query": query})
-        
-        if not result or not hasattr(result, 'content'):
-            return "❌ Ничего не найдено."
-            
-        # Форматируем результат (текстовый контент)
-        try:
-            # MCP ToolResult возвращает контент как список MessageContent
-            text_results = []
-            for item in result.content:
-                if hasattr(item, 'text'):
-                    text_results.append(item.text)
-            
-            return "\n\n".join(text_results)
-        except (AttributeError, IndexError, KeyError, TypeError):
-            return str(result)
+        Порядок:
+        1. `brave-search`
+        2. `firecrawl`
+        """
+        search_chain = (
+            ("brave-search", "brave_web_search"),
+            ("firecrawl", "firecrawl_search"),
+        )
+
+        for server_name, tool_name in search_chain:
+            if not await self.ensure_server(server_name):
+                continue
+            logger.info("executing_web_search", query=query, server=server_name, tool=tool_name)
+            result = await self.call_tool(server_name, tool_name, {"query": query})
+            rendered = self._format_tool_result(result)
+            if rendered:
+                return rendered
+
+        return "❌ Поисковые MCP серверы недоступны: проверь BRAVE_SEARCH_API_KEY или FIRECRAWL_API_KEY."
 
     async def read_file(self, path: str) -> str:
         """Чтение файла через MCP"""

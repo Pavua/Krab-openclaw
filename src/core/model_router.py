@@ -38,14 +38,18 @@ class ModelRouter:
         self,
         lm_studio_url: str,
         gemini_api_key: Optional[str],
-        http_client: "AsyncClient",
+        local_http_client: "AsyncClient",
+        cloud_http_client: "AsyncClient",
         fallback_chain: list[str],
         *,
         config_model: Optional[str] = None,
     ):
         self.lm_studio_url = lm_studio_url
         self.gemini_api_key = gemini_api_key
-        self._http_client = http_client
+        # Важно не смешивать LM Studio auth-заголовки с облачными запросами:
+        # Google Gemini должен ходить через отдельный "чистый" клиент.
+        self._local_http_client = local_http_client
+        self._cloud_http_client = cloud_http_client
         self.fallback_chain = fallback_chain
         self.config_model = config_model
 
@@ -60,7 +64,7 @@ class ModelRouter:
         if has_photo:
             return await get_best_cloud_model(
                 self.gemini_api_key,
-                self._http_client,
+                self._cloud_http_client,
                 config_model="google/gemini-2.5-flash",
                 verify_fn=cloud_verify_gemini_access,
             )
@@ -72,7 +76,7 @@ class ModelRouter:
                     try:
                         if await is_lm_studio_available(
                             self.lm_studio_url,
-                            client=self._http_client,
+                            client=self._local_http_client,
                         ):
                             return "local"
                     except Exception as e:
@@ -85,7 +89,7 @@ class ModelRouter:
 
         return await get_best_cloud_model(
             self.gemini_api_key,
-            self._http_client,
+            self._cloud_http_client,
             config_model=self.config_model,
             verify_fn=cloud_verify_gemini_access,
         )
