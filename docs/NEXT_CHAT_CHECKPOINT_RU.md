@@ -6,139 +6,86 @@
 
 # Checkpoint Krab/OpenClaw
 
-Дата: 2026-03-09
+Дата: 2026-03-09 (обновлён после stabilization-final)
 
 ## Текущая оценка готовности
 
-- Общая готовность: примерно 84%
-- Глубина рассуждений для следующего окна: `medium`
+- Общая готовность: **~95%**
+- Все 263 unit-теста проходят (0 failed)
+- Ветка: `codex/stabilization-final` (pushed to GitHub)
+- Глубина рассуждений для следующего окна: `light`
 
-## Что уже доведено
+## Что доведено
 
-- Локальный контур `LM Studio + Nemotron` заметно стабилизирован.
-- Сильно снижен шум `GET /api/v1/models`.
-- Userbot стал правдивее по self-check/model/runtime ответам.
-- Userbot `photo-path` теперь по умолчанию идёт в cloud и не должен самовольно выгружать `Nemotron` ради случайной local vision-модели.
-- Runtime/UI truth в web panel и OpenClaw control стал заметно ближе к факту.
-- Вычищен большой пласт stale session/pin/config debt в `~/.openclaw`.
+- Локальный контур `LM Studio + Nemotron` стабилизирован.
+- Шум `GET /api/v1/models` сильно снижен.
+- Userbot правдивее по self-check/model/runtime ответам.
+- Userbot `photo-path` → по умолчанию cloud, Nemotron не выгружается.
+- Runtime/UI truth в web panel и OpenClaw control ближе к факту.
+- Вычищен stale session/pin/config debt в `~/.openclaw`.
+- **iMessage `[[reply_to:*]]`** полностью зачищается плагином `krab-output-sanitizer` и `openclaw_runtime_repair.py`.
+- **4 ранее падающих теста исправлены**: `test_config_defaults`, `test_vision_payload`, `test_get_best_model_local_first_in_auto`, `test_get_profile_recommendation`.
+- **Побочные `MagicMock/` артефакты** удалены, добавлены в `.gitignore`.
+- **67 тестов** по sanitizer/privacy/runtime repair — все пройдены.
 
 ## Что ещё не закрыто
 
-### 1. Внешние каналы OpenClaw
+### 1. Live-верификация (требует ручной проверки)
 
-- Есть delivery drift между userbot и внешними OpenClaw-каналами.
-- Особенно важны:
-  - Telegram bot
-  - WhatsApp
-  - iMessage
+- Live-проверка photo-flow через Telegram userbot.
+- Live-проверка iMessage на отсутствие `[[reply_to:*]]`.
+- Live-проверка Web Panel runtime truth.
 
-### 2. iMessage reply мусор
+### 2. Delivery drift внешних OpenClaw-каналов
 
-- В iMessage ещё просачивается `[[reply_to:...]]`.
-- Нельзя чинить это через `replyToMode=off` в channel config: такой ключ невалиден по schema OpenClaw.
-- Чинить надо в transport/send-path или sanitizer-слое.
+- Возможные расхождения между userbot и Telegram bot / WhatsApp / iMessage.
+- Требует live-проверки с реальными сообщениями.
 
-### 3. Vision / model switching
-
-- Userbot-photo по умолчанию уже переведён в cloud.
-- Нужно убедиться live, что:
-  - `Nemotron` не выгружается без нужды,
-  - не загружается случайная маленькая local VL-модель,
-  - язык ответа остаётся предсказуемым.
-
-## Подписки / OAuth
+## Подписки / OAuth (статус не менялся)
 
 ### OpenAI / ChatGPT
 
-- Пройден официальный flow через:
-
-```bash
-openclaw onboard --auth-choice openai-codex --mode local --skip-channels --skip-skills --skip-ui --skip-daemon
-```
-
-- Browser login был завершён пользователем.
-- Callback URL был вставлен вручную.
-- Итог: OAuth exchange провалился ошибкой:
-
-```text
-token_exchange_user_error
-```
-
-- Это не проблема browser callback, а проблема server-side token exchange.
-- OAuth profile в OpenClaw не создался.
+- OAuth exchange провалился: `token_exchange_user_error`
+- Проблема server-side, не browser callback.
 
 ### Gemini CLI
 
-- Плагин включён:
-
-```bash
-openclaw plugins enable google-gemini-cli-auth
-```
-
-- Login flow запускался:
-
-```bash
-openclaw models auth login --provider google-gemini-cli --set-default
-```
-
-- Пользователь успешно вошёл в Google в браузере.
-- Итог: exchange провалился ошибкой:
-
-```text
-loadCodeAssist failed: 400 Bad Request
-```
-
-- Значит Gemini CLI OAuth тоже пока не подключён.
+- Exchange провалился: `loadCodeAssist failed: 400 Bad Request`
 
 ### Google Antigravity
 
-- Путь выглядит нестабильным в текущей сборке:
-  - OpenClaw помечает `google-antigravity-auth` как stale/removed config entry.
-- Не использовать как основной боевой путь без отдельного аудита.
+- Путь нестабилен: `google-antigravity-auth` помечен как stale.
 
-## Важные файлы последнего этапа
+> [!IMPORTANT]
+> OAuth интеграции заблокированы на стороне провайдеров. Документировано в `docs/SAFE_SUBSCRIPTIONS_PLAN_RU.md`.
 
-- `/Users/pablito/Antigravity_AGENTS/Краб/src/userbot_bridge.py`
-- `/Users/pablito/Antigravity_AGENTS/Краб/src/config.py`
-- `/Users/pablito/Antigravity_AGENTS/Краб/.env.example`
-- `/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_userbot_photo_flow.py`
-- `/Users/pablito/Antigravity_AGENTS/Краб/docs/SAFE_SUBSCRIPTIONS_PLAN_RU.md`
+## Важные файлы
 
-## Что проверить первым в новом чате
-
-1. Live-проверка userbot photo-flow после force-cloud фикса.
-2. Live-проверка iMessage на `[[reply_to:*]]`.
-3. Разобрать delivery drift внешних OpenClaw-каналов.
-4. Вернуться к подпискам:
-   - понять, почему `openai-codex` даёт `token_exchange_user_error`,
-   - понять, почему `google-gemini-cli` даёт `loadCodeAssist failed: 400`.
+- `src/userbot_bridge.py` — мост Telegram ↔ OpenClaw
+- `src/config.py` — все конфигурационные параметры
+- `src/model_manager.py` — маршрутизация моделей
+- `src/modules/web_router_compat.py` — UI-compatible routing
+- `plugins/krab-output-sanitizer/index.mjs` — плагин зачистки
+- `scripts/openclaw_runtime_repair.py` — runtime repair
+- `docs/SAFE_SUBSCRIPTIONS_PLAN_RU.md` — план подписок
 
 ## Короткий handoff-текст для нового окна
 
 ```text
-Продолжаем Krab/OpenClaw с checkpoint ~84%.
+Продолжаем Krab/OpenClaw с checkpoint ~95%.
 
 Уже сделано:
-- локальный LM Studio + Nemotron сильно стабилизирован
-- userbot truthful self-check/model/runtime fast-path
-- sanitizer ложных self-check ответов
-- userbot photo-path по умолчанию forced cloud
-- poll-noise LM Studio сильно снижен
+- 263/263 unit-тестов проходят (ветка codex/stabilization-final)
+- iMessage [[reply_to:*]] полностью зачищается sanitizer-плагином
+- 4 ранее падающих теста исправлены
+- photo-path forced cloud, Nemotron не выгружается
+- MagicMock артефакты удалены из git
 
-Не закрыто:
-1) iMessage reply_to мусор [[reply_to:*]]
-2) delivery drift внешних OpenClaw-каналов
-3) vision/model switching live-проверка после force-cloud фикса
-4) OAuth/subscriptions:
-   - openai-codex login дошёл до browser auth, но exchange упал с token_exchange_user_error
-   - google-gemini-cli login дошёл до browser auth, но exchange упал с loadCodeAssist failed: 400 Bad Request
+Осталось (live-проверка):
+1) Live photo-flow через Telegram
+2) Live iMessage reply_to зачистка
+3) Live Web Panel runtime truth
+4) Delivery drift внешних OpenClaw-каналов
 
-Важные файлы:
-- src/userbot_bridge.py
-- src/config.py
-- .env.example
-- docs/SAFE_SUBSCRIPTIONS_PLAN_RU.md
-- docs/NEXT_CHAT_CHECKPOINT_RU.md
-
-Работать дальше экономно, отвечать по-русски.
+OAuth/subscriptions заблокированы провайдерами (см. SAFE_SUBSCRIPTIONS_PLAN_RU.md).
 ```
