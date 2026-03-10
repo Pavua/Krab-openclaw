@@ -620,6 +620,63 @@ def test_model_catalog_cloud_presets_come_from_openclaw_runtime_registry(monkeyp
     assert data["runtime_registry_source"] == "openclaw_models_json"
 
 
+def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_fallback(monkeypatch):
+    """Routing status должен честно отражать сломанный primary и disabled OAuth fallback."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-4.5-preview",
+                    "fallbacks": [
+                        "google-antigravity/gemini-3.1-pro-preview",
+                        "google/gemini-2.5-flash",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {
+                "models": [{"id": "gpt-4.5-preview"}]
+            },
+            "google-antigravity": {
+                "models": [{"id": "gemini-3.1-pro-preview"}]
+            },
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-antigravity:vscode-free": {"provider": "google-antigravity"},
+        },
+        "usageStats": {
+            "openai-codex:default": {"failureCounts": {"model_not_found": 2}},
+            "google-antigravity:vscode-free": {"disabledReason": "auth_permanent"},
+        },
+    }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4")
+
+    client = _make_client_with_router(_DummyRouter())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["routing"]
+    assert data["current_primary"] == "openai-codex/gpt-4.5-preview"
+    assert data["current_primary_broken"] is True
+    assert data["target_primary_candidate"] == "openai-codex/gpt-5.4"
+    assert data["target_primary_in_runtime"] is False
+    assert data["temporary_primary_recommendation"] == "google/gemini-2.5-flash"
+    assert any("model_not_found" in item for item in data["warnings"])
+    assert any("disabled" in item.lower() for item in data["warnings"])
+
+
 def test_model_local_load_default_falls_back_to_config_preferred_model(monkeypatch):
     """`/api/model/local/load-default` не должен ломаться, если compat-router не пробросил поле."""
 

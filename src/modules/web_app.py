@@ -141,6 +141,34 @@ class WebApp:
         """Путь к runtime source-of-truth моделей OpenClaw."""
         return Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"
 
+    @staticmethod
+    def _openclaw_config_path() -> Path:
+        """Путь к основному runtime-конфигу OpenClaw."""
+        return Path.home() / ".openclaw" / "openclaw.json"
+
+    @staticmethod
+    def _openclaw_auth_profiles_path() -> Path:
+        """Путь к auth-profiles OpenClaw."""
+        return Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
+
+    @classmethod
+    def _load_openclaw_runtime_config(cls) -> dict[str, Any]:
+        """Читает runtime-конфиг OpenClaw; при ошибке возвращает пустой payload."""
+        path = cls._openclaw_config_path()
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    @classmethod
+    def _load_openclaw_auth_profiles(cls) -> dict[str, Any]:
+        """Читает auth-profiles OpenClaw; при ошибке возвращает пустой payload."""
+        path = cls._openclaw_auth_profiles_path()
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return {}
+
     @classmethod
     def _load_openclaw_runtime_models(cls) -> dict[str, Any]:
         """Читает runtime-модели OpenClaw; при ошибке возвращает пустой payload."""
@@ -312,6 +340,131 @@ class WebApp:
                     "coding": coding_model or pro_model or chat_model,
                 },
             },
+        }
+
+    @classmethod
+    def _build_openclaw_model_routing_status(cls) -> dict[str, Any]:
+        """
+        Собирает честный read-only статус model routing в OpenClaw runtime.
+
+        Это диагностический слой для owner-панели:
+        - откуда берётся текущий primary/fallback chain;
+        - в каком состоянии auth-профили провайдеров;
+        - готов ли target `GPT-5.4` хотя бы на уровне runtime-конфига.
+        """
+        runtime_config = cls._load_openclaw_runtime_config()
+        runtime_models = cls._load_openclaw_runtime_models()
+        auth_profiles = cls._load_openclaw_auth_profiles()
+
+        agents = runtime_config.get("agents") if isinstance(runtime_config, dict) else {}
+        defaults = agents.get("defaults") if isinstance(agents, dict) else {}
+        model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+        current_primary = str(model_defaults.get("primary", "") or "").strip()
+        current_fallbacks = [
+            str(item).strip()
+            for item in (model_defaults.get("fallbacks") or [])
+            if str(item or "").strip()
+        ]
+
+        providers = runtime_models.get("providers") if isinstance(runtime_models, dict) else {}
+        if not isinstance(providers, dict):
+            providers = {}
+        profiles = auth_profiles.get("profiles") if isinstance(auth_profiles, dict) else {}
+        if not isinstance(profiles, dict):
+            profiles = {}
+        usage_stats = auth_profiles.get("usageStats") if isinstance(auth_profiles, dict) else {}
+        if not isinstance(usage_stats, dict):
+            usage_stats = {}
+
+        def _provider_state(provider_name: str) -> dict[str, Any]:
+            provider_payload = providers.get(provider_name)
+            model_entries = provider_payload.get("models") if isinstance(provider_payload, dict) else []
+            runtime_model_ids = []
+            for item in model_entries if isinstance(model_entries, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                raw_model_id = str(item.get("id", "") or "").strip()
+                if not raw_model_id:
+                    continue
+                runtime_model_ids.append(raw_model_id if "/" in raw_model_id else f"{provider_name}/{raw_model_id}")
+
+            profile_names = [
+                profile_name
+                for profile_name, profile_payload in profiles.items()
+                if isinstance(profile_payload, dict) and str(profile_payload.get("provider", "") or "").strip() == provider_name
+            ]
+            disabled_profiles: list[dict[str, str]] = []
+            failure_counts: dict[str, int] = {}
+            for profile_name in profile_names:
+                usage = usage_stats.get(profile_name)
+                if not isinstance(usage, dict):
+                    continue
+                disabled_reason = str(usage.get("disabledReason", "") or "").strip()
+                if disabled_reason:
+                    disabled_profiles.append(
+                        {
+                            "profile": profile_name,
+                            "reason": disabled_reason,
+                        }
+                    )
+                failures = usage.get("failureCounts")
+                if isinstance(failures, dict):
+                    for failure_key, failure_value in failures.items():
+                        failure_counts[str(failure_key)] = failure_counts.get(str(failure_key), 0) + int(failure_value or 0)
+
+            return {
+                "provider": provider_name,
+                "configured": bool(runtime_model_ids or profile_names),
+                "runtime_models": runtime_model_ids,
+                "profiles": profile_names,
+                "disabled_profiles": disabled_profiles,
+                "failure_counts": failure_counts,
+            }
+
+        openai_codex = _provider_state("openai-codex")
+        google_antigravity = _provider_state("google-antigravity")
+
+        target_primary = str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4") or "").strip()
+        target_in_runtime = target_primary in set(openai_codex["runtime_models"])
+        current_primary_broken = (
+            current_primary.startswith("openai-codex/")
+            and int(openai_codex["failure_counts"].get("model_not_found", 0) or 0) > 0
+        )
+        antigravity_disabled = bool(google_antigravity["disabled_profiles"])
+
+        warnings: list[str] = []
+        if current_primary_broken:
+            warnings.append("Текущий OpenAI primary падает с model_not_found и не годится как production primary.")
+        if not target_in_runtime:
+            warnings.append("GPT-5.4 пока не описан в runtime models.json OpenClaw и не готов к promotion.")
+        if antigravity_disabled:
+            warnings.append("Google Antigravity сейчас disabled в auth-profiles и не должен считаться надёжным fallback.")
+
+        temporary_primary = current_primary
+        if current_primary_broken:
+            temporary_primary = next(
+                (
+                    candidate
+                    for candidate in current_fallbacks
+                    if not (
+                        candidate.startswith("google-antigravity/")
+                        and antigravity_disabled
+                    )
+                ),
+                "",
+            )
+
+        return {
+            "current_primary": current_primary,
+            "current_fallbacks": current_fallbacks,
+            "target_primary_candidate": target_primary,
+            "target_primary_in_runtime": target_in_runtime,
+            "current_primary_broken": current_primary_broken,
+            "temporary_primary_recommendation": temporary_primary,
+            "openai_codex": openai_codex,
+            "google_antigravity": google_antigravity,
+            "warnings": warnings,
+            "workspace": str(defaults.get("workspace", "") or ""),
         }
 
     @staticmethod
@@ -2683,6 +2836,14 @@ class WebApp:
             """Каталог моделей/режимов для web-панели с кнопочным управлением."""
             router = self.deps["router"]
             return {"ok": True, "catalog": await _build_model_catalog(router)}
+
+        @self.app.get("/api/openclaw/model-routing/status")
+        async def openclaw_model_routing_status():
+            """Read-only статус runtime model routing для owner-панели."""
+            return {
+                "ok": True,
+                "routing": self._build_openclaw_model_routing_status(),
+            }
 
         @self.app.post("/api/model/apply")
         async def model_apply(

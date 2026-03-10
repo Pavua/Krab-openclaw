@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-10
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `40%`
+Текущая ориентировочная готовность большого плана: `45%`
 
 ## Цель
 
@@ -34,6 +34,7 @@
 
 - [ ] Убрать `gpt-4.5-preview` как ложный primary
 - [ ] Реализовать compatibility stage для `GPT-5.4`
+- [x] Добавить read-only diagnostics слой для runtime model routing
 - [ ] Настроить downgrade до последнего подтверждённого OpenClaw-compatible OpenAI/Codex ID
 - [ ] Восстановить `google-antigravity` как боевой fallback
 - [ ] Собрать production fallback chain
