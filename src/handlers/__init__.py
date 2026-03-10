@@ -1,5 +1,6 @@
 # Telegram command handlers (Фаза 4.4: вынос из userbot_bridge)
 from .command_handlers import (
+    handle_acl,
     handle_agent,
     handle_clear,
     handle_config,
@@ -27,6 +28,7 @@ from .command_handlers import (
 )
 
 __all__ = [
+    "handle_acl",
     "handle_agent",
     "handle_clear",
     "handle_config",

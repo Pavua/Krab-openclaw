@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-10
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `64%`
+Текущая ориентировочная готовность большого плана: `68%`
 
 ## Цель
 
@@ -22,6 +22,7 @@
 - [x] Создать канонический roadmap/progress документ
 - [x] Переписать repo-level `AGENTS.md`, `SKILLS.md`, `TOOLS.md`
 - [x] Внедрить owner/full/partial ACL для userbot
+- [x] Добавить owner-only runtime-управление ACL через `!acl` / `!access`
 - [x] Покрыть ACL unit-тестами
 
 ### Этап 2. Userbot-primary и общий runtime state
@@ -73,6 +74,7 @@
 - [x] Добавлен read-only compatibility probe для target-модели через текущий OpenClaw gateway
 - [x] Userbot читает канонический OpenClaw workspace bundle для owner/full контура
 - [x] `!remember / !recall` подключены к общей markdown-памяти `workspace-main-messaging/memory`
+- [x] Владелец может выдавать и снимать `full/partial` доступ без ручного редактирования hidden ACL JSON
 - [x] В web-панель `:8080` добавлен selector autoswitch-профилей
 - [x] Browser smoke подтвердил, что `gpt54-canary` dry-run виден в UI и отдаёт `target_model_not_in_runtime_registry`
 - [x] Live probe подтвердил: `GPT-5.4` пока `BLOCKED` в OpenClaw, потому что ещё отсутствует в runtime registry
@@ -90,6 +92,7 @@
 - [x] Unit: autoswitch `production-safe` / `gpt54-canary`
 - [x] Unit: compatibility probe + web endpoint для него
 - [x] Unit: workspace prompt bundle + shared memory bridge userbot/OpenClaw
+- [x] Unit: ACL runtime CRUD + owner command `!acl`
 - [x] Browser smoke: selector autoswitch-профилей на `:8080`
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart

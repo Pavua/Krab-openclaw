@@ -15,7 +15,13 @@ from pathlib import Path
 import pytest
 
 from src.config import config
-from src.core.access_control import AccessLevel, PARTIAL_ACCESS_COMMANDS, resolve_access_profile
+from src.core.access_control import (
+    AccessLevel,
+    PARTIAL_ACCESS_COMMANDS,
+    load_acl_runtime_state,
+    resolve_access_profile,
+    update_acl_subject,
+)
 
 
 def test_resolve_access_profile_marks_self_as_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,3 +70,26 @@ def test_partial_profile_can_execute_only_safe_commands(monkeypatch: pytest.Monk
     assert PARTIAL_ACCESS_COMMANDS == {"help", "search", "status"}
     assert profile.can_execute_command("status", {"status", "help", "search", "write"}) is True
     assert profile.can_execute_command("write", {"status", "help", "search", "write"}) is False
+
+
+def test_update_acl_subject_adds_and_removes_runtime_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    acl_path = tmp_path / "acl.json"
+    monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
+
+    add_result = update_acl_subject("full", "@reader", add=True)
+    assert add_result["changed"] is True
+    assert load_acl_runtime_state()["full"] == ["reader"]
+
+    noop_result = update_acl_subject("full", "@reader", add=True)
+    assert noop_result["changed"] is False
+    assert load_acl_runtime_state()["full"] == ["reader"]
+
+    revoke_result = update_acl_subject("full", "@reader", add=False)
+    assert revoke_result["changed"] is True
+    assert load_acl_runtime_state()["full"] == []
+
+
+def test_update_acl_subject_rejects_unsupported_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "USERBOT_ACL_FILE", tmp_path / "acl.json", raising=False)
+    with pytest.raises(ValueError, match="unsupported_acl_level"):
+        update_acl_subject("guest", "@reader", add=True)

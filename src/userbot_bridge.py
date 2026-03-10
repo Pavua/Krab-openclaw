@@ -35,6 +35,7 @@ from .core.scheduler import krab_scheduler
 from .employee_templates import ROLES, get_role_prompt
 from .handlers import (
     handle_agent,
+    handle_acl,
     handle_clear,
     handle_config,
     handle_cronstatus,
@@ -295,6 +296,7 @@ class KraabUserbot:
             "voice", "web", "sysinfo", "panel", "restart", "search",
             "remember", "recall", "ls", "read", "write", "agent",
             "diagnose", "help", "remind", "reminders", "rm_remind", "cronstatus",
+            "acl", "access",
         }
 
         def _make_command_filter(command_name: str):
@@ -407,6 +409,15 @@ class KraabUserbot:
         @self.client.on_message(filters.command("agent", prefixes=prefixes) & _make_command_filter("agent"), group=-1)
         async def wrap_agent(c, m):
             await run_cmd(handle_agent, m)
+
+        @self.client.on_message(filters.command("acl", prefixes=prefixes) & _make_command_filter("acl"), group=-1)
+        async def wrap_acl(c, m):
+            await run_cmd(handle_acl, m)
+
+        @self.client.on_message(filters.command("access", prefixes=prefixes) & _make_command_filter("access"), group=-1)
+        async def wrap_access(c, m):
+            # Alias для тех, кто интуитивно ищет именно access-management.
+            await run_cmd(handle_acl, m)
 
         @self.client.on_message(
             filters.command("diagnose", prefixes=prefixes) & _make_command_filter("diagnose"), group=-1
@@ -1439,7 +1450,7 @@ class KraabUserbot:
             )
 
         core_commands = [
-            "`!status`, `!clear`, `!config`, `!set`, `!restart`, `!help`",
+            "`!status`, `!clear`, `!config`, `!set`, `!restart`, `!help`, `!acl ...`",
         ]
         model_commands = [
             "`!model`, `!model local`, `!model cloud`, `!model auto`, `!model set <model_id>`, `!model load <name>`, `!model unload`, `!model scan`",

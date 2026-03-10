@@ -126,6 +126,7 @@ def test_build_runtime_commands_status_owner_includes_live_command_groups() -> N
     assert "Команды, которые реально доступны сейчас" in text
     assert "`!model local`" in text
     assert "`!search <запрос>`" in text
+    assert "`!acl ...`" in text
     assert "`!web`" in text
 
 

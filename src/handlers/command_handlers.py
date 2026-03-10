@@ -14,6 +14,12 @@ import httpx
 from pyrogram.types import Message
 
 from ..config import config
+from ..core.access_control import (
+    AccessLevel,
+    PARTIAL_ACCESS_COMMANDS,
+    load_acl_runtime_state,
+    update_acl_subject,
+)
 from ..core.exceptions import UserInputError
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
@@ -443,6 +449,91 @@ async def handle_set(bot: "KraabUserbot", message: Message) -> None:
         await message.reply("❌ Ошибка обновления.")
 
 
+async def handle_acl(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление runtime ACL userbot.
+
+    Доступно только owner-контуру.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(
+            user_message=(
+                "🔒 Управление ACL доступно только владельцу.\n"
+                "Можно попросить владельца выдать full или partial доступ."
+            )
+        )
+
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split()
+    action = str(parts[0] or "status").strip().lower() if parts else "status"
+    state = load_acl_runtime_state()
+
+    def _render_state() -> str:
+        full_items = state.get(AccessLevel.FULL.value, [])
+        partial_items = state.get(AccessLevel.PARTIAL.value, [])
+        owner_items = state.get(AccessLevel.OWNER.value, [])
+        return (
+            "🛂 **Runtime ACL userbot**\n"
+            "-----------------------\n"
+            f"- Файл: `{config.USERBOT_ACL_FILE}`\n"
+            f"- Владелец (config): `{config.OWNER_USERNAME}`\n"
+            f"- Owner в runtime-файле: `{', '.join(owner_items) if owner_items else '-'}`\n"
+            f"- Full: `{', '.join(full_items) if full_items else '-'}`\n"
+            f"- Partial: `{', '.join(partial_items) if partial_items else '-'}`\n"
+            f"- Partial-команды: `{', '.join(sorted(PARTIAL_ACCESS_COMMANDS))}`\n\n"
+            "Команды:\n"
+            "- `!acl status`\n"
+            "- `!acl grant full @username`\n"
+            "- `!acl grant partial @username`\n"
+            "- `!acl revoke full @username`\n"
+            "- `!acl revoke partial @username`\n"
+            "- `!acl list`"
+        )
+
+    if action in {"", "status", "list"}:
+        await message.reply(_render_state())
+        return
+
+    if action not in {"grant", "revoke"}:
+        raise UserInputError(
+            user_message=(
+                "❌ Неизвестное действие ACL.\n"
+                "Используй: `status`, `list`, `grant`, `revoke`."
+            )
+        )
+
+    if len(parts) < 3:
+        raise UserInputError(
+            user_message=(
+                "❌ Формат ACL-команды:\n"
+                "- `!acl grant full @username`\n"
+                "- `!acl grant partial 123456789`\n"
+                "- `!acl revoke full @username`"
+            )
+        )
+
+    level = str(parts[1] or "").strip().lower()
+    subject = str(parts[2] or "").strip()
+    if level not in {AccessLevel.FULL.value, AccessLevel.PARTIAL.value}:
+        raise UserInputError(
+            user_message="❌ Можно изменять только уровни `full` и `partial`."
+        )
+
+    result = update_acl_subject(level, subject, add=(action == "grant"))
+    state = result["state"]
+    verb = "выдан" if action == "grant" else "снят"
+    changed_note = "обновлено" if result["changed"] else "без изменений"
+    await message.reply(
+        "✅ ACL обновлён.\n"
+        f"- Уровень: `{level}`\n"
+        f"- Subject: `{result['subject']}`\n"
+        f"- Результат: `{verb}` / {changed_note}\n"
+        f"- Full: `{', '.join(state.get('full', [])) if state.get('full') else '-'}`\n"
+        f"- Partial: `{', '.join(state.get('partial', [])) if state.get('partial') else '-'}`"
+    )
+
+
 async def handle_role(bot: "KraabUserbot", message: Message) -> None:
     """Смена системного промпта (личности)."""
     args = message.text.split()
@@ -632,6 +723,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!search <query>` — веб-поиск
 `!remember <text>` — запомнить факт
 `!recall <query>` — вспомнить факт
+`!acl ...` / `!access ...` — управление full/partial доступом (owner-only)
 `!role [name|list]` — смена личности
 `!remind <время> | <текст>` — поставить напоминание
 `!reminders` — список активных напоминаний

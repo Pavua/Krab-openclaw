@@ -131,6 +131,97 @@ def _load_acl_file(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _save_acl_file(path: Path, payload: dict[str, Any]) -> None:
+    """Сохраняет runtime ACL-файл в детерминированном JSON-виде."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _runtime_acl_path(path: Path | None = None) -> Path:
+    """Возвращает канонический путь runtime ACL-файла."""
+    if isinstance(path, Path):
+        return path
+    candidate = getattr(config, "USERBOT_ACL_FILE", None)
+    if isinstance(candidate, Path):
+        return candidate
+    return Path.home() / ".openclaw" / "krab_userbot_acl.json"
+
+
+def load_acl_runtime_state(path: Path | None = None) -> dict[str, list[str]]:
+    """
+    Возвращает нормализованное runtime-состояние ACL-файла.
+
+    Формат результата всегда единый:
+    - `owner`: список subjects из файла;
+    - `full`: список subjects из файла;
+    - `partial`: список subjects из файла.
+    """
+    acl_path = _runtime_acl_path(path)
+    raw_payload = _load_acl_file(acl_path)
+    state: dict[str, list[str]] = {}
+    for level in (AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value):
+        ids, usernames = _extract_acl_subjects(raw_payload.get(level))
+        state[level] = sorted(ids | usernames)
+    return state
+
+
+def save_acl_runtime_state(state: dict[str, list[str]], path: Path | None = None) -> Path:
+    """Сохраняет нормализованный ACL state в runtime-файл."""
+    acl_path = _runtime_acl_path(path)
+    payload: dict[str, list[str]] = {}
+    for level in (AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value):
+        values = state.get(level) if isinstance(state, dict) else []
+        normalized = sorted(
+            {
+                normalize_subject(item)
+                for item in (values or [])
+                if normalize_subject(item)
+            }
+        )
+        payload[level] = normalized
+    _save_acl_file(acl_path, payload)
+    return acl_path
+
+
+def update_acl_subject(level: str | AccessLevel, subject: object, *, add: bool, path: Path | None = None) -> dict[str, Any]:
+    """
+    Добавляет или удаляет subject из runtime ACL-файла.
+
+    Возвращает:
+    - `changed`: было ли фактическое изменение;
+    - `state`: новое нормализованное состояние;
+    - `path`: куда записан ACL.
+    """
+    normalized_level = str(level.value if isinstance(level, AccessLevel) else level or "").strip().lower()
+    if normalized_level not in {AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value}:
+        raise ValueError(f"unsupported_acl_level:{normalized_level or 'empty'}")
+
+    normalized_subject = normalize_subject(subject)
+    if not normalized_subject:
+        raise ValueError("empty_acl_subject")
+
+    state = load_acl_runtime_state(path)
+    entries = set(state.get(normalized_level, []))
+    before = set(entries)
+    if add:
+        entries.add(normalized_subject)
+    else:
+        entries.discard(normalized_subject)
+    state[normalized_level] = sorted(entries)
+    changed = before != entries
+    acl_path = save_acl_runtime_state(state, path) if changed else _runtime_acl_path(path)
+    return {
+        "changed": changed,
+        "path": acl_path,
+        "state": state,
+        "level": normalized_level,
+        "subject": normalized_subject,
+    }
+
+
 def resolve_access_profile(*, user_id: object, username: object, self_user_id: object | None) -> AccessProfile:
     """
     Определяет ACL-профиль пользователя.
