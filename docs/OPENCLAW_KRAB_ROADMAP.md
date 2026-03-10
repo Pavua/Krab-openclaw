@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-11
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `71%`
+Текущая ориентировочная готовность большого плана: `76%`
 
 ## Цель
 
@@ -56,8 +56,8 @@
 
 ### Этап 6. Безопасность и release discipline
 
-- [ ] Закрыть открытые `groupPolicy=open` там, где есть elevated tools
-- [ ] Ужесточить reserve bot и risky каналы
+- [x] Закрыть открытые `groupPolicy=open` для Telegram reserve-контура
+- [x] Ужесточить reserve bot и risky каналы для Telegram bot
 - [ ] Добавить release-checklist и merge-gate для крупных этапов
 
 ## Что сделано в этой ветке
@@ -81,6 +81,10 @@
 - [x] Browser smoke подтвердил, что `gpt54-canary` dry-run виден в UI и отдаёт `target_model_not_in_runtime_registry`
 - [x] Live probe подтвердил: `GPT-5.4` пока `BLOCKED` в OpenClaw, потому что ещё отсутствует в runtime registry
 - [x] Browser smoke подтвердил, что `Userbot ACL` в UI читает owner/full/partial и применяет `Grant / Revoke` на runtime ACL
+- [x] Repair-слой runtime теперь умеет безопасно переводить `dmPolicy=allowlist` без wildcard-дыры
+- [x] Repair-слой runtime теперь умеет выставлять `groupPolicy=allowlist` и выводить `groupAllowFrom` из live-конфига
+- [x] Создан one-click файл `Apply Reserve Telegram Policy.command` для reserve-safe Telegram Bot
+- [x] Live runtime Telegram bot переведён в reserve-safe policy: `allowlist` для DM и групп, внешние tool-guards включены
 
 ## Блокеры и риски
 
@@ -88,6 +92,7 @@
 - В рабочем дереве уже есть незакоммиченные изменения, часть из них не относится к этой задаче
 - `src/core/provider_manager.py` уже существует как незакоммиченный файл и требует аккуратной миграции, а не перезаписи
 - Боевой процесс панели на `:8080` запущен без hot-reload, поэтому для появления новых endpoint'ов и секций нужен контролируемый restart runtime
+- Для полного подтверждения reserve-контура ещё нужен внешний smoke самого Telegram Bot после runtime-refresh/реального сообщения
 
 ## Проверка
 
@@ -98,10 +103,13 @@
 - [x] Unit: workspace prompt bundle + shared memory bridge userbot/OpenClaw
 - [x] Unit: ACL runtime CRUD + owner command `!acl`
 - [x] Unit: web ACL endpoints `/api/userbot/acl/status` и `/api/userbot/acl/update`
+- [x] Unit: reserve-safe repair для `dmPolicy/groupPolicy` Telegram Bot
 - [x] Browser smoke: selector autoswitch-профилей на `:8080`
 - [x] Browser smoke: `Userbot ACL` на изолированном web-инстансе подтверждает `Refresh / Grant / Revoke`
+- [x] Runtime repair smoke: Telegram reserve-policy применён и отражён в `~/.openclaw/openclaw.json`
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart
+- [ ] E2E: emergency запрос через Telegram Bot в reserve-safe режиме
 - [ ] E2E: совместимость `GPT-5.4` в OpenClaw
 
 ## Merge gate

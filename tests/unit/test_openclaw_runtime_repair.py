@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from scripts.openclaw_runtime_repair import (
+    apply_group_policy,
     apply_dm_policy,
     choose_target_key,
     choose_lmstudio_token,
@@ -516,6 +517,70 @@ def test_apply_dm_policy_open_adds_wildcard_allow_from(tmp_path: Path) -> None:
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["telegram"]["allowFrom"] == ["*"]
     assert payload["channels"]["imessage"]["allowFrom"] == ["*"]
+
+
+def test_apply_dm_policy_allowlist_replaces_wildcard_with_trusted_peers(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "channels": {
+                    "telegram": {"enabled": True, "dmPolicy": "open", "allowFrom": ["*"]},
+                },
+                "plugins": {
+                    "entries": {
+                        "krab-output-sanitizer": {
+                            "config": {
+                                "trustedPeers": {
+                                    "telegram": ["312322764", "trusted_user"],
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = apply_dm_policy(openclaw_path, ("telegram",), "allowlist")
+    assert report["changed"] is True
+    assert report["allow_from_fixed"]["telegram"] == "derived_from_trusted_peers"
+
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["channels"]["telegram"]["dmPolicy"] == "allowlist"
+    assert payload["channels"]["telegram"]["allowFrom"] == ["312322764", "trusted_user"]
+
+
+def test_apply_group_policy_allowlist_uses_enabled_group_keys(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "channels": {
+                    "telegram": {
+                        "enabled": True,
+                        "groupPolicy": "open",
+                        "groups": {
+                            "-1001804661353": {"enabled": True},
+                            "-1001999999999": {"enabled": False},
+                        },
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = apply_group_policy(openclaw_path, ("telegram",), "allowlist")
+    assert report["changed"] is True
+    assert report["group_allow_from_fixed"]["telegram"] == "derived_from_channel_groups"
+
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["channels"]["telegram"]["groupPolicy"] == "allowlist"
+    assert payload["channels"]["telegram"]["groupAllowFrom"] == ["-1001804661353"]
 
 
 def test_repair_group_policy_allowlist_switches_to_open_when_empty(tmp_path: Path) -> None:

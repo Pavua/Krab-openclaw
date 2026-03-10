@@ -2099,6 +2099,21 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
     allow_from_fixed: dict[str, str] = {}
     creds_root = openclaw_path.parent / "credentials"
     allow_from_changes = 0
+    plugins = payload.get("plugins") if isinstance(payload.get("plugins"), dict) else {}
+    plugin_entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
+    sanitizer = (
+        plugin_entries.get("krab-output-sanitizer")
+        if isinstance(plugin_entries.get("krab-output-sanitizer"), dict)
+        else {}
+    )
+    sanitizer_config = (
+        sanitizer.get("config") if isinstance(sanitizer.get("config"), dict) else {}
+    )
+    trusted_peers = (
+        sanitizer_config.get("trustedPeers")
+        if isinstance(sanitizer_config.get("trustedPeers"), dict)
+        else {}
+    )
 
     for channel in channels:
         cfg = channel_cfg.get(channel)
@@ -2113,6 +2128,11 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
 
         allow_from = cfg.get("allowFrom")
         allow_from_list = allow_from if isinstance(allow_from, list) else []
+        normalized_allow_from = [
+            str(item).strip()
+            for item in allow_from_list
+            if str(item).strip() and str(item).strip() not in {"*", "+"}
+        ]
 
         if policy == "open":
             # Для open OpenClaw требует wildcard в allowFrom.
@@ -2121,21 +2141,41 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
                 allow_from_fixed[channel] = "set_wildcard"
                 allow_from_changes += 1
         elif policy == "allowlist":
-            # Для allowlist нужен непустой список.
-            if not allow_from_list:
+            # Для allowlist wildcard нельзя сохранять: иначе канал останется фактически открытым.
+            desired_allow_from = list(normalized_allow_from)
+            source = ""
+            if not desired_allow_from:
                 channel_allowlist_file = creds_root / f"{channel}-allowFrom.json"
                 loaded: list[str] = []
                 if channel_allowlist_file.exists():
                     try:
                         raw = json.loads(channel_allowlist_file.read_text(encoding="utf-8"))
                         if isinstance(raw, list):
-                            loaded = [str(x).strip() for x in raw if str(x).strip()]
+                            loaded = [
+                                str(x).strip()
+                                for x in raw
+                                if str(x).strip() and str(x).strip() not in {"*", "+"}
+                            ]
                     except (OSError, ValueError):
                         loaded = []
                 if loaded:
-                    cfg["allowFrom"] = loaded
-                    allow_from_fixed[channel] = "loaded_from_credentials"
-                    allow_from_changes += 1
+                    desired_allow_from = loaded
+                    source = "loaded_from_credentials"
+                else:
+                    trusted = trusted_peers.get(channel)
+                    if isinstance(trusted, list):
+                        derived = [
+                            str(x).strip()
+                            for x in trusted
+                            if str(x).strip() and str(x).strip() not in {"*", "+"}
+                        ]
+                        if derived:
+                            desired_allow_from = derived
+                            source = "derived_from_trusted_peers"
+            if desired_allow_from and desired_allow_from != allow_from_list:
+                cfg["allowFrom"] = desired_allow_from
+                allow_from_fixed[channel] = source or "sanitized_inline_allowlist"
+                allow_from_changes += 1
 
     if changed_channels or allow_from_changes > 0:
         _write_json(openclaw_path, payload)
@@ -2146,6 +2186,96 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
         "channels": changed_channels,
         "allow_from_fixed": allow_from_fixed,
         "allow_from_changes": allow_from_changes,
+    }
+
+
+def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str) -> dict[str, Any]:
+    """
+    Явно выставляет groupPolicy для каналов.
+
+    Для `allowlist` пытается собрать `groupAllowFrom` из live-конфига:
+    1) уже существующий inline `groupAllowFrom`;
+    2) keys из `channels.<name>.groups`;
+    3) credentials `<channel>-groupAllowFrom.json`.
+    """
+    payload = _read_json(openclaw_path)
+    channel_cfg = payload.setdefault("channels", {})
+    changed_channels: list[str] = []
+    group_allow_from_fixed: dict[str, str] = {}
+    creds_root = openclaw_path.parent / "credentials"
+
+    for channel in channels:
+        cfg = channel_cfg.get(channel)
+        if not isinstance(cfg, dict):
+            continue
+
+        current_policy = str(cfg.get("groupPolicy", "") or "").strip().lower()
+        group_allow_from = cfg.get("groupAllowFrom")
+        group_allow_from_list = group_allow_from if isinstance(group_allow_from, list) else []
+        normalized_group_allow_from = [
+            str(item).strip()
+            for item in group_allow_from_list
+            if str(item).strip() and str(item).strip() not in {"*", "+"}
+        ]
+
+        desired_group_allow_from = list(normalized_group_allow_from)
+        source = ""
+        if policy == "allowlist" and not desired_group_allow_from:
+            groups_cfg = cfg.get("groups")
+            if isinstance(groups_cfg, dict):
+                derived_groups = [
+                    str(group_id).strip()
+                    for group_id, group_meta in groups_cfg.items()
+                    if str(group_id).strip()
+                    and (not isinstance(group_meta, dict) or bool(group_meta.get("enabled", True)))
+                ]
+                if derived_groups:
+                    desired_group_allow_from = derived_groups
+                    source = "derived_from_channel_groups"
+            if not desired_group_allow_from:
+                group_allowlist_file = creds_root / f"{channel}-groupAllowFrom.json"
+                if group_allowlist_file.exists():
+                    try:
+                        raw = json.loads(group_allowlist_file.read_text(encoding="utf-8"))
+                        if isinstance(raw, list):
+                            desired_group_allow_from = [
+                                str(x).strip()
+                                for x in raw
+                                if str(x).strip() and str(x).strip() not in {"*", "+"}
+                            ]
+                            if desired_group_allow_from:
+                                source = "loaded_from_credentials"
+                    except (OSError, ValueError):
+                        desired_group_allow_from = []
+
+        changed = False
+        if current_policy != policy:
+            # Не включаем allowlist без реального списка, иначе transport просто замолчит.
+            if policy != "allowlist" or desired_group_allow_from:
+                cfg["groupPolicy"] = policy
+                changed = True
+
+        if policy == "allowlist" and desired_group_allow_from and desired_group_allow_from != group_allow_from_list:
+            cfg["groupAllowFrom"] = desired_group_allow_from
+            group_allow_from_fixed[channel] = source or "sanitized_inline_group_allowlist"
+            changed = True
+
+        if policy == "open" and "groupAllowFrom" in cfg and group_allow_from_list:
+            cfg.pop("groupAllowFrom", None)
+            group_allow_from_fixed[channel] = "removed_for_open_policy"
+            changed = True
+
+        if changed:
+            changed_channels.append(channel)
+
+    if changed_channels:
+        _write_json(openclaw_path, payload)
+
+    return {
+        "path": str(openclaw_path),
+        "changed": bool(changed_channels),
+        "channels": changed_channels,
+        "group_allow_from_fixed": group_allow_from_fixed,
     }
 
 
@@ -2210,6 +2340,12 @@ def parse_args() -> argparse.Namespace:
         choices=("keep", "off"),
         default="off",
         help="Какой replyToMode выставить каналам. keep = не менять.",
+    )
+    parser.add_argument(
+        "--group-policy",
+        choices=("keep", "allowlist", "open"),
+        default="keep",
+        help="Какой groupPolicy выставить каналам. keep = не менять.",
     )
     parser.add_argument(
         "--skip-allowlist-normalize",
@@ -2342,6 +2478,13 @@ def main() -> int:
         report["steps"]["dm_policy"] = apply_dm_policy(openclaw_path, channels, dm_policy)
     else:
         report["steps"]["dm_policy"] = {"skipped": True}
+
+    group_policy = str(args.group_policy or "keep").strip().lower()
+    if group_policy != "keep":
+        report["steps"]["group_policy"] = apply_group_policy(openclaw_path, channels, group_policy)
+        report["steps"]["repair_group_policy"] = repair_group_policy_allowlist(openclaw_path, channels)
+    else:
+        report["steps"]["group_policy"] = {"skipped": True}
 
     if not args.skip_allowlist_normalize:
         allowlist_steps: dict[str, Any] = {}
