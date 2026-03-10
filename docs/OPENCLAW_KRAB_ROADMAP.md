@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-10
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `45%`
+Текущая ориентировочная готовность большого плана: `52%`
 
 ## Цель
 
@@ -33,11 +33,11 @@
 ### Этап 3. GPT-5.4 first routing
 
 - [ ] Убрать `gpt-4.5-preview` как ложный primary
-- [ ] Реализовать compatibility stage для `GPT-5.4`
+- [ ] Реализовать compatibility stage для `GPT-5.4` (частично)
 - [x] Добавить read-only diagnostics слой для runtime model routing
-- [ ] Настроить downgrade до последнего подтверждённого OpenClaw-compatible OpenAI/Codex ID
+- [ ] Настроить downgrade до последнего подтверждённого OpenClaw-compatible OpenAI/Codex ID (частично)
 - [ ] Восстановить `google-antigravity` как боевой fallback
-- [ ] Собрать production fallback chain
+- [ ] Собрать production fallback chain (частично)
 
 ### Этап 4. Thinking / slots / quota UX
 
@@ -68,6 +68,10 @@
 - [x] Подтверждено, что browser relay частично жив, но browser RPC ещё не доведён
 - [x] Внедрён ACL owner/full/partial
 - [x] Обновлён web model catalog до runtime-aware режима
+- [x] Добавлен autoswitch-профиль `production-safe` на основе runtime registry/auth/log truth
+- [x] Добавлен честный canary-профиль `gpt54-canary` с `BLOCKED`, если `GPT-5.4` ещё не готов в OpenClaw runtime
+- [x] В web-панель `:8080` добавлен selector autoswitch-профилей
+- [x] Browser smoke подтвердил, что `gpt54-canary` dry-run виден в UI и отдаёт `target_model_not_in_runtime_registry`
 
 ## Блокеры и риски
 
@@ -79,13 +83,15 @@
 
 - [x] Unit: ACL и runtime-aware status
 - [x] Unit: runtime-aware model catalog
+- [x] Unit: autoswitch `production-safe` / `gpt54-canary`
+- [x] Browser smoke: selector autoswitch-профилей на `:8080`
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart
 - [ ] E2E: совместимость `GPT-5.4` в OpenClaw
 
 ## Merge gate
 
-- [ ] Ветка проходит targeted unit tests
+- [x] Ветка проходит targeted unit tests
 - [ ] Ветка проходит smoke
 - [ ] Есть краткий отчёт: что сделано, как проверено, что осталось
 - [ ] Только после этого можно рассматривать merge в `main`

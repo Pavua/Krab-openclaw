@@ -9,7 +9,9 @@ OpenClaw model autoswitch для Krab: быстрые профили local/cloud
 2) Для каналов OpenClaw (Telegram Bot / WhatsApp / iMessage и др.) нужен
    единый и быстрый способ переключать модельный профиль:
    - local-first (локальная модель как primary),
-   - cloud-first (облако как primary, локальная как fallback).
+   - cloud-first (облако как primary, локальная как fallback),
+   - production-safe (только подтвержденные runtime cloud-кандидаты),
+   - gpt54-canary (честная попытка поднять целевой GPT-5.4 primary).
 3) Скрипт работает с runtime-файлами `~/.openclaw`, делает бэкапы и
    возвращает детерминированный JSON для web-панели.
 """
@@ -19,12 +21,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+
+
+DEFAULT_TARGET_PRIMARY_MODEL = "openai-codex/gpt-5.4"
+DEFAULT_SAFE_CLOUD_MODELS = (
+    "google/gemini-2.5-flash",
+    "openai/gpt-4o-mini",
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -152,6 +162,325 @@ def _unique_non_empty(items: list[str]) -> list[str]:
     return out
 
 
+def _provider_from_model(model_key: str) -> str:
+    raw = str(model_key or "").strip().lower()
+    if "/" not in raw:
+        return ""
+    return raw.split("/", 1)[0].strip()
+
+
+def _runtime_models_from_payload(
+    runtime_models_payload: dict[str, Any],
+    *,
+    fallback_openclaw_payload: dict[str, Any],
+) -> list[str]:
+    """
+    Собирает канонический registry моделей из `models.json`.
+
+    Если отдельный runtime registry недоступен, пытаемся аккуратно деградировать
+    до провайдеров, зашитых в `openclaw.json`, чтобы dry-run не падал в вакуум.
+    """
+    source = runtime_models_payload if runtime_models_payload else (fallback_openclaw_payload.get("models") or {})
+    providers = source.get("providers") if isinstance(source, dict) else {}
+    if not isinstance(providers, dict):
+        return []
+
+    known_providers = set(str(key or "").strip().lower() for key in providers.keys() if str(key or "").strip())
+    out: list[str] = []
+    for provider_name, provider_cfg in providers.items():
+        models = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
+        if not isinstance(models, list):
+            continue
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
+            normalized = _normalize_model_key(str(provider_name or ""), model_id, known_providers)
+            if normalized:
+                out.append(normalized)
+    return _unique_non_empty(out)
+
+
+def _model_matches(model_key: str, candidate: str) -> bool:
+    left = str(model_key or "").strip().lower()
+    right = str(candidate or "").strip().lower()
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    left_tail = left.split("/", 1)[1] if "/" in left else left
+    right_tail = right.split("/", 1)[1] if "/" in right else right
+    return left_tail == right_tail
+
+
+def _registry_contains_model(model_key: str, registry_models: list[str]) -> bool:
+    return any(_model_matches(model_key, item) for item in registry_models)
+
+
+def _matching_auth_entries(auth_payload: dict[str, Any], provider: str) -> tuple[list[tuple[str, dict[str, Any]]], list[tuple[str, dict[str, Any]]]]:
+    provider_raw = str(provider or "").strip().lower()
+    profiles_raw = auth_payload.get("profiles") if isinstance(auth_payload.get("profiles"), dict) else {}
+    usage_raw = auth_payload.get("usageStats") if isinstance(auth_payload.get("usageStats"), dict) else {}
+
+    matching_profiles: list[tuple[str, dict[str, Any]]] = []
+    for profile_key, profile_value in profiles_raw.items():
+        if not isinstance(profile_value, dict):
+            continue
+        profile_provider = str(profile_value.get("provider") or "").strip().lower()
+        if profile_provider == provider_raw or str(profile_key).strip().lower().startswith(f"{provider_raw}:"):
+            matching_profiles.append((str(profile_key), profile_value))
+
+    matching_usage: list[tuple[str, dict[str, Any]]] = []
+    for usage_key, usage_value in usage_raw.items():
+        if not isinstance(usage_value, dict):
+            continue
+        if str(usage_key).strip().lower().startswith(f"{provider_raw}:"):
+            matching_usage.append((str(usage_key), usage_value))
+
+    return matching_profiles, matching_usage
+
+
+def _provider_health(auth_payload: dict[str, Any], provider: str) -> dict[str, Any]:
+    """
+    Нормализует auth/usage truth по провайдеру.
+
+    `disabledReason` трактуем как runtime stop-сигнал, даже если таймер уже
+    почти истек: для safe-профиля лучше не промотировать сомнительный провайдер.
+    """
+    profiles, usage_entries = _matching_auth_entries(auth_payload, provider)
+    disabled_reason = ""
+    disabled_until = 0
+    failure_counts: dict[str, int] = {}
+    error_count = 0
+
+    for _, usage in usage_entries:
+        reason = str(usage.get("disabledReason") or "").strip()
+        if reason and not disabled_reason:
+            disabled_reason = reason
+        disabled_until = max(disabled_until, int(usage.get("disabledUntil") or 0))
+        error_count = max(error_count, int(usage.get("errorCount") or 0))
+        raw_failures = usage.get("failureCounts")
+        if isinstance(raw_failures, dict):
+            for key, value in raw_failures.items():
+                name = str(key or "").strip()
+                if not name:
+                    continue
+                failure_counts[name] = failure_counts.get(name, 0) + int(value or 0)
+
+    disabled = bool(disabled_reason)
+    return {
+        "provider": str(provider or "").strip().lower(),
+        "has_profile": bool(profiles),
+        "profiles": [key for key, _ in profiles],
+        "disabled": disabled,
+        "disabled_reason": disabled_reason or "",
+        "disabled_until": disabled_until,
+        "failure_counts": failure_counts,
+        "error_count": error_count,
+    }
+
+
+def _broken_models_from_gateway_log(gateway_log_path: Path) -> list[str]:
+    """
+    Извлекает модели, которые runtime уже пометил как `not found`.
+    """
+    if not gateway_log_path.exists():
+        return []
+    try:
+        lines = gateway_log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+
+    out: list[str] = []
+    for line in lines[-400:]:
+        for candidate in re.findall(r'Model "([^"]+)" not found', line):
+            out.append(str(candidate).strip())
+        for candidate in re.findall(r"model `([^`]+)` does not exist", line, flags=re.IGNORECASE):
+            out.append(str(candidate).strip())
+    return _unique_non_empty(out)
+
+
+def _is_model_broken(model_key: str, broken_models: list[str]) -> bool:
+    return any(_model_matches(model_key, item) for item in broken_models)
+
+
+def _safe_cloud_candidates(
+    *,
+    openclaw_payload: dict[str, Any],
+    registry_models: list[str],
+    auth_payload: dict[str, Any],
+    broken_models: list[str],
+    target_primary: str,
+) -> list[str]:
+    defaults = ((openclaw_payload.get("agents") or {}).get("defaults") or {})
+    model_cfg = defaults.get("model") if isinstance(defaults, dict) else {}
+    current_primary = str((model_cfg or {}).get("primary") or "").strip() if isinstance(model_cfg, dict) else ""
+    raw_fallbacks = model_cfg.get("fallbacks") if isinstance(model_cfg, dict) else []
+    current_fallbacks = [
+        str(item or "").strip()
+        for item in raw_fallbacks
+        if str(item or "").strip()
+    ] if isinstance(raw_fallbacks, list) else []
+
+    preferred_runtime = sorted(
+        [
+            item for item in registry_models
+            if item and not _is_local_model(item)
+        ],
+        key=lambda item: (
+            0 if _provider_from_model(item) == "openai-codex" else
+            1 if _provider_from_model(item) == "google-antigravity" else
+            2 if _provider_from_model(item) == "google" else
+            3
+        ),
+    )
+    candidate_chain = _unique_non_empty(
+        [
+            target_primary,
+            current_primary,
+            *current_fallbacks,
+            *DEFAULT_SAFE_CLOUD_MODELS,
+            *preferred_runtime,
+        ]
+    )
+
+    safe_models: list[str] = []
+    for candidate in candidate_chain:
+        if not candidate or _is_local_model(candidate):
+            continue
+        if not _registry_contains_model(candidate, registry_models):
+            continue
+        provider = _provider_from_model(candidate)
+        health = _provider_health(auth_payload, provider) if provider else {}
+        if health.get("disabled"):
+            continue
+        if _is_model_broken(candidate, broken_models):
+            continue
+        safe_models.append(candidate)
+    return _unique_non_empty(safe_models)
+
+
+def _plan_special_profile(
+    *,
+    requested_profile: str,
+    openclaw_payload: dict[str, Any],
+    local_model: str,
+    registry_models: list[str],
+    auth_payload: dict[str, Any],
+    broken_models: list[str],
+    target_primary: str,
+) -> dict[str, Any] | None:
+    if requested_profile not in {"production-safe", "gpt54-canary"}:
+        return None
+
+    safe_cloud_models = _safe_cloud_candidates(
+        openclaw_payload=openclaw_payload,
+        registry_models=registry_models,
+        auth_payload=auth_payload,
+        broken_models=broken_models,
+        target_primary=target_primary if requested_profile == "gpt54-canary" else "",
+    )
+
+    provider_health = {
+        provider: _provider_health(auth_payload, provider)
+        for provider in ("openai-codex", "google-antigravity", "google", "openai")
+    }
+
+    if requested_profile == "gpt54-canary":
+        if not _registry_contains_model(target_primary, registry_models):
+            return {
+                "ok": False,
+                "status": "BLOCKED",
+                "reason": "target_model_not_in_runtime_registry",
+                "primary": "",
+                "fallbacks": [],
+                "changed": {},
+                "details": {
+                    "target_primary_candidate": target_primary,
+                    "registry_models": registry_models,
+                    "provider_health": provider_health,
+                    "broken_models": broken_models,
+                },
+            }
+        target_provider = _provider_from_model(target_primary)
+        target_provider_health = provider_health.get(target_provider, {})
+        if target_provider_health.get("disabled"):
+            return {
+                "ok": False,
+                "status": "BLOCKED",
+                "reason": "target_provider_disabled",
+                "primary": "",
+                "fallbacks": [],
+                "changed": {},
+                "details": {
+                    "target_primary_candidate": target_primary,
+                    "provider_health": provider_health,
+                    "broken_models": broken_models,
+                },
+            }
+        if _is_model_broken(target_primary, broken_models):
+            return {
+                "ok": False,
+                "status": "BLOCKED",
+                "reason": "target_model_marked_broken",
+                "primary": "",
+                "fallbacks": [],
+                "changed": {},
+                "details": {
+                    "target_primary_candidate": target_primary,
+                    "provider_health": provider_health,
+                    "broken_models": broken_models,
+                },
+            }
+
+        remaining_cloud = [item for item in safe_cloud_models if not _model_matches(item, target_primary)]
+        return {
+            "ok": True,
+            "status": "READY",
+            "reason": "canary_target_ready",
+            "primary": target_primary,
+            "fallbacks": _unique_non_empty([*remaining_cloud, local_model]),
+            "changed": {},
+            "details": {
+                "target_primary_candidate": target_primary,
+                "provider_health": provider_health,
+                "broken_models": broken_models,
+                "registry_models": registry_models,
+            },
+        }
+
+    if not safe_cloud_models:
+        return {
+            "ok": False,
+            "status": "BLOCKED",
+            "reason": "no_safe_cloud_candidates",
+            "primary": "",
+            "fallbacks": [],
+            "changed": {},
+            "details": {
+                "target_primary_candidate": target_primary,
+                "provider_health": provider_health,
+                "broken_models": broken_models,
+                "registry_models": registry_models,
+            },
+        }
+
+    return {
+        "ok": True,
+        "status": "READY",
+        "reason": "safe_cloud_chain_built",
+        "primary": safe_cloud_models[0],
+        "fallbacks": _unique_non_empty([*safe_cloud_models[1:], local_model]),
+        "changed": {},
+        "details": {
+            "target_primary_candidate": target_primary,
+            "provider_health": provider_health,
+            "broken_models": broken_models,
+            "registry_models": registry_models,
+        },
+    }
+
+
 def _build_target_profile(
     *,
     openclaw_payload: dict[str, Any],
@@ -192,7 +521,7 @@ def _detect_current_profile(openclaw_payload: dict[str, Any]) -> str:
 
 def _resolve_requested_profile(requested: str, current: str) -> str:
     raw = str(requested or "").strip().lower()
-    if raw in {"local-first", "cloud-first"}:
+    if raw in {"local-first", "cloud-first", "production-safe", "gpt54-canary"}:
         return raw
     if raw == "toggle":
         return "cloud-first" if current == "local-first" else "local-first"
@@ -293,13 +622,16 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Только диагностика, без записи файлов")
     parser.add_argument(
         "--profile",
-        choices=("local-first", "cloud-first", "toggle", "current", "auto"),
+        choices=("local-first", "cloud-first", "production-safe", "gpt54-canary", "toggle", "current", "auto"),
         default="local-first",
         help="Профиль маршрутизации для OpenClaw main-agent.",
     )
     parser.add_argument("--openclaw-json", default=str(Path.home() / ".openclaw" / "openclaw.json"))
     parser.add_argument("--agent-json", default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "agent.json"))
     parser.add_argument("--state-json", default=str(Path.home() / ".openclaw" / "krab_autoswitch_state.json"))
+    parser.add_argument("--models-json", default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"))
+    parser.add_argument("--auth-profiles-json", default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"))
+    parser.add_argument("--gateway-log", default=str(Path.home() / ".openclaw" / "logs" / "gateway.err.log"))
     parser.add_argument("--local-model", default="", help="Принудительный local model key, например lmstudio/zai-org/glm-4.6v-flash")
     parser.add_argument("--cloud-model", default="", help="Принудительный cloud model key, например google/gemini-2.5-flash")
     args = parser.parse_args()
@@ -307,9 +639,14 @@ def main() -> int:
     openclaw_path = Path(args.openclaw_json).expanduser()
     agent_path = Path(args.agent_json).expanduser()
     state_path = Path(args.state_json).expanduser()
+    models_path = Path(args.models_json).expanduser()
+    auth_profiles_path = Path(args.auth_profiles_json).expanduser()
+    gateway_log_path = Path(args.gateway_log).expanduser()
 
     openclaw_payload = _read_json(openclaw_path)
     agent_payload = _read_json(agent_path)
+    runtime_models_payload = _read_json(models_path)
+    auth_payload = _read_json(auth_profiles_path)
     if not openclaw_payload:
         print(
             json.dumps(
@@ -329,21 +666,47 @@ def main() -> int:
     local_override = _resolve_local_override(openclaw_payload, explicit_override=args.local_model)
     local_model = _pick_local_model_key(openclaw_payload, override=local_override)
     cloud_model = _pick_cloud_model_key(openclaw_payload, override=args.cloud_model)
+    target_primary = str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", DEFAULT_TARGET_PRIMARY_MODEL) or DEFAULT_TARGET_PRIMARY_MODEL).strip()
+    registry_models = _runtime_models_from_payload(
+        runtime_models_payload,
+        fallback_openclaw_payload=openclaw_payload,
+    )
+    broken_models = _broken_models_from_gateway_log(gateway_log_path)
     current_profile = _detect_current_profile(openclaw_payload)
     effective_profile = _resolve_requested_profile(args.profile, current_profile)
-    primary, fallbacks = _build_target_profile(
+    special_plan = _plan_special_profile(
+        requested_profile=effective_profile,
         openclaw_payload=openclaw_payload,
-        profile=effective_profile,
         local_model=local_model,
-        cloud_model=cloud_model,
+        registry_models=registry_models,
+        auth_payload=auth_payload if isinstance(auth_payload, dict) else {},
+        broken_models=broken_models,
+        target_primary=target_primary,
     )
+    if special_plan is not None:
+        primary = str(special_plan.get("primary") or "").strip()
+        fallbacks_raw = special_plan.get("fallbacks")
+        fallbacks = [
+            str(item or "").strip()
+            for item in fallbacks_raw
+            if str(item or "").strip()
+        ] if isinstance(fallbacks_raw, list) else []
+    else:
+        primary, fallbacks = _build_target_profile(
+            openclaw_payload=openclaw_payload,
+            profile=effective_profile,
+            local_model=local_model,
+            cloud_model=cloud_model,
+        )
 
-    changed = _apply_agent_targets(
-        openclaw_payload=openclaw_payload,
-        agent_payload=agent_payload if isinstance(agent_payload, dict) else {},
-        primary=primary,
-        fallbacks=fallbacks,
-    )
+    changed: dict[str, Any] = {}
+    if primary:
+        changed = _apply_agent_targets(
+            openclaw_payload=openclaw_payload,
+            agent_payload=agent_payload if isinstance(agent_payload, dict) else {},
+            primary=primary,
+            fallbacks=fallbacks,
+        )
 
     backup_openclaw = ""
     backup_agent = ""
@@ -370,10 +733,18 @@ def main() -> int:
             },
         )
 
-    status_value = "OK" if (changed or args.dry_run) else "ACTIVE"
-    reason_value = "profile_applied" if changed else "already_in_desired_state"
+    if special_plan is not None and str(special_plan.get("status") or "").upper() == "BLOCKED":
+        status_value = "BLOCKED"
+        reason_value = str(special_plan.get("reason") or "profile_blocked").strip() or "profile_blocked"
+        ok_value = False
+    else:
+        status_value = "OK" if (changed or args.dry_run) else "ACTIVE"
+        reason_value = "profile_applied" if changed else "already_in_desired_state"
+        if special_plan is not None and str(special_plan.get("reason") or "").strip():
+            reason_value = str(special_plan.get("reason") or "").strip()
+        ok_value = True
     payload = {
-        "ok": True,
+        "ok": ok_value,
         "mode": "dry-run" if args.dry_run else "apply",
         "status": status_value,
         "changed": bool(changed),
@@ -388,12 +759,20 @@ def main() -> int:
             "fallbacks": fallbacks,
             "local_model_detected": local_model,
             "cloud_model_detected": cloud_model,
+            "target_primary_candidate": target_primary,
+            "runtime_registry_source": str(models_path),
+            "auth_profiles_source": str(auth_profiles_path),
+            "gateway_log_source": str(gateway_log_path),
+            "runtime_registry_models": registry_models,
+            "runtime_registry_count": len(registry_models),
+            "broken_models": broken_models,
             "openclaw_json": str(openclaw_path),
             "agent_json": str(agent_path),
             "state_json": str(state_path),
             "backup_openclaw_json": backup_openclaw,
             "backup_agent_json": backup_agent,
             "changed_fields": changed,
+            "special_profile": special_plan.get("details") if isinstance(special_plan, dict) else {},
             "note": "После apply перезапусти OpenClaw gateway для гарантированного применения.",
         },
     }

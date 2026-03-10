@@ -894,6 +894,13 @@
           </svg>
           Cloud Probe
         </button>
+        <select id="ocAutoswitchProfileSelect" class="field" style="min-width: 220px;">
+          <option value="toggle">Autoswitch Toggle</option>
+          <option value="production-safe">Production Safe</option>
+          <option value="gpt54-canary">GPT-5.4 Canary</option>
+          <option value="local-first">Local First</option>
+          <option value="cloud-first">Cloud First</option>
+        </select>
         <button id="ocApplyAutoswitchBtn" class="primary">
           Apply Autoswitch
         </button>
@@ -2901,13 +2908,16 @@ ${channelsText}`;
         if (showStatus) setText("ocMeta", "Загружаю статус OpenClaw...");
         loadControlCompatStatus(false);
         loadEffectiveRouting(false);
+        const autoswitchProfileSelect = document.getElementById("ocAutoswitchProfileSelect");
+        const autoswitchProfile = autoswitchProfileSelect ? String(autoswitchProfileSelect.value || "toggle") : "toggle";
+        const autoswitchStatusProfile = autoswitchProfile === "toggle" ? "current" : autoswitchProfile;
 
         const [catalogRes, autoswitchRes, channelsRes, browserSmokeRes] = await Promise.all([
           fetch("/api/model/catalog").catch((e) => ({
             ok: false,
             error: e.message,
           })),
-          fetch("/api/openclaw/model-autoswitch/status").catch((e) => ({
+          fetch(`/api/openclaw/model-autoswitch/status?profile=${encodeURIComponent(autoswitchStatusProfile)}`).catch((e) => ({
             ok: false,
             error: e.message,
           })),
@@ -3049,14 +3059,16 @@ ${channelsText}`;
 
     async function ocApplyAutoswitch() {
       try {
-        setText("ocMeta", "Применяю autoswitch...");
-        const payload = await postJson(
-          "/api/openclaw/model-autoswitch/apply",
-          { toggle: true },
-        );
+        const autoswitchProfileSelect = document.getElementById("ocAutoswitchProfileSelect");
+        const selectedProfile = autoswitchProfileSelect ? String(autoswitchProfileSelect.value || "toggle") : "toggle";
+        setText("ocMeta", `Применяю autoswitch (${selectedProfile})...`);
+        const requestBody = selectedProfile === "toggle"
+          ? { toggle: true }
+          : { profile: selectedProfile, toggle: false };
+        const payload = await postJson("/api/openclaw/model-autoswitch/apply", requestBody);
         const autoswitch = payload.autoswitch || {};
         const statusText = String(autoswitch.status || "unknown").toUpperCase();
-        setText("ocMeta", `Autoswitch применен (${statusText})`);
+        setText("ocMeta", `Autoswitch ${selectedProfile}: ${statusText}`);
         await loadOpenclawStatus(false);
       } catch (error) {
         showApiError("ocMeta", "Autoswitch", error);

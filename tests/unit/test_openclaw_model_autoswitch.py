@@ -53,6 +53,79 @@ def _base_openclaw_payload() -> dict:
     }
 
 
+def _base_runtime_models_payload() -> dict:
+    return {
+        "providers": {
+            "google": {
+                "models": [
+                    {"id": "google/gemini-2.5-flash"},
+                    {"id": "google/gemini-2.5-flash-lite"},
+                ]
+            },
+            "lmstudio": {
+                "models": [
+                    {"id": "zai-org/glm-4.6v-flash"},
+                ]
+            },
+            "openai": {
+                "models": [
+                    {"id": "gpt-4o-mini"},
+                ]
+            },
+            "openai-codex": {
+                "models": [
+                    {"id": "gpt-4.5-preview"},
+                ]
+            },
+            "google-antigravity": {
+                "models": [
+                    {"id": "gemini-3.1-pro-preview"},
+                ]
+            },
+        }
+    }
+
+
+def _write_runtime_sidecars(
+    tmp_path: Path,
+    *,
+    runtime_models_payload: dict | None = None,
+    auth_profiles_payload: dict | None = None,
+    gateway_log_text: str = "",
+) -> tuple[Path, Path, Path]:
+    models_path = tmp_path / "models.json"
+    auth_profiles_path = tmp_path / "auth-profiles.json"
+    gateway_log_path = tmp_path / "gateway.err.log"
+    models_path.write_text(
+        json.dumps(runtime_models_payload or _base_runtime_models_payload(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    auth_profiles_path.write_text(
+        json.dumps(
+            auth_profiles_payload
+            or {
+                "profiles": {
+                    "openai-codex:default": {"provider": "openai-codex"},
+                    "google-antigravity:vscode-free": {"provider": "google-antigravity"},
+                },
+                "usageStats": {
+                    "google-antigravity:vscode-free": {
+                        "disabledReason": "auth_permanent",
+                        "failureCounts": {"auth_permanent": 2},
+                    },
+                    "openai-codex:default": {
+                        "failureCounts": {"model_not_found": 2},
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    gateway_log_path.write_text(gateway_log_text, encoding="utf-8")
+    return models_path, auth_profiles_path, gateway_log_path
+
+
 def _run_script(*args: str, env_overrides: dict[str, str] | None = None) -> dict:
     env = os.environ.copy()
     # Изолируем тесты от реального LOCAL_PREFERRED_MODEL из локального .env.
@@ -84,6 +157,7 @@ def test_dry_run_local_first_preserves_lmstudio_provider(tmp_path):
     openclaw_path = tmp_path / "openclaw.json"
     agent_path = tmp_path / "agent.json"
     state_path = tmp_path / "state.json"
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(tmp_path)
     openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
     agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
 
@@ -93,6 +167,9 @@ def test_dry_run_local_first_preserves_lmstudio_provider(tmp_path):
         "--openclaw-json", str(openclaw_path),
         "--agent-json", str(agent_path),
         "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
     )
 
     assert payload["ok"] is True
@@ -104,6 +181,7 @@ def test_toggle_switches_between_cloud_and_local_profiles(tmp_path):
     openclaw_path = tmp_path / "openclaw.json"
     agent_path = tmp_path / "agent.json"
     state_path = tmp_path / "state.json"
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(tmp_path)
     openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
     agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
 
@@ -112,6 +190,9 @@ def test_toggle_switches_between_cloud_and_local_profiles(tmp_path):
         "--openclaw-json", str(openclaw_path),
         "--agent-json", str(agent_path),
         "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
     )
     assert first["ok"] is True
     assert first["details"]["effective_profile"] == "local-first"
@@ -124,6 +205,9 @@ def test_toggle_switches_between_cloud_and_local_profiles(tmp_path):
         "--openclaw-json", str(openclaw_path),
         "--agent-json", str(agent_path),
         "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
     )
     assert second["ok"] is True
     assert second["details"]["effective_profile"] == "cloud-first"
@@ -137,6 +221,7 @@ def test_local_first_uses_env_preferred_local_model(tmp_path):
     openclaw_path = tmp_path / "openclaw.json"
     agent_path = tmp_path / "agent.json"
     state_path = tmp_path / "state.json"
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(tmp_path)
     openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
     agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
 
@@ -146,8 +231,95 @@ def test_local_first_uses_env_preferred_local_model(tmp_path):
         "--openclaw-json", str(openclaw_path),
         "--agent-json", str(agent_path),
         "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
         env_overrides={"LOCAL_PREFERRED_MODEL": "nvidia/nemotron-3-nano"},
     )
 
     assert payload["ok"] is True
     assert payload["details"]["primary_model"] == "lmstudio/nvidia/nemotron-3-nano"
+
+
+def test_production_safe_skips_broken_primary_and_disabled_provider(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        gateway_log_text='2026-03-10 [model-fallback] Model "openai-codex/gpt-4.5-preview" not found.\n',
+    )
+    openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "openai-codex/gpt-4.5-preview"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "production-safe",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "OK"
+    assert payload["details"]["primary_model"] == "google/gemini-2.5-flash"
+    assert "google-antigravity/gemini-3.1-pro-preview" not in payload["details"]["fallbacks"]
+
+
+def test_gpt54_canary_blocks_when_target_missing_from_runtime_registry(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(tmp_path)
+    openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "gpt54-canary",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+        env_overrides={"OPENCLAW_TARGET_PRIMARY_MODEL": "openai-codex/gpt-5.4"},
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "BLOCKED"
+    assert payload["reason"] == "target_model_not_in_runtime_registry"
+    assert payload["details"]["primary_model"] == ""
+
+
+def test_gpt54_canary_promotes_target_when_registry_ready(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    runtime_models_payload = _base_runtime_models_payload()
+    runtime_models_payload["providers"]["openai-codex"]["models"].append({"id": "gpt-5.4"})
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        runtime_models_payload=runtime_models_payload,
+    )
+    openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "gpt54-canary",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+        env_overrides={"OPENCLAW_TARGET_PRIMARY_MODEL": "openai-codex/gpt-5.4"},
+    )
+
+    assert payload["ok"] is True
+    assert payload["details"]["primary_model"] == "openai-codex/gpt-5.4"
+    assert payload["reason"] == "canary_target_ready"

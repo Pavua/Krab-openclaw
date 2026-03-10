@@ -1297,3 +1297,37 @@ def test_model_autoswitch_apply_honors_toggle_payload(monkeypatch):
     assert "--dry-run" not in cmd
     assert "--profile" in cmd
     assert "toggle" in cmd
+
+
+def test_model_autoswitch_apply_passes_explicit_profile(monkeypatch):
+    """`/api/openclaw/model-autoswitch/apply` должен прокидывать явный профиль из body."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    calls = []
+
+    class _Proc:
+        def __init__(self):
+            self.returncode = 0
+            self.stdout = json.dumps({"ok": True, "status": "OK", "reason": "unit_test"})
+            self.stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _Proc()
+
+    monkeypatch.setattr("src.modules.web_app.subprocess.run", _fake_run)
+    client = _make_client()
+
+    resp = client.post(
+        "/api/openclaw/model-autoswitch/apply",
+        json={"profile": "production-safe"},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert calls, "subprocess.run не был вызван"
+    cmd = calls[-1]
+    assert "--dry-run" not in cmd
+    assert "--profile" in cmd
+    assert "production-safe" in cmd
