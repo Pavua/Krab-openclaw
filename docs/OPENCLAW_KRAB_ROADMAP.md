@@ -1,8 +1,8 @@
 # OpenClaw Krab Roadmap
 
-Дата актуализации: 2026-03-10
+Дата актуализации: 2026-03-11
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `68%`
+Текущая ориентировочная готовность большого плана: `71%`
 
 ## Цель
 
@@ -46,6 +46,7 @@
 - [ ] Разделить слоты `Chat / Coding / Vision / Fast`
 - [x] Показывать реальные capabilities, а не hardcoded catalog
 - [ ] Показывать auth/quota/runtime state из OpenClaw
+- [x] Добавить owner-oriented web ACL control для userbot в `:8080`
 
 ### Этап 5. Browser / MCP readiness
 
@@ -76,14 +77,17 @@
 - [x] `!remember / !recall` подключены к общей markdown-памяти `workspace-main-messaging/memory`
 - [x] Владелец может выдавать и снимать `full/partial` доступ без ручного редактирования hidden ACL JSON
 - [x] В web-панель `:8080` добавлен selector autoswitch-профилей
+- [x] В web-панель `:8080` добавлен owner-oriented блок `Userbot ACL` с `Refresh / Grant / Revoke`
 - [x] Browser smoke подтвердил, что `gpt54-canary` dry-run виден в UI и отдаёт `target_model_not_in_runtime_registry`
 - [x] Live probe подтвердил: `GPT-5.4` пока `BLOCKED` в OpenClaw, потому что ещё отсутствует в runtime registry
+- [x] Browser smoke подтвердил, что `Userbot ACL` в UI читает owner/full/partial и применяет `Grant / Revoke` на runtime ACL
 
 ## Блокеры и риски
 
 - Совместимость `GPT-5.4` в Codex не гарантирует совместимость того же ID в `OpenClaw openai-codex`
 - В рабочем дереве уже есть незакоммиченные изменения, часть из них не относится к этой задаче
 - `src/core/provider_manager.py` уже существует как незакоммиченный файл и требует аккуратной миграции, а не перезаписи
+- Боевой процесс панели на `:8080` запущен без hot-reload, поэтому для появления новых endpoint'ов и секций нужен контролируемый restart runtime
 
 ## Проверка
 
@@ -93,7 +97,9 @@
 - [x] Unit: compatibility probe + web endpoint для него
 - [x] Unit: workspace prompt bundle + shared memory bridge userbot/OpenClaw
 - [x] Unit: ACL runtime CRUD + owner command `!acl`
+- [x] Unit: web ACL endpoints `/api/userbot/acl/status` и `/api/userbot/acl/update`
 - [x] Browser smoke: selector autoswitch-профилей на `:8080`
+- [x] Browser smoke: `Userbot ACL` на изолированном web-инстансе подтверждает `Refresh / Grant / Revoke`
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart
 - [ ] E2E: совместимость `GPT-5.4` в OpenClaw

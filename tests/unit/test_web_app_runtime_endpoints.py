@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from src.config import config
 from src.modules.web_app import WebApp
@@ -1369,3 +1371,95 @@ def test_model_compat_probe_passes_model_and_reasoning(monkeypatch):
     assert "--reasoning" in cmd
     assert "high" in cmd
     assert "--skip-reasoning" in cmd
+
+
+def test_userbot_acl_status_returns_runtime_acl_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """`/api/userbot/acl/status` должен отдавать owner, runtime state и partial-команды."""
+    acl_path = tmp_path / "krab_userbot_acl.json"
+    monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
+    monkeypatch.setattr(config, "OWNER_USERNAME", "@pablito", raising=False)
+    monkeypatch.setattr(
+        "src.modules.web_app.load_acl_runtime_state",
+        lambda: {"owner": ["pablito"], "full": ["trusted"], "partial": ["reader"]},
+    )
+
+    client = _make_client()
+    resp = client.get("/api/userbot/acl/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["acl"]["path"] == str(acl_path)
+    assert data["acl"]["owner_username"] == "@pablito"
+    assert data["acl"]["state"]["full"] == ["trusted"]
+    assert data["acl"]["state"]["partial"] == ["reader"]
+    assert data["acl"]["partial_commands"] == ["help", "search", "status"]
+
+
+def test_userbot_acl_update_requires_web_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`/api/userbot/acl/update` должен требовать WEB_API_KEY, если он включён."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    client = _make_client()
+
+    resp = client.post(
+        "/api/userbot/acl/update",
+        json={"action": "grant", "level": "full", "subject": "@trusted"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "forbidden: invalid WEB_API_KEY"
+
+
+def test_userbot_acl_update_grants_subject(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`/api/userbot/acl/update` должен применять grant/revoke через общий ACL helper."""
+    acl_path = tmp_path / "krab_userbot_acl.json"
+    monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    def _fake_update(level: str, subject: str, *, add: bool):
+        assert level == "partial"
+        assert subject == "@reader"
+        assert add is True
+        return {
+            "changed": True,
+            "level": "partial",
+            "subject": "reader",
+            "path": acl_path,
+            "state": {"owner": [], "full": [], "partial": ["reader"]},
+        }
+
+    monkeypatch.setattr("src.modules.web_app.update_acl_subject", _fake_update)
+    client = _make_client()
+
+    resp = client.post(
+        "/api/userbot/acl/update",
+        json={"action": "grant", "level": "partial", "subject": "@reader"},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["acl"]["action"] == "grant"
+    assert data["acl"]["level"] == "partial"
+    assert data["acl"]["subject"] == "reader"
+    assert data["acl"]["changed"] is True
+    assert data["acl"]["path"] == str(acl_path)
+    assert data["acl"]["state"]["partial"] == ["reader"]
+
+
+def test_userbot_acl_update_rejects_invalid_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`/api/userbot/acl/update` должен отвергать неподдерживаемые действия."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    client = _make_client()
+
+    resp = client.post(
+        "/api/userbot/acl/update",
+        json={"action": "promote", "level": "full", "subject": "@trusted"},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "acl_update_invalid_action"

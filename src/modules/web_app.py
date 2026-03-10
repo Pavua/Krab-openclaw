@@ -29,6 +29,11 @@ from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, 
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.config import config  # noqa: E402
+from src.core.access_control import (  # noqa: E402
+    PARTIAL_ACCESS_COMMANDS,
+    load_acl_runtime_state,
+    update_acl_subject,
+)
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
 from src.core.model_aliases import (  # noqa: E402
@@ -2843,6 +2848,52 @@ class WebApp:
             return {
                 "ok": True,
                 "routing": self._build_openclaw_model_routing_status(),
+            }
+
+        @self.app.get("/api/userbot/acl/status")
+        async def userbot_acl_status():
+            """Read-only runtime ACL userbot."""
+            return {
+                "ok": True,
+                "acl": {
+                    "path": str(config.USERBOT_ACL_FILE),
+                    "owner_username": str(getattr(config, "OWNER_USERNAME", "") or ""),
+                    "state": load_acl_runtime_state(),
+                    "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
+                },
+            }
+
+        @self.app.post("/api/userbot/acl/update")
+        async def userbot_acl_update(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Обновляет runtime ACL userbot через owner web-key."""
+            self._assert_write_access(x_krab_web_key, token)
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="acl_update_body_required")
+            action = str(body.get("action") or "").strip().lower()
+            level = str(body.get("level") or "").strip().lower()
+            subject = str(body.get("subject") or "").strip()
+            if action not in {"grant", "revoke"}:
+                raise HTTPException(status_code=400, detail="acl_update_invalid_action")
+            try:
+                result = update_acl_subject(level, subject, add=(action == "grant"))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {
+                "ok": True,
+                "acl": {
+                    "action": action,
+                    "level": result["level"],
+                    "subject": result["subject"],
+                    "changed": bool(result["changed"]),
+                    "path": str(result["path"]),
+                    "state": result["state"],
+                    "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
+                },
             }
 
         @self.app.get("/api/openclaw/model-compat/probe")
