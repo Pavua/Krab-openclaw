@@ -562,6 +562,64 @@ def test_model_catalog_uses_runtime_truth_for_loaded_flag(monkeypatch):
     assert catalog["local_models"][0]["loaded"] is True
 
 
+def test_model_catalog_cloud_presets_come_from_openclaw_runtime_registry(monkeypatch):
+    """Cloud catalog должен строиться из runtime models.json, а не из старого hardcoded списка."""
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "openai-codex/gpt-4.5-preview"}
+            self.force_mode = None
+
+        async def list_local_models_verbose(self):
+            return []
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "idle",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    runtime_payload = {
+        "providers": {
+            "openai-codex": {
+                "models": [
+                    {"id": "gpt-4.5-preview", "name": "ChatGPT 4.5 Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
+                ]
+            },
+            "google-antigravity": {
+                "models": [
+                    {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
+                ]
+            },
+        }
+    }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_models",
+        classmethod(lambda cls: runtime_payload),
+    )
+    client = _make_client_with_router(_TruthRouter())
+
+    resp = client.get("/api/model/catalog")
+
+    assert resp.status_code == 200
+    data = resp.json()["catalog"]
+    cloud_ids = {item["id"] for item in data["cloud_presets"]}
+    assert "openai-codex/gpt-4.5-preview" in cloud_ids
+    assert "google-antigravity/gemini-3.1-pro-preview" in cloud_ids
+    assert "openai/gpt-5-codex" not in cloud_ids
+    assert data["runtime_registry_source"] == "openclaw_models_json"
+
+
 def test_model_local_load_default_falls_back_to_config_preferred_model(monkeypatch):
     """`/api/model/local/load-default` не должен ломаться, если compat-router не пробросил поле."""
 

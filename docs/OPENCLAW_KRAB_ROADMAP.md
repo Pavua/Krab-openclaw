@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-10
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `30%`
+Текущая ориентировочная готовность большого плана: `40%`
 
 ## Цель
 
@@ -42,7 +42,7 @@
 
 - [ ] Ввести presets `off / low / medium / high / xhigh`
 - [ ] Разделить слоты `Chat / Coding / Vision / Fast`
-- [ ] Показывать реальные capabilities, а не hardcoded catalog
+- [x] Показывать реальные capabilities, а не hardcoded catalog
 - [ ] Показывать auth/quota/runtime state из OpenClaw
 
 ### Этап 5. Browser / MCP readiness
@@ -66,7 +66,7 @@
 - [x] Подтверждено отсутствие нативного Telegram userbot в upstream OpenClaw
 - [x] Подтверждено, что browser relay частично жив, но browser RPC ещё не доведён
 - [x] Внедрён ACL owner/full/partial
-- [ ] Обновлён web model catalog до runtime-aware режима
+- [x] Обновлён web model catalog до runtime-aware режима
 
 ## Блокеры и риски
 
@@ -77,7 +77,7 @@
 ## Проверка
 
 - [x] Unit: ACL и runtime-aware status
-- [ ] Unit: runtime-aware model catalog
+- [x] Unit: runtime-aware model catalog
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart
 - [ ] E2E: совместимость `GPT-5.4` в OpenClaw

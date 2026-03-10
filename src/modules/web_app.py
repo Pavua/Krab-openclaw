@@ -137,6 +137,184 @@ class WebApp:
         return token
 
     @staticmethod
+    def _openclaw_models_config_path() -> Path:
+        """Путь к runtime source-of-truth моделей OpenClaw."""
+        return Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"
+
+    @classmethod
+    def _load_openclaw_runtime_models(cls) -> dict[str, Any]:
+        """Читает runtime-модели OpenClaw; при ошибке возвращает пустой payload."""
+        path = cls._openclaw_models_config_path()
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return {"providers": {}}
+
+    @staticmethod
+    def _provider_label(provider_name: str) -> str:
+        """Человекочитаемый label провайдера для model catalog."""
+        normalized = str(provider_name or "").strip().lower()
+        labels = {
+            "google": "Google",
+            "google-antigravity": "Google OAuth",
+            "openai": "OpenAI",
+            "openai-codex": "OpenAI Codex",
+            "lmstudio": "LM Studio",
+            "github-copilot": "GitHub Copilot",
+        }
+        return labels.get(normalized, normalized or "provider")
+
+    @classmethod
+    def _build_runtime_cloud_presets(cls, current_slots: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        """
+        Строит cloud catalog из runtime OpenClaw models.json.
+
+        Почему это отдельный helper:
+        - web-панель не должна invent-ить каталог моделей из старых alias-списков;
+        - runtime truth уже живёт в OpenClaw, и UI должен отражать именно его;
+        - текущие slot bindings добавляем как fallback, даже если модель ещё не
+          описана в runtime registry, чтобы пользователь видел фактическое состояние.
+        """
+        payload = cls._load_openclaw_runtime_models()
+        providers = payload.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+
+        items_by_id: dict[str, dict[str, Any]] = {}
+
+        for provider_name, provider_payload in providers.items():
+            if str(provider_name).strip().lower() == "lmstudio":
+                continue
+            models = provider_payload.get("models") if isinstance(provider_payload, dict) else None
+            if not isinstance(models, list):
+                continue
+            for model in models:
+                if not isinstance(model, dict):
+                    continue
+                raw_model_id = str(model.get("id", "") or "").strip()
+                if not raw_model_id:
+                    continue
+                canonical_id = raw_model_id if "/" in raw_model_id else f"{provider_name}/{raw_model_id}"
+                item = {
+                    "id": canonical_id,
+                    "provider": str(provider_name),
+                    "provider_label": cls._provider_label(provider_name),
+                    "label": f"{cls._provider_label(provider_name)} • {raw_model_id}",
+                    "name": str(model.get("name", "") or raw_model_id),
+                    "reasoning": bool(model.get("reasoning", False)),
+                    "max_tokens": int(model.get("maxTokens", 0) or 0),
+                    "context_window": int(model.get("contextWindow", 0) or 0),
+                    "source": "openclaw_runtime",
+                }
+                items_by_id[canonical_id] = item
+
+        for slot_model in (current_slots or {}).values():
+            model_id = str(slot_model or "").strip()
+            if not model_id or model_id in items_by_id:
+                continue
+            provider_name = model_id.split("/", 1)[0] if "/" in model_id else "custom"
+            items_by_id[model_id] = {
+                "id": model_id,
+                "provider": provider_name,
+                "provider_label": cls._provider_label(provider_name),
+                "label": f"{cls._provider_label(provider_name)} • {model_id.split('/', 1)[-1]}",
+                "name": model_id,
+                "reasoning": False,
+                "max_tokens": 0,
+                "context_window": 0,
+                "source": "router_current",
+            }
+
+        return [items_by_id[key] for key in sorted(items_by_id)]
+
+    @classmethod
+    def _build_runtime_quick_presets(
+        cls,
+        *,
+        current_slots: dict[str, str],
+        local_override: str,
+    ) -> dict[str, dict[str, Any]]:
+        """Строит quick presets только из runtime-видимых cloud моделей."""
+        available_ids = {str(item.get("id", "")).strip() for item in cls._build_runtime_cloud_presets(current_slots) if str(item.get("id", "")).strip()}
+
+        def _pick(*preferred_ids: str) -> str:
+            for candidate in preferred_ids:
+                normalized = str(candidate or "").strip()
+                if normalized and normalized in available_ids:
+                    return normalized
+            for slot_name in ("chat", "thinking", "pro", "coding"):
+                current = str(current_slots.get(slot_name, "") or "").strip()
+                if current and current in available_ids:
+                    return current
+            return next(iter(sorted(available_ids)), "")
+
+        chat_model = _pick(
+            str(current_slots.get("chat", "") or ""),
+            "openai-codex/gpt-5.4",
+            "openai-codex/gpt-5.3-codex",
+            "openai-codex/gpt-5.2-codex",
+            "google/gemini-2.5-flash",
+            "google-antigravity/gemini-3.1-pro-preview",
+        )
+        thinking_model = _pick(
+            str(current_slots.get("thinking", "") or ""),
+            "openai-codex/gpt-5.4",
+            "openai-codex/gpt-5.3-codex",
+            "google-antigravity/gemini-3.1-pro-preview",
+            "google/gemini-2.5-flash",
+        )
+        pro_model = _pick(
+            str(current_slots.get("pro", "") or ""),
+            "openai-codex/gpt-5.4",
+            "google-antigravity/gemini-3.1-pro-preview",
+            "openai-codex/gpt-5.3-codex",
+            "google/gemini-2.5-flash",
+        )
+        coding_model = _pick(
+            str(current_slots.get("coding", "") or ""),
+            "openai-codex/gpt-5.4",
+            "openai-codex/gpt-5.3-codex",
+            "openai-codex/gpt-5.2-codex",
+            "openai/gpt-4o-mini",
+        )
+
+        return {
+            "balanced_auto": {
+                "mode": "auto",
+                "title": "Balanced Auto",
+                "description": "Авто-режим: runtime-слоты держатся ближе к текущей truth-конфигурации.",
+                "slots": {
+                    "chat": chat_model,
+                    "thinking": thinking_model or chat_model,
+                    "pro": pro_model or thinking_model or chat_model,
+                    "coding": coding_model or pro_model or chat_model,
+                },
+            },
+            "local_focus": {
+                "mode": "local",
+                "title": "Local Focus",
+                "description": "Force local + локальная модель в ключевых слотах.",
+                "slots": {
+                    "chat": local_override,
+                    "thinking": local_override,
+                    "pro": local_override,
+                    "coding": local_override,
+                },
+            },
+            "cloud_reasoning": {
+                "mode": "cloud",
+                "title": "Cloud Reasoning",
+                "description": "Force cloud + лучший доступный reasoning/coding runtime-профиль.",
+                "slots": {
+                    "chat": chat_model,
+                    "thinking": thinking_model or pro_model or chat_model,
+                    "pro": pro_model or thinking_model or chat_model,
+                    "coding": coding_model or pro_model or chat_model,
+                },
+            },
+        }
+
+    @staticmethod
     def _openclaw_cli_env() -> dict[str, str]:
         """
         Формирует env для вызовов `openclaw` CLI из web-панели.
@@ -2443,30 +2621,15 @@ class WebApp:
                     },
                 )
 
-            cloud_presets: list[dict[str, str]] = []
+            cloud_presets: list[dict[str, Any]] = []
             alias_items: list[dict[str, str]] = []
             try:
-                canonical_cloud_models = sorted(
-                    {
-                        str(model_id).strip()
-                        for model_id in MODEL_FRIENDLY_ALIASES.values()
-                        if str(model_id).strip()
-                    }
-                )
-                for model_id in canonical_cloud_models:
-                    provider = "openai" if model_id.startswith("openai/") else (
-                        "google" if model_id.startswith("google/") else "other"
-                    )
-                    cloud_presets.append(
-                        {
-                            "id": model_id,
-                            "provider": provider,
-                            "label": model_id.replace("google/", "Gemini • ").replace("openai/", "OpenAI • "),
-                        }
-                    )
-
+                cloud_presets = self._build_runtime_cloud_presets(cloud_slots)
+                runtime_model_ids = {str(item.get("id", "")).strip() for item in cloud_presets if str(item.get("id", "")).strip()}
                 for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
                     resolved_id, _ = normalize_model_alias(alias_key)
+                    if resolved_id not in runtime_model_ids:
+                        continue
                     alias_items.append(
                         {
                             "alias": alias_key,
@@ -2478,29 +2641,25 @@ class WebApp:
                 alias_items = []
 
             if not cloud_presets:
-                cloud_presets = [
-                    {"id": "google/gemini-2.5-flash", "provider": "google", "label": "Gemini • gemini-2.5-flash"},
-                    {"id": "google/gemini-3.1-pro-preview", "provider": "google", "label": "Gemini • gemini-3.1-pro-preview"},
-                    {"id": "openai/gpt-5-mini", "provider": "openai", "label": "OpenAI • gpt-5-mini"},
-                    {"id": "openai/gpt-5-codex", "provider": "openai", "label": "OpenAI • gpt-5-codex"},
-                ]
+                cloud_presets = self._build_runtime_cloud_presets({})
 
+            local_override = local_active_model or str(
+                getattr(router_obj, "active_local_model", "") or getattr(config, "LOCAL_PREFERRED_MODEL", "") or ""
+            ).strip()
+            if not local_override:
+                local_override = "nvidia/nemotron-3-nano"
+
+            quick_presets_map = self._build_runtime_quick_presets(
+                current_slots=cloud_slots,
+                local_override=local_override,
+            )
             quick_presets = [
                 {
-                    "id": "balanced_auto",
-                    "title": "Balanced Auto",
-                    "description": "Авто-режим: local-first с сильными cloud-слотами.",
-                },
-                {
-                    "id": "local_focus",
-                    "title": "Local Focus",
-                    "description": "Force local + локальная модель в ключевых слотах.",
-                },
-                {
-                    "id": "cloud_reasoning",
-                    "title": "Cloud Reasoning",
-                    "description": "Force cloud + усиленный reasoning/coding профиль.",
-                },
+                    "id": preset_id,
+                    "title": str(preset_payload.get("title", preset_id)),
+                    "description": str(preset_payload.get("description", "")),
+                }
+                for preset_id, preset_payload in quick_presets_map.items()
             ]
 
             return {
@@ -2515,6 +2674,8 @@ class WebApp:
                 "cloud_presets": cloud_presets,
                 "aliases": alias_items,
                 "quick_presets": quick_presets,
+                "runtime_model_count": len(cloud_presets),
+                "runtime_registry_source": "openclaw_models_json",
             }
 
         @self.app.get("/api/model/catalog")
@@ -2591,35 +2752,10 @@ class WebApp:
                 if not local_override:
                     local_override = os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip() or "nvidia/nemotron-3-nano"
 
-                presets: dict[str, dict[str, object]] = {
-                    "balanced_auto": {
-                        "mode": "auto",
-                        "slots": {
-                            "chat": "google/gemini-2.5-flash",
-                            "thinking": "google/gemini-2.5-pro",
-                            "pro": "google/gemini-3.1-pro-preview",
-                            "coding": "openai/gpt-5-codex",
-                        },
-                    },
-                    "local_focus": {
-                        "mode": "local",
-                        "slots": {
-                            "chat": local_override,
-                            "thinking": local_override,
-                            "pro": local_override,
-                            "coding": local_override,
-                        },
-                    },
-                    "cloud_reasoning": {
-                        "mode": "cloud",
-                        "slots": {
-                            "chat": "google/gemini-2.5-flash",
-                            "thinking": "google/gemini-2.5-pro",
-                            "pro": "google/gemini-3.1-pro-preview",
-                            "coding": "openai/gpt-5-codex",
-                        },
-                    },
-                }
+                presets = self._build_runtime_quick_presets(
+                    current_slots={str(k): str(v) for k, v in router.models.items()},
+                    local_override=local_override,
+                )
                 chosen = presets.get(preset_id)
                 if not chosen:
                     raise HTTPException(status_code=400, detail=f"model_apply_unknown_preset: {preset_id}")
