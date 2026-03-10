@@ -1331,3 +1331,41 @@ def test_model_autoswitch_apply_passes_explicit_profile(monkeypatch):
     assert "--dry-run" not in cmd
     assert "--profile" in cmd
     assert "production-safe" in cmd
+
+
+def test_model_compat_probe_passes_model_and_reasoning(monkeypatch):
+    """`/api/openclaw/model-compat/probe` должен прокидывать model/reasoning/skip_reasoning в probe-скрипт."""
+    calls = []
+
+    class _Proc:
+        def __init__(self):
+            self.returncode = 0
+            self.stdout = json.dumps({"ok": False, "status": "BLOCKED", "reason": "unit_test"})
+            self.stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _Proc()
+
+    monkeypatch.setattr("src.modules.web_app.subprocess.run", _fake_run)
+    client = _make_client()
+
+    resp = client.get(
+        "/api/openclaw/model-compat/probe",
+        params={
+            "model": "openai-codex/gpt-5.4",
+            "reasoning": "high",
+            "skip_reasoning": "true",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["probe"]["status"] == "BLOCKED"
+    assert calls, "subprocess.run не был вызван"
+    cmd = calls[-1]
+    assert "--model" in cmd
+    assert "openai-codex/gpt-5.4" in cmd
+    assert "--reasoning" in cmd
+    assert "high" in cmd
+    assert "--skip-reasoning" in cmd

@@ -2845,6 +2845,20 @@ class WebApp:
                 "routing": self._build_openclaw_model_routing_status(),
             }
 
+        @self.app.get("/api/openclaw/model-compat/probe")
+        async def openclaw_model_compat_probe(
+            model: str = Query(default=""),
+            reasoning: str = Query(default="high"),
+            skip_reasoning: bool = Query(default=False),
+        ):
+            """Read-only compatibility probe для target-модели через текущий OpenClaw gateway."""
+            payload = _run_openclaw_model_compat_probe(
+                model=model,
+                reasoning=reasoning,
+                skip_reasoning=skip_reasoning,
+            )
+            return {"ok": True, "probe": payload}
+
         @self.app.post("/api/model/apply")
         async def model_apply(
             payload: dict = Body(...),
@@ -3953,6 +3967,63 @@ class WebApp:
                 ) from exc
             if not isinstance(payload, dict):
                 raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_invalid_payload")
+            return payload
+
+        def _run_openclaw_model_compat_probe(
+            *,
+            model: str = "",
+            reasoning: str = "high",
+            skip_reasoning: bool = False,
+        ) -> dict:
+            """
+            Запускает read-only probe совместимости target-модели в OpenClaw runtime.
+            """
+            project_root = Path(__file__).resolve().parents[2]
+            script_path = project_root / "scripts" / "openclaw_model_compat_probe.py"
+            if not script_path.exists():
+                raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_script_missing")
+
+            python_bin = project_root / ".venv" / "bin" / "python"
+            if not python_bin.exists():
+                python_bin = Path(sys.executable or "python3")
+
+            cmd = [str(python_bin), str(script_path)]
+            normalized_model = str(model or "").strip()
+            normalized_reasoning = str(reasoning or "high").strip().lower() or "high"
+            if normalized_model:
+                cmd.extend(["--model", normalized_model])
+            if normalized_reasoning:
+                cmd.extend(["--reasoning", normalized_reasoning])
+            if skip_reasoning:
+                cmd.append("--skip-reasoning")
+
+            proc = subprocess.run(
+                cmd,
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            stdout = (proc.stdout or "").strip()
+            stderr = (proc.stderr or "").strip()
+            if proc.returncode != 0:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"openclaw_model_compat_probe_failed: {stderr or stdout or proc.returncode}",
+                )
+
+            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+            if not lines:
+                raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_empty_output")
+            try:
+                payload = json.loads(lines[-1])
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"openclaw_model_compat_probe_invalid_json: {exc}",
+                ) from exc
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_invalid_payload")
             return payload
 
         @self.app.get("/api/openclaw/model-autoswitch/status")
