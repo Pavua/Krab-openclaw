@@ -376,8 +376,8 @@ def _build_start_next_chat_md(
     head = str((git or {}).get("head") or "").strip() or "unknown"
 
     required_files = [
-        bundle_dir / "MIGRATION_HANDOFF_2026-03-02.md",
-        bundle_dir / "OPEN_ISSUES_CHECKLIST.md",
+        bundle_dir / "NEXT_CHAT_CHECKPOINT_RU.md",
+        bundle_dir / "OPENCLAW_KRAB_ROADMAP.md",
         bundle_dir / "NEW_CHAT_BOOTSTRAP_PROMPT.md",
         bundle_dir / "runtime_snapshot.json",
         bundle_dir / "known_issues_matrix.md",
@@ -421,8 +421,9 @@ def _build_start_next_chat_md(
             "",
             "## Стартовый prompt для нового чата",
             "1. Открой `NEW_CHAT_BOOTSTRAP_PROMPT.md` из этого bundle.",
-            "2. Добавь контекст: текущий этап `E1→E3 закрыт`, активный этап `каналы + фото + Chrome relay`.",
-            "3. Добавь явное требование формата отчёта после каждой итерации:",
+            "2. Прочитай `NEXT_CHAT_CHECKPOINT_RU.md` и `OPENCLAW_KRAB_ROADMAP.md`.",
+            "3. Зафиксируй факт: текущая готовность плана около `82%`, активный этап — `controlled restart + browser/MCP readiness + E2E каналов`.",
+            "4. Добавь явное требование формата отчёта после каждой итерации:",
             "   - что изменено;",
             "   - как проверено;",
             "   - что осталось.",
@@ -517,8 +518,8 @@ def main() -> int:
     (BUNDLE_DIR / "krab_log_tail.log").write_text(krab_log_tail, encoding="utf-8")
     (BUNDLE_DIR / "openclaw_log_tail.log").write_text(openclaw_log_tail, encoding="utf-8")
 
-    _copy_if_exists(DOCS_DIR / "MIGRATION_HANDOFF_2026-03-02.md", BUNDLE_DIR / "MIGRATION_HANDOFF_2026-03-02.md")
-    _copy_if_exists(DOCS_DIR / "OPEN_ISSUES_CHECKLIST.md", BUNDLE_DIR / "OPEN_ISSUES_CHECKLIST.md")
+    _copy_if_exists(DOCS_DIR / "NEXT_CHAT_CHECKPOINT_RU.md", BUNDLE_DIR / "NEXT_CHAT_CHECKPOINT_RU.md")
+    _copy_if_exists(DOCS_DIR / "OPENCLAW_KRAB_ROADMAP.md", BUNDLE_DIR / "OPENCLAW_KRAB_ROADMAP.md")
     _copy_if_exists(DOCS_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md", BUNDLE_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md")
     (BUNDLE_DIR / "START_NEXT_CHAT.md").write_text(
         _build_start_next_chat_md(
