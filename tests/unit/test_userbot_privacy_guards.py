@@ -69,6 +69,18 @@ def test_build_runtime_chat_scope_keeps_chat_for_owner(monkeypatch) -> None:
     assert scope == "12345"
 
 
+def test_build_runtime_chat_scope_isolated_for_partial_access(monkeypatch) -> None:
+    bot = _make_bot_stub()
+    monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)
+    scope = bot._build_runtime_chat_scope_id(
+        chat_id="12345",
+        user_id=777,
+        is_allowed_sender=False,
+        access_level="partial",
+    )
+    assert scope == "partial:12345:777"
+
+
 def test_build_system_prompt_for_non_owner_uses_safe_prompt(monkeypatch) -> None:
     bot = _make_bot_stub()
     monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)
@@ -76,6 +88,15 @@ def test_build_system_prompt_for_non_owner_uses_safe_prompt(monkeypatch) -> None
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
     prompt = bot._build_system_prompt_for_sender(is_allowed_sender=False)
     assert prompt == "SAFE_PROMPT_TEST"
+
+
+def test_build_system_prompt_for_partial_access_uses_partial_prompt(monkeypatch) -> None:
+    bot = _make_bot_stub()
+    monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "PARTIAL_ACCESS_PROMPT", "PARTIAL_PROMPT_TEST", raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
+    prompt = bot._build_system_prompt_for_sender(is_allowed_sender=False, access_level="partial")
+    assert prompt == "PARTIAL_PROMPT_TEST"
 
 
 def test_deferred_action_guard_adds_warning_when_scheduler_disabled(monkeypatch) -> None:

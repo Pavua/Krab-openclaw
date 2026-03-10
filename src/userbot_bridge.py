@@ -6,7 +6,7 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 - Поддерживает команды и триггеры (!краб, @краб)
 - Интегрируется с OpenClaw для AI ответов
 - Управляет моделями через ModelManager
-- Имеет систему прав доступа (Owner Only)
+- Имеет систему прав доступа owner/full/partial/guest
 """
 
 import asyncio
@@ -25,6 +25,7 @@ from pyrogram import Client, enums, filters
 from pyrogram.types import Message
 
 from .config import config
+from .core.access_control import AccessLevel, AccessProfile, resolve_access_profile
 from .core.exceptions import KrabError, UserInputError
 from .core.logger import get_logger
 from .core.mcp_registry import resolve_managed_server_launch
@@ -117,6 +118,7 @@ class KraabUserbot:
     """
 
     _known_commands: set[str] = set()
+    _partial_commands: set[str] = {"help", "search", "status"}
     _reply_to_tag_pattern = re.compile(
         r"\[\[\s*(?:reply_to_current|reply_to\s*:[^\]]+|reply_to_[^\]]+)\s*\]\]\s*",
         re.IGNORECASE,
@@ -285,21 +287,6 @@ class KraabUserbot:
     def _setup_handlers(self):
         """Регистрация обработчиков событий и команд"""
 
-        # Custom Filter: Владелец или разрешенные пользователи
-        def check_allowed(_, __, m):
-            if not m.from_user:
-                return False
-            result = self._is_allowed_sender(m.from_user)
-            if not result:
-                logger.warning(
-                    "access_denied",
-                    user=(m.from_user.username or "").lower(),
-                    id=str(m.from_user.id),
-                    chat=m.chat.id,
-                )
-            return result
-
-        is_allowed = filters.create(check_allowed)
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
         self._known_commands = {
@@ -308,6 +295,27 @@ class KraabUserbot:
             "remember", "recall", "ls", "read", "write", "agent",
             "diagnose", "help", "remind", "reminders", "rm_remind", "cronstatus",
         }
+
+        def _make_command_filter(command_name: str):
+            """Создаёт per-command ACL-фильтр без дублирования правил в декораторах."""
+
+            def check_access(_, __, m):
+                if not m.from_user:
+                    return False
+                result = self._has_command_access(m.from_user, command_name)
+                if not result:
+                    access_profile = self._get_access_profile(m.from_user)
+                    logger.warning(
+                        "command_access_denied",
+                        command=command_name,
+                        access_level=access_profile.level.value,
+                        user=(m.from_user.username or "").lower(),
+                        id=str(m.from_user.id),
+                        chat=m.chat.id,
+                    )
+                return result
+
+            return filters.create(check_access)
 
         async def run_cmd(handler, m):
             try:
@@ -321,107 +329,107 @@ class KraabUserbot:
                 m.stop_propagation()
 
         # Регистрация командных оберток (Фаза 4.4: модульные хендлеры)
-        @self.client.on_message(filters.command("status", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("status", prefixes=prefixes) & _make_command_filter("status"), group=-1)
         async def wrap_status(c, m):
             await run_cmd(handle_status, m)
 
-        @self.client.on_message(filters.command("model", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("model", prefixes=prefixes) & _make_command_filter("model"), group=-1)
         async def wrap_model(c, m):
             await run_cmd(handle_model, m)
 
-        @self.client.on_message(filters.command("clear", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("clear", prefixes=prefixes) & _make_command_filter("clear"), group=-1)
         async def wrap_clear(c, m):
             await run_cmd(handle_clear, m)
 
-        @self.client.on_message(filters.command("config", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1)
         async def wrap_config(c, m):
             await run_cmd(handle_config, m)
 
-        @self.client.on_message(filters.command("set", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("set", prefixes=prefixes) & _make_command_filter("set"), group=-1)
         async def wrap_set(c, m):
             await run_cmd(handle_set, m)
 
-        @self.client.on_message(filters.command("role", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("role", prefixes=prefixes) & _make_command_filter("role"), group=-1)
         async def wrap_role(c, m):
             await run_cmd(handle_role, m)
 
-        @self.client.on_message(filters.command("voice", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("voice", prefixes=prefixes) & _make_command_filter("voice"), group=-1)
         async def wrap_voice(c, m):
             await run_cmd(handle_voice, m)
 
-        @self.client.on_message(filters.command("web", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("web", prefixes=prefixes) & _make_command_filter("web"), group=-1)
         async def wrap_web(c, m):
             await run_cmd(handle_web, m)
 
         @self.client.on_message(
-            filters.command("sysinfo", prefixes=prefixes) & is_allowed, group=-1
+            filters.command("sysinfo", prefixes=prefixes) & _make_command_filter("sysinfo"), group=-1
         )
         async def wrap_sysinfo(c, m):
             await run_cmd(handle_sysinfo, m)
 
-        @self.client.on_message(filters.command("panel", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("panel", prefixes=prefixes) & _make_command_filter("panel"), group=-1)
         async def wrap_panel(c, m):
             await run_cmd(handle_panel, m)
 
         @self.client.on_message(
-            filters.command("restart", prefixes=prefixes) & is_allowed, group=-1
+            filters.command("restart", prefixes=prefixes) & _make_command_filter("restart"), group=-1
         )
         async def wrap_restart(c, m):
             await run_cmd(handle_restart, m)
 
-        @self.client.on_message(filters.command("search", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("search", prefixes=prefixes) & _make_command_filter("search"), group=-1)
         async def wrap_search(c, m):
             await run_cmd(handle_search, m)
 
         @self.client.on_message(
-            filters.command("remember", prefixes=prefixes) & is_allowed, group=-1
+            filters.command("remember", prefixes=prefixes) & _make_command_filter("remember"), group=-1
         )
         async def wrap_remember(c, m):
             await run_cmd(handle_remember, m)
 
-        @self.client.on_message(filters.command("recall", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("recall", prefixes=prefixes) & _make_command_filter("recall"), group=-1)
         async def wrap_recall(c, m):
             await run_cmd(handle_recall, m)
 
-        @self.client.on_message(filters.command("ls", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1)
         async def wrap_ls(c, m):
             await run_cmd(handle_ls, m)
 
-        @self.client.on_message(filters.command("read", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("read", prefixes=prefixes) & _make_command_filter("read"), group=-1)
         async def wrap_read(c, m):
             await run_cmd(handle_read, m)
 
-        @self.client.on_message(filters.command("write", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("write", prefixes=prefixes) & _make_command_filter("write"), group=-1)
         async def wrap_write(c, m):
             await run_cmd(handle_write, m)
 
-        @self.client.on_message(filters.command("agent", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("agent", prefixes=prefixes) & _make_command_filter("agent"), group=-1)
         async def wrap_agent(c, m):
             await run_cmd(handle_agent, m)
 
         @self.client.on_message(
-            filters.command("diagnose", prefixes=prefixes) & is_allowed, group=-1
+            filters.command("diagnose", prefixes=prefixes) & _make_command_filter("diagnose"), group=-1
         )
         async def wrap_diagnose(c, m):
             await run_cmd(handle_diagnose, m)
 
-        @self.client.on_message(filters.command("help", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1)
         async def wrap_help(c, m):
             await run_cmd(handle_help, m)
 
-        @self.client.on_message(filters.command("remind", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("remind", prefixes=prefixes) & _make_command_filter("remind"), group=-1)
         async def wrap_remind(c, m):
             await run_cmd(handle_remind, m)
 
-        @self.client.on_message(filters.command("reminders", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("reminders", prefixes=prefixes) & _make_command_filter("reminders"), group=-1)
         async def wrap_reminders(c, m):
             await run_cmd(handle_reminders, m)
 
-        @self.client.on_message(filters.command("rm_remind", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("rm_remind", prefixes=prefixes) & _make_command_filter("rm_remind"), group=-1)
         async def wrap_rm_remind(c, m):
             await run_cmd(handle_rm_remind, m)
 
-        @self.client.on_message(filters.command("cronstatus", prefixes=prefixes) & is_allowed, group=-1)
+        @self.client.on_message(filters.command("cronstatus", prefixes=prefixes) & _make_command_filter("cronstatus"), group=-1)
         async def wrap_cronstatus(c, m):
             await run_cmd(handle_cronstatus, m)
 
@@ -890,40 +898,62 @@ class KraabUserbot:
         """Нормализует username для сравнений ACL."""
         return str(value or "").strip().lstrip("@").lower()
 
+    def _get_access_profile(self, user: object) -> AccessProfile:
+        """Возвращает ACL-профиль отправителя."""
+        if not user:
+            return AccessProfile(level=AccessLevel.GUEST, source="missing_user", matched_subject="")
+        return resolve_access_profile(
+            user_id=getattr(user, "id", ""),
+            username=getattr(user, "username", ""),
+            self_user_id=getattr(self.me, "id", None),
+        )
+
     def _is_allowed_sender(self, user: object) -> bool:
         """
-        Проверяет, является ли отправитель владельцем или входит в allowlist.
+        Проверяет, является ли отправитель доверенным участником owner/full контура.
         """
-        if not user:
-            return False
-        user_id = str(getattr(user, "id", "") or "")
-        username = self._normalize_username(getattr(user, "username", ""))
+        return self._get_access_profile(user).is_trusted
 
-        me_id = getattr(self.me, "id", None)
-        if me_id and str(me_id) == user_id:
-            return True
+    def _has_command_access(self, user: object, command_name: str) -> bool:
+        """Проверяет доступ пользователя к конкретной Telegram-команде."""
+        access_profile = self._get_access_profile(user)
+        return access_profile.can_execute_command(command_name, self._known_commands)
 
-        allowed_ids = {str(x) for x in config.ALLOWED_USERS if str(x).isdigit()}
-        allowed_names = {self._normalize_username(x) for x in config.ALLOWED_USERS if not str(x).isdigit()}
-        return (user_id in allowed_ids) or (username and username in allowed_names)
-
-    def _build_runtime_chat_scope_id(self, *, chat_id: str, user_id: int, is_allowed_sender: bool) -> str:
+    def _build_runtime_chat_scope_id(
+        self,
+        *,
+        chat_id: str,
+        user_id: int,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None = None,
+    ) -> str:
         """
         Возвращает ключ сессии для LLM-контекста.
 
         Для неавторизованных пользователей включаем изоляцию, чтобы исключить
         смешивание истории с owner-контекстом и риск утечки персональных данных.
         """
+        resolved_level = str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "").strip().lower()
         if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
             return str(chat_id)
-        return f"guest:{chat_id}:{user_id}"
+        isolated_level = resolved_level or AccessLevel.GUEST.value
+        return f"{isolated_level}:{chat_id}:{user_id}"
 
-    def _build_system_prompt_for_sender(self, *, is_allowed_sender: bool) -> str:
+    def _build_system_prompt_for_sender(
+        self,
+        *,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None = None,
+    ) -> str:
         """
         Возвращает системный промпт в зависимости от доверия к отправителю.
         """
+        resolved_level = str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "").strip().lower()
         if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
             base_prompt = get_role_prompt(self.current_role)
+        elif resolved_level == AccessLevel.PARTIAL.value:
+            partial_prompt = str(getattr(config, "PARTIAL_ACCESS_PROMPT", "") or "").strip()
+            base_prompt = partial_prompt or str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
         else:
             safe_prompt = str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
             if safe_prompt:
@@ -1239,7 +1269,31 @@ class KraabUserbot:
             f"- Cloud tier: `{tier}`"
         )
 
-    def _build_runtime_capability_status(self, *, is_allowed_sender: bool) -> str:
+    @staticmethod
+    def _resolve_runtime_access_mode(
+        *,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None,
+    ) -> str:
+        """Нормализует access_level для truthful runtime-summary."""
+        if isinstance(access_level, AccessLevel):
+            return access_level.value
+        normalized = str(access_level or "").strip().lower()
+        if normalized in {
+            AccessLevel.OWNER.value,
+            AccessLevel.FULL.value,
+            AccessLevel.PARTIAL.value,
+            AccessLevel.GUEST.value,
+        }:
+            return normalized
+        return AccessLevel.FULL.value if is_allowed_sender else AccessLevel.GUEST.value
+
+    def _build_runtime_capability_status(
+        self,
+        *,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None = None,
+    ) -> str:
         """
         Возвращает детерминированный capability-отчёт по реальному runtime.
 
@@ -1259,6 +1313,10 @@ class KraabUserbot:
         route_channel = str(route_meta.get("channel", "") or "").strip()
         route_model = str(route_meta.get("model", "") or "").strip()
         active_model = current_model or route_model or str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
+        access_mode = self._resolve_runtime_access_mode(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_level,
+        )
 
         abilities: list[str] = [
             "- Отвечать на вопросы, объяснять сложные темы, писать тексты и помогать с кодом.",
@@ -1269,7 +1327,7 @@ class KraabUserbot:
 
         if bool(getattr(config, "SCHEDULER_ENABLED", False)):
             abilities.append("- Ставить напоминания и отложенные задачи через `!remind`, `!reminders`, `!rm_remind`.")
-        if is_allowed_sender:
+        if access_mode in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
             abilities.extend(
                 [
                     "- Искать информацию в вебе по команде `!search`.",
@@ -1277,6 +1335,14 @@ class KraabUserbot:
                     "- Работать с файлами по путям через `!ls`, `!read`, `!write`.",
                     "- Управлять браузерным/веб-контуром через `!web` и открывать панель через `!panel`.",
                     "- Отправлять голосовой ответ в режиме `!voice`.",
+                ]
+            )
+        elif access_mode == AccessLevel.PARTIAL.value:
+            abilities.extend(
+                [
+                    "- Искать информацию в вебе по команде `!search`.",
+                    "- Показывать truthful runtime-статус и безопасные help-команды.",
+                    "- Работать в изолированном контуре без owner-only инструментов.",
                 ]
             )
         else:
@@ -1293,12 +1359,16 @@ class KraabUserbot:
             "- Не запоминаю всю переписку навсегда автоматически: долговременная память у меня точечная и управляется отдельно.",
             "- Качество анализа фото зависит от того, какая модель и какой маршрут сейчас доступны.",
         ]
-        if is_allowed_sender:
+        if access_mode in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
             limitations.append(
                 "- Голосовой ответ есть, но полноценное понимание входящих голосовых сообщений всё ещё ограничено текущим контуром."
             )
             limitations.append(
                 "- Работа с файлами идёт через команды и пути, а не как полностью бесшовная загрузка любых вложений в обычном диалоге."
+            )
+        elif access_mode == AccessLevel.PARTIAL.value:
+            limitations.append(
+                "- Частичный доступ не открывает файловый контур, браузерное управление, панель, конфиги и admin-команды."
             )
         else:
             limitations.append(
@@ -1322,13 +1392,32 @@ class KraabUserbot:
             + "\n\nЕсли хочешь, я могу отдельно показать список **команд**, **инструментов владельца** или **реальных активных интеграций** в этом runtime."
         )
 
-    def _build_runtime_commands_status(self, *, is_allowed_sender: bool) -> str:
+    def _build_runtime_commands_status(
+        self,
+        *,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None = None,
+    ) -> str:
         """
         Возвращает truth-summary по доступным Telegram-командам.
 
         Для гостевого контура не раскрываем owner-only/admin команды.
         """
-        if not is_allowed_sender:
+        access_mode = self._resolve_runtime_access_mode(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_level,
+        )
+        if access_mode == AccessLevel.PARTIAL.value:
+            return (
+                "🧭 **Команды частичного доступа**\n"
+                "- `!status`\n"
+                "- `!help`\n"
+                "- `!search <запрос>`\n\n"
+                "🔒 **Что недоступно в этом контуре**\n"
+                "- Управление моделями, памятью, файлами, браузером, панелью и runtime-конфигом.\n"
+                "- Owner/full-команды для диагностики, записи файлов и глобальных изменений."
+            )
+        if access_mode not in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
             return (
                 "🦀 **Что доступно в обычном диалоге**\n"
                 "- Свободные текстовые запросы без спецкоманд.\n"
@@ -1364,7 +1453,12 @@ class KraabUserbot:
             + "\n\nЕсли хочешь, я могу следующим сообщением показать короткую шпаргалку **по каждой команде с примерами**."
         )
 
-    async def _build_runtime_integrations_status(self, *, is_allowed_sender: bool) -> str:
+    async def _build_runtime_integrations_status(
+        self,
+        *,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None = None,
+    ) -> str:
         """
         Возвращает truth-summary по активным интеграциям и инструментам runtime.
 
@@ -1380,6 +1474,10 @@ class KraabUserbot:
         firecrawl_ready = not bool(resolve_managed_server_launch("firecrawl").get("missing_env"))
         browser_ready = not bool(resolve_managed_server_launch("openclaw-browser").get("missing_env"))
         chrome_profile_ready = not bool(resolve_managed_server_launch("chrome-profile").get("missing_env"))
+        access_mode = self._resolve_runtime_access_mode(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_level,
+        )
 
         public_lines = [
             f"- OpenClaw Gateway: {'ON' if openclaw_ok else 'OFF'}",
@@ -1388,7 +1486,14 @@ class KraabUserbot:
             "- Голосовой TTS-ответ: ON",
         ]
 
-        if not is_allowed_sender:
+        if access_mode == AccessLevel.PARTIAL.value:
+            return (
+                "🔌 **Текущие интеграции Краба**\n"
+                + "\n".join(public_lines)
+                + f"\n- Web search (Brave): {'configured' if brave_ready else 'missing key'}"
+                + "\n- Owner-only MCP, браузерный контроль, файловый доступ и расширенный tool-контур скрыты в этом чате."
+            )
+        if access_mode not in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
             return (
                 "🔌 **Текущие интеграции Краба**\n"
                 + "\n".join(public_lines)
@@ -1410,7 +1515,12 @@ class KraabUserbot:
             + "\n\nЕсли хочешь, я могу отдельно показать статус в формате **что работает / что требует ключ / что требует баланс**."
         )
 
-    async def _build_runtime_truth_status(self, *, is_allowed_sender: bool) -> str:
+    async def _build_runtime_truth_status(
+        self,
+        *,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None = None,
+    ) -> str:
         """
         Собирает короткий truthful self-check без вызова LLM.
 
@@ -1436,6 +1546,10 @@ class KraabUserbot:
         browser_ready = not bool(resolve_managed_server_launch("openclaw-browser").get("missing_env"))
         chrome_profile_ready = not bool(resolve_managed_server_launch("chrome-profile").get("missing_env"))
         brave_ready = not bool(resolve_managed_server_launch("brave-search").get("missing_env"))
+        access_mode = self._resolve_runtime_access_mode(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_level,
+        )
 
         lines: list[str] = [
             "🧭 **Фактический runtime self-check**",
@@ -1458,13 +1572,28 @@ class KraabUserbot:
             "- Интернет / веб-поиск: "
             + (
                 "доступен через инструментальный маршрут по явному запросу"
-                if is_allowed_sender and brave_ready
+                if access_mode in {AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value} and brave_ready
                 else "не подтверждается как постоянный фоновой доступ"
             )
         )
         lines.append("- Cron / heartbeat: без отдельной runtime-проверки не считаю их подтверждённо рабочими.")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_command_access_denied_text(command_name: str, access_profile: AccessProfile) -> str:
+        """Возвращает понятное сообщение при попытке вызвать недоступную команду."""
+        command = str(command_name or "").strip().lower()
+        if access_profile.level == AccessLevel.PARTIAL:
+            return (
+                f"🔒 Команда `!{command}` недоступна в режиме частичного доступа.\n"
+                "Сейчас доступны: `!status`, `!help`, `!search <запрос>`.\n"
+                "Для расширения прав владелец должен перевести контакт в full-доступ."
+            )
+        return (
+            f"🔒 Команда `!{command}` доступна только доверенному контуру Краба.\n"
+            "В обычном диалоге доступны свободные сообщения, а служебные команды скрыты."
+        )
 
     async def _deliver_response_parts(
         self,
@@ -1596,7 +1725,14 @@ class KraabUserbot:
             user = message.from_user
             if not user or user.is_bot:
                 return
+            access_profile = self._get_access_profile(user)
             is_allowed_sender = self._is_allowed_sender(user)
+            if is_allowed_sender and not access_profile.is_trusted:
+                access_profile = AccessProfile(
+                    level=AccessLevel.FULL,
+                    source="legacy_allowed_sender_override",
+                    matched_subject=str(getattr(user, "username", "") or getattr(user, "id", "")),
+                )
 
             text = message.text or message.caption or ""
             has_voice = bool(getattr(message, "voice", None))
@@ -1604,6 +1740,8 @@ class KraabUserbot:
             if text and text.lstrip()[:1] in ("!", "/", "."):
                 cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
                 if cmd_word in self._known_commands:
+                    if not access_profile.can_execute_command(cmd_word, self._known_commands):
+                        await message.reply(self._build_command_access_denied_text(cmd_word, access_profile))
                     return
 
             if not text and not message.photo and not has_voice:
@@ -1614,6 +1752,7 @@ class KraabUserbot:
                 chat_id=chat_id,
                 user_id=int(user.id),
                 is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
             )
             is_self = user.id == self.me.id
             has_trigger = self._is_trigger(text)
@@ -1659,6 +1798,7 @@ class KraabUserbot:
             if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
                 runtime_text = await self._build_runtime_truth_status(
                     is_allowed_sender=is_allowed_sender,
+                    access_level=access_profile.level,
                 )
                 runtime_text = self._apply_optional_disclosure(
                     chat_id=chat_id,
@@ -1676,6 +1816,7 @@ class KraabUserbot:
             if self._looks_like_capability_status_question(query):
                 capability_text = self._build_runtime_capability_status(
                     is_allowed_sender=is_allowed_sender,
+                    access_level=access_profile.level,
                 )
                 capability_text = self._apply_optional_disclosure(
                     chat_id=chat_id,
@@ -1693,6 +1834,7 @@ class KraabUserbot:
             if self._looks_like_commands_question(query):
                 commands_text = self._build_runtime_commands_status(
                     is_allowed_sender=is_allowed_sender,
+                    access_level=access_profile.level,
                 )
                 commands_text = self._apply_optional_disclosure(
                     chat_id=chat_id,
@@ -1710,6 +1852,7 @@ class KraabUserbot:
             if self._looks_like_integrations_question(query):
                 integrations_text = await self._build_runtime_integrations_status(
                     is_allowed_sender=is_allowed_sender,
+                    access_level=access_profile.level,
                 )
                 integrations_text = self._apply_optional_disclosure(
                     chat_id=chat_id,
@@ -1774,6 +1917,7 @@ class KraabUserbot:
 
             system_prompt = self._build_system_prompt_for_sender(
                 is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
             )
 
             # CONTEXT: Добавляем контекст чата для групп
