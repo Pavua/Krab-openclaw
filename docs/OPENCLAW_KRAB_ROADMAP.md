@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-11
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `76%`
+Текущая ориентировочная готовность большого плана: `82%`
 
 ## Цель
 
@@ -33,12 +33,12 @@
 
 ### Этап 3. GPT-5.4 first routing
 
-- [ ] Убрать `gpt-4.5-preview` как ложный primary
-- [ ] Реализовать compatibility stage для `GPT-5.4` (частично)
+- [x] Убрать `gpt-4.5-preview` как ложный primary
+- [x] Реализовать compatibility stage для `GPT-5.4`
 - [x] Добавить read-only diagnostics слой для runtime model routing
-- [ ] Настроить downgrade до последнего подтверждённого OpenClaw-compatible OpenAI/Codex ID (частично)
+- [x] Настроить downgrade до последнего подтверждённого OpenClaw-compatible OpenAI/Codex ID
 - [ ] Восстановить `google-antigravity` как боевой fallback
-- [ ] Собрать production fallback chain (частично)
+- [x] Собрать production fallback chain
 
 ### Этап 4. Thinking / slots / quota UX
 
@@ -85,6 +85,9 @@
 - [x] Repair-слой runtime теперь умеет выставлять `groupPolicy=allowlist` и выводить `groupAllowFrom` из live-конфига
 - [x] Создан one-click файл `Apply Reserve Telegram Policy.command` для reserve-safe Telegram Bot
 - [x] Live runtime Telegram bot переведён в reserve-safe policy: `allowlist` для DM и групп, внешние tool-guards включены
+- [x] Добавлен безопасный `canary-registry sync` для `GPT-5.4` без изменения production routing до compat-probe
+- [x] Live compatibility probe подтвердил: `openai-codex/gpt-5.4` реально отвечает через OpenClaw gateway
+- [x] Runtime primary переведён на `openai-codex/gpt-5.4`, fallback chain перестроен без disabled `google-antigravity`
 
 ## Блокеры и риски
 
@@ -93,6 +96,7 @@
 - `src/core/provider_manager.py` уже существует как незакоммиченный файл и требует аккуратной миграции, а не перезаписи
 - Боевой процесс панели на `:8080` запущен без hot-reload, поэтому для появления новых endpoint'ов и секций нужен контролируемый restart runtime
 - Для полного подтверждения reserve-контура ещё нужен внешний smoke самого Telegram Bot после runtime-refresh/реального сообщения
+- `openclaw models status` после live-promotion показывает новый default, но секция `Configured models` ещё требует отдельной проверки на консистентность со свежим registry
 
 ## Проверка
 
@@ -104,13 +108,15 @@
 - [x] Unit: ACL runtime CRUD + owner command `!acl`
 - [x] Unit: web ACL endpoints `/api/userbot/acl/status` и `/api/userbot/acl/update`
 - [x] Unit: reserve-safe repair для `dmPolicy/groupPolicy` Telegram Bot
+- [x] Unit: safe sync canary-модели в runtime registry OpenClaw
 - [x] Browser smoke: selector autoswitch-профилей на `:8080`
 - [x] Browser smoke: `Userbot ACL` на изолированном web-инстансе подтверждает `Refresh / Grant / Revoke`
 - [x] Runtime repair smoke: Telegram reserve-policy применён и отражён в `~/.openclaw/openclaw.json`
+- [x] Live probe: `openai-codex/gpt-5.4` = `READY` через OpenClaw gateway
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart
 - [ ] E2E: emergency запрос через Telegram Bot в reserve-safe режиме
-- [ ] E2E: совместимость `GPT-5.4` в OpenClaw
+- [x] E2E: совместимость `GPT-5.4` в OpenClaw
 
 ## Merge gate
 
