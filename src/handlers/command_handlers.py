@@ -18,6 +18,7 @@ from ..core.exceptions import UserInputError
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
+from ..core.openclaw_workspace import append_workspace_memory_entry, recall_workspace_memory
 from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
 from ..core.swarm import AgentRoom
 from ..employee_templates import ROLES, get_role_prompt, list_roles, save_role
@@ -129,7 +130,13 @@ async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
     if not text:
         raise UserInputError(user_message="🧠 Что запомнить? Напиши: `!remember <текст>`")
     try:
-        success = memory_manager.save_fact(text)
+        workspace_saved = append_workspace_memory_entry(
+            text,
+            source="userbot",
+            author=str(getattr(getattr(message, "from_user", None), "username", "") or ""),
+        )
+        vector_saved = memory_manager.save_fact(text)
+        success = workspace_saved or vector_saved
         if success:
             await message.reply(f"🧠 **Запомнил:** `{text}`")
         else:
@@ -144,7 +151,14 @@ async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
     if not text:
         raise UserInputError(user_message="🧠 Что вспомнить? Напиши: `!recall <запрос>`")
     try:
-        facts = memory_manager.recall(text)
+        workspace_facts = recall_workspace_memory(text)
+        vector_facts = memory_manager.recall(text)
+        sections: list[str] = []
+        if workspace_facts:
+            sections.append(f"**OpenClaw workspace:**\n{workspace_facts}")
+        if vector_facts and vector_facts not in workspace_facts:
+            sections.append(f"**Local vector memory:**\n{vector_facts}")
+        facts = "\n\n".join(section for section in sections if section).strip()
         if facts:
             await message.reply(f"🧠 **Вспомнил:**\n\n{facts}")
         else:

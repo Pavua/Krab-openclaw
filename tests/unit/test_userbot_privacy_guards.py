@@ -99,6 +99,20 @@ def test_build_system_prompt_for_partial_access_uses_partial_prompt(monkeypatch)
     assert prompt == "PARTIAL_PROMPT_TEST"
 
 
+def test_build_system_prompt_for_owner_includes_openclaw_workspace_bundle(monkeypatch) -> None:
+    bot = _make_bot_stub()
+    monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
+    monkeypatch.setattr(userbot_bridge_module, "get_role_prompt", lambda role: "ROLE_PROMPT_TEST")
+    monkeypatch.setattr(userbot_bridge_module, "load_workspace_prompt_bundle", lambda: "WORKSPACE_TRUTH_TEST")
+
+    prompt = bot._build_system_prompt_for_sender(is_allowed_sender=True)
+
+    assert "ROLE_PROMPT_TEST" in prompt
+    assert "WORKSPACE_TRUTH_TEST" in prompt
+    assert "источник истины" in prompt.lower()
+
+
 def test_deferred_action_guard_adds_warning_when_scheduler_disabled(monkeypatch) -> None:
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", False, raising=False)
     monkeypatch.setattr(userbot_bridge_module.config, "DEFERRED_ACTION_GUARD_ENABLED", True, raising=False)

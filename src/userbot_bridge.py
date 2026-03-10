@@ -29,6 +29,7 @@ from .core.access_control import AccessLevel, AccessProfile, resolve_access_prof
 from .core.exceptions import KrabError, UserInputError
 from .core.logger import get_logger
 from .core.mcp_registry import resolve_managed_server_launch
+from .core.openclaw_workspace import load_workspace_prompt_bundle
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .employee_templates import ROLES, get_role_prompt
@@ -951,6 +952,14 @@ class KraabUserbot:
         resolved_level = str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "").strip().lower()
         if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
             base_prompt = get_role_prompt(self.current_role)
+            workspace_bundle = load_workspace_prompt_bundle()
+            if workspace_bundle:
+                base_prompt = (
+                    f"{base_prompt}\n\n"
+                    "Ниже канонический OpenClaw workspace для внешнего messaging-контура. "
+                    "Это источник истины для Краба; придерживайся его, а не устаревших локальных копий.\n\n"
+                    f"{workspace_bundle}"
+                ).strip()
         elif resolved_level == AccessLevel.PARTIAL.value:
             partial_prompt = str(getattr(config, "PARTIAL_ACCESS_PROMPT", "") or "").strip()
             base_prompt = partial_prompt or str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()

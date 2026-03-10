@@ -187,6 +187,12 @@ class Config:
             str(Path.home() / ".openclaw" / "krab_userbot_acl.json"),
         )
     )
+    OPENCLAW_MAIN_WORKSPACE_DIR: Path = Path(
+        os.getenv(
+            "OPENCLAW_MAIN_WORKSPACE_DIR",
+            str(Path.home() / ".openclaw" / "workspace-main-messaging"),
+        )
+    )
     TRIGGER_PREFIXES: list[str] = [p.strip() for p in os.getenv("TRIGGER_PREFIXES", "!краб,@краб,/краб,Краб,,краб,").split(",") if p.strip()]
     # Опциональный дисклеймер в начале диалога: честный автоответчик без маскировки.
     AI_DISCLOSURE_ENABLED: bool = os.getenv("AI_DISCLOSURE_ENABLED", "0").strip().lower() in (

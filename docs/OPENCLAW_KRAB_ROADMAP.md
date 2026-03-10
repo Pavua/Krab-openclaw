@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-10
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `58%`
+Текущая ориентировочная готовность большого плана: `64%`
 
 ## Цель
 
@@ -26,7 +26,7 @@
 
 ### Этап 2. Userbot-primary и общий runtime state
 
-- [ ] Перевести userbot на общий workspace/state без отдельной амнезии
+- [ ] Перевести userbot на общий workspace/state без отдельной амнезии (частично)
 - [ ] Зафиксировать Telegram bot как reserve transport
 - [ ] Развести права owner / full / partial / guest по командам и tool-контру
 
@@ -71,6 +71,8 @@
 - [x] Добавлен autoswitch-профиль `production-safe` на основе runtime registry/auth/log truth
 - [x] Добавлен честный canary-профиль `gpt54-canary` с `BLOCKED`, если `GPT-5.4` ещё не готов в OpenClaw runtime
 - [x] Добавлен read-only compatibility probe для target-модели через текущий OpenClaw gateway
+- [x] Userbot читает канонический OpenClaw workspace bundle для owner/full контура
+- [x] `!remember / !recall` подключены к общей markdown-памяти `workspace-main-messaging/memory`
 - [x] В web-панель `:8080` добавлен selector autoswitch-профилей
 - [x] Browser smoke подтвердил, что `gpt54-canary` dry-run виден в UI и отдаёт `target_model_not_in_runtime_registry`
 - [x] Live probe подтвердил: `GPT-5.4` пока `BLOCKED` в OpenClaw, потому что ещё отсутствует в runtime registry
@@ -87,6 +89,7 @@
 - [x] Unit: runtime-aware model catalog
 - [x] Unit: autoswitch `production-safe` / `gpt54-canary`
 - [x] Unit: compatibility probe + web endpoint для него
+- [x] Unit: workspace prompt bundle + shared memory bridge userbot/OpenClaw
 - [x] Browser smoke: selector autoswitch-профилей на `:8080`
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart

@@ -1,0 +1,176 @@
+# -*- coding: utf-8 -*-
+"""
+openclaw_workspace.py — доступ к каноническому workspace OpenClaw.
+
+Что это:
+- единая точка чтения persona/source-of-truth из `~/.openclaw/workspace-main-messaging`;
+- helper для userbot, чтобы он не жил на отдельном hardcoded prompt;
+- helper для общей текстовой памяти `!remember/!recall`, не плодящей второй
+  независимый store рядом с runtime OpenClaw.
+
+Зачем нужно:
+- bot-контур OpenClaw уже опирается на hidden workspace;
+- userbot раньше читал только локальный prompt и свою Chroma-память;
+- из-за этого появлялась амнезия и расхождение поведения между каналами.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from .logger import get_logger
+from ..config import config
+
+
+logger = get_logger(__name__)
+
+
+WORKSPACE_PROMPT_FILES: tuple[str, ...] = ("SOUL.md", "USER.md", "TOOLS.md", "MEMORY.md")
+
+
+def resolve_main_workspace_dir(workspace_dir: Path | None = None) -> Path:
+    """Возвращает канонический путь workspace-main-messaging."""
+    candidate = workspace_dir or getattr(config, "OPENCLAW_MAIN_WORKSPACE_DIR", None)
+    if isinstance(candidate, Path):
+        return candidate.expanduser()
+    return Path.home() / ".openclaw" / "workspace-main-messaging"
+
+
+def _read_text(path: Path, *, max_chars: int) -> str:
+    if not path.exists():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError as exc:
+        logger.warning("openclaw_workspace_read_failed", path=str(path), error=str(exc))
+        return ""
+    if max_chars > 0 and len(text) > max_chars:
+        return text[:max_chars].rstrip() + "\n[...trimmed...]"
+    return text
+
+
+def load_workspace_prompt_bundle(
+    *,
+    workspace_dir: Path | None = None,
+    max_chars_per_file: int = 1800,
+    include_recent_memory_days: int = 2,
+) -> str:
+    """
+    Собирает компактный prompt-bundle из канонического OpenClaw workspace.
+
+    Для userbot достаточно persona + user prefs + tools + свежей памяти.
+    Полный AGENTS bootstrap сюда намеренно не тащим, чтобы не раздувать prompt.
+    """
+    root = resolve_main_workspace_dir(workspace_dir)
+    sections: list[str] = []
+
+    for filename in WORKSPACE_PROMPT_FILES:
+        content = _read_text(root / filename, max_chars=max_chars_per_file)
+        if content:
+            sections.append(f"[{filename}]\n{content}")
+
+    memory_dir = root / "memory"
+    if memory_dir.exists():
+        today = datetime.now().date()
+        for offset in range(max(0, int(include_recent_memory_days))):
+            day = today - timedelta(days=offset)
+            content = _read_text(memory_dir / f"{day.isoformat()}.md", max_chars=max_chars_per_file)
+            if content:
+                sections.append(f"[memory/{day.isoformat()}.md]\n{content}")
+
+    return "\n\n".join(section for section in sections if section).strip()
+
+
+def append_workspace_memory_entry(
+    text: str,
+    *,
+    workspace_dir: Path | None = None,
+    source: str = "userbot",
+    author: str = "",
+) -> bool:
+    """Добавляет запись в дневной markdown-файл общей памяти OpenClaw."""
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+
+    root = resolve_main_workspace_dir(workspace_dir)
+    memory_dir = root / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now()
+    day_path = memory_dir / f"{today.date().isoformat()}.md"
+
+    author_suffix = f":{author.strip()}" if str(author or "").strip() else ""
+    line = f"- {today.strftime('%H:%M')} [{str(source or 'userbot').strip()}{author_suffix}] {normalized}"
+    try:
+        if day_path.exists():
+            existing = day_path.read_text(encoding="utf-8", errors="ignore").rstrip()
+            prefix = existing + ("\n" if existing else "")
+            day_path.write_text(prefix + line + "\n", encoding="utf-8")
+        else:
+            header = f"# Memory {today.date().isoformat()}\n\n"
+            day_path.write_text(header + line + "\n", encoding="utf-8")
+        return True
+    except OSError as exc:
+        logger.warning("openclaw_workspace_memory_append_failed", path=str(day_path), error=str(exc))
+        return False
+
+
+def _query_tokens(query: str) -> list[str]:
+    tokens = re.findall(r"[0-9A-Za-zА-Яа-яЁё_-]{3,}", str(query or "").lower())
+    return list(dict.fromkeys(tokens))
+
+
+def recall_workspace_memory(
+    query: str,
+    *,
+    workspace_dir: Path | None = None,
+    max_results: int = 5,
+    max_chars: int = 1600,
+) -> str:
+    """
+    Ищет текстовые совпадения в канонической памяти OpenClaw.
+
+    Это не векторный поиск, а надёжный fallback по markdown-памяти workspace:
+    он нужен, чтобы userbot видел ту же дневную память, что и runtime OpenClaw.
+    """
+    tokens = _query_tokens(query)
+    if not tokens:
+        return ""
+
+    root = resolve_main_workspace_dir(workspace_dir)
+    candidate_files: list[Path] = []
+    memory_md = root / "MEMORY.md"
+    if memory_md.exists():
+        candidate_files.append(memory_md)
+    memory_dir = root / "memory"
+    if memory_dir.exists():
+        candidate_files.extend(sorted(memory_dir.glob("*.md"), reverse=True))
+
+    matches: list[tuple[int, str, str]] = []
+    for path in candidate_files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError as exc:
+            logger.warning("openclaw_workspace_memory_read_failed", path=str(path), error=str(exc))
+            continue
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            lowered = line.lower()
+            score = sum(1 for token in tokens if token in lowered)
+            if score <= 0:
+                continue
+            matches.append((score, path.name, line))
+
+    matches.sort(key=lambda item: (-item[0], item[1], item[2]))
+    rendered: list[str] = []
+    for _, filename, line in matches[: max(1, int(max_results))]:
+        rendered.append(f"- [{filename}] {line}")
+
+    result = "\n".join(rendered).strip()
+    if max_chars > 0 and len(result) > max_chars:
+        return result[:max_chars].rstrip() + "\n[...trimmed...]"
+    return result
