@@ -1,71 +1,67 @@
 # NEW CHAT BOOTSTRAP PROMPT
 
-Ниже актуальный шаблон для старта нового окна по ветке `GPT-5.4 / userbot-primary`.
-
----
+Ниже актуальный шаблон для старта нового окна по состоянию на `2026-03-12`.
 
 Работаем в проекте Krab/OpenClaw.  
-Текущая ветка: `codex/gpt54-userbot-primary`.  
-Текущая ориентировочная готовность большого плана: `~82%`.
+Текущая рабочая ветка: `codex/handoff-bundle-polish`.  
+Техническая база этой ветки: `codex/web-runtime-smoke-hardening @ 859cf05`.  
+Текущая ориентировочная готовность большого плана: `~99%`.
 
 ## Прочитай сначала
 
-1. [docs/NEXT_CHAT_CHECKPOINT_RU.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/NEXT_CHAT_CHECKPOINT_RU.md)
-2. [docs/OPENCLAW_KRAB_ROADMAP.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/OPENCLAW_KRAB_ROADMAP.md)
-3. (если уже собран) свежий `artifacts/handoff_<timestamp>/START_NEXT_CHAT.md`
-4. (если уже собран) свежий `artifacts/handoff_<timestamp>/runtime_snapshot.json`
-5. (если уже собран) свежий `artifacts/handoff_<timestamp>/known_issues_matrix.md`
+1. Если приложен свежий bundle: `artifacts/handoff_<timestamp>/START_NEXT_CHAT.md`
+2. Если приложен свежий bundle: `artifacts/handoff_<timestamp>/ATTACH_SUMMARY_RU.md`
+3. Если работа продолжается на основной учётке: `artifacts/handoff_<timestamp>/PABLITO_RETURN_CHECKLIST.md`
+4. [docs/NEXT_CHAT_CHECKPOINT_RU.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/NEXT_CHAT_CHECKPOINT_RU.md)
+5. [docs/OPENCLAW_KRAB_ROADMAP.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/OPENCLAW_KRAB_ROADMAP.md)
+6. Если приложен свежий bundle: `runtime_snapshot.json`, `HANDOFF_MANIFEST.json`, `known_issues_matrix.md`
 
 ## Что уже считается фактом
 
-1. `openai-codex/gpt-4.5-preview` был ложным primary и падал `404`.
-2. `GPT-5.4` уже зарегистрирован в runtime registry OpenClaw.
-3. Live compat probe для `openai-codex/gpt-5.4` уже дал `READY`.
-4. Runtime primary уже переведён на `openai-codex/gpt-5.4`.
-5. Userbot использует общий workspace `~/.openclaw/workspace-main-messaging`.
-6. ACL `owner / full / partial / guest` реализован.
-7. Telegram Bot уже переведён в reserve-safe policy.
+1. Runtime primary в OpenClaw уже переведён на `openai-codex/gpt-5.4`.
+2. Owner UI на `:8080` уже показывает truthful runtime/model/browser state, а не заглушки.
+3. Truthful блок параллелизма уже реализован и подтверждён unit + browser smoke на изолированном `:18081`.
+4. Release gate и merge-gate уже доведены до рабочего состояния.
+5. `signal_alert_route` и web-based runtime smoke уже ужесточены под временную учётку `USER2`.
+6. `pre_release_smoke --full --strict-runtime` на `USER2` теперь блокируется только по owner-only шагам, а не по ложным кодовым фейлам.
+7. Git/push на временной учётке уже настроен и ветки восстановления уже лежат в `origin`.
 
 ## Что сделать первым
 
-1. Проверить `git status` и не трогать чужие незакоммиченные изменения.
-2. Проверить controlled restart runtime / web panel.
-3. Подтвердить, что `:8080` подхватил новый код web ACL и текущий routing.
-4. Довести `browser/MCP readiness`.
-5. Прогнать E2E:
-   - owner message через userbot
-   - emergency message через reserve Telegram Bot
-6. Проверить консистентность `openclaw models status` после promotion `GPT-5.4`.
+1. Проверить `git status --short --branch` и не трогать чужие незакоммиченные изменения.
+2. Если работа идёт уже на `pablito`, сразу выполнить `Verify Live Parallelism On Pablito.command`.
+3. Прочитать свежие `pre_release_smoke_latest.json` и `r20_merge_gate_latest.json` из bundle.
+4. Снять с roadmap хвост live `:8080` по parallelism только после реального переподтверждения от владельца `pablito`.
+5. Дальше решать, нужен ли ещё строгий owner/reserve Telegram E2E как финальный процентный хвост.
 
 ## Ограничения
 
-1. Комментарии и докстринги в коде — на русском.
-2. Не дублировать уже имеющийся функционал OpenClaw.
-3. Сначала использовать существующие runtime/repair/diagnostics механизмы, потом писать новый glue-код.
-4. Merge в `main` только после smoke/e2e.
+1. Комментарии и докстринги в коде должны оставаться на русском.
+2. Не дублировать уже существующий функционал OpenClaw, если его можно вызвать или честно отобразить.
+3. Все статусы и проценты в docs должны опираться только на код, тест, smoke или live acceptance.
+4. Merge в `main` только после smoke/e2e и актуального handoff bundle.
 
 ## Короткий стартовый промпт
 
 ```text
-Продолжаем Krab/OpenClaw в ветке codex/gpt54-userbot-primary.
+Продолжаем Krab/OpenClaw в ветке codex/handoff-bundle-polish.
 
-Прочитай сначала:
-1) docs/NEXT_CHAT_CHECKPOINT_RU.md
-2) docs/OPENCLAW_KRAB_ROADMAP.md
-3) если есть свежий bundle — artifacts/handoff_<timestamp>/START_NEXT_CHAT.md
+Я приложил свежий handoff bundle. Сначала прочитай:
+1) START_NEXT_CHAT.md
+2) ATTACH_SUMMARY_RU.md
+3) PABLITO_RETURN_CHECKLIST.md
+4) NEXT_CHAT_CHECKPOINT_RU.md
+5) OPENCLAW_KRAB_ROADMAP.md
 
-Текущий факт:
-- готовность плана ~82%
-- GPT-5.4 уже READY в OpenClaw compat probe
-- runtime primary уже переключён на openai-codex/gpt-5.4
-- userbot сидит на общем workspace
-- ACL owner/full/partial реализован
-- Telegram Bot уже в reserve-safe policy
+Текущее состояние на 2026-03-12:
+- готовность проекта ~99%
+- technical baseline = codex/web-runtime-smoke-hardening @ 859cf05
+- truthful parallelism UI уже реализован и подтверждён unit + изолированным browser smoke
+- release gate зелёный, strict runtime smoke на USER2 блокируется только owner-only шагами
+- последний реальный хвост перед финишем: live verify нового parallelism блока на основном :8080 после restart от владельца pablito
 
-Следующий этап:
-1) controlled restart runtime / web panel
-2) browser/MCP readiness
-3) E2E userbot
-4) E2E reserve Telegram Bot
-5) проверить консистентность openclaw models status после promotion
+Первый шаг:
+1) проверить git status и текущую ветку
+2) если работа идёт на pablito — запустить Verify Live Parallelism On Pablito.command
+3) затем продолжить с ближайшего незакрытого пункта roadmap
 ```

@@ -40,6 +40,15 @@ ARTIFACTS_DIR = ROOT / "artifacts"
 NOW = datetime.now(timezone.utc)
 STAMP = NOW.strftime("%Y%m%d_%H%M%S")
 BUNDLE_DIR = ARTIFACTS_DIR / f"handoff_{STAMP}"
+PROJECT_READINESS = "~99%"
+RECOVERY_BRANCHES = (
+    "codex/live-8080-parallelism-acceptance",
+    "codex/release-gate-checklist",
+    "codex/pablito-live-parallelism-helper",
+    "codex/signal-alert-ssl-hardening",
+    "codex/web-runtime-smoke-hardening",
+    "codex/handoff-bundle-polish",
+)
 
 
 def _mask_secret(value: str) -> str:
@@ -69,6 +78,11 @@ def _run(cmd: list[str]) -> dict[str, Any]:
         }
     except Exception as exc:  # noqa: BLE001 - это диагностический скрипт
         return {"ok": False, "returncode": 1, "stdout": "", "stderr": str(exc)}
+
+
+def _git_stdout(args: list[str]) -> str:
+    """Возвращает stdout git-команды или пустую строку, если ветка/ревизия недоступна."""
+    return str(_run(["git", *args]).get("stdout", "") or "").strip()
 
 
 def _http_json(url: str, *, timeout: float = 4.0) -> dict[str, Any]:
@@ -362,11 +376,322 @@ def _collect_acceptance_artifacts(bundle_dir: Path) -> dict[str, Any]:
     return out
 
 
+def _collect_recovery_branches() -> list[dict[str, str]]:
+    """
+    Собирает короткий список веток recovery-цикла.
+
+    Зачем:
+    - следующему окну нужен не только текущий branch, но и вехи, которые уже
+      были запушены как точки восстановления.
+    """
+    rows: list[dict[str, str]] = []
+    for branch in RECOVERY_BRANCHES:
+        head_short = _git_stdout(["rev-parse", "--short", branch])
+        subject = _git_stdout(["log", "-1", "--pretty=%s", branch])
+        if not head_short and not subject:
+            continue
+        rows.append(
+            {
+                "name": branch,
+                "head_short": head_short,
+                "subject": subject,
+            }
+        )
+    return rows
+
+
+def _ops_artifact_summary(payload: dict[str, Any], *, artifact_name: str) -> dict[str, Any]:
+    """Нормализует краткую выжимку ops-артефакта для handoff manifest/summary."""
+    summary: dict[str, Any] = {
+        "ok": bool(payload.get("ok")),
+        "generated_at": payload.get("generated_at") or payload.get("generated_at_utc"),
+    }
+    if artifact_name == "pre_release_smoke_latest":
+        summary["blocked"] = bool(payload.get("blocked"))
+        summary["strict_runtime"] = bool(payload.get("strict_runtime"))
+        summary["required_failed"] = len(payload.get("required_failed") or [])
+        summary["blocked_required"] = payload.get("blocked_required") or []
+        summary["advisory_failed"] = len(payload.get("advisory_failed") or [])
+        summary["blocked_advisory"] = payload.get("blocked_advisory") or []
+    elif artifact_name == "r20_merge_gate_latest":
+        summary["required_failed"] = int(payload.get("required_failed") or 0)
+        summary["advisory_failed"] = int(payload.get("advisory_failed") or 0)
+        summary["checks_total"] = len(payload.get("checks") or [])
+    return summary
+
+
+def _collect_ops_evidence(bundle_dir: Path) -> dict[str, Any]:
+    """
+    Подтягивает свежие ops и browser evidence в handoff bundle.
+
+    Почему:
+    - attach-папка должна содержать не только narrative docs, но и короткие
+      доказательства того, чем именно подтверждено текущее состояние.
+    """
+    records: dict[str, Any] = {}
+    files = {
+        "pre_release_smoke_latest": ROOT / "artifacts" / "ops" / "pre_release_smoke_latest.json",
+        "r20_merge_gate_latest": ROOT / "artifacts" / "ops" / "r20_merge_gate_latest.json",
+        "latest_browser_snapshot": _latest_file_by_glob(".playwright-cli/page-*.yml"),
+        "latest_browser_screenshot": _latest_file_by_glob(".playwright-cli/page-*.png"),
+    }
+
+    for key, src in files.items():
+        record: dict[str, Any] = {
+            "source_path": str(src) if src else None,
+            "bundle_path": None,
+            "found": bool(src and Path(src).exists()),
+            "summary": {},
+        }
+        if src and Path(src).exists():
+            src_path = Path(src)
+            dst = bundle_dir / src_path.name
+            shutil.copy2(src_path, dst)
+            record["bundle_path"] = str(dst)
+            if src_path.suffix.lower() == ".json":
+                record["summary"] = _ops_artifact_summary(
+                    _read_json_file(src_path),
+                    artifact_name=key,
+                )
+            else:
+                record["summary"] = {
+                    "size_bytes": src_path.stat().st_size,
+                    "mtime_utc": datetime.fromtimestamp(
+                        src_path.stat().st_mtime,
+                        tz=timezone.utc,
+                    ).isoformat(),
+                }
+        records[key] = record
+    return records
+
+
+def _build_attach_summary_md(
+    *,
+    runtime_snapshot: dict[str, Any],
+    acceptance: dict[str, Any],
+    ops_evidence: dict[str, Any],
+) -> str:
+    """
+    Формирует короткую attach-summary для нового чата и возврата на pablito.
+
+    Почему:
+    - следующему окну нужен сжатый operational summary, не требующий читать
+      весь checkpoint перед первым действием.
+    """
+    git = runtime_snapshot.get("git") if isinstance(runtime_snapshot, dict) else {}
+    branch = str((git or {}).get("branch") or "").strip() or "unknown"
+    head = str((git or {}).get("head") or "").strip() or "unknown"
+    health_lite = (
+        (((runtime_snapshot.get("health") or {}).get("web_lite") or {}).get("json"))
+        if isinstance(runtime_snapshot, dict)
+        else {}
+    )
+    health_lite = health_lite if isinstance(health_lite, dict) else {}
+    route = health_lite.get("last_runtime_route") if isinstance(health_lite.get("last_runtime_route"), dict) else {}
+    pre_release = (ops_evidence.get("pre_release_smoke_latest") or {}).get("summary") or {}
+    merge_gate = (ops_evidence.get("r20_merge_gate_latest") or {}).get("summary") or {}
+    active_issues = [
+        row.get("code")
+        for row in (runtime_snapshot.get("known_issues") or [])
+        if isinstance(row, dict) and str(row.get("status") or "").upper() == "ACTIVE"
+    ]
+    branch_rows = runtime_snapshot.get("recovery_branches") or []
+
+    lines = [
+        "# ATTACH SUMMARY RU",
+        "",
+        "Эту папку можно приложить целиком в новый чат и продолжить работу без пересказа по памяти.",
+        "",
+        f"- Сгенерировано (UTC): `{NOW.isoformat()}`",
+        f"- Текущая ветка: `{branch}`",
+        f"- HEAD: `{head}`",
+        f"- Ориентировочная готовность проекта: `{PROJECT_READINESS}`",
+        "",
+        "## Текущее живое состояние",
+        f"- `telegram_userbot_state`: `{health_lite.get('telegram_userbot_state', 'unknown')}`",
+        f"- `openclaw_auth_state`: `{health_lite.get('openclaw_auth_state', 'unknown')}`",
+        f"- Последний runtime route: `{route.get('model') or 'unknown'}` через `{route.get('provider') or 'unknown'}`",
+        f"- `pre_release_smoke_latest`: blocked=`{pre_release.get('blocked', False)}`; blocked_required=`{', '.join(pre_release.get('blocked_required') or []) or '-'}`",
+        f"- `r20_merge_gate_latest`: required_failed=`{merge_gate.get('required_failed', '-')}`; advisory_failed=`{merge_gate.get('advisory_failed', '-')}`",
+        "",
+        "## Что уже закрыто на USER2",
+        "- truthful блок параллелизма в owner UI реализован и подтверждён unit + browser smoke на изолированном `:18081`",
+        "- release gate и runbook доведены до рабочего состояния; merge-gate зелёный",
+        "- owner-mismatch в strict runtime smoke классифицируется честно как blocked-среда, а не как code failure",
+        "- `signal_alert_route` больше не даёт ложные `CERTIFICATE_VERIFY_FAILED` и умеет truth-fallback через web endpoint",
+        "- `live_channel_smoke` и web-based runtime smoke доведены до полезного verdict на временной учётке",
+        "- attach-ready handoff bundle теперь генерируется вместе с summary, checklist, manifest и zip-архивом",
+        "",
+        "## Реальные хвосты перед абсолютным финишем",
+        "- переподтвердить новый блок параллелизма на живом `:8080` после restart именно от владельца `pablito`",
+        "- при желании закрыть строгий `owner -> userbot -> reply` и полный inbound reserve round-trip как отдельный live E2E этап",
+        "- переподтвердить или перелогинить `google-gemini-cli`, потому что OAuth fallback отмечен как хрупкий",
+    ]
+
+    if active_issues:
+        lines.extend(
+            [
+                "",
+                "## Активные сигналы по свежей матрице проблем",
+            ]
+        )
+        for code in active_issues:
+            lines.append(f"- `{code}`")
+
+    lines.extend(
+        [
+            "",
+            "## Ключевые recovery-ветки",
+        ]
+    )
+    for row in branch_rows:
+        lines.append(f"- `{row.get('name')}` @ `{row.get('head_short')}`: {row.get('subject')}")
+
+    lines.extend(
+        [
+            "",
+            "## Что открыть в этой папке",
+            "1. `START_NEXT_CHAT.md`",
+            "2. `PABLITO_RETURN_CHECKLIST.md`",
+            "3. `NEXT_CHAT_CHECKPOINT_RU.md`",
+            "4. `OPENCLAW_KRAB_ROADMAP.md`",
+            "5. `HANDOFF_MANIFEST.json`",
+            "",
+            "## Что уже лежит как evidence",
+        ]
+    )
+    for key in (
+        "pre_release_smoke_latest",
+        "r20_merge_gate_latest",
+        "latest_browser_snapshot",
+        "latest_browser_screenshot",
+    ):
+        record = ops_evidence.get(key) or {}
+        if record.get("bundle_path"):
+            lines.append(f"- `{Path(str(record['bundle_path'])).name}`")
+    for key in (
+        "e1e3_acceptance",
+        "channels_photo_chrome_acceptance",
+        "channels_photo_chrome_smoke",
+    ):
+        record = acceptance.get(key) or {}
+        if record.get("bundle_path"):
+            lines.append(f"- `{Path(str(record['bundle_path'])).name}`")
+    return "\n".join(lines) + "\n"
+
+
+def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any]) -> str:
+    """
+    Формирует короткий runbook возврата на основную учётку `pablito`.
+
+    Нужен, чтобы последний live acceptance-хвост можно было закрыть без
+    дополнительной реконструкции команд.
+    """
+    git = runtime_snapshot.get("git") if isinstance(runtime_snapshot, dict) else {}
+    branch = str((git or {}).get("branch") or "").strip() or "codex/handoff-bundle-polish"
+    lines = [
+        "# PABLITO RETURN CHECKLIST",
+        "",
+        "Этот чеклист нужен для возврата на основную учётку `pablito` и закрытия последнего live acceptance-хвоста.",
+        "",
+        f"- Рабочая ветка для продолжения: `{branch}`",
+        f"- Ориентировочная готовность проекта: `{PROJECT_READINESS}`",
+        "",
+        "## Самый короткий путь",
+        "```bash",
+        "cd /Users/pablito/Antigravity_AGENTS/Краб",
+        "git fetch origin",
+        f"git switch {branch}",
+        "git pull --ff-only",
+        "./Verify\\ Live\\ Parallelism\\ On\\ Pablito.command",
+        "```",
+        "",
+        "## Что должен сделать helper",
+        "- остановить старый runtime",
+        "- поднять свежий runtime уже от владельца `pablito`",
+        "- дождаться `:8080` и `:18789`",
+        "- прочитать `/api/model/catalog`",
+        "- сохранить truth в `artifacts/ops/live_parallelism_truth_latest.json`",
+        "- открыть `http://127.0.0.1:8080`",
+        "",
+        "## Если нужен ручной режим",
+        "```bash",
+        "cd /Users/pablito/Antigravity_AGENTS/Краб",
+        "./new\\ Stop\\ Krab.command",
+        "nohup ./new\\ start_krab.command > logs/live_parallelism_restart.log 2>&1 &",
+        "python3 - <<'PY'",
+        "import json, time, urllib.request",
+        "for _ in range(80):",
+        "    try:",
+        "        with urllib.request.urlopen('http://127.0.0.1:8080/api/health/lite', timeout=3) as r:",
+        "            if json.loads(r.read().decode()).get('ok'):",
+        "                break",
+        "    except Exception:",
+        "        pass",
+        "    time.sleep(1.5)",
+        "with urllib.request.urlopen('http://127.0.0.1:8080/api/model/catalog', timeout=10) as r:",
+        "    payload = json.loads(r.read().decode())",
+        "print(json.dumps(payload.get('catalog', {}).get('parallelism_truth', {}), ensure_ascii=False, indent=2))",
+        "PY",
+        "```",
+        "",
+        "## После live verify",
+        "1. Сохранить новый handoff bundle уже на `pablito`, если пойдёшь дальше.",
+        "2. Если live `:8080` подтвердился, снять этот хвост из roadmap/checkpoint.",
+        "3. Дальше решать, нужен ли ещё строгий live E2E owner/reserve Telegram.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _build_handoff_manifest(
+    *,
+    runtime_snapshot: dict[str, Any],
+    acceptance: dict[str, Any],
+    ops_evidence: dict[str, Any],
+    bundle_zip_path: Path,
+) -> dict[str, Any]:
+    """Собирает machine-readable manifest attach-папки."""
+    bundle_files = sorted(
+        [
+            path.name
+            for path in BUNDLE_DIR.iterdir()
+            if path.is_file()
+        ]
+    )
+    return {
+        "generated_at_utc": NOW.isoformat(),
+        "project_readiness": PROJECT_READINESS,
+        "bundle_dir": str(BUNDLE_DIR),
+        "bundle_zip": str(bundle_zip_path),
+        "entrypoints": {
+            "start_next_chat": str(BUNDLE_DIR / "START_NEXT_CHAT.md"),
+            "attach_summary": str(BUNDLE_DIR / "ATTACH_SUMMARY_RU.md"),
+            "pablito_return_checklist": str(BUNDLE_DIR / "PABLITO_RETURN_CHECKLIST.md"),
+            "runtime_snapshot": str(BUNDLE_DIR / "runtime_snapshot.json"),
+            "manifest": str(BUNDLE_DIR / "HANDOFF_MANIFEST.json"),
+        },
+        "git": runtime_snapshot.get("git") or {},
+        "recovery_branches": runtime_snapshot.get("recovery_branches") or [],
+        "acceptance_artifacts": acceptance,
+        "ops_evidence": ops_evidence,
+        "known_issues": runtime_snapshot.get("known_issues") or [],
+        "bundle_files": bundle_files,
+        "resume_target": {
+            "account": "pablito",
+            "preferred_branch": str((runtime_snapshot.get("git") or {}).get("branch") or "").strip()
+            or "codex/handoff-bundle-polish",
+            "helper_command": "/Users/pablito/Antigravity_AGENTS/Краб/Verify Live Parallelism On Pablito.command",
+            "live_truth_artifact": "/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/live_parallelism_truth_latest.json",
+        },
+    }
+
+
 def _build_start_next_chat_md(
     *,
     bundle_dir: Path,
     runtime_snapshot: dict[str, Any],
     acceptance: dict[str, Any],
+    ops_evidence: dict[str, Any],
 ) -> str:
     """
     Формирует стартовый чеклист для открытия нового чата без потери контекста.
@@ -376,16 +701,23 @@ def _build_start_next_chat_md(
     head = str((git or {}).get("head") or "").strip() or "unknown"
 
     required_files = [
+        bundle_dir / "ATTACH_SUMMARY_RU.md",
+        bundle_dir / "PABLITO_RETURN_CHECKLIST.md",
         bundle_dir / "NEXT_CHAT_CHECKPOINT_RU.md",
         bundle_dir / "OPENCLAW_KRAB_ROADMAP.md",
         bundle_dir / "NEW_CHAT_BOOTSTRAP_PROMPT.md",
         bundle_dir / "runtime_snapshot.json",
+        bundle_dir / "HANDOFF_MANIFEST.json",
         bundle_dir / "known_issues_matrix.md",
     ]
     optional_files = [
         acceptance.get("e1e3_acceptance", {}).get("bundle_path"),
         acceptance.get("channels_photo_chrome_acceptance", {}).get("bundle_path"),
         acceptance.get("channels_photo_chrome_smoke", {}).get("bundle_path"),
+        ops_evidence.get("pre_release_smoke_latest", {}).get("bundle_path"),
+        ops_evidence.get("r20_merge_gate_latest", {}).get("bundle_path"),
+        ops_evidence.get("latest_browser_snapshot", {}).get("bundle_path"),
+        ops_evidence.get("latest_browser_screenshot", {}).get("bundle_path"),
     ]
 
     lines = [
@@ -396,8 +728,9 @@ def _build_start_next_chat_md(
         f"- Сгенерировано (UTC): `{NOW.isoformat()}`",
         f"- Ветка: `{branch}`",
         f"- HEAD: `{head}`",
+        f"- Готовность проекта: `{PROJECT_READINESS}`",
         "",
-        "## Обязательные файлы (source of truth)",
+        "## Что открыть первым",
     ]
     for idx, path in enumerate(required_files, start=1):
         lines.append(f"{idx}. `{path}`")
@@ -420,18 +753,20 @@ def _build_start_next_chat_md(
         [
             "",
             "## Стартовый prompt для нового чата",
-            "1. Открой `NEW_CHAT_BOOTSTRAP_PROMPT.md` из этого bundle.",
-            "2. Прочитай `NEXT_CHAT_CHECKPOINT_RU.md` и `OPENCLAW_KRAB_ROADMAP.md`.",
-            "3. Не доверяй старым процентам готовности из архивных handoff-фраз; текущий truth бери только из `NEXT_CHAT_CHECKPOINT_RU.md` и `OPENCLAW_KRAB_ROADMAP.md`.",
-            "4. Добавь явное требование формата отчёта после каждой итерации:",
+            "1. Сначала прочитай `ATTACH_SUMMARY_RU.md` и `PABLITO_RETURN_CHECKLIST.md`.",
+            "2. Затем открой `NEW_CHAT_BOOTSTRAP_PROMPT.md` из этого bundle.",
+            "3. Прочитай `NEXT_CHAT_CHECKPOINT_RU.md` и `OPENCLAW_KRAB_ROADMAP.md`.",
+            "4. Не доверяй старым процентам готовности из архивных handoff-фраз; текущий truth бери только из этого bundle.",
+            "5. Добавь явное требование формата отчёта после каждой итерации:",
             "   - что изменено;",
             "   - как проверено;",
             "   - что осталось.",
             "",
             "## Короткая проверка после старта нового чата",
             "1. Проверить `git status --short --branch`.",
-            "2. Прочитать `runtime_snapshot.json` и `known_issues_matrix.md`.",
-            "3. Продолжить с ближайшего незакрытого пункта roadmap.",
+            "2. Прочитать `runtime_snapshot.json`, `HANDOFF_MANIFEST.json` и `known_issues_matrix.md`.",
+            "3. Если работа продолжается на `pablito`, запустить `Verify Live Parallelism On Pablito.command`.",
+            "4. Продолжить с ближайшего незакрытого пункта roadmap.",
             "",
         ]
     )
@@ -505,10 +840,13 @@ def main() -> int:
             "web_api_key": _mask_secret(os.getenv("WEB_API_KEY", "")),
         },
         "known_issues": issues_rows,
+        "recovery_branches": _collect_recovery_branches(),
     }
 
     acceptance_artifacts = _collect_acceptance_artifacts(BUNDLE_DIR)
+    ops_evidence = _collect_ops_evidence(BUNDLE_DIR)
     runtime_snapshot["acceptance_artifacts"] = acceptance_artifacts
+    runtime_snapshot["ops_evidence"] = ops_evidence
 
     (BUNDLE_DIR / "runtime_snapshot.json").write_text(
         json.dumps(runtime_snapshot, ensure_ascii=False, indent=2) + "\n",
@@ -521,19 +859,58 @@ def main() -> int:
     _copy_if_exists(DOCS_DIR / "NEXT_CHAT_CHECKPOINT_RU.md", BUNDLE_DIR / "NEXT_CHAT_CHECKPOINT_RU.md")
     _copy_if_exists(DOCS_DIR / "OPENCLAW_KRAB_ROADMAP.md", BUNDLE_DIR / "OPENCLAW_KRAB_ROADMAP.md")
     _copy_if_exists(DOCS_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md", BUNDLE_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md")
+    (BUNDLE_DIR / "ATTACH_SUMMARY_RU.md").write_text(
+        _build_attach_summary_md(
+            runtime_snapshot=runtime_snapshot,
+            acceptance=acceptance_artifacts,
+            ops_evidence=ops_evidence,
+        ),
+        encoding="utf-8",
+    )
+    (BUNDLE_DIR / "PABLITO_RETURN_CHECKLIST.md").write_text(
+        _build_pablito_return_checklist_md(runtime_snapshot=runtime_snapshot),
+        encoding="utf-8",
+    )
     (BUNDLE_DIR / "START_NEXT_CHAT.md").write_text(
         _build_start_next_chat_md(
             bundle_dir=BUNDLE_DIR,
             runtime_snapshot=runtime_snapshot,
             acceptance=acceptance_artifacts,
+            ops_evidence=ops_evidence,
         ),
+        encoding="utf-8",
+    )
+    bundle_zip_path = Path(
+        shutil.make_archive(
+            str(BUNDLE_DIR),
+            "zip",
+            root_dir=str(ARTIFACTS_DIR),
+            base_dir=BUNDLE_DIR.name,
+        )
+    )
+    (BUNDLE_DIR / "HANDOFF_MANIFEST.json").write_text(
+        json.dumps(
+            _build_handoff_manifest(
+                runtime_snapshot=runtime_snapshot,
+                acceptance=acceptance_artifacts,
+                ops_evidence=ops_evidence,
+                bundle_zip_path=bundle_zip_path,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
     print("=== Handoff Bundle Export ===")
     print(f"OK: {BUNDLE_DIR}")
+    print(f"bundle_zip: {bundle_zip_path}")
     print(f"runtime_snapshot: {BUNDLE_DIR / 'runtime_snapshot.json'}")
     print(f"known_issues: {BUNDLE_DIR / 'known_issues_matrix.md'}")
+    print(f"attach_summary: {BUNDLE_DIR / 'ATTACH_SUMMARY_RU.md'}")
+    print(f"pablito_return: {BUNDLE_DIR / 'PABLITO_RETURN_CHECKLIST.md'}")
+    print(f"manifest: {BUNDLE_DIR / 'HANDOFF_MANIFEST.json'}")
     print(f"start_packet: {BUNDLE_DIR / 'START_NEXT_CHAT.md'}")
     return 0
 

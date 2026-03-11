@@ -8,7 +8,7 @@
 # Checkpoint Krab/OpenClaw
 
 Дата: 2026-03-12
-Ветка: `codex/live-8080-parallelism-acceptance`
+Ветка: `codex/handoff-bundle-polish`
 Ориентировочная готовность большого плана: **~99%**
 
 ## Что уже подтверждено
@@ -171,6 +171,22 @@
   - `autoswitch_dry_run`
   - `e1e3_acceptance`
 
+### 7. Handoff / attach-ready bundle
+
+- Устаревший drift в `docs/NEW_CHAT_BOOTSTRAP_PROMPT.md` убран:
+  - больше нет старых `~82%`;
+  - рабочая ветка и техническая база указаны truthfully.
+- `scripts/export_handoff_bundle.py` теперь собирает attach-ready bundle без ручной доукомплектации:
+  - `ATTACH_SUMMARY_RU.md`
+  - `PABLITO_RETURN_CHECKLIST.md`
+  - `HANDOFF_MANIFEST.json`
+  - `.zip`-архив рядом с папкой bundle
+- В bundle дополнительно подтягиваются:
+  - `pre_release_smoke_latest.json`
+  - `r20_merge_gate_latest.json`
+  - свежие browser evidence-файлы из `.playwright-cli`
+- Это нужно, чтобы на `pablito` можно было просто приложить одну папку в новый чат и сразу продолжить от фактического состояния, а не собирать контекст вручную.
+
 ## Важные риски
 
 - В рабочем дереве есть чужие незакоммиченные изменения; не трогать их без необходимости.
@@ -190,15 +206,16 @@
 
 - Глубина рассуждений: `high`
 - `fast`: выключен
-- Рабочий branch текущего recovery-цикла: `codex/live-8080-parallelism-acceptance`
+- Рабочий branch текущего recovery-цикла: `codex/handoff-bundle-polish`
 
 ## Короткий handoff-текст для нового окна
 
 ```text
-Продолжаем Krab/OpenClaw в ветке codex/live-8080-parallelism-acceptance.
+Продолжаем Krab/OpenClaw в ветке codex/handoff-bundle-polish.
 
 Текущее состояние на 2026-03-12:
 - готовность плана ~99%
+- attach-ready handoff bundle теперь самодостаточен: summary, checklist, manifest, zip
 - runtime primary = openai-codex/gpt-5.4
 - browser/MCP readiness в owner UI закрыт и подтверждён живым click-through
 - owner UI показывает реальный cloud/local catalog и truthful runtime health
@@ -217,8 +234,11 @@
 5) warning про `krab-output-sanitizer` provenance остаётся
 
 Сначала прочитай:
-1) docs/NEXT_CHAT_CHECKPOINT_RU.md
-2) docs/OPENCLAW_KRAB_ROADMAP.md
+1) свежий START_NEXT_CHAT.md из handoff bundle
+2) свежий ATTACH_SUMMARY_RU.md из handoff bundle
+3) свежий PABLITO_RETURN_CHECKLIST.md из handoff bundle
+4) docs/NEXT_CHAT_CHECKPOINT_RU.md
+5) docs/OPENCLAW_KRAB_ROADMAP.md
 
 Следующий лучший шаг:
 1) переподтвердить live :8080 для блока parallelism после restart от pablito

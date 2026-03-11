@@ -1,7 +1,7 @@
 # OpenClaw Krab Roadmap
 
 Дата актуализации: 2026-03-12
-Ветка реализации: `codex/live-8080-parallelism-acceptance`
+Ветка реализации: `codex/handoff-bundle-polish`
 Текущая ориентировочная готовность большого плана: `99%`
 
 ## Цель
@@ -113,6 +113,11 @@
 - [x] Исправлен owner-chat fast-path: запросы вида `проведи полную диагностику` / `cron у тебя уже работает` теперь уходят в deterministic `runtime self-check`, а не в свободную генерацию
 - [x] Controlled restart подтверждён после launcher-fix: runtime снова поднимает `:8080` и `:18789`, `telegram_userbot_state=running`
 - [x] Reserve Telegram delivery подтверждён после controlled restart через live `openclaw message send --channel telegram --target 312322764`
+- [x] Handoff bundle доведён до attach-ready формата:
+  - свежий `NEW_CHAT_BOOTSTRAP_PROMPT.md` без устаревших `~82%`
+  - автоматическая генерация `ATTACH_SUMMARY_RU.md`, `PABLITO_RETURN_CHECKLIST.md`, `HANDOFF_MANIFEST.json`
+  - `.zip`-архив рядом с каждой новой handoff-папкой
+  - в bundle подтягиваются `pre_release_smoke_latest.json`, `r20_merge_gate_latest.json` и свежие browser evidence-файлы
 
 ## Блокеры и риски
 
