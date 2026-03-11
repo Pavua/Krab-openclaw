@@ -65,28 +65,31 @@ wait_gateway_listening() {
 }
 
 probe_gateway_health() {
-    [ -n "${OPENCLAW_BIN:-}" ] || return 1
-    OPENCLAW_GATEWAY_BIN="$OPENCLAW_BIN" python3 - <<'PY'
-import os
-import subprocess
+    # Проверяем локальный health endpoint напрямую, а не парсим `openclaw status`.
+    # Почему так:
+    # - формат `openclaw status` менялся между релизами 2026.x;
+    # - текстовый парсинг уже давал ложные "gateway unhealthy", хотя `/health`
+    #   отвечал `{"ok":true,"status":"live"}` и порт реально работал.
+    python3 - <<'PY'
+import json
 import sys
+import urllib.error
+import urllib.request
 
-binary = str(os.environ.get("OPENCLAW_GATEWAY_BIN", "") or "").strip()
-if not binary:
+url = "http://127.0.0.1:18789/health"
+try:
+    with urllib.request.urlopen(url, timeout=3) as response:
+        raw = response.read().decode("utf-8", "replace")
+except (urllib.error.URLError, TimeoutError, OSError):
     raise SystemExit(1)
 
 try:
-    result = subprocess.run(
-        [binary, "status"],
-        capture_output=True,
-        text=True,
-        timeout=6,
-    )
+    payload = json.loads(raw)
 except Exception:
-    raise SystemExit(1)
+    payload = {}
 
-combined = ((result.stdout or "") + "\n" + (result.stderr or "")).lower()
-raise SystemExit(0 if "reachable: yes" in combined else 1)
+ok = bool(payload.get("ok")) or str(payload.get("status", "")).strip().lower() == "live"
+raise SystemExit(0 if ok else 1)
 PY
 }
 
@@ -102,6 +105,40 @@ wait_gateway_healthy() {
         step=$((step + 1))
     done
     return 1
+}
+
+safe_openclaw_control() {
+    local timeout_sec="${1:-8}"
+    shift
+    local openclaw_bin="${OPENCLAW_BIN:-}"
+    [ -n "$openclaw_bin" ] || return 127
+
+    # CLI `openclaw gateway stop` в некоторых состояниях может подвисать даже
+    # когда порт уже пустой. Тогда launcher зависает до бесконечности ещё до
+    # старта gateway. Оборачиваем управляющие команды в жёсткий timeout.
+    python3 - "$openclaw_bin" "$timeout_sec" "$@" <<'PY'
+import subprocess
+import sys
+
+bin_path = sys.argv[1]
+timeout_sec = float(sys.argv[2])
+args = [bin_path, *sys.argv[3:]]
+
+try:
+    completed = subprocess.run(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=timeout_sec,
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    raise SystemExit(124)
+except FileNotFoundError:
+    raise SystemExit(127)
+
+raise SystemExit(int(completed.returncode))
+PY
 }
 
 restart_stale_gateway() {
@@ -324,7 +361,12 @@ if [ -n "$OPENCLAW_BIN" ]; then
             fi
         fi
 
-        "$OPENCLAW_BIN" gateway stop >/dev/null 2>&1 || true
+        stop_rc=0
+        safe_openclaw_control 8 gateway stop || stop_rc=$?
+        if [ "$stop_rc" -eq 124 ]; then
+            echo "⚠️ openclaw gateway stop завис; продолжаю через принудительную зачистку stale-процесса."
+            pkill -f "openclaw( |$).*gateway( |$)|openclaw-gateway" >/dev/null 2>&1 || true
+        fi
 
         echo "🦞 Starting OpenClaw Gateway..."
         # Начиная с OpenClaw 2026.3.x foreground-gateway поднимается через

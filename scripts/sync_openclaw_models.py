@@ -167,9 +167,11 @@ def main() -> int:
             primary_model = "lmstudio/nvidia/nemotron-3-nano"
 
     preferred_vision_model = str(os.getenv("LOCAL_PREFERRED_VISION_MODEL", "auto") or "").strip()
+    preferred_text_model = str(os.getenv("LOCAL_PREFERRED_MODEL", "") or "").strip()
     models_catalog_report = repair_lmstudio_provider_catalog(
         path,
         primary_model=primary_model,
+        preferred_text_model=preferred_text_model,
         preferred_vision_model=preferred_vision_model,
         lmstudio_token=lmstudio_token,
     )
@@ -178,6 +180,7 @@ def main() -> int:
         openclaw_catalog_report = repair_lmstudio_provider_catalog(
             openclaw_path,
             primary_model=primary_model,
+            preferred_text_model=preferred_text_model,
             preferred_vision_model=preferred_vision_model,
             lmstudio_token=lmstudio_token,
         )

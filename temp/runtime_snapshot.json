@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-03-06T16:31:01.777531+00:00",
+  "generated_at_utc": "2026-03-11T05:10:00.164543+00:00",
   "base_url": "http://127.0.0.1:8080",
   "ok": true,
   "endpoints": {
@@ -10,22 +10,22 @@
       "payload": {
         "ok": true,
         "status": "up",
-        "telegram_session_state": "open_or_unclean",
+        "telegram_session_state": "ready",
         "telegram_userbot_state": "running",
         "telegram_userbot_error_code": "",
-        "lmstudio_model_state": "loaded",
+        "lmstudio_model_state": "idle",
         "openclaw_auth_state": "configured",
         "last_runtime_route": {
-          "timestamp": 1772810797,
-          "channel": "local_direct",
-          "provider": "unknown",
-          "model": "qwen2-vl-2b-instruct-abliterated-mlx",
+          "timestamp": 1773204693,
+          "channel": "openclaw_cloud",
+          "provider": "openai-codex",
+          "model": "openai-codex/gpt-5.4",
           "active_tier": "free",
-          "force_cloud": false,
+          "force_cloud": true,
           "status": "ok",
           "error_code": null,
-          "route_reason": "local_direct_primary",
-          "route_detail": "Ответ получен напрямую из LM Studio"
+          "route_reason": "openclaw_response_ok",
+          "route_detail": "Ответ получен через OpenClaw API"
         },
         "scheduler_enabled": true,
         "voice_gateway_configured": true
@@ -37,7 +37,7 @@
       "error": null,
       "payload": {
         "ok": true,
-        "raw": "[plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)\nChecking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:open, allow:*\n- Discord default: enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, configured, running, connected, url:http://127.0.0.1:12345, works\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).\n",
+        "raw": "[plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)\nChecking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:allowlist, allow:*\n- Discord default: enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, configured, running, connected, url:http://127.0.0.1:12345, works\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).\n",
         "warnings": [],
         "exit_code": 0,
         "channels": [
@@ -49,7 +49,7 @@
           {
             "name": "WhatsApp default",
             "status": "OK",
-            "meta": "enabled, configured, linked, running, connected, dm:open, allow:*"
+            "meta": "enabled, configured, linked, running, connected, dm:allowlist, allow:*"
           },
           {
             "name": "Discord default",
@@ -94,16 +94,306 @@
             "path": "https://example.com",
             "gateway_reachable": true,
             "browser_http_reachable": true,
-            "browser_http_state": "auth_required",
-            "browser_auth_required": true,
+            "browser_http_state": "authorized",
+            "browser_auth_required": false,
+            "relay_reachable": true,
+            "tab_attached": false,
             "local_target": "ws://127.0.0.1:18789",
-            "detail": "gateway=Connect: ok (20ms) · RPC: ok; browser relay auth required (401)"
+            "detail": "gateway=Connect: ok (15ms) · RPC: ok; browser relay authorized (200)"
           },
           "raw": {
-            "gateway_probe": "Gateway Status\nReachable: yes\nProbe budget: 3000ms\n\nDiscovery (this machine)\nFound 1 gateway(s) via Bonjour (local.)\n\nTargets\nLocal loopback ws://127.0.0.1:18789\n  Connect: ok (20ms) · RPC: ok\n  Gateway: MacBook-Pro-Pablito.local (192.168.0.171) · macos 26.4 · app unknown\n  Wide-area discovery: unknown\n\n",
+            "gateway_probe": "Gateway Status\nReachable: yes\nProbe budget: 3000ms\n\nDiscovery (this machine)\nFound 1 gateway(s) via Bonjour (local.)\n\nTargets\nLocal loopback ws://127.0.0.1:18789\n  Connect: ok (15ms) · RPC: ok\n  Gateway: MacBook-Pro-Pablito.local (192.168.0.171) · macos 26.4 · app 2026.3.8\n  Wide-area discovery: unknown\n\n",
             "gateway_probe_error": "",
-            "browser_http_status": 401,
+            "browser_http_status": 200,
             "browser_http_error": ""
+          }
+        }
+      }
+    },
+    "browser_mcp_readiness": {
+      "ok": true,
+      "status_code": 200,
+      "error": null,
+      "payload": {
+        "available": true,
+        "overall": {
+          "readiness": "ready",
+          "detail": "Browser relay и managed MCP готовы."
+        },
+        "browser": {
+          "state": "attached",
+          "readiness": "ready",
+          "stage_label": "Вкладка подключена",
+          "summary": "Browser relay готов к owner automation.",
+          "next_step": "Контур готов: можно выполнять browser/MCP сценарии.",
+          "warnings": [],
+          "blockers": [],
+          "runtime": {
+            "running": true,
+            "cdp_ready": true,
+            "profile": "openclaw",
+            "cdp_url": "http://127.0.0.1:18800",
+            "cdp_port": 18800,
+            "tabs_count": 1,
+            "detected_browser": "chrome"
+          },
+          "smoke": {
+            "relay_reachable": true,
+            "gateway_reachable": true,
+            "tab_attached": false,
+            "auth_required": false,
+            "browser_http_state": "authorized",
+            "local_target": "ws://127.0.0.1:18789",
+            "detail": "gateway=Connect: ok (15ms) · RPC: ok; browser relay authorized (200)"
+          }
+        },
+        "mcp": {
+          "readiness": "ready",
+          "detail": "Managed MCP registry синхронизирован и готов.",
+          "warnings": [
+            "chrome-profile: В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging."
+          ],
+          "sync": {
+            "status": "synced",
+            "path": "/Users/pablito/.lmstudio/mcp.json",
+            "included": [
+              "brave-search",
+              "chrome-profile",
+              "context7",
+              "filesystem",
+              "firecrawl",
+              "github",
+              "lmstudio",
+              "memory",
+              "openai-chat",
+              "openclaw-browser"
+            ],
+            "skipped_missing": [],
+            "skipped_risk": [
+              "filesystem-home",
+              "shell"
+            ],
+            "preserved_existing": [
+              "neovim",
+              "xcodebuild"
+            ],
+            "detail": "LM Studio mcp.json синхронизирован с managed registry."
+          },
+          "summary": {
+            "total": 12,
+            "ready": 11,
+            "attention": 1,
+            "blocked": 0,
+            "required_total": 3,
+            "required_ready": 3,
+            "required_attention": 0,
+            "required_blocked": 0
+          },
+          "servers": [
+            {
+              "name": "brave-search",
+              "category": "integrations",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "Быстрый web search через Brave Search MCP.",
+              "risk": "low",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "chrome-profile",
+              "category": "integrations",
+              "required_for_owner_browser": false,
+              "readiness": "attention",
+              "state": "manual_setup_required",
+              "description": "Chrome DevTools MCP для обычного Chrome-профиля пользователя.",
+              "risk": "medium",
+              "missing_env": [],
+              "manual_setup": [
+                "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging.",
+                "После этого перезапустить LM Studio/Codex, чтобы MCP перечитал конфиг."
+              ],
+              "detail": "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging."
+            },
+            {
+              "name": "context7",
+              "category": "integrations",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "Актуальная документация библиотек и фреймворков.",
+              "risk": "low",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "filesystem",
+              "category": "core",
+              "required_for_owner_browser": true,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "Доступ к файлам проекта Krab/OpenClaw.",
+              "risk": "medium",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "filesystem-home",
+              "category": "core",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "Широкий доступ к домашней директории пользователя.",
+              "risk": "high",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "firecrawl",
+              "category": "integrations",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "Глубокий web crawl/search/extract сервер.",
+              "risk": "medium",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "github",
+              "category": "integrations",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "GitHub MCP для issue/PR/repo automation.",
+              "risk": "medium",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "lmstudio",
+              "category": "llm",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "OpenAI-compatible bridge к локальному LM Studio API.",
+              "risk": "low",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "memory",
+              "category": "core",
+              "required_for_owner_browser": true,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "Лёгкая MCP-память для заметок и промежуточных фактов.",
+              "risk": "low",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "openai-chat",
+              "category": "llm",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "OpenAI MCP bridge для внешних моделей/API.",
+              "risk": "medium",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            },
+            {
+              "name": "openclaw-browser",
+              "category": "browser",
+              "required_for_owner_browser": true,
+              "readiness": "ready",
+              "state": "attached",
+              "description": "Chrome DevTools MCP поверх OpenClaw browser relay.",
+              "risk": "medium",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Browser relay готов к owner automation."
+            },
+            {
+              "name": "shell",
+              "category": "core",
+              "required_for_owner_browser": false,
+              "readiness": "ready",
+              "state": "ready_to_launch",
+              "description": "Полноценный shell MCP. Сильный, но рискованный инструмент.",
+              "risk": "high",
+              "missing_env": [],
+              "manual_setup": [],
+              "detail": "Конфигурация готова к запуску."
+            }
+          ]
+        },
+        "raw": {
+          "browser_status": {
+            "enabled": true,
+            "profile": "openclaw",
+            "running": true,
+            "cdpReady": true,
+            "cdpHttp": true,
+            "pid": 52613,
+            "cdpPort": 18800,
+            "cdpUrl": "http://127.0.0.1:18800",
+            "chosenBrowser": "chrome",
+            "detectedBrowser": "chrome",
+            "detectedExecutablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "detectError": null,
+            "userDataDir": "/Users/pablito/.openclaw/browser/openclaw/user-data",
+            "color": "#FF4500",
+            "headless": false,
+            "noSandbox": false,
+            "executablePath": null,
+            "attachOnly": false
+          },
+          "browser_status_error": "",
+          "tabs": {
+            "tabs": [
+              {
+                "targetId": "231EB674B4B7572E6DE0F6877C3F831C",
+                "title": "Example Domain",
+                "url": "https://example.com/",
+                "wsUrl": "ws://127.0.0.1:18800/devtools/page/231EB674B4B7572E6DE0F6877C3F831C",
+                "type": "page"
+              }
+            ]
+          },
+          "tabs_error": "",
+          "browser_smoke": {
+            "browser_smoke": {
+              "ok": true,
+              "channel": "endpoint",
+              "tool": "gateway_probe+http_probe",
+              "path": "https://example.com",
+              "gateway_reachable": true,
+              "browser_http_reachable": true,
+              "browser_http_state": "authorized",
+              "browser_auth_required": false,
+              "relay_reachable": true,
+              "tab_attached": false,
+              "local_target": "ws://127.0.0.1:18789",
+              "detail": "gateway=Connect: ok (15ms) · RPC: ok; browser relay authorized (200)"
+            },
+            "raw": {
+              "gateway_probe": "Gateway Status\nReachable: yes\nProbe budget: 3000ms\n\nDiscovery (this machine)\nFound 1 gateway(s) via Bonjour (local.)\n\nTargets\nLocal loopback ws://127.0.0.1:18789\n  Connect: ok (15ms) · RPC: ok\n  Gateway: MacBook-Pro-Pablito.local (192.168.0.171) · macos 26.4 · app 2026.3.8\n  Wide-area discovery: unknown\n\n",
+              "gateway_probe_error": "",
+              "browser_http_status": 200,
+              "browser_http_error": ""
+            }
           }
         }
       }
@@ -118,12 +408,12 @@
           "photo_smoke": {
             "ok": true,
             "local_available": false,
-            "models_count": 91,
+            "models_count": 92,
             "local_vision_count": 27,
-            "selected_model": "qwen2-vl-2b-instruct-abliterated-mlx",
-            "selected_provider": "local",
-            "selected_local": true,
-            "detail": "selected=qwen2-vl-2b-instruct-abliterated-mlx; route=local_vision"
+            "selected_model": "openai-codex/gpt-5.4",
+            "selected_provider": "openai-codex",
+            "selected_local": false,
+            "detail": "selected=openai-codex/gpt-5.4; route=cloud_vision_fallback"
           }
         }
       }
@@ -135,7 +425,9 @@
       "payload": {
         "ok": true,
         "runtime_channels_ok": true,
+        "runtime_status": "OK",
         "control_schema_warnings": [],
+        "has_schema_warning": false,
         "impact_level": "none",
         "recommended_action": "Все каналы работают нормально. Предупреждений нет."
       }
@@ -147,7 +439,7 @@
       "payload": {
         "ok": true,
         "report": {
-          "generated_at": "2026-03-06T16:31:01+00:00",
+          "generated_at": "2026-03-11T05:10:00+00:00",
           "status": "degraded",
           "risk_level": "medium",
           "degradation": "normal",
@@ -155,7 +447,7 @@
             "openclaw": {
               "ok": true,
               "status": "ok",
-              "latency_ms": 18,
+              "latency_ms": 21,
               "source": "openclaw",
               "degraded": false,
               "token_status": {
@@ -179,7 +471,7 @@
             "local_lm": {
               "ok": true,
               "status": "ok",
-              "latency_ms": 80,
+              "latency_ms": 24,
               "source": "model_manager.health_check",
               "degraded": false
             },
@@ -193,7 +485,7 @@
             "krab_ear": {
               "ok": true,
               "status": "ok",
-              "latency_ms": 19,
+              "latency_ms": 1,
               "source": "krab_ear_client",
               "degraded": false
             }
@@ -204,13 +496,13 @@
             "voice_assist_ready": false
           },
           "resources": {
-            "cpu_percent": 16.4,
-            "ram_percent": 82.1,
-            "ram_available_gb": 6.5,
+            "cpu_percent": 33.4,
+            "ram_percent": 77.6,
+            "ram_available_gb": 8.1,
             "load_avg": [
-              5.20068359375,
-              5.5185546875,
-              6.3291015625
+              6.1328125,
+              6.48583984375,
+              7.6142578125
             ]
           },
           "queue": {},
@@ -220,14 +512,14 @@
           ],
           "_diagnostics": {
             "latency_summary": {
-              "openclaw": 18,
-              "local_lm": 80,
+              "openclaw": 21,
+              "local_lm": 24,
               "voice_gateway": 12,
-              "krab_ear": 19
+              "krab_ear": 1
             },
             "slowest_source": "local_lm",
-            "slowest_latency_ms": 80,
-            "total_collect_ms": 81,
+            "slowest_latency_ms": 24,
+            "total_collect_ms": 24,
             "timeout_budget_sec": 2.5
           }
         }

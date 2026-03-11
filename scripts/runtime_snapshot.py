@@ -60,6 +60,7 @@ def build_snapshot(base_url: str) -> dict[str, Any]:
         ("/api/health/lite", "health_lite"),
         ("/api/openclaw/channels/status", "channels_status"),
         ("/api/openclaw/browser-smoke", "browser_smoke"),
+        ("/api/openclaw/browser-mcp-readiness", "browser_mcp_readiness"),
         ("/api/openclaw/photo-smoke", "photo_smoke"),
         ("/api/openclaw/control-compat/status", "control_compat"),
         ("/api/ecosystem/health", "ecosystem_health"),
@@ -99,4 +100,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

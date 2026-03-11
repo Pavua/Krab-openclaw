@@ -256,6 +256,7 @@ def test_repair_lmstudio_provider_catalog_replaces_stale_glm_with_primary_model(
     report = repair_lmstudio_provider_catalog(
         models_path,
         primary_model="lmstudio/nvidia/nemotron-3-nano",
+        preferred_text_model="lmstudio/nvidia/nemotron-3-nano",
         preferred_vision_model="auto",
         lmstudio_token="lm-real-token",
         live_models=[
@@ -282,6 +283,57 @@ def test_repair_lmstudio_provider_catalog_replaces_stale_glm_with_primary_model(
     catalog = payload["providers"]["lmstudio"]["models"]
     assert [item["id"] for item in catalog] == ["nvidia/nemotron-3-nano"]
     assert catalog[0]["input"] == ["text"]
+
+
+def test_repair_lmstudio_provider_catalog_does_not_copy_cloud_primary_into_local_catalog(tmp_path: Path) -> None:
+    models_path = tmp_path / "models.json"
+    models_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "lmstudio": {
+                        "baseUrl": "http://localhost:1234/v1",
+                        "apiKey": "lm-real-token",
+                        "auth": "api-key",
+                        "api": "openai-completions",
+                        "models": [],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = repair_lmstudio_provider_catalog(
+        models_path,
+        primary_model="openai-codex/gpt-5.4",
+        preferred_text_model="lmstudio/nvidia/nemotron-3-nano",
+        preferred_vision_model="auto",
+        lmstudio_token="lm-real-token",
+        live_models=[
+            {
+                "id": "nvidia/nemotron-3-nano",
+                "display_name": "Nemotron 3 Nano",
+                "supports_vision": False,
+                "context_window": 262144,
+                "size_bytes": 17790000000,
+            },
+            {
+                "id": "qwen3.5-9b-mlx-vlm",
+                "display_name": "Qwen 3.5 9B VLM",
+                "supports_vision": True,
+                "context_window": 65536,
+                "size_bytes": 9300000000,
+            },
+        ],
+    )
+
+    assert report["changed"] is True
+    assert report["models"] == ["nvidia/nemotron-3-nano"]
+    payload = json.loads(models_path.read_text(encoding="utf-8"))
+    catalog = payload["providers"]["lmstudio"]["models"]
+    assert [item["id"] for item in catalog] == ["nvidia/nemotron-3-nano"]
 
 
 def test_repair_sessions_clears_local_overrides(tmp_path: Path) -> None:
@@ -553,7 +605,7 @@ def test_apply_dm_policy_allowlist_replaces_wildcard_with_trusted_peers(tmp_path
     assert payload["channels"]["telegram"]["allowFrom"] == ["312322764", "trusted_user"]
 
 
-def test_apply_group_policy_allowlist_uses_enabled_group_keys(tmp_path: Path) -> None:
+def test_apply_group_policy_allowlist_uses_dm_allowlist_for_telegram_senders(tmp_path: Path) -> None:
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(
         json.dumps(
@@ -562,6 +614,7 @@ def test_apply_group_policy_allowlist_uses_enabled_group_keys(tmp_path: Path) ->
                     "telegram": {
                         "enabled": True,
                         "groupPolicy": "open",
+                        "allowFrom": ["312322764"],
                         "groups": {
                             "-1001804661353": {"enabled": True},
                             "-1001999999999": {"enabled": False},
@@ -576,11 +629,41 @@ def test_apply_group_policy_allowlist_uses_enabled_group_keys(tmp_path: Path) ->
 
     report = apply_group_policy(openclaw_path, ("telegram",), "allowlist")
     assert report["changed"] is True
-    assert report["group_allow_from_fixed"]["telegram"] == "derived_from_channel_groups"
+    assert report["group_allow_from_fixed"]["telegram"] == "derived_from_dm_allowlist"
 
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["telegram"]["groupPolicy"] == "allowlist"
-    assert payload["channels"]["telegram"]["groupAllowFrom"] == ["-1001804661353"]
+    assert payload["channels"]["telegram"]["groupAllowFrom"] == ["312322764"]
+
+
+def test_apply_group_policy_allowlist_rewrites_invalid_telegram_group_ids(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "channels": {
+                    "telegram": {
+                        "enabled": True,
+                        "groupPolicy": "allowlist",
+                        "allowFrom": ["312322764"],
+                        "groupAllowFrom": ["-1001804661353"],
+                        "groups": {
+                            "-1001804661353": {"enabled": True},
+                        },
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = apply_group_policy(openclaw_path, ("telegram",), "allowlist")
+    assert report["changed"] is True
+    assert report["group_allow_from_fixed"]["telegram"] == "derived_from_dm_allowlist"
+
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["channels"]["telegram"]["groupAllowFrom"] == ["312322764"]
 
 
 def test_repair_group_policy_allowlist_switches_to_open_when_empty(tmp_path: Path) -> None:
@@ -604,6 +687,36 @@ def test_repair_group_policy_allowlist_switches_to_open_when_empty(tmp_path: Pat
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["imessage"]["groupPolicy"] == "open"
     assert payload["channels"]["telegram"]["groupPolicy"] == "allowlist"
+
+
+def test_repair_group_policy_allowlist_switches_telegram_to_open_when_only_group_ids_left(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "channels": {
+                    "telegram": {
+                        "enabled": True,
+                        "groupPolicy": "allowlist",
+                        "groupAllowFrom": ["-1001804661353"],
+                        "groups": {
+                            "-1001804661353": {"enabled": True},
+                        },
+                    },
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = repair_group_policy_allowlist(openclaw_path, ("telegram",))
+    assert report["changed"] is True
+    assert report["channels"] == ["telegram"]
+
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["channels"]["telegram"]["groupPolicy"] == "open"
+    assert "groupAllowFrom" not in payload["channels"]["telegram"]
 
 
 def test_repair_hooks_disables_enabled_without_token(tmp_path: Path) -> None:

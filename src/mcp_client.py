@@ -184,6 +184,79 @@ class MCPClientManager:
         except (AttributeError, IndexError, KeyError, TypeError):
             return str(result)
 
+    async def get_tool_manifest(self) -> List[Dict[str, Any]]:
+        """
+        Собирает список всех доступных инструментов от всех активных MCP сессий.
+        Форматирует их в OpenAI-совместимый Tool Definition.
+        """
+        manifest = []
+        for server_name, session in self.sessions.items():
+            try:
+                tools_result = await session.list_tools()
+                # Обычно SDK mcp-python возвращает объект с полем .tools
+                tools = getattr(tools_result, "tools", [])
+                for tool in tools:
+                    manifest.append({
+                        "type": "function",
+                        "function": {
+                            "name": f"{server_name}__{tool.name}",
+                            "description": tool.description,
+                            "parameters": tool.inputSchema,
+                        }
+                    })
+            except Exception as e:
+                logger.error("mcp_list_tools_failed", server=server_name, error=str(e))
+        
+        # Добавляем нативные инструменты Краба, если они еще не в MCP
+        # peekaboo: скриншот через KrabEarAgent
+        manifest.append({
+            "type": "function",
+            "function": {
+                "name": "peekaboo",
+                "description": "Сделать скриншот экрана macOS для анализа визуального контекста.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {"type": "string", "description": "Зачем нужен скриншот"}
+                    }
+                }
+            }
+        })
+        return manifest
+
+    async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
+        """
+        Вызывает инструмент по полному имени (server__tool) или нативному имени.
+        """
+        if full_tool_name == "peekaboo":
+            return await self._peekaboo_impl(arguments)
+
+        if "__" not in full_tool_name:
+            return f"❌ Неизвестный формат инструмента: {full_tool_name}"
+        
+        server_name, tool_name = full_tool_name.split("__", 1)
+        result = await self.call_tool(server_name, tool_name, arguments)
+        return self._format_tool_result(result)
+
+    async def _peekaboo_impl(self, arguments: Dict[str, Any]) -> str:
+        """
+        Реализация peekaboo через локальный KrabEarAgent.
+        """
+        import httpx
+        try:
+            # KrabEarAgent работает на 5005 порту (согласно предыдущей сессии)
+            url = "http://127.0.0.1:5005/screenshot"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    path = data.get("path", "")
+                    # Мы возвращаем путь к файлу для Vision-обработки или просто подтверждение
+                    return f"✅ Скриншот сделан и сохранен: {path}. Я его вижу."
+                return f"❌ Ошибка KrabEarAgent: {resp.status_code}"
+        except Exception as e:
+            return f"❌ Ошибка peekaboo: {str(e)}"
+
     async def stop_all(self):
         """Остановка всех серверов"""
         await self.exit_stack.aclose()

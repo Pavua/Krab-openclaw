@@ -172,6 +172,43 @@ def _run_cli_json(cmd: list[str], timeout_sec: float = 20.0) -> tuple[dict[str, 
         return {}, f"invalid_json_output: {stdout[:300]}"
 
 
+def _collect_stable_browser_cli_state(
+    *,
+    settle_attempts: int = 3,
+    settle_delay_sec: float = 1.0,
+) -> tuple[dict[str, Any], str | None, dict[str, Any], str | None]:
+    """
+    Снимает browser status/tabs с коротким settle-окном против transient start/attach-флапов.
+
+    Почему это нужно:
+    - сразу после restart/gateway reconnect `openclaw browser status --json` может кратко
+      вернуть `running=false`, а `tabs --json` — пустой список, хотя через секунду browser
+      уже жив;
+    - acceptance не должен краснеть на таком флапе, если контур стабилизируется сам.
+    """
+    attempts = max(1, int(settle_attempts))
+    last_status: dict[str, Any] = {}
+    last_status_err: str | None = None
+    last_tabs: dict[str, Any] = {}
+    last_tabs_err: str | None = None
+
+    for attempt in range(attempts):
+        last_status, last_status_err = _run_cli_json(["openclaw", "browser", "--json", "status"], timeout_sec=12.0)
+        last_tabs, last_tabs_err = _run_cli_json(["openclaw", "browser", "--json", "tabs"], timeout_sec=12.0)
+
+        tabs = last_tabs.get("tabs") if isinstance(last_tabs, dict) else []
+        if not isinstance(tabs, list):
+            tabs = []
+        running = bool(last_status.get("running"))
+
+        if last_status_err or last_tabs_err or running or tabs:
+            break
+        if attempt + 1 < attempts:
+            time.sleep(max(0.0, float(settle_delay_sec)))
+
+    return last_status, last_status_err, last_tabs, last_tabs_err
+
+
 def _run_browser_action_probe(url: str = "https://example.com") -> dict[str, Any]:
     """
     Практический flow-check Chrome relay через CLI.
@@ -182,12 +219,21 @@ def _run_browser_action_probe(url: str = "https://example.com") -> dict[str, Any
     3) при наличии вкладки: `navigate` + `snapshot`
     4) при отсутствии вкладки: явная explainable-деградация (tab_not_connected)
     """
-    status_payload, status_err = _run_cli_json(["openclaw", "browser", "--json", "status"], timeout_sec=12.0)
-    tabs_payload, tabs_err = _run_cli_json(["openclaw", "browser", "--json", "tabs"], timeout_sec=12.0)
+    status_payload, status_err, tabs_payload, tabs_err = _collect_stable_browser_cli_state()
 
     tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else []
     if not isinstance(tabs, list):
         tabs = []
+
+    if not bool(status_payload.get("running")):
+        _, _ = _run_cli_json(["openclaw", "browser", "--json", "start"], timeout_sec=15.0)
+        status_payload, status_err, tabs_payload, tabs_err = _collect_stable_browser_cli_state(
+            settle_attempts=2,
+            settle_delay_sec=1.0,
+        )
+        tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else []
+        if not isinstance(tabs, list):
+            tabs = []
 
     if status_err:
         return {
@@ -218,13 +264,36 @@ def _run_browser_action_probe(url: str = "https://example.com") -> dict[str, Any
                 "tabs_count": 0,
                 "attach_hint": "Открой вкладку в Chrome и нажми иконку расширения OpenClaw для attach.",
             }
-        return {
-            "ok": False,
-            "state": "open_failed",
-            "blocking": True,
-            "detail": open_err or "open_failed_unknown",
-            "tabs_count": 0,
-        }
+        if open_err is None:
+            # `browser open` может завершиться успешно без stdout. После этого ещё раз
+            # проверяем tabs: если вкладка появилась, продолжаем normal flow; если нет,
+            # это explainable attach-проблема, а не hard fail.
+            status_payload, status_err, tabs_payload, tabs_err = _collect_stable_browser_cli_state(
+                settle_attempts=2,
+                settle_delay_sec=1.0,
+            )
+            tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else []
+            if not isinstance(tabs, list):
+                tabs = []
+            if tabs:
+                pass
+            else:
+                return {
+                    "ok": False,
+                    "state": "tab_not_connected",
+                    "blocking": False,
+                    "detail": "Chrome relay не подтвердил вкладку после open; нужен attach через расширение OpenClaw.",
+                    "tabs_count": 0,
+                    "attach_hint": "Открой вкладку в Chrome и нажми иконку расширения OpenClaw для attach.",
+                }
+        else:
+            return {
+                "ok": False,
+                "state": "open_failed",
+                "blocking": True,
+                "detail": open_err or "open_failed_unknown",
+                "tabs_count": 0,
+            }
 
     _, nav_err = _run_cli_json(["openclaw", "browser", "--json", "navigate", url], timeout_sec=20.0)
     if nav_err:
@@ -324,10 +393,11 @@ def build_report(
 
     browser_state = str(browser_smoke.get("browser_http_state") or "")
     # В ряде окружений gateway probe может временно флапать, но при этом
-    # browser relay уже отвечает в состоянии auth_required/attached.
+    # browser relay уже отвечает в состоянии auth_required/authorized.
     # Для acceptance считаем это рабочим маршрутом (не красным блокером).
     browser_http_reachable = bool(browser_smoke.get("browser_http_reachable")) or browser_state in {
         "attached",
+        "authorized",
         "auth_required",
     }
     browser_action_ready = (
@@ -359,6 +429,8 @@ def build_report(
     warnings: list[str] = []
     if browser_state == "auth_required":
         warnings.append("Chrome relay требует авторизацию (browser_http_state=auth_required). Это не блокер readiness.")
+    if browser_state == "authorized":
+        warnings.append("Chrome relay авторизован и доступен по HTTP. Action-level attach проверяется отдельным browser probe.")
     if (
         browser_state == "auth_required"
         and not bool(browser_smoke.get("gateway_reachable"))

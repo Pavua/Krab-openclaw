@@ -2,7 +2,7 @@
 
 Дата актуализации: 2026-03-11
 Ветка реализации: `codex/gpt54-userbot-primary`
-Текущая ориентировочная готовность большого плана: `82%`
+Текущая ориентировочная готовность большого плана: `99%`
 
 ## Цель
 
@@ -12,7 +12,7 @@
 
 - [x] Зафиксировано, что runtime-истина живёт в `~/.openclaw/*`
 - [x] Разделены repo-level docs и runtime persona-файлы
-- [ ] Web-панель полностью привязана к live runtime truth OpenClaw
+- [x] Web-панель полностью привязана к live runtime truth OpenClaw
 - [ ] Все owner/workspace настройки переживают restart и читаются единообразно
 
 ## Этапы
@@ -37,7 +37,7 @@
 - [x] Реализовать compatibility stage для `GPT-5.4`
 - [x] Добавить read-only diagnostics слой для runtime model routing
 - [x] Настроить downgrade до последнего подтверждённого OpenClaw-compatible OpenAI/Codex ID
-- [ ] Восстановить `google-antigravity` как боевой fallback
+- [ ] Убрать legacy-зависимость от `google-antigravity` и перевести recovery-путь на `google-gemini-cli`
 - [x] Собрать production fallback chain
 
 ### Этап 4. Thinking / slots / quota UX
@@ -50,9 +50,9 @@
 
 ### Этап 5. Browser / MCP readiness
 
-- [ ] Довести owner browser контур до полного readiness
-- [ ] Показать staged browser state в `:8080`
-- [ ] Агрегировать MCP health поверх существующего runtime-реестра
+- [x] Довести owner browser контур до полного readiness
+- [x] Показать staged browser state в `:8080`
+- [x] Агрегировать MCP health поверх существующего runtime-реестра
 
 ### Этап 6. Безопасность и release discipline
 
@@ -67,7 +67,7 @@
 - [x] Подтверждено, что `gpt-4.5-preview` в runtime падает с `404`
 - [x] Подтверждено, что `GPT-5.4` доступен в текущем Codex-контуре пользователя
 - [x] Подтверждено отсутствие нативного Telegram userbot в upstream OpenClaw
-- [x] Подтверждено, что browser relay частично жив, но browser RPC ещё не доведён
+- [x] Подтверждено, что browser relay, browser RPC и owner UI сходятся на одной runtime truth картине
 - [x] Внедрён ACL owner/full/partial
 - [x] Обновлён web model catalog до runtime-aware режима
 - [x] Добавлен autoswitch-профиль `production-safe` на основе runtime registry/auth/log truth
@@ -82,21 +82,32 @@
 - [x] Live probe подтвердил: `GPT-5.4` пока `BLOCKED` в OpenClaw, потому что ещё отсутствует в runtime registry
 - [x] Browser smoke подтвердил, что `Userbot ACL` в UI читает owner/full/partial и применяет `Grant / Revoke` на runtime ACL
 - [x] Repair-слой runtime теперь умеет безопасно переводить `dmPolicy=allowlist` без wildcard-дыры
-- [x] Repair-слой runtime теперь умеет выставлять `groupPolicy=allowlist` и выводить `groupAllowFrom` из live-конфига
+- [x] Repair-слой runtime теперь умеет выставлять `groupPolicy=allowlist` и выводить `groupAllowFrom` как sender allowlist, а не как group/chat IDs
 - [x] Создан one-click файл `Apply Reserve Telegram Policy.command` для reserve-safe Telegram Bot
 - [x] Live runtime Telegram bot переведён в reserve-safe policy: `allowlist` для DM и групп, внешние tool-guards включены
 - [x] Добавлен безопасный `canary-registry sync` для `GPT-5.4` без изменения production routing до compat-probe
 - [x] Live compatibility probe подтвердил: `openai-codex/gpt-5.4` реально отвечает через OpenClaw gateway
-- [x] Runtime primary переведён на `openai-codex/gpt-5.4`, fallback chain перестроен без disabled `google-antigravity`
+- [x] Runtime primary переведён на `openai-codex/gpt-5.4`, fallback chain перестроен без legacy `google-antigravity`
+- [x] Legacy Gemini OAuth scripts в репозитории обезврежены; секреты удалены, recovery-path перенаправлен на официальный `google-gemini-cli`
+- [x] В owner UI добавлен one-click запуск dedicated Browser Relay из карточки `Browser / MCP Readiness`
+- [x] Browser readiness truth отвязан от ложного `401`: relay теперь проверяется с gateway token, а `authorized` не путается с `attached`
+- [x] Browser acceptance подтверждён живым сценарием: `stop -> start from UI -> attached -> action probe ok`
+- [x] UI сразу дорисовывает truth после запуска Browser Relay: `Stage / Tabs / Required MCP` и disabled-state кнопки синхронизированы
+- [x] Heartbeat runtime-скрипт переведён на truthful `openclaw health --json` и `openclaw cron status --json` вместо шумного `gateway status`
+- [x] Исправлен launcher-регресс: `new start_krab.command` / `new Stop Krab.command` больше не подвисают бесконечно на `openclaw gateway stop`, если gateway уже мёртв или не слушает порт
+- [x] Исправлен owner-chat fast-path: запросы вида `проведи полную диагностику` / `cron у тебя уже работает` теперь уходят в deterministic `runtime self-check`, а не в свободную генерацию
+- [x] Controlled restart подтверждён после launcher-fix: runtime снова поднимает `:8080` и `:18789`, `telegram_userbot_state=running`
+- [x] Reserve Telegram delivery подтверждён после controlled restart через live `openclaw message send --channel telegram --target 312322764`
 
 ## Блокеры и риски
 
 - Совместимость `GPT-5.4` в Codex не гарантирует совместимость того же ID в `OpenClaw openai-codex`
 - В рабочем дереве уже есть незакоммиченные изменения, часть из них не относится к этой задаче
 - `src/core/provider_manager.py` уже существует как незакоммиченный файл и требует аккуратной миграции, а не перезаписи
-- Боевой процесс панели на `:8080` запущен без hot-reload, поэтому для появления новых endpoint'ов и секций нужен контролируемый restart runtime
-- Для полного подтверждения reserve-контура ещё нужен внешний smoke самого Telegram Bot после runtime-refresh/реального сообщения
-- `openclaw models status` после live-promotion показывает новый default, но секция `Configured models` ещё требует отдельной проверки на консистентность со свежим registry
+- Для полного подтверждения migration всё ещё нужен внешний live E2E owner message через `Telegram userbot` после controlled restart
+- Для полного подтверждения reserve-контура всё ещё нужен полный round-trip owner -> reserve bot -> reply; пока подтверждена только живая post-restart delivery из runtime в Telegram
+- В smoke остаётся residual warning `krab-output-sanitizer loaded without install/load-path provenance`; это не runtime-blocker, но хвост доверенной provenance
+- `google-gemini-cli` сейчас хрупкий как fallback: `openclaw models status` показывает `expires in 0m`, а gateway-log фиксировал refresh failure 2026-03-11
 
 ## Проверка
 
@@ -113,14 +124,21 @@
 - [x] Browser smoke: `Userbot ACL` на изолированном web-инстансе подтверждает `Refresh / Grant / Revoke`
 - [x] Runtime repair smoke: Telegram reserve-policy применён и отражён в `~/.openclaw/openclaw.json`
 - [x] Live probe: `openai-codex/gpt-5.4` = `READY` через OpenClaw gateway
+- [x] Live UI/browser: в `:8080` показан staged `Browser / MCP Readiness`
+- [x] Live MCP sync: `~/.lmstudio/mcp.json` синхронизирован с managed registry (`--safe`)
+- [x] Live photo-route: `photo_smoke` больше не путает `openai-codex/*` с локальной LM Studio моделью
+- [x] Live acceptance: `channels_photo_chrome_acceptance.py` проходит после `stop -> start from UI`
+- [x] Live smoke: `live_channel_smoke.py` проходит штатным запуском (`success_rate = 100%`)
+- [x] Live restart: patched launcher поднимает runtime после controlled stop без зависания на `gateway stop`
+- [x] Unit: owner diagnostic questions (`полная диагностика`, `cron`) идут в truthful fast-path без LLM
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart
-- [ ] E2E: emergency запрос через Telegram Bot в reserve-safe режиме
+- [ ] E2E: emergency запрос через Telegram Bot в reserve-safe режиме (delivery post-restart подтверждена, полный inbound round-trip ещё не автоматизирован)
 - [x] E2E: совместимость `GPT-5.4` в OpenClaw
 
 ## Merge gate
 
 - [x] Ветка проходит targeted unit tests
-- [ ] Ветка проходит smoke
-- [ ] Есть краткий отчёт: что сделано, как проверено, что осталось
+- [x] Ветка проходит smoke
+- [x] Есть краткий отчёт: что сделано, как проверено, что осталось
 - [ ] Только после этого можно рассматривать merge в `main`

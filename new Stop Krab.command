@@ -54,6 +54,52 @@ clear_web_port() {
     [ -z "$pids" ] && echo "✅ Port ${port} cleared." || echo "❌ Port ${port} still occupied: $pids"
 }
 
+resolve_openclaw_bin() {
+    if [ -x "${DIR}/.venv/bin/openclaw" ]; then
+        echo "${DIR}/.venv/bin/openclaw"
+        return 0
+    fi
+    if command -v openclaw >/dev/null 2>&1; then
+        command -v openclaw
+        return 0
+    fi
+    return 1
+}
+
+safe_openclaw_control() {
+    local timeout_sec="${1:-8}"
+    shift
+    local openclaw_bin
+    openclaw_bin="$(resolve_openclaw_bin)" || return 127
+
+    # На реальном macOS runtime `openclaw browser/gateway stop` может повиснуть,
+    # если backend уже умер, а CLI всё ещё ждёт RPC-ответ. Для stop-script это
+    # особенно опасно: пользователь видит "Stop" и думает, что всё завершилось.
+    python3 - "$openclaw_bin" "$timeout_sec" "$@" <<'PY'
+import subprocess
+import sys
+
+bin_path = sys.argv[1]
+timeout_sec = float(sys.argv[2])
+args = [bin_path, *sys.argv[3:]]
+
+try:
+    completed = subprocess.run(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=timeout_sec,
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    raise SystemExit(124)
+except FileNotFoundError:
+    raise SystemExit(127)
+
+raise SystemExit(int(completed.returncode))
+PY
+}
+
 # 0. Кидаем "ядовитую таблетку", чтобы скрипт старта сам вышел из цикла!
 touch .stop_krab
 disable_legacy_launchd_core
@@ -85,11 +131,11 @@ pkill -f "run_krab" >/dev/null 2>&1 || true
 clear_web_port 8080
 
 # 4. Останавливаем OpenClaw
-"${DIR}/.venv/bin/openclaw" browser stop >/dev/null 2>&1 || openclaw browser stop >/dev/null 2>&1 || true
+safe_openclaw_control 8 browser stop || true
 # Подчищаем именно automation Chrome relay OpenClaw, не трогая обычный профиль пользователя.
 pkill -f "remote-debugging-port=18800" >/dev/null 2>&1 || true
 pkill -f "${HOME}/.openclaw/browser/openclaw/user-data" >/dev/null 2>&1 || true
-"${DIR}/.venv/bin/openclaw" gateway stop >/dev/null 2>&1 || openclaw gateway stop >/dev/null 2>&1 || true
+safe_openclaw_control 8 gateway stop || true
 
 if [ -f "$OPENCLAW_PID_FILE" ]; then
     PID=$(cat "$OPENCLAW_PID_FILE" 2>/dev/null || true)

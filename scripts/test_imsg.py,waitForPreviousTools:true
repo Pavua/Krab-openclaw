@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os
+import subprocess
+
+DB_PATH = "/Users/pablito/Library/Messages/chat.db"
+CLI_PATH = "/opt/homebrew/bin/imsg"
+
+def check():
+    print(f"--- Диагностика iMessage ---")
+    if os.path.exists(DB_PATH):
+        print(f"✅ БД: {DB_PATH}")
+    else:
+        print(f"❌ БД не найдена")
+    
+    if os.path.exists(CLI_PATH):
+        print(f"✅ CLI: {CLI_PATH}")
+    else:
+        print(f"❌ CLI не найден")
+
+if __name__ == "__main__":
+    check()

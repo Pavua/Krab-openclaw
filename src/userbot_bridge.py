@@ -11,6 +11,7 @@ Userbot Bridge - Мост между Telegram и OpenClaw/AI
 
 import asyncio
 import base64
+import json
 import os
 import re
 import shutil
@@ -30,6 +31,7 @@ from .core.exceptions import KrabError, UserInputError
 from .core.logger import get_logger
 from .core.mcp_registry import resolve_managed_server_launch
 from .core.openclaw_workspace import load_workspace_prompt_bundle
+from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .employee_templates import ROLES, get_role_prompt
@@ -66,6 +68,19 @@ from .search_engine import close_search
 from .voice_engine import text_to_speech
 
 logger = get_logger(__name__)
+
+
+def _current_runtime_primary_model() -> str:
+    """
+    Возвращает primary-модель из живого OpenClaw runtime.
+
+    Почему helper нужен здесь:
+    - truthful self-check не должен опираться на stale `.env` значение;
+    - owner userbot должен видеть тот же primary, что реально выставлен в
+      `~/.openclaw/openclaw.json`, даже если в этом канале ещё не было
+      подтверждённого LLM-маршрута.
+    """
+    return str(get_runtime_primary_model() or "").strip()
 
 
 def _resolve_openclaw_stream_timeouts(*, has_photo: bool) -> tuple[float, float]:
@@ -1245,6 +1260,11 @@ class KraabUserbot:
         low = str(text or "").strip().lower()
         if not low:
             return False
+        # Живой кейс из owner-чата: запросы вида "проведи полную диагностику"
+        # раньше не попадали в truthful fast-path и уходили в свободную LLM-
+        # генерацию, из-за чего пользователь видел мусор вроде "контекст потерян"
+        # вместо реального self-check. Поэтому явно считаем диагностические
+        # формулировки runtime-вопросом.
         patterns = [
             "проверка связи",
             "проверь связь",
@@ -1254,10 +1274,17 @@ class KraabUserbot:
             "проверь что работает",
             "проверь все",
             "проверь всё",
+            "проведи диагностику",
+            "полную диагностику",
+            "диагностику рантайма",
+            "диагностику runtime",
+            "runtime self-check",
             "сделай self-check",
             "самопровер",
             "работает ли cron",
             "работает ли крон",
+            "cron у тебя уже работает",
+            "крон у тебя уже работает",
             "доступ к браузеру",
             "есть ли браузер",
             "можешь использовать браузер",
@@ -1563,6 +1590,7 @@ class KraabUserbot:
         route_model = str(route_meta.get("model", "") or "").strip()
         route_provider = str(route_meta.get("provider", "") or "").strip()
         scheduler_on = bool(getattr(config, "SCHEDULER_ENABLED", False))
+        scheduler_started = bool(getattr(krab_scheduler, "is_started", False))
         browser_ready = not bool(resolve_managed_server_launch("openclaw-browser").get("missing_env"))
         chrome_profile_ready = not bool(resolve_managed_server_launch("chrome-profile").get("missing_env"))
         brave_ready = not bool(resolve_managed_server_launch("brave-search").get("missing_env"))
@@ -1571,15 +1599,39 @@ class KraabUserbot:
             access_level=access_level,
         )
 
+        route_line = (
+            f"`{route_channel}`"
+            if route_channel
+            else "ещё не подтверждён в этом канале (self-check не гоняет LLM-маршрут)"
+        )
+        model_line = f"`{route_model or local_model}`" if (route_model or local_model) else "ещё не подтверждена"
+        primary_hint = ""
+        try:
+            model_info = self.router.get_model_info() if hasattr(self, "router") and self.router else {}
+        except Exception:
+            model_info = {}
+        if isinstance(model_info, dict):
+            primary_hint = str(model_info.get("current_model", "") or "").strip()
+        if not primary_hint:
+            primary_hint = _current_runtime_primary_model()
+
         lines: list[str] = [
             "🧭 **Фактический runtime self-check**",
             f"- Gateway / transport: {'ON' if openclaw_ok else 'OFF'}",
-            f"- Последний маршрут: `{route_channel or 'не подтверждён'}`",
-            f"- Последняя модель: `{route_model or local_model or 'не подтверждена'}`",
+            "- Текущий канал: Python Telegram userbot (primary transport)",
+            f"- Последний маршрут: {route_line}",
+            f"- Последняя модель: {model_line}",
         ]
         if route_provider:
             lines.append(f"- Провайдер: `{route_provider}`")
-        lines.append(f"- Scheduler / reminders: {'включён' if scheduler_on else 'выключен'}")
+        if primary_hint and not route_model:
+            lines.append(f"- Primary по runtime: `{primary_hint}`")
+        if scheduler_on and scheduler_started:
+            lines.append("- Scheduler / reminders: включён и подтверждён runtime-стартом")
+        elif scheduler_on:
+            lines.append("- Scheduler / reminders: включён, но runtime-старт ещё не подтверждён")
+        else:
+            lines.append("- Scheduler / reminders: выключен")
         lines.append(
             "- Браузерный контур: "
             + (
@@ -1596,7 +1648,12 @@ class KraabUserbot:
                 else "не подтверждается как постоянный фоновой доступ"
             )
         )
-        lines.append("- Cron / heartbeat: без отдельной runtime-проверки не считаю их подтверждённо рабочими.")
+        if scheduler_on and scheduler_started and openclaw_ok:
+            lines.append("- Cron / heartbeat: scheduler активен, transport живой.")
+        elif scheduler_on and scheduler_started:
+            lines.append("- Cron / heartbeat: scheduler активен, но transport сейчас не подтверждён.")
+        else:
+            lines.append("- Cron / heartbeat: без подтверждённого scheduler runtime не считаю их рабочими.")
 
         return "\n".join(lines)
 

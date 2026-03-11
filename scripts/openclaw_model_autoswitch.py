@@ -33,8 +33,14 @@ from dotenv import load_dotenv
 DEFAULT_TARGET_PRIMARY_MODEL = "openai-codex/gpt-5.4"
 DEFAULT_SAFE_CLOUD_MODELS = (
     "google/gemini-2.5-flash",
-    "openai/gpt-4o-mini",
 )
+RUNTIME_AUTH_SCOPE_MARKERS = (
+    "missing scopes: model.request",
+    "insufficient permissions for this operation",
+)
+RUNTIME_AUTH_PROVIDER_HINTS = {
+    "lane=session:agent:main:openai:": "openai-codex",
+}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -304,12 +310,43 @@ def _is_model_broken(model_key: str, broken_models: list[str]) -> bool:
     return any(_model_matches(model_key, item) for item in broken_models)
 
 
+def _runtime_auth_failed_providers(gateway_log_path: Path) -> dict[str, str]:
+    """
+    Возвращает провайдеры, которые уже доказанно падают в embedded runtime по auth/scopes.
+
+    Почему это нужно:
+    - `production-safe` раньше снимал только `model not found`;
+    - но боевой primary может быть "формально существующим" и всё равно стабильно
+      умирать на `401 Missing scopes: model.request`, тратя время на каждый failover.
+    """
+    if not gateway_log_path.exists():
+        return {}
+    try:
+        lines = gateway_log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return {}
+
+    disabled: dict[str, str] = {}
+    for line in lines[-400:]:
+        raw = str(line or "").strip()
+        if not raw:
+            continue
+        lowered = raw.lower()
+        if not all(marker in lowered for marker in RUNTIME_AUTH_SCOPE_MARKERS):
+            continue
+        for hint, provider in RUNTIME_AUTH_PROVIDER_HINTS.items():
+            if hint in lowered:
+                disabled[str(provider or "").strip()] = "runtime_missing_scope_model_request"
+    return disabled
+
+
 def _safe_cloud_candidates(
     *,
     openclaw_payload: dict[str, Any],
     registry_models: list[str],
     auth_payload: dict[str, Any],
     broken_models: list[str],
+    runtime_auth_failed_providers: dict[str, str],
     target_primary: str,
 ) -> list[str]:
     defaults = ((openclaw_payload.get("agents") or {}).get("defaults") or {})
@@ -322,25 +359,12 @@ def _safe_cloud_candidates(
         if str(item or "").strip()
     ] if isinstance(raw_fallbacks, list) else []
 
-    preferred_runtime = sorted(
-        [
-            item for item in registry_models
-            if item and not _is_local_model(item)
-        ],
-        key=lambda item: (
-            0 if _provider_from_model(item) == "openai-codex" else
-            1 if _provider_from_model(item) == "google-antigravity" else
-            2 if _provider_from_model(item) == "google" else
-            3
-        ),
-    )
     candidate_chain = _unique_non_empty(
         [
             target_primary,
             current_primary,
             *current_fallbacks,
             *DEFAULT_SAFE_CLOUD_MODELS,
-            *preferred_runtime,
         ]
     )
 
@@ -351,6 +375,8 @@ def _safe_cloud_candidates(
         if not _registry_contains_model(candidate, registry_models):
             continue
         provider = _provider_from_model(candidate)
+        if provider and runtime_auth_failed_providers.get(provider):
+            continue
         health = _provider_health(auth_payload, provider) if provider else {}
         if health.get("disabled"):
             continue
@@ -368,6 +394,7 @@ def _plan_special_profile(
     registry_models: list[str],
     auth_payload: dict[str, Any],
     broken_models: list[str],
+    runtime_auth_failed_providers: dict[str, str],
     target_primary: str,
 ) -> dict[str, Any] | None:
     if requested_profile not in {"production-safe", "gpt54-canary"}:
@@ -378,13 +405,19 @@ def _plan_special_profile(
         registry_models=registry_models,
         auth_payload=auth_payload,
         broken_models=broken_models,
+        runtime_auth_failed_providers=runtime_auth_failed_providers,
         target_primary=target_primary if requested_profile == "gpt54-canary" else "",
     )
 
     provider_health = {
         provider: _provider_health(auth_payload, provider)
-        for provider in ("openai-codex", "google-antigravity", "google", "openai")
+        for provider in ("openai-codex", "google-gemini-cli", "google-antigravity", "google", "openai", "qwen-portal")
     }
+    for provider, reason in runtime_auth_failed_providers.items():
+        health = dict(provider_health.get(provider) or {})
+        health["disabled"] = True
+        health["disabled_reason"] = str(reason or "runtime_auth_failed")
+        provider_health[provider] = health
 
     if requested_profile == "gpt54-canary":
         if not _registry_contains_model(target_primary, registry_models):
@@ -672,6 +705,7 @@ def main() -> int:
         fallback_openclaw_payload=openclaw_payload,
     )
     broken_models = _broken_models_from_gateway_log(gateway_log_path)
+    runtime_auth_failed_providers = _runtime_auth_failed_providers(gateway_log_path)
     current_profile = _detect_current_profile(openclaw_payload)
     effective_profile = _resolve_requested_profile(args.profile, current_profile)
     special_plan = _plan_special_profile(
@@ -681,6 +715,7 @@ def main() -> int:
         registry_models=registry_models,
         auth_payload=auth_payload if isinstance(auth_payload, dict) else {},
         broken_models=broken_models,
+        runtime_auth_failed_providers=runtime_auth_failed_providers,
         target_primary=target_primary,
     )
     if special_plan is not None:
@@ -766,6 +801,7 @@ def main() -> int:
             "runtime_registry_models": registry_models,
             "runtime_registry_count": len(registry_models),
             "broken_models": broken_models,
+            "runtime_auth_failed_providers": runtime_auth_failed_providers,
             "openclaw_json": str(openclaw_path),
             "agent_json": str(agent_path),
             "state_json": str(state_path),

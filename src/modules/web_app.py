@@ -36,6 +36,12 @@ from src.core.access_control import (  # noqa: E402
 )
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
+from src.core.mcp_registry import (  # noqa: E402
+    LMSTUDIO_MCP_PATH,
+    build_lmstudio_mcp_json,
+    get_managed_mcp_servers,
+    resolve_managed_server_launch,
+)
 from src.core.model_aliases import (  # noqa: E402
     MODEL_FRIENDLY_ALIASES,
     normalize_model_alias,
@@ -141,6 +147,25 @@ class WebApp:
         token = str(auth.get("token") or "").strip()
         return token
 
+    @classmethod
+    def _openclaw_gateway_auth_headers(cls) -> dict[str, str]:
+        """
+        Возвращает auth headers для прямых HTTP-проб OpenClaw gateway/browser relay.
+
+        Почему это отдельный helper:
+        - browser relay на `:18791` защищён тем же gateway token;
+        - без заголовка получаем ложный `401 auth_required`, хотя relay и dedicated browser
+          уже могут быть полностью живы;
+        - web-панель должна проверять runtime truth в том же auth-контуре, что и CLI.
+        """
+        token = cls._openclaw_gateway_token_from_config()
+        if not token:
+            token = str(os.getenv("OPENCLAW_GATEWAY_TOKEN", "") or "").strip()
+        headers = {"Accept": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
     @staticmethod
     def _openclaw_models_config_path() -> Path:
         """Путь к runtime source-of-truth моделей OpenClaw."""
@@ -189,13 +214,40 @@ class WebApp:
         normalized = str(provider_name or "").strip().lower()
         labels = {
             "google": "Google",
-            "google-antigravity": "Google OAuth",
+            "google-antigravity": "Google OAuth (legacy)",
+            "google-gemini-cli": "Gemini CLI OAuth",
             "openai": "OpenAI",
             "openai-codex": "OpenAI Codex",
             "lmstudio": "LM Studio",
             "github-copilot": "GitHub Copilot",
         }
         return labels.get(normalized, normalized or "provider")
+
+    @classmethod
+    def _active_runtime_model_ids(cls) -> set[str]:
+        """
+        Возвращает активную цепочку моделей из OpenClaw runtime.
+
+        Что считаем "активным":
+        - primary;
+        - fallback chain;
+        - это и есть боевой слой, который должен доминировать в owner UI,
+          чтобы панель не засорялась legacy-провайдерами и старыми платными хвостами.
+        """
+        runtime_config = cls._load_openclaw_runtime_config()
+        agents = runtime_config.get("agents") if isinstance(runtime_config, dict) else {}
+        defaults = agents.get("defaults") if isinstance(agents, dict) else {}
+        model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+
+        active: set[str] = set()
+        primary = str(model_defaults.get("primary", "") or "").strip()
+        if primary:
+            active.add(primary)
+        for item in (model_defaults.get("fallbacks") or []):
+            candidate = str(item or "").strip()
+            if candidate:
+                active.add(candidate)
+        return active
 
     @classmethod
     def _build_runtime_cloud_presets(cls, current_slots: dict[str, str] | None = None) -> list[dict[str, Any]]:
@@ -212,6 +264,7 @@ class WebApp:
         providers = payload.get("providers")
         if not isinstance(providers, dict):
             providers = {}
+        active_chain = cls._active_runtime_model_ids()
 
         items_by_id: dict[str, dict[str, Any]] = {}
 
@@ -228,6 +281,8 @@ class WebApp:
                 if not raw_model_id:
                     continue
                 canonical_id = raw_model_id if "/" in raw_model_id else f"{provider_name}/{raw_model_id}"
+                if active_chain and canonical_id not in active_chain:
+                    continue
                 item = {
                     "id": canonical_id,
                     "provider": str(provider_name),
@@ -258,6 +313,22 @@ class WebApp:
                 "source": "router_current",
             }
 
+        for model_id in sorted(active_chain):
+            if not model_id or model_id in items_by_id:
+                continue
+            provider_name = model_id.split("/", 1)[0] if "/" in model_id else "custom"
+            items_by_id[model_id] = {
+                "id": model_id,
+                "provider": provider_name,
+                "provider_label": cls._provider_label(provider_name),
+                "label": f"{cls._provider_label(provider_name)} • {model_id.split('/', 1)[-1]}",
+                "name": model_id.split("/", 1)[-1],
+                "reasoning": "gpt-5" in model_id,
+                "max_tokens": 0,
+                "context_window": 0,
+                "source": "active_chain_runtime",
+            }
+
         return [items_by_id[key] for key in sorted(items_by_id)]
 
     @classmethod
@@ -284,31 +355,34 @@ class WebApp:
         chat_model = _pick(
             str(current_slots.get("chat", "") or ""),
             "openai-codex/gpt-5.4",
-            "openai-codex/gpt-5.3-codex",
-            "openai-codex/gpt-5.2-codex",
-            "google/gemini-2.5-flash",
-            "google-antigravity/gemini-3.1-pro-preview",
+            "google-gemini-cli/gemini-3.1-pro-preview",
+            "google/gemini-3.1-pro-preview",
+            "qwen-portal/coder-model",
+            "google/gemini-2.5-flash-lite",
         )
         thinking_model = _pick(
             str(current_slots.get("thinking", "") or ""),
             "openai-codex/gpt-5.4",
-            "openai-codex/gpt-5.3-codex",
-            "google-antigravity/gemini-3.1-pro-preview",
-            "google/gemini-2.5-flash",
+            "google-gemini-cli/gemini-3.1-pro-preview",
+            "google/gemini-3.1-pro-preview",
+            "qwen-portal/coder-model",
+            "google/gemini-2.5-flash-lite",
         )
         pro_model = _pick(
             str(current_slots.get("pro", "") or ""),
             "openai-codex/gpt-5.4",
-            "google-antigravity/gemini-3.1-pro-preview",
-            "openai-codex/gpt-5.3-codex",
-            "google/gemini-2.5-flash",
+            "google-gemini-cli/gemini-3.1-pro-preview",
+            "google/gemini-3.1-pro-preview",
+            "qwen-portal/coder-model",
+            "google/gemini-2.5-flash-lite",
         )
         coding_model = _pick(
             str(current_slots.get("coding", "") or ""),
             "openai-codex/gpt-5.4",
-            "openai-codex/gpt-5.3-codex",
-            "openai-codex/gpt-5.2-codex",
-            "openai/gpt-4o-mini",
+            "qwen-portal/coder-model",
+            "google-gemini-cli/gemini-3.1-pro-preview",
+            "google/gemini-3.1-pro-preview",
+            "google/gemini-2.5-flash-lite",
         )
 
         return {
@@ -399,9 +473,25 @@ class WebApp:
                 if isinstance(profile_payload, dict) and str(profile_payload.get("provider", "") or "").strip() == provider_name
             ]
             disabled_profiles: list[dict[str, str]] = []
+            expired_profiles: list[dict[str, str]] = []
             failure_counts: dict[str, int] = {}
+            cooldown_active = False
+            now_ms = time.time() * 1000.0
             for profile_name in profile_names:
+                profile_payload = profiles.get(profile_name)
                 usage = usage_stats.get(profile_name)
+                if isinstance(profile_payload, dict):
+                    try:
+                        expires_at = float(profile_payload.get("expires", 0) or 0)
+                    except (TypeError, ValueError):
+                        expires_at = 0.0
+                    if expires_at > 0 and expires_at <= now_ms:
+                        expired_profiles.append(
+                            {
+                                "profile": profile_name,
+                                "reason": "expired",
+                            }
+                        )
                 if not isinstance(usage, dict):
                     continue
                 disabled_reason = str(usage.get("disabledReason", "") or "").strip()
@@ -412,6 +502,12 @@ class WebApp:
                             "reason": disabled_reason,
                         }
                     )
+                try:
+                    cooldown_until = float(usage.get("cooldownUntil", 0) or 0)
+                except (TypeError, ValueError):
+                    cooldown_until = 0.0
+                if cooldown_until > (time.time() * 1000.0):
+                    cooldown_active = True
                 failures = usage.get("failureCounts")
                 if isinstance(failures, dict):
                     for failure_key, failure_value in failures.items():
@@ -423,10 +519,13 @@ class WebApp:
                 "runtime_models": runtime_model_ids,
                 "profiles": profile_names,
                 "disabled_profiles": disabled_profiles,
+                "expired_profiles": expired_profiles,
                 "failure_counts": failure_counts,
+                "cooldown_active": cooldown_active,
             }
 
         openai_codex = _provider_state("openai-codex")
+        google_gemini_cli = _provider_state("google-gemini-cli")
         google_antigravity = _provider_state("google-antigravity")
 
         target_primary = str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4") or "").strip()
@@ -434,15 +533,30 @@ class WebApp:
         current_primary_broken = (
             current_primary.startswith("openai-codex/")
             and int(openai_codex["failure_counts"].get("model_not_found", 0) or 0) > 0
+            and bool(openai_codex.get("cooldown_active"))
+        )
+        google_gemini_cli_unavailable = bool(
+            google_gemini_cli["disabled_profiles"]
+            or google_gemini_cli["expired_profiles"]
+            or google_gemini_cli["cooldown_active"]
         )
         antigravity_disabled = bool(google_antigravity["disabled_profiles"])
+        antigravity_legacy_present = bool(google_antigravity["configured"])
 
         warnings: list[str] = []
         if current_primary_broken:
             warnings.append("Текущий OpenAI primary падает с model_not_found и не годится как production primary.")
+        if google_gemini_cli_unavailable:
+            warnings.append(
+                "Google Gemini CLI OAuth сейчас не является надёжным fallback: профиль в cooldown/expired и может требовать re-auth."
+            )
         if not target_in_runtime:
             warnings.append("GPT-5.4 пока не описан в runtime models.json OpenClaw и не готов к promotion.")
-        if antigravity_disabled:
+        if antigravity_legacy_present:
+            warnings.append(
+                "Legacy provider google-antigravity уже удалён в OpenClaw 2026.3.8+ и не должен использоваться как fallback; миграция идёт через google-gemini-cli или google/* API key."
+            )
+        elif antigravity_disabled:
             warnings.append("Google Antigravity сейчас disabled в auth-profiles и не должен считаться надёжным fallback.")
 
         temporary_primary = current_primary
@@ -453,7 +567,11 @@ class WebApp:
                     for candidate in current_fallbacks
                     if not (
                         candidate.startswith("google-antigravity/")
-                        and antigravity_disabled
+                        and (antigravity_disabled or antigravity_legacy_present)
+                    )
+                    and not (
+                        candidate.startswith("google-gemini-cli/")
+                        and google_gemini_cli_unavailable
                     )
                 ),
                 "",
@@ -467,7 +585,9 @@ class WebApp:
             "current_primary_broken": current_primary_broken,
             "temporary_primary_recommendation": temporary_primary,
             "openai_codex": openai_codex,
+            "google_gemini_cli": google_gemini_cli,
             "google_antigravity": google_antigravity,
+            "google_antigravity_legacy_removed": antigravity_legacy_present,
             "warnings": warnings,
             "workspace": str(defaults.get("workspace", "") or ""),
         }
@@ -770,6 +890,52 @@ class WebApp:
             "sqlite_quick_check_ok": sqlite_ok,
             "sqlite_error": sqlite_error,
         }
+
+    @staticmethod
+    def _normalize_telegram_session_truth(
+        session_snapshot: dict[str, Any], userbot_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Нормализует файловое состояние session через живой runtime userbot.
+
+        Почему это нужно:
+        - sidecar-файлы SQLite (`-journal/-wal/-shm`) штатно появляются, пока Pyrogram
+          держит базу открытой;
+        - для owner UI и `/api/health/lite` важно показывать реальную деградацию, а не
+          пугать пользователя ложным `open_or_unclean` на живом userbot.
+        """
+        snapshot = dict(session_snapshot or {})
+        raw_state = str(snapshot.get("state") or "unknown").strip() or "unknown"
+        startup_state = str((userbot_state or {}).get("startup_state") or "").strip().lower()
+        client_connected = bool((userbot_state or {}).get("client_connected"))
+        sqlite_ok = snapshot.get("sqlite_quick_check_ok")
+        sidecars_present = bool(
+            snapshot.get("wal_exists") or snapshot.get("shm_exists") or snapshot.get("journal_exists")
+        )
+
+        snapshot["state_file_raw"] = raw_state
+        snapshot["state_source"] = "file"
+
+        # Если userbot уже живой и SQLite проходит quick_check, sidecar-файлы считаем
+        # признаком активной сессии, а не "грязного" завершения.
+        if (
+            raw_state == "open_or_unclean"
+            and startup_state == "running"
+            and client_connected
+            and sqlite_ok is not False
+            and sidecars_present
+        ):
+            snapshot["state"] = "ready"
+            snapshot["state_source"] = "runtime+file"
+            snapshot["state_reason"] = "sqlite_sidecars_expected_while_userbot_running"
+            snapshot["state_detail"] = (
+                "Userbot подключён; sidecar-файлы SQLite считаются штатным признаком открытой сессии."
+            )
+        elif raw_state == "ready":
+            snapshot["state_reason"] = "sqlite_ready"
+        elif raw_state == "open_or_unclean":
+            snapshot["state_reason"] = "sqlite_sidecars_without_live_userbot"
+        return snapshot
 
     async def _probe_lmstudio_model_snapshot(self) -> dict[str, Any]:
         """
@@ -1140,6 +1306,15 @@ class WebApp:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("web_stats_router_info_failed", error=str(exc))
 
+        router_models = router_info.get("models")
+        if not isinstance(router_models, dict):
+            router_models = getattr(router_obj, "models", {}) or {}
+        if isinstance(router_models, dict):
+            current_chat_model = str(router_models.get("chat", "") or "").strip()
+            if current_chat_model:
+                router_info["current_model"] = current_chat_model
+                router_info["models"] = {str(k): str(v) for k, v in router_models.items()}
+
         local_truth = await self._resolve_local_runtime_truth(router_obj)
         openclaw = self.deps.get("openclaw_client")
 
@@ -1192,6 +1367,7 @@ class WebApp:
             "last_route": last_route if isinstance(last_route, dict) else {},
             "cloud_keys": cloud_keys,
             "cloud_tier": cloud_tier,
+            "scheduler_enabled": bool(getattr(config, "SCHEDULER_ENABLED", False)),
         }
 
     def _derive_openclaw_auth_state(
@@ -1263,7 +1439,10 @@ class WebApp:
             except Exception:
                 telegram_userbot_state = {}
 
-        telegram_session = self._telegram_session_snapshot()
+        telegram_session = self._normalize_telegram_session_truth(
+            self._telegram_session_snapshot(),
+            telegram_userbot_state,
+        )
         lmstudio = await self._lmstudio_model_snapshot()
         openclaw_auth_state = self._derive_openclaw_auth_state(
             last_runtime_route=last_runtime_route,
@@ -1434,7 +1613,11 @@ class WebApp:
             meta = right.strip()
             meta_low = meta.lower()
 
-            if (
+            # Явный `works` из probe считаем сильнее промежуточного transport-хвоста
+            # вроде `disconnected`, иначе UI даёт ложный FAIL в момент успешного reconnect.
+            if "works" in meta_low:
+                status = "OK"
+            elif (
                 "not configured" in meta_low
                 or "error:" in meta_low
                 or "stopped" in meta_low
@@ -1445,8 +1628,7 @@ class WebApp:
             elif "warn" in meta_low:
                 status = "WARN"
             elif (
-                "works" in meta_low
-                or "running" in meta_low
+                "running" in meta_low
                 or "connected" in meta_low
                 or "enabled" in meta_low
             ):
@@ -1511,7 +1693,7 @@ class WebApp:
         Классифицирует HTTP-пробу browser relay в прозрачное runtime-состояние.
 
         Состояния:
-        - `attached`: relay доступен и отдает 200;
+        - `authorized`: relay доступен и авторизован, но это ещё не доказательство attach;
         - `auth_required`: relay живой, но требует авторизацию (401/403);
         - `unavailable`: relay недоступен/ошибка.
         """
@@ -1520,11 +1702,11 @@ class WebApp:
 
         if code == 200:
             return {
-                "state": "attached",
+                "state": "authorized",
                 "reachable": True,
                 "auth_required": False,
                 "status_code": code,
-                "detail": "browser relay attached (200)",
+                "detail": "browser relay authorized (200)",
             }
         if code in {401, 403}:
             return {
@@ -1548,6 +1730,499 @@ class WebApp:
             "auth_required": False,
             "status_code": None,
             "detail": err or "browser relay probe failed",
+        }
+
+    @staticmethod
+    def _merge_existing_mcp_servers(
+        existing_payload: dict[str, Any],
+        managed_servers: dict[str, Any],
+        managed_names: list[str],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Обновляет managed MCP-сервера, сохраняя посторонние custom-записи."""
+        existing_servers = dict(existing_payload.get("mcpServers", {}) or {})
+        managed_name_set = set(managed_names)
+        preserved = sorted(name for name in existing_servers if name not in managed_name_set)
+        merged_servers = {
+            name: payload
+            for name, payload in existing_servers.items()
+            if name not in managed_name_set
+        }
+        merged_servers.update(managed_servers)
+        return {"mcpServers": merged_servers}, preserved
+
+    @classmethod
+    def _inspect_lmstudio_mcp_sync(cls) -> dict[str, Any]:
+        """
+        Проверяет, совпадает ли live `~/.lmstudio/mcp.json` с managed реестром.
+
+        Это часть readiness, потому что GUI-клиенты вроде LM Studio могут жить
+        на старом `mcp.json`, даже если проектный registry уже обновлён.
+        """
+        target_path = Path(LMSTUDIO_MCP_PATH).expanduser()
+        managed_payload, summary = build_lmstudio_mcp_json(
+            include_optional_missing=False,
+            include_high_risk=False,
+        )
+
+        if not target_path.exists():
+            return {
+                "status": "missing",
+                "path": str(target_path),
+                "included": list(summary.get("included", [])),
+                "skipped_missing": list(summary.get("skipped_missing", [])),
+                "skipped_risk": list(summary.get("skipped_risk", [])),
+                "preserved_existing": [],
+                "detail": "LM Studio mcp.json ещё не создан.",
+            }
+
+        try:
+            current_payload = json.loads(target_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            return {
+                "status": "error",
+                "path": str(target_path),
+                "included": list(summary.get("included", [])),
+                "skipped_missing": list(summary.get("skipped_missing", [])),
+                "skipped_risk": list(summary.get("skipped_risk", [])),
+                "preserved_existing": [],
+                "detail": f"Не удалось прочитать LM Studio mcp.json: {exc}",
+            }
+
+        expected_payload, preserved = cls._merge_existing_mcp_servers(
+            current_payload,
+            managed_payload.get("mcpServers", {}),
+            list(summary.get("managed_names", [])),
+        )
+        status = "synced" if current_payload == expected_payload else "drift"
+        detail = "LM Studio mcp.json синхронизирован с managed registry."
+        if status == "drift":
+            detail = "LM Studio mcp.json расходится с managed registry и требует sync."
+
+        return {
+            "status": status,
+            "path": str(target_path),
+            "included": list(summary.get("included", [])),
+            "skipped_missing": list(summary.get("skipped_missing", [])),
+            "skipped_risk": list(summary.get("skipped_risk", [])),
+            "preserved_existing": preserved,
+            "detail": detail,
+        }
+
+    async def _run_openclaw_cli_json(
+        self,
+        args: list[str],
+        *,
+        timeout_sec: float = 12.0,
+    ) -> tuple[dict[str, Any], str]:
+        """Запускает `openclaw ... --json` и безопасно возвращает `(payload, error)`."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._openclaw_cli_env(),
+            )
+        except Exception as exc:
+            return {}, f"cli_spawn_failed: {exc}"
+
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+            return {}, "cli_timeout"
+
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        if int(proc.returncode or 0) != 0:
+            return {}, stderr_text or stdout_text or f"exit_code={proc.returncode}"
+        if not stdout_text:
+            return {}, ""
+        try:
+            payload = json.loads(stdout_text)
+        except ValueError:
+            return {}, f"invalid_json_output: {self._tail_text(stdout_text, max_chars=240)}"
+        if not isinstance(payload, dict):
+            return {"raw": payload}, ""
+        return payload, ""
+
+    async def _collect_stable_browser_cli_runtime(
+        self,
+        *,
+        relay_reachable: bool,
+        auth_required: bool,
+        attempts: int = 3,
+        settle_delay_sec: float = 0.8,
+    ) -> tuple[dict[str, Any], str, dict[str, Any], str]:
+        """
+        Снимает browser status/tabs с коротким settle-окном против transient CLI-флапов.
+
+        Почему это нужно:
+        - сразу после gateway/browser reconnect OpenClaw CLI может кратко вернуть
+          `running=false` и `tabs=[]`, хотя relay уже авторизован и через секунду
+          приходит в норму;
+        - owner readiness не должен мигать ложным `tab_not_connected` на этом окне.
+        """
+        safe_attempts = max(1, int(attempts))
+        status_payload: dict[str, Any] = {}
+        status_error = ""
+        tabs_payload: dict[str, Any] = {}
+        tabs_error = ""
+
+        for attempt in range(safe_attempts):
+            status_payload, status_error = await self._run_openclaw_cli_json(
+                ["browser", "--json", "status"],
+                timeout_sec=12.0,
+            )
+            tabs_payload, tabs_error = await self._run_openclaw_cli_json(
+                ["browser", "--json", "tabs"],
+                timeout_sec=12.0,
+            )
+
+            tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else []
+            if not isinstance(tabs, list):
+                tabs = []
+            running = bool(status_payload.get("running"))
+
+            if status_error or tabs_error:
+                break
+            if not relay_reachable or auth_required:
+                break
+            if running or tabs:
+                break
+            if attempt + 1 < safe_attempts:
+                await asyncio.sleep(max(0.0, float(settle_delay_sec)))
+
+        return status_payload, status_error, tabs_payload, tabs_error
+
+    async def _collect_openclaw_browser_smoke_report(self, url: str = "https://example.com") -> dict[str, Any]:
+        """Собирает browser smoke report в одном месте для reuse в нескольких endpoint'ах."""
+        gateway_probe_raw = ""
+        gateway_probe_error = ""
+        gateway_reachable = False
+        local_target = ""
+        gateway_detail = ""
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                "gateway",
+                "probe",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=self._openclaw_cli_env(),
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
+                gateway_probe_raw = stdout.decode("utf-8", errors="replace")
+                parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
+                gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
+                local_target = str(parsed_probe.get("local_target") or "")
+                gateway_detail = str(parsed_probe.get("detail") or "")
+            except asyncio.TimeoutError:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                gateway_probe_error = "gateway_probe_timeout"
+        except Exception as exc:
+            gateway_probe_error = f"gateway_probe_failed: {exc}"
+
+        browser_http_status: int | None = None
+        browser_http_error = ""
+        try:
+            browser_headers = self._openclaw_gateway_auth_headers()
+            async with httpx.AsyncClient(timeout=2.5) as client:
+                resp = await client.get("http://127.0.0.1:18791/", headers=browser_headers)
+            browser_http_status = int(resp.status_code)
+        except Exception as exc:
+            browser_http_error = str(exc)
+
+        browser_probe = self._classify_browser_http_probe(browser_http_status, browser_http_error)
+        browser_http_reachable = bool(browser_probe.get("reachable"))
+        browser_http_state = str(browser_probe.get("state") or "unavailable")
+        browser_auth_required = bool(browser_probe.get("auth_required"))
+        # Сам HTTP 200 подтверждает auth/доступность relay, но attach вкладки проверяем
+        # отдельно через browser status/tabs и action probe.
+        tab_attached = False
+        relay_reachable = browser_http_reachable
+
+        smoke_ok = bool(gateway_reachable and browser_http_reachable)
+        detail_parts: list[str] = []
+        if gateway_detail:
+            detail_parts.append(f"gateway={gateway_detail}")
+        if gateway_probe_error:
+            detail_parts.append(gateway_probe_error)
+        detail_parts.append(str(browser_probe.get("detail") or "browser relay state unknown"))
+        if browser_http_error:
+            detail_parts.append(f"browser_http_error={browser_http_error}")
+
+        return {
+            "browser_smoke": {
+                "ok": smoke_ok,
+                "channel": "endpoint" if smoke_ok else "none",
+                "tool": "gateway_probe+http_probe",
+                "path": url,
+                "gateway_reachable": gateway_reachable,
+                "browser_http_reachable": browser_http_reachable,
+                "browser_http_state": browser_http_state,
+                "browser_auth_required": browser_auth_required,
+                "relay_reachable": relay_reachable,
+                "tab_attached": tab_attached,
+                "local_target": local_target,
+                "detail": "; ".join(detail_parts) if detail_parts else "n/a",
+            },
+            "raw": {
+                "gateway_probe": self._tail_text(gateway_probe_raw, max_chars=4000),
+                "gateway_probe_error": gateway_probe_error,
+                "browser_http_status": browser_http_status,
+                "browser_http_error": browser_http_error,
+            },
+        }
+
+    @staticmethod
+    def _classify_browser_stage(
+        browser_status: dict[str, Any],
+        tabs_payload: dict[str, Any],
+        smoke: dict[str, Any],
+        *,
+        browser_status_error: str = "",
+        tabs_error: str = "",
+    ) -> dict[str, Any]:
+        """Превращает raw browser probes в staged readiness для owner UI."""
+        tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else []
+        if not isinstance(tabs, list):
+            tabs = []
+
+        running = bool(browser_status.get("running"))
+        cdp_ready = bool(browser_status.get("cdpReady"))
+        relay_reachable = bool(smoke.get("relay_reachable") or smoke.get("browser_http_reachable"))
+        auth_required = bool(smoke.get("browser_auth_required"))
+        tab_attached = bool(smoke.get("tab_attached"))
+        browser_http_state = str(smoke.get("browser_http_state") or "unavailable")
+        tabs_count = len(tabs)
+
+        warnings: list[str] = []
+        blockers: list[str] = []
+        next_step = "Проверить конфигурацию OpenClaw browser."
+        state = "unknown"
+        readiness = "attention"
+        stage_label = "Неизвестно"
+        summary = str(smoke.get("detail") or "browser readiness unavailable")
+
+        if browser_status_error and not relay_reachable:
+            state = "status_error"
+            readiness = "blocked"
+            stage_label = "CLI status недоступен"
+            blockers.append(browser_status_error)
+            next_step = "Проверь `openclaw browser status` и доступность runtime CLI."
+        elif (running and cdp_ready and relay_reachable and tabs_count > 0 and not auth_required) or tab_attached:
+            state = "attached"
+            readiness = "ready"
+            stage_label = "Вкладка подключена"
+            summary = "Browser relay готов к owner automation."
+            next_step = "Контур готов: можно выполнять browser/MCP сценарии."
+        elif auth_required:
+            state = "auth_required"
+            readiness = "attention"
+            stage_label = "Нужна авторизация relay"
+            warnings.append("Browser relay отвечает, но требует авторизацию/attach.")
+            next_step = "Открой Chrome с relay и авторизуй browser session."
+        elif tabs_error:
+            state = "tabs_error"
+            readiness = "blocked"
+            stage_label = "Не удалось прочитать вкладки"
+            blockers.append(tabs_error)
+            next_step = "Проверь `openclaw browser tabs --json`."
+        elif relay_reachable and tabs_count == 0:
+            state = "tab_not_connected"
+            readiness = "attention"
+            stage_label = "Нет подключённой вкладки"
+            warnings.append("Relay жив, но вкладка ещё не attach-нута.")
+            next_step = "Открой вкладку в Chrome и attach через расширение OpenClaw."
+        elif not running:
+            state = "stopped"
+            readiness = "blocked"
+            stage_label = "Browser relay остановлен"
+            blockers.append("OpenClaw browser сейчас не запущен.")
+            next_step = "Запусти `openclaw browser start` или включи `OPENCLAW_BROWSER_AUTOSTART=1`."
+        elif not cdp_ready and not relay_reachable:
+            state = "starting"
+            readiness = "blocked"
+            stage_label = "Browser relay поднимается"
+            blockers.append("Chrome уже запущен, но CDP/relay ещё не готовы.")
+            next_step = "Подожди запуск relay или проверь порт/профиль Chrome."
+        elif relay_reachable:
+            state = "relay_ready"
+            readiness = "attention"
+            stage_label = "Relay жив, action flow не завершён"
+            warnings.append("HTTP relay доступен, но attach вкладки не подтверждён.")
+            next_step = "Проверь attach/авторизацию текущей вкладки."
+        else:
+            state = "unavailable"
+            readiness = "blocked"
+            stage_label = "Relay недоступен"
+            blockers.append(str(smoke.get("detail") or "browser relay unavailable"))
+            next_step = "Проверь gateway probe, browser relay и локальные порты OpenClaw."
+
+        if running and not cdp_ready:
+            warnings.append("OpenClaw browser запущен, но CDP ещё не готов.")
+        if not running and relay_reachable:
+            warnings.append("CLI сообщает running=false, но HTTP relay уже отвечает. Возможен stale status в OpenClaw CLI.")
+        if tabs_count > 0 and not tab_attached and state != "attached":
+            warnings.append("CLI видит вкладки, но HTTP relay пока не подтвердил attach.")
+
+        return {
+            "state": state,
+            "readiness": readiness,
+            "stage_label": stage_label,
+            "summary": summary,
+            "next_step": next_step,
+            "warnings": warnings,
+            "blockers": blockers,
+            "runtime": {
+                "running": running,
+                "cdp_ready": cdp_ready,
+                "profile": str(browser_status.get("profile") or ""),
+                "cdp_url": str(browser_status.get("cdpUrl") or ""),
+                "cdp_port": browser_status.get("cdpPort"),
+                "tabs_count": tabs_count,
+                "detected_browser": str(browser_status.get("detectedBrowser") or ""),
+            },
+            "smoke": {
+                "relay_reachable": relay_reachable,
+                "gateway_reachable": bool(smoke.get("gateway_reachable")),
+                "tab_attached": tab_attached,
+                "auth_required": auth_required,
+                "browser_http_state": browser_http_state,
+                "local_target": str(smoke.get("local_target") or ""),
+                "detail": str(smoke.get("detail") or ""),
+            },
+        }
+
+    @staticmethod
+    def _managed_mcp_category(name: str) -> str:
+        """Грубая категория managed MCP-сервера для UI-группировки."""
+        normalized = str(name or "").strip().lower()
+        if "browser" in normalized:
+            return "browser"
+        if normalized in {"filesystem", "filesystem-home", "memory", "shell"}:
+            return "core"
+        if normalized in {"lmstudio", "openai-chat"}:
+            return "llm"
+        return "integrations"
+
+    @classmethod
+    def _build_mcp_readiness_snapshot(cls, browser: dict[str, Any]) -> dict[str, Any]:
+        """Собирает MCP readiness поверх managed registry и LM Studio sync-state."""
+        registry = get_managed_mcp_servers()
+        required_names = {"filesystem", "memory", "openclaw-browser"}
+        sync_state = cls._inspect_lmstudio_mcp_sync()
+
+        servers: list[dict[str, Any]] = []
+        ready_count = 0
+        attention_count = 0
+        blocked_count = 0
+        required_ready = 0
+        required_attention = 0
+        required_blocked = 0
+        optional_warnings: list[str] = []
+
+        for name in sorted(registry):
+            launch = resolve_managed_server_launch(name)
+            missing_env = list(launch.get("missing_env", []))
+            manual_setup = list(launch.get("manual_setup", []))
+            category = cls._managed_mcp_category(name)
+            required_for_owner_browser = name in required_names
+
+            state = "ready_to_launch"
+            readiness = "ready"
+            detail = "Конфигурация готова к запуску."
+
+            if missing_env:
+                state = "missing_env"
+                readiness = "blocked" if required_for_owner_browser else "attention"
+                detail = f"Отсутствуют обязательные переменные: {', '.join(missing_env)}"
+            elif name == "openclaw-browser":
+                state = str(browser.get("state") or "unknown")
+                readiness = str(browser.get("readiness") or "attention")
+                detail = str(browser.get("summary") or browser.get("next_step") or "Browser relay state unknown.")
+            elif manual_setup:
+                state = "manual_setup_required"
+                readiness = "attention"
+                detail = manual_setup[0]
+
+            item = {
+                "name": name,
+                "category": category,
+                "required_for_owner_browser": required_for_owner_browser,
+                "readiness": readiness,
+                "state": state,
+                "description": str(launch.get("description") or ""),
+                "risk": str(launch.get("risk") or "medium"),
+                "missing_env": missing_env,
+                "manual_setup": manual_setup,
+                "detail": detail,
+            }
+            servers.append(item)
+
+            if readiness == "ready":
+                ready_count += 1
+                if required_for_owner_browser:
+                    required_ready += 1
+            elif readiness == "blocked":
+                blocked_count += 1
+                if required_for_owner_browser:
+                    required_blocked += 1
+            else:
+                attention_count += 1
+                if required_for_owner_browser:
+                    required_attention += 1
+                elif detail:
+                    optional_warnings.append(f"{name}: {detail}")
+
+        readiness = "ready"
+        if required_blocked > 0:
+            readiness = "blocked"
+        elif required_attention > 0 or str(sync_state.get("status") or "") != "synced":
+            readiness = "attention"
+
+        warnings: list[str] = []
+        if str(sync_state.get("status") or "") == "drift":
+            warnings.append("LM Studio mcp.json расходится с managed registry.")
+        elif str(sync_state.get("status") or "") == "missing":
+            warnings.append("LM Studio mcp.json ещё не создан.")
+        elif str(sync_state.get("status") or "") == "error":
+            warnings.append(str(sync_state.get("detail") or "LM Studio mcp.json unreadable"))
+        warnings.extend(optional_warnings[:4])
+
+        detail = "Managed MCP registry синхронизирован и готов."
+        if readiness == "blocked":
+            detail = "Есть блокирующие проблемы в обязательных MCP-серверах для owner browser контура."
+        elif readiness == "attention":
+            detail = "Базовый MCP-контур собран, но ещё есть drift/setup-шаги."
+
+        return {
+            "readiness": readiness,
+            "detail": detail,
+            "warnings": warnings,
+            "sync": sync_state,
+            "summary": {
+                "total": len(servers),
+                "ready": ready_count,
+                "attention": attention_count,
+                "blocked": blocked_count,
+                "required_total": len(required_names),
+                "required_ready": required_ready,
+                "required_attention": required_attention,
+                "required_blocked": required_blocked,
+            },
+            "servers": servers,
         }
 
     def _web_attachment_max_bytes(self) -> int:
@@ -2845,9 +3520,70 @@ class WebApp:
         @self.app.get("/api/openclaw/model-routing/status")
         async def openclaw_model_routing_status():
             """Read-only статус runtime model routing для owner-панели."""
+            routing = self._build_openclaw_model_routing_status()
+            openclaw = self.deps.get("openclaw_client")
+            last_runtime_route: dict[str, Any] = {}
+            if openclaw and hasattr(openclaw, "get_last_runtime_route"):
+                try:
+                    last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
+                except Exception:
+                    last_runtime_route = {}
+
+            route_model = str(last_runtime_route.get("model", "") or "").strip()
+            route_provider = str(last_runtime_route.get("provider", "") or "").strip()
+            route_reason = str(last_runtime_route.get("route_reason", "") or "").strip()
+            route_detail = str(last_runtime_route.get("route_detail", "") or "").strip()
+            route_status = str(last_runtime_route.get("status", "") or "").strip().lower()
+            current_primary = str(routing.get("current_primary", "") or "").strip()
+            live_primary_verified = bool(
+                route_status == "ok"
+                and route_model
+                and route_model == current_primary
+            )
+            live_fallback_active = bool(
+                route_status == "ok"
+                and route_model
+                and current_primary
+                and route_model != current_primary
+                and "fallback" in route_detail.lower()
+            )
+            if route_status == "ok" and route_model:
+                routing["live_active_model"] = route_model
+                routing["live_active_provider"] = route_provider
+                routing["live_active_route_reason"] = route_reason
+                routing["live_active_route_detail"] = route_detail
+            if live_primary_verified:
+                routing["current_primary_broken"] = False
+                routing["temporary_primary_recommendation"] = current_primary
+                warnings = routing.get("warnings")
+                if isinstance(warnings, list):
+                    routing["warnings"] = [
+                        item
+                        for item in warnings
+                        if "openai primary падает с model_not_found" not in str(item).lower()
+                    ]
+                routing["live_primary_verified"] = True
+                routing["live_fallback_active"] = False
+            elif live_fallback_active:
+                routing["current_primary_broken"] = True
+                routing["temporary_primary_recommendation"] = route_model
+                warnings = routing.get("warnings")
+                if isinstance(warnings, list):
+                    fallback_warning = (
+                        f"Сейчас active route идёт через fallback `{route_model}`, "
+                        f"а не через configured primary `{current_primary}`."
+                    )
+                    if fallback_warning not in warnings:
+                        warnings.insert(0, fallback_warning)
+                routing["live_primary_verified"] = False
+                routing["live_fallback_active"] = True
+            else:
+                routing["live_primary_verified"] = False
+                routing["live_fallback_active"] = False
+
             return {
                 "ok": True,
-                "routing": self._build_openclaw_model_routing_status(),
+                "routing": routing,
             }
 
         @self.app.get("/api/userbot/acl/status")
@@ -3606,6 +4342,38 @@ class WebApp:
                 if hasattr(router, "get_profile_recommendation")
                 else {"profile": profile}
             )
+            if hasattr(router, "get_task_preflight"):
+                try:
+                    preflight = router.get_task_preflight(
+                        prompt=prompt,
+                        task_type=task_type,
+                        preferred_model=preferred_model_str,
+                        confirm_expensive=confirm_expensive,
+                    )
+                except Exception:
+                    preflight = {}
+                if isinstance(preflight, dict):
+                    execution = preflight.get("execution") if isinstance(preflight.get("execution"), dict) else {}
+                    recommended_model = str(execution.get("model") or recommendation.get("model") or recommendation.get("recommended_model") or "").strip()
+                    recommended_channel = str(execution.get("channel") or recommendation.get("channel") or "").strip()
+                    reason_lines = preflight.get("reasons") if isinstance(preflight.get("reasons"), list) else []
+                    recommendation = {
+                        **(recommendation if isinstance(recommendation, dict) else {}),
+                        "profile": str(preflight.get("profile") or profile),
+                        "model": recommended_model,
+                        "recommended_model": recommended_model,
+                        "channel": recommended_channel,
+                        "reasoning": "; ".join(str(item) for item in reason_lines if str(item).strip())
+                        or str((recommendation or {}).get("reasoning") or ""),
+                        "local_available": bool(
+                            preflight.get("local_available", (recommendation or {}).get("local_available", False))
+                        ),
+                        "force_mode": str(
+                            execution.get("force_mode")
+                            or (recommendation or {}).get("force_mode")
+                            or "auto"
+                        ),
+                    }
             last_route = (
                 router.get_last_route()
                 if hasattr(router, "get_last_route")
@@ -3622,7 +4390,9 @@ class WebApp:
                 "mode": "web_native",
                 "task_type": task_type,
                 "profile": profile,
-                "effective_force_mode": str(getattr(router, "force_mode", "auto")),
+                "effective_force_mode": _normalize_force_mode(
+                    getattr(router, "force_mode", "auto")
+                ),
                 "recommendation": recommendation,
                 "last_route": last_route,
                 "reply": reply,
@@ -3684,87 +4454,107 @@ class WebApp:
             1) `openclaw gateway probe` (reachability gateway ws),
             2) HTTP probe browser-server (`http://127.0.0.1:18791/`).
             """
-            gateway_probe_raw = ""
-            gateway_probe_error = ""
-            gateway_reachable = False
-            local_target = ""
-            gateway_detail = ""
+            return {
+                "available": True,
+                "report": await self._collect_openclaw_browser_smoke_report(url),
+            }
 
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "openclaw",
-                    "gateway",
-                    "probe",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=self._openclaw_cli_env(),
+        @self.app.post("/api/openclaw/browser/start")
+        async def openclaw_browser_start(
+            token: str = Query(default=""),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        ):
+            """Явно поднимает dedicated OpenClaw browser и возвращает обновлённый readiness snapshot."""
+            self._assert_write_access(x_krab_web_key, token)
+
+            start_payload, start_error = await self._run_openclaw_cli_json(
+                ["browser", "--json", "start"],
+                timeout_sec=20.0,
+            )
+            if start_error:
+                return {
+                    "ok": False,
+                    "error": "browser_start_failed",
+                    "detail": start_error,
+                }
+
+            smoke_report = await self._collect_openclaw_browser_smoke_report("https://example.com")
+            smoke = dict(smoke_report.get("browser_smoke", {}) or {})
+            browser_status, browser_status_error, tabs_payload, tabs_error = (
+                await self._collect_stable_browser_cli_runtime(
+                    relay_reachable=bool(smoke.get("relay_reachable") or smoke.get("browser_http_reachable")),
+                    auth_required=bool(smoke.get("browser_auth_required")),
+                    attempts=3,
+                    settle_delay_sec=0.8,
                 )
-                try:
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=12.0)
-                    gateway_probe_raw = stdout.decode("utf-8", errors="replace")
-                    parsed_probe = self._parse_openclaw_gateway_probe(gateway_probe_raw)
-                    gateway_reachable = bool(parsed_probe.get("gateway_reachable"))
-                    local_target = str(parsed_probe.get("local_target") or "")
-                    gateway_detail = str(parsed_probe.get("detail") or "")
-                except asyncio.TimeoutError:
-                    if proc.returncode is None:
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                    gateway_probe_error = "gateway_probe_timeout"
-            except Exception as exc:
-                gateway_probe_error = f"gateway_probe_failed: {exc}"
+            )
+            browser = self._classify_browser_stage(
+                browser_status,
+                tabs_payload,
+                smoke,
+                browser_status_error=browser_status_error,
+                tabs_error=tabs_error,
+            )
 
-            browser_http_status: int | None = None
-            browser_http_error = ""
-            try:
-                async with httpx.AsyncClient(timeout=2.5) as client:
-                    resp = await client.get("http://127.0.0.1:18791/")
-                browser_http_status = int(resp.status_code)
-            except Exception as exc:
-                browser_http_error = str(exc)
+            return {
+                "ok": True,
+                "start": start_payload,
+                "browser": browser,
+                "raw": {
+                    "browser_status": browser_status,
+                    "browser_status_error": browser_status_error,
+                    "tabs": tabs_payload,
+                    "tabs_error": tabs_error,
+                    "browser_smoke": smoke_report,
+                },
+            }
 
-            browser_probe = self._classify_browser_http_probe(browser_http_status, browser_http_error)
-            browser_http_reachable = bool(browser_probe.get("reachable"))
-            browser_http_state = str(browser_probe.get("state") or "unavailable")
-            browser_auth_required = bool(browser_probe.get("auth_required"))
-            tab_attached = browser_http_state == "attached"
-            relay_reachable = browser_http_reachable
+        @self.app.get("/api/openclaw/browser-mcp-readiness")
+        async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
+            """Агрегированный staged readiness для owner browser-контура и managed MCP."""
+            smoke_report = await self._collect_openclaw_browser_smoke_report(url)
+            smoke = dict(smoke_report.get("browser_smoke", {}) or {})
+            browser_status, browser_status_error, tabs_payload, tabs_error = (
+                await self._collect_stable_browser_cli_runtime(
+                    relay_reachable=bool(smoke.get("relay_reachable") or smoke.get("browser_http_reachable")),
+                    auth_required=bool(smoke.get("browser_auth_required")),
+                    attempts=3,
+                    settle_delay_sec=0.8,
+                )
+            )
+            browser = self._classify_browser_stage(
+                browser_status,
+                tabs_payload,
+                smoke,
+                browser_status_error=browser_status_error,
+                tabs_error=tabs_error,
+            )
+            mcp = self._build_mcp_readiness_snapshot(browser)
 
-            smoke_ok = bool(gateway_reachable and browser_http_reachable)
-            detail_parts: list[str] = []
-            if gateway_detail:
-                detail_parts.append(f"gateway={gateway_detail}")
-            if gateway_probe_error:
-                detail_parts.append(gateway_probe_error)
-            detail_parts.append(str(browser_probe.get("detail") or "browser relay state unknown"))
-            if browser_http_error:
-                detail_parts.append(f"browser_http_error={browser_http_error}")
+            overall = "ready"
+            if "blocked" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
+                overall = "blocked"
+            elif "attention" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
+                overall = "attention"
 
             return {
                 "available": True,
-                "report": {
-                    "browser_smoke": {
-                        "ok": smoke_ok,
-                        "channel": "endpoint" if smoke_ok else "none",
-                        "tool": "gateway_probe+http_probe",
-                        "path": url,
-                        "gateway_reachable": gateway_reachable,
-                        "browser_http_reachable": browser_http_reachable,
-                        "browser_http_state": browser_http_state,
-                        "browser_auth_required": browser_auth_required,
-                        "relay_reachable": relay_reachable,
-                        "tab_attached": tab_attached,
-                        "local_target": local_target,
-                        "detail": "; ".join(detail_parts) if detail_parts else "n/a",
-                    },
-                    "raw": {
-                        "gateway_probe": self._tail_text(gateway_probe_raw, max_chars=4000),
-                        "gateway_probe_error": gateway_probe_error,
-                        "browser_http_status": browser_http_status,
-                        "browser_http_error": browser_http_error,
-                    },
+                "overall": {
+                    "readiness": overall,
+                    "detail": (
+                        "Browser relay и managed MCP готовы."
+                        if overall == "ready"
+                        else "Есть оставшиеся шаги для browser/MCP readiness."
+                    ),
+                },
+                "browser": browser,
+                "mcp": mcp,
+                "raw": {
+                    "browser_status": browser_status,
+                    "browser_status_error": browser_status_error,
+                    "tabs": tabs_payload,
+                    "tabs_error": tabs_error,
+                    "browser_smoke": smoke_report,
                 },
             }
 
@@ -4269,22 +5059,34 @@ class WebApp:
             last_route_channel = str(last_route.get("channel") or "").strip().lower()
             last_route_model = str(last_route.get("model") or "").strip()
 
-            current_route_uses_cloud = False
-            if force_mode_eff == "cloud":
-                current_route_uses_cloud = True
-            elif not local_available and cloud_fallback_enabled:
-                current_route_uses_cloud = True
+            current_route_uses_cloud = bool(
+                last_route_status == "ok" and last_route_channel in {"openclaw_cloud", "cloud"}
+            )
+            current_fallback_active = False
+            if force_mode_eff == "cloud" and cloud_fallback_enabled:
+                current_fallback_active = True
+            elif not cloud_fallback_enabled:
+                current_fallback_active = False
             elif last_route_status == "ok":
-                # Истина для idle UI: если последнего валидного маршрута нет, считаем fallback резервом,
-                # а не активным состоянием. Это убирает ложное "Да" при уже загруженной local-модели.
-                if last_route_channel in {"openclaw_cloud", "cloud"}:
-                    current_route_uses_cloud = True
-                elif last_route_model and active_local_model and last_route_model != active_local_model:
-                    current_route_uses_cloud = True
+                # Cloud =/= fallback.
+                # Считаем fallback активным только если фактическая модель маршрута
+                # отличается от configured default cloud-model либо пришлось уйти
+                # в cloud при force_local=off и отсутствии рабочей local-модели.
+                if current_route_uses_cloud and default_model and last_route_model and last_route_model != default_model:
+                    current_fallback_active = True
+                elif (
+                    not current_route_uses_cloud
+                    and last_route_model
+                    and active_local_model
+                    and last_route_model != active_local_model
+                ):
+                    current_fallback_active = True
+            elif not local_available and force_mode_eff not in {"cloud"} and cloud_fallback_enabled:
+                current_fallback_active = True
 
             if not cloud_fallback_enabled:
                 cloud_fallback_state = "disabled"
-            elif current_route_uses_cloud:
+            elif current_fallback_active:
                 cloud_fallback_state = "active"
             else:
                 cloud_fallback_state = "standby"
@@ -4331,7 +5133,15 @@ class WebApp:
                     "Cloud fallback доступен как резерв, но сейчас не задействован."
                 )
 
-            active_slot_or_model = active_local_model or default_model or default_slot
+            # Для owner UI важнее фактическая последняя модель маршрута, чем stale router-slot.
+            # Иначе после hot-reload/runtime-fallback верхние виджеты показывают правду,
+            # а блок "Эффективный роутинг" остаётся на старом default-model.
+            active_slot_or_model = (
+                last_route_model
+                or active_local_model
+                or default_model
+                or default_slot
+            )
 
             return {
                 "ok": True,
@@ -4340,7 +5150,8 @@ class WebApp:
                 "active_slot_or_model": active_slot_or_model,
                 "cloud_fallback": cloud_fallback_enabled,
                 "cloud_fallback_state": cloud_fallback_state,
-                "cloud_fallback_active": current_route_uses_cloud,
+                "cloud_fallback_active": current_fallback_active,
+                "cloud_route_active": current_route_uses_cloud,
                 "force_mode_requested": force_mode_raw,
                 "force_mode_effective": force_mode_eff,
                 "assistant_default_slot": default_slot,

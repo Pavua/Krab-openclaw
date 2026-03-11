@@ -269,6 +269,63 @@ def test_production_safe_skips_broken_primary_and_disabled_provider(tmp_path):
     assert "google-antigravity/gemini-3.1-pro-preview" not in payload["details"]["fallbacks"]
 
 
+def test_production_safe_skips_runtime_auth_failed_provider(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    runtime_models_payload = _base_runtime_models_payload()
+    runtime_models_payload["providers"]["openai-codex"]["models"].append({"id": "gpt-5.4"})
+    runtime_models_payload["providers"]["google-gemini-cli"] = {
+        "models": [
+            {"id": "gemini-3.1-pro-preview"},
+        ]
+    }
+    auth_profiles_payload = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-gemini-cli:default": {"provider": "google-gemini-cli"},
+        },
+        "usageStats": {},
+    }
+    gateway_log_text = (
+        '2026-03-11 [diagnostic] lane task error: '
+        'lane=session:agent:main:openai:abc123 durationMs=547 '
+        'error="FailoverError: HTTP 401: You have insufficient permissions for this operation. '
+        'Missing scopes: model.request."\n'
+    )
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        runtime_models_payload=runtime_models_payload,
+        auth_profiles_payload=auth_profiles_payload,
+        gateway_log_text=gateway_log_text,
+    )
+    payload_openclaw = _base_openclaw_payload()
+    payload_openclaw["agents"]["defaults"]["model"]["primary"] = "openai-codex/gpt-5.4"
+    payload_openclaw["agents"]["defaults"]["model"]["fallbacks"] = [
+        "google-gemini-cli/gemini-3.1-pro-preview",
+        "google/gemini-2.5-flash",
+    ]
+    openclaw_path.write_text(json.dumps(payload_openclaw, ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "openai-codex/gpt-5.4"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "production-safe",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+    )
+
+    assert payload["ok"] is True
+    assert payload["details"]["primary_model"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert payload["details"]["runtime_auth_failed_providers"] == {
+        "openai-codex": "runtime_missing_scope_model_request"
+    }
+
+
 def test_gpt54_canary_blocks_when_target_missing_from_runtime_registry(tmp_path):
     openclaw_path = tmp_path / "openclaw.json"
     agent_path = tmp_path / "agent.json"

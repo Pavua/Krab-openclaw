@@ -1,0 +1,113 @@
+{
+  "generated_at_utc": "2026-03-11T05:06:12.293626+00:00",
+  "ok": true,
+  "inputs": {
+    "channels_url": "http://127.0.0.1:8080/api/openclaw/channels/status",
+    "health_url": "http://127.0.0.1:8080/api/health/lite",
+    "tail_size": 500,
+    "max_age_minutes": 15.0,
+    "logs": [
+      "openclaw.log",
+      "krab.log"
+    ]
+  },
+  "health_lite": {
+    "error": null,
+    "openclaw_auth_state": "configured",
+    "telegram_userbot_state": "running",
+    "lmstudio_model_state": "idle"
+  },
+  "channels": {
+    "error": null,
+    "source": "web_endpoint",
+    "gateway_reachable": true,
+    "success_rate": 100.0,
+    "required_total": 7,
+    "passed": [
+      {
+        "name": "Telegram default",
+        "status": "OK",
+        "meta": "enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works"
+      },
+      {
+        "name": "WhatsApp default",
+        "status": "OK",
+        "meta": "enabled, configured, linked, running, connected, dm:allowlist, allow:*"
+      },
+      {
+        "name": "Discord default",
+        "status": "OK",
+        "meta": "enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works"
+      },
+      {
+        "name": "Slack default",
+        "status": "OK",
+        "meta": "enabled, configured, running, bot:config, app:config, works"
+      },
+      {
+        "name": "Signal default",
+        "status": "OK",
+        "meta": "enabled, configured, running, url:http://127.0.0.1:18080, works"
+      },
+      {
+        "name": "iMessage default",
+        "status": "OK",
+        "meta": "enabled, configured, running, works"
+      },
+      {
+        "name": "BlueBubbles default",
+        "status": "OK",
+        "meta": "enabled, configured, running, connected, url:http://127.0.0.1:12345, works"
+      }
+    ],
+    "failed": [],
+    "skipped": []
+  },
+  "logs": {
+    "scanned": [
+      {
+        "path": "openclaw.log",
+        "lines_total_tail": 67,
+        "lines_recent_window": 67
+      },
+      {
+        "path": "krab.log",
+        "lines_total_tail": 500,
+        "lines_recent_window": 378
+      }
+    ],
+    "errors": [],
+    "warnings": [
+      {
+        "source": "openclaw.log",
+        "line": 1,
+        "code": "sanitizer_plugin_untracked_provenance",
+        "severity": "warn",
+        "text": "2026-03-11T05:51:25.984+01:00 [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)"
+      },
+      {
+        "source": "openclaw.log",
+        "line": 2,
+        "code": "sanitizer_plugin_untracked_provenance",
+        "severity": "warn",
+        "text": "2026-03-11T05:51:25.987+01:00 [gateway] [plugins] loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (plugin=krab-output-sanitizer, source=/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)"
+      }
+    ],
+    "all_findings": [
+      {
+        "source": "openclaw.log",
+        "line": 1,
+        "code": "sanitizer_plugin_untracked_provenance",
+        "severity": "warn",
+        "text": "2026-03-11T05:51:25.984+01:00 [gateway] [plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)"
+      },
+      {
+        "source": "openclaw.log",
+        "line": 2,
+        "code": "sanitizer_plugin_untracked_provenance",
+        "severity": "warn",
+        "text": "2026-03-11T05:51:25.987+01:00 [gateway] [plugins] loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (plugin=krab-output-sanitizer, source=/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)"
+      }
+    ]
+  }
+}

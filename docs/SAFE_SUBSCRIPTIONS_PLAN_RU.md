@@ -50,6 +50,9 @@ OpenClaw хранит токены в:
 
 Важно: Gemini API официально биллится через Cloud Billing / AI Studio API key.
 Подписка Google AI Pro не равна обычному Gemini API billing "по умолчанию".
+В установленном у нас `OpenClaw 2026.3.8` legacy provider `google-antigravity`
+уже удалён; актуальный OAuth-путь для Google в runtime идёт через
+`google-gemini-cli`.
 
 Источник:
 
@@ -80,17 +83,20 @@ OpenClaw хранит токены в:
 - запрос через cloud-route идёт через OpenAI OAuth-профиль;
 - в проекте нет новых секретов в `.env`, markdown или временных файлах.
 
-### Этап 2. Google — только после отдельной проверки политики
+### Этап 2. Google — только через актуальный поддерживаемый flow
 
 Цель:
 
 - не использовать небезопасные community-скрипты;
-- сначала проверить, есть ли официальный поддерживаемый flow у OpenClaw именно для нужного нам Google-сценария.
+- не использовать legacy `google-antigravity`;
+- использовать только поддерживаемый flow OpenClaw для `google-gemini-cli`
+  или обычный Gemini API key.
 
 Критерий успеха:
 
-- найден официальный поддерживаемый путь;
-- если такого пути нет, интеграцию не включаем.
+- включён bundled plugin `google-gemini-cli-auth`, если нужен OAuth;
+- login выполняется через `openclaw models auth login --provider google-gemini-cli`;
+- если нужен просто cloud fallback, используем Gemini API key без самодельного OAuth.
 
 ## Правило проекта
 

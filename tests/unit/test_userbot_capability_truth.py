@@ -77,6 +77,14 @@ def test_looks_like_runtime_truth_question_detects_self_check_intent() -> None:
     assert KraabUserbot._looks_like_runtime_truth_question("Расскажи шутку") is False
 
 
+def test_looks_like_runtime_truth_question_detects_full_diagnostics_intent() -> None:
+    """Полная диагностика рантайма не должна уходить в свободную генерацию."""
+    assert KraabUserbot._looks_like_runtime_truth_question("Cron у тебя уже работает? Проведи полную диагностику") is True
+    assert KraabUserbot._looks_like_runtime_truth_question(
+        "Проведи полную диагностику рантайма и скажи текущую модель"
+    ) is True
+
+
 def test_build_runtime_capability_status_owner_includes_real_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     """Для доверенного контура summary должен отражать реальные owner-инструменты."""
     bot = _make_bot_stub()
@@ -325,6 +333,7 @@ async def test_process_message_runtime_truth_question_uses_fast_path_without_llm
     )
     monkeypatch.setattr(userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True))
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.krab_scheduler, "_started", True, raising=False)
     monkeypatch.setattr(
         userbot_bridge_module,
         "resolve_managed_server_launch",
@@ -337,4 +346,62 @@ async def test_process_message_runtime_truth_question_uses_fast_path_without_llm
     delivered_text = bot._safe_edit.await_args_list[-1].args[1]
     assert "Фактический runtime self-check" in delivered_text
     assert "Gateway / transport: ON" in delivered_text
+    assert "Текущий канал: Python Telegram userbot (primary transport)" in delivered_text
     assert "Последняя модель: `nvidia/nemotron-3-nano`" in delivered_text
+    assert "Scheduler / reminders: включён и подтверждён runtime-стартом" in delivered_text
+    assert "Cron / heartbeat: scheduler активен, transport живой." in delivered_text
+
+
+@pytest.mark.asyncio
+async def test_process_message_full_diagnostics_question_uses_runtime_truth_fast_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Полный диагностический вопрос владельца должен обходить LLM.
+
+    Это защищает owner-чат от ложных "контекст потерян" / "не помню" ответов
+    на запросы про cron/runtime, которые по смыслу должны отвечаться из live truth.
+    """
+    bot = _make_bot_stub()
+    bot._is_allowed_sender = Mock(return_value=True)
+
+    incoming = SimpleNamespace(
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Cron у тебя уже работает? Проведи полную диагностику",
+        caption=None,
+        photo=None,
+        voice=None,
+        chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+    )
+
+    send_stream_mock = Mock()
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
+    monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "openai-codex/gpt-5.4")
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client,
+        "get_last_runtime_route",
+        lambda: {
+            "channel": "openclaw_cloud",
+            "model": "openai-codex/gpt-5.4",
+            "provider": "openai-codex",
+        },
+    )
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.krab_scheduler, "_started", True, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module,
+        "resolve_managed_server_launch",
+        lambda name: {"missing_env": []},
+    )
+
+    await bot._process_message(incoming)
+
+    send_stream_mock.assert_not_called()
+    delivered_text = bot._safe_edit.await_args_list[-1].args[1]
+    assert "Фактический runtime self-check" in delivered_text
+    assert "Последний маршрут: `openclaw_cloud`" in delivered_text
+    assert "Последняя модель: `openai-codex/gpt-5.4`" in delivered_text
+    assert "Cron / heartbeat: scheduler активен, transport живой." in delivered_text

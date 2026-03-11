@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -35,12 +37,24 @@ from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.lm_studio_health import is_lm_studio_available
 from .core.logger import get_logger
 from .core.openclaw_secrets_runtime import reload_openclaw_secrets
+from .core.openclaw_runtime_models import (
+    get_runtime_fallback_models,
+    get_runtime_primary_model,
+)
 from .core.routing_errors import RouterError, RouterQuotaError
 
 logger = get_logger(__name__)
 
 AUTH_UNAUTHORIZED_CODE = "openclaw_auth_unauthorized"
 LEGACY_AUTH_CODES = {AUTH_UNAUTHORIZED_CODE, "auth_invalid", "unsupported_key_type"}
+MODEL_FALLBACK_LOG_RE = re.compile(
+    r'^(?P<ts>\S+)\s+\[model-fallback\]\s+Model "(?P<requested>[^"]+)"[\s\S]*?Fell back to "(?P<fallback>[^"]+)"\.',
+    re.IGNORECASE,
+)
+EMBEDDED_SESSION_LANE_ERROR_RE = re.compile(
+    r'^(?P<ts>\S+)\s+\[diagnostic\]\s+lane task error:\s+lane=session:agent:main:openai:(?P<session>[a-z0-9-]+)\s+durationMs=\d+\s+error="(?P<error>.+)"$',
+    re.IGNORECASE,
+)
 
 
 class OpenClawClient:
@@ -66,6 +80,8 @@ class OpenClawClient:
         # Source-of-truth по моделям/ключам OpenClaw (решение проекта: ~/.openclaw)
         self._models_path = default_openclaw_models_path()
         self._openclaw_runtime_config_path = Path.home() / ".openclaw" / "openclaw.json"
+        self._openclaw_sessions_index_path = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
+        self._gateway_log_path = Path(getattr(config, "BASE_DIR", Path.cwd())) / "openclaw.log"
 
         self.gemini_tiers = {
             "free": str(os.getenv("GEMINI_API_KEY_FREE", "") or "").strip(),
@@ -180,6 +196,167 @@ class OpenClawClient:
                 error=str(exc),
             )
             return False
+
+    def _resolve_gateway_reported_model(
+        self,
+        requested_model: str,
+        *,
+        request_started_at: float,
+    ) -> str:
+        """
+        Возвращает фактическую модель, если gateway тихо сделал внутренний fallback.
+
+        Важный нюанс OpenClaw:
+        - API `v1/chat/completions` часто возвращает requested model в JSON, даже
+          если сам gateway внутри пересадил запрос на другой provider/model;
+        - поэтому для truthful route-status приходится дополнительно смотреть
+          свежую строку `[model-fallback]` в локальном gateway-логе.
+        """
+        normalized_requested = str(requested_model or "").strip()
+        if not normalized_requested:
+            return ""
+
+        log_path = self._gateway_log_path
+        if not log_path.exists():
+            return normalized_requested
+
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()[-400:]
+        except OSError as exc:
+            logger.warning("openclaw_gateway_log_read_failed", path=str(log_path), error=str(exc))
+            return normalized_requested
+
+        for raw_line in reversed(lines):
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            match = MODEL_FALLBACK_LOG_RE.match(line)
+            if not match:
+                continue
+            requested = str(match.group("requested") or "").strip()
+            if requested != normalized_requested:
+                continue
+
+            ts_raw = str(match.group("ts") or "").strip()
+            try:
+                event_ts = datetime.fromisoformat(ts_raw).timestamp()
+            except ValueError:
+                event_ts = 0.0
+            if event_ts and event_ts < (float(request_started_at) - 2.0):
+                continue
+
+            fallback_model = str(match.group("fallback") or "").strip()
+            if fallback_model:
+                logger.info(
+                    "openclaw_gateway_model_fallback_detected",
+                    requested_model=normalized_requested,
+                    fallback_model=fallback_model,
+                    log_path=str(log_path),
+                )
+                return fallback_model
+
+        embedded_fallback = self._resolve_gateway_session_model_from_log(
+            log_lines=lines,
+            requested_model=normalized_requested,
+            request_started_at=request_started_at,
+        )
+        if embedded_fallback:
+            return embedded_fallback
+
+        return normalized_requested
+
+    def _resolve_gateway_session_model_from_log(
+        self,
+        *,
+        log_lines: list[str],
+        requested_model: str,
+        request_started_at: float,
+    ) -> str:
+        """
+        Пытается восстановить фактическую модель через session-state embedded agent.
+
+        Почему нужен второй источник истины:
+        - OpenClaw не всегда пишет `[model-fallback]`, если primary падает auth/scopes-ошибкой;
+        - при этом session `agent:main:openai:*` уже успевает обновиться на
+          реальный fallback provider/model;
+        - без этого owner UI видит requested model и врет о сработавшем primary.
+        """
+        sessions_path = self._openclaw_sessions_index_path
+        if not sessions_path.exists():
+            return ""
+
+        try:
+            sessions_payload = json.loads(sessions_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning(
+                "openclaw_sessions_index_read_failed",
+                path=str(sessions_path),
+                error=str(exc),
+            )
+            return ""
+        if not isinstance(sessions_payload, dict):
+            return ""
+
+        normalized_requested = str(requested_model or "").strip()
+        if not normalized_requested:
+            return ""
+
+        for raw_line in reversed(log_lines):
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            match = EMBEDDED_SESSION_LANE_ERROR_RE.match(line)
+            if not match:
+                continue
+
+            ts_raw = str(match.group("ts") or "").strip()
+            try:
+                event_ts = datetime.fromisoformat(ts_raw).timestamp()
+            except ValueError:
+                event_ts = 0.0
+            if event_ts and event_ts < (float(request_started_at) - 2.0):
+                continue
+
+            session_key = f"agent:main:openai:{str(match.group('session') or '').strip()}"
+            session_meta = sessions_payload.get(session_key)
+            if not isinstance(session_meta, dict):
+                continue
+
+            resolved_model = self._compose_session_runtime_model(session_meta)
+            if not resolved_model or resolved_model == normalized_requested:
+                continue
+
+            logger.info(
+                "openclaw_gateway_session_fallback_detected",
+                requested_model=normalized_requested,
+                fallback_model=resolved_model,
+                session_key=session_key,
+                log_path=str(self._gateway_log_path),
+            )
+            return resolved_model
+
+        return ""
+
+    @staticmethod
+    def _compose_session_runtime_model(session_meta: dict[str, Any]) -> str:
+        """
+        Собирает full model id из session-state OpenClaw.
+
+        Session index часто хранит `modelProvider=google-gemini-cli` и
+        `model=gemini-3.1-pro-preview` раздельно, поэтому для truthful route
+        их надо склеивать обратно.
+        """
+        if not isinstance(session_meta, dict):
+            return ""
+        provider = str(session_meta.get("modelProvider") or "").strip()
+        model = str(session_meta.get("model") or "").strip()
+        if not model:
+            return ""
+        if "/" in model:
+            return model
+        if provider:
+            return f"{provider}/{model}"
+        return model
 
     @staticmethod
     def _messages_size(messages: List[Dict[str, Any]]) -> int:
@@ -1020,15 +1197,24 @@ class OpenClawClient:
         max_output_tokens: int | None = None,
         allow_auth_retry: bool = True,
     ) -> str:
-        """Один запрос к OpenClaw (stream=true) с буферизацией ответа."""
+        """Один запрос к OpenClaw (stream=false) с буферизацией ответа.
+
+        КРИТИЧЕСКИЙ ФИХ: stream=True в google-antigravity Antigravity gateway возвращает
+        только 'data: [DONE]' без контента — это приводит к lm_empty_stream на всех каналах.
+        stream=False, напротив, работает корректно и возвращает полный JSON-ответ.
+        """
+        from .mcp_client import mcp_manager  # lazy import
+        tools = await mcp_manager.get_tool_manifest()
+        
         payload = {
             "messages": messages_to_send,
-            "stream": True,
+            "stream": False,  # ФИКС: streaming даёт пустой [DONE], JSON работает корректно
             "model": model_id,
-            # Просим нативный usage у OpenAI-compatible backend, если он умеет
-            # возвращать его в финальном SSE-чанке.
-            "stream_options": {"include_usage": True},
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
         if isinstance(max_output_tokens, int) and max_output_tokens > 0:
             # Совместимый лимит длины ответа для OpenAI-совместимых /v1/chat/completions.
             payload["max_tokens"] = max_output_tokens
@@ -1036,84 +1222,104 @@ class OpenClawClient:
         full_response = ""
         usage_snapshot: dict[str, int] | None = None
         retry_after_token_refresh = False
-        async with self._http_client.stream(
-            "POST",
+
+        # Используем обычный POST (не streaming), чтобы получить единый JSON-ответ
+        response = await self._http_client.post(
             f"{self.base_url}/v1/chat/completions",
             json=payload,
-        ) as response:
-            logger.info("openclaw_response_status", status=response.status_code, model=model_id)
+        )
+        logger.info("openclaw_response_status", status=response.status_code, model=model_id)
 
-            if response.status_code != 200:
-                body_bytes = await response.aread()
-                body_str = body_bytes.decode("utf-8", errors="ignore")
-                logger.error("openclaw_api_error", status=response.status_code, body=body_str)
-                if response.status_code in (401, 403):
-                    if allow_auth_retry and self._refresh_gateway_token_from_runtime():
-                        retry_after_token_refresh = True
-                    else:
-                        raise ProviderAuthError(
-                            message=f"status={response.status_code} body={body_str[:500]}",
-                            user_message="Ошибка авторизации API",
-                        )
-                elif response.status_code == 429:
-                    raise RouterQuotaError(
-                        user_message="Квота исчерпана. Попробуй позже или переключись на локальную модель (!model local).",
-                        details={"status": 429},
-                    )
-                elif response.status_code >= 500:
-                    raise ProviderError(
-                        message=f"status={response.status_code} body={body_str[:500]}",
-                        user_message="Провайдер временно недоступен",
-                        retryable=True,
-                    )
+        if response.status_code != 200:
+            body_str = response.text
+            logger.error("openclaw_api_error", status=response.status_code, body=body_str)
+            if response.status_code in (401, 403):
+                if allow_auth_retry and self._refresh_gateway_token_from_runtime():
+                    retry_after_token_refresh = True
                 else:
-                    raise ProviderError(
+                    raise ProviderAuthError(
                         message=f"status={response.status_code} body={body_str[:500]}",
-                        user_message=f"Ошибка API: {response.status_code}",
-                        retryable=False,
+                        user_message="Ошибка авторизации API",
                     )
-
-            if retry_after_token_refresh:
-                logger.warning(
-                    "openclaw_retry_after_gateway_token_refresh",
-                    model=model_id,
+            elif response.status_code == 429:
+                raise RouterQuotaError(
+                    user_message="Квота исчерпана. Попробуй позже или переключись на локальную модель (!model local).",
+                    details={"status": 429},
                 )
-                return await self._openclaw_completion_once(
-                    model_id=model_id,
-                    messages_to_send=messages_to_send,
-                    max_output_tokens=max_output_tokens,
-                    allow_auth_retry=False,
+            elif response.status_code >= 500:
+                raise ProviderError(
+                    message=f"status={response.status_code} body={body_str[:500]}",
+                    user_message="Провайдер временно недоступен",
+                    retryable=True,
+                )
+            else:
+                raise ProviderError(
+                    message=f"status={response.status_code} body={body_str[:500]}",
+                    user_message=f"Ошибка API: {response.status_code}",
+                    retryable=False,
                 )
 
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
-                if line.startswith("data: "):
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-                    normalized_usage = self._normalize_usage_snapshot(data.get("usage"))
-                    if normalized_usage:
-                        usage_snapshot = normalized_usage
-                    delta = data.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if delta:
-                        full_response += delta
-                else:
-                    # Иногда прокси может вернуть единый JSON без SSE префикса
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    normalized_usage = self._normalize_usage_snapshot(data.get("usage"))
-                    if normalized_usage:
-                        usage_snapshot = normalized_usage
-                    maybe_content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
-                    if maybe_content:
-                        full_response += maybe_content
+        if retry_after_token_refresh:
+            logger.warning(
+                "openclaw_retry_after_gateway_token_refresh",
+                model=model_id,
+            )
+            return await self._openclaw_completion_once(
+                model_id=model_id,
+                messages_to_send=messages_to_send,
+                max_output_tokens=max_output_tokens,
+                allow_auth_retry=False,
+            )
+
+        # Читаем единый JSON-ответ (stream=False)
+        try:
+            data = response.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        
+        normalized_usage = self._normalize_usage_snapshot(data.get("usage"))
+        if normalized_usage:
+            usage_snapshot = normalized_usage
+        
+        choices = data.get("choices") or [{}]
+        message_obj = choices[0].get("message") or {}
+        full_response = message_obj.get("content", "") or ""
+        tool_calls = message_obj.get("tool_calls")
+
+        # Обработка tool_calls
+        if tool_calls:
+            logger.info("openclaw_tool_calls_detected", count=len(tool_calls))
+            # Добавляем сообщение ассистента с tool_calls в историю для этого запроса
+            messages_to_send.append(message_obj)
+            
+            for tc in tool_calls:
+                tc_id = tc.get("id")
+                func = tc.get("function") or {}
+                func_name = func.get("name")
+                import json
+                try:
+                    args = json.loads(func.get("arguments", "{}"))
+                except Exception:
+                    args = {}
+                
+                logger.info("executing_mcp_tool", name=func_name, args=args)
+                tool_result = await mcp_manager.call_tool_unified(func_name, args)
+                
+                # Добавляем результат выполнения инструмента
+                messages_to_send.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "name": func_name,
+                    "content": str(tool_result)
+                })
+            
+            # Рекурсивный вызов для получения финального ответа после инструментов
+            return await self._openclaw_completion_once(
+                model_id=model_id,
+                messages_to_send=messages_to_send,
+                max_output_tokens=max_output_tokens,
+                allow_auth_retry=allow_auth_retry
+            )
 
         if not usage_snapshot and full_response.strip():
             usage_snapshot = self._estimate_usage_snapshot(messages_to_send, full_response)
@@ -1197,6 +1403,17 @@ class OpenClawClient:
         has_photo: bool,
     ) -> str:
         """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет)."""
+        runtime_chain: list[str] = []
+        runtime_primary = str(get_runtime_primary_model() or "").strip()
+        if runtime_primary:
+            runtime_chain.append(runtime_primary)
+        runtime_chain.extend(get_runtime_fallback_models())
+        for candidate in runtime_chain:
+            normalized = str(candidate or "").strip()
+            if not normalized or normalized == str(current_model or "").strip():
+                continue
+            if self._is_cloud_candidate_usable(normalized, model_manager):
+                return normalized
         if not hasattr(model_manager, "get_best_cloud_model"):
             return ""
         candidate = str(await model_manager.get_best_cloud_model(has_photo=has_photo) or "").strip()
@@ -1340,6 +1557,81 @@ class OpenClawClient:
         logger.warning("openclaw_wait_timeout", timeout=timeout)
         return False
 
+    async def warmup_runtime_route(self, *, force_refresh: bool = False) -> dict[str, Any]:
+        """
+        Выполняет короткий runtime-probe, чтобы после рестарта появился живой route-truth.
+
+        Почему это нужно:
+        - `/api/health/lite` и userbot self-check раньше видели пустой
+          `last_runtime_route` до первого реального пользовательского запроса;
+        - из-за этого UI показывал stale `current_primary_broken`, хотя
+          `openai-codex/gpt-5.4` уже отвечал через gateway;
+        - probe идёт через тот же production routing-контур, но с коротким
+          служебным prompt и отдельным временным chat_id, который потом очищается.
+        """
+        existing = self.get_last_runtime_route()
+        existing_ts = int(existing.get("timestamp") or 0)
+        existing_is_fresh = existing_ts > 0 and (int(time.time()) - existing_ts) <= 300
+        if (
+            not force_refresh
+            and existing.get("status") == "ok"
+            and existing_is_fresh
+            and str(existing.get("channel") or "").strip()
+        ):
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "recent_runtime_route",
+                "route": existing,
+            }
+
+        if not await self.health_check():
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "gateway_unhealthy",
+                "route": existing,
+            }
+
+        runtime_primary = str(get_runtime_primary_model() or "").strip()
+        force_cloud_probe = not runtime_primary.lower().startswith("lmstudio/")
+        probe_chat_id = "__runtime_route_warmup__"
+        preview_parts: list[str] = []
+
+        try:
+            async for chunk in self.send_message_stream(
+                message="Технический runtime warmup. Ответь только: OK.",
+                chat_id=probe_chat_id,
+                system_prompt="Служебный runtime warmup-probe. Ответь только одним словом: OK.",
+                force_cloud=force_cloud_probe,
+                max_output_tokens=8,
+            ):
+                piece = str(chunk or "").strip()
+                if piece:
+                    preview_parts.append(piece)
+                if len(" ".join(preview_parts)) >= 80:
+                    break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("openclaw_runtime_route_warmup_failed", error=str(exc))
+            return {
+                "ok": False,
+                "skipped": False,
+                "reason": "warmup_exception",
+                "error": str(exc),
+                "route": self.get_last_runtime_route(),
+            }
+        finally:
+            self.clear_session(probe_chat_id)
+
+        route = self.get_last_runtime_route()
+        return {
+            "ok": str(route.get("status") or "").strip().lower() == "ok",
+            "skipped": False,
+            "reason": "warmup_completed",
+            "response_preview": " ".join(preview_parts).strip()[:120],
+            "route": route,
+        }
+
     async def send_message_stream(
         self,
         message: str,
@@ -1347,6 +1639,7 @@ class OpenClawClient:
         system_prompt: Optional[str] = None,
         images: Optional[List[str]] = None,
         force_cloud: bool = False,
+        preferred_model: Optional[str] = None,
         max_output_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         """
@@ -1355,7 +1648,7 @@ class OpenClawClient:
         Recovery policy:
         1) текущий маршрут,
         2) при quota free -> попытка switch paid,
-        3) fallback на openai/gpt-4o-mini,
+        3) fallback по live runtime-цепочке OpenClaw,
         4) fallback на локальную модель,
         5) прямой LM Studio fallback (если force_cloud=False).
         """
@@ -1400,12 +1693,27 @@ class OpenClawClient:
 
         has_photo = bool(images)
         effective_force_cloud = bool(force_cloud)
+        preferred_model_id = str(preferred_model or "").strip()
         selected_model = ""
         attempt_model = ""
+        request_started_at = time.time()
         messages_to_send: list[dict[str, Any]] = []
 
         try:
-            selected_model = await model_manager.get_best_model(has_photo=has_photo)
+            if preferred_model_id:
+                # Явный выбор модели из UI/owner-пути должен иметь приоритет над
+                # автоматическим роутингом. Иначе owner-панель показывает, что
+                # модель выбрана, но фактически запрос уходит в default-slot.
+                selected_model = preferred_model_id
+                logger.info(
+                    "openclaw_preferred_model_selected",
+                    chat_id=chat_id,
+                    preferred_model=preferred_model_id,
+                    has_photo=has_photo,
+                    force_cloud=effective_force_cloud,
+                )
+            else:
+                selected_model = await model_manager.get_best_model(has_photo=has_photo)
             # В force_cloud режиме не позволяем оставаться на локальной модели,
             # иначе runtime-route показывает local и ломает "cloud truth".
             if effective_force_cloud and model_manager.is_local_model(selected_model):
@@ -1613,10 +1921,6 @@ class OpenClawClient:
                         attempt_model = cloud_retry
                         self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_retry"
                         continue
-                    if self._is_cloud_candidate_usable("openai/gpt-4o-mini", model_manager):
-                        attempt_model = "openai/gpt-4o-mini"
-                        self._cloud_tier_state["last_recovery_action"] = "switch_to_openai"
-                        continue
 
                 # 2.25) Cloud quality recovery:
                 # если облачный ответ пустой/битый/таймаутный — пробуем другой cloud-кандидат,
@@ -1635,13 +1939,6 @@ class OpenClawClient:
                     if cloud_retry:
                         attempt_model = cloud_retry
                         self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_quality_retry"
-                        continue
-                    if (
-                        attempt_model != "openai/gpt-4o-mini"
-                        and self._is_cloud_candidate_usable("openai/gpt-4o-mini", model_manager)
-                    ):
-                        attempt_model = "openai/gpt-4o-mini"
-                        self._cloud_tier_state["last_recovery_action"] = "switch_to_openai_quality_retry"
                         continue
 
                 # 2.5) Фото пришло в локальную модель без vision add-on:
@@ -1826,16 +2123,26 @@ class OpenClawClient:
                 or self._last_runtime_route.get("status") != "ok"
                 or self._last_runtime_route.get("channel") == "planning"
             ):
+                resolved_model = self._resolve_gateway_reported_model(
+                    attempt_model,
+                    request_started_at=request_started_at,
+                )
                 route_channel = (
                     "openclaw_local"
-                    if model_manager.is_local_model(attempt_model)
+                    if model_manager.is_local_model(resolved_model)
                     else "openclaw_cloud"
                 )
+                route_detail = "Ответ получен через OpenClaw API"
+                if resolved_model and resolved_model != attempt_model:
+                    route_detail = (
+                        "Ответ получен через OpenClaw API; "
+                        f"gateway fallback -> {resolved_model}"
+                    )
                 self._set_last_runtime_route(
                     channel=route_channel,
-                    model=attempt_model,
+                    model=resolved_model,
                     route_reason="openclaw_response_ok",
-                    route_detail="Ответ получен через OpenClaw API",
+                    route_detail=route_detail,
                     force_cloud=effective_force_cloud,
                 )
 

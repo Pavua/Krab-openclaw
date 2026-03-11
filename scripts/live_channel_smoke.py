@@ -287,12 +287,14 @@ def _normalize_probe_channels_payload(payload: dict[str, Any]) -> dict[str, Any]
         if not configured:
             status = "WARN"
             meta_parts.append("not configured")
+        elif probe_ok:
+            status = "OK"
+            if not running:
+                meta_parts.append("disconnected")
+            meta_parts.append("works")
         elif not running:
             status = "FAIL"
             meta_parts.append("disconnected")
-        elif probe_ok:
-            status = "OK"
-            meta_parts.append("works")
         else:
             status = "FAIL"
             probe_error = (

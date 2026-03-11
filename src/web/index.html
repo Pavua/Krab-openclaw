@@ -677,19 +677,49 @@
             style="display: flex; flex-direction: column; gap: 10px; max-height: 120px; overflow-y: auto; padding-right: 4px;">
             <span class="card-meta">—</span>
           </div>
-          <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
-            <div style="display:flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--border-card); padding-top: 8px;">
+        </div>
+
+        <!-- Browser / MCP -->
+        <div class="card state-container"
+          style="background: var(--bg-surface); padding: 20px; border: 1px solid var(--border-subtle); box-shadow: inset 0 0 20px rgba(0,0,0,0.3);">
+          <h4 class="form-label"
+            style="margin-bottom: 16px; color: var(--accent-orange); display: flex; align-items: center; gap: 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-orange);"
+              class="pulse-warn"></div>
+            Browser / MCP Readiness
+          </h4>
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div
+              style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Stage:</span>
+              <span id="ocBrowserStage" class="badge warn">—</span>
+            </div>
+            <div
+              style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
               <span class="card-meta" style="margin: 0;">Relay reachable:</span>
               <span id="ocRelayReachable" class="badge warn">—</span>
             </div>
-            <div style="display:flex; justify-content: space-between; align-items: center;">
-              <span class="card-meta" style="margin: 0;">Tab attached:</span>
-              <span id="ocTabAttached" class="badge warn">—</span>
+            <div
+              style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Tabs:</span>
+              <span id="ocBrowserTabs" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div style="display:flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--border-card); padding-top: 8px;">
+              <span class="card-meta" style="margin: 0;">mcp.json:</span>
+              <span id="ocMcpSync" class="badge warn">—</span>
             </div>
             <div style="display:flex; justify-content: space-between; align-items: center;">
-              <span class="card-meta" style="margin: 0;">Last browser call:</span>
-              <span id="ocBrowserLast" class="card-meta text-ellipsis" style="max-width: 140px; text-align: right;">—</span>
+              <span class="card-meta" style="margin: 0;">Required MCP:</span>
+              <span id="ocMcpReady" class="card-value" style="font-size: 0.95rem; text-align: right;">—</span>
             </div>
+          </div>
+          <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 6px;">
+            <span id="ocBrowserNext" class="card-meta" style="min-height: 18px;">—</span>
+            <span id="ocBrowserMcpNotes" class="card-meta text-ellipsis" style="max-width: 100%;">—</span>
+          </div>
+          <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <button id="ocBrowserStartBtn">Запустить Browser Relay</button>
+            <span id="ocBrowserStartMeta" class="card-meta">—</span>
           </div>
         </div>
 
@@ -1328,11 +1358,12 @@
           await fetchPromiseFn(e);
         } finally {
           if (btn) {
-            btn.disabled = false;
             if (loadingText) {
               if (isInput) btn.value = origText;
               else btn.innerHTML = origText;
             }
+            const keepDisabled = String(btn.dataset.keepDisabled || "").toLowerCase() === "true";
+            btn.disabled = keepDisabled;
           }
         }
       };
@@ -2471,7 +2502,17 @@ ${channelsText}`;
           setText("ocTierLastError", tierLastError);
 
           const activeTier = lastRoute.channel === "cloud" ? "Cloud" : (lastRoute.channel === "local" ? "Local" : "Auto");
-          const isFallback = Boolean(lastRoute.route_reason && lastRoute.route_reason !== "primary_choice");
+          // Раньше здесь любой непустой route_reason считался fallback, из-за чего
+          // штатный `openclaw_response_ok` рисовался как `Yes`.
+          // Считаем fallback только по явным fallback-сигнатурам.
+          const routeReason = String(lastRoute.route_reason || "").toLowerCase();
+          const routeDetail = String(lastRoute.route_detail || "").toLowerCase();
+          const isFallback =
+            routeReason === "model_fallback" ||
+            routeReason === "fallback_active" ||
+            routeReason === "fallback" ||
+            routeDetail.includes("fallback ->") ||
+            routeDetail.includes("fell back to");
           setText("opsCloudActiveTier", activeTier);
           setText("opsCloudFallbackUsed", isFallback ? "Yes" : "No");
           setText("opsCloudFallbackReason", lastRoute.route_reason || "—");
@@ -2891,6 +2932,22 @@ ${channelsText}`;
       }
     }));
 
+    document.getElementById("ocBrowserStartBtn").addEventListener("click", withBtnState("ocBrowserStartBtn", "Запуск...", async () => {
+      try {
+        setText("ocBrowserStartMeta", "Запускаю dedicated browser...");
+        const payload = await postJson("/api/openclaw/browser/start", {});
+        const browser = payload.browser || {};
+        const stage = browser.stage_label || browser.state || "готово";
+        setText("ocBrowserStartMeta", `Browser relay: ${stage}`);
+        showToast(`Browser relay: ${stage}`, browser.readiness === "ready" ? "success" : "warn");
+        await updateStats(true);
+        await loadOpenclawStatus(false);
+      } catch (e) {
+        setText("ocBrowserStartMeta", `Ошибка: ${e.message}`);
+        showToast(`Browser relay error: ${e.message}`, "error");
+      }
+    }));
+
     async function loadControlCompatStatus(showStatus = true) {
       try {
         const res = await fetch("/api/openclaw/control-compat/status");
@@ -2959,7 +3016,7 @@ ${channelsText}`;
         const autoswitchProfile = autoswitchProfileSelect ? String(autoswitchProfileSelect.value || "toggle") : "toggle";
         const autoswitchStatusProfile = autoswitchProfile === "toggle" ? "current" : autoswitchProfile;
 
-        const [catalogRes, autoswitchRes, channelsRes, browserSmokeRes] = await Promise.all([
+        const [catalogRes, autoswitchRes, channelsRes, browserReadinessRes] = await Promise.all([
           fetch("/api/model/catalog").catch((e) => ({
             ok: false,
             error: e.message,
@@ -2972,7 +3029,7 @@ ${channelsText}`;
             ok: false,
             error: e.message,
           })),
-          fetch("/api/openclaw/browser-smoke?url=https%3A%2F%2Fexample.com").catch((e) => ({
+          fetch("/api/openclaw/browser-mcp-readiness?url=https%3A%2F%2Fexample.com").catch((e) => ({
             ok: false,
             error: e.message,
           })),
@@ -3053,48 +3110,104 @@ ${channelsText}`;
             `<span class="badge bad">FAIL</span> <span style="font-size: 0.8em; color: var(--state-error);">${errText}</span>`;
         }
 
-        // Browser relay/tool smoke
+        // Browser / MCP readiness
+        const stageBadge = document.getElementById("ocBrowserStage");
         const relayBadge = document.getElementById("ocRelayReachable");
-        const tabBadge = document.getElementById("ocTabAttached");
-        const lastBrowser = document.getElementById("ocBrowserLast");
-        if (browserSmokeRes.ok) {
-          const payload = await browserSmokeRes.json().catch(() => ({}));
-          const report = payload.report || {};
-          const baseBrowser = report.base?.browser || {};
-          const smoke = report.browser_smoke || {};
-          const relayOk = Boolean(
-            smoke.relay_reachable ||
-            smoke.browser_http_reachable ||
-            baseBrowser.available
-          );
-          const tabAttached = Boolean(
-            smoke.tab_attached ||
-            smoke.browser_http_state === "attached"
-          );
-          const lastCall = smoke.detail || smoke.tool || smoke.path || smoke.channel || "n/a";
+        const tabsValue = document.getElementById("ocBrowserTabs");
+        const syncBadge = document.getElementById("ocMcpSync");
+        const mcpReady = document.getElementById("ocMcpReady");
+        const nextStep = document.getElementById("ocBrowserNext");
+        const notes = document.getElementById("ocBrowserMcpNotes");
+        const startBtn = document.getElementById("ocBrowserStartBtn");
+        const startMeta = document.getElementById("ocBrowserStartMeta");
+        if (browserReadinessRes.ok) {
+          const payload = await browserReadinessRes.json().catch(() => ({}));
+          const browser = payload.browser || {};
+          const browserRuntime = browser.runtime || {};
+          const smoke = browser.smoke || {};
+          const mcp = payload.mcp || {};
+          const mcpSummary = mcp.summary || {};
+          const sync = mcp.sync || {};
+          const browserReadiness = String(browser.readiness || "attention");
+          const stageClass = browserReadiness === "ready" ? "ok" : (browserReadiness === "blocked" ? "bad" : "warn");
+          const stageText = browser.stage_label || browser.state || "—";
+          const relayOk = Boolean(smoke.relay_reachable);
+          const syncState = String(sync.status || "unknown");
+          const syncClass = syncState === "synced" ? "ok" : (syncState === "drift" ? "warn" : "bad");
+          const syncText = syncState === "synced"
+            ? "SYNC"
+            : (syncState === "drift" ? "DRIFT" : (syncState === "missing" ? "MISSING" : "ERROR"));
+          const noteParts = [];
+          if (browser.summary) noteParts.push(String(browser.summary));
+          if (Array.isArray(browser.warnings) && browser.warnings.length) noteParts.push(String(browser.warnings[0]));
+          if (Array.isArray(browser.blockers) && browser.blockers.length) noteParts.push(String(browser.blockers[0]));
+          if (mcp.detail) noteParts.push(String(mcp.detail));
+          if (Array.isArray(mcp.warnings) && mcp.warnings.length) noteParts.push(String(mcp.warnings[0]));
 
+          if (stageBadge) {
+            stageBadge.className = `badge ${stageClass}`;
+            stageBadge.textContent = stageText;
+          }
           if (relayBadge) {
-            relayBadge.className = relayOk ? "badge ok" : "badge bad";
+            relayBadge.className = relayOk ? "badge ok" : (browserReadiness === "blocked" ? "badge bad" : "badge warn");
             relayBadge.textContent = relayOk ? "Yes" : "No";
           }
-          if (tabBadge) {
-            tabBadge.className = tabAttached ? "badge ok" : "badge warn";
-            tabBadge.textContent = tabAttached ? "Yes" : "No";
+          if (tabsValue) {
+            tabsValue.textContent = String(browserRuntime.tabs_count ?? "0");
           }
-          if (lastBrowser) {
-            lastBrowser.textContent = String(lastCall);
+          if (syncBadge) {
+            syncBadge.className = `badge ${syncClass}`;
+            syncBadge.textContent = syncText;
+          }
+          if (mcpReady) {
+            mcpReady.textContent = `${mcpSummary.required_ready || 0}/${mcpSummary.required_total || 0} ready`;
+          }
+          if (nextStep) {
+            nextStep.textContent = String(browser.next_step || "—");
+          }
+          if (notes) {
+            notes.textContent = noteParts.filter(Boolean).slice(0, 2).join(" · ") || "—";
+          }
+          if (startBtn) {
+            startBtn.dataset.keepDisabled = browserReadiness === "ready" ? "true" : "false";
+            startBtn.disabled = browserReadiness === "ready";
+          }
+          if (startMeta) {
+            startMeta.textContent = browserReadiness === "ready"
+              ? "Browser relay уже готов."
+              : "Если dedicated browser не поднялся после restart, можно запустить его отсюда.";
           }
         } else {
+          if (stageBadge) {
+            stageBadge.className = "badge bad";
+            stageBadge.textContent = "API ERR";
+          }
           if (relayBadge) {
             relayBadge.className = "badge bad";
             relayBadge.textContent = "No";
           }
-          if (tabBadge) {
-            tabBadge.className = "badge warn";
-            tabBadge.textContent = "Unknown";
+          if (tabsValue) {
+            tabsValue.textContent = "—";
           }
-          if (lastBrowser) {
-            lastBrowser.textContent = "smoke_error";
+          if (syncBadge) {
+            syncBadge.className = "badge bad";
+            syncBadge.textContent = "ERROR";
+          }
+          if (mcpReady) {
+            mcpReady.textContent = "—";
+          }
+          if (nextStep) {
+            nextStep.textContent = "browser_mcp_readiness_error";
+          }
+          if (notes) {
+            notes.textContent = String(browserReadinessRes.error || "API error");
+          }
+          if (startBtn) {
+            startBtn.dataset.keepDisabled = "false";
+            startBtn.disabled = false;
+          }
+          if (startMeta) {
+            startMeta.textContent = "Не удалось прочитать browser readiness.";
           }
         }
 

@@ -39,6 +39,21 @@ class _FakeRouter:
     def get_profile_recommendation(self, profile: str):
         return {"profile": profile, "recommended_model": "nvidia/nemotron-3-nano"}
 
+    def get_task_preflight(self, **kwargs):
+        preferred_model = str(kwargs.get("preferred_model") or "").strip()
+        model = preferred_model or "nvidia/nemotron-3-nano"
+        channel = "cloud" if model.startswith(("google/", "google-gemini-cli/", "openai/", "openai-codex/")) else "local"
+        return {
+            "profile": str(kwargs.get("task_type") or "chat"),
+            "execution": {
+                "model": model,
+                "channel": channel,
+                "force_mode": "auto",
+            },
+            "reasons": ["Использована явно запрошенная модель." if preferred_model else "Использована модель по умолчанию."],
+            "local_available": True,
+        }
+
     def get_last_route(self):
         return {
             "route_reason": "local_direct_primary",
@@ -73,7 +88,7 @@ def test_assistant_query_returns_router_last_route():
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
-    assert data["effective_force_mode"] == "force_local"
+    assert data["effective_force_mode"] == "local"
     assert data["last_route"]["channel"] == "local_direct"
     assert data["last_route"]["model"] == "nvidia/nemotron-3-nano"
 
@@ -103,3 +118,59 @@ def test_assistant_query_model_status_uses_authoritative_route():
     assert data["ok"] is True
     assert "nvidia/nemotron-3-nano" in data["reply"]
     assert "local_direct" in data["reply"]
+
+
+def test_assistant_query_returns_auto_force_mode_when_router_has_none():
+    """
+    Если force-mode не задан, API должен отдавать `auto`, а не строку `None`.
+    """
+    app = WebApp(
+        deps={
+            "router": _FakeRouter(),
+            "openclaw_client": None,
+            "black_box": None,
+        },
+        host="127.0.0.1",
+        port=18080,
+    )
+    client = TestClient(app.app)
+
+    resp = client.post(
+        "/api/assistant/query",
+        json={"prompt": "обычный запрос"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["effective_force_mode"] == "auto"
+
+
+def test_assistant_query_recommendation_respects_preferred_model():
+    """
+    Если web-клиент явно передал preferred_model, recommendation в ответе тоже
+    должен отражать этот выбор, а не старый default-profile.
+    """
+    app = WebApp(
+        deps={
+            "router": _FakeRouter(),
+            "openclaw_client": None,
+            "black_box": None,
+        },
+        host="127.0.0.1",
+        port=18080,
+    )
+    client = TestClient(app.app)
+
+    resp = client.post(
+        "/api/assistant/query",
+        json={
+            "prompt": "проверка preferred",
+            "preferred_model": "google-gemini-cli/gemini-3.1-pro-preview",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["recommendation"]["model"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert data["recommendation"]["recommended_model"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert data["recommendation"]["channel"] == "cloud"

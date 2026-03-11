@@ -163,3 +163,74 @@ def test_message_sending_external_guard_strips_reply_tag_inside_text() -> None:
     assert result is not None
     assert "[[reply_to:" not in result["content"]
     assert result["content"] == "На связи. Что-то нужно проверить?"
+
+
+def test_message_sending_external_guard_rewrites_legacy_bot_migration_monologue() -> None:
+    result = _run_plugin_hook(
+        "message_sending",
+        {
+            "to": "@example_user",
+            "content": (
+                "Нет, По. Я сейчас работаю через обычного Telegram-бота (канал telegram). "
+                "В Python userbot-контур меня в этом runtime не пересаживали."
+            ),
+        },
+        {
+            "channelId": "telegram",
+            "sessionKey": "agent:main:telegram:direct:@example_user",
+        },
+    )
+
+    assert result is not None
+    assert (
+        result["content"]
+        == "В этом диалоге отвечает reserve Telegram Bot. Основной owner-канал живёт в Python userbot; память общая, но owner-инструменты здесь не подтверждены."
+    )
+
+
+def test_message_sending_external_guard_rewrites_generic_model_claim_to_runtime_truth() -> None:
+    result = _run_plugin_hook(
+        "message_sending",
+        {
+            "to": "@example_user",
+            "content": (
+                "Я сейчас работаю на модели google/gemini-3.1-pro-preview.\n\n"
+                "(Дефолтная модель в этом рантайме настроена как openai-codex/gpt-5.4.)"
+            ),
+        },
+        {
+            "channelId": "telegram",
+            "sessionKey": "agent:main:telegram:direct:@example_user",
+        },
+    )
+
+    assert result is not None
+    assert (
+        result["content"]
+        == "В этом диалоге отвечает reserve Telegram Bot. Primary в runtime настроен как `openai-codex/gpt-5.4`; фактический активный маршрут здесь нужно подтверждать по runtime-route, а не по свободному тексту модели."
+    )
+
+
+def test_message_sending_external_guard_rewrites_runtime_self_check_block() -> None:
+    result = _run_plugin_hook(
+        "message_sending",
+        {
+            "to": "@example_user",
+            "content": (
+                "🧭 **Фактический runtime self-check**\n"
+                "- Gateway / transport: ON\n"
+                "- Последний маршрут: ещё не подтверждён\n"
+                "- Последняя модель: ещё не подтверждена\n"
+            ),
+        },
+        {
+            "channelId": "telegram",
+            "sessionKey": "agent:main:telegram:direct:@example_user",
+        },
+    )
+
+    assert result is not None
+    assert (
+        result["content"]
+        == "Связь в этом канале есть. Reserve Telegram Bot не подтверждает полный runtime self-check; основной owner-канал живёт в Python userbot."
+    )

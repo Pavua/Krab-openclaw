@@ -74,6 +74,41 @@ async def test_health_check_failure(client: OpenClawClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_warmup_runtime_route_runs_short_probe_and_clears_temp_session(client: OpenClawClient) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_stream(*, message, chat_id, system_prompt=None, force_cloud=False, max_output_tokens=None, images=None):
+        captured["message"] = message
+        captured["chat_id"] = chat_id
+        captured["system_prompt"] = system_prompt
+        captured["force_cloud"] = force_cloud
+        captured["max_output_tokens"] = max_output_tokens
+        captured["images"] = images
+        client._set_last_runtime_route(  # noqa: SLF001
+            channel="openclaw_cloud",
+            model="openai-codex/gpt-5.4",
+            route_reason="openclaw_response_ok",
+            route_detail="Ответ получен через OpenClaw API",
+            force_cloud=bool(force_cloud),
+        )
+        yield "OK"
+
+    with patch.object(client, "health_check", new=AsyncMock(return_value=True)):
+        with patch("src.openclaw_client.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"):
+            with patch.object(client, "send_message_stream", new=_fake_stream):
+                with patch.object(client, "clear_session") as clear_session:
+                    report = await client.warmup_runtime_route(force_refresh=True)
+
+    assert report["ok"] is True
+    assert report["reason"] == "warmup_completed"
+    assert report["route"]["model"] == "openai-codex/gpt-5.4"
+    assert captured["chat_id"] == "__runtime_route_warmup__"
+    assert captured["force_cloud"] is True
+    assert captured["max_output_tokens"] == 8
+    clear_session.assert_called_once_with("__runtime_route_warmup__")
+
+
+@pytest.mark.asyncio
 async def test_send_message_stream_success_buffered(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
@@ -90,6 +125,31 @@ async def test_send_message_stream_success_buffered(client: OpenClawClient) -> N
     route = client.get_last_runtime_route()
     assert route.get("channel") == "openclaw_cloud"
     assert route.get("status") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_honors_preferred_cloud_model(client: OpenClawClient) -> None:
+    """Явно запрошенная модель из owner/web-path должна идти в runtime без подмены."""
+    from src.model_manager import model_manager
+
+    completion = AsyncMock(return_value="Cloud preferred OK")
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")) as get_best:
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_openclaw_completion_once", new=completion):
+                chunks = []
+                async for chunk in client.send_message_stream(
+                    "Hi",
+                    "chat-preferred-cloud",
+                    preferred_model="google-gemini-cli/gemini-3.1-pro-preview",
+                ):
+                    chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud preferred OK"
+    assert get_best.await_count == 0
+    assert completion.await_args.kwargs["model_id"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    route = client.get_last_runtime_route()
+    assert route.get("model") == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert route.get("channel") == "openclaw_cloud"
 
 
 @pytest.mark.asyncio
@@ -212,19 +272,21 @@ def test_commit_usage_snapshot_updates_compat_stats_and_cost_analytics(client: O
 
 
 @pytest.mark.asyncio
-async def test_openclaw_completion_once_estimates_usage_when_stream_has_no_usage(client: OpenClawClient) -> None:
+async def test_openclaw_completion_once_estimates_usage_when_response_has_no_usage(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
-    client._http_client.stream = MagicMock(
-        return_value=_FakeStreamResponse(
-            [
-                'data: {"choices":[{"delta":{"role":"assistant"}}]}',
-                'data: {"choices":[{"delta":{"content":"cloud"}}]}',
-                'data: {"choices":[{"delta":{"content":"-usage"}}]}',
-                "data: [DONE]",
-            ]
-        )
-    )
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": "cloud-usage",
+                }
+            }
+        ]
+    }
+    client._http_client.post.return_value = response
     fake_analytics = MagicMock()
     messages = [{"role": "user", "content": "Ответь одним словом: cloud-usage"}]
 
@@ -246,8 +308,8 @@ async def test_openclaw_completion_once_estimates_usage_when_stream_has_no_usage
         expected_usage,
         model_id="google/gemini-2.5-flash",
     )
-    request_payload = client._http_client.stream.call_args.kwargs["json"]
-    assert request_payload["stream_options"] == {"include_usage": True}
+    request_payload = client._http_client.post.call_args.kwargs["json"]
+    assert request_payload["stream"] is False
 
 
 @pytest.mark.asyncio
@@ -325,7 +387,7 @@ async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenCl
     with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local")):
         with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
             with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=False)):
-                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
                     with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")) as completion:
                         chunks = []
                         async for chunk in client.send_message_stream("Hi", "chat-local-fallback"):
@@ -343,7 +405,7 @@ async def test_force_cloud_remaps_local_selected_model_to_cloud_candidate(client
 
     with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")):
         with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-            with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
                 with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")) as completion:
                     chunks = []
                     async for chunk in client.send_message_stream("Hi", "chat-force-cloud", force_cloud=True):
@@ -408,7 +470,7 @@ async def test_vision_addon_missing_auto_mode_skips_alt_local_vision_and_goes_to
         with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")):
             with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
                 with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)) as ensure_loaded:
-                    with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                    with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
                         with patch.object(
                             model_manager,
                             "_local_candidates",
@@ -443,7 +505,7 @@ async def test_photo_auto_mode_remaps_accidental_local_vision_selection_to_cloud
                 "is_local_model",
                 side_effect=lambda mid: str(mid).startswith("qwen2-vl") or str(mid).startswith("local"),
             ):
-                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
                     with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)) as ensure_loaded:
                         with patch.object(client, "_direct_lm_fallback", new=AsyncMock(return_value="Локальный vision")) as direct_fallback:
                             with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud vision OK")) as completion:
@@ -508,14 +570,14 @@ def test_local_recovery_enabled_for_text_route_even_in_auto_vision_mode(client: 
 
 
 @pytest.mark.asyncio
-async def test_auth_error_without_openai_key_falls_back_to_local_not_openai(client: OpenClawClient) -> None:
+async def test_auth_error_without_cloud_retry_falls_back_to_local(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
     completion = AsyncMock(side_effect=["401 Unauthorized: invalid api key", "Локальный ответ"])
     with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
         with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
             with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="")):
                     with patch.object(client, "_resolve_local_model_for_retry", new=AsyncMock(return_value="local/qwen")):
                         with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)):
                             with patch.object(client, "_openclaw_completion_once", new=completion):
@@ -664,6 +726,55 @@ def test_refresh_gateway_token_from_runtime_updates_auth_header(client: OpenClaw
     assert refreshed is True
     assert client.token == "runtime-token-123"
     assert client._http_client.headers["Authorization"] == "Bearer runtime-token-123"
+
+
+def test_resolve_gateway_reported_model_prefers_recent_fallback_log(client: OpenClawClient, tmp_path: Path) -> None:
+    log_path = tmp_path / "openclaw.log"
+    log_path.write_text(
+        '2026-03-11T04:09:15.775+01:00 [model-fallback] Model "openai-codex/gpt-5.4" not found. Fell back to "google/gemini-3.1-pro-preview".\n',
+        encoding="utf-8",
+    )
+    client._gateway_log_path = log_path
+
+    resolved = client._resolve_gateway_reported_model(  # noqa: SLF001
+        "openai-codex/gpt-5.4",
+        request_started_at=0.0,
+    )
+
+    assert resolved == "google/gemini-3.1-pro-preview"
+
+
+def test_resolve_gateway_reported_model_uses_embedded_session_state_after_lane_error(
+    client: OpenClawClient,
+    tmp_path: Path,
+) -> None:
+    """Если gateway не написал model-fallback, truth берём из session-state embedded agent."""
+    log_path = tmp_path / "openclaw.log"
+    log_path.write_text(
+        '2026-03-11T04:09:15.775+01:00 [diagnostic] lane task error: lane=session:agent:main:openai:abc123 durationMs=1234 error="HTTP 401: Missing scopes: model.request"\n',
+        encoding="utf-8",
+    )
+    sessions_path = tmp_path / "sessions.json"
+    sessions_path.write_text(
+        (
+            "{"
+            '"agent:main:openai:abc123": {'
+            '"modelProvider": "google-gemini-cli", '
+            '"model": "gemini-3.1-pro-preview"'
+            "}"
+            "}"
+        ),
+        encoding="utf-8",
+    )
+    client._gateway_log_path = log_path
+    client._openclaw_sessions_index_path = sessions_path
+
+    resolved = client._resolve_gateway_reported_model(  # noqa: SLF001
+        "openai-codex/gpt-5.4",
+        request_started_at=0.0,
+    )
+
+    assert resolved == "google-gemini-cli/gemini-3.1-pro-preview"
 
 
 @pytest.mark.asyncio
@@ -852,10 +963,10 @@ async def test_empty_response_does_not_override_last_auth_error(client: OpenClaw
 
 
 @pytest.mark.asyncio
-async def test_force_cloud_empty_stream_switches_to_openai_quality_retry(client: OpenClawClient) -> None:
+async def test_force_cloud_empty_stream_switches_to_runtime_cloud_retry(client: OpenClawClient) -> None:
     """
-    При force_cloud и пустом облачном ответе пробуем cloud-quality recovery,
-    в том числе переключение на openai/gpt-4o-mini (если ключ доступен).
+    При force_cloud и пустом облачном ответе пробуем следующий live fallback
+    из runtime-цепочки, а не старый hardcoded OpenAI API fallback.
     """
     from src.model_manager import model_manager
 
@@ -866,21 +977,25 @@ async def test_force_cloud_empty_stream_switches_to_openai_quality_retry(client:
             "Cloud recovery OK",
         ]
     )
-    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-quality"}, clear=False):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-3-flash-preview")):
-            with patch.object(model_manager, "is_local_model", return_value=False):
-                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-3-flash-preview")):
-                    with patch.object(client, "_openclaw_completion_once", new=completion):
-                        chunks = []
-                        async for chunk in client.send_message_stream(
-                            "Hi",
-                            "chat-force-cloud-quality-retry",
-                            force_cloud=True,
-                        ):
-                            chunks.append(chunk)
+    with patch("src.openclaw_client.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"):
+        with patch(
+            "src.openclaw_client.get_runtime_fallback_models",
+            return_value=["google/gemini-3.1-pro-preview", "qwen-portal/coder-model"],
+        ):
+            with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="openai-codex/gpt-5.4")):
+                with patch.object(model_manager, "is_local_model", return_value=False):
+                    with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="openai-codex/gpt-5.4")):
+                        with patch.object(client, "_openclaw_completion_once", new=completion):
+                            chunks = []
+                            async for chunk in client.send_message_stream(
+                                "Hi",
+                                "chat-force-cloud-quality-retry",
+                                force_cloud=True,
+                            ):
+                                chunks.append(chunk)
 
     assert "".join(chunks) == "Cloud recovery OK"
     assert completion.await_count == 3
-    assert completion.await_args_list[-1].kwargs["model_id"] == "openai/gpt-4o-mini"
+    assert completion.await_args_list[-1].kwargs["model_id"] == "google/gemini-3.1-pro-preview"
     route = client.get_last_runtime_route()
     assert route.get("channel") == "openclaw_cloud"

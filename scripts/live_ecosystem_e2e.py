@@ -36,9 +36,51 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.integrations.krab_ear_client import KrabEarClient
-from src.core.lm_studio_auth import build_lm_studio_auth_headers
-from src.integrations.voice_gateway_client import VoiceGatewayClient
+
+def _inject_repo_site_packages(project_root: Path) -> list[str]:
+    """
+    Подмешивает `site-packages` локального venv в `sys.path`.
+
+    Зачем:
+    - live E2E часто запускают обычным `python3`, минуя `.venv/bin/python`;
+    - при этом зависимости проекта уже установлены в локальном venv;
+    - скрипт должен оставаться самодостаточным и не падать раньше фактической проверки.
+
+    Возвращает:
+    - список реально добавленных путей, чтобы их можно было вывести в отчёте.
+    """
+    injected: list[str] = []
+    seen = set(sys.path)
+    env_roots = (".venv", ".venv_krab", "venv")
+    for env_name in env_roots:
+        lib_root = project_root / env_name / "lib"
+        if not lib_root.exists():
+            continue
+        for site_packages in sorted(lib_root.glob("python*/site-packages"), reverse=True):
+            raw_path = str(site_packages.resolve())
+            if raw_path in seen or not site_packages.exists():
+                continue
+            sys.path.insert(0, raw_path)
+            seen.add(raw_path)
+            injected.append(raw_path)
+    return injected
+
+
+_BOOTSTRAP_INFO = {
+    "attempted": False,
+    "injected_site_packages": [],
+}
+
+try:
+    from src.integrations.krab_ear_client import KrabEarClient
+    from src.core.lm_studio_auth import build_lm_studio_auth_headers
+    from src.integrations.voice_gateway_client import VoiceGatewayClient
+except ModuleNotFoundError:
+    _BOOTSTRAP_INFO["attempted"] = True
+    _BOOTSTRAP_INFO["injected_site_packages"] = _inject_repo_site_packages(PROJECT_ROOT)
+    from src.integrations.krab_ear_client import KrabEarClient
+    from src.core.lm_studio_auth import build_lm_studio_auth_headers
+    from src.integrations.voice_gateway_client import VoiceGatewayClient
 
 
 def _now_iso() -> str:
@@ -226,6 +268,11 @@ async def main() -> int:
         "generated_at": _now_iso(),
         "overall_ok": overall_ok,
         "degradation": degradation,
+        "python_runtime": {
+            "executable": sys.executable,
+            "bootstrap_attempted": bool(_BOOTSTRAP_INFO["attempted"]),
+            "injected_site_packages": list(_BOOTSTRAP_INFO["injected_site_packages"]),
+        },
         "checks_http": checks_http,
         "checks_client": checks_client,
         "voice_lifecycle": lifecycle,

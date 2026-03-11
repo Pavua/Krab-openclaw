@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -101,6 +102,28 @@ class _FakeHealthClient:
         return self._ok
 
 
+class _FakeUserbot:
+    """Минимальная заглушка userbot runtime-state для health/runtime тестов."""
+
+    def __init__(
+        self,
+        *,
+        startup_state: str = "running",
+        client_connected: bool = True,
+        startup_error_code: str = "",
+    ) -> None:
+        self._payload = {
+            "startup_state": startup_state,
+            "startup_error_code": startup_error_code,
+            "client_connected": client_connected,
+            "authorized_user": "pablito",
+            "authorized_user_id": 312322764,
+        }
+
+    def get_runtime_state(self) -> dict:
+        return dict(self._payload)
+
+
 def _make_client(*, openclaw_client=None) -> TestClient:
     deps = {
         "router": _DummyRouter(),
@@ -137,6 +160,25 @@ def _make_client_with_router(router, *, openclaw_client=None) -> TestClient:
     }
     app = WebApp(deps, port=18080, host="127.0.0.1")
     return TestClient(app.app)
+
+
+def _make_app(*, openclaw_client=None, kraab_userbot=None) -> WebApp:
+    deps = {
+        "router": _DummyRouter(),
+        "openclaw_client": openclaw_client or _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(ok=True),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": None,
+        "watchdog": None,
+        "queue": None,
+        "kraab_userbot": kraab_userbot,
+    }
+    return WebApp(deps, port=18080, host="127.0.0.1")
 
 
 def test_health_lite_contains_runtime_fields(monkeypatch):
@@ -375,6 +417,63 @@ def test_loaded_state_default_ttl_is_relaxed_for_live_dashboard(monkeypatch):
     assert WebApp._runtime_lite_ttl_sec_for_state("idle") == 20.0
 
 
+def test_runtime_lite_treats_sqlite_journal_as_ready_when_userbot_is_live(monkeypatch):
+    """Живой userbot не должен светиться как `open_or_unclean` только из-за journal sidecar."""
+
+    async def _fake_lmstudio_snapshot(self):
+        return {"state": "idle", "loaded_models": []}
+
+    def _fake_telegram_snapshot(self):
+        return {
+            "state": "open_or_unclean",
+            "session_exists": True,
+            "journal_exists": True,
+            "wal_exists": False,
+            "shm_exists": False,
+            "sqlite_quick_check_ok": True,
+            "sqlite_error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lmstudio_snapshot)
+    monkeypatch.setattr(WebApp, "_telegram_session_snapshot", _fake_telegram_snapshot)
+
+    app = _make_app(kraab_userbot=_FakeUserbot(startup_state="running", client_connected=True))
+    snapshot = asyncio.run(app._build_runtime_lite_snapshot_uncached())
+
+    assert snapshot["telegram_session_state"] == "ready"
+    assert snapshot["telegram_session"]["state"] == "ready"
+    assert snapshot["telegram_session"]["state_file_raw"] == "open_or_unclean"
+    assert snapshot["telegram_session"]["state_reason"] == "sqlite_sidecars_expected_while_userbot_running"
+
+
+def test_runtime_lite_keeps_open_or_unclean_when_userbot_is_not_live(monkeypatch):
+    """Если userbot не живой, sidecar-файлы по-прежнему считаем подозрительным состоянием."""
+
+    async def _fake_lmstudio_snapshot(self):
+        return {"state": "idle", "loaded_models": []}
+
+    def _fake_telegram_snapshot(self):
+        return {
+            "state": "open_or_unclean",
+            "session_exists": True,
+            "journal_exists": True,
+            "wal_exists": False,
+            "shm_exists": False,
+            "sqlite_quick_check_ok": True,
+            "sqlite_error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lmstudio_snapshot)
+    monkeypatch.setattr(WebApp, "_telegram_session_snapshot", _fake_telegram_snapshot)
+
+    app = _make_app(kraab_userbot=_FakeUserbot(startup_state="stopped", client_connected=False))
+    snapshot = asyncio.run(app._build_runtime_lite_snapshot_uncached())
+
+    assert snapshot["telegram_session_state"] == "open_or_unclean"
+    assert snapshot["telegram_session"]["state"] == "open_or_unclean"
+    assert snapshot["telegram_session"]["state_reason"] == "sqlite_sidecars_without_live_userbot"
+
+
 def test_runtime_handoff_returns_machine_readable_snapshot(monkeypatch):
     """`/api/runtime/handoff` должен отдавать единый JSON-снимок для anti-413 handoff."""
     monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:9")
@@ -564,8 +663,8 @@ def test_model_catalog_uses_runtime_truth_for_loaded_flag(monkeypatch):
     assert catalog["local_models"][0]["loaded"] is True
 
 
-def test_model_catalog_cloud_presets_come_from_openclaw_runtime_registry(monkeypatch):
-    """Cloud catalog должен строиться из runtime models.json, а не из старого hardcoded списка."""
+def test_model_catalog_cloud_presets_follow_active_runtime_chain(monkeypatch):
+    """Cloud catalog должен следовать active runtime chain и скрывать legacy-хвосты."""
 
     class _TruthRouter(_DummyRouter):
         def __init__(self) -> None:
@@ -600,6 +699,29 @@ def test_model_catalog_cloud_presets_come_from_openclaw_runtime_registry(monkeyp
                     {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
                 ]
             },
+            "google": {
+                "models": [
+                    {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
+                ]
+            },
+            "qwen-portal": {
+                "models": [
+                    {"id": "coder-model", "name": "Qwen Coder", "reasoning": False, "contextWindow": 128000, "maxTokens": 8192}
+                ]
+            },
+        }
+    }
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-4.5-preview",
+                    "fallbacks": [
+                        "google/gemini-3.1-pro-preview",
+                        "qwen-portal/coder-model",
+                    ],
+                }
+            }
         }
     }
 
@@ -609,6 +731,11 @@ def test_model_catalog_cloud_presets_come_from_openclaw_runtime_registry(monkeyp
         "_load_openclaw_runtime_models",
         classmethod(lambda cls: runtime_payload),
     )
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_config",
+        classmethod(lambda cls: runtime_config),
+    )
     client = _make_client_with_router(_TruthRouter())
 
     resp = client.get("/api/model/catalog")
@@ -617,13 +744,15 @@ def test_model_catalog_cloud_presets_come_from_openclaw_runtime_registry(monkeyp
     data = resp.json()["catalog"]
     cloud_ids = {item["id"] for item in data["cloud_presets"]}
     assert "openai-codex/gpt-4.5-preview" in cloud_ids
-    assert "google-antigravity/gemini-3.1-pro-preview" in cloud_ids
+    assert "google/gemini-3.1-pro-preview" in cloud_ids
+    assert "qwen-portal/coder-model" in cloud_ids
+    assert "google-antigravity/gemini-3.1-pro-preview" not in cloud_ids
     assert "openai/gpt-5-codex" not in cloud_ids
     assert data["runtime_registry_source"] == "openclaw_models_json"
 
 
-def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_fallback(monkeypatch):
-    """Routing status должен честно отражать сломанный primary и disabled OAuth fallback."""
+def test_openclaw_model_routing_status_reports_broken_primary_and_legacy_google_fallback(monkeypatch):
+    """Routing status должен честно отражать сломанный primary и legacy Google fallback."""
 
     runtime_config = {
         "agents": {
@@ -655,7 +784,10 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_fallb
             "google-antigravity:vscode-free": {"provider": "google-antigravity"},
         },
         "usageStats": {
-            "openai-codex:default": {"failureCounts": {"model_not_found": 2}},
+            "openai-codex:default": {
+                "failureCounts": {"model_not_found": 2},
+                "cooldownUntil": int((time.time() + 60.0) * 1000.0),
+            },
             "google-antigravity:vscode-free": {"disabledReason": "auth_permanent"},
         },
     }
@@ -675,8 +807,189 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_fallb
     assert data["target_primary_candidate"] == "openai-codex/gpt-5.4"
     assert data["target_primary_in_runtime"] is False
     assert data["temporary_primary_recommendation"] == "google/gemini-2.5-flash"
+    assert data["google_antigravity_legacy_removed"] is True
     assert any("model_not_found" in item for item in data["warnings"])
-    assert any("disabled" in item.lower() for item in data["warnings"])
+    assert any("legacy" in item.lower() or "удал" in item.lower() for item in data["warnings"])
+
+
+def test_openclaw_model_routing_status_skips_expired_google_gemini_cli_fallback(monkeypatch):
+    """Временная рекомендация не должна выбирать `google-gemini-cli`, если OAuth уже expired/cooldown."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-5.4",
+                    "fallbacks": [
+                        "google-gemini-cli/gemini-3.1-pro-preview",
+                        "google/gemini-3.1-pro-preview",
+                        "qwen-portal/coder-model",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {"models": [{"id": "gpt-5.4"}]},
+            "google": {"models": [{"id": "google/gemini-3.1-pro-preview"}]},
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-gemini-cli:default": {
+                "provider": "google-gemini-cli",
+                "expires": int((time.time() - 60.0) * 1000.0),
+            },
+        },
+        "usageStats": {
+            "openai-codex:default": {
+                "failureCounts": {"model_not_found": 1},
+                "cooldownUntil": int((time.time() + 60.0) * 1000.0),
+            },
+            "google-gemini-cli:default": {
+                "failureCounts": {"auth": 1},
+                "cooldownUntil": int((time.time() + 60.0) * 1000.0),
+            },
+        },
+    }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+
+    client = _make_client_with_router(_DummyRouter())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["routing"]
+    assert data["current_primary_broken"] is True
+    assert data["temporary_primary_recommendation"] == "google/gemini-3.1-pro-preview"
+    assert data["google_gemini_cli"]["cooldown_active"] is True
+    assert data["google_gemini_cli"]["expired_profiles"] == [
+        {"profile": "google-gemini-cli:default", "reason": "expired"}
+    ]
+    assert any("google gemini cli" in item.lower() for item in data["warnings"])
+
+
+def test_openclaw_model_routing_status_clears_broken_flag_when_live_primary_verified(monkeypatch):
+    """Последний успешный live route на primary должен сбрасывать stale broken-диагностику."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-5.4",
+                    "fallbacks": [
+                        "google/gemini-3.1-pro-preview",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {"models": [{"id": "gpt-5.4"}]},
+            "google": {"models": [{"id": "google/gemini-3.1-pro-preview"}]},
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+        },
+        "usageStats": {
+            "openai-codex:default": {
+                "failureCounts": {"model_not_found": 3},
+                "cooldownUntil": int((time.time() + 60.0) * 1000.0),
+            },
+        },
+    }
+
+    class _PrimaryVerifiedOpenClaw(_FakeOpenClaw):
+        def get_last_runtime_route(self):
+            return {
+                "channel": "openclaw_cloud",
+                "provider": "openai-codex",
+                "model": "openai-codex/gpt-5.4",
+                "status": "ok",
+            }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+
+    client = _make_client_with_router(_DummyRouter(), openclaw_client=_PrimaryVerifiedOpenClaw())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["routing"]
+    assert data["current_primary_broken"] is False
+    assert data["temporary_primary_recommendation"] == "openai-codex/gpt-5.4"
+    assert data["live_primary_verified"] is True
+    assert not any("openai primary падает" in item.lower() for item in data["warnings"])
+
+
+def test_openclaw_model_routing_status_marks_live_fallback_as_active(monkeypatch):
+    """Если live route уже ушёл на fallback, endpoint должен показывать активный fallback, а не primary."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-5.4",
+                    "fallbacks": [
+                        "google/gemini-3.1-pro-preview",
+                        "qwen-portal/coder-model",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {"models": [{"id": "gpt-5.4"}]},
+            "google": {"models": [{"id": "google/gemini-3.1-pro-preview"}]},
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+        },
+        "usageStats": {
+            "openai-codex:default": {},
+        },
+    }
+
+    class _FallbackActiveOpenClaw(_FakeOpenClaw):
+        def get_last_runtime_route(self):
+            return {
+                "channel": "openclaw_cloud",
+                "provider": "google",
+                "model": "google/gemini-3.1-pro-preview",
+                "status": "ok",
+                "route_reason": "openclaw_response_ok",
+                "route_detail": "Ответ получен через OpenClaw API; gateway fallback -> google/gemini-3.1-pro-preview",
+            }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+
+    client = _make_client_with_router(_DummyRouter(), openclaw_client=_FallbackActiveOpenClaw())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["routing"]
+    assert data["current_primary_broken"] is True
+    assert data["temporary_primary_recommendation"] == "google/gemini-3.1-pro-preview"
+    assert data["live_primary_verified"] is False
+    assert data["live_fallback_active"] is True
+    assert data["live_active_model"] == "google/gemini-3.1-pro-preview"
+    assert any("active route идёт через fallback" in item for item in data["warnings"])
 
 
 def test_model_local_load_default_falls_back_to_config_preferred_model(monkeypatch):
@@ -989,6 +1302,59 @@ def test_routing_effective_marks_cloud_fallback_active_in_force_cloud(monkeypatc
     assert data["cloud_fallback_active"] is True
 
 
+def test_routing_effective_prefers_last_route_model_over_stale_router_slot(monkeypatch):
+    """`/api/openclaw/routing/effective` должен показывать фактическую cloud-модель, а не stale default-slot."""
+
+    class _TruthModelManager:
+        def get_current_model(self):
+            return ""
+
+        async def get_loaded_models(self):
+            return []
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self._mm = _TruthModelManager()
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "openai-codex/gpt-5.4"}
+            self.force_mode = "force_cloud"
+            self.routing_policy = "free_first_hybrid"
+            self.cloud_soft_cap_reached = False
+
+        def get_last_route(self):
+            return {
+                "status": "ok",
+                "channel": "openclaw_cloud",
+                "model": "google-gemini-cli/gemini-3.1-pro-preview",
+                "route_reason": "openclaw_response_ok",
+                "route_detail": "Ответ получен через OpenClaw API; gateway fallback -> google-gemini-cli/gemini-3.1-pro-preview",
+            }
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "not_loaded",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    client = _make_client_with_router(_TruthRouter())
+
+    resp = client.get("/api/openclaw/routing/effective")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["assistant_default_model"] == "openai-codex/gpt-5.4"
+    assert data["active_slot_or_model"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert data["cloud_fallback_state"] == "active"
+    assert data["cloud_fallback_active"] is True
+
+
 def test_parse_openclaw_channels_probe_returns_normalized_channels():
     """Парсер channels probe должен отдавать нормализованный список каналов для UI."""
     sample = """
@@ -1009,6 +1375,22 @@ Warnings:
     assert parsed["channels"][1]["name"] == "BlueBubbles default"
     assert parsed["channels"][1]["status"] == "FAIL"
     assert parsed["warnings"] == ["bluebubbles default: Not configured"]
+
+
+def test_parse_openclaw_channels_probe_prefers_probe_works_over_disconnected_tail():
+    """Успешный probe должен побеждать промежуточный `disconnected` в transport meta."""
+
+    sample = """
+Checking channel status (probe)…
+Gateway reachable.
+- Discord default: enabled, configured, running, disconnected, bot:@OpenClaw, token:config, intents:content=limited, works
+""".strip()
+
+    parsed = WebApp._parse_openclaw_channels_probe(sample)
+    assert parsed["gateway_reachable"] is True
+    assert len(parsed["channels"]) == 1
+    assert parsed["channels"][0]["name"] == "Discord default"
+    assert parsed["channels"][0]["status"] == "OK"
 
 
 def test_browser_smoke_marks_auth_required_as_reachable_but_not_attached(monkeypatch):
@@ -1039,8 +1421,9 @@ def test_browser_smoke_marks_auth_required_as_reachable_but_not_attached(monkeyp
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def get(self, url: str):
+        async def get(self, url: str, *, headers=None):
             assert url == "http://127.0.0.1:18791/"
+            assert "Authorization" not in (headers or {})
             return _Resp(401)
 
     async def _fake_create_subprocess_exec(*cmd, **kwargs):
@@ -1058,6 +1441,7 @@ Local loopback ws://127.0.0.1:18789
 
     monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: ""))
     client = _make_client()
 
     resp = client.get("/api/openclaw/browser-smoke")
@@ -1067,6 +1451,445 @@ Local loopback ws://127.0.0.1:18789
     assert smoke["browser_http_state"] == "auth_required"
     assert smoke["tab_attached"] is False
     assert smoke["browser_auth_required"] is True
+
+
+def test_browser_smoke_uses_gateway_token_and_marks_authorized(monkeypatch):
+    """Авторизованный browser relay probe должен ходить с gateway token и не светить ложный auth_required."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str, *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, b""
+
+        def terminate(self):
+            return None
+
+    class _Resp:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    seen_headers: dict[str, str] = {}
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, *, headers=None):
+            assert url == "http://127.0.0.1:18791/"
+            seen_headers.update(headers or {})
+            return _Resp(200)
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        assert cmd[:3] == ("openclaw", "gateway", "probe")
+        stdout_text = """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok (15ms) · RPC: ok
+""".strip()
+        return _Proc(stdout_text, returncode=0)
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: "gateway-token-from-config"),
+    )
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/browser-smoke")
+    assert resp.status_code == 200
+    smoke = resp.json()["report"]["browser_smoke"]
+    assert seen_headers["Authorization"] == "Bearer gateway-token-from-config"
+    assert smoke["relay_reachable"] is True
+    assert smoke["browser_http_state"] == "authorized"
+    assert smoke["tab_attached"] is False
+    assert smoke["browser_auth_required"] is False
+
+
+def test_browser_mcp_readiness_reports_stage_and_mcp_drift(monkeypatch, tmp_path: Path):
+    """`/api/openclaw/browser-mcp-readiness` должен показывать staged browser state и drift LM Studio MCP."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str = "", stderr_text: str = "", *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+            self._stderr = stderr_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, self._stderr
+
+        def terminate(self):
+            return None
+
+    class _Resp:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, *, headers=None):
+            assert url == "http://127.0.0.1:18791/"
+            assert "Authorization" not in (headers or {})
+            return _Resp(401)
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[:3] == ("openclaw", "gateway", "probe"):
+            stdout_text = """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok (15ms) · RPC: ok
+""".strip()
+            return _Proc(stdout_text, returncode=0)
+        if cmd[:4] == ("openclaw", "browser", "--json", "status"):
+            return _Proc(json.dumps({
+                "running": True,
+                "cdpReady": True,
+                "profile": "openclaw",
+                "cdpUrl": "http://127.0.0.1:18800",
+                "cdpPort": 18800,
+                "detectedBrowser": "chrome",
+            }), returncode=0)
+        if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
+            return _Proc(json.dumps({"tabs": []}), returncode=0)
+        raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
+
+    managed_registry = {
+        "filesystem": {"description": "files"},
+        "memory": {"description": "memory"},
+        "openclaw-browser": {"description": "browser"},
+        "chrome-profile": {"description": "chrome"},
+    }
+
+    def _fake_resolve(name: str):
+        base = {
+            "name": name,
+            "description": name,
+            "risk": "medium",
+            "missing_env": [],
+            "manual_setup": [],
+        }
+        if name == "chrome-profile":
+            base["manual_setup"] = ["Включить Remote Debugging в Chrome."]
+        return base
+
+    lmstudio_path = tmp_path / "mcp.json"
+    lmstudio_path.write_text(
+        json.dumps({"mcpServers": {"filesystem": {}, "memory": {}}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: ""))
+    monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: managed_registry)
+    monkeypatch.setattr("src.modules.web_app.resolve_managed_server_launch", _fake_resolve)
+    monkeypatch.setattr(
+        "src.modules.web_app.build_lmstudio_mcp_json",
+        lambda include_optional_missing=False, include_high_risk=False: (
+            {"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}}},
+            {
+                "included": ["filesystem", "memory", "openclaw-browser"],
+                "skipped_missing": [],
+                "skipped_risk": ["filesystem-home", "shell"],
+                "managed_names": ["filesystem", "memory", "openclaw-browser", "chrome-profile"],
+            },
+        ),
+    )
+    monkeypatch.setattr("src.modules.web_app.LMSTUDIO_MCP_PATH", lmstudio_path)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/browser-mcp-readiness")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["overall"]["readiness"] == "attention"
+    assert data["browser"]["state"] == "auth_required"
+    assert data["browser"]["readiness"] == "attention"
+    assert data["browser"]["runtime"]["tabs_count"] == 0
+    assert data["mcp"]["readiness"] == "attention"
+    assert data["mcp"]["sync"]["status"] == "drift"
+    assert data["mcp"]["summary"]["required_ready"] == 2
+    assert data["mcp"]["summary"]["required_attention"] == 1
+    chrome_profile = next(item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile")
+    assert chrome_profile["state"] == "manual_setup_required"
+
+
+def test_browser_mcp_readiness_treats_reachable_auth_relay_as_attention_even_if_status_stale():
+    """Reachable relay с `auth_required` не должен краснеть только из-за stale `running=false`."""
+
+    browser = WebApp._classify_browser_stage(
+        {"running": False, "cdpReady": False, "profile": "openclaw"},
+        {"tabs": []},
+        {
+            "relay_reachable": True,
+            "browser_http_reachable": True,
+            "browser_auth_required": True,
+            "tab_attached": False,
+            "browser_http_state": "auth_required",
+            "detail": "browser relay auth required (401)",
+        },
+    )
+
+    assert browser["state"] == "auth_required"
+    assert browser["readiness"] == "attention"
+    assert any("stale status" in item for item in browser["warnings"])
+
+
+def test_browser_mcp_readiness_marks_authorized_running_browser_with_tabs_as_ready():
+    """Авторизованный relay + running browser + вкладки должен давать ready stage без ложного auth_required."""
+
+    browser = WebApp._classify_browser_stage(
+        {"running": True, "cdpReady": True, "profile": "openclaw"},
+        {"tabs": [{"targetId": "abc"}]},
+        {
+            "relay_reachable": True,
+            "browser_http_reachable": True,
+            "browser_auth_required": False,
+            "tab_attached": False,
+            "browser_http_state": "authorized",
+            "detail": "browser relay authorized (200)",
+        },
+    )
+
+    assert browser["state"] == "attached"
+    assert browser["readiness"] == "ready"
+    assert browser["runtime"]["tabs_count"] == 1
+    assert browser["warnings"] == []
+
+
+def test_browser_mcp_readiness_retries_transient_empty_cli_state_when_relay_authorized(monkeypatch, tmp_path: Path):
+    """При `authorized` relay endpoint должен пережидать краткий CLI-флап status/tabs и не застревать в false attention."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str = "", stderr_text: str = "", *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+            self._stderr = stderr_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, self._stderr
+
+        def terminate(self):
+            return None
+
+    class _Resp:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, *, headers=None):
+            assert url == "http://127.0.0.1:18791/"
+            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            return _Resp(200)
+
+    status_calls = {"count": 0}
+    tabs_calls = {"count": 0}
+
+    async def _fast_sleep(_sec: float):
+        return None
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[:3] == ("openclaw", "gateway", "probe"):
+            stdout_text = """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok (15ms) · RPC: ok
+""".strip()
+            return _Proc(stdout_text, returncode=0)
+        if cmd[:4] == ("openclaw", "browser", "--json", "status"):
+            status_calls["count"] += 1
+            payload = {"running": False, "cdpReady": False, "profile": "openclaw"}
+            if status_calls["count"] >= 2:
+                payload = {
+                    "running": True,
+                    "cdpReady": True,
+                    "profile": "openclaw",
+                    "cdpUrl": "http://127.0.0.1:18800",
+                    "cdpPort": 18800,
+                    "detectedBrowser": "chrome",
+                }
+            return _Proc(json.dumps(payload), returncode=0)
+        if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
+            tabs_calls["count"] += 1
+            payload = {"tabs": []}
+            if tabs_calls["count"] >= 2:
+                payload = {"tabs": [{"targetId": "abc", "title": "Example Domain", "url": "https://example.com/"}]}
+            return _Proc(json.dumps(payload), returncode=0)
+        raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
+
+    lmstudio_path = tmp_path / "mcp.json"
+    lmstudio_path.write_text(
+        json.dumps({"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
+    monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: {"filesystem": {}, "memory": {}, "openclaw-browser": {}})
+    monkeypatch.setattr(
+        "src.modules.web_app.resolve_managed_server_launch",
+        lambda name: {"name": name, "description": name, "risk": "medium", "missing_env": [], "manual_setup": []},
+    )
+    monkeypatch.setattr(
+        "src.modules.web_app.build_lmstudio_mcp_json",
+        lambda include_optional_missing=False, include_high_risk=False: (
+            {"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}}},
+            {
+                "included": ["filesystem", "memory", "openclaw-browser"],
+                "skipped_missing": [],
+                "skipped_risk": [],
+                "managed_names": ["filesystem", "memory", "openclaw-browser"],
+            },
+        ),
+    )
+    monkeypatch.setattr("src.modules.web_app.LMSTUDIO_MCP_PATH", lmstudio_path)
+    monkeypatch.setattr("src.modules.web_app.asyncio.sleep", _fast_sleep)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/browser-mcp-readiness")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["browser"]["state"] == "attached"
+    assert data["browser"]["readiness"] == "ready"
+    assert data["browser"]["runtime"]["tabs_count"] == 1
+    assert status_calls["count"] >= 2
+    assert tabs_calls["count"] >= 2
+
+
+def test_browser_start_endpoint_returns_updated_readiness(monkeypatch):
+    """`POST /api/openclaw/browser/start` должен поднимать browser и возвращать обновлённый staged readiness."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str = "", stderr_text: str = "", *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+            self._stderr = stderr_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, self._stderr
+
+        def terminate(self):
+            return None
+
+    class _Resp:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, *, headers=None):
+            assert url == "http://127.0.0.1:18791/"
+            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            return _Resp(200)
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[:3] == ("openclaw", "gateway", "probe"):
+            return _Proc(
+                """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok (15ms) · RPC: ok
+""".strip(),
+                returncode=0,
+            )
+        if cmd[:4] == ("openclaw", "browser", "--json", "start"):
+            return _Proc(
+                json.dumps(
+                    {
+                        "running": True,
+                        "cdpReady": True,
+                        "profile": "openclaw",
+                        "cdpUrl": "http://127.0.0.1:18800",
+                        "cdpPort": 18800,
+                        "detectedBrowser": "chrome",
+                    }
+                ),
+                returncode=0,
+            )
+        if cmd[:4] == ("openclaw", "browser", "--json", "status"):
+            return _Proc(
+                json.dumps(
+                    {
+                        "running": True,
+                        "cdpReady": True,
+                        "profile": "openclaw",
+                        "cdpUrl": "http://127.0.0.1:18800",
+                        "cdpPort": 18800,
+                        "detectedBrowser": "chrome",
+                    }
+                ),
+                returncode=0,
+            )
+        if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
+            return _Proc(
+                json.dumps({"tabs": [{"targetId": "abc", "title": "Example Domain", "url": "https://example.com/"}]}),
+                returncode=0,
+            )
+        raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
+    client = _make_client()
+
+    resp = client.post("/api/openclaw/browser/start", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["browser"]["state"] == "attached"
+    assert data["browser"]["readiness"] == "ready"
+    assert data["browser"]["runtime"]["tabs_count"] == 1
 
 
 def test_control_compat_status_returns_legacy_aliases(monkeypatch):
@@ -1192,6 +2015,14 @@ def test_classify_browser_http_probe_auth_required_state():
     assert parsed["state"] == "auth_required"
     assert parsed["reachable"] is True
     assert parsed["auth_required"] is True
+
+
+def test_classify_browser_http_probe_authorized_state():
+    """200 в browser probe означает авторизованный relay, но не автоматически attach."""
+    parsed = WebApp._classify_browser_http_probe(200, "")
+    assert parsed["state"] == "authorized"
+    assert parsed["reachable"] is True
+    assert parsed["auth_required"] is False
 
 
 def test_photo_smoke_endpoint_reports_ready_with_local_vision():

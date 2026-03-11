@@ -234,6 +234,23 @@ async def test_get_best_model_local_first_in_auto(manager: ModelManager) -> None
     assert best == "local/abc"
 
 
+@pytest.mark.asyncio
+async def test_get_best_model_force_cloud_prefers_runtime_primary_over_stale_env(manager: ModelManager) -> None:
+    """Cloud-маршрут должен брать primary из live runtime, а не из старого `.env`."""
+    with patch("src.model_manager.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"):
+        with patch("src.model_manager.config") as mock_config:
+            mock_config.FORCE_CLOUD = True
+            mock_config.MODEL = "openai-codex/gpt-4.5-preview"
+            mock_config.LM_STUDIO_URL = "http://mock-url"
+            mock_config.LM_STUDIO_API_KEY = ""
+            mock_config.LOCAL_PREFERRED_MODEL = ""
+            mock_config.LOCAL_PREFERRED_VISION_MODEL = ""
+            with patch.object(manager._router, "get_best_model", new=AsyncMock(return_value="openai-codex/gpt-5.4")):
+                best = await manager.get_best_model()
+
+    assert best == "openai-codex/gpt-5.4"
+    assert manager._router.config_model == "openai-codex/gpt-5.4"
+
 
 @pytest.mark.asyncio
 async def test_get_best_model_photo_falls_back_to_cloud_when_no_local_vision_is_selected(manager: ModelManager) -> None:
@@ -243,6 +260,22 @@ async def test_get_best_model_photo_falls_back_to_cloud_when_no_local_vision_is_
 
     assert best == "google/gemini-2.5-flash"
     assert router_best.await_count == 1
+
+
+def test_is_local_model_treats_openai_codex_as_cloud(manager: ModelManager) -> None:
+    """OpenAI/Codex runtime IDs не должны маскироваться под локальные LM Studio модели."""
+    assert manager.is_local_model("openai-codex/gpt-5.4") is False
+    assert manager.is_local_model("openai/gpt-4o-mini") is False
+    assert manager.is_local_model("google-antigravity/gemini-3.1-pro-preview") is False
+    assert manager.is_local_model("google-gemini-cli/gemini-3.1-pro-preview") is False
+    assert manager.is_local_model("qwen-portal/coder-model") is False
+
+
+@pytest.mark.asyncio
+async def test_verify_model_access_accepts_non_gemini_cloud_model_without_local_cache(manager: ModelManager) -> None:
+    """Нелокальные non-Gemini модели не должны заваливаться на проверке как будто это LM Studio cache miss."""
+    ok = await manager.verify_model_access("openai-codex/gpt-5.4")
+    assert ok is True
 
 
 @pytest.mark.asyncio

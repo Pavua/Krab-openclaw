@@ -14,13 +14,39 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 import math
+import json
+from pathlib import Path
 from typing import Any, Optional
 
 import structlog
 
 from ..config import config
+from ..core.local_health import fetch_lm_studio_models_list
+from ..core.model_types import ModelInfo, ModelType
 
 logger = structlog.get_logger(__name__)
+
+
+def _runtime_primary_model() -> str:
+    """
+    Возвращает primary-модель из живого OpenClaw runtime.
+
+    Почему compat-слой читает это сам:
+    - `config.MODEL` живёт в `.env` и может отставать от runtime-конфига OpenClaw;
+    - owner UI должен по умолчанию показывать именно текущий production primary,
+      а не исторический env-хвост вроде `gpt-4.5-preview`.
+    """
+    cfg_path = Path.home() / ".openclaw" / "openclaw.json"
+    try:
+        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return str(config.MODEL or "").strip()
+
+    agents = payload.get("agents") if isinstance(payload, dict) else {}
+    defaults = agents.get("defaults") if isinstance(agents, dict) else {}
+    model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+    primary = str(model_defaults.get("primary", "") or "").strip()
+    return primary or str(config.MODEL or "").strip()
 
 
 class WebRouterCompat:
@@ -43,7 +69,7 @@ class WebRouterCompat:
         self.active_tier: str = getattr(openclaw_client, "active_tier", "free")
         self.cloud_soft_cap_reached: bool = False
         self.rag = None
-        self.models: dict[str, str] = {"chat": config.MODEL}
+        self.models: dict[str, str] = {"chat": _runtime_primary_model()}
         self._local_preferred_model_override: Optional[str] = None
 
     # --- Properties the old router exposed ---
@@ -108,8 +134,9 @@ class WebRouterCompat:
     # --- Model info ---
 
     def get_model_info(self) -> dict[str, Any]:
+        current_chat_model = str(self.models.get("chat") or _runtime_primary_model()).strip()
         return {
-            "current_model": config.MODEL,
+            "current_model": current_chat_model,
             "models": dict(self.models),
             "force_cloud": config.FORCE_CLOUD,
             "lm_studio_url": config.LM_STUDIO_URL,
@@ -170,12 +197,23 @@ class WebRouterCompat:
         task_type: str = "chat",
         **kwargs: Any,
     ) -> str:
-        """Simplified query routing via OpenClaw."""
+        """Совместимый web-query путь с уважением к force-mode и preferred model."""
         if not self.openclaw_client:
             return "OpenClaw client not configured"
+        preferred_model = str(kwargs.get("preferred_model", "") or "").strip() or None
+        effective_force_mode = str(self.force_mode or ("force_cloud" if config.FORCE_CLOUD else "auto"))
+        effective_force_cloud = effective_force_mode == "force_cloud"
+        if preferred_model:
+            # Явный выбор модели в owner UI сильнее общего режима.
+            # Иначе `preferred_model=google-gemini-cli/...` терялся, и запрос
+            # всё равно уходил в default primary `openai-codex/gpt-5.4`.
+            effective_force_cloud = not self._is_local_model(preferred_model)
         chunks = []
         async for chunk in self.openclaw_client.send_message_stream(
-            prompt, chat_id="web_assistant", force_cloud=config.FORCE_CLOUD
+            prompt,
+            chat_id="web_assistant",
+            force_cloud=effective_force_cloud,
+            preferred_model=preferred_model,
         ):
             chunks.append(chunk)
         self.active_tier = getattr(self.openclaw_client, "active_tier", self.active_tier)
@@ -194,7 +232,7 @@ class WebRouterCompat:
             "status": str(route_meta.get("status", "")).strip() or "unknown",
             "error_code": route_meta.get("error_code"),
             "active_tier": str(route_meta.get("active_tier", self.active_tier)),
-            "force_cloud": bool(route_meta.get("force_cloud", config.FORCE_CLOUD)),
+            "force_cloud": bool(route_meta.get("force_cloud", effective_force_cloud)),
             "timestamp": route_meta.get("timestamp"),
         }
         return "".join(chunks)
@@ -211,12 +249,30 @@ class WebRouterCompat:
         candidate = str(model_id or "").strip()
         if not candidate:
             return False
+        low = candidate.lower()
+        if low.startswith(("lmstudio/", "local/")):
+            return True
+        if low.startswith(
+            (
+                "google/",
+                "google-gemini-cli/",
+                "google-antigravity/",
+                "openai/",
+                "openai-codex/",
+                "openrouter/",
+                "qwen-portal/",
+                "anthropic/",
+                "xai/",
+                "deepseek/",
+                "groq/",
+            )
+        ):
+            return False
         if hasattr(self._mm, "is_local_model"):
             try:
                 return bool(self._mm.is_local_model(candidate))
             except Exception:  # noqa: BLE001
                 pass
-        low = candidate.lower()
         return not (low.startswith("google/") or low.startswith("openai/"))
 
     def _get_active_local_model(self) -> str:
@@ -781,19 +837,72 @@ class WebRouterCompat:
     # --- Model listing ---
 
     async def list_local_models_verbose(self) -> list[dict[str, Any]]:
-        """Lists local models with metadata for the web panel catalog."""
-        models = []
-        if not self._mm._models_cache:
-            await self._mm.discover_models()
-        from ..core.model_types import ModelType
-        for mid, info in self._mm._models_cache.items():
-            if info.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF):
-                models.append({
+        """
+        Возвращает truth-список локальных chat/VLM-моделей для owner UI.
+
+        Почему не опираемся только на `_models_cache`:
+        - после переподключения диска и рескана LM Studio живой API уже знает
+          про модели, а старый кэш внутри Python-процесса может быть пустым
+          или содержать только legacy/bundled записи;
+        - веб-панель должна видеть тот же каталог, который реально показывает
+          LM Studio API, иначе owner получает ложную картину доступной локали.
+        """
+        models: list[dict[str, Any]] = []
+        loaded_ids = {
+            str(item).strip()
+            for item in await self._mm.get_loaded_models(force_refresh=True)
+            if str(item or "").strip()
+        }
+
+        local_infos: dict[str, ModelInfo] = {}
+        try:
+            model_list = await fetch_lm_studio_models_list(
+                self._mm.lm_studio_url,
+                client=self._mm._http_client,
+            )
+        except Exception:  # noqa: BLE001
+            model_list = []
+
+        for model_data in model_list:
+            model_id = str(model_data.get("id", "")).strip()
+            if not model_id:
+                continue
+            cached = self._mm._models_cache.get(model_id)
+            model_type = getattr(cached, "type", None)
+            if model_type not in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF):
+                low_id = model_id.lower()
+                model_type = ModelType.LOCAL_GGUF if "gguf" in low_id else ModelType.LOCAL_MLX
+            local_infos[model_id] = ModelInfo(
+                id=model_id,
+                name=str(model_data.get("name", model_id)),
+                type=model_type,
+                size_gb=float(model_data.get("size_gb") or getattr(cached, "size_gb", 0.0) or 0.0),
+                supports_vision=bool(
+                    model_data.get("vision", False) or getattr(cached, "supports_vision", False)
+                ),
+            )
+
+        if not local_infos:
+            if not self._mm._models_cache:
+                await self._mm.discover_models()
+            local_infos = {
+                mid: info
+                for mid, info in self._mm._models_cache.items()
+                if info.type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF)
+            }
+
+        for mid, info in sorted(local_infos.items(), key=lambda item: item[0].lower()):
+            if not self._mm._is_chat_capable_local_model(mid, info):
+                continue
+            models.append(
+                {
                     "id": mid,
-                    "loaded": mid == self._mm._current_model,
+                    "loaded": mid == self._mm._current_model or mid in loaded_ids,
                     "type": info.type.value if hasattr(info.type, "value") else str(info.type),
-                    "size_human": f"{info.size_gb:.1f} GB" if info.size_gb > 0 else "n/a",
-                })
+                    "size_human": f"{info.size_gb:.1f} GB" if float(info.size_gb or 0.0) > 0 else "n/a",
+                    "vision": bool(getattr(info, "supports_vision", False)),
+                }
+            )
         return models
 
     # --- Health check (for ecosystem_health adapter) ---

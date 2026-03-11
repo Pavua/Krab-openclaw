@@ -150,11 +150,13 @@ MAIN_AGENT_MESSAGING_SOUL = """# Краб: внешний messaging-агент
 
 1. Будь кратким, честным и прикладным.
 2. Не заявляй, что у тебя есть доступ к cron, браузеру, shell, файловой системе, интернету, голосу или внешним интеграциям, если это не подтверждено результатом текущего runtime/tool-вызова.
-3. Если возможность доступна только в отдельном Python userbot-контуре, прямо так и говори: "это доступно в userbot, но не подтверждено для этого внешнего канала".
-4. Не предлагай пользователю shell-скрипты, crontab, Python-хелперы и другие owner/workspace-решения как будто ты уже выполнил их сам.
-5. На вопросы "что умеешь" и "что не умеешь" отвечай по фактическому состоянию именно этого канала и текущего runtime.
-6. Если нет подтверждённого доступа к браузеру или интернету, говори это прямо и без фантазий.
-7. Если транспорт просит ответ, но фактов мало, лучше дать короткий truthful-ответ, чем выдумывать функциональность.
+3. Telegram Bot считай резервным transport: основной owner-канал живёт в отдельном Python userbot-контуре.
+4. Если возможность доступна только в отдельном Python userbot-контуре, прямо так и говори: "это доступно в userbot, но не подтверждено для этого внешнего канала".
+5. Если спрашивают, где ты сейчас работаешь, отвечай кратко: "В этом диалоге отвечает reserve Telegram Bot; основной owner-канал — Python userbot".
+6. Не предлагай пользователю shell-скрипты, crontab, Python-хелперы и другие owner/workspace-решения как будто ты уже выполнил их сам.
+7. На вопросы "что умеешь" и "что не умеешь" отвечай по фактическому состоянию именно этого канала и текущего runtime.
+8. Если нет подтверждённого доступа к браузеру или интернету, говори это прямо и без фантазий.
+9. Если транспорт просит ответ, но фактов мало, лучше дать короткий truthful-ответ, чем выдумывать функциональность.
 """
 
 LEGACY_INVALID_TOOL_KEYS = ("sessions", "message", "agentToAgent", "elevated")
@@ -682,14 +684,70 @@ def _remove_transport_aliases_for_session_id(payload: dict[str, Any], session_id
 
 
 def _normalize_local_model_id(model_id: str) -> str:
-    """Убирает provider-префикс у локальной модели (`lmstudio/...` -> `...`)."""
+    """
+    Нормализует ID локальной модели для LM Studio provider catalog.
+
+    Правило:
+    - `lmstudio/...` и `local/...` превращаем в голый локальный ID;
+    - ID от внешних провайдеров (`openai-codex/...`, `google/...`, `qwen-portal/...`)
+      в локальный каталог не пропускаем вообще.
+
+    Почему это важно:
+    - иначе repair может записать cloud primary внутрь `models.providers.lmstudio.models`,
+      и runtime начинает жить с конфликтующим alias, который не существует в LM Studio.
+    """
     raw = str(model_id or "").strip()
+    if not raw:
+        return ""
     if "/" not in raw:
         return raw
     head, tail = raw.split("/", 1)
     if head.strip().lower() in {"lmstudio", "local"} and tail.strip():
         return tail.strip()
-    return raw
+    return ""
+
+
+def _pick_lmstudio_text_model_id(
+    *,
+    live_models: list[dict[str, Any]],
+    primary_model: str,
+    preferred_text_model: str,
+) -> str:
+    """
+    Выбирает текстовую модель для компактного каталога LM Studio.
+
+    Приоритет:
+    1) локальный `primary_model`, если он действительно локальный и есть в live-каталоге;
+    2) `LOCAL_PREFERRED_MODEL`, если он найден среди live-моделей;
+    3) первая не-vision модель из live-каталога;
+    4) первая вообще доступная модель как fail-open fallback.
+    """
+    indexed = {
+        str(item.get("id") or "").strip(): item
+        for item in live_models
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+
+    for candidate in (
+        _normalize_local_model_id(primary_model),
+        _normalize_local_model_id(preferred_text_model),
+        str(preferred_text_model or "").strip(),
+    ):
+        normalized = str(candidate or "").strip()
+        if normalized and normalized in indexed:
+            return normalized
+
+    for item in live_models:
+        model_id = str(item.get("id") or "").strip()
+        if model_id and not bool(item.get("supports_vision", False)):
+            return model_id
+
+    for item in live_models:
+        model_id = str(item.get("id") or "").strip()
+        if model_id:
+            return model_id
+
+    return ""
 
 
 def _derive_lmstudio_catalog_base_url(existing_base_url: str) -> str:
@@ -788,6 +846,7 @@ def _build_lmstudio_catalog_entries(
     *,
     live_models: list[dict[str, Any]],
     primary_model: str,
+    preferred_text_model: str,
     preferred_vision_model: str,
 ) -> tuple[list[dict[str, Any]], str]:
     """
@@ -805,7 +864,11 @@ def _build_lmstudio_catalog_entries(
     }
 
     selected_ids: list[str] = []
-    primary_id = _normalize_local_model_id(primary_model)
+    primary_id = _pick_lmstudio_text_model_id(
+        live_models=live_models,
+        primary_model=primary_model,
+        preferred_text_model=preferred_text_model,
+    )
     if primary_id:
         selected_ids.append(primary_id)
 
@@ -858,6 +921,7 @@ def repair_lmstudio_provider_catalog(
     path: Path,
     *,
     primary_model: str,
+    preferred_text_model: str,
     preferred_vision_model: str,
     lmstudio_token: str,
     live_models: list[dict[str, Any]] | None = None,
@@ -895,10 +959,15 @@ def repair_lmstudio_provider_catalog(
     entries, vision_source = _build_lmstudio_catalog_entries(
         live_models=live_models,
         primary_model=primary_model,
+        preferred_text_model=preferred_text_model,
         preferred_vision_model=preferred_vision_model,
     )
     if not entries:
-        primary_id = _normalize_local_model_id(primary_model)
+        primary_id = _pick_lmstudio_text_model_id(
+            live_models=live_models,
+            primary_model=primary_model,
+            preferred_text_model=preferred_text_model,
+        )
         if not primary_id:
             return {
                 "path": str(path),
@@ -2195,14 +2264,36 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
 
     Для `allowlist` пытается собрать `groupAllowFrom` из live-конфига:
     1) уже существующий inline `groupAllowFrom`;
-    2) keys из `channels.<name>.groups`;
-    3) credentials `<channel>-groupAllowFrom.json`.
+    2) sender-id allowlist из `allowFrom`;
+    3) credentials `<channel>-groupAllowFrom.json`;
+    4) trusted peers из `krab-output-sanitizer`.
+
+    Почему именно так:
+    - `channels.<name>.groups` хранит chat/group IDs, а не sender IDs;
+    - Telegram doctor ожидает в `groupAllowFrom` именно numeric sender IDs;
+    - раньше мы ошибочно прокидывали туда group ID, из-за чего gateway
+      честно ругался `Invalid allowFrom entry`.
     """
     payload = _read_json(openclaw_path)
     channel_cfg = payload.setdefault("channels", {})
     changed_channels: list[str] = []
     group_allow_from_fixed: dict[str, str] = {}
     creds_root = openclaw_path.parent / "credentials"
+    plugins = payload.get("plugins") if isinstance(payload.get("plugins"), dict) else {}
+    plugin_entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
+    sanitizer = (
+        plugin_entries.get("krab-output-sanitizer")
+        if isinstance(plugin_entries.get("krab-output-sanitizer"), dict)
+        else {}
+    )
+    sanitizer_config = (
+        sanitizer.get("config") if isinstance(sanitizer.get("config"), dict) else {}
+    )
+    trusted_peers = (
+        sanitizer_config.get("trustedPeers")
+        if isinstance(sanitizer_config.get("trustedPeers"), dict)
+        else {}
+    )
 
     for channel in channels:
         cfg = channel_cfg.get(channel)
@@ -2210,6 +2301,9 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
             continue
 
         current_policy = str(cfg.get("groupPolicy", "") or "").strip().lower()
+        groups_cfg = cfg.get("groups") if isinstance(cfg.get("groups"), dict) else {}
+        allow_from = cfg.get("allowFrom")
+        allow_from_list = allow_from if isinstance(allow_from, list) else []
         group_allow_from = cfg.get("groupAllowFrom")
         group_allow_from_list = group_allow_from if isinstance(group_allow_from, list) else []
         normalized_group_allow_from = [
@@ -2217,21 +2311,37 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
             for item in group_allow_from_list
             if str(item).strip() and str(item).strip() not in {"*", "+"}
         ]
+        if channel == "telegram":
+            enabled_group_ids = {
+                str(group_id).strip()
+                for group_id, group_meta in groups_cfg.items()
+                if str(group_id).strip()
+                and (not isinstance(group_meta, dict) or bool(group_meta.get("enabled", True)))
+            }
+            # В Telegram `groupAllowFrom` — это sender IDs.
+            # Отрицательные значения и chat IDs из `groups` считаем заведомо
+            # сломанным наследием прошлой схемы и вычищаем до нормального derivation.
+            normalized_group_allow_from = [
+                item
+                for item in normalized_group_allow_from
+                if not item.startswith("-") and item not in enabled_group_ids
+            ]
 
         desired_group_allow_from = list(normalized_group_allow_from)
         source = ""
         if policy == "allowlist" and not desired_group_allow_from:
-            groups_cfg = cfg.get("groups")
-            if isinstance(groups_cfg, dict):
-                derived_groups = [
-                    str(group_id).strip()
-                    for group_id, group_meta in groups_cfg.items()
-                    if str(group_id).strip()
-                    and (not isinstance(group_meta, dict) or bool(group_meta.get("enabled", True)))
+            derived_from_dm_allowlist = [
+                str(item).strip()
+                for item in allow_from_list
+                if str(item).strip() and str(item).strip() not in {"*", "+"}
+            ]
+            if channel == "telegram":
+                derived_from_dm_allowlist = [
+                    item for item in derived_from_dm_allowlist if not item.startswith("-")
                 ]
-                if derived_groups:
-                    desired_group_allow_from = derived_groups
-                    source = "derived_from_channel_groups"
+            if derived_from_dm_allowlist:
+                desired_group_allow_from = derived_from_dm_allowlist
+                source = "derived_from_dm_allowlist"
             if not desired_group_allow_from:
                 group_allowlist_file = creds_root / f"{channel}-groupAllowFrom.json"
                 if group_allowlist_file.exists():
@@ -2243,10 +2353,28 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
                                 for x in raw
                                 if str(x).strip() and str(x).strip() not in {"*", "+"}
                             ]
+                            if channel == "telegram":
+                                desired_group_allow_from = [
+                                    item for item in desired_group_allow_from if not item.startswith("-")
+                                ]
                             if desired_group_allow_from:
                                 source = "loaded_from_credentials"
                     except (OSError, ValueError):
                         desired_group_allow_from = []
+            if not desired_group_allow_from:
+                trusted = trusted_peers.get(channel)
+                if isinstance(trusted, list):
+                    desired_group_allow_from = [
+                        str(x).strip()
+                        for x in trusted
+                        if str(x).strip() and str(x).strip() not in {"*", "+"}
+                    ]
+                    if channel == "telegram":
+                        desired_group_allow_from = [
+                            item for item in desired_group_allow_from if not item.startswith("-")
+                        ]
+                    if desired_group_allow_from:
+                        source = "derived_from_trusted_peers"
 
         changed = False
         if current_policy != policy:
@@ -2298,10 +2426,27 @@ def repair_group_policy_allowlist(openclaw_path: Path, channels: tuple[str, ...]
         if not isinstance(cfg, dict):
             continue
         current_policy = str(cfg.get("groupPolicy", "") or "").strip().lower()
+        groups_cfg = cfg.get("groups") if isinstance(cfg.get("groups"), dict) else {}
         group_allow_from = cfg.get("groupAllowFrom")
         group_allow_from_list = group_allow_from if isinstance(group_allow_from, list) else []
-        if current_policy == "allowlist" and not group_allow_from_list:
+        is_invalid_telegram_sender_allowlist = False
+        if channel == "telegram" and group_allow_from_list:
+            enabled_group_ids = {
+                str(group_id).strip()
+                for group_id, group_meta in groups_cfg.items()
+                if str(group_id).strip()
+                and (not isinstance(group_meta, dict) or bool(group_meta.get("enabled", True)))
+            }
+            is_invalid_telegram_sender_allowlist = not any(
+                str(item).strip()
+                and not str(item).strip().startswith("-")
+                and str(item).strip() not in enabled_group_ids
+                for item in group_allow_from_list
+            )
+
+        if current_policy == "allowlist" and (not group_allow_from_list or is_invalid_telegram_sender_allowlist):
             cfg["groupPolicy"] = "open"
+            cfg.pop("groupAllowFrom", None)
             fixed_channels.append(channel)
 
     if fixed_channels:
@@ -2446,12 +2591,14 @@ def main() -> int:
     report["steps"]["repair_lmstudio_catalog_models_json"] = repair_lmstudio_provider_catalog(
         models_path,
         primary_model=default_model,
+        preferred_text_model=str(os.getenv("LOCAL_PREFERRED_MODEL", "") or "").strip(),
         preferred_vision_model=preferred_vision_model,
         lmstudio_token=lmstudio_token,
     )
     report["steps"]["repair_lmstudio_catalog_openclaw_json"] = repair_lmstudio_provider_catalog(
         openclaw_path,
         primary_model=default_model,
+        preferred_text_model=str(os.getenv("LOCAL_PREFERRED_MODEL", "") or "").strip(),
         preferred_vision_model=preferred_vision_model,
         lmstudio_token=lmstudio_token,
     )

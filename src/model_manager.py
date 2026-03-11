@@ -34,6 +34,7 @@ from .core.cost_analytics import cost_analytics
 from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.local_health import discover_models as discover_models_impl
 from .core.local_health import is_lm_studio_available
+from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.model_config import (
     DEFAULT_UNKNOWN_MODEL_SIZE_GB,
     FALLBACK_CHAIN_LOCAL,
@@ -116,7 +117,7 @@ class ModelManager:
             local_http_client=self._http_client,
             cloud_http_client=self._cloud_http_client,
             fallback_chain=self.fallback_chain,
-            config_model=config.MODEL,
+            config_model=self._effective_cloud_config_model(),
         )
         # Аналитика затрат (Cost Engine, бюджет, отчёты) — Фаза 4.1, Шаг 4
         self._cost_analytics = cost_analytics
@@ -348,10 +349,13 @@ class ModelManager:
 
     async def verify_model_access(self, model_id: str) -> bool:
         """Проверяет доступность модели перед переключением (локальные — по кэшу, облако — через cloud_gateway)."""
-        if self._detect_model_type(model_id) != ModelType.CLOUD_GEMINI:
+        detected_type = self._detect_model_type(model_id)
+        if detected_type in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF):
             if model_id in self._models_cache:
                 return True
             return False
+        if detected_type != ModelType.CLOUD_GEMINI:
+            return True
         key = await self._resolve_gemini_key()
         return await cloud_verify_gemini_access(
             model_id,
@@ -361,7 +365,42 @@ class ModelManager:
 
     def _detect_model_type(self, model_id: str) -> ModelType:
         """Определяет тип модели по ID"""
-        model_id_lower = model_id.lower()
+        normalized_model_id = str(model_id or "").strip()
+        model_id_lower = normalized_model_id.lower()
+
+        cached = self._models_cache.get(normalized_model_id)
+        cached_type = getattr(cached, "type", None)
+        if isinstance(cached_type, ModelType):
+            return cached_type
+
+        # Явные облачные provider-id. Без этого `google-gemini-cli` и
+        # `qwen-portal` раньше попадали в "локальные" только потому, что не
+        # содержали `gemini`/`openai` в старой эвристике.
+        local_provider_prefixes = (
+            "lmstudio/",
+            "local/",
+        )
+
+        if model_id_lower.startswith(local_provider_prefixes):
+            return ModelType.LOCAL_MLX
+
+        if model_id_lower.startswith("openai/") or model_id_lower.startswith("openai-codex/"):
+            return ModelType.CLOUD_OPENROUTER
+        if model_id_lower.startswith(
+            (
+                "openrouter/",
+                "google-antigravity/",
+                "google-gemini-cli/",
+                "qwen-portal/",
+                "anthropic/",
+                "xai/",
+                "deepseek/",
+                "groq/",
+            )
+        ):
+            return ModelType.CLOUD_OPENROUTER
+        if model_id_lower.startswith("google/"):
+            return ModelType.CLOUD_GEMINI
 
         if "mlx" in model_id_lower:
             return ModelType.LOCAL_MLX
@@ -372,13 +411,27 @@ class ModelManager:
         else:
             return ModelType.LOCAL_MLX
 
+    def _effective_cloud_config_model(self) -> str:
+        """
+        Возвращает cloud-model truth для Python routing-контура.
+
+        Почему не используем слепо `config.MODEL`:
+        - `.env` часто остаётся на старом `gpt-4.5-preview`;
+        - source-of-truth по модели уже переехал в `~/.openclaw/openclaw.json`;
+        - локальный runtime может держать другой primary, чем исторический env.
+        """
+        runtime_primary = str(get_runtime_primary_model() or "").strip()
+        if runtime_primary and not self.is_local_model(runtime_primary):
+            return runtime_primary
+        return str(config.MODEL or "").strip()
+
     async def get_best_model(self, *, has_photo: bool = False) -> str:
         """
         Возвращает лучшую доступную модель.
         При has_photo=True: локальная vision-модель (если есть), иначе облачная (gemini).
         """
         # Синхронизируем cloud-конфиг роутера с runtime-настройкой.
-        self._router.config_model = config.MODEL
+        self._router.config_model = self._effective_cloud_config_model()
 
         # Режим cloud принудительный — сразу отдаём облачную ветку.
         if getattr(config, "FORCE_CLOUD", False):
@@ -403,7 +456,7 @@ class ModelManager:
 
     def is_local_model(self, model_id: str) -> bool:
         """True if model_id refers to a local (LM Studio) model, not a cloud one."""
-        return self._detect_model_type(model_id) != ModelType.CLOUD_GEMINI
+        return self._detect_model_type(model_id) in (ModelType.LOCAL_MLX, ModelType.LOCAL_GGUF)
 
     async def _local_candidates(self, *, has_photo: bool = False) -> list[tuple[str, ModelInfo]]:
         """Возвращает локальные кандидаты, отсортированные от лёгких к тяжёлым."""

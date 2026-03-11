@@ -64,6 +64,29 @@ async def _start_web_panel(*, kraab_userbot: KraabUserbot | None = None) -> obje
         return None
 
 
+async def _warmup_runtime_route_truth() -> None:
+    """
+    Подтверждает живой route-truth вскоре после старта runtime.
+
+    Зачем отдельный background-task:
+    - не держим bootstrap на лишние секунды, пока userbot уже стартует;
+    - после рестарта web/UI быстрее перестаёт показывать ложный broken primary;
+    - если current primary реально не отвечает, route сохранит фактический fallback/error.
+    """
+    await asyncio.sleep(1.5)
+    try:
+        report = await openclaw_client.warmup_runtime_route()
+        logger.info(
+            "runtime_route_warmup_finished",
+            ok=bool(report.get("ok")),
+            skipped=bool(report.get("skipped")),
+            reason=str(report.get("reason") or ""),
+            route=report.get("route") or {},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("runtime_route_warmup_task_failed", error=str(exc))
+
+
 async def run_app() -> None:
     """
     Запускает приложение: баннер, проверки здоровья, web panel, userbot start → wait → stop.
@@ -86,6 +109,7 @@ async def run_app() -> None:
     kraab = KraabUserbot()
     web_panel = await _start_web_panel(kraab_userbot=kraab)
     stop_event = asyncio.Event()
+    warmup_task: asyncio.Task | None = None
 
     def _request_stop(reason: str) -> None:
         """Запрашивает штатную остановку приложения без форс-килла."""
@@ -108,11 +132,18 @@ async def run_app() -> None:
             logger.info("kraab_running")
         else:
             logger.warning("kraab_degraded_mode", **kraab_state)
+        warmup_task = asyncio.create_task(_warmup_runtime_route_truth())
         await stop_event.wait()
     except asyncio.CancelledError:
         logger.info("stopping_signal_received")
     except Exception as e:
         logger.error("fatal_error", error=str(e))
     finally:
+        if warmup_task is not None and not warmup_task.done():
+            warmup_task.cancel()
+            try:
+                await warmup_task
+            except asyncio.CancelledError:
+                pass
         await kraab.stop()
         logger.info("kraab_stopped")

@@ -96,6 +96,24 @@ def test_normalize_probe_channels_payload_maps_probe_json_to_channels_contract()
     assert "disconnected" in channels["discord"]["meta"]
 
 
+def test_normalize_probe_channels_payload_prefers_probe_success_over_running_flag():
+    """Если probe успешен, временный `running=False` не должен валить канал в FAIL."""
+
+    module = _load_smoke_module()
+    payload = {
+        "channels": {
+            "discord": {"configured": True, "running": False, "probe": {"ok": True}},
+        }
+    }
+
+    normalized = module._normalize_probe_channels_payload(payload)
+    channels = {item["name"]: item for item in normalized["channels"]}
+
+    assert channels["discord"]["status"] == "OK"
+    assert "works" in channels["discord"]["meta"]
+    assert "disconnected" in channels["discord"]["meta"]
+
+
 def test_fetch_channels_with_fallback_uses_probe_when_web_unavailable(monkeypatch):
     module = _load_smoke_module()
 

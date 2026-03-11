@@ -34,6 +34,7 @@ class _FakeOpenClawClient:
 
     def __init__(self) -> None:
         self.active_tier = "free"
+        self.last_call: dict[str, object] = {}
         self._meta = {
             "channel": "local_direct",
             "provider": "nvidia",
@@ -47,9 +48,21 @@ class _FakeOpenClawClient:
             "timestamp": 1234567890,
         }
 
-    async def send_message_stream(self, message: str, chat_id: str, force_cloud: bool = False):
+    async def send_message_stream(
+        self,
+        message: str,
+        chat_id: str,
+        force_cloud: bool = False,
+        preferred_model: str | None = None,
+    ):
         assert message
         assert chat_id == "web_assistant"
+        self.last_call = {
+            "message": message,
+            "chat_id": chat_id,
+            "force_cloud": force_cloud,
+            "preferred_model": preferred_model,
+        }
         yield "Локальный "
         yield "ответ"
 
@@ -101,6 +114,40 @@ async def test_route_query_exposes_runtime_route_meta():
     assert last_route["model"] == "nvidia/nemotron-3-nano"
     assert last_route["status"] == "ok"
     assert last_route["route_reason"] == "local_direct_primary"
+
+
+@pytest.mark.asyncio
+async def test_route_query_passes_preferred_cloud_model_and_forces_cloud():
+    """
+    Если owner/web-path явно просит облачную модель, compat-роутер должен
+    прокинуть её в OpenClawClient, а не молча оставить default primary.
+    """
+    router = WebRouterCompat(_FakeModelManager(), _FakeOpenClawClient())
+    await router.route_query(
+        "проверка cloud preferred",
+        preferred_model="google-gemini-cli/gemini-3.1-pro-preview",
+    )
+
+    assert router.openclaw_client.last_call["preferred_model"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert router.openclaw_client.last_call["force_cloud"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_query_preferred_local_model_overrides_force_cloud_mode():
+    """
+    Явный выбор локальной модели в owner UI должен быть сильнее общего
+    force-cloud режима compat-роутера.
+    """
+    router = WebRouterCompat(_FakeModelManager(), _FakeOpenClawClient())
+    router.force_mode = "force_cloud"
+
+    await router.route_query(
+        "проверка local preferred",
+        preferred_model="nvidia/nemotron-3-nano",
+    )
+
+    assert router.openclaw_client.last_call["preferred_model"] == "nvidia/nemotron-3-nano"
+    assert router.openclaw_client.last_call["force_cloud"] is False
 
 
 def test_get_profile_recommendation_returns_ui_compatible_contract(monkeypatch):
