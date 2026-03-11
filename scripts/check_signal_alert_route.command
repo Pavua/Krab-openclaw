@@ -10,6 +10,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ -x ".venv/bin/python" ]]; then
+  PYTHON_BIN=".venv/bin/python"
+elif [[ -x ".venv_krab/bin/python" ]]; then
+  PYTHON_BIN=".venv_krab/bin/python"
+else
+  PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
+
 SEND_TEST=0
 STRICT_MODE=0
 for arg in "$@"; do
@@ -74,22 +82,77 @@ fi
 
 echo
 echo "📡 Проверка статуса Telegram канала..."
-status_output="$(openclaw channels status --probe 2>&1 || true)"
-if echo "$status_output" | rg -q "Telegram.*works|telegram.*works|default.*works"; then
-  say_ok "openclaw Telegram канал в статусе works"
+status_output="$({
+"$PYTHON_BIN" - <<'PY'
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+web_url = "http://127.0.0.1:8080/api/openclaw/channels/status"
+
+try:
+    with urllib.request.urlopen(web_url, timeout=8) as resp:
+        payload = json.loads(resp.read().decode("utf-8", "replace"))
+    channels = payload.get("channels") if isinstance(payload, dict) else []
+    if isinstance(channels, list):
+        for item in channels:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            status = str(item.get("status") or "")
+            meta = str(item.get("meta") or "")
+            if "telegram" in name.lower():
+                print("source=web")
+                print(f"ok={1 if status.upper() == 'OK' else 0}")
+                print(f"detail={name}: {status} {meta}".strip())
+                raise SystemExit(0)
+except (urllib.error.URLError, TimeoutError, ValueError):
+    pass
+
+proc = subprocess.run(
+    ["openclaw", "channels", "status", "--probe"],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+raw = (proc.stdout or proc.stderr or "").strip()
+ok = int(proc.returncode == 0 and ("Telegram" in raw or "telegram" in raw) and "works" in raw.lower())
+print("source=cli")
+print(f"ok={ok}")
+print(f"detail={raw}")
+PY
+} || true)"
+
+status_ok="$(echo "$status_output" | awk -F= '/^ok=/{print $2}')"
+status_source="$(echo "$status_output" | awk -F= '/^source=/{print $2}')"
+status_detail="$(echo "$status_output" | awk -F= '/^detail=/{print substr($0,8)}')"
+
+if [[ "$status_ok" == "1" ]]; then
+  say_ok "openclaw Telegram канал в статусе works (${status_source:-unknown})"
 else
-  say_fail "openclaw Telegram канал не в works"
-  echo "$status_output" | rg -n "Telegram|telegram|Warnings|warning|error|failed" || true
+  say_fail "openclaw Telegram канал не в works (${status_source:-unknown})"
+  if [[ -n "${status_detail:-}" ]]; then
+    echo "$status_detail" | rg -n "Telegram|telegram|Warnings|warning|error|failed|unauthorized|works" || true
+  fi
 fi
 
 echo
 echo "🤖 Проверка getUpdates у Telegram бота..."
 updates_info="$({
-python3 - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 import json
 import os
+import ssl
 import time
 import urllib.request
+
+try:
+    import certifi
+except Exception:  # noqa: BLE001
+    certifi = None
 
 token = os.environ.get("OPENCLAW_TELEGRAM_BOT_TOKEN", "").strip()
 if not token:
@@ -100,11 +163,23 @@ if not token:
     raise SystemExit(0)
 
 url = f"https://api.telegram.org/bot{token}/getUpdates?limit=100"
+ca_bundle = (
+    os.environ.get("OPENCLAW_ALERT_ROUTE_CA_BUNDLE", "").strip()
+    or os.environ.get("SSL_CERT_FILE", "").strip()
+    or (certifi.where() if certifi else "")
+)
+ssl_context = None
+if ca_bundle:
+    try:
+        ssl_context = ssl.create_default_context(cafile=ca_bundle)
+    except Exception:  # noqa: BLE001
+        ssl_context = None
+
 data = None
 last_error = ""
 for attempt in range(1, 4):
     try:
-        with urllib.request.urlopen(url, timeout=20) as resp:
+        with urllib.request.urlopen(url, timeout=20, context=ssl_context) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         break
     except Exception as exc:
@@ -140,6 +215,7 @@ print(f"ok={1 if ok else 0}")
 print(f"updates={len(updates)}")
 print(f"private_chat_id={private_chat_id}")
 print("error=")
+print(f"ca_bundle={ca_bundle}")
 PY
 } || true)"
 
@@ -147,6 +223,7 @@ updates_ok="$(echo "$updates_info" | awk -F= '/^ok=/{print $2}')"
 updates_count="$(echo "$updates_info" | awk -F= '/^updates=/{print $2}')"
 private_chat_id="$(echo "$updates_info" | awk -F= '/^private_chat_id=/{print $2}')"
 updates_error="$(echo "$updates_info" | awk -F= '/^error=/{print substr($0,7)}')"
+updates_ca_bundle="$(echo "$updates_info" | awk -F= '/^ca_bundle=/{print substr($0,11)}')"
 
 if [[ "$updates_ok" == "1" ]]; then
   say_ok "Bot API getUpdates доступен"
@@ -154,6 +231,9 @@ else
   say_fail "Bot API getUpdates недоступен"
   if [[ -n "${updates_error:-}" ]]; then
     echo "   detail: ${updates_error}"
+  fi
+  if [[ -n "${updates_ca_bundle:-}" ]]; then
+    echo "   ca_bundle: ${updates_ca_bundle}"
   fi
 fi
 

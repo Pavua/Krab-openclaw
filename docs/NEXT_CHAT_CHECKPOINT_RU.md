@@ -160,6 +160,9 @@
 - `pre_release_smoke.py` теперь различает:
   - `exit 1` — реальный required failure;
   - `exit 2` — required checks blocked средой, например из-за временной учётки и ownership mismatch live runtime.
+- `scripts/check_signal_alert_route.command` больше не валится ложно на:
+  - `CERTIFICATE_VERIFY_FAILED` из-за Python trust store;
+  - `gateway token missing` при наличии живого web endpoint `:8080`.
 
 ## Важные риски
 
