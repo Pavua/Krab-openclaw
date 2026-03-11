@@ -145,6 +145,8 @@
 
 - Controlled restart из-под `USER2` восстановил `:8080`, `:18789` и `telegram_userbot_state=running`, но не заменил старый `pablito`-owned `src.main`.
 - Поэтому новый блок параллелизма уже подтверждён кодом, unit и изолированным browser smoke, но не должен считаться live-verified на основном `:8080`, пока restart не выполнит владелец `pablito`.
+- Для возврата на основную учётку добавлен one-click helper:
+  - [Verify Live Parallelism On Pablito.command](/Users/pablito/Antigravity_AGENTS/Краб/Verify%20Live%20Parallelism%20On%20Pablito.command)
 
 ### 6. Release gate
 

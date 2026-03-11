@@ -120,6 +120,8 @@
 - `google-gemini-cli` сейчас хрупкий как fallback: `openclaw models status` показывает `expires in 0m`, а gateway-log фиксировал refresh failure 2026-03-11
 - Live `:8080` для нового блока параллелизма пока не переподтверждён после restart из-под `USER2`:
   старый `src.main` принадлежит `pablito`, пережил попытку controlled restart и не дал заменить процесс без доступа владельца
+- Для закрытия этого хвоста добавлен helper:
+  [Verify Live Parallelism On Pablito.command](/Users/pablito/Antigravity_AGENTS/Краб/Verify%20Live%20Parallelism%20On%20Pablito.command)
 
 ## Проверка
 
