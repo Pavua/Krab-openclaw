@@ -59,7 +59,7 @@
 
 - [x] Закрыть открытые `groupPolicy=open` для Telegram reserve-контура
 - [x] Ужесточить reserve bot и risky каналы для Telegram bot
-- [ ] Добавить release-checklist и merge-gate для крупных этапов
+- [x] Добавить release-checklist и merge-gate для крупных этапов
 
 ## Что сделано в этой ветке
 
@@ -99,6 +99,10 @@
   - явное разделение с named semantics `parallel / sequential` из других runtime-контуров
 - [x] Browser smoke на изолированном web-инстансе подтвердил рендер нового блока параллелизма и live-клик `Синхронизировать каталог`
 - [x] Heartbeat runtime-скрипт переведён на truthful `openclaw health --json` и `openclaw cron status --json` вместо шумного `gateway status`
+- [x] Добавлен канонический release-checklist:
+  - one-click [Release Gate.command](/Users/pablito/Antigravity_AGENTS/Краб/Release%20Gate.command)
+  - runbook [docs/RELEASE_CHECKLIST_RU.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/RELEASE_CHECKLIST_RU.md)
+  - источники истины: `pre_release_smoke_latest.json` и `r20_merge_gate_latest.json`
 - [x] Исправлен launcher-регресс: `new start_krab.command` / `new Stop Krab.command` больше не подвисают бесконечно на `openclaw gateway stop`, если gateway уже мёртв или не слушает порт
 - [x] Исправлен owner-chat fast-path: запросы вида `проведи полную диагностику` / `cron у тебя уже работает` теперь уходят в deterministic `runtime self-check`, а не в свободную генерацию
 - [x] Controlled restart подтверждён после launcher-fix: runtime снова поднимает `:8080` и `:18789`, `telegram_userbot_state=running`

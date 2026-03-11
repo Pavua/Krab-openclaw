@@ -19,8 +19,11 @@ if [ "${2:-}" = "strict" ] || [ "${1:-}" = "strict" ]; then
   EXTRA_ARGS+=("--strict-runtime")
 fi
 
-python3 scripts/pre_release_smoke.py "${EXTRA_ARGS[@]}"
-EXIT_CODE=$?
+if python3 scripts/pre_release_smoke.py "${EXTRA_ARGS[@]}"; then
+  EXIT_CODE=0
+else
+  EXIT_CODE=$?
+fi
 
 echo ""
 echo "Готово. Код выхода: $EXIT_CODE"

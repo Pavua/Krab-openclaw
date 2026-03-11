@@ -16,8 +16,11 @@ echo "📂 Root: $ROOT_DIR"
 echo "🐍 Python: $PYTHON_BIN"
 echo
 
-"$PYTHON_BIN" scripts/r20_merge_gate.py "$@"
-EXIT_CODE=$?
+if "$PYTHON_BIN" scripts/r20_merge_gate.py "$@"; then
+  EXIT_CODE=0
+else
+  EXIT_CODE=$?
+fi
 
 echo
 if [ "$EXIT_CODE" -eq 0 ]; then

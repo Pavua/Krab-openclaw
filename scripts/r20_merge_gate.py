@@ -163,6 +163,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="R20 Merge Gate")
     parser.add_argument("--lite-url", default="http://127.0.0.1:8080/api/health/lite")
     parser.add_argument("--deep-url", default="http://127.0.0.1:8080/api/health")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Совместимый no-op флаг для старых launcher/pre-release smoke вызовов.",
+    )
     parser.add_argument("--skip-http", action="store_true")
     args = parser.parse_args()
 

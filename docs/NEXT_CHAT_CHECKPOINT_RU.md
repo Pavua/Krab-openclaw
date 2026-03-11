@@ -146,6 +146,16 @@
 - Controlled restart из-под `USER2` восстановил `:8080`, `:18789` и `telegram_userbot_state=running`, но не заменил старый `pablito`-owned `src.main`.
 - Поэтому новый блок параллелизма уже подтверждён кодом, unit и изолированным browser smoke, но не должен считаться live-verified на основном `:8080`, пока restart не выполнит владелец `pablito`.
 
+### 6. Release gate
+
+- Для крупных этапов теперь есть канонический one-click вход:
+  - [Release Gate.command](/Users/pablito/Antigravity_AGENTS/Краб/Release%20Gate.command)
+- Добавлен runbook:
+  - [docs/RELEASE_CHECKLIST_RU.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/RELEASE_CHECKLIST_RU.md)
+- Канонические release artifacts:
+  - `artifacts/ops/pre_release_smoke_latest.json`
+  - `artifacts/ops/r20_merge_gate_latest.json`
+
 ## Важные риски
 
 - В рабочем дереве есть чужие незакоммиченные изменения; не трогать их без необходимости.
