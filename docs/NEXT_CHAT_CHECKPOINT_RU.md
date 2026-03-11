@@ -155,6 +155,9 @@
 - Канонические release artifacts:
   - `artifacts/ops/pre_release_smoke_latest.json`
   - `artifacts/ops/r20_merge_gate_latest.json`
+- `pre_release_smoke.py` теперь различает:
+  - `exit 1` — реальный required failure;
+  - `exit 2` — required checks blocked средой, например из-за временной учётки и ownership mismatch live runtime.
 
 ## Важные риски
 

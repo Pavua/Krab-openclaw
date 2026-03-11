@@ -31,6 +31,8 @@ fi
 echo
 if [ "$EXIT_CODE" -eq 0 ]; then
   echo "✅ Release gate пройден."
+elif [ "$EXIT_CODE" -eq 2 ]; then
+  echo "⏸ Release gate заблокирован средой, а не кодом."
 else
   echo "❌ Release gate не пройден."
 fi

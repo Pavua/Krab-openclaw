@@ -81,6 +81,10 @@
 - В таком случае merge-gate всё равно нужно прогнать, но verdict обязан явно отделять:
   - `code regression`
   - `environment/runtime owner blocker`
+- Канонический `pre_release_smoke.py` теперь возвращает:
+  - `0` — required checks зелёные;
+  - `1` — есть реальные required failures;
+  - `2` — required checks blocked средой (например, owner mismatch временной учётки).
 
 ## Когда merge допустим
 

@@ -26,6 +26,9 @@ else
 fi
 
 echo ""
+if [ "$EXIT_CODE" -eq 2 ]; then
+  echo "⏸ Проверка заблокирована средой, а не регрессией кода."
+fi
 echo "Готово. Код выхода: $EXIT_CODE"
 read -p "Нажми Enter для закрытия окна..."
 exit $EXIT_CODE
