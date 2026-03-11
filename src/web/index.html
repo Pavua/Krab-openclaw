@@ -696,6 +696,11 @@
             </div>
             <div
               style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Contour:</span>
+              <span id="ocBrowserContour" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div
+              style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
               <span class="card-meta" style="margin: 0;">Relay reachable:</span>
               <span id="ocRelayReachable" class="badge warn">—</span>
             </div>
@@ -703,6 +708,21 @@
               style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
               <span class="card-meta" style="margin: 0;">Tabs:</span>
               <span id="ocBrowserTabs" class="card-value" style="font-size: 0.95rem;">—</span>
+            </div>
+            <div
+              style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Owner attach:</span>
+              <span id="ocBrowserOwnerAttach" class="badge warn">—</span>
+            </div>
+            <div
+              style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">OpenClaw path:</span>
+              <span id="ocBrowserRelayPath" class="badge warn">—</span>
+            </div>
+            <div
+              style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Chrome DevTools:</span>
+              <span id="ocChromeDevtoolsPath" class="badge warn">—</span>
             </div>
             <div style="display:flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--border-card); padding-top: 8px;">
               <span class="card-meta" style="margin: 0;">mcp.json:</span>
@@ -719,7 +739,11 @@
           </div>
           <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <button id="ocBrowserStartBtn">Запустить Browser Relay</button>
+            <button id="ocBrowserOwnerBtn">Открыть Owner Chrome</button>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 6px;">
             <span id="ocBrowserStartMeta" class="card-meta">—</span>
+            <span id="ocBrowserOwnerMeta" class="card-meta">—</span>
           </div>
         </div>
 
@@ -839,6 +863,30 @@
               <span class="card-meta" style="margin: 0;">Cloud Fallback:</span>
               <span id="ocrouteFallback" class="card-value"
                 style="font-size: 0.9rem; color: var(--text-muted);">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Gateway auth:</span>
+              <span id="ocrouteAuth" class="card-value"
+                style="font-size: 0.9rem; color: var(--text-muted);">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Reasoning:</span>
+              <span id="ocrouteReasoning" class="card-value text-ellipsis"
+                style="font-size: 0.9rem; max-width: 140px; text-align: right; color: var(--text-muted);">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">History budget:</span>
+              <span id="ocrouteHistory" class="card-value text-ellipsis"
+                style="font-size: 0.84rem; max-width: 160px; text-align: right; color: var(--text-muted);">—</span>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Output cap:</span>
+              <span id="ocrouteOutput" class="card-value text-ellipsis"
+                style="font-size: 0.84rem; max-width: 160px; text-align: right; color: var(--text-muted);">—</span>
             </div>
             <div style="display: flex; flex-direction: column; gap: 4px;">
               <span class="card-meta" style="margin: 0;">Decision notes:</span>
@@ -971,6 +1019,7 @@
           <option value="toggle">Autoswitch Toggle</option>
           <option value="production-safe">Production Safe</option>
           <option value="gpt54-canary">GPT-5.4 Canary</option>
+          <option value="openai-safe">OpenAI Safe</option>
           <option value="local-first">Local First</option>
           <option value="cloud-first">Cloud First</option>
         </select>
@@ -1004,7 +1053,7 @@
       <!-- AI Engine Config -->
       <div class="form-grid">
         <div class="form-group">
-          <span class="form-label">Режим Роутинга</span>
+          <span class="form-label">1. Режим роутинга</span>
           <select id="modelModeSelect" class="field">
             <option value="auto">Auto (Local-First)</option>
             <option value="local">Local (Force)</option>
@@ -1012,35 +1061,112 @@
           </select>
         </div>
         <div class="form-group">
-          <span class="form-label">Пресет</span>
+          <span class="form-label">2. Профиль запуска</span>
           <select id="modelPresetSelect" class="field">
             <option value="balanced_auto">Balanced Auto</option>
             <option value="local_focus">Local Focus</option>
             <option value="cloud_reasoning">Cloud Reasoning</option>
           </select>
         </div>
-        <div class="form-group">
-          <span class="form-label">Слот / Модель</span>
-          <div style="display: flex; gap: 8px">
-            <select id="modelSlotSelect" class="field" style="flex: 1">
+      </div>
+
+      <div class="assistant-actions">
+        <button id="modelCatalogReloadBtn">Синхронизировать каталог</button>
+        <button id="modelApplyModeBtn" class="primary">Применить режим и профиль</button>
+        <span class="card-meta" id="modelControlMeta" style="margin-left: auto">Каталог моделей загружен.</span>
+      </div>
+      <div class="card-meta" id="modelRoutingHint" style="margin-top: 8px; color: var(--text-muted);">
+        Основной путь: режим + профиль. Точную cloud-модель меняй только если нужен ручной override.
+      </div>
+      <div class="card-meta" id="modelProvidersMeta" style="margin-top: 4px; color: var(--text-muted);">
+        —
+      </div>
+      <div class="card-meta" id="modelQuotaMeta" style="margin-top: 4px; color: var(--text-muted);">
+        —
+      </div>
+      <div class="card-meta" id="modelParallelismMeta" style="margin-top: 4px; color: var(--text-muted);">
+        —
+      </div>
+      <div class="card-meta" id="modelChainMeta" style="margin-top: 4px; color: var(--text-muted);">
+        —
+      </div>
+
+      <details style="margin-top: 16px;" open>
+        <summary class="card-meta" style="cursor: pointer; user-select: none;">
+          Глобальная цепочка OpenClaw и runtime-настройки
+        </summary>
+        <div class="card-meta" style="margin-top: 10px; color: var(--text-muted);">
+          Этот блок меняет live `~/.openclaw/openclaw.json` для всех каналов, userbot и main-agent, а не только текущий web-запуск.
+        </div>
+        <div id="globalRoutingEditor" style="margin-top: 16px;"></div>
+        <div class="assistant-actions" style="margin-top: 12px;">
+          <button id="modelApplyRuntimeChainBtn" class="primary">Сохранить глобальную цепочку</button>
+          <span class="card-meta" id="modelRuntimeKnobsMeta" style="margin-left: auto;">
+            —
+          </span>
+        </div>
+      </details>
+
+      <div id="modelProviderHealth" style="
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+          "></div>
+      <div class="card-meta" id="modelProviderActionMeta" style="margin-top: 8px; color: var(--text-muted);">
+        —
+      </div>
+
+      <details style="margin-top: 16px;">
+        <summary class="card-meta" style="cursor: pointer; user-select: none;">
+          Cloud inventory и live-check
+        </summary>
+        <div class="form-grid" style="margin-top: 16px;">
+          <div class="form-group">
+            <span class="form-label">Cloud-модель из live inventory</span>
+            <select id="assistantCloudInventorySelect" class="field">
+              <option value="">(inventory пуст)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <span class="form-label">Проверка модели</span>
+            <div class="assistant-actions" style="margin-top: 0;">
+              <button id="assistantProbeModelBtn">Проверить выбранную модель</button>
+              <span class="card-meta" id="assistantProbeMeta" style="margin-left: auto;">
+                Выбери cloud-модель из inventory и запусти live-check.
+              </span>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details style="margin-top: 16px;">
+        <summary class="card-meta" style="cursor: pointer; user-select: none;">
+          Advanced: точная привязка cloud-слота
+        </summary>
+        <div class="form-grid" style="margin-top: 16px;">
+          <div class="form-group">
+            <span class="form-label">Cloud-слот</span>
+            <select id="modelSlotSelect" class="field">
               <option value="chat">Chat</option>
             </select>
-            <select id="modelChoiceSelect" class="field" style="flex: 2">
+          </div>
+          <div class="form-group">
+            <span class="form-label">Cloud-модель для слота</span>
+            <select id="modelSlotChoiceSelect" class="field">
               <option value="google/gemini-2.5-flash">
                 gemini-2.5-flash
               </option>
             </select>
           </div>
         </div>
-      </div>
-
-      <div class="assistant-actions">
-        <button id="modelCatalogReloadBtn">Обновить каталог</button>
-        <button id="modelApplyModeBtn">Применить режим</button>
-        <button id="modelApplyPresetBtn">Применить пресет</button>
-        <button id="modelApplySlotBtn">Сохранить слот</button>
-        <span class="card-meta" id="modelControlMeta" style="margin-left: auto">Каталог моделей загружен.</span>
-      </div>
+        <div class="assistant-actions" style="margin-top: 12px;">
+          <button id="modelApplySlotBtn">Сохранить cloud-слот</button>
+          <span class="card-meta" id="modelSlotHint" style="margin-left: auto;">
+            Слот нужен для cloud fallback и forced cloud маршрутов.
+          </span>
+        </div>
+      </details>
 
       <!-- Task Parameters -->
       <div class="form-grid" style="
@@ -1073,10 +1199,24 @@
           </select>
         </div>
         <div class="form-group">
-          <span class="form-label">API Key</span>
-          <input id="assistantApiKey" class="field" placeholder="API Ключ (опционально)" />
+          <span class="form-label">Модель для этого запуска</span>
+          <select id="assistantPreferredModelSelect" class="field">
+            <option value="">Авто по текущему роутингу</option>
+          </select>
         </div>
       </div>
+
+      <details style="margin-top: 12px;">
+        <summary class="card-meta" style="cursor: pointer; user-select: none;">
+          Расширенные параметры запроса
+        </summary>
+        <div class="form-grid" style="margin-top: 16px;">
+          <div class="form-group">
+            <span class="form-label">Web API Key</span>
+            <input id="assistantApiKey" class="field" placeholder="API Ключ (опционально)" />
+          </div>
+        </div>
+      </details>
 
       <textarea id="assistantPrompt" class="field" placeholder="Введите задачу, промпт или фрагмент кода..."></textarea>
 
@@ -1427,26 +1567,123 @@
       const node = document.getElementById(nodeId);
       if (!node) return;
       const current = String(selectedValue || "");
-      const html = options
-        .map((item) => {
-          const value = String(item.value ?? "");
-          const label = String(item.label ?? value);
-          const selected = value === current ? " selected" : "";
-          return `<option value="${value}"${selected}>${label}</option>`;
+      const direct = [];
+      const grouped = new Map();
+
+      for (const rawItem of Array.isArray(options) ? options : []) {
+        const item = rawItem || {};
+        const value = String(item.value ?? "");
+        const label = String(item.label ?? value);
+        const selected = value === current ? " selected" : "";
+        const disabled = item.disabled ? " disabled" : "";
+        const optionHtml = `<option value="${escapeHtml(value)}"${selected}${disabled}>${escapeHtml(label)}</option>`;
+        const group = String(item.group || "").trim();
+        if (!group) {
+          direct.push(optionHtml);
+          continue;
+        }
+        if (!grouped.has(group)) {
+          grouped.set(group, []);
+        }
+        grouped.get(group).push(optionHtml);
+      }
+
+      const groupedHtml = Array.from(grouped.entries())
+        .map(([label, groupOptions]) => {
+          return `<optgroup label="${escapeHtml(label)}">${groupOptions.join("")}</optgroup>`;
         })
         .join("");
-      node.innerHTML = html || '<option value="">(пусто)</option>';
+      node.innerHTML = direct.join("") + groupedHtml || '<option value="">(пусто)</option>';
     }
 
-    function getModelOptionsFromCatalog(catalog) {
+    function buildProviderGroupLabel(group) {
+      const providerLabel = String(group?.provider_label || group?.provider || "Cloud");
+      const readiness = String(group?.provider_readiness_label || "").trim();
+      const authMode = String(group?.provider_auth || "").trim().toLowerCase();
+      const parts = [providerLabel];
+      if (authMode === "oauth" && readiness !== "OAuth OK") {
+        parts.push("OAuth");
+      } else if (authMode === "oauth" && readiness === "OAuth OK") {
+        parts.push("OAuth OK");
+      } else if (authMode === "api-key") {
+        parts.push(providerLabel.toLowerCase().includes("openai") ? "API key • ручной выбор" : "API key");
+      }
+      if (readiness && readiness !== "OAuth OK" && readiness !== "API key") {
+        parts.push(readiness);
+      }
+      const configuredCount = Number(group?.configured_model_count || 0);
+      const totalCount = Number(group?.model_count || 0);
+      if (totalCount > 0) {
+        parts.push(`${configuredCount}/${totalCount} runtime`);
+      }
+      const oauthTtl = String(group?.provider_oauth_remaining_human || "").trim();
+      if (oauthTtl) {
+        parts.push(`TTL ${oauthTtl}`);
+      }
+      if (group?.legacy) {
+        parts.push("legacy");
+      }
+      return parts.join(" • ");
+    }
+
+    function buildEffectiveKindLabel(kind) {
+      const raw = String(kind || "").trim().toLowerCase();
+      if (raw === "profiles") return "OAuth/profile store";
+      if (raw === "env") return "ENV key";
+      if (raw === "models.json") return "models.json key";
+      return raw;
+    }
+
+    function formatContextWindow(value) {
+      const raw = Number(value || 0);
+      if (!raw || raw < 0) return "";
+      if (raw >= 1000000) return `${(raw / 1000000).toFixed(raw % 1000000 === 0 ? 0 : 1)}M ctx`;
+      if (raw >= 1000) return `${Math.round(raw / 1000)}k ctx`;
+      return `${raw} ctx`;
+    }
+
+    function buildCloudModelLabel(item) {
+      const modelId = String(item?.id || "").trim();
+      const actualId = String(item?.actual_model_id || modelId).trim();
+      const humanName = String(item?.name || actualId || modelId).trim();
+      const stateLabel = item?.configured_runtime ? "runtime" : "catalog";
+      const providerState = item?.configured_runtime
+        ? "ready-now"
+        : (String(item?.provider_readiness || "").trim().toLowerCase() === "blocked" ? "provider-blocked" : "discoverable");
+      const activeSuffix = item?.active_runtime ? " • active" : "";
+      const slotSuffix = Array.isArray(item?.selected_slots) && item.selected_slots.length
+        ? ` • slots: ${item.selected_slots.join(",")}`
+        : "";
+      const reasoningSuffix = item?.reasoning ? " • reasoning" : "";
+      const contextSuffix = formatContextWindow(item?.context_window)
+        ? ` • ${formatContextWindow(item?.context_window)}`
+        : "";
+      return `${humanName} • id: ${actualId} • ${stateLabel}/${providerState}${activeSuffix}${slotSuffix}${reasoningSuffix}${contextSuffix}`;
+    }
+
+    function getPreferredModelOptionsFromCatalog(catalog) {
       const result = [];
       const localModels = Array.isArray(catalog?.local_models)
         ? catalog.local_models
         : [];
-      const cloudPresets = Array.isArray(catalog?.cloud_presets)
+      const cloudModels = Array.isArray(catalog?.cloud_presets)
         ? catalog.cloud_presets
         : [];
-      const cloudSlots = catalog?.cloud_slots || {};
+
+      result.push({
+        value: "",
+        label: "Авто по текущему роутингу",
+      });
+
+      for (const item of cloudModels) {
+        const modelId = String(item?.id || "").trim();
+        if (!modelId) continue;
+        result.push({
+          value: modelId,
+          label: buildCloudModelLabel(item),
+          group: `Облако — ${buildProviderGroupLabel(item)}`,
+        });
+      }
 
       for (const item of localModels) {
         const modelId = String(item?.id || "").trim();
@@ -1455,25 +1692,8 @@
         const sizeSuffix = item?.size_human ? ` • ${item.size_human}` : "";
         result.push({
           value: modelId,
-          label: `LOCAL • ${modelId}${loadedSuffix}${sizeSuffix}`,
-        });
-      }
-
-      for (const item of cloudPresets) {
-        const modelId = String(item?.id || "").trim();
-        if (!modelId) continue;
-        result.push({
-          value: modelId,
-          label: `CLOUD • ${modelId}`,
-        });
-      }
-
-      for (const modelId of Object.values(cloudSlots)) {
-        const text = String(modelId || "").trim();
-        if (!text) continue;
-        result.push({
-          value: text,
-          label: `CURRENT • ${text}`,
+          label: `${modelId}${loadedSuffix}${sizeSuffix}`,
+          group: "Локальные модели",
         });
       }
 
@@ -1487,9 +1707,392 @@
       return dedup;
     }
 
+    function getCloudInventoryOptionsFromCatalog(catalog) {
+      const result = [];
+      const cloudInventory = Array.isArray(catalog?.cloud_inventory)
+        ? catalog.cloud_inventory
+        : [];
+      for (const item of cloudInventory) {
+        const modelId = String(item?.id || "").trim();
+        if (!modelId) continue;
+        result.push({
+          value: modelId,
+          label: buildCloudModelLabel(item),
+          group: `Inventory — ${buildProviderGroupLabel(item)}`,
+        });
+      }
+      return result;
+    }
+
+    function getCloudSlotOptionsFromCatalog(catalog) {
+      const result = [];
+      const cloudModels = Array.isArray(catalog?.cloud_presets)
+        ? catalog.cloud_presets
+        : [];
+      for (const item of cloudModels) {
+        const modelId = String(item?.id || "").trim();
+        if (!modelId) continue;
+        result.push({
+          value: modelId,
+          label: buildCloudModelLabel(item),
+          group: `Cloud slot — ${buildProviderGroupLabel(item)}`,
+        });
+      }
+      return result;
+    }
+
+    function buildThinkingModeLabel(value) {
+      const normalized = String(value || "").trim().toLowerCase();
+      if (normalized === "off") return "Off";
+      if (normalized === "auto") return "Auto";
+      if (normalized === "low") return "Low";
+      if (normalized === "medium") return "Medium";
+      if (normalized === "high") return "High";
+      return normalized || "off";
+    }
+
+    function getEditableChainModelOptionsFromCatalog(catalog) {
+      const result = [];
+      const seen = new Set();
+
+      const pushItem = (item) => {
+        const value = String(item?.value || "").trim();
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        result.push(item);
+      };
+
+      const cloudInventory = Array.isArray(catalog?.cloud_inventory)
+        ? catalog.cloud_inventory
+        : [];
+      for (const item of cloudInventory) {
+        const modelId = String(item?.id || "").trim();
+        if (!modelId) continue;
+        pushItem({
+          value: modelId,
+          label: buildCloudModelLabel(item),
+          group: `Облако — ${buildProviderGroupLabel(item)}`,
+        });
+      }
+
+      const localModels = Array.isArray(catalog?.local_models)
+        ? catalog.local_models
+        : [];
+      for (const item of localModels) {
+        const modelId = String(item?.id || "").trim();
+        if (!modelId) continue;
+        const loadedSuffix = item?.loaded ? " • loaded" : "";
+        const sizeSuffix = item?.size_human ? ` • ${item.size_human}` : "";
+        pushItem({
+          value: modelId,
+          label: `${modelId}${loadedSuffix}${sizeSuffix}`,
+          group: "Локальные модели",
+        });
+      }
+
+      const chainItems = Array.isArray(catalog?.runtime_controls?.chain_items)
+        ? catalog.runtime_controls.chain_items
+        : [];
+      for (const item of chainItems) {
+        const modelId = String(item?.model_id || "").trim();
+        if (!modelId) continue;
+        pushItem({
+          value: modelId,
+          label: `${modelId} • current-runtime`,
+          group: "Текущая runtime-цепочка",
+        });
+      }
+
+      return result;
+    }
+
+    function renderGlobalRoutingEditor(catalog) {
+      const root = document.getElementById("globalRoutingEditor");
+      if (!root) return;
+      const runtimeControls = catalog?.runtime_controls && typeof catalog.runtime_controls === "object"
+        ? catalog.runtime_controls
+        : {};
+      const primary = String(runtimeControls?.primary || "").trim();
+      const fallbacks = Array.isArray(runtimeControls?.fallbacks)
+        ? runtimeControls.fallbacks.map((item) => String(item || "").trim()).filter(Boolean)
+        : [];
+      const thinkingDefault = String(runtimeControls?.thinking_default || "off").trim().toLowerCase() || "off";
+      const contextTokens = Number(runtimeControls?.context_tokens || 128000);
+      const fallbackSlots = Math.max(
+        Number(runtimeControls?.max_fallback_slots || 0),
+        fallbacks.length,
+        5,
+      );
+      const chainItems = Array.isArray(runtimeControls?.chain_items)
+        ? runtimeControls.chain_items
+        : [];
+      const thinkingByModel = new Map();
+      for (const item of chainItems) {
+        const modelId = String(item?.model_id || "").trim();
+        if (!modelId) continue;
+        thinkingByModel.set(
+          modelId,
+          String(item?.effective_thinking || item?.explicit_thinking || thinkingDefault).trim().toLowerCase() || thinkingDefault,
+        );
+      }
+
+      const rows = [
+        {
+          id: "primary",
+          label: "Primary",
+          modelValue: primary,
+          thinkingValue: thinkingByModel.get(primary) || thinkingDefault,
+          allowBlank: false,
+        },
+      ];
+      for (let index = 0; index < fallbackSlots; index += 1) {
+        const modelValue = String(fallbacks[index] || "").trim();
+        rows.push({
+          id: `fallback_${index + 1}`,
+          label: `Fallback #${index + 1}`,
+          modelValue,
+          thinkingValue: thinkingByModel.get(modelValue) || thinkingDefault,
+          allowBlank: true,
+        });
+      }
+
+      root.innerHTML = `
+        <div class="form-grid">
+          <div class="form-group">
+            <span class="form-label">Глобальное окно контекста</span>
+            <input id="runtimeContextTokensInput" class="field" type="number" min="4096" max="2000000" step="1024" />
+          </div>
+          <div class="form-group">
+            <span class="form-label">Глобальный thinkingDefault</span>
+            <select id="runtimeThinkingDefaultSelect" class="field"></select>
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:16px;">
+          ${rows.map((row) => `
+            <div class="form-grid" style="grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr);">
+              <div class="form-group">
+                <span class="form-label">${escapeHtml(row.label)}</span>
+                <select id="runtimeChainModelSelect_${escapeHtml(row.id)}" class="field"></select>
+              </div>
+              <div class="form-group">
+                <span class="form-label">Thinking</span>
+                <select id="runtimeChainThinkingSelect_${escapeHtml(row.id)}" class="field"></select>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+
+      const modelOptions = getEditableChainModelOptionsFromCatalog(catalog);
+      const thinkingOptions = [
+        { value: "off", label: "Off" },
+        { value: "auto", label: "Auto" },
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High" },
+      ];
+      fillSelect("runtimeThinkingDefaultSelect", thinkingOptions, thinkingDefault);
+      const contextInput = document.getElementById("runtimeContextTokensInput");
+      if (contextInput) {
+        contextInput.value = String(contextTokens || 128000);
+      }
+
+      for (const row of rows) {
+        const selectId = `runtimeChainModelSelect_${row.id}`;
+        const options = row.allowBlank
+          ? [{ value: "", label: "(пусто)" }, ...modelOptions]
+          : modelOptions;
+        fillSelect(selectId, options.length ? options : [{ value: "", label: "(модели не обнаружены)" }], row.modelValue);
+        fillSelect(`runtimeChainThinkingSelect_${row.id}`, thinkingOptions, row.thinkingValue || thinkingDefault);
+      }
+    }
+
+    function collectGlobalRoutingPayload() {
+      const runtimeControls = modelCatalogState?.runtime_controls && typeof modelCatalogState.runtime_controls === "object"
+        ? modelCatalogState.runtime_controls
+        : {};
+      const fallbackSlots = Math.max(
+        Number(runtimeControls?.max_fallback_slots || 0),
+        Array.isArray(runtimeControls?.fallbacks) ? runtimeControls.fallbacks.length : 0,
+        5,
+      );
+      const primary = String(document.getElementById("runtimeChainModelSelect_primary")?.value || "").trim();
+      const contextTokens = Number(document.getElementById("runtimeContextTokensInput")?.value || 0);
+      const thinkingDefault = String(document.getElementById("runtimeThinkingDefaultSelect")?.value || "off").trim().toLowerCase() || "off";
+      const fallbacks = [];
+      const slotThinking = {};
+
+      const primaryThinking = String(document.getElementById("runtimeChainThinkingSelect_primary")?.value || thinkingDefault).trim().toLowerCase() || thinkingDefault;
+      if (primary) {
+        slotThinking[primary] = primaryThinking;
+      }
+
+      for (let index = 0; index < fallbackSlots; index += 1) {
+        const modelId = String(document.getElementById(`runtimeChainModelSelect_fallback_${index + 1}`)?.value || "").trim();
+        const thinkingValue = String(document.getElementById(`runtimeChainThinkingSelect_fallback_${index + 1}`)?.value || thinkingDefault).trim().toLowerCase() || thinkingDefault;
+        if (!modelId) continue;
+        fallbacks.push(modelId);
+        slotThinking[modelId] = thinkingValue;
+      }
+
+      return {
+        primary,
+        fallbacks,
+        context_tokens: contextTokens,
+        thinking_default: thinkingDefault,
+        slot_thinking: slotThinking,
+      };
+    }
+
+    function renderProviderHealthCards(catalog) {
+      const root = document.getElementById("modelProviderHealth");
+      if (!root) return;
+      const providerGroups = Array.isArray(catalog?.cloud_provider_groups)
+        ? catalog.cloud_provider_groups
+        : [];
+      if (!providerGroups.length) {
+        root.innerHTML = "";
+        return;
+      }
+      root.innerHTML = providerGroups.map((group) => {
+        const readiness = String(group?.provider_readiness || "unknown").trim().toLowerCase();
+        const tone = readiness === "blocked"
+          ? {
+            bg: "rgba(239, 68, 68, 0.08)",
+            border: "rgba(239, 68, 68, 0.22)",
+            badge: "bad",
+          }
+          : readiness === "attention"
+            ? {
+              bg: "rgba(245, 158, 11, 0.08)",
+              border: "rgba(245, 158, 11, 0.22)",
+              badge: "warn",
+            }
+            : {
+              bg: "rgba(34, 197, 94, 0.08)",
+              border: "rgba(34, 197, 94, 0.22)",
+              badge: "ok",
+            };
+        const oauthLabel = String(group?.provider_oauth_status || "").trim();
+        const oauthTtl = String(group?.provider_oauth_remaining_human || "").trim();
+        const quotaLabel = String(group?.provider_quota_label || "").trim();
+        const quotaState = String(group?.provider_quota_state || "").trim().toLowerCase();
+        const effectiveKind = String(group?.provider_effective_kind || "").trim();
+        const configuredCount = Number(group?.configured_model_count || 0);
+        const totalCount = Number(group?.model_count || 0);
+        const catalogOnlyCount = Number(group?.catalog_only_model_count || 0);
+        const authLine = effectiveKind
+          ? `Подключение: ${buildEffectiveKindLabel(effectiveKind)}${String(group?.provider_effective_detail || "").trim() ? ` • ${String(group?.provider_effective_detail || "").trim()}` : ""}`
+          : "";
+        const oauthLine = oauthLabel
+          ? `OAuth: ${oauthLabel}${oauthTtl ? ` • TTL ${oauthTtl}` : ""}`
+          : "";
+        const quotaLine = quotaState && quotaState !== "unknown" && quotaLabel
+          ? `Квота: ${quotaLabel}`
+          : "";
+        const detailLine = String(group?.provider_detail || "").trim();
+        const providerUi = group?.provider_ui && typeof group.provider_ui === "object"
+          ? group.provider_ui
+          : {};
+        const repairAvailable = Boolean(providerUi?.repair_available);
+        const repairLabel = String(providerUi?.repair_label || "").trim();
+        const repairAction = String(providerUi?.repair_action || "").trim();
+        const providerName = String(group?.provider || "").trim();
+        const repairButton = repairAvailable && repairLabel && repairAction && providerName
+          ? `
+            <div class="assistant-actions" style="margin-top: 10px;">
+              <button
+                class="model-provider-action-btn"
+                data-provider="${escapeHtml(providerName)}"
+                data-action="${escapeHtml(repairAction)}"
+              >${escapeHtml(repairLabel)}</button>
+            </div>
+          `
+          : "";
+        return `
+          <div style="padding: 14px; border-radius: 14px; border: 1px solid ${tone.border}; background: ${tone.bg};">
+            <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">
+              <strong style="font-size: 0.95rem;">${escapeHtml(String(group?.provider_label || group?.provider || "Cloud"))}</strong>
+              <span class="badge ${tone.badge}">${escapeHtml(String(group?.provider_readiness_label || "Configured"))}</span>
+            </div>
+            <div class="card-meta" style="margin-top: 8px;">Runtime: ${configuredCount}/${totalCount} моделей • catalog-only ${catalogOnlyCount}</div>
+            ${authLine ? `<div class="card-meta" style="margin-top: 4px;">${escapeHtml(authLine)}</div>` : ""}
+            ${oauthLine ? `<div class="card-meta" style="margin-top: 4px;">${escapeHtml(oauthLine)}</div>` : ""}
+            ${quotaLine ? `<div class="card-meta" style="margin-top: 4px;">${escapeHtml(quotaLine)}</div>` : ""}
+            ${detailLine ? `<div class="card-meta" style="margin-top: 6px; color: var(--text-main);">${escapeHtml(detailLine)}</div>` : ""}
+            ${repairButton}
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function runProviderAction(provider, action) {
+      const metaNode = document.getElementById("modelProviderActionMeta");
+      if (metaNode) {
+        metaNode.textContent = `Запускаю действие для ${provider}...`;
+      }
+      const payload = await postJson("/api/model/provider-action", { provider, action });
+      if (!payload?.ok) {
+        throw new Error(payload?.error || "provider_action_failed");
+      }
+      const detail = String(payload?.detail || "").trim();
+      const launchPath = String(payload?.launch?.path || "").trim();
+      if (metaNode) {
+        metaNode.textContent = detail
+          ? `${payload.message} ${detail}${launchPath ? ` • ${launchPath}` : ""}`
+          : `${payload.message}${launchPath ? ` • ${launchPath}` : ""}`;
+      }
+      showToast(String(payload?.message || "Provider helper запущен"), "success");
+      setTimeout(() => {
+        loadModelCatalog(false).catch(() => {});
+      }, 1200);
+      return payload;
+    }
+
+    function describeModelForChain(modelId, catalog) {
+      const rawModelId = String(modelId || "").trim();
+      if (!rawModelId) return "-";
+      const cloudInventory = Array.isArray(catalog?.cloud_inventory)
+        ? catalog.cloud_inventory
+        : [];
+      const item = cloudInventory.find((entry) => String(entry?.id || "").trim() === rawModelId);
+      if (!item) return rawModelId;
+      const providerLabel = String(item?.provider_label || item?.provider || "Cloud").trim();
+      const authMode = String(item?.provider_auth || "").trim().toLowerCase();
+      const authLabel = authMode === "oauth"
+        ? "OAuth"
+        : (authMode === "api-key" ? "API key" : "auth ?");
+      return `${String(item?.name || item?.actual_model_id || rawModelId).trim()} (${providerLabel} • ${authLabel} • ${String(item?.actual_model_id || rawModelId).trim()})`;
+    }
+
+    function renderModelRoutingChain(catalog) {
+      const routing = catalog?.routing_status && typeof catalog.routing_status === "object"
+        ? catalog.routing_status
+        : {};
+      const primary = String(routing?.current_primary || "").trim();
+      const fallbacks = Array.isArray(routing?.current_fallbacks)
+        ? routing.current_fallbacks.filter(Boolean)
+        : [];
+      const tempPrimary = String(routing?.temporary_primary_recommendation || "").trim();
+      if (!primary && !fallbacks.length) {
+        setText("modelChainMeta", "Глобальная цепочка OpenClaw пока не определена.");
+        return;
+      }
+      const parts = [`Primary: ${describeModelForChain(primary, catalog)}`];
+      if (fallbacks.length) {
+        parts.push(
+          `Fallbacks: ${fallbacks.map((item, index) => `#${index + 1} ${describeModelForChain(item, catalog)}`).join(" • ")}`
+        );
+      }
+      if (routing?.current_primary_broken) {
+        parts.push(`primary unstable -> temp ${describeModelForChain(tempPrimary, catalog)}`);
+      }
+      setText("modelChainMeta", parts.join(" • "));
+    }
+
     function syncSlotModelSelection() {
       const slotNode = document.getElementById("modelSlotSelect");
-      const modelNode = document.getElementById("modelChoiceSelect");
+      const modelNode = document.getElementById("modelSlotChoiceSelect");
       if (!slotNode || !modelNode || !modelCatalogState) return;
       const slot = String(slotNode.value || "").trim();
       const currentModel = String(
@@ -1513,6 +2116,15 @@
         : [];
       const selectedSlot = String(
         document.getElementById("modelSlotSelect")?.value || "",
+      );
+      const selectedPreferredModel = String(
+        document.getElementById("assistantPreferredModelSelect")?.value || "",
+      );
+      const selectedSlotModel = String(
+        document.getElementById("modelSlotChoiceSelect")?.value || "",
+      );
+      const selectedInventoryModel = String(
+        document.getElementById("assistantCloudInventorySelect")?.value || "",
       );
 
       fillSelect(
@@ -1547,13 +2159,29 @@
           : slotNames[0] || "chat",
       );
 
-      const modelOptions = getModelOptionsFromCatalog(catalog);
+      const preferredOptions = getPreferredModelOptionsFromCatalog(catalog);
       fillSelect(
-        "modelChoiceSelect",
-        modelOptions.length
-          ? modelOptions
+        "assistantPreferredModelSelect",
+        preferredOptions.length
+          ? preferredOptions
           : [{ value: "", label: "(модели не обнаружены)" }],
-        "",
+        selectedPreferredModel,
+      );
+      const inventoryOptions = getCloudInventoryOptionsFromCatalog(catalog);
+      fillSelect(
+        "assistantCloudInventorySelect",
+        inventoryOptions.length
+          ? inventoryOptions
+          : [{ value: "", label: "(cloud inventory пуст)" }],
+        selectedInventoryModel,
+      );
+      const cloudModelOptions = getCloudSlotOptionsFromCatalog(catalog);
+      fillSelect(
+        "modelSlotChoiceSelect",
+        cloudModelOptions.length
+          ? cloudModelOptions
+          : [{ value: "", label: "(cloud-модели не обнаружены)" }],
+        selectedSlotModel,
       );
       syncSlotModelSelection();
 
@@ -1563,10 +2191,70 @@
       const active = catalog?.local_active_model
         ? ` • active=${catalog.local_active_model}`
         : "";
+      const guidance = String(catalog?.catalog_guidance?.primary_flow || "").trim();
+      const providerGroups = Array.isArray(catalog?.cloud_provider_groups)
+        ? catalog.cloud_provider_groups
+        : [];
+      const providerSummary = providerGroups.length
+        ? providerGroups
+          .map((group) => {
+            const name = String(group?.provider_label || group?.provider || "Cloud");
+            const readiness = String(group?.provider_readiness_label || "Configured");
+            const configuredCount = Number(group?.configured_model_count || 0);
+            const count = Number(group?.model_count || 0);
+            const oauthTtl = String(group?.provider_oauth_remaining_human || "").trim();
+            return `${name}: ${configuredCount}/${count} (${readiness}${oauthTtl ? `, TTL ${oauthTtl}` : ""})`;
+          })
+          .join(" • ")
+        : "Cloud-провайдеры не обнаружены";
+      const routerUsage = catalog?.router_usage && typeof catalog.router_usage === "object"
+        ? catalog.router_usage
+        : {};
+      const routerTotals = routerUsage.totals && typeof routerUsage.totals === "object"
+        ? routerUsage.totals
+        : {};
+      const routerSoftCap = routerUsage.soft_cap && typeof routerUsage.soft_cap === "object"
+        ? routerUsage.soft_cap
+        : {};
+      const routerBudgetText = routerSoftCap.cloud_soft_cap_calls != null
+        ? `Router budget: cloud ${routerTotals.cloud_calls ?? 0}/${routerSoftCap.cloud_soft_cap_calls} • left ${routerSoftCap.cloud_remaining_calls ?? 0}`
+        : "Router usage здесь отражает только usage/cost роутера, а не баланс провайдера.";
+      const quotaKnown = providerGroups.filter((group) => String(group?.provider_quota_state || "").trim().toLowerCase() !== "unknown");
+      const quotaSummary = quotaKnown.length
+        ? quotaKnown.map((group) => `${String(group?.provider_label || group?.provider || "Cloud")}: ${String(group?.provider_quota_label || "").trim()}`).join(" • ")
+        : "Квоты провайдеров: live остаток сейчас не публикуется; ниже показаны только auth TTL и подтверждённые quota/rate-limit ошибки.";
+      const parallelism = catalog?.parallelism_truth && typeof catalog.parallelism_truth === "object"
+        ? catalog.parallelism_truth
+        : {};
+      const parallelismSummary = [
+        String(parallelism?.summary_label || "").trim(),
+        String(parallelism?.detail_label || "").trim(),
+        String(parallelism?.broadcast_note || "").trim(),
+      ].filter(Boolean).join(" • ");
       setText(
         "modelControlMeta",
         `Каталог обновлен • mode=${mode} • ${localState}${active}`,
       );
+      setText("modelRoutingHint", guidance || "Сначала выбери режим и профиль. Точный слот меняй только в advanced override.");
+      setText("modelProvidersMeta", providerSummary);
+      setText("modelQuotaMeta", `${quotaSummary} • ${routerBudgetText}`);
+      setText("modelParallelismMeta", parallelismSummary || "Parallel / sequential semantics для этого runtime ещё не подтверждены.");
+      renderModelRoutingChain(catalog);
+      renderGlobalRoutingEditor(catalog);
+      const runtimeControls = catalog?.runtime_controls && typeof catalog.runtime_controls === "object"
+        ? catalog.runtime_controls
+        : {};
+      const runtimeFallbackCount = Array.isArray(runtimeControls?.fallbacks)
+        ? runtimeControls.fallbacks.length
+        : 0;
+      const runtimeThinkingDefault = String(runtimeControls?.thinking_default || "off").trim().toLowerCase() || "off";
+      const runtimeContextTokens = Number(runtimeControls?.context_tokens || 0);
+      setText(
+        "modelRuntimeKnobsMeta",
+        `Global: ${formatContextWindow(runtimeContextTokens) || `${runtimeContextTokens} ctx`} • thinkingDefault ${buildThinkingModeLabel(runtimeThinkingDefault)} • fallbacks ${runtimeFallbackCount}`,
+      );
+      renderProviderHealthCards(catalog);
+      setText("modelProviderActionMeta", "One-click repair доступен прямо на карточках провайдеров, где для этого есть helper.");
     }
 
     async function loadModelCatalog(showStatus = true) {
@@ -1577,7 +2265,12 @@
         }
         syncModelControls(payload.catalog || {});
         if (showStatus) {
-          setText("modelControlMeta", "Каталог моделей готов.");
+          const guidance = String(
+            payload?.catalog?.catalog_guidance?.primary_flow || "",
+          ).trim();
+          if (guidance) {
+            setText("modelRoutingHint", guidance);
+          }
         }
       } catch (error) {
         setText(
@@ -1585,6 +2278,56 @@
           `Ошибка каталога моделей: ${error.message}`,
         );
       }
+    }
+
+    function findInventoryModel(modelId) {
+      const cloudInventory = Array.isArray(modelCatalogState?.cloud_inventory)
+        ? modelCatalogState.cloud_inventory
+        : [];
+      return cloudInventory.find((item) => String(item?.id || "").trim() === String(modelId || "").trim()) || null;
+    }
+
+    async function probeSelectedCloudModel() {
+      const model = String(document.getElementById("assistantCloudInventorySelect")?.value || "").trim();
+      if (!model) {
+        setText("assistantProbeMeta", "Сначала выбери cloud-модель из live inventory.");
+        return;
+      }
+      const selected = findInventoryModel(model);
+      const skipReasoning = !Boolean(selected?.reasoning);
+      const reasoningDepth = String(document.getElementById("assistantReasoningDepth")?.value || "auto").trim();
+      const reasoningMode = reasoningDepth === "deep" ? "high" : (reasoningDepth === "fast" ? "low" : "medium");
+      setText("assistantProbeMeta", `Проверяю ${model}...`);
+      try {
+        const probe = await fetchJson(
+          `/api/openclaw/model-compat/probe?model=${encodeURIComponent(model)}&reasoning=${encodeURIComponent(reasoningMode)}&skip_reasoning=${skipReasoning ? "true" : "false"}`,
+        );
+        const payload = probe?.probe || {};
+        const status = String(payload?.status || "UNKNOWN").trim();
+        const reason = String(payload?.reason || "no_reason").trim();
+        const effectiveModel = String(payload?.runtime_truth?.effective_model || model).trim();
+        setText("assistantProbeMeta", `${status} • ${reason} • effective=${effectiveModel}`);
+        const probeLines = [
+          `Модель: ${model}`,
+          `Статус: ${status}`,
+          `Причина: ${reason}`,
+          `Effective model: ${effectiveModel}`,
+          `В runtime registry: ${payload?.target_in_runtime_registry ? "yes" : "no"}`,
+          `Promotion ready: ${payload?.promotion_ready ? "yes" : "no"}`,
+        ];
+        document.getElementById("assistantOutput").textContent = probeLines.join("\n");
+      } catch (error) {
+        showApiError("assistantProbeMeta", "Model Probe", error);
+      }
+    }
+
+    async function applyGlobalRuntimeChain() {
+      const payload = collectGlobalRoutingPayload();
+      if (!payload.primary) {
+        setText("modelRuntimeKnobsMeta", "Сначала выбери primary для глобальной цепочки.");
+        return;
+      }
+      await applyModelAction("set_runtime_chain", payload);
     }
 
     async function applyModelAction(action, extraPayload = {}) {
@@ -1929,7 +2672,7 @@
         .trim()
         .toLowerCase();
       const selectedModel = (
-        document.getElementById("modelChoiceSelect")?.value || ""
+        document.getElementById("assistantPreferredModelSelect")?.value || ""
       ).trim();
       let taskType = taskTypeRaw || "chat";
       const confirmExpensive = depthRaw === "deep";
@@ -2032,7 +2775,7 @@
         document.getElementById("assistantApiKey").value || ""
       ).trim();
       const selectedModel = (
-        document.getElementById("modelChoiceSelect").value || ""
+        document.getElementById("assistantPreferredModelSelect").value || ""
       ).trim();
       let taskType = taskTypeRaw || "chat";
       const confirmExpensive = depthRaw === "deep";
@@ -2416,6 +3159,7 @@ ${channelsText}`;
           if (runtimeConfig && runtimeConfig.ok) {
             window.__runtimeGatewayTokenPresent = Boolean(runtimeConfig.gateway_token_present);
             window.__runtimeGatewayTokenMasked = String(runtimeConfig.gateway_token_masked || "");
+            applyRuntimeConfigTruth(runtimeConfig);
           }
           updateTokenStatus();
 
@@ -2749,19 +3493,36 @@ ${channelsText}`;
     document.getElementById("opsAckBtn").addEventListener("click", withBtnState("opsAckBtn", "Wait...", () => opsAckAction(true)));
     document.getElementById("opsUnackBtn").addEventListener("click", withBtnState("opsUnackBtn", "Wait...", () => opsAckAction(false)));
     document.getElementById("modelCatalogReloadBtn").addEventListener("click", withBtnState("modelCatalogReloadBtn", "Reloading...", () => loadModelCatalog(true)));
+    document.getElementById("assistantProbeModelBtn").addEventListener("click", withBtnState("assistantProbeModelBtn", "Checking...", probeSelectedCloudModel));
+    document.getElementById("modelApplyRuntimeChainBtn").addEventListener("click", withBtnState("modelApplyRuntimeChainBtn", "Saving...", applyGlobalRuntimeChain));
+    document.getElementById("modelProviderHealth").addEventListener("click", async (event) => {
+      const button = event.target.closest(".model-provider-action-btn");
+      if (!button) return;
+      const provider = String(button.dataset.provider || "").trim();
+      const action = String(button.dataset.action || "").trim();
+      if (!provider || !action) return;
+      const previousText = button.textContent;
+      button.disabled = true;
+      button.textContent = "Подождите...";
+      try {
+        await runProviderAction(provider, action);
+      } catch (error) {
+        showToast(`Provider action error: ${error.message}`, "error");
+        setText("modelProviderActionMeta", `Ошибка provider action: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = previousText;
+      }
+    });
 
     document.getElementById("modelApplyModeBtn").addEventListener("click", withBtnState("modelApplyModeBtn", "Wait...", async () => {
       const mode = (document.getElementById("modelModeSelect").value || "auto").trim();
-      await applyModelAction("set_mode", { mode });
-    }));
-    document.getElementById("modelApplyPresetBtn").addEventListener("click", withBtnState("modelApplyPresetBtn", "Wait...", async () => {
       const preset = (document.getElementById("modelPresetSelect").value || "").trim();
-      const localModel = (document.getElementById("modelChoiceSelect").value || "").trim();
-      await applyModelAction("apply_preset", { preset, local_model: localModel });
+      await applyModelAction("apply_preset", { preset, mode_override: mode });
     }));
     document.getElementById("modelApplySlotBtn").addEventListener("click", withBtnState("modelApplySlotBtn", "Wait...", async () => {
       const slot = (document.getElementById("modelSlotSelect").value || "").trim();
-      const model = (document.getElementById("modelChoiceSelect").value || "").trim();
+      const model = (document.getElementById("modelSlotChoiceSelect").value || "").trim();
       await applyModelAction("set_slot_model", { slot, model });
     }));
 
@@ -2811,6 +3572,39 @@ ${channelsText}`;
         tokenBadge.style.color = "var(--state-warn)";
         tokenBadge.style.borderColor = "var(--state-warn)";
       }
+    }
+
+    function formatHistoryBudget(historyBudget) {
+      const budget = historyBudget && typeof historyBudget === "object" ? historyBudget : {};
+      const dialogMsgs = Number(budget.dialog_messages || 0);
+      const localMsgs = Number(budget.local_messages || 0);
+      const retryMsgs = Number(budget.retry_messages || 0);
+      const localChars = budget.local_max_chars == null ? "inf" : String(budget.local_max_chars);
+      return `${dialogMsgs}/${localMsgs}/${retryMsgs} msg • local ${localChars}`;
+    }
+
+    function formatOutputBudget(runtimePolicy) {
+      const policy = runtimePolicy && typeof runtimePolicy === "object" ? runtimePolicy : {};
+      const outputTokens = policy.output_tokens && typeof policy.output_tokens === "object" ? policy.output_tokens : {};
+      const textCap = Number(outputTokens.text || 0);
+      const photoCap = Number(outputTokens.photo || 0);
+      const photoMode = policy.photo_force_cloud ? "cloud-photo" : "mixed-photo";
+      return `${textCap}/${photoCap} tok • ${photoMode}`;
+    }
+
+    function applyRuntimeConfigTruth(runtimeConfig) {
+      const payload = runtimeConfig && typeof runtimeConfig === "object" ? runtimeConfig : {};
+      window.__runtimeConfigTruth = payload;
+      const policy = payload.runtime_policy && typeof payload.runtime_policy === "object" ? payload.runtime_policy : {};
+      const historyBudget = policy.history_budget && typeof policy.history_budget === "object" ? policy.history_budget : {};
+
+      const authText = payload.gateway_auth_state === "configured"
+        ? `Configured (${payload.gateway_token_kind || "plain"})`
+        : "Missing";
+      setText("ocrouteAuth", authText);
+      setText("ocrouteReasoning", String(policy.native_reasoning_mode || "off"));
+      setText("ocrouteHistory", formatHistoryBudget(historyBudget));
+      setText("ocrouteOutput", formatOutputBudget(policy));
     }
     if (apiKeyInput) {
       apiKeyInput.addEventListener("input", updateTokenStatus);
@@ -2948,6 +3742,23 @@ ${channelsText}`;
       }
     }));
 
+    document.getElementById("ocBrowserOwnerBtn").addEventListener("click", withBtnState("ocBrowserOwnerBtn", "Открываю...", async () => {
+      try {
+        setText("ocBrowserOwnerMeta", "Открываю owner Chrome helper...");
+        const payload = await postJson("/api/openclaw/browser/open-owner-chrome", {});
+        const launcher = String(payload.launcher || "unknown");
+        const nextStep = String(payload.next_step || "Проверь owner Chrome и обнови статус.");
+        const helperPath = String(payload.helper_path || "");
+        const helperTail = helperPath ? ` (${helperPath.split("/").pop()})` : "";
+        setText("ocBrowserOwnerMeta", `Owner Chrome: ${launcher}${helperTail}. ${nextStep}`);
+        showToast("Открыл owner Chrome helper", "success");
+        await loadOpenclawStatus(false);
+      } catch (e) {
+        setText("ocBrowserOwnerMeta", `Ошибка owner Chrome: ${e.message}`);
+        showToast(`Owner Chrome error: ${e.message}`, "error");
+      }
+    }));
+
     async function loadControlCompatStatus(showStatus = true) {
       try {
         const res = await fetch("/api/openclaw/control-compat/status");
@@ -3016,7 +3827,7 @@ ${channelsText}`;
         const autoswitchProfile = autoswitchProfileSelect ? String(autoswitchProfileSelect.value || "toggle") : "toggle";
         const autoswitchStatusProfile = autoswitchProfile === "toggle" ? "current" : autoswitchProfile;
 
-        const [catalogRes, autoswitchRes, channelsRes, browserReadinessRes] = await Promise.all([
+        const [catalogRes, autoswitchRes, channelsRes, browserReadinessRes, runtimeConfigRes] = await Promise.all([
           fetch("/api/model/catalog").catch((e) => ({
             ok: false,
             error: e.message,
@@ -3033,7 +3844,24 @@ ${channelsText}`;
             ok: false,
             error: e.message,
           })),
+          fetch("/api/openclaw/runtime-config").catch((e) => ({
+            ok: false,
+            error: e.message,
+          })),
         ]);
+
+        if (runtimeConfigRes.ok) {
+          const runtimeConfig = await runtimeConfigRes.json().catch(() => ({}));
+          window.__runtimeGatewayTokenPresent = Boolean(runtimeConfig.gateway_token_present);
+          window.__runtimeGatewayTokenMasked = String(runtimeConfig.gateway_token_masked || "");
+          applyRuntimeConfigTruth(runtimeConfig);
+          updateTokenStatus();
+        } else {
+          setText("ocrouteAuth", "ERR");
+          setText("ocrouteReasoning", "ERR");
+          setText("ocrouteHistory", "ERR");
+          setText("ocrouteOutput", "ERR");
+        }
 
         // Catalog processing
         if (catalogRes.ok) {
@@ -3112,23 +3940,34 @@ ${channelsText}`;
 
         // Browser / MCP readiness
         const stageBadge = document.getElementById("ocBrowserStage");
+        const contourValue = document.getElementById("ocBrowserContour");
         const relayBadge = document.getElementById("ocRelayReachable");
         const tabsValue = document.getElementById("ocBrowserTabs");
+        const ownerAttachBadge = document.getElementById("ocBrowserOwnerAttach");
+        const relayPathBadge = document.getElementById("ocBrowserRelayPath");
+        const devtoolsPathBadge = document.getElementById("ocChromeDevtoolsPath");
         const syncBadge = document.getElementById("ocMcpSync");
         const mcpReady = document.getElementById("ocMcpReady");
         const nextStep = document.getElementById("ocBrowserNext");
         const notes = document.getElementById("ocBrowserMcpNotes");
         const startBtn = document.getElementById("ocBrowserStartBtn");
         const startMeta = document.getElementById("ocBrowserStartMeta");
+        const ownerBtn = document.getElementById("ocBrowserOwnerBtn");
+        const ownerMeta = document.getElementById("ocBrowserOwnerMeta");
         if (browserReadinessRes.ok) {
           const payload = await browserReadinessRes.json().catch(() => ({}));
           const browser = payload.browser || {};
           const browserRuntime = browser.runtime || {};
+          const browserPaths = Array.isArray(browser.paths) ? browser.paths : [];
           const smoke = browser.smoke || {};
           const mcp = payload.mcp || {};
           const mcpSummary = mcp.summary || {};
           const sync = mcp.sync || {};
           const browserReadiness = String(browser.readiness || "attention");
+          const activeContour = String(browserRuntime.active_contour || "unknown");
+          const ownerAttachConfirmed = Boolean(browserRuntime.owner_attach_confirmed);
+          const relayRunning = Boolean(browserRuntime.running);
+          const cdpReady = Boolean(browserRuntime.cdp_ready);
           const stageClass = browserReadiness === "ready" ? "ok" : (browserReadiness === "blocked" ? "bad" : "warn");
           const stageText = browser.stage_label || browser.state || "—";
           const relayOk = Boolean(smoke.relay_reachable);
@@ -3138,6 +3977,10 @@ ${channelsText}`;
             ? "SYNC"
             : (syncState === "drift" ? "DRIFT" : (syncState === "missing" ? "MISSING" : "ERROR"));
           const noteParts = [];
+          const relayPath = browserPaths.find((item) => String(item.kind || "") === "openclaw_relay") || {};
+          const devtoolsPath = browserPaths.find((item) => String(item.kind || "") === "chrome_devtools") || {};
+          const relayPathReadiness = String(relayPath.readiness || "attention");
+          const devtoolsPathReadiness = String(devtoolsPath.readiness || "attention");
           if (browser.summary) noteParts.push(String(browser.summary));
           if (Array.isArray(browser.warnings) && browser.warnings.length) noteParts.push(String(browser.warnings[0]));
           if (Array.isArray(browser.blockers) && browser.blockers.length) noteParts.push(String(browser.blockers[0]));
@@ -3148,12 +3991,30 @@ ${channelsText}`;
             stageBadge.className = `badge ${stageClass}`;
             stageBadge.textContent = stageText;
           }
+          if (contourValue) {
+            contourValue.textContent = String(browserRuntime.active_contour_label || "—");
+          }
           if (relayBadge) {
             relayBadge.className = relayOk ? "badge ok" : (browserReadiness === "blocked" ? "badge bad" : "badge warn");
             relayBadge.textContent = relayOk ? "Yes" : "No";
           }
           if (tabsValue) {
             tabsValue.textContent = String(browserRuntime.tabs_count ?? "0");
+          }
+          if (ownerAttachBadge) {
+            const ownerAttachClass = ownerAttachConfirmed ? "ok" : (activeContour === "debug_browser" ? "warn" : (browserReadiness === "blocked" ? "bad" : "warn"));
+            ownerAttachBadge.className = `badge ${ownerAttachClass}`;
+            ownerAttachBadge.textContent = ownerAttachConfirmed ? "CONFIRMED" : (activeContour === "debug_browser" ? "PENDING" : "UNKNOWN");
+          }
+          if (relayPathBadge) {
+            const relayPathClass = relayPathReadiness === "ready" ? "ok" : (relayPathReadiness === "blocked" ? "bad" : "warn");
+            relayPathBadge.className = `badge ${relayPathClass}`;
+            relayPathBadge.textContent = String(relayPath.active_label || relayPath.state || "—");
+          }
+          if (devtoolsPathBadge) {
+            const devtoolsPathClass = devtoolsPathReadiness === "ready" ? "ok" : (devtoolsPathReadiness === "blocked" ? "bad" : "warn");
+            devtoolsPathBadge.className = `badge ${devtoolsPathClass}`;
+            devtoolsPathBadge.textContent = String(devtoolsPath.active_label || devtoolsPath.state || "—");
           }
           if (syncBadge) {
             syncBadge.className = `badge ${syncClass}`;
@@ -3166,21 +4027,46 @@ ${channelsText}`;
             nextStep.textContent = String(browser.next_step || "—");
           }
           if (notes) {
-            notes.textContent = noteParts.filter(Boolean).slice(0, 2).join(" · ") || "—";
+            const pathHint = [relayPath.detail, devtoolsPath.detail].filter(Boolean).join(" · ");
+            notes.textContent = [pathHint, ...noteParts].filter(Boolean).slice(0, 2).join(" · ") || "—";
           }
           if (startBtn) {
-            startBtn.dataset.keepDisabled = browserReadiness === "ready" ? "true" : "false";
-            startBtn.disabled = browserReadiness === "ready";
+            const keepDisabled = browserReadiness === "ready" || (relayRunning && cdpReady);
+            startBtn.dataset.keepDisabled = keepDisabled ? "true" : "false";
+            startBtn.disabled = keepDisabled;
           }
           if (startMeta) {
-            startMeta.textContent = browserReadiness === "ready"
-              ? "Browser relay уже готов."
-              : "Если dedicated browser не поднялся после restart, можно запустить его отсюда.";
+            if (browserReadiness === "ready") {
+              startMeta.textContent = "Browser relay уже готов.";
+            } else if (relayRunning && activeContour === "debug_browser") {
+              startMeta.textContent = "Dedicated debug browser уже запущен; для owner attach нужен обычный Chrome.";
+            } else if (relayRunning) {
+              startMeta.textContent = "Browser relay уже запущен; проверь attach/авторизацию.";
+            } else {
+              startMeta.textContent = "Если dedicated browser не поднялся после restart, можно запустить его отсюда.";
+            }
+          }
+          if (ownerBtn) {
+            const keepDisabled = ownerAttachConfirmed;
+            ownerBtn.dataset.keepDisabled = keepDisabled ? "true" : "false";
+            ownerBtn.disabled = keepDisabled;
+          }
+          if (ownerMeta) {
+            if (ownerAttachConfirmed) {
+              ownerMeta.textContent = "Owner Chrome уже подтверждён.";
+            } else if (devtoolsPathReadiness === "attention") {
+              ownerMeta.textContent = "Откроет обычный Chrome на странице Remote Debugging через существующий .command helper.";
+            } else {
+              ownerMeta.textContent = "Подготовь обычный Chrome для owner attach и затем обнови статус.";
+            }
           }
         } else {
           if (stageBadge) {
             stageBadge.className = "badge bad";
             stageBadge.textContent = "API ERR";
+          }
+          if (contourValue) {
+            contourValue.textContent = "—";
           }
           if (relayBadge) {
             relayBadge.className = "badge bad";
@@ -3188,6 +4074,18 @@ ${channelsText}`;
           }
           if (tabsValue) {
             tabsValue.textContent = "—";
+          }
+          if (ownerAttachBadge) {
+            ownerAttachBadge.className = "badge bad";
+            ownerAttachBadge.textContent = "ERROR";
+          }
+          if (relayPathBadge) {
+            relayPathBadge.className = "badge bad";
+            relayPathBadge.textContent = "ERROR";
+          }
+          if (devtoolsPathBadge) {
+            devtoolsPathBadge.className = "badge bad";
+            devtoolsPathBadge.textContent = "ERROR";
           }
           if (syncBadge) {
             syncBadge.className = "badge bad";
@@ -3208,6 +4106,13 @@ ${channelsText}`;
           }
           if (startMeta) {
             startMeta.textContent = "Не удалось прочитать browser readiness.";
+          }
+          if (ownerBtn) {
+            ownerBtn.dataset.keepDisabled = "false";
+            ownerBtn.disabled = false;
+          }
+          if (ownerMeta) {
+            ownerMeta.textContent = "Не удалось получить owner Chrome readiness.";
           }
         }
 

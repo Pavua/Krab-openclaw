@@ -18,6 +18,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -47,6 +48,10 @@ from src.core.model_aliases import (  # noqa: E402
     normalize_model_alias,
     parse_model_set_request,
     render_model_presets_text,
+)
+from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
+    discover_gateway_signal_log,
+    runtime_auth_failed_providers_from_signal_log,
 )
 from src.core.observability import (  # noqa: E402
     build_ops_response,
@@ -182,6 +187,121 @@ class WebApp:
         return Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
 
     @classmethod
+    def _openclaw_agent_config_path(cls) -> Path:
+        """Путь к main agent.json OpenClaw, который тоже должен идти в ногу с primary."""
+        return Path.home() / ".openclaw" / "agents" / "main" / "agent" / "agent.json"
+
+    @staticmethod
+    def _json_backup_path(path: Path, *, label: str) -> Path:
+        """Формирует timestamp backup path рядом с исходным JSON-файлом."""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+        safe_label = re.sub(r"[^a-z0-9_-]+", "_", str(label or "backup").strip().lower()) or "backup"
+        return path.with_suffix(path.suffix + f".bak_{safe_label}_{stamp}")
+
+    @classmethod
+    def _backup_json_file(cls, path: Path, *, label: str) -> str:
+        """Создаёт backup JSON-конфига перед записью, чтобы откат был тривиальным."""
+        if not path.exists():
+            return ""
+        backup_path = cls._json_backup_path(path, label=label)
+        backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        return str(backup_path)
+
+    @staticmethod
+    def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
+        """Пишет JSON детерминированно и с финальным переводом строки."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _normalize_runtime_model_id(raw_model: Any) -> tuple[str, str]:
+        """Нормализует model id/alias до canonical runtime-id."""
+        raw = str(raw_model or "").strip()
+        if not raw:
+            return "", ""
+        resolved_model, alias_note = normalize_model_alias(raw)
+        canonical = str(resolved_model or "").strip()
+        return canonical, str(alias_note or "").strip()
+
+    @staticmethod
+    def _normalize_thinking_mode(raw_value: Any, *, allow_blank: bool = False) -> str:
+        """Ограничивает thinking к набору режимов, которые уже используются в runtime."""
+        normalized = str(raw_value or "").strip().lower()
+        if not normalized and allow_blank:
+            return ""
+        allowed = {"off", "auto", "low", "medium", "high"}
+        if normalized not in allowed:
+            raise ValueError("runtime_invalid_thinking_mode")
+        return normalized
+
+    @staticmethod
+    def _normalize_context_tokens(raw_value: Any) -> int:
+        """Проверяет contextTokens, чтобы в runtime не уехали мусорные значения."""
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("runtime_invalid_context_tokens") from exc
+        if value < 4096 or value > 2_000_000:
+            raise ValueError("runtime_invalid_context_tokens")
+        return value
+
+    @classmethod
+    def _chrome_remote_debugging_helper_path(cls) -> Path:
+        """Путь к существующему macOS helper для owner Chrome attach."""
+        return cls._project_root() / "new Enable Chrome Remote Debugging.command"
+
+    @classmethod
+    def _launch_owner_chrome_remote_debugging(cls) -> dict[str, Any]:
+        """
+        Открывает owner Chrome flow через существующий проектный helper.
+
+        Почему так:
+        - в репозитории уже есть `.command` с понятной инструкцией для пользователя;
+        - owner UI должен запускать тот же сценарий, а не дублировать новый launcher;
+        - если helper отсутствует, деградируем в прямое открытие `chrome://inspect`.
+        """
+        helper_path = cls._chrome_remote_debugging_helper_path()
+        inspect_url = "chrome://inspect/#remote-debugging"
+
+        try:
+            if helper_path.exists():
+                subprocess.Popen(
+                    ["open", str(helper_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return {
+                    "ok": True,
+                    "launcher": "command",
+                    "helper_path": str(helper_path),
+                    "opened_url": inspect_url,
+                    "next_step": "В обычном Chrome включи Remote Debugging и оставь профиль открытым.",
+                }
+
+            chrome_app = "/Applications/Google Chrome.app"
+            open_target = chrome_app if Path(chrome_app).exists() else "Google Chrome"
+            subprocess.Popen(
+                ["open", "-a", open_target, inspect_url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return {
+                "ok": True,
+                "launcher": "direct_open",
+                "helper_path": str(helper_path),
+                "opened_url": inspect_url,
+                "next_step": "В обычном Chrome включи Remote Debugging и затем обнови Browser / MCP Readiness.",
+            }
+        except OSError as exc:
+            return {
+                "ok": False,
+                "error": "chrome_remote_debugging_open_failed",
+                "detail": str(exc),
+                "helper_path": str(helper_path),
+                "opened_url": inspect_url,
+            }
+
+    @classmethod
     def _load_openclaw_runtime_config(cls) -> dict[str, Any]:
         """Читает runtime-конфиг OpenClaw; при ошибке возвращает пустой payload."""
         path = cls._openclaw_config_path()
@@ -208,6 +328,15 @@ class WebApp:
         except (OSError, ValueError, TypeError):
             return {"providers": {}}
 
+    @classmethod
+    def _load_openclaw_agent_config(cls) -> dict[str, Any]:
+        """Читает main agent.json OpenClaw; при ошибке возвращает пустой payload."""
+        path = cls._openclaw_agent_config_path()
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return {}
+
     @staticmethod
     def _provider_label(provider_name: str) -> str:
         """Человекочитаемый label провайдера для model catalog."""
@@ -220,8 +349,655 @@ class WebApp:
             "openai-codex": "OpenAI Codex",
             "lmstudio": "LM Studio",
             "github-copilot": "GitHub Copilot",
+            "qwen-portal": "Qwen Portal",
         }
         return labels.get(normalized, normalized or "provider")
+
+    @classmethod
+    def _provider_sort_rank(cls, provider_name: str) -> tuple[int, str]:
+        """Стабильный порядок провайдеров для owner UI."""
+        normalized = str(provider_name or "").strip().lower()
+        order = {
+            "google-gemini-cli": 10,
+            "google": 20,
+            "qwen-portal": 30,
+            "openai-codex": 40,
+            "openai": 50,
+            "github-copilot": 60,
+            "google-antigravity": 90,
+        }
+        return (order.get(normalized, 500), normalized)
+
+    @staticmethod
+    def _friendly_model_name(model_id: str, raw_name: str = "") -> str:
+        """Превращает сырой model id в понятное пользовательское имя."""
+        candidate_id = str(model_id or "").strip()
+        candidate_name = str(raw_name or "").strip()
+        tail = candidate_id.split("/", 1)[-1] if "/" in candidate_id else candidate_id
+        lowered_tail = tail.lower()
+
+        overrides = {
+            "gpt-5.4": "GPT-5.4",
+            "gpt-4.5-preview": "GPT-4.5 Preview",
+            "gpt-4o-mini": "GPT-4o Mini",
+            "coder-model": "Qwen Coder",
+            "vision-model": "Qwen Vision",
+            "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
+            "gemini-3-pro-preview": "Gemini 3 Pro Preview",
+            "gemini-pro-latest": "Gemini Pro Latest",
+            "gemini-1.5-pro": "Gemini 1.5 Pro",
+            "gemini-2.5-flash": "Gemini 2.5 Flash",
+            "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
+            "gemini-3-flash": "Gemini 3 Flash",
+        }
+        if lowered_tail in overrides:
+            return overrides[lowered_tail]
+        if candidate_name and candidate_name.lower() not in {"chatgpt 4.5 preview"}:
+            return candidate_name
+
+        normalized = re.sub(r"[_-]+", " ", tail)
+        normalized = re.sub(r"\b([a-z]+)\s+(\d+(?:\.\d+)?)\b", lambda m: f"{m.group(1).title()} {m.group(2)}", normalized)
+        normalized = normalized.replace("gpt ", "GPT-").replace("qwen ", "Qwen ").replace("gemini ", "Gemini ")
+        normalized = normalized.replace(" pro ", " Pro ").replace(" preview", " Preview").replace(" flash", " Flash")
+        normalized = normalized.replace(" lite", " Lite").replace(" vision", " Vision").replace(" coder", " Coder")
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized or tail
+
+    @staticmethod
+    def _humanize_remaining_ms(remaining_ms: Any) -> str:
+        """Нормализует remainingMs в короткий человекочитаемый вид для UI."""
+        try:
+            raw_ms = int(remaining_ms)
+        except (TypeError, ValueError):
+            return ""
+        if raw_ms == 0:
+            return "0м"
+        sign = "-" if raw_ms < 0 else ""
+        total_minutes = abs(raw_ms) // 60000
+        days, rem_minutes = divmod(total_minutes, 24 * 60)
+        hours, minutes = divmod(rem_minutes, 60)
+        parts: list[str] = []
+        if days:
+            parts.append(f"{days}д")
+        if hours:
+            parts.append(f"{hours}ч")
+        if minutes or not parts:
+            parts.append(f"{minutes}м")
+        return sign + " ".join(parts[:2])
+
+    @staticmethod
+    def _canonical_runtime_model_id(provider_name: str, raw_model_id: str) -> str:
+        """Нормализует raw model id в provider-prefixed вид."""
+        provider = str(provider_name or "").strip()
+        model_id = str(raw_model_id or "").strip()
+        if not model_id:
+            return ""
+        if "/" in model_id:
+            return model_id
+        return f"{provider}/{model_id}" if provider else model_id
+
+    @classmethod
+    def _provider_repair_helper_path(cls, provider_name: str) -> Path | None:
+        """Возвращает helper `.command` для провайдера, если он уже есть или поддерживается."""
+        normalized = str(provider_name or "").strip().lower()
+        mapping = {
+            "google-gemini-cli": cls._project_root() / "Login Gemini CLI OAuth.command",
+            "qwen-portal": cls._project_root() / "Login Qwen Portal OAuth.command",
+        }
+        return mapping.get(normalized)
+
+    @classmethod
+    def _provider_ui_metadata(cls, provider_name: str) -> dict[str, Any]:
+        """UI-подсказки и repair-рекомендации для конкретного провайдера."""
+        normalized = str(provider_name or "").strip().lower()
+        helper_path = cls._provider_repair_helper_path(normalized)
+        base = {
+            "manual_only": False,
+            "recommended": True,
+            "repair_available": bool(helper_path and helper_path.exists()),
+            "repair_label": "",
+            "repair_action": "",
+            "repair_detail": "",
+        }
+        if normalized == "google-gemini-cli":
+            base.update(
+                {
+                    "repair_label": "Перелогинить Gemini CLI",
+                    "repair_action": "repair_oauth",
+                    "repair_detail": "Откроет существующий one-click helper для Gemini CLI OAuth.",
+                }
+            )
+        elif normalized == "qwen-portal":
+            base.update(
+                {
+                    "repair_label": "Перелогинить Qwen Portal",
+                    "repair_action": "repair_oauth",
+                    "repair_detail": "Откроет Qwen Portal OAuth helper через OpenClaw plugin.",
+                }
+            )
+        elif normalized == "google-antigravity":
+            base.update(
+                {
+                    "recommended": False,
+                    "repair_available": bool(cls._provider_repair_helper_path("google-gemini-cli") and cls._provider_repair_helper_path("google-gemini-cli").exists()),
+                    "repair_label": "Перейти на Gemini CLI",
+                    "repair_action": "migrate_to_gemini_cli",
+                    "repair_detail": "Legacy provider. Вместо него используй официальный Gemini CLI OAuth flow.",
+                }
+            )
+        elif normalized == "openai":
+            base.update(
+                {
+                    "manual_only": True,
+                    "repair_label": "",
+                    "repair_action": "",
+                    "repair_detail": "API key модели доступны только для ручного выбора и не должны включаться автоматически.",
+                }
+            )
+        elif normalized == "openai-codex":
+            base.update(
+                {
+                    "repair_detail": "OAuth-модели видимы, но promotion зависит от разрешённых scopes в самом OpenAI Codex OAuth контуре.",
+                }
+            )
+        return base
+
+    @classmethod
+    def _openclaw_models_status_snapshot(cls) -> dict[str, dict[str, Any]]:
+        """
+        Truth-срез из `openclaw models status --json`.
+
+        Нужен, чтобы owner UI опирался на тот же auth/runtime view,
+        который уже считает сам OpenClaw, а не на самодельный разбор текста.
+        """
+        try:
+            proc = subprocess.run(
+                ["openclaw", "models", "status", "--json"],
+                cwd=str(cls._project_root()),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except Exception:
+            return {}
+        if proc.returncode != 0:
+            return {}
+        try:
+            payload = json.loads(str(proc.stdout or "{}"))
+        except (TypeError, ValueError):
+            return {}
+
+        auth_root = payload.get("auth") if isinstance(payload, dict) else {}
+        providers_meta = auth_root.get("providers") if isinstance(auth_root, dict) else []
+        oauth_root = auth_root.get("oauth") if isinstance(auth_root, dict) else {}
+        oauth_providers = oauth_root.get("providers") if isinstance(oauth_root, dict) else []
+
+        by_provider: dict[str, dict[str, Any]] = {}
+        for item in providers_meta if isinstance(providers_meta, list) else []:
+            if not isinstance(item, dict):
+                continue
+            provider_name = str(item.get("provider", "") or "").strip().lower()
+            if not provider_name:
+                continue
+            entry = by_provider.setdefault(provider_name, {"provider": provider_name})
+            effective = item.get("effective") if isinstance(item.get("effective"), dict) else {}
+            profiles = item.get("profiles") if isinstance(item.get("profiles"), dict) else {}
+            entry.update(
+                {
+                    "effective_kind": str(effective.get("kind", "") or "").strip(),
+                    "effective_detail": str(effective.get("detail", "") or "").strip(),
+                    "profile_count": int(profiles.get("count", 0) or 0),
+                    "profile_labels": [
+                        str(label or "").strip()
+                        for label in (profiles.get("labels") or [])
+                        if str(label or "").strip()
+                    ],
+                }
+            )
+
+        for item in oauth_providers if isinstance(oauth_providers, list) else []:
+            if not isinstance(item, dict):
+                continue
+            provider_name = str(item.get("provider", "") or "").strip().lower()
+            if not provider_name:
+                continue
+            entry = by_provider.setdefault(provider_name, {"provider": provider_name})
+            remaining_ms = item.get("remainingMs")
+            try:
+                normalized_remaining_ms = int(remaining_ms)
+            except (TypeError, ValueError):
+                normalized_remaining_ms = None
+            entry.update(
+                {
+                    "oauth_status": str(item.get("status", "") or "").strip().lower(),
+                    "oauth_expires_at": item.get("expiresAt"),
+                    "oauth_remaining_ms": normalized_remaining_ms,
+                    "oauth_remaining_human": cls._humanize_remaining_ms(normalized_remaining_ms),
+                    "oauth_profiles": item.get("profiles") if isinstance(item.get("profiles"), list) else [],
+                }
+            )
+
+        return {
+            "raw": payload if isinstance(payload, dict) else {},
+            "providers": by_provider,
+        }
+
+    @classmethod
+    def _openclaw_models_full_catalog(cls) -> dict[str, Any]:
+        """Читает `openclaw models list --all --json` и группирует модели по provider."""
+        try:
+            proc = subprocess.run(
+                ["openclaw", "models", "list", "--all", "--json"],
+                cwd=str(cls._project_root()),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+            )
+        except Exception:
+            return {"count": 0, "providers": {}}
+        if proc.returncode != 0:
+            return {"count": 0, "providers": {}}
+        try:
+            payload = json.loads(str(proc.stdout or "{}"))
+        except (TypeError, ValueError):
+            return {"count": 0, "providers": {}}
+
+        provider_map: dict[str, list[dict[str, Any]]] = {}
+        for item in (payload.get("models") or []) if isinstance(payload, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            model_key = str(item.get("key", "") or "").strip()
+            if "/" not in model_key:
+                continue
+            provider_name = model_key.split("/", 1)[0].strip().lower()
+            if not provider_name or provider_name in {"local", "lmstudio"}:
+                continue
+            provider_map.setdefault(provider_name, []).append(item)
+
+        for items in provider_map.values():
+            items.sort(
+                key=lambda item: (
+                    0 if "configured" in [str(tag or "").strip().lower() for tag in (item.get("tags") or [])] else 1,
+                    0 if "default" in [str(tag or "").strip().lower() for tag in (item.get("tags") or [])] else 1,
+                    str(item.get("name") or item.get("key") or "").lower(),
+                )
+            )
+
+        return {
+            "count": int(payload.get("count", 0) or 0) if isinstance(payload, dict) else 0,
+            "providers": provider_map,
+        }
+
+    @staticmethod
+    def _quota_state_from_failure_counts(failure_counts: dict[str, int] | None) -> dict[str, str]:
+        """Грубая, но честная классификация quota-состояния по live failure counts."""
+        raw = failure_counts if isinstance(failure_counts, dict) else {}
+        lowered_keys = {str(key or "").strip().lower() for key in raw.keys()}
+        if any(token in lowered_keys for token in {"quota", "quota_exceeded", "insufficient_quota", "billing_error"}):
+            return {
+                "quota_state": "blocked",
+                "quota_label": "Квота/баланс заблокировали запросы",
+            }
+        if any(token in lowered_keys for token in {"rate_limit", "rate_limited", "too_many_requests"}):
+            return {
+                "quota_state": "limited",
+                "quota_label": "Провайдер упирался в rate limit",
+            }
+        return {
+            "quota_state": "unknown",
+            "quota_label": "Провайдер не публикует остаток квоты",
+        }
+
+    @classmethod
+    def _build_openclaw_parallelism_truth(
+        cls,
+        *,
+        runtime_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Возвращает честное описание parallel / sequential semantics для owner UI.
+
+        Здесь важно не смешивать две разные вещи:
+        - queue concurrency для main/subagent lane;
+        - отдельные режимы `parallel / sequential`, которые встречаются в других
+          runtime-контурах OpenClaw вроде broadcast strategy.
+
+        Для глобальной панели Краба показываем только подтверждённый queue truth,
+        чтобы не выдавать это за единый глобальный переключатель.
+        """
+        payload = runtime_config if isinstance(runtime_config, dict) else cls._load_openclaw_runtime_config()
+        agents = payload.get("agents") if isinstance(payload, dict) else {}
+        defaults = agents.get("defaults") if isinstance(agents, dict) else {}
+        subagents = defaults.get("subagents") if isinstance(defaults, dict) else {}
+        if not isinstance(subagents, dict):
+            subagents = {}
+
+        def _positive_int(raw_value: Any) -> int | None:
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                return None
+            if value <= 0:
+                return None
+            return value
+
+        main_max = _positive_int(defaults.get("maxConcurrent"))
+        subagent_max = _positive_int(subagents.get("maxConcurrent"))
+
+        detail_parts: list[str] = []
+        if isinstance(main_max, int):
+            detail_parts.append(f"main lane до {main_max} задач одновременно")
+        if isinstance(subagent_max, int):
+            detail_parts.append(f"subagent lane до {subagent_max} задач одновременно")
+
+        return {
+            "summary_label": "Для main-agent OpenClaw использует queue concurrency, а не единый глобальный переключатель parallel / sequential.",
+            "detail_label": (
+                "; ".join(detail_parts)
+                if detail_parts
+                else "В live config отдельный queue cap для main/subagent не найден, но global parallel/sequential switch здесь тоже не подтверждён."
+            ),
+            "broadcast_note": "Именованные режимы parallel / sequential могут существовать отдельно, например в broadcast strategy, и это не то же самое, что queue cap main-agent.",
+            "main_max_concurrent": main_max,
+            "subagent_max_concurrent": subagent_max,
+        }
+
+    @classmethod
+    def _runtime_provider_model_ids_from_config(
+        cls,
+        provider_name: str,
+        *,
+        runtime_config: dict[str, Any] | None = None,
+        current_slots: dict[str, str] | None = None,
+    ) -> list[str]:
+        """
+        Собирает provider-модели из runtime-конфига, даже если models.json их не описывает.
+
+        Это критично для `google-gemini-cli`: он может быть активным в runtime и auth,
+        но отсутствовать в текущем registry-файле OpenClaw.
+        """
+        normalized_provider = str(provider_name or "").strip().lower()
+        if not normalized_provider:
+            return []
+
+        payload = runtime_config if isinstance(runtime_config, dict) else cls._load_openclaw_runtime_config()
+        agents = payload.get("agents") if isinstance(payload, dict) else {}
+        defaults = agents.get("defaults") if isinstance(agents, dict) else {}
+        model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+        if not isinstance(model_defaults, dict):
+            model_defaults = {}
+        model_overrides = defaults.get("models") if isinstance(defaults, dict) else {}
+        agents_list = agents.get("list") if isinstance(agents, dict) else []
+
+        discovered: list[str] = []
+        seen: set[str] = set()
+
+        def _remember(candidate: str) -> None:
+            raw = str(candidate or "").strip()
+            if not raw:
+                return
+            canonical = raw if "/" in raw else f"{normalized_provider}/{raw}"
+            if not canonical.startswith(f"{normalized_provider}/"):
+                return
+            if canonical in seen:
+                return
+            seen.add(canonical)
+            discovered.append(canonical)
+
+        _remember(model_defaults.get("primary", ""))
+        for item in (model_defaults.get("fallbacks") or []):
+            _remember(str(item or ""))
+
+        if isinstance(model_overrides, dict):
+            for model_id in model_overrides:
+                _remember(str(model_id or ""))
+
+        for slot_model in (current_slots or {}).values():
+            _remember(str(slot_model or ""))
+
+        for agent_payload in agents_list if isinstance(agents_list, list) else []:
+            if not isinstance(agent_payload, dict):
+                continue
+            _remember(str(agent_payload.get("model", "") or ""))
+
+        return discovered
+
+    @classmethod
+    def _runtime_signal_failed_providers(cls) -> dict[str, str]:
+        """Читает живые auth/scope-fail сигналы gateway-log для truthful catalog."""
+        try:
+            signal_log = discover_gateway_signal_log(repo_root=cls._project_root())
+        except Exception:
+            signal_log = Path()
+        if not signal_log or not signal_log.exists():
+            return {}
+        try:
+            return runtime_auth_failed_providers_from_signal_log(signal_log)
+        except Exception:
+            return {}
+
+    @classmethod
+    def _runtime_provider_state(
+        cls,
+        provider_name: str,
+        *,
+        runtime_models: dict[str, Any] | None = None,
+        auth_profiles: dict[str, Any] | None = None,
+        runtime_signal_failures: dict[str, str] | None = None,
+        status_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Возвращает честный статус провайдера для каталога и routing diagnostics."""
+        normalized_provider = str(provider_name or "").strip().lower()
+        provider_payload = {}
+        providers = runtime_models.get("providers") if isinstance(runtime_models, dict) else {}
+        if isinstance(providers, dict):
+            provider_payload = providers.get(normalized_provider) if isinstance(providers.get(normalized_provider), dict) else {}
+
+        model_entries = provider_payload.get("models") if isinstance(provider_payload, dict) else []
+        runtime_model_ids: list[str] = []
+        if isinstance(model_entries, list):
+            for item in model_entries:
+                if not isinstance(item, dict):
+                    continue
+                canonical = cls._canonical_runtime_model_id(normalized_provider, str(item.get("id", "") or ""))
+                if canonical and canonical not in runtime_model_ids:
+                    runtime_model_ids.append(canonical)
+
+        profiles = auth_profiles.get("profiles") if isinstance(auth_profiles, dict) else {}
+        if not isinstance(profiles, dict):
+            profiles = {}
+        usage_stats = auth_profiles.get("usageStats") if isinstance(auth_profiles, dict) else {}
+        if not isinstance(usage_stats, dict):
+            usage_stats = {}
+        status_providers = status_snapshot.get("providers") if isinstance(status_snapshot, dict) else {}
+        if not isinstance(status_providers, dict):
+            status_providers = {}
+        status_meta = status_providers.get(normalized_provider) if isinstance(status_providers.get(normalized_provider), dict) else {}
+
+        profile_names = [
+            profile_name
+            for profile_name, profile_payload in profiles.items()
+            if isinstance(profile_payload, dict) and str(profile_payload.get("provider", "") or "").strip() == normalized_provider
+        ]
+
+        disabled_profiles: list[dict[str, str]] = []
+        expired_profiles: list[dict[str, str]] = []
+        failure_counts: dict[str, int] = {}
+        cooldown_active = False
+        now_ms = time.time() * 1000.0
+        for profile_name in profile_names:
+            profile_payload = profiles.get(profile_name)
+            usage = usage_stats.get(profile_name)
+            if isinstance(profile_payload, dict):
+                try:
+                    expires_at = float(profile_payload.get("expires", 0) or 0)
+                except (TypeError, ValueError):
+                    expires_at = 0.0
+                if expires_at > 0 and expires_at <= now_ms:
+                    expired_profiles.append({"profile": profile_name, "reason": "expired"})
+            if not isinstance(usage, dict):
+                continue
+            disabled_reason = str(usage.get("disabledReason", "") or "").strip()
+            if disabled_reason:
+                disabled_profiles.append({"profile": profile_name, "reason": disabled_reason})
+            try:
+                cooldown_until = float(usage.get("cooldownUntil", 0) or 0)
+            except (TypeError, ValueError):
+                cooldown_until = 0.0
+            if cooldown_until > now_ms:
+                cooldown_active = True
+            failures = usage.get("failureCounts")
+            if isinstance(failures, dict):
+                for failure_key, failure_value in failures.items():
+                    failure_counts[str(failure_key)] = failure_counts.get(str(failure_key), 0) + int(failure_value or 0)
+
+        auth_mode = str(provider_payload.get("auth", "") or "").strip().lower()
+        api_key_configured = bool(str(provider_payload.get("apiKey", "") or "").strip())
+        effective_kind = str(status_meta.get("effective_kind", "") or "").strip().lower()
+        if not auth_mode and profile_names:
+            auth_mode = "oauth"
+        elif not auth_mode and api_key_configured:
+            auth_mode = "api-key"
+        elif not auth_mode and effective_kind == "profiles":
+            auth_mode = "oauth"
+        elif not auth_mode and effective_kind in {"env", "models.json"}:
+            auth_mode = "api-key"
+        signal_fail_code = str((runtime_signal_failures or {}).get(normalized_provider, "") or "").strip()
+        legacy = normalized_provider == "google-antigravity"
+        oauth_status = str(status_meta.get("oauth_status", "") or "").strip().lower()
+        oauth_remaining_ms = status_meta.get("oauth_remaining_ms")
+        oauth_remaining_human = str(status_meta.get("oauth_remaining_human", "") or "").strip()
+        oauth_expected = auth_mode == "oauth"
+        quota_truth = cls._quota_state_from_failure_counts(failure_counts)
+
+        readiness = "ready"
+        readiness_label = "Configured"
+        detail = "Провайдер готов к выбору."
+
+        if signal_fail_code == "runtime_missing_scope_model_request":
+            readiness = "blocked"
+            readiness_label = "Scope fail"
+            detail = "Runtime фиксирует `Missing scopes: model.request`; OAuth-модели видны, но как primary сейчас неработоспособны."
+        elif disabled_profiles:
+            readiness = "blocked"
+            readiness_label = "Disabled"
+            detail = f"Профиль отключён: {disabled_profiles[0]['reason']}"
+        elif oauth_expected and oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 0:
+            readiness = "attention"
+            readiness_label = "Re-auth soon"
+            detail = "OpenClaw ещё считает OAuth рабочим, но TTL уже на нуле или ниже; лучше сделать повторный логин до следующего флапа."
+        elif oauth_expected and oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 15 * 60 * 1000:
+            readiness = "attention"
+            readiness_label = "Expiring"
+            detail = "OAuth-профиль живой, но подходит к истечению и может скоро потребовать re-auth."
+        elif oauth_expected and oauth_status in {"expired", "missing"}:
+            readiness = "blocked"
+            readiness_label = "Expired"
+            detail = "Сам OpenClaw считает OAuth-профиль истёкшим или отсутствующим."
+        elif oauth_expected and expired_profiles:
+            readiness = "blocked"
+            readiness_label = "Expired"
+            detail = "OAuth-профиль истёк и требует повторного логина."
+        elif cooldown_active:
+            readiness = "attention"
+            readiness_label = "Cooldown"
+            detail = "Провайдер в cooldown после недавних ошибок; выбор возможен, но route нестабилен."
+        elif legacy:
+            readiness = "attention"
+            readiness_label = "Legacy"
+            detail = "Legacy OAuth-провайдер. Показываем для совместимости, но не рекомендуем для нового primary."
+        elif auth_mode == "oauth" and profile_names:
+            readiness = "ready"
+            readiness_label = "OAuth OK"
+            detail = "OAuth-профиль найден и выглядит рабочим."
+        elif auth_mode == "oauth":
+            readiness = "attention"
+            readiness_label = "OAuth missing"
+            detail = "Провайдер ожидает OAuth-профиль, но связанный login пока не найден."
+        elif auth_mode == "api-key" and api_key_configured:
+            readiness = "ready"
+            readiness_label = "API key"
+            detail = "API key сконфигурирован."
+        elif auth_mode == "api-key":
+            readiness = "blocked"
+            readiness_label = "API key missing"
+            detail = "Провайдер требует API key, но ключ не найден."
+        elif runtime_model_ids or profile_names:
+            readiness = "ready"
+            readiness_label = "Configured"
+            detail = "Провайдер описан в runtime."
+        else:
+            readiness = "blocked"
+            readiness_label = "Unavailable"
+            detail = "Runtime-провайдер пока не описан."
+
+        return {
+            "provider": normalized_provider,
+            "configured": bool(runtime_model_ids or profile_names),
+            "runtime_models": runtime_model_ids,
+            "profiles": profile_names,
+            "disabled_profiles": disabled_profiles,
+            "expired_profiles": expired_profiles,
+            "failure_counts": failure_counts,
+            "cooldown_active": cooldown_active,
+            "auth_mode": auth_mode or "unknown",
+            "api_key_configured": api_key_configured,
+            "signal_fail_code": signal_fail_code,
+            "readiness": readiness,
+            "readiness_label": readiness_label,
+            "detail": detail,
+            "legacy": legacy,
+            "effective_kind": effective_kind,
+            "effective_detail": str(status_meta.get("effective_detail", "") or "").strip(),
+            "oauth_status": oauth_status,
+            "oauth_remaining_ms": oauth_remaining_ms,
+            "oauth_remaining_human": oauth_remaining_human,
+            "quota_state": str(quota_truth.get("quota_state", "unknown") or "unknown"),
+            "quota_label": str(quota_truth.get("quota_label", "") or ""),
+        }
+
+    def _launch_local_app(self, target_path: Path) -> dict[str, Any]:
+        """
+        Запускает локальный `.command`/app через macOS `open` без блокировки web API.
+
+        Нужен для one-click repair из панели: открываем helper в Terminal,
+        а дальше пользователь проходит интерактивный OAuth flow в штатном окне.
+        """
+        target = Path(target_path).resolve()
+        if not target.exists() or not target.is_file():
+            return {
+                "ok": False,
+                "exit_code": 127,
+                "error": f"helper_not_found:{target}",
+                "launched": False,
+                "path": str(target),
+            }
+
+        try:
+            subprocess.Popen(
+                ["open", str(target)],
+                cwd=str(self._project_root()),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return {
+                "ok": True,
+                "exit_code": 0,
+                "error": "",
+                "launched": True,
+                "path": str(target),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "exit_code": 1,
+                "error": f"helper_launch_error:{exc}",
+                "launched": False,
+                "path": str(target),
+            }
 
     @classmethod
     def _active_runtime_model_ids(cls) -> set[str]:
@@ -238,6 +1014,8 @@ class WebApp:
         agents = runtime_config.get("agents") if isinstance(runtime_config, dict) else {}
         defaults = agents.get("defaults") if isinstance(agents, dict) else {}
         model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+        if not isinstance(model_defaults, dict):
+            model_defaults = {}
 
         active: set[str] = set()
         primary = str(model_defaults.get("primary", "") or "").strip()
@@ -250,6 +1028,249 @@ class WebApp:
         return active
 
     @classmethod
+    def _build_openclaw_runtime_controls(cls) -> dict[str, Any]:
+        """
+        Собирает editable runtime-controls для owner UI.
+
+        Это отдельный truth-слой над `~/.openclaw/openclaw.json`, чтобы панель могла
+        не только показывать `primary/fallbacks`, но и править:
+        - глобальное context window;
+        - thinkingDefault;
+        - per-model thinking для активной цепочки.
+        """
+        runtime_config = cls._load_openclaw_runtime_config()
+        agents = runtime_config.get("agents") if isinstance(runtime_config, dict) else {}
+        defaults = agents.get("defaults") if isinstance(agents, dict) else {}
+        model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+        if not isinstance(model_defaults, dict):
+            model_defaults = {}
+        models_defaults = defaults.get("models") if isinstance(defaults, dict) else {}
+        if not isinstance(models_defaults, dict):
+            models_defaults = {}
+
+        primary = str(model_defaults.get("primary", "") or "").strip()
+        fallbacks = [
+            str(item).strip()
+            for item in (model_defaults.get("fallbacks") or [])
+            if str(item or "").strip()
+        ]
+        thinking_default = str(defaults.get("thinkingDefault", "off") or "off").strip().lower() or "off"
+        try:
+            thinking_default = cls._normalize_thinking_mode(thinking_default)
+        except ValueError:
+            thinking_default = "off"
+
+        try:
+            context_tokens = int(defaults.get("contextTokens", 128000) or 128000)
+        except (TypeError, ValueError):
+            context_tokens = 128000
+
+        chain_items: list[dict[str, Any]] = []
+        for index, model_id in enumerate([primary, *fallbacks]):
+            if not model_id:
+                continue
+            model_payload = models_defaults.get(model_id) if isinstance(models_defaults.get(model_id), dict) else {}
+            params = model_payload.get("params") if isinstance(model_payload, dict) else {}
+            explicit_thinking = str(params.get("thinking", "") or "").strip().lower() if isinstance(params, dict) else ""
+            if explicit_thinking:
+                try:
+                    explicit_thinking = cls._normalize_thinking_mode(explicit_thinking)
+                except ValueError:
+                    explicit_thinking = ""
+            effective_thinking = explicit_thinking or thinking_default
+            chain_items.append(
+                {
+                    "slot_kind": "primary" if index == 0 else "fallback",
+                    "slot_index": 0 if index == 0 else index,
+                    "slot_label": "Primary" if index == 0 else f"Fallback #{index}",
+                    "model_id": model_id,
+                    "explicit_thinking": explicit_thinking,
+                    "effective_thinking": effective_thinking,
+                    "uses_default_thinking": not bool(explicit_thinking),
+                }
+            )
+
+        return {
+            "primary": primary,
+            "fallbacks": fallbacks,
+            "context_tokens": context_tokens,
+            "thinking_default": thinking_default,
+            "thinking_modes": ["off", "auto", "low", "medium", "high"],
+            "chain_items": chain_items,
+            "max_fallback_slots": max(5, len(fallbacks)),
+        }
+
+    @classmethod
+    def _apply_openclaw_runtime_controls(
+        cls,
+        *,
+        primary_raw: Any,
+        fallbacks_raw: list[Any],
+        context_tokens_raw: Any,
+        thinking_default_raw: Any,
+        slot_thinking_raw: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Применяет глобальную model-chain и runtime-knobs в live OpenClaw config.
+
+        Записываем сразу в:
+        - `~/.openclaw/openclaw.json`
+        - `~/.openclaw/agents/main/agent/agent.json`
+
+        Так owner UI меняет тот же runtime, который реально используют каналы и userbot.
+        """
+        primary, primary_alias_note = cls._normalize_runtime_model_id(primary_raw)
+        if not primary or "/" not in primary:
+            raise ValueError("runtime_primary_model_required")
+
+        fallbacks: list[str] = []
+        alias_notes: list[str] = []
+        if primary_alias_note:
+            alias_notes.append(primary_alias_note)
+        seen = {primary}
+        for raw_item in list(fallbacks_raw or []):
+            model_id, alias_note = cls._normalize_runtime_model_id(raw_item)
+            if alias_note:
+                alias_notes.append(alias_note)
+            if not model_id:
+                continue
+            if "/" not in model_id:
+                raise ValueError("runtime_invalid_fallback_model")
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            fallbacks.append(model_id)
+
+        context_tokens = cls._normalize_context_tokens(context_tokens_raw)
+        thinking_default = cls._normalize_thinking_mode(thinking_default_raw)
+
+        normalized_slot_thinking: dict[str, str] = {}
+        raw_slot_thinking = slot_thinking_raw if isinstance(slot_thinking_raw, dict) else {}
+        for model_id, raw_thinking in raw_slot_thinking.items():
+            canonical_model_id, alias_note = cls._normalize_runtime_model_id(model_id)
+            if alias_note:
+                alias_notes.append(alias_note)
+            if not canonical_model_id or canonical_model_id not in {primary, *fallbacks}:
+                continue
+            normalized_slot_thinking[canonical_model_id] = cls._normalize_thinking_mode(raw_thinking)
+
+        openclaw_path = cls._openclaw_config_path()
+        agent_path = cls._openclaw_agent_config_path()
+        openclaw_payload = cls._load_openclaw_runtime_config()
+        agent_payload = cls._load_openclaw_agent_config()
+        if not isinstance(openclaw_payload, dict) or not openclaw_payload:
+            raise ValueError("runtime_openclaw_json_missing_or_invalid")
+        if not isinstance(agent_payload, dict):
+            agent_payload = {}
+
+        agents = openclaw_payload.setdefault("agents", {})
+        if not isinstance(agents, dict):
+            agents = {}
+            openclaw_payload["agents"] = agents
+
+        defaults = agents.setdefault("defaults", {})
+        if not isinstance(defaults, dict):
+            defaults = {}
+            agents["defaults"] = defaults
+
+        model_cfg = defaults.setdefault("model", {})
+        if not isinstance(model_cfg, dict):
+            model_cfg = {}
+            defaults["model"] = model_cfg
+
+        models_cfg = defaults.setdefault("models", {})
+        if not isinstance(models_cfg, dict):
+            models_cfg = {}
+            defaults["models"] = models_cfg
+
+        changed: dict[str, Any] = {}
+
+        prev_primary = str(model_cfg.get("primary") or "")
+        if prev_primary != primary:
+            model_cfg["primary"] = primary
+            changed["agents.defaults.model.primary"] = {"from": prev_primary, "to": primary}
+
+        prev_fallbacks = model_cfg.get("fallbacks")
+        if prev_fallbacks != fallbacks:
+            model_cfg["fallbacks"] = list(fallbacks)
+            changed["agents.defaults.model.fallbacks"] = {"from": prev_fallbacks, "to": list(fallbacks)}
+
+        prev_context_tokens = defaults.get("contextTokens")
+        if prev_context_tokens != context_tokens:
+            defaults["contextTokens"] = context_tokens
+            changed["agents.defaults.contextTokens"] = {"from": prev_context_tokens, "to": context_tokens}
+
+        prev_thinking_default = str(defaults.get("thinkingDefault") or "")
+        if prev_thinking_default != thinking_default:
+            defaults["thinkingDefault"] = thinking_default
+            changed["agents.defaults.thinkingDefault"] = {"from": prev_thinking_default, "to": thinking_default}
+
+        subagents = defaults.setdefault("subagents", {})
+        if not isinstance(subagents, dict):
+            subagents = {}
+            defaults["subagents"] = subagents
+        prev_sub_model = str(subagents.get("model") or "")
+        if prev_sub_model != primary:
+            subagents["model"] = primary
+            changed["agents.defaults.subagents.model"] = {"from": prev_sub_model, "to": primary}
+
+        agents_list = agents.get("list")
+        if isinstance(agents_list, list):
+            for item in agents_list:
+                if not isinstance(item, dict) or str(item.get("id") or "") != "main":
+                    continue
+                prev_list_model = str(item.get("model") or "")
+                if prev_list_model != primary:
+                    item["model"] = primary
+                    changed["agents.list[main].model"] = {"from": prev_list_model, "to": primary}
+                break
+
+        prev_agent_model = str(agent_payload.get("model") or "")
+        if prev_agent_model != primary:
+            agent_payload["model"] = primary
+            changed["agents.main.agent.json.model"] = {"from": prev_agent_model, "to": primary}
+
+        # Явно фиксируем thinking на моделях активной цепочки, чтобы runtime не жил
+        # stale-override'ами и global thinking реально применялся.
+        for model_id in [primary, *fallbacks]:
+            model_payload = models_cfg.setdefault(model_id, {})
+            if not isinstance(model_payload, dict):
+                model_payload = {}
+                models_cfg[model_id] = model_payload
+            params = model_payload.setdefault("params", {})
+            if not isinstance(params, dict):
+                params = {}
+                model_payload["params"] = params
+            next_thinking = normalized_slot_thinking.get(model_id, thinking_default)
+            prev_model_thinking = str(params.get("thinking") or "")
+            if prev_model_thinking != next_thinking:
+                params["thinking"] = next_thinking
+                changed[f"agents.defaults.models[{model_id}].params.thinking"] = {
+                    "from": prev_model_thinking,
+                    "to": next_thinking,
+                }
+
+        backup_openclaw = cls._backup_json_file(openclaw_path, label="webui_runtime")
+        backup_agent = cls._backup_json_file(agent_path, label="webui_runtime")
+        cls._write_json_file(openclaw_path, openclaw_payload)
+        cls._write_json_file(agent_path, agent_payload)
+
+        return {
+            "primary": primary,
+            "fallbacks": fallbacks,
+            "context_tokens": context_tokens,
+            "thinking_default": thinking_default,
+            "slot_thinking": {
+                model_id: normalized_slot_thinking.get(model_id, thinking_default)
+                for model_id in [primary, *fallbacks]
+            },
+            "alias_notes": [note for note in alias_notes if note],
+            "changed": changed,
+            "backup_openclaw_json": backup_openclaw,
+            "backup_agent_json": backup_agent,
+        }
+
+    @classmethod
     def _build_runtime_cloud_presets(cls, current_slots: dict[str, str] | None = None) -> list[dict[str, Any]]:
         """
         Строит cloud catalog из runtime OpenClaw models.json.
@@ -260,76 +1281,233 @@ class WebApp:
         - текущие slot bindings добавляем как fallback, даже если модель ещё не
           описана в runtime registry, чтобы пользователь видел фактическое состояние.
         """
-        payload = cls._load_openclaw_runtime_models()
-        providers = payload.get("providers")
+        runtime_models = cls._load_openclaw_runtime_models()
+        runtime_config = cls._load_openclaw_runtime_config()
+        auth_profiles = cls._load_openclaw_auth_profiles()
+        full_catalog = cls._openclaw_models_full_catalog()
+        status_snapshot = cls._openclaw_models_status_snapshot()
+        providers = runtime_models.get("providers")
         if not isinstance(providers, dict):
             providers = {}
         active_chain = cls._active_runtime_model_ids()
+        signal_failures = cls._runtime_signal_failed_providers()
+
+        provider_names: set[str] = {
+            str(name or "").strip()
+            for name in providers.keys()
+            if str(name or "").strip() and str(name or "").strip().lower() not in {"lmstudio", "local"}
+        }
+        profiles = auth_profiles.get("profiles") if isinstance(auth_profiles, dict) else {}
+        if isinstance(profiles, dict):
+            for profile_payload in profiles.values():
+                if not isinstance(profile_payload, dict):
+                    continue
+                provider_name = str(profile_payload.get("provider", "") or "").strip()
+                if provider_name and provider_name.lower() not in {"lmstudio", "local"}:
+                    provider_names.add(provider_name)
+        for model_id in active_chain:
+            provider_name = str(model_id.split("/", 1)[0] if "/" in model_id else "").strip()
+            if provider_name and provider_name.lower() not in {"lmstudio", "local"}:
+                provider_names.add(provider_name)
+        for model_id in (current_slots or {}).values():
+            raw = str(model_id or "").strip()
+            provider_name = str(raw.split("/", 1)[0] if "/" in raw else "").strip()
+            if provider_name and provider_name.lower() not in {"lmstudio", "local"}:
+                provider_names.add(provider_name)
+        full_catalog_providers = full_catalog.get("providers") if isinstance(full_catalog, dict) else {}
+        if isinstance(full_catalog_providers, dict):
+            for provider_name in full_catalog_providers.keys():
+                normalized = str(provider_name or "").strip()
+                if normalized and normalized.lower() not in {"lmstudio", "local"} and normalized in provider_names:
+                    provider_names.add(normalized)
 
         items_by_id: dict[str, dict[str, Any]] = {}
-
-        for provider_name, provider_payload in providers.items():
-            if str(provider_name).strip().lower() == "lmstudio":
-                continue
+        for provider_name in sorted(provider_names, key=cls._provider_sort_rank):
+            normalized_provider = str(provider_name or "").strip()
+            provider_payload = providers.get(normalized_provider) if isinstance(providers.get(normalized_provider), dict) else {}
+            provider_state = cls._runtime_provider_state(
+                normalized_provider,
+                runtime_models=runtime_models,
+                auth_profiles=auth_profiles,
+                runtime_signal_failures=signal_failures,
+                status_snapshot=status_snapshot,
+            )
+            provider_ui = cls._provider_ui_metadata(normalized_provider)
+            configured_model_ids = set(str(item or "").strip() for item in (provider_state.get("runtime_models") or []) if str(item or "").strip())
+            configured_model_ids.update(
+                cls._runtime_provider_model_ids_from_config(
+                    normalized_provider,
+                    runtime_config=runtime_config,
+                    current_slots=current_slots,
+                )
+            )
+            full_catalog_models = full_catalog_providers.get(normalized_provider) if isinstance(full_catalog_providers, dict) else []
+            if isinstance(full_catalog_models, list):
+                for model in full_catalog_models:
+                    if not isinstance(model, dict):
+                        continue
+                    canonical_id = str(model.get("key", "") or "").strip()
+                    if not canonical_id:
+                        continue
+                    selected_slots = [
+                        slot_name
+                        for slot_name, slot_model in (current_slots or {}).items()
+                        if str(slot_model or "").strip() == canonical_id
+                    ]
+                    raw_name = str(model.get("name", "") or "").strip()
+                    tags = [
+                        str(tag or "").strip()
+                        for tag in (model.get("tags") or [])
+                        if str(tag or "").strip()
+                    ]
+                    configured_runtime = bool(
+                        canonical_id in configured_model_ids
+                        or canonical_id in active_chain
+                        or selected_slots
+                        or "configured" in {tag.lower() for tag in tags}
+                    )
+                    items_by_id[canonical_id] = {
+                        "id": canonical_id,
+                        "provider": normalized_provider,
+                        "provider_label": cls._provider_label(normalized_provider),
+                        "provider_auth": str(provider_state.get("auth_mode") or "unknown"),
+                        "provider_readiness": str(provider_state.get("readiness") or "unknown"),
+                        "provider_readiness_label": str(provider_state.get("readiness_label") or "Configured"),
+                        "provider_detail": str(provider_state.get("detail") or ""),
+                        "provider_quota_state": str(provider_state.get("quota_state") or "unknown"),
+                        "provider_quota_label": str(provider_state.get("quota_label") or ""),
+                        "provider_effective_kind": str(provider_state.get("effective_kind") or ""),
+                        "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
+                        "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
+                        "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_ui": dict(provider_ui),
+                        "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
+                        "name": cls._friendly_model_name(canonical_id, raw_name),
+                        "raw_name": raw_name,
+                        "actual_model_id": canonical_id.split("/", 1)[-1],
+                        "reasoning": bool(model.get("reasoning", False)),
+                        "max_tokens": int(model.get("maxTokens", 0) or 0),
+                        "context_window": int(model.get("contextWindow", 0) or 0),
+                        "input_modes": [
+                            str(mode or "").strip()
+                            for mode in (model.get("input") or [])
+                            if str(mode or "").strip()
+                        ],
+                        "source": "provider_catalog",
+                        "provider_catalog_visible": True,
+                        "configured_runtime": configured_runtime,
+                        "active_runtime": canonical_id in active_chain,
+                        "selected_slots": selected_slots,
+                        "legacy": bool(provider_state.get("legacy")),
+                        "catalog_tags": tags,
+                        "catalog_available": bool(model.get("available", False)),
+                    }
             models = provider_payload.get("models") if isinstance(provider_payload, dict) else None
-            if not isinstance(models, list):
-                continue
-            for model in models:
-                if not isinstance(model, dict):
+            if isinstance(models, list):
+                for model in models:
+                    if not isinstance(model, dict):
+                        continue
+                    raw_model_id = str(model.get("id", "") or "").strip()
+                    canonical_id = cls._canonical_runtime_model_id(normalized_provider, raw_model_id)
+                    if not canonical_id:
+                        continue
+                    selected_slots = [
+                        slot_name
+                        for slot_name, slot_model in (current_slots or {}).items()
+                        if str(slot_model or "").strip() == canonical_id
+                    ]
+                    items_by_id[canonical_id] = {
+                        "id": canonical_id,
+                        "provider": normalized_provider,
+                        "provider_label": cls._provider_label(normalized_provider),
+                        "provider_auth": str(provider_state.get("auth_mode") or "unknown"),
+                        "provider_readiness": str(provider_state.get("readiness") or "unknown"),
+                        "provider_readiness_label": str(provider_state.get("readiness_label") or "Configured"),
+                        "provider_detail": str(provider_state.get("detail") or ""),
+                        "provider_quota_state": str(provider_state.get("quota_state") or "unknown"),
+                        "provider_quota_label": str(provider_state.get("quota_label") or ""),
+                        "provider_effective_kind": str(provider_state.get("effective_kind") or ""),
+                        "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
+                        "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
+                        "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_ui": dict(provider_ui),
+                        "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
+                        "name": cls._friendly_model_name(canonical_id, str(model.get("name", "") or "")),
+                        "raw_name": str(model.get("name", "") or ""),
+                        "actual_model_id": canonical_id.split("/", 1)[-1],
+                        "reasoning": bool(model.get("reasoning", False)),
+                        "max_tokens": int(model.get("maxTokens", 0) or 0),
+                        "context_window": int(model.get("contextWindow", 0) or 0),
+                        "input_modes": [
+                            str(mode or "").strip()
+                            for mode in (model.get("input") or [])
+                            if str(mode or "").strip()
+                        ],
+                        "source": "openclaw_runtime",
+                        "provider_catalog_visible": False,
+                        "configured_runtime": True,
+                        "active_runtime": canonical_id in active_chain,
+                        "selected_slots": selected_slots,
+                        "legacy": bool(provider_state.get("legacy")),
+                        "catalog_tags": [],
+                        "catalog_available": True,
+                    }
+
+            for canonical_id in cls._runtime_provider_model_ids_from_config(
+                normalized_provider,
+                runtime_config=runtime_config,
+                current_slots=current_slots,
+            ):
+                if not canonical_id or canonical_id in items_by_id:
                     continue
-                raw_model_id = str(model.get("id", "") or "").strip()
-                if not raw_model_id:
-                    continue
-                canonical_id = raw_model_id if "/" in raw_model_id else f"{provider_name}/{raw_model_id}"
-                if active_chain and canonical_id not in active_chain:
-                    continue
-                item = {
+                selected_slots = [
+                    slot_name
+                    for slot_name, slot_model in (current_slots or {}).items()
+                    if str(slot_model or "").strip() == canonical_id
+                ]
+                items_by_id[canonical_id] = {
                     "id": canonical_id,
-                    "provider": str(provider_name),
-                    "provider_label": cls._provider_label(provider_name),
-                    "label": f"{cls._provider_label(provider_name)} • {raw_model_id}",
-                    "name": str(model.get("name", "") or raw_model_id),
-                    "reasoning": bool(model.get("reasoning", False)),
-                    "max_tokens": int(model.get("maxTokens", 0) or 0),
-                    "context_window": int(model.get("contextWindow", 0) or 0),
-                    "source": "openclaw_runtime",
+                    "provider": normalized_provider,
+                    "provider_label": cls._provider_label(normalized_provider),
+                    "provider_auth": str(provider_state.get("auth_mode") or "unknown"),
+                    "provider_readiness": str(provider_state.get("readiness") or "unknown"),
+                    "provider_readiness_label": str(provider_state.get("readiness_label") or "Configured"),
+                    "provider_detail": str(provider_state.get("detail") or ""),
+                    "provider_quota_state": str(provider_state.get("quota_state") or "unknown"),
+                    "provider_quota_label": str(provider_state.get("quota_label") or ""),
+                    "provider_effective_kind": str(provider_state.get("effective_kind") or ""),
+                    "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
+                    "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
+                    "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                    "provider_ui": dict(provider_ui),
+                    "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
+                    "name": cls._friendly_model_name(canonical_id),
+                    "raw_name": "",
+                    "actual_model_id": canonical_id.split("/", 1)[-1],
+                    "reasoning": "gpt-5" in canonical_id or canonical_id.endswith("/gpt-5.4"),
+                    "max_tokens": 0,
+                    "context_window": 0,
+                    "input_modes": [],
+                    "source": "runtime_config",
+                    "provider_catalog_visible": False,
+                    "configured_runtime": True,
+                    "active_runtime": canonical_id in active_chain,
+                    "selected_slots": selected_slots,
+                    "legacy": bool(provider_state.get("legacy")),
+                    "catalog_tags": [],
+                    "catalog_available": True,
                 }
-                items_by_id[canonical_id] = item
 
-        for slot_model in (current_slots or {}).values():
-            model_id = str(slot_model or "").strip()
-            if not model_id or model_id in items_by_id:
-                continue
-            provider_name = model_id.split("/", 1)[0] if "/" in model_id else "custom"
-            items_by_id[model_id] = {
-                "id": model_id,
-                "provider": provider_name,
-                "provider_label": cls._provider_label(provider_name),
-                "label": f"{cls._provider_label(provider_name)} • {model_id.split('/', 1)[-1]}",
-                "name": model_id,
-                "reasoning": False,
-                "max_tokens": 0,
-                "context_window": 0,
-                "source": "router_current",
-            }
-
-        for model_id in sorted(active_chain):
-            if not model_id or model_id in items_by_id:
-                continue
-            provider_name = model_id.split("/", 1)[0] if "/" in model_id else "custom"
-            items_by_id[model_id] = {
-                "id": model_id,
-                "provider": provider_name,
-                "provider_label": cls._provider_label(provider_name),
-                "label": f"{cls._provider_label(provider_name)} • {model_id.split('/', 1)[-1]}",
-                "name": model_id.split("/", 1)[-1],
-                "reasoning": "gpt-5" in model_id,
-                "max_tokens": 0,
-                "context_window": 0,
-                "source": "active_chain_runtime",
-            }
-
-        return [items_by_id[key] for key in sorted(items_by_id)]
+        return sorted(
+            items_by_id.values(),
+            key=lambda item: (
+                cls._provider_sort_rank(str(item.get("provider") or "")),
+                0 if bool(item.get("configured_runtime")) else 1,
+                0 if bool(item.get("active_runtime")) else 1,
+                0 if str(item.get("source") or "") in {"openclaw_runtime", "runtime_config"} else 1,
+                str(item.get("name") or item.get("id") or "").lower(),
+            ),
+        )
 
     @classmethod
     def _build_runtime_quick_presets(
@@ -339,7 +1517,18 @@ class WebApp:
         local_override: str,
     ) -> dict[str, dict[str, Any]]:
         """Строит quick presets только из runtime-видимых cloud моделей."""
-        available_ids = {str(item.get("id", "")).strip() for item in cls._build_runtime_cloud_presets(current_slots) if str(item.get("id", "")).strip()}
+        del local_override
+        available_ids = {
+            str(item.get("id", "")).strip()
+            for item in cls._build_runtime_cloud_presets(current_slots)
+            if str(item.get("id", "")).strip() and bool(item.get("configured_runtime", True))
+        }
+        if not available_ids:
+            available_ids = {
+                str(item.get("id", "")).strip()
+                for item in cls._build_runtime_cloud_presets(current_slots)
+                if str(item.get("id", "")).strip()
+            }
 
         def _pick(*preferred_ids: str) -> str:
             for candidate in preferred_ids:
@@ -400,12 +1589,12 @@ class WebApp:
             "local_focus": {
                 "mode": "local",
                 "title": "Local Focus",
-                "description": "Force local + локальная модель в ключевых слотах.",
+                "description": "Force local для основного трафика, но cloud fallback остаётся безопасным и предсказуемым.",
                 "slots": {
-                    "chat": local_override,
-                    "thinking": local_override,
-                    "pro": local_override,
-                    "coding": local_override,
+                    "chat": chat_model,
+                    "thinking": thinking_model or chat_model,
+                    "pro": pro_model or thinking_model or chat_model,
+                    "coding": coding_model or pro_model or chat_model,
                 },
             },
             "cloud_reasoning": {
@@ -434,10 +1623,13 @@ class WebApp:
         runtime_config = cls._load_openclaw_runtime_config()
         runtime_models = cls._load_openclaw_runtime_models()
         auth_profiles = cls._load_openclaw_auth_profiles()
+        status_snapshot = cls._openclaw_models_status_snapshot()
 
         agents = runtime_config.get("agents") if isinstance(runtime_config, dict) else {}
         defaults = agents.get("defaults") if isinstance(agents, dict) else {}
         model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+        if not isinstance(model_defaults, dict):
+            model_defaults = {}
         current_primary = str(model_defaults.get("primary", "") or "").strip()
         current_fallbacks = [
             str(item).strip()
@@ -445,95 +1637,40 @@ class WebApp:
             if str(item or "").strip()
         ]
 
-        providers = runtime_models.get("providers") if isinstance(runtime_models, dict) else {}
-        if not isinstance(providers, dict):
-            providers = {}
-        profiles = auth_profiles.get("profiles") if isinstance(auth_profiles, dict) else {}
-        if not isinstance(profiles, dict):
-            profiles = {}
-        usage_stats = auth_profiles.get("usageStats") if isinstance(auth_profiles, dict) else {}
-        if not isinstance(usage_stats, dict):
-            usage_stats = {}
-
-        def _provider_state(provider_name: str) -> dict[str, Any]:
-            provider_payload = providers.get(provider_name)
-            model_entries = provider_payload.get("models") if isinstance(provider_payload, dict) else []
-            runtime_model_ids = []
-            for item in model_entries if isinstance(model_entries, list) else []:
-                if not isinstance(item, dict):
-                    continue
-                raw_model_id = str(item.get("id", "") or "").strip()
-                if not raw_model_id:
-                    continue
-                runtime_model_ids.append(raw_model_id if "/" in raw_model_id else f"{provider_name}/{raw_model_id}")
-
-            profile_names = [
-                profile_name
-                for profile_name, profile_payload in profiles.items()
-                if isinstance(profile_payload, dict) and str(profile_payload.get("provider", "") or "").strip() == provider_name
-            ]
-            disabled_profiles: list[dict[str, str]] = []
-            expired_profiles: list[dict[str, str]] = []
-            failure_counts: dict[str, int] = {}
-            cooldown_active = False
-            now_ms = time.time() * 1000.0
-            for profile_name in profile_names:
-                profile_payload = profiles.get(profile_name)
-                usage = usage_stats.get(profile_name)
-                if isinstance(profile_payload, dict):
-                    try:
-                        expires_at = float(profile_payload.get("expires", 0) or 0)
-                    except (TypeError, ValueError):
-                        expires_at = 0.0
-                    if expires_at > 0 and expires_at <= now_ms:
-                        expired_profiles.append(
-                            {
-                                "profile": profile_name,
-                                "reason": "expired",
-                            }
-                        )
-                if not isinstance(usage, dict):
-                    continue
-                disabled_reason = str(usage.get("disabledReason", "") or "").strip()
-                if disabled_reason:
-                    disabled_profiles.append(
-                        {
-                            "profile": profile_name,
-                            "reason": disabled_reason,
-                        }
-                    )
-                try:
-                    cooldown_until = float(usage.get("cooldownUntil", 0) or 0)
-                except (TypeError, ValueError):
-                    cooldown_until = 0.0
-                if cooldown_until > (time.time() * 1000.0):
-                    cooldown_active = True
-                failures = usage.get("failureCounts")
-                if isinstance(failures, dict):
-                    for failure_key, failure_value in failures.items():
-                        failure_counts[str(failure_key)] = failure_counts.get(str(failure_key), 0) + int(failure_value or 0)
-
-            return {
-                "provider": provider_name,
-                "configured": bool(runtime_model_ids or profile_names),
-                "runtime_models": runtime_model_ids,
-                "profiles": profile_names,
-                "disabled_profiles": disabled_profiles,
-                "expired_profiles": expired_profiles,
-                "failure_counts": failure_counts,
-                "cooldown_active": cooldown_active,
-            }
-
-        openai_codex = _provider_state("openai-codex")
-        google_gemini_cli = _provider_state("google-gemini-cli")
-        google_antigravity = _provider_state("google-antigravity")
+        signal_failures = cls._runtime_signal_failed_providers()
+        openai_codex = cls._runtime_provider_state(
+            "openai-codex",
+            runtime_models=runtime_models,
+            auth_profiles=auth_profiles,
+            runtime_signal_failures=signal_failures,
+            status_snapshot=status_snapshot,
+        )
+        google_gemini_cli = cls._runtime_provider_state(
+            "google-gemini-cli",
+            runtime_models=runtime_models,
+            auth_profiles=auth_profiles,
+            runtime_signal_failures=signal_failures,
+            status_snapshot=status_snapshot,
+        )
+        google_antigravity = cls._runtime_provider_state(
+            "google-antigravity",
+            runtime_models=runtime_models,
+            auth_profiles=auth_profiles,
+            runtime_signal_failures=signal_failures,
+            status_snapshot=status_snapshot,
+        )
 
         target_primary = str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4") or "").strip()
         target_in_runtime = target_primary in set(openai_codex["runtime_models"])
         current_primary_broken = (
             current_primary.startswith("openai-codex/")
-            and int(openai_codex["failure_counts"].get("model_not_found", 0) or 0) > 0
-            and bool(openai_codex.get("cooldown_active"))
+            and (
+                str(openai_codex.get("signal_fail_code") or "") == "runtime_missing_scope_model_request"
+                or (
+                    int(openai_codex["failure_counts"].get("model_not_found", 0) or 0) > 0
+                    and bool(openai_codex.get("cooldown_active"))
+                )
+            )
         )
         google_gemini_cli_unavailable = bool(
             google_gemini_cli["disabled_profiles"]
@@ -545,7 +1682,10 @@ class WebApp:
 
         warnings: list[str] = []
         if current_primary_broken:
-            warnings.append("Текущий OpenAI primary падает с model_not_found и не годится как production primary.")
+            if str(openai_codex.get("signal_fail_code") or "") == "runtime_missing_scope_model_request":
+                warnings.append("Текущий OpenAI primary блокируется по OAuth scopes (`model.request`) и не годится как production primary.")
+            else:
+                warnings.append("Текущий OpenAI primary падает с model_not_found и не годится как production primary.")
         if google_gemini_cli_unavailable:
             warnings.append(
                 "Google Gemini CLI OAuth сейчас не является надёжным fallback: профиль в cooldown/expired и может требовать re-auth."
@@ -1986,6 +3126,54 @@ class WebApp:
         }
 
     @staticmethod
+    def _infer_browser_runtime_contour(browser_status: dict[str, Any]) -> dict[str, Any]:
+        """
+        Нормализует live browser runtime в owner/debug-контур.
+
+        Почему это важно:
+        - `running=true` и `tabs>0` сами по себе не говорят, attach-нут ли мы
+          к обычному Chrome владельца или крутим отдельный debug profile;
+        - handoff требует правдивого разделения `Мой Chrome` и `Debug browser`,
+          чтобы UI не выдавал dedicated relay за owner attach.
+        """
+        raw_attach_only = browser_status.get("attachOnly")
+        attach_only = raw_attach_only if isinstance(raw_attach_only, bool) else None
+        profile = str(browser_status.get("profile") or "")
+        chosen_browser = str(browser_status.get("chosenBrowser") or "")
+        detected_browser = str(browser_status.get("detectedBrowser") or "")
+        user_data_dir = str(browser_status.get("userDataDir") or "")
+        normalized_user_data_dir = user_data_dir.replace("\\", "/")
+
+        is_dedicated_profile = False
+        if "/.openclaw/browser/" in normalized_user_data_dir:
+            is_dedicated_profile = True
+        elif attach_only is False and profile == "openclaw":
+            is_dedicated_profile = True
+
+        active_contour = "unknown"
+        active_contour_label = "Не определён"
+        if attach_only is True:
+            active_contour = "my_chrome"
+            active_contour_label = "Мой Chrome"
+        elif is_dedicated_profile:
+            active_contour = "debug_browser"
+            active_contour_label = "Debug browser"
+        elif attach_only is False:
+            active_contour = "browser_process"
+            active_contour_label = "Browser relay"
+
+        return {
+            "attach_only": attach_only,
+            "profile": profile,
+            "chosen_browser": chosen_browser,
+            "detected_browser": detected_browser,
+            "user_data_dir": user_data_dir,
+            "is_dedicated_profile": is_dedicated_profile,
+            "active_contour": active_contour,
+            "active_contour_label": active_contour_label,
+        }
+
+    @staticmethod
     def _classify_browser_stage(
         browser_status: dict[str, Any],
         tabs_payload: dict[str, Any],
@@ -2006,6 +3194,14 @@ class WebApp:
         tab_attached = bool(smoke.get("tab_attached"))
         browser_http_state = str(smoke.get("browser_http_state") or "unavailable")
         tabs_count = len(tabs)
+        contour = WebApp._infer_browser_runtime_contour(browser_status)
+        active_contour = str(contour.get("active_contour") or "unknown")
+        active_contour_label = str(contour.get("active_contour_label") or "Не определён")
+        attached_by_runtime = bool(
+            (running and cdp_ready and relay_reachable and tabs_count > 0 and not auth_required) or tab_attached
+        )
+        owner_attach_confirmed = bool(active_contour == "my_chrome" and attached_by_runtime)
+        debug_attach_confirmed = bool(active_contour == "debug_browser" and attached_by_runtime)
 
         warnings: list[str] = []
         blockers: list[str] = []
@@ -2021,18 +3217,35 @@ class WebApp:
             stage_label = "CLI status недоступен"
             blockers.append(browser_status_error)
             next_step = "Проверь `openclaw browser status` и доступность runtime CLI."
-        elif (running and cdp_ready and relay_reachable and tabs_count > 0 and not auth_required) or tab_attached:
+        elif debug_attach_confirmed:
+            state = "debug_attached"
+            readiness = "attention"
+            stage_label = "Подключён Debug browser"
+            summary = "Dedicated browser relay жив, но это не attach к обычному Chrome владельца."
+            warnings.append("Сейчас активен dedicated debug browser, а не обычный Chrome владельца.")
+            next_step = "Если нужен owner browser, включи Remote Debugging в обычном Chrome и переподключи `chrome-profile`."
+        elif attached_by_runtime:
             state = "attached"
             readiness = "ready"
-            stage_label = "Вкладка подключена"
-            summary = "Browser relay готов к owner automation."
-            next_step = "Контур готов: можно выполнять browser/MCP сценарии."
+            if owner_attach_confirmed:
+                stage_label = "Мой Chrome подключён"
+                summary = "Owner browser attach подтверждён."
+                next_step = "Контур владельца готов: можно выполнять browser/MCP сценарии."
+            else:
+                stage_label = "Вкладка подключена"
+                summary = "Browser relay готов к automation."
+                next_step = "Контур готов: можно выполнять browser/MCP сценарии."
         elif auth_required:
             state = "auth_required"
             readiness = "attention"
-            stage_label = "Нужна авторизация relay"
-            warnings.append("Browser relay отвечает, но требует авторизацию/attach.")
-            next_step = "Открой Chrome с relay и авторизуй browser session."
+            if active_contour == "debug_browser":
+                stage_label = "Нужна авторизация Debug browser"
+                warnings.append("Dedicated debug browser отвечает, но требует авторизацию/attach.")
+                next_step = "Авторизуй debug browser или переключись на attach к обычному Chrome."
+            else:
+                stage_label = "Нужна авторизация relay"
+                warnings.append("Browser relay отвечает, но требует авторизацию/attach.")
+                next_step = "Открой Chrome с relay и авторизуй browser session."
         elif tabs_error:
             state = "tabs_error"
             readiness = "blocked"
@@ -2042,9 +3255,14 @@ class WebApp:
         elif relay_reachable and tabs_count == 0:
             state = "tab_not_connected"
             readiness = "attention"
-            stage_label = "Нет подключённой вкладки"
-            warnings.append("Relay жив, но вкладка ещё не attach-нута.")
-            next_step = "Открой вкладку в Chrome и attach через расширение OpenClaw."
+            if active_contour == "debug_browser":
+                stage_label = "Debug browser без вкладки"
+                warnings.append("Dedicated debug browser жив, но owner Chrome ещё не attach-нут.")
+                next_step = "Открой вкладку в debug browser или переключись на attach к обычному Chrome."
+            else:
+                stage_label = "Нет подключённой вкладки"
+                warnings.append("Relay жив, но вкладка ещё не attach-нута.")
+                next_step = "Открой вкладку в Chrome и attach через расширение OpenClaw."
         elif not running:
             state = "stopped"
             readiness = "blocked"
@@ -2076,6 +3294,8 @@ class WebApp:
             warnings.append("CLI сообщает running=false, но HTTP relay уже отвечает. Возможен stale status в OpenClaw CLI.")
         if tabs_count > 0 and not tab_attached and state != "attached":
             warnings.append("CLI видит вкладки, но HTTP relay пока не подтвердил attach.")
+        if active_contour == "debug_browser" and not owner_attach_confirmed:
+            warnings.append("Runtime сейчас смотрит в dedicated OpenClaw profile, а не в обычный Chrome владельца.")
 
         return {
             "state": state,
@@ -2088,11 +3308,19 @@ class WebApp:
             "runtime": {
                 "running": running,
                 "cdp_ready": cdp_ready,
-                "profile": str(browser_status.get("profile") or ""),
+                "profile": str(contour.get("profile") or ""),
                 "cdp_url": str(browser_status.get("cdpUrl") or ""),
                 "cdp_port": browser_status.get("cdpPort"),
                 "tabs_count": tabs_count,
-                "detected_browser": str(browser_status.get("detectedBrowser") or ""),
+                "detected_browser": str(contour.get("detected_browser") or ""),
+                "chosen_browser": str(contour.get("chosen_browser") or ""),
+                "user_data_dir": str(contour.get("user_data_dir") or ""),
+                "attach_only": contour.get("attach_only"),
+                "is_dedicated_profile": bool(contour.get("is_dedicated_profile")),
+                "active_contour": active_contour,
+                "active_contour_label": active_contour_label,
+                "owner_attach_confirmed": owner_attach_confirmed,
+                "debug_attach_confirmed": debug_attach_confirmed,
             },
             "smoke": {
                 "relay_reachable": relay_reachable,
@@ -2224,6 +3452,73 @@ class WebApp:
             },
             "servers": servers,
         }
+
+    @staticmethod
+    def _build_browser_access_paths(browser: dict[str, Any], mcp: dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Строит два канонических пути доступа к браузеру без изобретения нового стека.
+
+        Нам важно явно показать пользователю:
+        - что уже работает через OpenClaw relay / расширение;
+        - что даёт более полный DevTools-путь через обычный Chrome.
+        """
+        runtime = browser.get("runtime") if isinstance(browser, dict) else {}
+        runtime = runtime if isinstance(runtime, dict) else {}
+        summary = str(browser.get("summary") or browser.get("next_step") or "Browser path unavailable")
+        next_step = str(browser.get("next_step") or "")
+        active_contour = str(runtime.get("active_contour") or "unknown")
+        active_label = str(runtime.get("active_contour_label") or "Не определён")
+        relay_running = bool(runtime.get("running"))
+        relay_ready = bool(browser.get("readiness") == "ready")
+
+        relay_detail = summary
+        if active_contour == "debug_browser":
+            relay_detail = "Active contour: Debug browser. " + summary
+        elif active_contour == "my_chrome":
+            relay_detail = "Active contour: Мой Chrome. " + summary
+
+        servers = mcp.get("servers") if isinstance(mcp, dict) else []
+        if not isinstance(servers, list):
+            servers = []
+        chrome_profile = next(
+            (item for item in servers if isinstance(item, dict) and str(item.get("name") or "") == "chrome-profile"),
+            {},
+        )
+        chrome_manual_setup = chrome_profile.get("manual_setup") if isinstance(chrome_profile, dict) else []
+        if not isinstance(chrome_manual_setup, list):
+            chrome_manual_setup = []
+        chrome_next_step = str(
+            chrome_manual_setup[0]
+            if chrome_manual_setup
+            else chrome_profile.get("detail") or "Путь Chrome DevTools пока не подтверждён."
+        )
+
+        return [
+            {
+                "name": "OpenClaw relay",
+                "kind": "openclaw_relay",
+                "readiness": str(browser.get("readiness") or "attention"),
+                "state": str(browser.get("state") or "unknown"),
+                "active": bool(relay_running),
+                "active_label": active_label if relay_running else "Не активен",
+                "detail": relay_detail,
+                "next_step": next_step,
+                "preferred_for": "Быстрый доступ через OpenClaw relay/extension.",
+                "confirmed": relay_ready,
+            },
+            {
+                "name": "Chrome DevTools",
+                "kind": "chrome_devtools",
+                "readiness": str(chrome_profile.get("readiness") or "attention"),
+                "state": str(chrome_profile.get("state") or "unknown"),
+                "active": bool(runtime.get("owner_attach_confirmed")),
+                "active_label": "Мой Chrome" if bool(runtime.get("owner_attach_confirmed")) else "Не подтверждён",
+                "detail": str(chrome_profile.get("detail") or "Обычный Chrome профиль пока не подтверждён."),
+                "next_step": chrome_next_step,
+                "preferred_for": "Полный DevTools-контур поверх обычного Chrome профиля.",
+                "confirmed": bool(runtime.get("owner_attach_confirmed")),
+            },
+        ]
 
     def _web_attachment_max_bytes(self) -> int:
         """Максимальный размер вложения web-панели в байтах."""
@@ -2576,8 +3871,8 @@ class WebApp:
             Runtime-конфиг OpenClaw для UI.
             Важно: секрет не отдаём целиком, только masked + флаг присутствия.
             """
-            base_url = os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789").strip().rstrip("/")
-            raw_key = str(os.getenv("OPENCLAW_API_KEY", "") or "").strip()
+            base_url = str(getattr(config, "OPENCLAW_URL", "") or "http://127.0.0.1:18789").strip().rstrip("/")
+            raw_key = str(self._openclaw_gateway_token_from_config() or "").strip()
             key_present = False
             key_masked = ""
             key_kind = "missing"
@@ -2596,6 +3891,37 @@ class WebApp:
                 "gateway_token_present": key_present,
                 "gateway_token_masked": key_masked,
                 "gateway_token_kind": key_kind,
+                "gateway_auth_state": "configured" if key_present else "missing",
+                "runtime_policy": {
+                    "force_cloud": bool(getattr(config, "FORCE_CLOUD", False)),
+                    "local_fallback_enabled": bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True)),
+                    "native_reasoning_mode": str(
+                        getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or "off"
+                    ).strip().lower(),
+                    "photo_force_cloud": bool(getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)),
+                    "output_tokens": {
+                        "text": int(getattr(config, "USERBOT_MAX_OUTPUT_TOKENS", 1200) or 1200),
+                        "photo": int(getattr(config, "USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420) or 420),
+                    },
+                    "history_budget": {
+                        "dialog_messages": int(getattr(config, "HISTORY_WINDOW_MESSAGES", 50) or 50),
+                        "dialog_max_chars": getattr(config, "HISTORY_WINDOW_MAX_CHARS", None),
+                        "local_messages": int(getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18) or 18),
+                        "local_max_chars": getattr(config, "LOCAL_HISTORY_WINDOW_MAX_CHARS", None),
+                        "retry_messages": int(getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8),
+                        "retry_max_chars": int(getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000),
+                        "retry_message_max_chars": int(getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200),
+                    },
+                    "timeouts_sec": {
+                        "chunk": float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0) or 180.0),
+                        "first_chunk": float(
+                            getattr(config, "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", 420.0) or 420.0
+                        ),
+                        "photo_first_chunk": float(
+                            getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0) or 540.0
+                        ),
+                    },
+                },
             }
 
         @self.app.post("/api/context/checkpoint")
@@ -3454,10 +4780,16 @@ class WebApp:
                     },
                 )
 
+            cloud_inventory: list[dict[str, Any]] = []
             cloud_presets: list[dict[str, Any]] = []
             alias_items: list[dict[str, str]] = []
             try:
-                cloud_presets = self._build_runtime_cloud_presets(cloud_slots)
+                cloud_inventory = self._build_runtime_cloud_presets(cloud_slots)
+                cloud_presets = [
+                    item
+                    for item in cloud_inventory
+                    if bool(item.get("configured_runtime", True))
+                ]
                 runtime_model_ids = {str(item.get("id", "")).strip() for item in cloud_presets if str(item.get("id", "")).strip()}
                 for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
                     resolved_id, _ = normalize_model_alias(alias_key)
@@ -3470,11 +4802,20 @@ class WebApp:
                         }
                     )
             except Exception:
+                cloud_inventory = []
                 cloud_presets = []
                 alias_items = []
 
+            if not cloud_inventory:
+                cloud_inventory = self._build_runtime_cloud_presets({})
             if not cloud_presets:
-                cloud_presets = self._build_runtime_cloud_presets({})
+                cloud_presets = [
+                    item
+                    for item in cloud_inventory
+                    if bool(item.get("configured_runtime", True))
+                ]
+            if not cloud_presets:
+                cloud_presets = list(cloud_inventory)
 
             local_override = local_active_model or str(
                 getattr(router_obj, "active_local_model", "") or getattr(config, "LOCAL_PREFERRED_MODEL", "") or ""
@@ -3494,6 +4835,69 @@ class WebApp:
                 }
                 for preset_id, preset_payload in quick_presets_map.items()
             ]
+            routing_status = self._build_openclaw_model_routing_status()
+            runtime_controls = self._build_openclaw_runtime_controls()
+
+            router_usage_summary = {}
+            if hasattr(router_obj, "get_usage_summary"):
+                try:
+                    router_usage_summary = dict(router_obj.get_usage_summary() or {})
+                except Exception:
+                    router_usage_summary = {}
+
+            cloud_provider_groups_map: dict[str, dict[str, Any]] = {}
+            for item in cloud_inventory:
+                provider_name = str(item.get("provider", "") or "").strip()
+                if not provider_name:
+                    continue
+                group = cloud_provider_groups_map.setdefault(
+                    provider_name,
+                    {
+                        "provider": provider_name,
+                        "provider_label": str(item.get("provider_label", provider_name)),
+                        "provider_auth": str(item.get("provider_auth", "unknown")),
+                        "provider_readiness": str(item.get("provider_readiness", "unknown")),
+                        "provider_readiness_label": str(item.get("provider_readiness_label", "Configured")),
+                        "provider_detail": str(item.get("provider_detail", "")),
+                        "provider_quota_state": str(item.get("provider_quota_state", "unknown")),
+                        "provider_quota_label": str(item.get("provider_quota_label", "")),
+                        "provider_effective_kind": str(item.get("provider_effective_kind", "")),
+                        "provider_effective_detail": str(item.get("provider_effective_detail", "")),
+                        "provider_oauth_status": str(item.get("provider_oauth_status", "")),
+                        "provider_oauth_remaining_human": str(item.get("provider_oauth_remaining_human", "")),
+                        "provider_ui": dict(item.get("provider_ui") or {}),
+                        "legacy": bool(item.get("legacy")),
+                        "models": [],
+                    },
+                )
+                group["models"].append(item)
+
+            cloud_provider_groups = [
+                {
+                    **group,
+                    "model_count": len(group["models"]),
+                    "configured_model_count": sum(
+                        1 for model in group["models"] if bool(model.get("configured_runtime"))
+                    ),
+                    "catalog_only_model_count": sum(
+                        1 for model in group["models"] if not bool(model.get("configured_runtime"))
+                    ),
+                    "active_count": sum(1 for model in group["models"] if bool(model.get("active_runtime"))),
+                    "selected_slots": sorted(
+                        {
+                            slot_name
+                            for model in group["models"]
+                            for slot_name in (model.get("selected_slots") or [])
+                            if str(slot_name or "").strip()
+                        }
+                    ),
+                }
+                for group in sorted(
+                    cloud_provider_groups_map.values(),
+                    key=lambda item: self._provider_sort_rank(str(item.get("provider") or "")),
+                )
+            ]
+            parallelism_truth = self._build_openclaw_parallelism_truth()
 
             return {
                 "force_mode": force_mode,
@@ -3505,10 +4909,21 @@ class WebApp:
                 "local_models": local_models,
                 "local_models_error": local_models_error,
                 "cloud_presets": cloud_presets,
+                "cloud_inventory": cloud_inventory,
+                "cloud_provider_groups": cloud_provider_groups,
                 "aliases": alias_items,
                 "quick_presets": quick_presets,
                 "runtime_model_count": len(cloud_presets),
-                "runtime_registry_source": "openclaw_models_json",
+                "cloud_inventory_count": len(cloud_inventory),
+                "runtime_registry_source": "openclaw_models_json+openclaw_models_list_all",
+                "router_usage": router_usage_summary,
+                "routing_status": routing_status,
+                "runtime_controls": runtime_controls,
+                "parallelism_truth": parallelism_truth,
+                "catalog_guidance": {
+                    "primary_flow": "Сначала выбери режим и пресет. Точный слот меняй только в advanced override.",
+                    "openai_manual_only": True,
+                },
             }
 
         @self.app.get("/api/model/catalog")
@@ -3516,6 +4931,62 @@ class WebApp:
             """Каталог моделей/режимов для web-панели с кнопочным управлением."""
             router = self.deps["router"]
             return {"ok": True, "catalog": await _build_model_catalog(router)}
+
+        @self.app.post("/api/model/provider-action")
+        async def model_provider_action(
+            payload: dict = Body(...),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Запускает provider-specific repair/migration action из owner-панели."""
+            self._assert_write_access(x_krab_web_key, token)
+
+            provider = str(payload.get("provider", "") or "").strip().lower()
+            action = str(payload.get("action", "") or "").strip().lower()
+            if not provider:
+                raise HTTPException(status_code=400, detail="provider_action_provider_required")
+            if not action:
+                raise HTTPException(status_code=400, detail="provider_action_action_required")
+
+            provider_ui = self._provider_ui_metadata(provider)
+            expected_action = str(provider_ui.get("repair_action", "") or "").strip().lower()
+            if action not in {"repair_oauth", "migrate_to_gemini_cli"}:
+                raise HTTPException(status_code=400, detail=f"provider_action_unsupported:{action}")
+            if not expected_action or action != expected_action:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"provider_action_not_available:{provider}:{action}",
+                )
+
+            helper_provider = "google-gemini-cli" if action == "migrate_to_gemini_cli" else provider
+            helper_path = self._provider_repair_helper_path(helper_provider)
+            if not helper_path or not helper_path.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"provider_action_helper_missing:{helper_provider}",
+                )
+
+            launch = self._launch_local_app(helper_path)
+            if not launch.get("ok"):
+                raise HTTPException(
+                    status_code=500,
+                    detail=str(launch.get("error") or "provider_action_launch_failed"),
+                )
+
+            detail = str(provider_ui.get("repair_detail", "") or "").strip()
+            if action == "migrate_to_gemini_cli":
+                message = "✅ Открыт helper миграции на Gemini CLI OAuth."
+            else:
+                message = f"✅ Открыт helper для провайдера `{provider}`."
+
+            return {
+                "ok": True,
+                "provider": provider,
+                "action": action,
+                "message": message,
+                "detail": detail,
+                "launch": launch,
+            }
 
         @self.app.get("/api/openclaw/model-routing/status")
         async def openclaw_model_routing_status():
@@ -3737,7 +5208,7 @@ class WebApp:
                         }
                     )
 
-                target_mode = str(chosen.get("mode", "auto")).strip().lower() or "auto"
+                target_mode = str(payload.get("mode_override", "") or chosen.get("mode", "auto")).strip().lower() or "auto"
                 if hasattr(router, "set_force_mode"):
                     router.set_force_mode(target_mode)
 
@@ -3747,6 +5218,37 @@ class WebApp:
                     "changes": applied_changes,
                 }
                 message_text = f"✅ Пресет `{preset_id}` применён ({len(applied_changes)} слотов)."
+
+            elif action == "set_runtime_chain":
+                primary_raw = payload.get("primary")
+                fallbacks_raw = payload.get("fallbacks") if isinstance(payload.get("fallbacks"), list) else []
+                context_tokens_raw = payload.get("context_tokens")
+                thinking_default_raw = payload.get("thinking_default", "off")
+                slot_thinking_raw = payload.get("slot_thinking")
+                try:
+                    applied = self._apply_openclaw_runtime_controls(
+                        primary_raw=primary_raw,
+                        fallbacks_raw=list(fallbacks_raw),
+                        context_tokens_raw=context_tokens_raw,
+                        thinking_default_raw=thinking_default_raw,
+                        slot_thinking_raw=slot_thinking_raw if isinstance(slot_thinking_raw, dict) else {},
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+                self._runtime_lite_cache = None
+                result_payload = {
+                    "runtime": applied,
+                    "routing_status": self._build_openclaw_model_routing_status(),
+                    "runtime_controls": self._build_openclaw_runtime_controls(),
+                }
+                backup_hint = ""
+                if applied.get("backup_openclaw_json"):
+                    backup_hint = " backup создан."
+                message_text = (
+                    f"✅ Глобальная цепочка OpenClaw обновлена: `{applied['primary']}` + "
+                    f"{len(applied['fallbacks'])} fallback(s).{backup_hint}"
+                )
 
             else:
                 raise HTTPException(status_code=400, detail=f"model_apply_unknown_action: {action}")
@@ -4509,6 +6011,15 @@ class WebApp:
                 },
             }
 
+        @self.app.post("/api/openclaw/browser/open-owner-chrome")
+        async def openclaw_browser_open_owner_chrome(
+            token: str = Query(default=""),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+        ):
+            """Открывает owner Chrome на странице Remote Debugging через существующий helper."""
+            self._assert_write_access(x_krab_web_key, token)
+            return self._launch_owner_chrome_remote_debugging()
+
         @self.app.get("/api/openclaw/browser-mcp-readiness")
         async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
             """Агрегированный staged readiness для owner browser-контура и managed MCP."""
@@ -4530,6 +6041,7 @@ class WebApp:
                 tabs_error=tabs_error,
             )
             mcp = self._build_mcp_readiness_snapshot(browser)
+            browser["paths"] = self._build_browser_access_paths(browser, mcp)
 
             overall = "ready"
             if "blocked" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:

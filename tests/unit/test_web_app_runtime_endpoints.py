@@ -557,6 +557,11 @@ def test_model_local_status_uses_runtime_truth_when_router_state_stale(monkeypat
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_status_snapshot",
+        classmethod(lambda cls: {"providers": {}}),
+    )
     client = _make_client_with_router(_TruthRouter())
 
     resp = client.get("/api/model/local/status")
@@ -663,8 +668,8 @@ def test_model_catalog_uses_runtime_truth_for_loaded_flag(monkeypatch):
     assert catalog["local_models"][0]["loaded"] is True
 
 
-def test_model_catalog_cloud_presets_follow_active_runtime_chain(monkeypatch):
-    """Cloud catalog должен следовать active runtime chain и скрывать legacy-хвосты."""
+def test_model_catalog_cloud_presets_expose_full_runtime_registry_and_provider_states(monkeypatch):
+    """Cloud catalog должен разделять runtime-ready модели и provider inventory без потери provider truth."""
 
     class _TruthRouter(_DummyRouter):
         def __init__(self) -> None:
@@ -715,13 +720,53 @@ def test_model_catalog_cloud_presets_follow_active_runtime_chain(monkeypatch):
         "agents": {
             "defaults": {
                 "model": {
-                    "primary": "openai-codex/gpt-4.5-preview",
+                    "primary": "google-gemini-cli/gemini-3.1-pro-preview",
                     "fallbacks": [
                         "google/gemini-3.1-pro-preview",
                         "qwen-portal/coder-model",
                     ],
                 }
-            }
+            },
+            "list": [{"model": "google-gemini-cli/gemini-3.1-pro-preview"}],
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-gemini-cli:default": {"provider": "google-gemini-cli"},
+        }
+    }
+    full_catalog = {
+        "count": 5,
+        "providers": {
+            "openai-codex": [
+                {"key": "openai-codex/gpt-4.5-preview", "name": "ChatGPT 4.5 Preview", "contextWindow": 128000, "maxTokens": 16384, "available": True, "tags": ["configured"]},
+                {"key": "openai-codex/gpt-5.4", "name": "GPT-5.4", "contextWindow": 272000, "maxTokens": 16384, "available": True, "tags": []},
+            ],
+            "google-gemini-cli": [
+                {"key": "google-gemini-cli/gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview (Cloud Code Assist)", "contextWindow": 1048576, "maxTokens": 16384, "available": True, "tags": ["configured", "default"]},
+                {"key": "google-gemini-cli/gemini-2.5-pro", "name": "Gemini 2.5 Pro (Cloud Code Assist)", "contextWindow": 1048576, "maxTokens": 8192, "available": True, "tags": []},
+            ],
+        },
+    }
+    status_snapshot = {
+        "providers": {
+            "openai-codex": {
+                "provider": "openai-codex",
+                "effective_kind": "profiles",
+                "effective_detail": "~/.openclaw/agents/main/agent/auth-profiles.json",
+                "oauth_status": "ok",
+                "oauth_remaining_ms": 856013633,
+                "oauth_remaining_human": "9д 21ч",
+            },
+            "google-gemini-cli": {
+                "provider": "google-gemini-cli",
+                "effective_kind": "profiles",
+                "effective_detail": "~/.openclaw/agents/main/agent/auth-profiles.json",
+                "oauth_status": "ok",
+                "oauth_remaining_ms": 2877006,
+                "oauth_remaining_human": "47м",
+            },
         }
     }
 
@@ -736,19 +781,392 @@ def test_model_catalog_cloud_presets_follow_active_runtime_chain(monkeypatch):
         "_load_openclaw_runtime_config",
         classmethod(lambda cls: runtime_config),
     )
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_auth_profiles",
+        classmethod(lambda cls: auth_profiles),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_runtime_signal_failed_providers",
+        classmethod(lambda cls: {"openai-codex": "runtime_missing_scope_model_request"}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_full_catalog",
+        classmethod(lambda cls: full_catalog),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_status_snapshot",
+        classmethod(lambda cls: status_snapshot),
+    )
     client = _make_client_with_router(_TruthRouter())
 
     resp = client.get("/api/model/catalog")
 
     assert resp.status_code == 200
     data = resp.json()["catalog"]
+    inventory_ids = {item["id"] for item in data["cloud_inventory"]}
     cloud_ids = {item["id"] for item in data["cloud_presets"]}
     assert "openai-codex/gpt-4.5-preview" in cloud_ids
     assert "google/gemini-3.1-pro-preview" in cloud_ids
     assert "qwen-portal/coder-model" in cloud_ids
-    assert "google-antigravity/gemini-3.1-pro-preview" not in cloud_ids
+    assert "google-antigravity/gemini-3.1-pro-preview" in cloud_ids
+    assert "google-gemini-cli/gemini-3.1-pro-preview" in cloud_ids
+    assert "openai-codex/gpt-5.4" in inventory_ids
+    assert "openai-codex/gpt-5.4" not in cloud_ids
+    assert "google-gemini-cli/gemini-2.5-pro" in inventory_ids
+    assert "google-gemini-cli/gemini-2.5-pro" not in cloud_ids
     assert "openai/gpt-5-codex" not in cloud_ids
-    assert data["runtime_registry_source"] == "openclaw_models_json"
+    provider_groups = {item["provider"]: item for item in data["cloud_provider_groups"]}
+    assert provider_groups["openai-codex"]["provider_readiness_label"] == "Scope fail"
+    assert provider_groups["google-gemini-cli"]["provider_readiness_label"] == "OAuth OK"
+    assert provider_groups["google-gemini-cli"]["configured_model_count"] == 1
+    assert provider_groups["google-gemini-cli"]["catalog_only_model_count"] == 1
+    assert provider_groups["google-antigravity"]["legacy"] is True
+    assert data["runtime_registry_source"] == "openclaw_models_json+openclaw_models_list_all"
+    assert data["parallelism_truth"]["main_max_concurrent"] is None
+    assert "queue concurrency" in data["parallelism_truth"]["summary_label"]
+
+
+def test_runtime_quick_presets_keep_cloud_slots_cloud_only(monkeypatch):
+    """Local Focus не должен записывать локальные модели в cloud-слоты."""
+
+    monkeypatch.setattr(
+        WebApp,
+        "_build_runtime_cloud_presets",
+        classmethod(
+            lambda cls, current_slots=None: [
+                {"id": "google/gemini-2.5-flash"},
+                {"id": "google-gemini-cli/gemini-3.1-pro-preview"},
+                {"id": "qwen-portal/coder-model"},
+            ]
+        ),
+    )
+
+    presets = WebApp._build_runtime_quick_presets(
+        current_slots={
+            "chat": "google/gemini-2.5-flash",
+            "thinking": "google-gemini-cli/gemini-3.1-pro-preview",
+            "pro": "google-gemini-cli/gemini-3.1-pro-preview",
+            "coding": "qwen-portal/coder-model",
+        },
+        local_override="nvidia/nemotron-3-nano",
+    )
+
+    local_focus_slots = presets["local_focus"]["slots"]
+    assert local_focus_slots["chat"] == "google/gemini-2.5-flash"
+    assert local_focus_slots["thinking"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert all(not str(model_id).startswith("nvidia/") for model_id in local_focus_slots.values())
+
+
+def test_runtime_provider_state_does_not_mark_api_key_provider_as_expired():
+    """API-key провайдер не должен становиться Expired только из-за отсутствия OAuth-статуса."""
+    payload = WebApp._runtime_provider_state(
+        "google",
+        runtime_models={
+            "providers": {
+                "google": {
+                    "auth": "api-key",
+                    "apiKey": "AIza-test",
+                    "models": [
+                        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
+                    ],
+                }
+            }
+        },
+        auth_profiles={"profiles": {}, "usageStats": {}},
+        runtime_signal_failures={},
+        status_snapshot={
+            "providers": {
+                "google": {
+                    "provider": "google",
+                    "effective_kind": "env",
+                    "effective_detail": "AIzaSyAi...masked",
+                    "oauth_status": "missing",
+                }
+            }
+        },
+    )
+
+    assert payload["auth_mode"] == "api-key"
+    assert payload["readiness"] == "ready"
+    assert payload["readiness_label"] == "API key"
+    assert payload["detail"] == "API key сконфигурирован."
+
+
+def test_build_openclaw_runtime_controls_reads_context_and_thinking(monkeypatch):
+    """Runtime-controls должны честно читать chain, contextTokens и thinking из live OpenClaw config."""
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-5.4",
+                    "fallbacks": [
+                        "google/gemini-2.5-flash",
+                        "lmstudio/local",
+                    ],
+                },
+                "contextTokens": 200000,
+                "thinkingDefault": "medium",
+                "models": {
+                    "openai-codex/gpt-5.4": {"params": {"thinking": "high"}},
+                    "lmstudio/local": {"params": {"thinking": "off"}},
+                },
+            }
+        }
+    }
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_config",
+        classmethod(lambda cls: runtime_config),
+    )
+
+    payload = WebApp._build_openclaw_runtime_controls()
+
+    assert payload["primary"] == "openai-codex/gpt-5.4"
+    assert payload["fallbacks"] == ["google/gemini-2.5-flash", "lmstudio/local"]
+    assert payload["context_tokens"] == 200000
+    assert payload["thinking_default"] == "medium"
+    chain_items = {item["model_id"]: item for item in payload["chain_items"]}
+    assert chain_items["openai-codex/gpt-5.4"]["explicit_thinking"] == "high"
+    assert chain_items["openai-codex/gpt-5.4"]["effective_thinking"] == "high"
+    assert chain_items["google/gemini-2.5-flash"]["effective_thinking"] == "medium"
+    assert chain_items["lmstudio/local"]["explicit_thinking"] == "off"
+
+
+def test_build_openclaw_parallelism_truth_reads_queue_caps(monkeypatch):
+    """Parallelism truth должен показывать queue caps отдельно от named modes."""
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "maxConcurrent": 4,
+                "subagents": {
+                    "maxConcurrent": 8,
+                },
+            }
+        }
+    }
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_config",
+        classmethod(lambda cls: runtime_config),
+    )
+
+    payload = WebApp._build_openclaw_parallelism_truth()
+
+    assert payload["main_max_concurrent"] == 4
+    assert payload["subagent_max_concurrent"] == 8
+    assert "queue concurrency" in payload["summary_label"]
+    assert "broadcast strategy" in payload["broadcast_note"]
+
+
+def test_model_provider_action_launches_known_helper(monkeypatch, tmp_path: Path):
+    """Provider-action должен открывать существующий helper для one-click OAuth repair."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    helper_path = tmp_path / "Login Gemini CLI OAuth.command"
+    helper_path.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    helper_path.chmod(0o755)
+
+    launched: dict[str, object] = {}
+
+    def _fake_launch(self, target_path: Path):
+        launched["path"] = str(target_path)
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "error": "",
+            "launched": True,
+            "path": str(target_path),
+        }
+
+    monkeypatch.setattr(
+        WebApp,
+        "_provider_repair_helper_path",
+        classmethod(lambda cls, provider_name: helper_path if provider_name == "google-gemini-cli" else None),
+    )
+    monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
+
+    class _Router:
+        models = {"chat": "google-gemini-cli/gemini-3.1-pro-preview"}
+        force_mode = "auto"
+
+        async def list_local_models_verbose(self):
+            return []
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "idle",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
+    monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
+
+    client = _make_client_with_router(_Router())
+    response = client.post(
+        "/api/model/provider-action",
+        headers={"X-Krab-Web-Key": "secret"},
+        json={"provider": "google-gemini-cli", "action": "repair_oauth"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["provider"] == "google-gemini-cli"
+    assert data["action"] == "repair_oauth"
+    assert str(launched["path"]).endswith("Login Gemini CLI OAuth.command")
+
+
+def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, tmp_path: Path):
+    """`/api/model/apply` должен обновлять глобальную chain и runtime knobs в live OpenClaw config."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "model": {
+                            "primary": "google/gemini-2.5-flash",
+                            "fallbacks": ["qwen-portal/coder-model"],
+                        },
+                        "models": {
+                            "google/gemini-2.5-flash": {"params": {"thinking": "off"}},
+                            "qwen-portal/coder-model": {"params": {"thinking": "off"}},
+                        },
+                        "contextTokens": 128000,
+                        "thinkingDefault": "off",
+                        "subagents": {"model": "google/gemini-2.5-flash"},
+                    },
+                    "list": [
+                        {"id": "main", "model": "google/gemini-2.5-flash"},
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    agent_path.write_text(
+        json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(WebApp, "_openclaw_config_path", staticmethod(lambda: openclaw_path))
+    monkeypatch.setattr(WebApp, "_openclaw_agent_config_path", classmethod(lambda cls: agent_path))
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_full_catalog",
+        classmethod(lambda cls: {"providers": {}}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_status_snapshot",
+        classmethod(lambda cls: {"providers": {}}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_auth_profiles",
+        classmethod(lambda cls: {"profiles": {}, "usageStats": {}}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_build_runtime_cloud_presets",
+        classmethod(
+            lambda cls, current_slots=None: [
+                {
+                    "id": "openai-codex/gpt-5.4",
+                    "provider": "openai-codex",
+                    "provider_label": "OpenAI Codex",
+                    "provider_auth": "oauth",
+                    "configured_runtime": True,
+                    "reasoning": True,
+                    "context_window": 128000,
+                },
+                {
+                    "id": "google/gemini-2.5-flash",
+                    "provider": "google",
+                    "provider_label": "Google",
+                    "provider_auth": "api-key",
+                    "configured_runtime": True,
+                    "reasoning": False,
+                    "context_window": 1000000,
+                },
+            ]
+        ),
+    )
+
+    async def _fake_local_truth(self, router_obj, *, force_refresh: bool = False):
+        return {
+            "engine": "lm_studio",
+            "active_model": "",
+            "runtime_reachable": False,
+            "loaded_models": [],
+        }
+
+    monkeypatch.setattr(WebApp, "_resolve_local_runtime_truth", _fake_local_truth)
+
+    class _Router(_DummyRouter):
+        def __init__(self) -> None:
+            self.models = {"chat": "google/gemini-2.5-flash"}
+            self.force_mode = "auto"
+            self.local_engine = "lm_studio"
+
+    client = _make_client_with_router(_Router())
+
+    resp = client.post(
+        "/api/model/apply",
+        json={
+            "action": "set_runtime_chain",
+            "primary": "openai-codex/gpt-5.4",
+            "fallbacks": [
+                "google/gemini-2.5-flash",
+                "lmstudio/local",
+                "google/gemini-2.5-flash",
+            ],
+            "context_tokens": 200000,
+            "thinking_default": "high",
+            "slot_thinking": {
+                "openai-codex/gpt-5.4": "high",
+                "google/gemini-2.5-flash": "medium",
+                "lmstudio/local": "off",
+            },
+        },
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["result"]["runtime"]["primary"] == "openai-codex/gpt-5.4"
+    assert data["result"]["runtime"]["fallbacks"] == ["google/gemini-2.5-flash", "lmstudio/local"]
+    assert Path(data["result"]["runtime"]["backup_openclaw_json"]).exists()
+    assert Path(data["result"]["runtime"]["backup_agent_json"]).exists()
+
+    openclaw_payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    defaults = openclaw_payload["agents"]["defaults"]
+    assert defaults["model"]["primary"] == "openai-codex/gpt-5.4"
+    assert defaults["model"]["fallbacks"] == ["google/gemini-2.5-flash", "lmstudio/local"]
+    assert defaults["contextTokens"] == 200000
+    assert defaults["thinkingDefault"] == "high"
+    assert defaults["subagents"]["model"] == "openai-codex/gpt-5.4"
+    assert defaults["models"]["openai-codex/gpt-5.4"]["params"]["thinking"] == "high"
+    assert defaults["models"]["google/gemini-2.5-flash"]["params"]["thinking"] == "medium"
+    assert defaults["models"]["lmstudio/local"]["params"]["thinking"] == "off"
+    assert openclaw_payload["agents"]["list"][0]["model"] == "openai-codex/gpt-5.4"
+
+    agent_payload = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert agent_payload["model"] == "openai-codex/gpt-5.4"
 
 
 def test_openclaw_model_routing_status_reports_broken_primary_and_legacy_google_fallback(monkeypatch):
@@ -795,6 +1213,8 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_legacy_google_
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
     monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
     monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4")
 
     client = _make_client_with_router(_DummyRouter())
@@ -859,6 +1279,8 @@ def test_openclaw_model_routing_status_skips_expired_google_gemini_cli_fallback(
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
     monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
 
     client = _make_client_with_router(_DummyRouter())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -920,6 +1342,8 @@ def test_openclaw_model_routing_status_clears_broken_flag_when_live_primary_veri
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
     monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
 
     client = _make_client_with_router(_DummyRouter(), openclaw_client=_PrimaryVerifiedOpenClaw())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -978,6 +1402,8 @@ def test_openclaw_model_routing_status_marks_live_fallback_as_active(monkeypatch
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
     monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
 
     client = _make_client_with_router(_DummyRouter(), openclaw_client=_FallbackActiveOpenClaw())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -1682,6 +2108,114 @@ def test_browser_mcp_readiness_marks_authorized_running_browser_with_tabs_as_rea
     assert browser["warnings"] == []
 
 
+def test_browser_mcp_readiness_distinguishes_dedicated_debug_browser_from_owner_attach():
+    """Dedicated OpenClaw profile не должен притворяться owner attach к обычному Chrome."""
+
+    browser = WebApp._classify_browser_stage(
+        {
+            "running": True,
+            "cdpReady": True,
+            "profile": "openclaw",
+            "attachOnly": False,
+            "chosenBrowser": "chrome",
+            "detectedBrowser": "chrome",
+            "userDataDir": "/Users/test/.openclaw/browser/openclaw/user-data",
+        },
+        {"tabs": [{"targetId": "abc"}]},
+        {
+            "relay_reachable": True,
+            "browser_http_reachable": True,
+            "browser_auth_required": False,
+            "tab_attached": False,
+            "browser_http_state": "authorized",
+            "detail": "browser relay authorized (200)",
+        },
+    )
+
+    assert browser["state"] == "debug_attached"
+    assert browser["readiness"] == "attention"
+    assert browser["stage_label"] == "Подключён Debug browser"
+    assert browser["runtime"]["active_contour"] == "debug_browser"
+    assert browser["runtime"]["active_contour_label"] == "Debug browser"
+    assert browser["runtime"]["owner_attach_confirmed"] is False
+    assert browser["runtime"]["debug_attach_confirmed"] is True
+    assert any("dedicated debug browser" in item for item in browser["warnings"])
+
+
+def test_browser_access_paths_include_relay_and_chrome_devtools():
+    """Browser readiness должен явно отдавать оба канонических пути доступа: relay и Chrome DevTools."""
+
+    browser = {
+        "readiness": "attention",
+        "state": "tab_not_connected",
+        "summary": "Dedicated debug browser жив, но owner Chrome ещё не attach-нут.",
+        "next_step": "Открой вкладку в debug browser или переключись на attach к обычному Chrome.",
+        "runtime": {
+            "running": True,
+            "active_contour": "debug_browser",
+            "active_contour_label": "Debug browser",
+            "owner_attach_confirmed": False,
+        },
+    }
+    mcp = {
+        "servers": [
+            {
+                "name": "chrome-profile",
+                "readiness": "attention",
+                "state": "manual_setup_required",
+                "detail": "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging.",
+                "manual_setup": ["В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging."],
+            }
+        ]
+    }
+
+    paths = WebApp._build_browser_access_paths(browser, mcp)
+
+    assert len(paths) == 2
+    relay_path = next(item for item in paths if item["kind"] == "openclaw_relay")
+    devtools_path = next(item for item in paths if item["kind"] == "chrome_devtools")
+    assert relay_path["active"] is True
+    assert relay_path["active_label"] == "Debug browser"
+    assert relay_path["confirmed"] is False
+    assert devtools_path["active"] is False
+    assert devtools_path["state"] == "manual_setup_required"
+    assert "Remote Debugging" in devtools_path["next_step"]
+
+
+def test_openclaw_runtime_config_exposes_runtime_policy(monkeypatch):
+    """`/api/openclaw/runtime-config` должен отдавать read-only policy truth для панели."""
+
+    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "runtime-token-123"))
+    monkeypatch.setattr("src.modules.web_app.config.OPENCLAW_URL", "http://127.0.0.1:18789")
+    monkeypatch.setattr("src.modules.web_app.config.LM_STUDIO_NATIVE_REASONING_MODE", "off")
+    monkeypatch.setattr("src.modules.web_app.config.USERBOT_MAX_OUTPUT_TOKENS", 1200)
+    monkeypatch.setattr("src.modules.web_app.config.USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420)
+    monkeypatch.setattr("src.modules.web_app.config.HISTORY_WINDOW_MESSAGES", 50)
+    monkeypatch.setattr("src.modules.web_app.config.HISTORY_WINDOW_MAX_CHARS", None)
+    monkeypatch.setattr("src.modules.web_app.config.LOCAL_HISTORY_WINDOW_MESSAGES", 18)
+    monkeypatch.setattr("src.modules.web_app.config.LOCAL_HISTORY_WINDOW_MAX_CHARS", 12000)
+    monkeypatch.setattr("src.modules.web_app.config.RETRY_HISTORY_WINDOW_MESSAGES", 8)
+    monkeypatch.setattr("src.modules.web_app.config.RETRY_HISTORY_WINDOW_MAX_CHARS", 4000)
+    monkeypatch.setattr("src.modules.web_app.config.RETRY_MESSAGE_MAX_CHARS", 1200)
+    monkeypatch.setattr("src.modules.web_app.config.OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0)
+    monkeypatch.setattr("src.modules.web_app.config.OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", 420.0)
+    monkeypatch.setattr("src.modules.web_app.config.OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0)
+    monkeypatch.setattr("src.modules.web_app.config.FORCE_CLOUD", False)
+    monkeypatch.setattr("src.modules.web_app.config.LOCAL_FALLBACK_ENABLED", True)
+    monkeypatch.setattr("src.modules.web_app.config.USERBOT_FORCE_CLOUD_FOR_PHOTO", True)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/runtime-config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["gateway_auth_state"] == "configured"
+    assert data["gateway_token_masked"] == "run...123"
+    assert data["runtime_policy"]["native_reasoning_mode"] == "off"
+    assert data["runtime_policy"]["output_tokens"]["text"] == 1200
+    assert data["runtime_policy"]["history_budget"]["local_max_chars"] == 12000
+    assert data["runtime_policy"]["timeouts_sec"]["photo_first_chunk"] == 540.0
+
+
 def test_browser_mcp_readiness_retries_transient_empty_cli_state_when_relay_authorized(monkeypatch, tmp_path: Path):
     """При `authorized` relay endpoint должен пережидать краткий CLI-флап status/tabs и не застревать в false attention."""
 
@@ -1890,6 +2424,31 @@ Local loopback ws://127.0.0.1:18789
     assert data["browser"]["state"] == "attached"
     assert data["browser"]["readiness"] == "ready"
     assert data["browser"]["runtime"]["tabs_count"] == 1
+
+
+def test_open_owner_chrome_endpoint_uses_existing_command_helper(monkeypatch, tmp_path: Path):
+    """`POST /api/openclaw/browser/open-owner-chrome` должен использовать существующий `.command` helper."""
+
+    helper_path = tmp_path / "new Enable Chrome Remote Debugging.command"
+    helper_path.write_text("#!/bin/zsh\nexit 0\n", encoding="utf-8")
+    helper_path.chmod(0o755)
+    calls: list[tuple[str, ...]] = []
+
+    class _Popen:
+        def __init__(self, cmd, stdout=None, stderr=None):
+            calls.append(tuple(str(part) for part in cmd))
+
+    monkeypatch.setattr(WebApp, "_project_root", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr("src.modules.web_app.subprocess.Popen", _Popen)
+    client = _make_client()
+
+    resp = client.post("/api/openclaw/browser/open-owner-chrome", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["launcher"] == "command"
+    assert data["helper_path"] == str(helper_path)
+    assert calls == [("open", str(helper_path))]
 
 
 def test_control_compat_status_returns_legacy_aliases(monkeypatch):

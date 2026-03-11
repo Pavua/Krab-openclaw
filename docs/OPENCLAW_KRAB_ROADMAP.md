@@ -1,7 +1,7 @@
 # OpenClaw Krab Roadmap
 
-Дата актуализации: 2026-03-11
-Ветка реализации: `codex/gpt54-userbot-primary`
+Дата актуализации: 2026-03-12
+Ветка реализации: `codex/live-8080-parallelism-acceptance`
 Текущая ориентировочная готовность большого плана: `99%`
 
 ## Цель
@@ -45,7 +45,8 @@
 - [ ] Ввести presets `off / low / medium / high / xhigh`
 - [ ] Разделить слоты `Chat / Coding / Vision / Fast`
 - [x] Показывать реальные capabilities, а не hardcoded catalog
-- [ ] Показывать auth/quota/runtime state из OpenClaw
+- [x] Показывать auth/quota/runtime state из OpenClaw
+- [x] Честно показывать queue concurrency truth для main-agent вместо ложного общего `parallel / sequential` toggle
 - [x] Добавить owner-oriented web ACL control для userbot в `:8080`
 
 ### Этап 5. Browser / MCP readiness
@@ -93,6 +94,10 @@
 - [x] Browser readiness truth отвязан от ложного `401`: relay теперь проверяется с gateway token, а `authorized` не путается с `attached`
 - [x] Browser acceptance подтверждён живым сценарием: `stop -> start from UI -> attached -> action probe ok`
 - [x] UI сразу дорисовывает truth после запуска Browser Relay: `Stage / Tabs / Required MCP` и disabled-state кнопки синхронизированы
+- [x] В `Интерфейс AI Ассистента` добавлен truthful meta-блок про параллелизм OpenClaw:
+  - queue concurrency для `main/subagent`
+  - явное разделение с named semantics `parallel / sequential` из других runtime-контуров
+- [x] Browser smoke на изолированном web-инстансе подтвердил рендер нового блока параллелизма и live-клик `Синхронизировать каталог`
 - [x] Heartbeat runtime-скрипт переведён на truthful `openclaw health --json` и `openclaw cron status --json` вместо шумного `gateway status`
 - [x] Исправлен launcher-регресс: `new start_krab.command` / `new Stop Krab.command` больше не подвисают бесконечно на `openclaw gateway stop`, если gateway уже мёртв или не слушает порт
 - [x] Исправлен owner-chat fast-path: запросы вида `проведи полную диагностику` / `cron у тебя уже работает` теперь уходят в deterministic `runtime self-check`, а не в свободную генерацию
@@ -108,6 +113,8 @@
 - Для полного подтверждения reserve-контура всё ещё нужен полный round-trip owner -> reserve bot -> reply; пока подтверждена только живая post-restart delivery из runtime в Telegram
 - В smoke остаётся residual warning `krab-output-sanitizer loaded without install/load-path provenance`; это не runtime-blocker, но хвост доверенной provenance
 - `google-gemini-cli` сейчас хрупкий как fallback: `openclaw models status` показывает `expires in 0m`, а gateway-log фиксировал refresh failure 2026-03-11
+- Live `:8080` для нового блока параллелизма пока не переподтверждён после restart из-под `USER2`:
+  старый `src.main` принадлежит `pablito`, пережил попытку controlled restart и не дал заменить процесс без доступа владельца
 
 ## Проверка
 
@@ -125,6 +132,8 @@
 - [x] Runtime repair smoke: Telegram reserve-policy применён и отражён в `~/.openclaw/openclaw.json`
 - [x] Live probe: `openai-codex/gpt-5.4` = `READY` через OpenClaw gateway
 - [x] Live UI/browser: в `:8080` показан staged `Browser / MCP Readiness`
+- [x] Unit: `parallelism_truth` в `/api/model/catalog` и чтение queue caps `main/subagent`
+- [x] Browser smoke: новый блок параллелизма в `Интерфейс AI Ассистента` подтверждён на изолированном web-инстансе `:18081`
 - [x] Live MCP sync: `~/.lmstudio/mcp.json` синхронизирован с managed registry (`--safe`)
 - [x] Live photo-route: `photo_smoke` больше не путает `openai-codex/*` с локальной LM Studio моделью
 - [x] Live acceptance: `channels_photo_chrome_acceptance.py` проходит после `stop -> start from UI`
@@ -135,6 +144,7 @@
 - [ ] E2E: owner message через userbot после restart
 - [ ] E2E: emergency запрос через Telegram Bot в reserve-safe режиме (delivery post-restart подтверждена, полный inbound round-trip ещё не автоматизирован)
 - [x] E2E: совместимость `GPT-5.4` в OpenClaw
+- [ ] Live browser acceptance: тот же блок параллелизма должен быть переподтверждён на основном `:8080` после restart уже от владельца `pablito`
 
 ## Merge gate
 

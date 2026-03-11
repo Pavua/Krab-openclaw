@@ -1,14 +1,14 @@
 """
 Канонический checkpoint для перехода в новый диалог по ветке GPT-5.4 / userbot-primary.
 
-Нужен, чтобы следующий диалог стартовал от фактического live-состояния на 2026-03-11,
+Нужен, чтобы следующий диалог стартовал от фактического live-состояния на 2026-03-12,
 а не от ранних handoff-файлов, где ещё считались открытыми уже закрытые блокеры.
 """
 
 # Checkpoint Krab/OpenClaw
 
-Дата: 2026-03-11
-Ветка: `codex/gpt54-userbot-primary`
+Дата: 2026-03-12
+Ветка: `codex/live-8080-parallelism-acceptance`
 Ориентировочная готовность большого плана: **~99%**
 
 ## Что уже подтверждено
@@ -45,6 +45,16 @@
 - Локальный каталог owner UI теперь берётся из живого `LM Studio API`, а не из stale-кэша.
 - Cloud-список в owner UI синхронизирован с реальной fallback-цепочкой OpenClaw.
 - Ложный `current_primary_broken` убран: broken-state теперь не поднимается по историческим ошибкам.
+- В `Интерфейс AI Ассистента` добавлен truthful meta-блок про параллелизм OpenClaw:
+  - queue concurrency для main-agent;
+  - queue concurrency для subagent lane;
+  - явное разделение с named semantics `parallel / sequential` из других runtime-контуров.
+- Изолированный browser smoke на `http://127.0.0.1:18081` подтвердил:
+  - текст `main lane до 4 задач одновременно`;
+  - текст `subagent lane до 8 задач одновременно`;
+  - живой клик `Синхронизировать каталог`.
+- Попытка переподтвердить тот же блок на live `:8080` из-под `USER2` упёрлась в ownership-барьер:
+  stale `src.main` принадлежит `pablito`, переживает restart-попытку и не даёт заменить процесс без доступа владельца.
 
 ### Userbot / reserve / launcher
 
@@ -80,6 +90,8 @@
 
 - `pytest -q tests/unit/test_web_app_runtime_endpoints.py -k 'browser_start_endpoint_returns_updated_readiness or browser_mcp_readiness_marks_authorized_running_browser_with_tabs_as_ready or browser_mcp_readiness_retries_transient_empty_cli_state_when_relay_authorized'`
   - `3 passed`
+- `./.venv/bin/pytest tests/unit/test_web_app_runtime_endpoints.py -q`
+  - `61 passed`
 - `pytest -q tests/unit/test_userbot_capability_truth.py -k 'runtime_truth_question_detects_full_diagnostics_intent or full_diagnostics_question_uses_runtime_truth_fast_path or runtime_truth_question_uses_fast_path_without_llm'`
   - `3 passed`
 
@@ -88,6 +100,9 @@
 - Живой click-through через owner UI:
   - `stop -> start from UI -> attached -> tabs=1 -> 3/3 ready`
 - DOM-проверка подтвердила, что кнопка запуска relay остаётся disabled при `ready`.
+- Дополнительно подтверждён изолированный browser smoke нового блока параллелизма:
+  - сохранён snapshot после клика `Синхронизировать каталог`;
+  - сохранён screenshot viewport.
 
 ### Live runtime
 
@@ -126,6 +141,11 @@
   - `krab-output-sanitizer loaded without install/load-path provenance`
 - Это не runtime-blocker, но хвост доверенной provenance всё ещё не закрыт.
 
+### 5. Live reload ownership barrier
+
+- Controlled restart из-под `USER2` восстановил `:8080`, `:18789` и `telegram_userbot_state=running`, но не заменил старый `pablito`-owned `src.main`.
+- Поэтому новый блок параллелизма уже подтверждён кодом, unit и изолированным browser smoke, но не должен считаться live-verified на основном `:8080`, пока restart не выполнит владелец `pablito`.
+
 ## Важные риски
 
 - В рабочем дереве есть чужие незакоммиченные изменения; не трогать их без необходимости.
@@ -134,28 +154,31 @@
 
 ## Рекомендуемый следующий этап
 
-1. Переподтвердить или перелогинить `google-gemini-cli`, потому что fallback сейчас на грани expiry.
-2. Если нужен именно `100%` milestone:
+1. Переподтвердить live `:8080` для блока параллелизма после restart от владельца `pablito`.
+2. Переподтвердить или перелогинить `google-gemini-cli`, потому что fallback сейчас на грани expiry.
+3. Если нужен именно `100%` milestone:
    - либо сделать ручной owner-message сразу после свежего restart,
    - либо дать отдельную owner-session для автоматизированного probe.
-3. После этого закрывать уже только provenance warning и финальный merge-gate.
+4. После этого закрывать уже только provenance warning и финальный merge-gate.
 
 ## Рекомендуемые настройки для следующего окна
 
 - Глубина рассуждений: `high`
 - `fast`: выключен
-- Новый branch не нужен: продолжаем в `codex/gpt54-userbot-primary`
+- Рабочий branch текущего recovery-цикла: `codex/live-8080-parallelism-acceptance`
 
 ## Короткий handoff-текст для нового окна
 
 ```text
-Продолжаем Krab/OpenClaw в ветке codex/gpt54-userbot-primary.
+Продолжаем Krab/OpenClaw в ветке codex/live-8080-parallelism-acceptance.
 
-Текущее состояние на 2026-03-11:
+Текущее состояние на 2026-03-12:
 - готовность плана ~99%
 - runtime primary = openai-codex/gpt-5.4
 - browser/MCP readiness в owner UI закрыт и подтверждён живым click-through
 - owner UI показывает реальный cloud/local catalog и truthful runtime health
+- новый truthful meta-блок про parallelism уже реализован и подтверждён unit + изолированным browser smoke
+- live :8080 для этого блока пока не переподтверждён, потому что stale src.main принадлежит pablito и не заменился из-под USER2
 - reserve Telegram delivery подтверждена после controlled restart (`messageId=1187`)
 - owner-chat history подтверждает реальные ответы userbot 2026-03-11 05:02 и 05:39
 - исправлен launcher bug: `new start_krab.command` / `new Stop Krab.command` больше не должны виснуть на `openclaw gateway stop`
@@ -164,14 +187,16 @@
 Остались хвосты:
 1) строгий active owner -> userbot -> reply E2E после restart ещё не автоматизирован
 2) полный inbound owner -> reserve bot -> reply тоже ещё не автоматизирован
-3) `google-gemini-cli` хрупкий: в models status `expires in 0m`, в gateway-log был refresh failure
-4) warning про `krab-output-sanitizer` provenance остаётся
+3) live :8080 нужно переподтвердить после restart именно от владельца pablito
+4) `google-gemini-cli` хрупкий: в models status `expires in 0m`, в gateway-log был refresh failure
+5) warning про `krab-output-sanitizer` provenance остаётся
 
 Сначала прочитай:
 1) docs/NEXT_CHAT_CHECKPOINT_RU.md
 2) docs/OPENCLAW_KRAB_ROADMAP.md
 
 Следующий лучший шаг:
-1) проверить/перелогинить google-gemini-cli
-2) затем закрыть строгий owner-E2E, если будет доступ к owner-аккаунту
+1) переподтвердить live :8080 для блока parallelism после restart от pablito
+2) проверить/перелогинить google-gemini-cli
+3) затем закрыть строгий owner-E2E, если будет доступ к owner-аккаунту
 ```
