@@ -378,6 +378,42 @@ def _fetch_channels_with_fallback(channels_url: str) -> tuple[dict[str, Any], st
     return channels_payload, combined_error, "unavailable"
 
 
+def _is_loopback_gateway_token_noise(
+    finding: dict[str, Any],
+    *,
+    health_payload: dict[str, Any],
+    channel_stats: dict[str, Any],
+) -> bool:
+    """
+    Определяет ложный auth-noise от локальных CLI/gateway probe попыток.
+
+    Почему это не должно валить live smoke:
+    - loopback `127.0.0.1` с `token_missing` часто появляется от локальных probe/CLI,
+      особенно на временной macOS-учётке;
+    - если `health_lite.openclaw_auth_state=ok` и каналы через web truth зелёные,
+      это не означает реальную деградацию transport/runtime.
+    """
+    if str(finding.get("code") or "") != "openclaw_auth_unauthorized":
+        return False
+
+    text = str(finding.get("text") or "").strip().lower()
+    if "127.0.0.1" not in text:
+        return False
+    if "token_missing" not in text and "gateway token missing" not in text:
+        return False
+
+    auth_state = str(health_payload.get("openclaw_auth_state") or "").strip().lower()
+    failed_channels = channel_stats.get("failed") if isinstance(channel_stats, dict) else []
+    gateway_reachable = bool(channel_stats.get("gateway_reachable")) if isinstance(channel_stats, dict) else False
+    if auth_state != "ok":
+        return False
+    if failed_channels:
+        return False
+    if not gateway_reachable:
+        return False
+    return True
+
+
 def build_report(
     *,
     channels_url: str,
@@ -405,8 +441,25 @@ def build_report(
         findings.extend(_scan_patterns(log_path, recent_lines, PATTERN_SPECS))
 
     channel_stats = _classify_channels(channels_payload)
-    errors = [f for f in findings if f.get("severity") == "error"]
-    warnings = [f for f in findings if f.get("severity") == "warn"]
+    normalized_findings: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    for finding in findings:
+        item = dict(finding)
+        if _is_loopback_gateway_token_noise(
+            item,
+            health_payload=health_payload,
+            channel_stats=channel_stats,
+        ):
+            item["severity"] = "warn"
+            item["code"] = "openclaw_local_probe_token_missing"
+            item["note"] = "loopback token_missing downgraded because live health/channels truth remain OK"
+        normalized_findings.append(item)
+        if item.get("severity") == "error":
+            errors.append(item)
+        else:
+            warnings.append(item)
 
     smoke_ok = (
         channels_error is None
@@ -446,7 +499,7 @@ def build_report(
             "scanned": scanned_logs,
             "errors": errors,
             "warnings": warnings,
-            "all_findings": findings,
+            "all_findings": normalized_findings,
         },
     }
 

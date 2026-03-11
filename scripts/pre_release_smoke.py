@@ -30,6 +30,7 @@ from urllib import error, request
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts" / "ops"
 DEFAULT_HEALTH_LITE_URL = "http://127.0.0.1:8080/api/health/lite"
+DEFAULT_CHANNELS_URL = "http://127.0.0.1:8080/api/openclaw/channels/status"
 
 
 @dataclass
@@ -188,6 +189,69 @@ def _blocked_result(
     )
 
 
+def _truthful_channels_probe_result(*, required: bool) -> StepResult:
+    """
+    Проверяет truth каналов через web endpoint с fallback на CLI.
+
+    Почему:
+    - на временной учётке локальный `openclaw channels status --probe` может валиться
+      по gateway token mismatch, хотя живой `:8080` уже знает правду о каналах;
+    - для merge-gate важнее truthful runtime verdict, чем локальная auth-среда CLI.
+    """
+    payload, err = _fetch_json(DEFAULT_CHANNELS_URL, timeout_sec=6.0)
+    if err == "" and isinstance(payload.get("channels"), list):
+        failed: list[str] = []
+        passed = 0
+        skipped = 0
+        for item in payload.get("channels") or []:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "").strip().upper()
+            name = str(item.get("name") or "unknown").strip()
+            meta = str(item.get("meta") or "").strip()
+            if status == "OK":
+                passed += 1
+                continue
+            if "not configured" in meta.lower():
+                skipped += 1
+                continue
+            failed.append(f"{name}: {status} {meta}".strip())
+        ok = len(failed) == 0
+        summary = (
+            f"web truth: passed={passed} skipped={skipped} failed={len(failed)}"
+            if ok
+            else "\n".join(["web truth failed:"] + failed[:5])
+        )
+        return StepResult(
+            name="channels_probe",
+            required=required,
+            ok=ok,
+            exit_code=0 if ok else 1,
+            cmd=["GET", DEFAULT_CHANNELS_URL],
+            summary=summary,
+        )
+
+    if shutil.which("openclaw"):
+        code, out, err_text = _run(["openclaw", "channels", "status", "--probe"], timeout=60)
+        return _mk_result(
+            "channels_probe",
+            ["openclaw", "channels", "status", "--probe"],
+            required,
+            code,
+            out,
+            err_text,
+        )
+
+    return StepResult(
+        name="channels_probe",
+        required=required,
+        ok=False,
+        exit_code=127,
+        cmd=["openclaw", "channels", "status", "--probe"],
+        summary=f"channels status unavailable: web_error={err or 'unknown'}; openclaw CLI not found",
+    )
+
+
 def _python_bin() -> str:
     """
     Выбирает python для smoke так, чтобы в нём были базовые модули:
@@ -318,7 +382,7 @@ def main() -> int:
                 "name": "live_channel_smoke",
                 "cmd": [py, "scripts/live_channel_smoke.py", "--max-age-minutes", "60"],
                 "required_on_strict": True,
-                "owner_sensitive": True,
+                "owner_sensitive": False,
             }
         )
     if _script_exists("scripts/swarm_live_smoke.py"):
@@ -355,10 +419,11 @@ def main() -> int:
                 "name": "channels_probe",
                 "cmd": ["openclaw", "channels", "status", "--probe"],
                 "required_on_strict": True,
-                "owner_sensitive": True,
+                "owner_sensitive": False,
+                "custom_runner": "truthful_channels_probe",
             }
         )
-    else:
+    elif not runtime_owner_mismatch:
         steps.append(
             StepResult(
                 name="channels_probe",
@@ -385,6 +450,7 @@ def main() -> int:
         cmd = list(item.get("cmd") or [])
         required = bool(args.strict_runtime and bool(item.get("required_on_strict")))
         owner_sensitive = bool(item.get("owner_sensitive"))
+        custom_runner = str(item.get("custom_runner") or "").strip()
         if runtime_owner_mismatch and owner_sensitive:
             steps.append(
                 _blocked_result(
@@ -395,6 +461,9 @@ def main() -> int:
                     summary=f"Проверка заблокирована: {runtime_owner_probe.get('summary')}",
                 )
             )
+            continue
+        if custom_runner == "truthful_channels_probe":
+            steps.append(_truthful_channels_probe_result(required=required))
             continue
         code, out, err = _run(cmd, timeout=240)
         steps.append(_mk_result(name, cmd, required, code, out, err))

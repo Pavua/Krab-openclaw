@@ -105,6 +105,10 @@
   - источники истины: `pre_release_smoke_latest.json` и `r20_merge_gate_latest.json`
 - [x] `pre_release_smoke.py` теперь честно разделяет code failure и environment-blocked verdict на временной учётке (`exit 1` vs `exit 2`)
 - [x] `signal_alert_route` использует project Python + CA bundle и truthful web fallback вместо ложных `CERTIFICATE_VERIFY_FAILED` / `gateway token missing`
+- [x] `live_channel_smoke.py` снова даёт полезный verdict на временной учётке:
+  - `success_rate = 100%`
+  - loopback `token_missing` не считается runtime-regression, если `health_lite` и channels truth зелёные
+- [x] `pre_release_smoke.py --full --strict-runtime` на USER2 больше не шумит лишними blocked-checks: остаются только owner-only `autoswitch_dry_run` и `e1e3_acceptance`
 - [x] Исправлен launcher-регресс: `new start_krab.command` / `new Stop Krab.command` больше не подвисают бесконечно на `openclaw gateway stop`, если gateway уже мёртв или не слушает порт
 - [x] Исправлен owner-chat fast-path: запросы вида `проведи полную диагностику` / `cron у тебя уже работает` теперь уходят в deterministic `runtime self-check`, а не в свободную генерацию
 - [x] Controlled restart подтверждён после launcher-fix: runtime снова поднимает `:8080` и `:18789`, `telegram_userbot_state=running`

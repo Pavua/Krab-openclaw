@@ -422,7 +422,7 @@ def _build_start_next_chat_md(
             "## Стартовый prompt для нового чата",
             "1. Открой `NEW_CHAT_BOOTSTRAP_PROMPT.md` из этого bundle.",
             "2. Прочитай `NEXT_CHAT_CHECKPOINT_RU.md` и `OPENCLAW_KRAB_ROADMAP.md`.",
-            "3. Зафиксируй факт: текущая готовность плана около `82%`, активный этап — `controlled restart + browser/MCP readiness + E2E каналов`.",
+            "3. Не доверяй старым процентам готовности из архивных handoff-фраз; текущий truth бери только из `NEXT_CHAT_CHECKPOINT_RU.md` и `OPENCLAW_KRAB_ROADMAP.md`.",
             "4. Добавь явное требование формата отчёта после каждой итерации:",
             "   - что изменено;",
             "   - как проверено;",

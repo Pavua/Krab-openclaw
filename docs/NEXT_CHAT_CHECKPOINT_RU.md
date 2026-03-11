@@ -163,6 +163,13 @@
 - `scripts/check_signal_alert_route.command` больше не валится ложно на:
   - `CERTIFICATE_VERIFY_FAILED` из-за Python trust store;
   - `gateway token missing` при наличии живого web endpoint `:8080`.
+- `scripts/live_channel_smoke.py` на `USER2` теперь проходит штатно:
+  - `ok = true`
+  - `success_rate = 100%`
+  - loopback `token_missing` в `openclaw.log` понижается до warning, если live health/channels truth остаются зелёными.
+- `pre_release_smoke.py --full --strict-runtime` на `USER2` теперь блокируется только по двум owner-only шагам:
+  - `autoswitch_dry_run`
+  - `e1e3_acceptance`
 
 ## Важные риски
 
