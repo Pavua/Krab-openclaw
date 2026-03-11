@@ -651,13 +651,12 @@ def _build_handoff_manifest(
     bundle_zip_path: Path,
 ) -> dict[str, Any]:
     """Собирает machine-readable manifest attach-папки."""
-    bundle_files = sorted(
-        [
-            path.name
-            for path in BUNDLE_DIR.iterdir()
-            if path.is_file()
-        ]
-    )
+    bundle_files = {
+        path.name
+        for path in BUNDLE_DIR.iterdir()
+        if path.is_file()
+    }
+    bundle_files.add("HANDOFF_MANIFEST.json")
     return {
         "generated_at_utc": NOW.isoformat(),
         "project_readiness": PROJECT_READINESS,
@@ -675,7 +674,7 @@ def _build_handoff_manifest(
         "acceptance_artifacts": acceptance,
         "ops_evidence": ops_evidence,
         "known_issues": runtime_snapshot.get("known_issues") or [],
-        "bundle_files": bundle_files,
+        "bundle_files": sorted(bundle_files),
         "resume_target": {
             "account": "pablito",
             "preferred_branch": str((runtime_snapshot.get("git") or {}).get("branch") or "").strip()
@@ -880,14 +879,7 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
-    bundle_zip_path = Path(
-        shutil.make_archive(
-            str(BUNDLE_DIR),
-            "zip",
-            root_dir=str(ARTIFACTS_DIR),
-            base_dir=BUNDLE_DIR.name,
-        )
-    )
+    bundle_zip_path = ARTIFACTS_DIR / f"{BUNDLE_DIR.name}.zip"
     (BUNDLE_DIR / "HANDOFF_MANIFEST.json").write_text(
         json.dumps(
             _build_handoff_manifest(
@@ -901,6 +893,14 @@ def main() -> int:
         )
         + "\n",
         encoding="utf-8",
+    )
+    bundle_zip_path = Path(
+        shutil.make_archive(
+            str(BUNDLE_DIR),
+            "zip",
+            root_dir=str(ARTIFACTS_DIR),
+            base_dir=BUNDLE_DIR.name,
+        )
     )
 
     print("=== Handoff Bundle Export ===")
