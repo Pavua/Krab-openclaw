@@ -5,7 +5,9 @@
 Покрываем:
 1) `!inbox status` показывает summary;
 2) `!inbox done <id>` обновляет статус persisted item;
-3) неизвестный id даёт понятную ошибку.
+3) `!inbox approval ...` создаёт approval-request;
+4) `!inbox approve <id>` принимает approval-request;
+5) неизвестный id даёт понятную ошибку.
 """
 
 from __future__ import annotations
@@ -93,3 +95,68 @@ async def test_handle_inbox_done_rejects_unknown_item(tmp_path) -> None:
         command_handlers_module.inbox_service = original
 
     assert "не найден" in str(exc_info.value.user_message or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_inbox_approval_creates_request(tmp_path) -> None:
+    """`!inbox approval ...` должен создавать approval-request."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    message = _make_message("!inbox approval money | Разрешить платный API | Нужен budget approval")
+    bot = SimpleNamespace()
+    original = command_handlers_module.inbox_service
+    command_handlers_module.inbox_service = inbox
+    try:
+        await handle_inbox(bot, message)
+    finally:
+        command_handlers_module.inbox_service = original
+
+    message.reply.assert_awaited_once()
+    items = inbox.list_items(status="open", kind="approval_request", limit=5)
+    assert items
+    assert items[0]["identity"]["approval_scope"] == "money"
+
+
+@pytest.mark.asyncio
+async def test_handle_inbox_approve_updates_approval_request(tmp_path) -> None:
+    """`!inbox approve <id>` должен переводить approval-request в approved."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    item = inbox.upsert_approval_request(
+        title="Включить платный cloud route",
+        body="Нужен production smoke.",
+        request_key="paid-cloud",
+        approval_scope="money",
+    )["item"]
+    message = _make_message(f"!inbox approve {item['item_id']}")
+    bot = SimpleNamespace()
+    original = command_handlers_module.inbox_service
+    command_handlers_module.inbox_service = inbox
+    try:
+        await handle_inbox(bot, message)
+    finally:
+        command_handlers_module.inbox_service = original
+
+    message.reply.assert_awaited_once()
+    approved_items = inbox.list_items(status="approved", kind="approval_request", limit=5)
+    assert approved_items
+
+
+@pytest.mark.asyncio
+async def test_handle_inbox_approve_rejects_non_approval_item(tmp_path) -> None:
+    """`!inbox approve` должен отклонять обычный owner-task."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    item = inbox.upsert_owner_task(
+        title="Проверить reserve bot",
+        body="Нужен smoke.",
+        task_key="reserve-bot-smoke",
+    )["item"]
+    message = _make_message(f"!inbox approve {item['item_id']}")
+    bot = SimpleNamespace()
+    original = command_handlers_module.inbox_service
+    command_handlers_module.inbox_service = inbox
+    try:
+        with pytest.raises(UserInputError) as exc_info:
+            await handle_inbox(bot, message)
+    finally:
+        command_handlers_module.inbox_service = original
+
+    assert "approval-request" in str(exc_info.value.user_message or "").lower()

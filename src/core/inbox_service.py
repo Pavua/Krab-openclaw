@@ -121,7 +121,7 @@ class InboxService:
     """
 
     _open_statuses = {"open", "acked"}
-    _closed_statuses = {"done", "cancelled"}
+    _closed_statuses = {"done", "cancelled", "approved", "rejected"}
     _allowed_statuses = _open_statuses | _closed_statuses
     _allowed_severities = {"info", "warning", "error"}
 
@@ -227,6 +227,8 @@ class InboxService:
         warning_items = [item for item in open_items if item.severity in {"warning", "error"}]
         reminder_items = [item for item in open_items if item.kind == "reminder"]
         escalation_items = [item for item in open_items if item.kind.startswith("watch_")]
+        owner_task_items = [item for item in open_items if item.kind == "owner_task"]
+        approval_items = [item for item in open_items if item.kind == "approval_request"]
         return {
             "state_path": str(self.state_path),
             "account_id": current_account_id(),
@@ -236,8 +238,25 @@ class InboxService:
             "attention_items": len(warning_items),
             "pending_reminders": len(reminder_items),
             "open_escalations": len(escalation_items),
+            "pending_owner_tasks": len(owner_task_items),
+            "pending_approvals": len(approval_items),
             "latest_open_items": [item.to_dict() for item in open_items[:5]],
         }
+
+    @staticmethod
+    def _dedupe_key(prefix: str, raw_key: str = "") -> str:
+        """
+        Возвращает dedupe-key для item-а.
+
+        Если вызывающий не дал внешний ключ, создаём локальный уникальный id:
+        для owner-created tasks/approvals это предпочтительнее, чем случайно
+        склеить разные запросы только по похожему заголовку.
+        """
+        normalized_prefix = str(prefix or "item").strip().lower() or "item"
+        normalized_key = str(raw_key or "").strip()
+        if normalized_key:
+            return f"{normalized_prefix}:{normalized_key}"
+        return f"{normalized_prefix}:{uuid.uuid4().hex[:12]}"
 
     def upsert_item(
         self,
@@ -378,6 +397,86 @@ class InboxService:
     def resolve_reminder(self, reminder_id: str, *, status: str = "done") -> dict[str, Any]:
         """Закрывает inbox item reminder-а."""
         return self.set_status_by_dedupe(f"reminder:{str(reminder_id or '').strip()}", status=status)
+
+    def upsert_owner_task(
+        self,
+        *,
+        title: str,
+        body: str,
+        task_key: str = "",
+        source: str = "owner",
+        severity: str = "info",
+        channel_id: str = "",
+        team_id: str = "",
+        trace_id: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Публикует owner-task в persisted inbox."""
+        return self.upsert_item(
+            dedupe_key=self._dedupe_key("task", task_key),
+            kind="owner_task",
+            source=str(source or "owner").strip().lower() or "owner",
+            title=str(title or "").strip(),
+            body=str(body or "").strip(),
+            severity=severity,
+            status="open",
+            identity=self.build_identity(
+                channel_id=channel_id,
+                team_id=team_id or "owner",
+                trace_id=str(trace_id or "").strip() or build_trace_id("task", task_key or title),
+                approval_scope="owner",
+            ),
+            metadata=dict(metadata or {}),
+        )
+
+    def upsert_approval_request(
+        self,
+        *,
+        title: str,
+        body: str,
+        request_key: str = "",
+        source: str = "owner",
+        severity: str = "warning",
+        channel_id: str = "",
+        team_id: str = "",
+        approval_scope: str = "owner",
+        requested_action: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Публикует approval-request в persisted inbox."""
+        payload_metadata = dict(metadata or {})
+        if requested_action:
+            payload_metadata["requested_action"] = str(requested_action).strip()
+        if approval_scope:
+            payload_metadata["approval_scope"] = str(approval_scope).strip()
+        return self.upsert_item(
+            dedupe_key=self._dedupe_key("approval", request_key),
+            kind="approval_request",
+            source=str(source or "owner").strip().lower() or "owner",
+            title=str(title or "").strip(),
+            body=str(body or "").strip(),
+            severity=severity,
+            status="open",
+            identity=self.build_identity(
+                channel_id=channel_id,
+                team_id=team_id or "owner",
+                trace_id=build_trace_id("approval", request_key or title, requested_action),
+                approval_scope=str(approval_scope or "owner").strip() or "owner",
+            ),
+            metadata=payload_metadata,
+        )
+
+    def resolve_approval(self, item_id: str, *, approved: bool) -> dict[str, Any]:
+        """Закрывает approval-request решением owner-а."""
+        target_id = str(item_id or "").strip()
+        if not target_id:
+            return {"ok": False, "error": "inbox_empty_item_id"}
+        item = next((row for row in self._load_items() if row.item_id == target_id), None)
+        if item is None:
+            return {"ok": False, "error": "inbox_item_not_found"}
+        if item.kind != "approval_request":
+            return {"ok": False, "error": "inbox_item_not_approval"}
+        return self.set_item_status(target_id, status="approved" if approved else "rejected")
 
     def report_watch_transition(
         self,

@@ -3846,6 +3846,62 @@ class WebApp:
                 "result": result,
             }
 
+        @self.app.post("/api/inbox/create")
+        async def inbox_create(
+            payload: dict[str, Any] = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Позволяет owner UI создавать owner-task или approval-request."""
+            self._assert_write_access(x_krab_web_key, token)
+            kind = str(payload.get("kind") or "").strip().lower()
+            title = str(payload.get("title") or "").strip()
+            body = str(payload.get("body") or "").strip()
+            if kind not in {"owner_task", "approval_request"}:
+                raise HTTPException(status_code=400, detail="inbox_create_invalid_kind")
+            if not title or not body:
+                raise HTTPException(status_code=400, detail="inbox_create_title_body_required")
+
+            severity = str(payload.get("severity") or "info").strip().lower() or "info"
+            source = str(payload.get("source") or "owner-ui").strip().lower() or "owner-ui"
+            channel_id = str(payload.get("channel_id") or "").strip()
+            team_id = str(payload.get("team_id") or "").strip()
+            metadata = dict(payload.get("metadata") or {})
+
+            try:
+                if kind == "owner_task":
+                    result = inbox_service.upsert_owner_task(
+                        title=title,
+                        body=body,
+                        task_key=str(payload.get("task_key") or "").strip(),
+                        source=source,
+                        severity=severity,
+                        channel_id=channel_id,
+                        team_id=team_id,
+                        trace_id=str(payload.get("trace_id") or "").strip(),
+                        metadata=metadata,
+                    )
+                else:
+                    result = inbox_service.upsert_approval_request(
+                        title=title,
+                        body=body,
+                        request_key=str(payload.get("request_key") or "").strip(),
+                        source=source,
+                        severity=str(payload.get("severity") or "warning").strip().lower() or "warning",
+                        channel_id=channel_id,
+                        team_id=team_id,
+                        approval_scope=str(payload.get("approval_scope") or "owner").strip() or "owner",
+                        requested_action=str(payload.get("requested_action") or "").strip(),
+                        metadata=metadata,
+                    )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            return {
+                "ok": True,
+                "result": result,
+            }
+
         @self.app.get("/api/policy")
         async def get_policy():
             """Возвращает runtime-политику AI (queue/guardrails/reactions)."""

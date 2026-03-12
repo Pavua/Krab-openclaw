@@ -730,7 +730,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!reminders` — список активных напоминаний
 `!rm_remind <id>` — удалить напоминание
 `!cronstatus` — статус scheduler
-`!inbox [list|status|ack|done|cancel]` — owner-visible inbox / escalation
+`!inbox [list|status|ack|done|cancel|approve|reject|task|approval]` — owner-visible inbox / escalation
 
 **System**
 `!ls [path]` — список файлов
@@ -898,12 +898,15 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
     """
     Owner-visible inbox и escalation foundation.
 
-    Поддерживаем минимальный, но уже полезный набор:
+    Поддерживаем owner workflow-подмножество:
     - `!inbox` / `!inbox list` — открыть текущие open items;
     - `!inbox status` — краткий summary;
     - `!inbox ack <id>` — отметить как просмотренное;
     - `!inbox done <id>` — закрыть item;
     - `!inbox cancel <id>` — отменить item вручную.
+    - `!inbox approve <id>` / `!inbox reject <id>` — принять решение по approval item;
+    - `!inbox task <title> | <body>` — создать owner-task;
+    - `!inbox approval <scope> | <title> | <body>` — создать approval-request.
     """
     del bot
     raw_args = str(message.text or "").split(maxsplit=2)
@@ -919,6 +922,8 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
             f"- attention_items: `{summary.get('attention_items')}`\n"
             f"- pending_reminders: `{summary.get('pending_reminders')}`\n"
             f"- open_escalations: `{summary.get('open_escalations')}`\n"
+            f"- pending_owner_tasks: `{summary.get('pending_owner_tasks')}`\n"
+            f"- pending_approvals: `{summary.get('pending_approvals')}`\n"
             f"- state: `{summary.get('state_path')}`"
         )
         return
@@ -933,22 +938,71 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
             meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
             due = str(meta.get("due_at_iso") or "").strip()
             due_suffix = f" · due `{due}`" if due else ""
+            approval_scope = str((item.get("identity") or {}).get("approval_scope") or "").strip()
+            approval_suffix = f" · scope `{approval_scope}`" if approval_scope and item["kind"] == "approval_request" else ""
             lines.append(
-                f"- `{item['item_id']}` · `{item['kind']}` · `{item['severity']}`{due_suffix}\n"
+                f"- `{item['item_id']}` · `{item['kind']}` · `{item['severity']}`{due_suffix}{approval_suffix}\n"
                 f"  {item['title']}"
             )
         await message.reply("\n".join(lines))
         return
 
-    if action not in {"ack", "done", "cancel"}:
-        raise UserInputError(user_message="📥 Формат: `!inbox [list|status|ack <id>|done <id>|cancel <id>]`")
+    if action == "task":
+        if len(raw_args) < 3 or "|" not in raw_args[2]:
+            raise UserInputError(user_message="📥 Формат: `!inbox task <title> | <body>`")
+        title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=1)]
+        if not title or not body:
+            raise UserInputError(user_message="📥 Для task нужны и заголовок, и описание.")
+        created = inbox_service.upsert_owner_task(title=title, body=body, source="telegram-owner")
+        await message.reply(
+            "📝 Owner-task создан.\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Title: {created['item']['title']}"
+        )
+        return
+
+    if action == "approval":
+        if len(raw_args) < 3 or raw_args[2].count("|") < 2:
+            raise UserInputError(user_message="📥 Формат: `!inbox approval <scope> | <title> | <body>`")
+        scope, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=2)]
+        if not scope or not title or not body:
+            raise UserInputError(user_message="📥 Для approval нужны scope, заголовок и описание.")
+        created = inbox_service.upsert_approval_request(
+            title=title,
+            body=body,
+            source="telegram-owner",
+            approval_scope=scope,
+            requested_action=title,
+            metadata={"requested_via": "telegram"},
+        )
+        await message.reply(
+            "🛂 Approval-request создан.\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Scope: `{scope}`\n"
+            f"- Title: {created['item']['title']}"
+        )
+        return
+
+    if action not in {"ack", "done", "cancel", "approve", "reject"}:
+        raise UserInputError(
+            user_message=(
+                "📥 Формат: "
+                "`!inbox [list|status|ack <id>|done <id>|cancel <id>|approve <id>|reject <id>|task <title> | <body>|approval <scope> | <title> | <body>]`"
+            )
+        )
 
     if len(raw_args) < 3 or not raw_args[2].strip():
-        raise UserInputError(user_message="📥 Укажи item id: `!inbox ack|done|cancel <id>`")
+        raise UserInputError(user_message="📥 Укажи item id: `!inbox ack|done|cancel|approve|reject <id>`")
     target_id = raw_args[2].strip()
-    target_status = {"ack": "acked", "done": "done", "cancel": "cancelled"}[action]
-    result = inbox_service.set_item_status(target_id, status=target_status)
+    if action in {"approve", "reject"}:
+        result = inbox_service.resolve_approval(target_id, approved=(action == "approve"))
+        target_status = "approved" if action == "approve" else "rejected"
+    else:
+        target_status = {"ack": "acked", "done": "done", "cancel": "cancelled"}[action]
+        result = inbox_service.set_item_status(target_id, status=target_status)
     if not result.get("ok"):
+        if result.get("error") == "inbox_item_not_approval":
+            raise UserInputError(user_message=f"📥 Item `{target_id}` не является approval-request.")
         raise UserInputError(user_message=f"📥 Item `{target_id}` не найден.")
     await message.reply(
         "✅ Inbox item обновлён.\n"

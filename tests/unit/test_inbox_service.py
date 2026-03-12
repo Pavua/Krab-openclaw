@@ -104,3 +104,47 @@ def test_watch_escalation_opens_and_recovers_without_duplicate_items(tmp_path: P
     assert open_items == []
     assert len(done_items) == 1
     assert done_items[0]["dedupe_key"] == "watch:gateway_down"
+
+
+def test_owner_task_and_approval_request_appear_in_summary(tmp_path: Path) -> None:
+    """Owner-task и approval-request должны попадать в summary и корректно закрываться."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    task = service.upsert_owner_task(
+        title="Проверить transport regression",
+        body="Нужен прогон reserve-safe E2E после restart.",
+        task_key="transport-regression",
+        source="owner-ui",
+    )
+    approval = service.upsert_approval_request(
+        title="Разрешить платный provider",
+        body="Нужен платный cloud route для production smoke.",
+        request_key="cloud-paid-route",
+        approval_scope="money",
+        requested_action="enable_paid_cloud_route",
+        metadata={"impact": "cost"},
+    )
+    summary = service.get_summary()
+    approved = service.resolve_approval(approval["item"]["item_id"], approved=True)
+
+    assert task["item"]["kind"] == "owner_task"
+    assert approval["item"]["kind"] == "approval_request"
+    assert summary["pending_owner_tasks"] == 1
+    assert summary["pending_approvals"] == 1
+    assert approval["item"]["identity"]["approval_scope"] == "money"
+    assert approved["item"]["status"] == "approved"
+
+
+def test_resolve_approval_rejects_non_approval_item(tmp_path: Path) -> None:
+    """Owner-task нельзя случайно закрыть как approval-request."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    task = service.upsert_owner_task(
+        title="Проверить reserve bot",
+        body="Нужен smoke.",
+        task_key="reserve-bot-smoke",
+    )
+
+    result = service.resolve_approval(task["item"]["item_id"], approved=True)
+
+    assert result["ok"] is False
+    assert result["error"] == "inbox_item_not_approval"

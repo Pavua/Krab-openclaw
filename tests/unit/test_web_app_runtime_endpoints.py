@@ -2856,6 +2856,46 @@ def test_inbox_update_requires_web_key(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert allowed.json()["result"]["item"]["status"] == "acked"
 
 
+def test_inbox_create_builds_owner_task_and_approval_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Create endpoint должен уметь создавать owner-task и approval-request."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    client = _make_client()
+
+    task_resp = client.post(
+        "/api/inbox/create",
+        json={
+            "kind": "owner_task",
+            "title": "Проверить reserve bot",
+            "body": "Нужен post-restart smoke.",
+            "task_key": "reserve-bot-smoke",
+        },
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+    approval_resp = client.post(
+        "/api/inbox/create",
+        json={
+            "kind": "approval_request",
+            "title": "Разрешить платный cloud route",
+            "body": "Нужен production smoke.",
+            "request_key": "paid-cloud-route",
+            "approval_scope": "money",
+            "requested_action": "enable_paid_cloud_route",
+        },
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert task_resp.status_code == 200
+    assert approval_resp.status_code == 200
+    assert task_resp.json()["result"]["item"]["kind"] == "owner_task"
+    assert approval_resp.json()["result"]["item"]["kind"] == "approval_request"
+    assert approval_resp.json()["result"]["item"]["identity"]["approval_scope"] == "money"
+
+
 def test_userbot_acl_update_grants_subject(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`/api/userbot/acl/update` должен применять grant/revoke через общий ACL helper."""
     acl_path = tmp_path / "krab_userbot_acl.json"
