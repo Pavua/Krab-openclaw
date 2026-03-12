@@ -924,6 +924,8 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
             f"- open_escalations: `{summary.get('open_escalations')}`\n"
             f"- pending_owner_tasks: `{summary.get('pending_owner_tasks')}`\n"
             f"- pending_approvals: `{summary.get('pending_approvals')}`\n"
+            f"- pending_owner_requests: `{summary.get('pending_owner_requests')}`\n"
+            f"- pending_owner_mentions: `{summary.get('pending_owner_mentions')}`\n"
             f"- state: `{summary.get('state_path')}`"
         )
         return

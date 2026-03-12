@@ -148,3 +148,42 @@ def test_resolve_approval_rejects_non_approval_item(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert result["error"] == "inbox_item_not_approval"
+
+
+def test_incoming_owner_request_and_mention_update_summary_without_duplicates(tmp_path: Path) -> None:
+    """Incoming request/mention должны попадать в отдельные summary buckets и не дублироваться по message id."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    first = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Проверь transport после restart",
+        sender_id="42",
+        sender_username="owner",
+        chat_type="private",
+    )
+    second = service.upsert_incoming_owner_request(
+        chat_id="-100777",
+        message_id="11",
+        text="Краб, посмотри этот тред",
+        sender_id="42",
+        sender_username="owner",
+        chat_type="group",
+        is_reply_to_me=True,
+        has_trigger=True,
+    )
+    repeated = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Проверь transport после restart",
+        sender_id="42",
+        sender_username="owner",
+        chat_type="private",
+    )
+    summary = service.get_summary()
+
+    assert first["created"] is True
+    assert second["item"]["kind"] == "owner_mention"
+    assert repeated["created"] is False
+    assert summary["pending_owner_requests"] == 1
+    assert summary["pending_owner_mentions"] == 1

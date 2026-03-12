@@ -229,6 +229,8 @@ class InboxService:
         escalation_items = [item for item in open_items if item.kind.startswith("watch_")]
         owner_task_items = [item for item in open_items if item.kind == "owner_task"]
         approval_items = [item for item in open_items if item.kind == "approval_request"]
+        owner_request_items = [item for item in open_items if item.kind == "owner_request"]
+        owner_mention_items = [item for item in open_items if item.kind == "owner_mention"]
         return {
             "state_path": str(self.state_path),
             "account_id": current_account_id(),
@@ -240,6 +242,8 @@ class InboxService:
             "open_escalations": len(escalation_items),
             "pending_owner_tasks": len(owner_task_items),
             "pending_approvals": len(approval_items),
+            "pending_owner_requests": len(owner_request_items),
+            "pending_owner_mentions": len(owner_mention_items),
             "latest_open_items": [item.to_dict() for item in open_items[:5]],
         }
 
@@ -477,6 +481,80 @@ class InboxService:
         if item.kind != "approval_request":
             return {"ok": False, "error": "inbox_item_not_approval"}
         return self.set_item_status(target_id, status="approved" if approved else "rejected")
+
+    def upsert_incoming_owner_request(
+        self,
+        *,
+        chat_id: str,
+        message_id: str,
+        text: str,
+        sender_id: str = "",
+        sender_username: str = "",
+        chat_type: str = "private",
+        is_reply_to_me: bool = False,
+        has_trigger: bool = False,
+        has_photo: bool = False,
+        has_audio: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Публикует входящий owner request / mention в persisted inbox.
+
+        Почему это отдельный helper:
+        - userbot не должен вручную собирать payload item-а в нескольких местах;
+        - distinction `private request` vs `group mention` нужна уже сейчас для
+          owner workflow, а дальше её переиспользует transport/task слой.
+        """
+        normalized_chat_type = str(chat_type or "private").strip().lower() or "private"
+        normalized_chat_id = str(chat_id or "").strip()
+        normalized_message_id = str(message_id or "").strip()
+        excerpt = str(text or "").strip()
+        kind = "owner_request" if normalized_chat_type == "private" else "owner_mention"
+        title = "Входящий owner request" if kind == "owner_request" else "Упоминание / owner request в чате"
+        body_lines = [
+            f"Чат: `{normalized_chat_id}`",
+            f"Сообщение: `{normalized_message_id}`",
+        ]
+        if sender_username:
+            body_lines.append(f"От: `@{sender_username}`")
+        elif sender_id:
+            body_lines.append(f"От: `{sender_id}`")
+        if excerpt:
+            body_lines.append(f"Текст: {excerpt}")
+        if has_photo:
+            body_lines.append("Вложение: `photo`")
+        if has_audio:
+            body_lines.append("Вложение: `audio`")
+        if is_reply_to_me:
+            body_lines.append("Контекст: reply_to_me")
+        if has_trigger:
+            body_lines.append("Контекст: explicit_trigger")
+        return self.upsert_item(
+            dedupe_key=f"incoming:{normalized_chat_id}:{normalized_message_id}",
+            kind=kind,
+            source="telegram-userbot",
+            title=title,
+            body="\n".join(body_lines),
+            severity="info",
+            status="open",
+            identity=self.build_identity(
+                channel_id=normalized_chat_id,
+                team_id="owner",
+                trace_id=build_trace_id("telegram", normalized_chat_id, normalized_message_id),
+                approval_scope="owner",
+            ),
+            metadata={
+                "chat_id": normalized_chat_id,
+                "message_id": normalized_message_id,
+                "chat_type": normalized_chat_type,
+                "sender_id": str(sender_id or "").strip(),
+                "sender_username": str(sender_username or "").strip(),
+                "is_reply_to_me": bool(is_reply_to_me),
+                "has_trigger": bool(has_trigger),
+                "has_photo": bool(has_photo),
+                "has_audio": bool(has_audio),
+                "text_excerpt": excerpt[:500],
+            },
+        )
 
     def report_watch_transition(
         self,

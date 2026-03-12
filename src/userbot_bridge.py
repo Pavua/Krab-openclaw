@@ -20,7 +20,7 @@ import sys
 import textwrap
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pyrogram import Client, enums, filters
 from pyrogram.types import Message
@@ -28,6 +28,7 @@ from pyrogram.types import Message
 from .config import config
 from .core.access_control import AccessLevel, AccessProfile, resolve_access_profile
 from .core.exceptions import KrabError, UserInputError
+from .core.inbox_service import inbox_service
 from .core.logger import get_logger
 from .core.mcp_registry import resolve_managed_server_launch
 from .core.openclaw_workspace import load_workspace_prompt_bundle
@@ -1726,6 +1727,84 @@ class KraabUserbot:
             return "Опиши присланное изображение на русском языке."
         return ""
 
+    @staticmethod
+    def _should_capture_incoming_owner_item(
+        *,
+        is_self: bool,
+        is_allowed_sender: bool,
+        chat_type: object,
+        is_reply_to_me: bool,
+        has_trigger: bool,
+        has_photo: bool,
+        has_audio: bool,
+        query: str,
+    ) -> bool:
+        """
+        Решает, надо ли складывать входящее сообщение в owner inbox.
+
+        Нам важно не превратить inbox в лог вообще всех сообщений, поэтому
+        берём только directed owner traffic:
+        - доверенный private chat;
+        - trusted group mention/reply;
+        - сообщения с вложением, явно адресованные userbot-контуру.
+        """
+        if is_self or not is_allowed_sender:
+            return False
+        normalized_chat_type = str(getattr(chat_type, "value", chat_type) or "").strip().lower()
+        if normalized_chat_type == "private":
+            return bool(str(query or "").strip() or has_photo or has_audio)
+        if not (is_reply_to_me or has_trigger):
+            return False
+        return bool(str(query or "").strip() or has_photo or has_audio or is_reply_to_me)
+
+    def _sync_incoming_message_to_inbox(
+        self,
+        *,
+        message: Message,
+        user: Any,
+        query: str,
+        is_self: bool,
+        is_allowed_sender: bool,
+        has_trigger: bool,
+        is_reply_to_me: bool,
+        has_audio_message: bool,
+    ) -> dict[str, Any]:
+        """
+        Публикует directed owner messages в persisted inbox.
+
+        Почему это живёт в userbot_bridge:
+        - именно здесь у нас есть truthful signal о том, что сообщение реально
+          адресовано userbot-контуру, а не просто проходит мимо в группе;
+        - storage и summary остаются в inbox_service, bridge только решает
+          capture/no-capture на transport-слое.
+        """
+        if not self._should_capture_incoming_owner_item(
+            is_self=is_self,
+            is_allowed_sender=is_allowed_sender,
+            chat_type=getattr(getattr(message, "chat", None), "type", ""),
+            is_reply_to_me=is_reply_to_me,
+            has_trigger=has_trigger,
+            has_photo=bool(getattr(message, "photo", None)),
+            has_audio=bool(has_audio_message),
+            query=query,
+        ):
+            return {"ok": False, "skipped": True, "reason": "not_directed_owner_traffic"}
+        chat_obj = getattr(message, "chat", None)
+        chat_type = getattr(chat_obj, "type", "")
+        normalized_chat_type = str(getattr(chat_type, "value", chat_type) or "").strip().lower()
+        return inbox_service.upsert_incoming_owner_request(
+            chat_id=str(getattr(chat_obj, "id", "") or ""),
+            message_id=str(getattr(message, "id", "") or ""),
+            text=str(query or "").strip(),
+            sender_id=str(getattr(user, "id", "") or ""),
+            sender_username=str(getattr(user, "username", "") or ""),
+            chat_type=normalized_chat_type,
+            is_reply_to_me=bool(is_reply_to_me),
+            has_trigger=bool(has_trigger),
+            has_photo=bool(getattr(message, "photo", None)),
+            has_audio=bool(has_audio_message),
+        )
+
     def _apply_optional_disclosure(self, *, chat_id: str, text: str) -> str:
         """
         Опционально добавляет дисклеймер в первый ответ для конкретного чата.
@@ -1853,6 +1932,20 @@ class KraabUserbot:
                 query = "(Голосовое сообщение)"
             if not query and not message.photo and not has_voice and not is_reply_to_me:
                 return
+
+            try:
+                self._sync_incoming_message_to_inbox(
+                    message=message,
+                    user=user,
+                    query=query,
+                    is_self=is_self,
+                    is_allowed_sender=is_allowed_sender,
+                    has_trigger=has_trigger,
+                    is_reply_to_me=bool(is_reply_to_me),
+                    has_audio_message=bool(has_voice),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("incoming_message_inbox_sync_failed", chat_id=chat_id, error=str(exc))
 
             logger.info(
                 "processing_ai_request",
