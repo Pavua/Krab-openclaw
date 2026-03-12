@@ -187,3 +187,39 @@ def test_incoming_owner_request_and_mention_update_summary_without_duplicates(tm
     assert repeated["created"] is False
     assert summary["pending_owner_requests"] == 1
     assert summary["pending_owner_mentions"] == 1
+
+
+def test_workflow_snapshot_exposes_trace_index_and_approval_history(tmp_path: Path) -> None:
+    """Workflow snapshot должен собирать компактные buckets и traceable approval history."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    approval = service.upsert_approval_request(
+        title="Разрешить cloud route",
+        body="Нужен production smoke.",
+        request_key="cloud-route",
+        approval_scope="money",
+        requested_action="enable_paid_cloud_route",
+    )["item"]
+    service.resolve_approval(approval["item_id"], approved=True)
+    service.upsert_owner_task(
+        title="Проверить reserve delivery",
+        body="Нужен round-trip после restart.",
+        task_key="reserve-delivery",
+    )
+    service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="77",
+        text="Проверь handoff truth",
+        sender_username="owner",
+        chat_type="private",
+    )
+    workflow = service.get_workflow_snapshot(limit_per_bucket=3, trace_limit=6)
+
+    assert workflow["summary"]["pending_owner_tasks"] == 1
+    assert workflow["summary"]["pending_owner_requests"] == 1
+    assert workflow["approval_history"][0]["status"] == "approved"
+    assert workflow["approval_history"][0]["identity"]["approval_scope"] == "money"
+    assert workflow["pending_owner_tasks"][0]["metadata"]["task_key"] == "reserve-delivery"
+    assert workflow["incoming_owner_requests"][0]["metadata"]["message_id"] == "77"
+    assert workflow["trace_index"]
+    assert workflow["trace_index"][0]["trace_id"]

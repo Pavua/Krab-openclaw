@@ -58,6 +58,8 @@ def build_snapshot(base_url: str) -> dict[str, Any]:
     """Собирает снимок runtime endpoint'ов в единый JSON."""
     targets = [
         ("/api/health/lite", "health_lite"),
+        ("/api/inbox/status", "inbox_status"),
+        ("/api/runtime/handoff", "runtime_handoff"),
         ("/api/openclaw/channels/status", "channels_status"),
         ("/api/openclaw/browser-smoke", "browser_smoke"),
         ("/api/openclaw/browser-mcp-readiness", "browser_mcp_readiness"),

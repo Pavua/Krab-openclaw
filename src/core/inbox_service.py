@@ -220,9 +220,8 @@ class InboxService:
                 break
         return rows
 
-    def get_summary(self) -> dict[str, Any]:
-        """Возвращает краткий owner-facing summary inbox."""
-        items = self._load_items()
+    def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
+        """Собирает owner-facing summary из уже загруженного набора item-ов."""
         open_items = [item for item in items if item.status in self._open_statuses]
         warning_items = [item for item in open_items if item.severity in {"warning", "error"}]
         reminder_items = [item for item in open_items if item.kind == "reminder"]
@@ -245,6 +244,127 @@ class InboxService:
             "pending_owner_requests": len(owner_request_items),
             "pending_owner_mentions": len(owner_mention_items),
             "latest_open_items": [item.to_dict() for item in open_items[:5]],
+        }
+
+    def get_summary(self) -> dict[str, Any]:
+        """Возвращает краткий owner-facing summary inbox."""
+        return self._build_summary(self._load_items())
+
+    @staticmethod
+    def _compact_item(item: InboxItem) -> dict[str, Any]:
+        """
+        Возвращает компактный workflow-friendly вид item-а.
+
+        Полный persisted payload остаётся доступен через `list_items`, а этот вид
+        нужен для handoff/runtime snapshot, где важны trace/correlation сигналы,
+        но не нужен весь JSON целиком.
+        """
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        selected_metadata: dict[str, Any] = {}
+        for key in (
+            "chat_id",
+            "message_id",
+            "sender_id",
+            "sender_username",
+            "requested_action",
+            "task_key",
+            "request_key",
+            "reminder_id",
+            "watch_reason",
+        ):
+            value = metadata.get(key)
+            if value not in {"", None}:
+                selected_metadata[key] = value
+        excerpt = str(metadata.get("text_excerpt") or "").strip()
+        if excerpt:
+            selected_metadata["text_excerpt"] = excerpt[:140]
+        if item.kind == "owner_task" and item.dedupe_key.startswith("task:"):
+            task_key = str(item.dedupe_key.partition(":")[2] or "").strip()
+            if task_key:
+                selected_metadata.setdefault("task_key", task_key)
+        if item.kind == "approval_request" and item.dedupe_key.startswith("approval:"):
+            request_key = str(item.dedupe_key.partition(":")[2] or "").strip()
+            if request_key:
+                selected_metadata.setdefault("request_key", request_key)
+        return {
+            "item_id": item.item_id,
+            "kind": item.kind,
+            "status": item.status,
+            "severity": item.severity,
+            "title": item.title,
+            "source": item.source,
+            "updated_at_utc": item.updated_at_utc,
+            "created_at_utc": item.created_at_utc,
+            "identity": {
+                "channel_id": item.identity.channel_id,
+                "team_id": item.identity.team_id,
+                "trace_id": item.identity.trace_id,
+                "approval_scope": item.identity.approval_scope,
+            },
+            "metadata": selected_metadata,
+        }
+
+    def get_workflow_snapshot(
+        self,
+        *,
+        limit_per_bucket: int = 4,
+        trace_limit: int = 12,
+    ) -> dict[str, Any]:
+        """
+        Возвращает компактный operator-workflow snapshot для runtime/handoff truth.
+
+        Зачем отдельный snapshot:
+        - summary показывает только счётчики, но не объясняет, какие именно
+          owner requests / approvals сейчас открыты;
+        - handoff и observability должны видеть traceable workflow-состояние,
+          не таща полный persisted inbox целиком.
+        """
+        items = self._load_items()
+        open_items = [item for item in items if item.status in self._open_statuses]
+        bucket_limit = max(1, int(limit_per_bucket or 4))
+        traces_limit = max(1, int(trace_limit or 12))
+
+        def _bucket(*, kind: str, statuses: set[str] | None = None) -> list[dict[str, Any]]:
+            allowed_statuses = statuses or self._open_statuses
+            rows = [item for item in items if item.kind == kind and item.status in allowed_statuses]
+            return [self._compact_item(item) for item in rows[:bucket_limit]]
+
+        attention_items = [
+            self._compact_item(item)
+            for item in open_items
+            if item.severity in {"warning", "error"}
+        ][:bucket_limit]
+
+        approval_history = _bucket(kind="approval_request", statuses={"approved", "rejected"})
+        trace_index: list[dict[str, Any]] = []
+        seen_traces: set[str] = set()
+        for item in items:
+            trace_id = str(item.identity.trace_id or "").strip()
+            if not trace_id or trace_id in seen_traces:
+                continue
+            seen_traces.add(trace_id)
+            trace_index.append(
+                {
+                    "trace_id": trace_id,
+                    "item_id": item.item_id,
+                    "kind": item.kind,
+                    "status": item.status,
+                    "updated_at_utc": item.updated_at_utc,
+                    "approval_scope": item.identity.approval_scope,
+                }
+            )
+            if len(trace_index) >= traces_limit:
+                break
+
+        return {
+            "summary": self._build_summary(items),
+            "attention_items": attention_items,
+            "pending_approvals": _bucket(kind="approval_request"),
+            "approval_history": approval_history,
+            "pending_owner_tasks": _bucket(kind="owner_task"),
+            "incoming_owner_requests": _bucket(kind="owner_request"),
+            "incoming_owner_mentions": _bucket(kind="owner_mention"),
+            "trace_index": trace_index,
         }
 
     @staticmethod

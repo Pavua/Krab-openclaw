@@ -3806,9 +3806,11 @@ class WebApp:
         @self.app.get("/api/inbox/status")
         async def inbox_status():
             """Возвращает persisted summary owner-visible inbox/escalation слоя."""
+            workflow = inbox_service.get_workflow_snapshot()
             return {
                 "ok": True,
-                "summary": inbox_service.get_summary(),
+                "summary": workflow.get("summary") or {},
+                "workflow": workflow,
             }
 
         @self.app.get("/api/inbox/items")
@@ -4149,6 +4151,7 @@ class WebApp:
                 if latest_pack_dir and (latest_pack_dir / "TRANSFER_PROMPT_RU.md").exists()
                 else None
             )
+            operator_workflow = inbox_service.get_workflow_snapshot()
 
             return {
                 "ok": True,
@@ -4162,10 +4165,11 @@ class WebApp:
                     "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
                     "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
                     "last_runtime_route": runtime_lite.get("last_runtime_route"),
-                    "inbox_summary": runtime_lite.get("inbox_summary"),
+                    "inbox_summary": operator_workflow.get("summary") or runtime_lite.get("inbox_summary"),
                 },
                 "runtime": runtime_lite,
-                "inbox_summary": inbox_service.get_summary(),
+                "inbox_summary": operator_workflow.get("summary") or {},
+                "operator_workflow": operator_workflow,
                 "services": {
                     "openclaw": openclaw_health,
                     "voice_gateway": voice_health,
@@ -4543,6 +4547,7 @@ class WebApp:
 
             openclaw = router.openclaw_client
             tier_state = openclaw.get_tier_state_export() if getattr(openclaw, "get_tier_state_export", None) else {}
+            operator_workflow = inbox_service.get_workflow_snapshot()
 
             return {
                 "ok": True,
@@ -4559,6 +4564,7 @@ class WebApp:
                 "breaker_state": {
                     "preflight_cache": {k: {"expires_in": v[0] - time.time(), "error": v[1]} for k, v in getattr(router, "_preflight_cache", {}).items() if v[0] > time.time()}
                 },
+                "operator_workflow": operator_workflow,
                 "queue_depth": queue_stats.get("active_tasks", 0),
                 "queue_stats": queue_stats,
                 "observability": get_observability_snapshot()
