@@ -59,6 +59,26 @@ TIMESTAMP_RE = re.compile(
 )
 
 
+def _launcher_state_files(root: Path) -> list[Path]:
+    """
+    Возвращает launcher-state файлы для текущей учётки вместе с legacy repo-level хвостами.
+
+    Это нужно для restart-acceptance после multi-account миграции: новые launcher'ы
+    пишут state в `~/.openclaw/krab_runtime_state`, но старые запускались из корня repo.
+    """
+    runtime_state_dir = Path.home() / ".openclaw" / "krab_runtime_state"
+    return [
+        runtime_state_dir / "launcher.lock",
+        runtime_state_dir / "openclaw.owner",
+        runtime_state_dir / "openclaw.pid",
+        runtime_state_dir / "stop_krab",
+        root / ".krab_launcher.lock",
+        root / ".openclaw.owner",
+        root / ".openclaw.pid",
+        root / ".stop_krab",
+    ]
+
+
 def _fetch_json(url: str, timeout_sec: float = 8.0) -> tuple[dict[str, Any], str | None]:
     req = request.Request(url, headers={"Accept": "application/json"})  # noqa: S310
     try:
@@ -219,12 +239,7 @@ def _run_restart_cycles(
         return {"enabled": False, "cycles": 0, "attempts": attempts, "all_running": True}
 
     # На всякий случай убираем stale lock-файлы, если stop не дочистил их.
-    lock_files = [
-        root / ".krab_launcher.lock",
-        root / ".openclaw.owner",
-        root / ".openclaw.pid",
-        root / ".stop_krab",
-    ]
+    lock_files = _launcher_state_files(root)
 
     for cycle in range(1, cycles + 1):
         cycle_result: dict[str, Any] = {

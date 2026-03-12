@@ -5,9 +5,13 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from src.config import config
+from src.modules import web_router_compat as mod
 from src.modules.web_router_compat import WebRouterCompat
 
 
@@ -182,6 +186,25 @@ def test_local_preferred_model_restores_legacy_router_contract(monkeypatch):
         assert router.local_preferred_model == "qwen3.5-9b-mlx"
     finally:
         monkeypatch.setattr(config, "LOCAL_PREFERRED_MODEL", previous)
+
+
+def test_router_init_survives_onboard_config_with_null_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    Чистый `openclaw onboard` может оставить `agents.defaults.model = null`.
+    Compat-роутер не должен падать на таком runtime-конфиге.
+    """
+    monkeypatch.setattr(mod.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(config, "MODEL", "google/gemini-2.5-flash")
+    runtime_root = tmp_path / ".openclaw"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "openclaw.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": None}}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    router = WebRouterCompat(_FakeModelManager(), _FakeOpenClawClient())
+
+    assert router.models["chat"] == "google/gemini-2.5-flash"
 
 
 def test_get_task_preflight_returns_rich_ui_payload():

@@ -45,6 +45,10 @@ def _runtime_primary_model() -> str:
     agents = payload.get("agents") if isinstance(payload, dict) else {}
     defaults = agents.get("defaults") if isinstance(agents, dict) else {}
     model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
+    if not isinstance(model_defaults, dict):
+        # `openclaw onboard` на чистой учётке может оставить `model: null`.
+        # Для owner UI это не повод падать: просто откатываемся к env-fallback.
+        model_defaults = {}
     primary = str(model_defaults.get("primary", "") or "").strip()
     return primary or str(config.MODEL or "").strip()
 

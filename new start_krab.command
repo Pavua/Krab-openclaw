@@ -6,15 +6,71 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
-LAUNCHER_LOCK_FILE="$DIR/.krab_launcher.lock"
-OPENCLAW_PID_FILE="$DIR/.openclaw.pid"
-OPENCLAW_OWNER_FILE="$DIR/.openclaw.owner"
+# Runtime-state переносим в per-account каталог, чтобы shared repo не держал
+# lock/pid/sentinel между разными macOS-учётками.
+RUNTIME_STATE_DIR="${KRAB_RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}"
+LAUNCHER_LOCK_FILE="$RUNTIME_STATE_DIR/launcher.lock"
+OPENCLAW_PID_FILE="$RUNTIME_STATE_DIR/openclaw.pid"
+OPENCLAW_OWNER_FILE="$RUNTIME_STATE_DIR/openclaw.owner"
+STOP_FLAG_FILE="$RUNTIME_STATE_DIR/stop_krab"
+LEGACY_LAUNCHER_LOCK_FILE="$DIR/.krab_launcher.lock"
+LEGACY_OPENCLAW_PID_FILE="$DIR/.openclaw.pid"
+LEGACY_OPENCLAW_OWNER_FILE="$DIR/.openclaw.owner"
+LEGACY_STOP_FLAG_FILE="$DIR/.stop_krab"
 GATEWAY_OWNED_BY_THIS=0
 KRAB_PROC_PATTERN="[Pp]ython.*src\\.main"
 OPENCLAW_REPAIR_RESTART_RECOMMENDED=0
 
 echo "🦀 Launching Krab Userbot..."
 echo "📂 Directory: $DIR"
+
+ensure_runtime_state_dir() {
+    mkdir -p "$RUNTIME_STATE_DIR"
+}
+
+write_runtime_state_file() {
+    local path="$1"
+    local value="${2:-}"
+    ensure_runtime_state_dir || return 1
+    rm -f "$path" >/dev/null 2>&1 || true
+    printf '%s' "$value" > "$path"
+}
+
+clear_stop_flag() {
+    rm -f "$STOP_FLAG_FILE" "$LEGACY_STOP_FLAG_FILE" >/dev/null 2>&1 || true
+}
+
+has_stop_flag() {
+    [ -f "$STOP_FLAG_FILE" ] || [ -f "$LEGACY_STOP_FLAG_FILE" ]
+}
+
+remove_legacy_runtime_state() {
+    # После миграции state-файлы не должны больше жить в общем корне repo,
+    # иначе учётки снова будут мешать друг другу stale-lock'ами.
+    rm -f \
+        "$LEGACY_LAUNCHER_LOCK_FILE" \
+        "$LEGACY_OPENCLAW_PID_FILE" \
+        "$LEGACY_OPENCLAW_OWNER_FILE" \
+        "$LEGACY_STOP_FLAG_FILE" >/dev/null 2>&1 || true
+}
+
+ensure_openclaw_account_bootstrap() {
+    if [ -z "${OPENCLAW_BIN:-}" ]; then
+        echo "⚠️ OpenClaw binary не найден; bootstrap runtime-конфига пропускается."
+        return 0
+    fi
+
+    # Helper сделан idempotent: его безопасно вызывать на каждом старте.
+    # Это защищает от сценария, когда `openclaw.json` уже существует, но остался
+    # частично невалидным после старого onboarding/миграции между учётками.
+    echo "🧱 Проверяю OpenClaw runtime для текущей macOS-учётки..."
+    "$KRAB_PYTHON_BIN" scripts/openclaw_account_bootstrap.py --openclaw-bin "$OPENCLAW_BIN" || {
+        echo "❌ Не удалось инициализировать ~/.openclaw для текущей учётки."
+        echo "Проверь вывод scripts/openclaw_account_bootstrap.py и повтори запуск."
+        return 1
+    }
+    return 0
+}
 
 is_pid_alive() {
     local pid="$1"
@@ -30,6 +86,10 @@ is_openclaw_gateway_pid() {
 }
 
 acquire_launcher_lock() {
+    ensure_runtime_state_dir || {
+        echo "❌ Не удалось создать runtime state dir: $RUNTIME_STATE_DIR"
+        return 1
+    }
     if [ -f "$LAUNCHER_LOCK_FILE" ]; then
         local prev_pid
         prev_pid="$(cat "$LAUNCHER_LOCK_FILE" 2>/dev/null || true)"
@@ -38,7 +98,7 @@ acquire_launcher_lock() {
             return 1
         fi
     fi
-    echo "$$" > "$LAUNCHER_LOCK_FILE"
+    write_runtime_state_file "$LAUNCHER_LOCK_FILE" "$$" || return 1
     return 0
 }
 
@@ -223,7 +283,8 @@ if ! acquire_launcher_lock; then
     exit 1
 fi
 
-rm -f .stop_krab
+clear_stop_flag
+remove_legacy_runtime_state
 
 echo "🧹 Performing pre-flight checks..."
 disable_legacy_launchd_core
@@ -262,15 +323,118 @@ fi
 clear_web_port 8080 || true
 
 # === Виртуальное окружение ===
-if [ -d ".venv" ]; then
-    source .venv/bin/activate
-elif [ -d "venv" ]; then
-    source venv/bin/activate
-else
-    echo "❌ Virtual environment not found (.venv or venv)!"
-    echo "Run: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+python_supports_module() {
+    local python_bin="$1"
+    local module_name="$2"
+    [ -x "$python_bin" ] || return 1
+    "$python_bin" - "$module_name" <<'PY' >/dev/null 2>&1
+import importlib.util
+import sys
+
+module_name = str(sys.argv[1] or "").strip()
+raise SystemExit(0 if module_name and importlib.util.find_spec(module_name) else 1)
+PY
+}
+
+select_krab_python_env() {
+    # Выбираем не "первое попавшееся" окружение, а то, где есть runtime-модули
+    # и, по возможности, `mlx_whisper` для voice/STT-контура.
+    eval "$(
+        python3 - "$DIR" <<'PY'
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+candidates = [
+    root / "venv" / "bin" / "python",
+    root / ".venv" / "bin" / "python",
+]
+runtime_modules = ("pyrogram", "google.genai", "PIL")
+stt_modules = ("mlx_whisper",)
+
+
+def supports(python_bin: Path, module_name: str) -> bool:
+    if not python_bin.exists():
+        return False
+    try:
+        completed = subprocess.run(
+            [
+                str(python_bin),
+                "-c",
+                (
+                    "import importlib.util, sys; "
+                    "raise SystemExit(0 if importlib.util.find_spec(sys.argv[1]) else 1)"
+                ),
+                module_name,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return False
+    return completed.returncode == 0
+
+
+def score_runtime(python_bin: Path) -> tuple[int, int, int]:
+    runtime_score = sum(1 for module in runtime_modules if supports(python_bin, module))
+    stt_score = sum(1 for module in stt_modules if supports(python_bin, module))
+    exists_score = 1 if python_bin.exists() else 0
+    return runtime_score, stt_score, exists_score
+
+
+best_runtime = None
+best_runtime_score = (-1, -1, -1)
+best_stt = None
+best_stt_score = (-1, -1, -1)
+
+for candidate in candidates:
+    runtime_score = score_runtime(candidate)
+    stt_score = (runtime_score[1], runtime_score[0], runtime_score[2])
+    if runtime_score > best_runtime_score:
+        best_runtime = candidate
+        best_runtime_score = runtime_score
+    if stt_score > best_stt_score:
+        best_stt = candidate
+        best_stt_score = stt_score
+
+if best_runtime is None or best_runtime_score[2] <= 0:
+    raise SystemExit(1)
+
+if best_stt is None or best_stt_score[2] <= 0:
+    best_stt = best_runtime
+
+print(f'KRAB_PYTHON_BIN="{best_runtime}"')
+print(f'KRAB_VENV_DIR="{best_runtime.parent.parent}"')
+print(f'KRAB_STT_PYTHON_BIN="{best_stt}"')
+PY
+    )"
+}
+
+if ! select_krab_python_env; then
+    echo "❌ Virtual environment not found (ожидался venv или .venv)!"
+    echo "Run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
     read -p "Press Enter to exit..."
     exit 1
+fi
+
+if [ -f "$KRAB_VENV_DIR/bin/activate" ]; then
+    # Активируем выбранное окружение, чтобы subprocess-слой и `python` совпадали
+    # с тем Python, который мы только что детерминированно выбрали.
+    source "$KRAB_VENV_DIR/bin/activate"
+fi
+
+export KRAB_PYTHON_BIN
+export KRAB_STT_PYTHON_BIN
+
+echo "🐍 Runtime Python: $KRAB_PYTHON_BIN"
+if [ "${KRAB_STT_PYTHON_BIN:-}" != "${KRAB_PYTHON_BIN:-}" ]; then
+    echo "🎙️ STT Python: $KRAB_STT_PYTHON_BIN"
 fi
 
 # === Загрузка .env ===
@@ -297,14 +461,25 @@ unset GOOGLE_CLOUD_LOCATION
 unset VERTEXAI
 unset VERTEX_AI
 
+# === OpenClaw bootstrap ===
+OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
+if [ ! -x "$OPENCLAW_BIN" ]; then
+    OPENCLAW_BIN=$(which openclaw 2>/dev/null)
+fi
+
+if ! ensure_openclaw_account_bootstrap; then
+    read -p "Press Enter to exit..."
+    exit 1
+fi
+
 # === Runtime repair OpenClaw (безопасная автопочинка перед стартом) ===
 if [ -f "scripts/openclaw_runtime_repair.py" ]; then
     echo "🛠️ Repairing OpenClaw runtime config..."
     # Внешние каналы не должны держать inline reply-tag'и в пользовательском тексте.
-    OPENCLAW_REPAIR_JSON="$(python3 scripts/openclaw_runtime_repair.py --dm-policy keep --reply-to-mode off 2>/dev/null || true)"
+    OPENCLAW_REPAIR_JSON="$("$KRAB_PYTHON_BIN" scripts/openclaw_runtime_repair.py --dm-policy keep --reply-to-mode off 2>/dev/null || true)"
     if [ -n "${OPENCLAW_REPAIR_JSON:-}" ]; then
         export OPENCLAW_REPAIR_JSON
-        OPENCLAW_REPAIR_RESTART_RECOMMENDED="$(python3 - <<'PY'
+        OPENCLAW_REPAIR_RESTART_RECOMMENDED="$("$KRAB_PYTHON_BIN" - <<'PY'
 import json
 import os
 
@@ -324,11 +499,6 @@ PY
 fi
 
 # === OpenClaw Gateway ===
-OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
-if [ ! -x "$OPENCLAW_BIN" ]; then
-    OPENCLAW_BIN=$(which openclaw 2>/dev/null)
-fi
-
 if [ -n "$OPENCLAW_BIN" ]; then
     # Отключаем lab-демон, который может автоподниматься на 18890 и ломать единый runtime.
     launchctl remove ai.openclaw.lab >/dev/null 2>&1 || true
@@ -375,8 +545,8 @@ if [ -n "$OPENCLAW_BIN" ]; then
         # так и не начинал слушать.
         nohup "$OPENCLAW_BIN" gateway run --port 18789 > openclaw.log 2>&1 &
         NEW_GATEWAY_PID=$!
-        echo "$NEW_GATEWAY_PID" > "$OPENCLAW_PID_FILE"
-        echo "$$" > "$OPENCLAW_OWNER_FILE"
+        write_runtime_state_file "$OPENCLAW_PID_FILE" "$NEW_GATEWAY_PID" || true
+        write_runtime_state_file "$OPENCLAW_OWNER_FILE" "$$" || true
         GATEWAY_OWNED_BY_THIS=1
         echo "✅ OpenClaw старт-команда отправлена (PID $NEW_GATEWAY_PID)"
 
@@ -424,9 +594,9 @@ fi
 # === Запуск бота с авто-рестартом ===
 while true; do
     # Проверяем, не нажал ли пользователь Стоп
-    if [ -f .stop_krab ]; then
+    if has_stop_flag; then
         echo "🛑 Stop flag detected. Shutting down auto-restarter..."
-        rm -f .stop_krab
+        clear_stop_flag
         break
     fi
 
@@ -439,13 +609,13 @@ while true; do
     fi
 
     echo "🚀 Starting Krab..."
-    python -m src.main
+    "$KRAB_PYTHON_BIN" -m src.main
     EXIT_CODE=$?
 
     # Повторная проверка после падения
-    if [ -f .stop_krab ]; then
+    if has_stop_flag; then
         echo "🛑 Stop flag detected. Exiting..."
-        rm -f .stop_krab
+        clear_stop_flag
         break
     fi
 

@@ -8,14 +8,58 @@ cd "$DIR"
 
 echo "🛑 Stopping Krab System..."
 
-LAUNCHER_LOCK_FILE="$DIR/.krab_launcher.lock"
-OPENCLAW_PID_FILE="$DIR/.openclaw.pid"
-OPENCLAW_OWNER_FILE="$DIR/.openclaw.owner"
+# Runtime-state живёт в per-account каталоге внутри `~/.openclaw`, чтобы
+# соседние macOS-учётки не дрались за lock/pid/sentinel в общем репозитории.
+RUNTIME_STATE_DIR="${KRAB_RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}"
+LAUNCHER_LOCK_FILE="$RUNTIME_STATE_DIR/launcher.lock"
+OPENCLAW_PID_FILE="$RUNTIME_STATE_DIR/openclaw.pid"
+OPENCLAW_OWNER_FILE="$RUNTIME_STATE_DIR/openclaw.owner"
+STOP_FLAG_FILE="$RUNTIME_STATE_DIR/stop_krab"
+LEGACY_LAUNCHER_LOCK_FILE="$DIR/.krab_launcher.lock"
+LEGACY_OPENCLAW_PID_FILE="$DIR/.openclaw.pid"
+LEGACY_OPENCLAW_OWNER_FILE="$DIR/.openclaw.owner"
+LEGACY_STOP_FLAG_FILE="$DIR/.stop_krab"
 KRAB_PROC_PATTERN="[Pp]ython.*src\\.main"
+
+ensure_runtime_state_dir() {
+    mkdir -p "$RUNTIME_STATE_DIR"
+}
+
+remove_legacy_runtime_state() {
+    # Чистим старые repo-level state-файлы best-effort, чтобы не оставлять
+    # ложные хвосты после миграции на per-account runtime state.
+    rm -f \
+        "$LEGACY_LAUNCHER_LOCK_FILE" \
+        "$LEGACY_OPENCLAW_PID_FILE" \
+        "$LEGACY_OPENCLAW_OWNER_FILE" \
+        "$LEGACY_STOP_FLAG_FILE" >/dev/null 2>&1 || true
+}
+
+set_stop_flag() {
+    ensure_runtime_state_dir || return 1
+    rm -f "$STOP_FLAG_FILE" >/dev/null 2>&1 || true
+    : > "$STOP_FLAG_FILE"
+}
 
 is_pid_alive() {
     local pid="$1"
     [ -n "${pid:-}" ] && kill -0 "$pid" >/dev/null 2>&1
+}
+
+stop_launcher_process() {
+    local launcher_pid=""
+    launcher_pid="$(cat "$LAUNCHER_LOCK_FILE" 2>/dev/null || true)"
+    if ! is_pid_alive "$launcher_pid"; then
+        return 0
+    fi
+
+    # Launcher может застрять в `read -p` после неудачного background-start.
+    # Явно завершаем владельца lock-файла, чтобы следующий запуск не видел ложный "already running".
+    kill -TERM "$launcher_pid" >/dev/null 2>&1 || true
+    sleep 0.5
+    if is_pid_alive "$launcher_pid"; then
+        kill -KILL "$launcher_pid" >/dev/null 2>&1 || true
+    fi
 }
 
 is_openclaw_gateway_pid() {
@@ -100,8 +144,13 @@ raise SystemExit(int(completed.returncode))
 PY
 }
 
-# 0. Кидаем "ядовитую таблетку", чтобы скрипт старта сам вышел из цикла!
-touch .stop_krab
+# 0. Кидаем "ядовитую таблетку", чтобы скрипт старта сам вышел из цикла.
+# Legacy repo-level flag тоже убираем, чтобы не застрять между учётками.
+set_stop_flag || {
+    echo "❌ Не удалось записать stop-флаг в $STOP_FLAG_FILE"
+    exit 1
+}
+remove_legacy_runtime_state
 disable_legacy_launchd_core
 
 # 1. Мягко просим завершиться, чтобы Pyrogram успел сохранить/закрыть сессию.
@@ -124,6 +173,7 @@ if pgrep -f "$KRAB_PROC_PATTERN" >/dev/null 2>&1; then
 fi
 
 # 2. Останавливаем скрипты авто-рестарта
+stop_launcher_process
 pkill -f "start_krab" >/dev/null 2>&1 || true
 pkill -f "run_krab" >/dev/null 2>&1 || true
 
