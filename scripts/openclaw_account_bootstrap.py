@@ -28,6 +28,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+DEFAULT_LOCAL_MODEL = "lmstudio/local"
+DEFAULT_CLOUD_MODEL = "google/gemini-2.5-flash"
+DEFAULT_OPENAI_SAFE_MODEL = "openai/gpt-4o-mini"
+
 
 def _openclaw_root() -> Path:
     """Возвращает runtime-root OpenClaw для текущей учётки."""
@@ -49,6 +53,58 @@ def _models_path() -> Path:
 
 def _auth_profiles_path() -> Path:
     return _openclaw_root() / "agents" / "main" / "agent" / "auth-profiles.json"
+
+
+def _agent_config_path() -> Path:
+    return _openclaw_root() / "agents" / "main" / "agent" / "agent.json"
+
+
+def _normalize_runtime_model_key(provider: str, model_id: str) -> str:
+    """Возвращает канонический model key с provider-префиксом."""
+    provider_raw = str(provider or "").strip().lower()
+    model_raw = str(model_id or "").strip()
+    if not model_raw:
+        return ""
+    if provider_raw and model_raw.startswith(f"{provider_raw}/"):
+        return model_raw
+    if provider_raw:
+        return f"{provider_raw}/{model_raw}"
+    return model_raw
+
+
+def _pick_local_primary_model(runtime_models_payload: dict[str, Any]) -> str:
+    """
+    Выбирает локальную primary-модель для bootstrap skeleton.
+
+    Почему это важно:
+    - если `agents.defaults.model.primary` пустой, Python routing откатывается в
+      исторический `config.MODEL`;
+    - на новой учётке это даёт ложный cloud warmup вместо реального local-first.
+    """
+    providers = runtime_models_payload.get("providers") if isinstance(runtime_models_payload, dict) else {}
+    lmstudio = providers.get("lmstudio") if isinstance(providers, dict) else {}
+    models = lmstudio.get("models") if isinstance(lmstudio, dict) else []
+    if isinstance(models, list):
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            normalized = _normalize_runtime_model_key("lmstudio", str(item.get("id") or ""))
+            if normalized:
+                return normalized
+    return DEFAULT_LOCAL_MODEL
+
+
+def _unique_non_empty(items: list[str]) -> list[str]:
+    """Удаляет пустые значения и дубликаты, сохраняя порядок."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        raw = str(item or "").strip()
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        out.append(raw)
+    return out
 
 
 def _empty_models_payload() -> dict[str, Any]:
@@ -87,7 +143,15 @@ def _empty_auth_profiles_payload() -> dict[str, Any]:
     }
 
 
-def _normalize_openclaw_config(path: Path) -> dict[str, Any]:
+def _read_json_or_default(path: Path, default: dict[str, Any]) -> dict[str, Any]:
+    """Читает JSON или возвращает переданный default без исключения наружу."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+    except (OSError, ValueError, TypeError):
+        return default
+
+
+def _normalize_openclaw_config(path: Path, *, runtime_models_payload: dict[str, Any]) -> dict[str, Any]:
     """
     Доводит `openclaw.json` до минимально валидного provider-skeleton.
 
@@ -98,7 +162,7 @@ def _normalize_openclaw_config(path: Path) -> dict[str, Any]:
     - лучше один раз создать пустой, но валидный каркас, чем потом ловить
       "Config invalid" на запуске gateway.
     """
-    payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    payload = _read_json_or_default(path, {})
     models = payload.setdefault("models", {})
     providers = models.setdefault("providers", {})
 
@@ -116,6 +180,85 @@ def _normalize_openclaw_config(path: Path) -> dict[str, Any]:
     lmstudio.setdefault("baseUrl", "http://localhost:1234/v1")
     lmstudio.setdefault("models", [])
 
+    gateway = payload.setdefault("gateway", {})
+    if not isinstance(gateway, dict):
+        gateway = {}
+        payload["gateway"] = gateway
+    http_cfg = gateway.setdefault("http", {})
+    if not isinstance(http_cfg, dict):
+        http_cfg = {}
+        gateway["http"] = http_cfg
+    endpoints = http_cfg.setdefault("endpoints", {})
+    if not isinstance(endpoints, dict):
+        endpoints = {}
+        http_cfg["endpoints"] = endpoints
+    chat_completions = endpoints.setdefault("chatCompletions", {})
+    if not isinstance(chat_completions, dict):
+        chat_completions = {}
+        endpoints["chatCompletions"] = chat_completions
+    # Наш production-клиент и runtime warmup всё ещё ходят через
+    # `/v1/chat/completions`, а в свежем OpenClaw этот endpoint может быть
+    # выключен по умолчанию после onboard. Включаем его явно, чтобы новый
+    # профиль не выглядел "живым" только по `/health`, но падал 404 на чате.
+    chat_completions["enabled"] = True
+
+    agents = payload.setdefault("agents", {})
+    if not isinstance(agents, dict):
+        agents = {}
+        payload["agents"] = agents
+    defaults = agents.setdefault("defaults", {})
+    if not isinstance(defaults, dict):
+        defaults = {}
+        agents["defaults"] = defaults
+
+    model_cfg = defaults.get("model")
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+        defaults["model"] = model_cfg
+
+    local_primary = _pick_local_primary_model(runtime_models_payload)
+    primary_model = str(model_cfg.get("primary") or "").strip() or DEFAULT_CLOUD_MODEL
+    model_cfg["primary"] = primary_model
+
+    current_fallbacks = model_cfg.get("fallbacks")
+    normalized_fallbacks = []
+    if isinstance(current_fallbacks, list):
+        normalized_fallbacks = [
+            str(item or "").strip()
+            for item in current_fallbacks
+            if str(item or "").strip()
+        ]
+    if not normalized_fallbacks:
+        if primary_model.startswith("lmstudio/"):
+            normalized_fallbacks = [DEFAULT_CLOUD_MODEL, DEFAULT_OPENAI_SAFE_MODEL]
+        else:
+            normalized_fallbacks = [local_primary, DEFAULT_OPENAI_SAFE_MODEL]
+    model_cfg["fallbacks"] = [
+        item for item in _unique_non_empty(normalized_fallbacks) if item != primary_model
+    ]
+
+    subagents = defaults.get("subagents")
+    if not isinstance(subagents, dict):
+        subagents = {}
+        defaults["subagents"] = subagents
+    if not str(subagents.get("model") or "").strip():
+        subagents["model"] = primary_model
+
+    agents_list = agents.get("list")
+    if not isinstance(agents_list, list):
+        agents_list = []
+        agents["list"] = agents_list
+    main_agent = None
+    for item in agents_list:
+        if isinstance(item, dict) and str(item.get("id") or "").strip() == "main":
+            main_agent = item
+            break
+    if main_agent is None:
+        main_agent = {"id": "main", "workspace": str(_workspace_dir())}
+        agents_list.append(main_agent)
+    if not str(main_agent.get("model") or "").strip():
+        main_agent["model"] = primary_model
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {
@@ -124,6 +267,9 @@ def _normalize_openclaw_config(path: Path) -> dict[str, Any]:
         "google_models_count": len(google.get("models") or []),
         "lmstudio_base_url": str(lmstudio.get("baseUrl") or ""),
         "lmstudio_models_count": len(lmstudio.get("models") or []),
+        "chat_completions_enabled": bool(chat_completions.get("enabled")),
+        "primary_model": primary_model,
+        "fallbacks": list(model_cfg.get("fallbacks") or []),
     }
 
 
@@ -134,6 +280,34 @@ def _write_json_if_missing(path: Path, payload: dict[str, Any]) -> dict[str, Any
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {"path": str(path), "created": True, "exists": True}
+
+
+def _ensure_agent_config(path: Path, *, primary_model: str) -> dict[str, Any]:
+    """
+    Создаёт или нормализует `main agent.json`, чтобы runtime и UI видели один primary.
+    """
+    payload = _read_json_or_default(path, {})
+    created = not path.exists()
+    updated = False
+    if not isinstance(payload, dict):
+        payload = {}
+        updated = True
+    if str(payload.get("id") or "").strip() != "main":
+        payload["id"] = "main"
+        updated = True
+    if str(payload.get("model") or "").strip() != primary_model:
+        payload["model"] = primary_model
+        updated = True
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {
+        "path": str(path),
+        "created": created,
+        "updated": updated,
+        "exists": True,
+        "model": primary_model,
+    }
 
 
 def _run_openclaw_onboard(openclaw_bin: str) -> dict[str, Any]:
@@ -181,6 +355,7 @@ def bootstrap_openclaw_account(openclaw_bin: str) -> dict[str, Any]:
     config_path = _openclaw_config_path()
     models_path = _models_path()
     auth_profiles_path = _auth_profiles_path()
+    agent_config_path = _agent_config_path()
 
     onboard_report: dict[str, Any] | None = None
     if not config_path.exists():
@@ -195,7 +370,12 @@ def bootstrap_openclaw_account(openclaw_bin: str) -> dict[str, Any]:
 
     models_report = _write_json_if_missing(models_path, _empty_models_payload())
     auth_report = _write_json_if_missing(auth_profiles_path, _empty_auth_profiles_payload())
-    config_report = _normalize_openclaw_config(config_path)
+    runtime_models_payload = _read_json_or_default(models_path, _empty_models_payload())
+    config_report = _normalize_openclaw_config(config_path, runtime_models_payload=runtime_models_payload)
+    agent_report = _ensure_agent_config(
+        agent_config_path,
+        primary_model=str(config_report.get("primary_model") or DEFAULT_LOCAL_MODEL),
+    )
 
     return {
         "ok": True,
@@ -203,6 +383,7 @@ def bootstrap_openclaw_account(openclaw_bin: str) -> dict[str, Any]:
         "config_path": str(config_path),
         "models_path": str(models_path),
         "auth_profiles_path": str(auth_profiles_path),
+        "agent_config_path": str(agent_config_path),
         "workspace_dir": str(_workspace_dir()),
         "onboard": onboard_report
         or {
@@ -213,6 +394,7 @@ def bootstrap_openclaw_account(openclaw_bin: str) -> dict[str, Any]:
         "config": config_report,
         "models": models_report,
         "auth_profiles": auth_report,
+        "agent_config": agent_report,
     }
 
 
