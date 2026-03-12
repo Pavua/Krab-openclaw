@@ -126,6 +126,14 @@ def _seed_inbox(inbox: InboxService) -> None:
         sender_username="owner",
         chat_type="private",
     )
+    inbox.record_incoming_owner_reply(
+        chat_id="123",
+        message_id="55",
+        response_text="Transport persistence проверен.",
+        delivery_mode="edit_and_reply",
+        reply_message_ids=["7001"],
+        note="llm_response_delivered",
+    )
 
 
 def test_inbox_status_returns_workflow_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -141,7 +149,8 @@ def test_inbox_status_returns_workflow_snapshot(monkeypatch: pytest.MonkeyPatch,
     data = resp.json()
     assert data["ok"] is True
     assert data["summary"]["pending_owner_tasks"] == 1
-    assert data["workflow"]["incoming_owner_requests"][0]["metadata"]["message_id"] == "55"
+    assert data["workflow"]["recent_replied_requests"][0]["metadata"]["message_id"] == "55"
+    assert data["workflow"]["recent_replied_requests"][0]["metadata"]["reply_message_ids"] == ["7001"]
     assert data["workflow"]["approval_history"][0]["identity"]["approval_scope"] == "money"
 
 
@@ -157,8 +166,9 @@ def test_runtime_handoff_contains_operator_workflow(monkeypatch: pytest.MonkeyPa
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
-    assert data["operator_workflow"]["summary"]["pending_owner_requests"] == 1
+    assert data["operator_workflow"]["summary"]["pending_owner_requests"] == 0
     assert data["operator_workflow"]["pending_owner_tasks"][0]["metadata"]["task_key"] == "reserve-safe-smoke"
+    assert data["operator_workflow"]["recent_activity"][0]["action"] == "reply_sent"
     assert data["inbox_summary"]["pending_owner_tasks"] == 1
 
 
@@ -181,4 +191,5 @@ def test_ops_runtime_snapshot_contains_operator_workflow(monkeypatch: pytest.Mon
     data = resp.json()
     assert data["ok"] is True
     assert data["operator_workflow"]["summary"]["pending_owner_tasks"] == 1
+    assert data["operator_workflow"]["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Transport persistence проверен."
     assert data["operator_workflow"]["trace_index"]

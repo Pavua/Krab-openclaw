@@ -30,7 +30,7 @@ def isolate_userbot_inbox_capture(monkeypatch: pytest.MonkeyPatch, request: pyte
     Оставляем живой capture только там, где он и является предметом проверки.
     """
     node_path = str(getattr(request.node, "fspath", "") or "")
-    if node_path.endswith("test_userbot_inbox_flow.py"):
+    if node_path.endswith("test_userbot_inbox_flow.py") or node_path.endswith("test_userbot_reply_trace_flow.py"):
         yield
         return
 

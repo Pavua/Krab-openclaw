@@ -223,3 +223,33 @@ def test_workflow_snapshot_exposes_trace_index_and_approval_history(tmp_path: Pa
     assert workflow["incoming_owner_requests"][0]["metadata"]["message_id"] == "77"
     assert workflow["trace_index"]
     assert workflow["trace_index"][0]["trace_id"]
+
+
+def test_record_incoming_owner_reply_persists_reply_and_recent_activity(tmp_path: Path) -> None:
+    """Reply trail должен связывать owner request с фактом ответа и recent activity."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    service.upsert_incoming_owner_request(
+        chat_id="321",
+        message_id="99",
+        text="Проверь runtime handoff",
+        sender_username="owner",
+        chat_type="private",
+    )
+
+    result = service.record_incoming_owner_reply(
+        chat_id="321",
+        message_id="99",
+        response_text="Handoff truth синхронизирован.",
+        delivery_mode="edit_and_reply",
+        reply_message_ids=["501", "502"],
+        note="llm_response_delivered",
+    )
+    workflow = service.get_workflow_snapshot(limit_per_bucket=3, trace_limit=6)
+
+    assert result["ok"] is True
+    assert result["item"]["status"] == "done"
+    assert result["item"]["metadata"]["reply_delivery_mode"] == "edit_and_reply"
+    assert result["item"]["metadata"]["reply_message_ids"] == ["501", "502"]
+    assert workflow["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Handoff truth синхронизирован."
+    assert workflow["recent_activity"][0]["action"] == "reply_sent"
+    assert workflow["recent_activity"][0]["note"] == "llm_response_delivered"

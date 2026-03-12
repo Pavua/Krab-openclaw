@@ -490,6 +490,14 @@ def _build_attach_summary_md(
     route = health_lite.get("last_runtime_route") if isinstance(health_lite.get("last_runtime_route"), dict) else {}
     pre_release = (ops_evidence.get("pre_release_smoke_latest") or {}).get("summary") or {}
     merge_gate = (ops_evidence.get("r20_merge_gate_latest") or {}).get("summary") or {}
+    operator_workflow = runtime_snapshot.get("operator_workflow") if isinstance(runtime_snapshot, dict) else {}
+    operator_workflow = operator_workflow if isinstance(operator_workflow, dict) else {}
+    workflow_summary = operator_workflow.get("summary") if isinstance(operator_workflow.get("summary"), dict) else {}
+    recent_replies = operator_workflow.get("recent_replied_requests") if isinstance(operator_workflow.get("recent_replied_requests"), list) else []
+    recent_activity = operator_workflow.get("recent_activity") if isinstance(operator_workflow.get("recent_activity"), list) else []
+    last_reply = recent_replies[0] if recent_replies else {}
+    last_reply_meta = last_reply.get("metadata") if isinstance(last_reply, dict) and isinstance(last_reply.get("metadata"), dict) else {}
+    last_activity = recent_activity[0] if recent_activity else {}
     active_issues = [
         row.get("code")
         for row in (runtime_snapshot.get("known_issues") or [])
@@ -513,6 +521,16 @@ def _build_attach_summary_md(
         f"- Последний runtime route: `{route.get('model') or 'unknown'}` через `{route.get('provider') or 'unknown'}`",
         f"- `pre_release_smoke_latest`: blocked=`{pre_release.get('blocked', False)}`; blocked_required=`{', '.join(pre_release.get('blocked_required') or []) or '-'}`",
         f"- `r20_merge_gate_latest`: required_failed=`{merge_gate.get('required_failed', '-')}`; advisory_failed=`{merge_gate.get('advisory_failed', '-')}`",
+        "",
+        "## Operator workflow",
+        f"- `open_items`: `{workflow_summary.get('open_items', 0)}`",
+        f"- `pending_owner_tasks`: `{workflow_summary.get('pending_owner_tasks', 0)}`",
+        f"- `pending_owner_requests`: `{workflow_summary.get('pending_owner_requests', 0)}`",
+        f"- `pending_owner_mentions`: `{workflow_summary.get('pending_owner_mentions', 0)}`",
+        f"- `pending_approvals`: `{workflow_summary.get('pending_approvals', 0)}`",
+        f"- `recent_reply_trace`: `{last_reply.get('identity', {}).get('trace_id', 'n/a')}`",
+        f"- `recent_reply_excerpt`: `{last_reply_meta.get('reply_excerpt', '-')}`",
+        f"- `recent_activity`: `{last_activity.get('action', 'n/a')}` by `{last_activity.get('actor', 'n/a')}`",
         "",
         "## Что уже закрыто на USER2",
         "- truthful блок параллелизма в owner UI реализован и подтверждён unit + browser smoke на изолированном `:18081`",
@@ -674,6 +692,7 @@ def _build_handoff_manifest(
         "acceptance_artifacts": acceptance,
         "ops_evidence": ops_evidence,
         "known_issues": runtime_snapshot.get("known_issues") or [],
+        "operator_workflow": runtime_snapshot.get("operator_workflow") or {},
         "bundle_files": sorted(bundle_files),
         "resume_target": {
             "account": "pablito",
@@ -831,6 +850,7 @@ def main() -> int:
         },
         "channels": _openclaw_channels_snapshot(),
         "telegram_session": _session_state(),
+        "operator_workflow": ((runtime_handoff.get("json") or {}).get("operator_workflow") or {}) if isinstance(runtime_handoff.get("json"), dict) else {},
         "secrets_masked": {
             "openclaw_token": _mask_secret(os.getenv("OPENCLAW_TOKEN", "")),
             "gemini_free": _mask_secret(os.getenv("GEMINI_API_KEY_FREE", "")),

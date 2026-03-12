@@ -1686,7 +1686,7 @@ class KraabUserbot:
         is_self: bool,
         query: str,
         full_response: str,
-    ) -> None:
+    ) -> dict[str, Any]:
         """
         Доставляет готовый ответ в Telegram с безопасным split.
 
@@ -1698,16 +1698,78 @@ class KraabUserbot:
         parts = self._split_message(
             f"🦀 {query}\n\n{full_response}" if is_self else full_response
         )
+        delivered_ids: list[str] = []
 
         if is_self:
             source_message = await self._safe_edit(source_message, parts[0])
+            if getattr(source_message, "id", None):
+                delivered_ids.append(str(source_message.id))
             for part in parts[1:]:
-                await source_message.reply(part)
-            return
+                sent = await source_message.reply(part)
+                if getattr(sent, "id", None):
+                    delivered_ids.append(str(sent.id))
+            return {
+                "delivery_mode": "edit_and_reply",
+                "text_message_ids": delivered_ids,
+                "parts_count": len(parts),
+            }
 
         temp_message = await self._safe_edit(temp_message, parts[0])
+        if getattr(temp_message, "id", None):
+            delivered_ids.append(str(temp_message.id))
         for part in parts[1:]:
-            await source_message.reply(part)
+            sent = await source_message.reply(part)
+            if getattr(sent, "id", None):
+                delivered_ids.append(str(sent.id))
+        return {
+            "delivery_mode": "edit_and_reply",
+            "text_message_ids": delivered_ids,
+            "parts_count": len(parts),
+        }
+
+    @staticmethod
+    def _message_ids_from_delivery(delivery_result: dict[str, Any] | None) -> list[str]:
+        """Извлекает список текстовых message-id из delivery summary."""
+        if not isinstance(delivery_result, dict):
+            return []
+        rows = delivery_result.get("text_message_ids")
+        if not isinstance(rows, list):
+            return []
+        return [str(row).strip() for row in rows if str(row).strip()]
+
+    def _record_incoming_reply_to_inbox(
+        self,
+        *,
+        incoming_item_result: dict[str, Any] | None,
+        response_text: str,
+        delivery_result: dict[str, Any] | None = None,
+        note: str = "",
+    ) -> dict[str, Any]:
+        """
+        Фиксирует outcome для ранее захваченного owner request.
+
+        Важно не гадать по transport-логам задним числом: если ответ уже ушёл,
+        persisted inbox должен видеть это сразу.
+        """
+        if not isinstance(incoming_item_result, dict) or not incoming_item_result.get("ok"):
+            return {"ok": False, "skipped": True, "reason": "incoming_item_missing"}
+        item = incoming_item_result.get("item")
+        metadata = item.get("metadata") if isinstance(item, dict) else {}
+        if not isinstance(metadata, dict):
+            return {"ok": False, "skipped": True, "reason": "incoming_item_metadata_missing"}
+        chat_id = str(metadata.get("chat_id") or "").strip()
+        message_id = str(metadata.get("message_id") or "").strip()
+        if not chat_id or not message_id:
+            return {"ok": False, "skipped": True, "reason": "incoming_item_identity_incomplete"}
+        return inbox_service.record_incoming_owner_reply(
+            chat_id=chat_id,
+            message_id=message_id,
+            response_text=response_text,
+            delivery_mode=str((delivery_result or {}).get("delivery_mode") or "text").strip().lower() or "text",
+            reply_message_ids=self._message_ids_from_delivery(delivery_result),
+            actor="kraab",
+            note=note,
+        )
 
     @staticmethod
     def _build_effective_user_query(*, query: str, has_images: bool) -> str:
@@ -1933,8 +1995,9 @@ class KraabUserbot:
             if not query and not message.photo and not has_voice and not is_reply_to_me:
                 return
 
+            incoming_item_result: dict[str, Any] | None = None
             try:
-                self._sync_incoming_message_to_inbox(
+                incoming_item_result = self._sync_incoming_message_to_inbox(
                     message=message,
                     user=user,
                     query=query,
@@ -1979,12 +2042,18 @@ class KraabUserbot:
                     chat_id=chat_id,
                     text=runtime_text,
                 )
-                await self._deliver_response_parts(
+                delivery_result = await self._deliver_response_parts(
                     source_message=message,
                     temp_message=temp_msg,
                     is_self=is_self,
                     query=query,
                     full_response=runtime_text,
+                )
+                self._record_incoming_reply_to_inbox(
+                    incoming_item_result=incoming_item_result,
+                    response_text=runtime_text,
+                    delivery_result=delivery_result,
+                    note="runtime_truth_fastpath",
                 )
                 return
 
@@ -1997,12 +2066,18 @@ class KraabUserbot:
                     chat_id=chat_id,
                     text=capability_text,
                 )
-                await self._deliver_response_parts(
+                delivery_result = await self._deliver_response_parts(
                     source_message=message,
                     temp_message=temp_msg,
                     is_self=is_self,
                     query=query,
                     full_response=capability_text,
+                )
+                self._record_incoming_reply_to_inbox(
+                    incoming_item_result=incoming_item_result,
+                    response_text=capability_text,
+                    delivery_result=delivery_result,
+                    note="capability_truth_fastpath",
                 )
                 return
 
@@ -2015,12 +2090,18 @@ class KraabUserbot:
                     chat_id=chat_id,
                     text=commands_text,
                 )
-                await self._deliver_response_parts(
+                delivery_result = await self._deliver_response_parts(
                     source_message=message,
                     temp_message=temp_msg,
                     is_self=is_self,
                     query=query,
                     full_response=commands_text,
+                )
+                self._record_incoming_reply_to_inbox(
+                    incoming_item_result=incoming_item_result,
+                    response_text=commands_text,
+                    delivery_result=delivery_result,
+                    note="commands_truth_fastpath",
                 )
                 return
 
@@ -2033,12 +2114,18 @@ class KraabUserbot:
                     chat_id=chat_id,
                     text=integrations_text,
                 )
-                await self._deliver_response_parts(
+                delivery_result = await self._deliver_response_parts(
                     source_message=message,
                     temp_message=temp_msg,
                     is_self=is_self,
                     query=query,
                     full_response=integrations_text,
+                )
+                self._record_incoming_reply_to_inbox(
+                    incoming_item_result=incoming_item_result,
+                    response_text=integrations_text,
+                    delivery_result=delivery_result,
+                    note="integrations_truth_fastpath",
                 )
                 return
 
@@ -2082,8 +2169,24 @@ class KraabUserbot:
                 safe_error = photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
                 if is_self:
                     message = await self._safe_edit(message, f"🦀 {safe_query}\n\n{safe_error}")
+                    delivery_result = {
+                        "delivery_mode": "edit_error",
+                        "text_message_ids": [str(getattr(message, "id", "") or "")] if getattr(message, "id", None) else [],
+                        "parts_count": 1,
+                    }
                 else:
                     temp_msg = await self._safe_edit(temp_msg, safe_error)
+                    delivery_result = {
+                        "delivery_mode": "edit_error",
+                        "text_message_ids": [str(getattr(temp_msg, "id", "") or "")] if getattr(temp_msg, "id", None) else [],
+                        "parts_count": 1,
+                    }
+                self._record_incoming_reply_to_inbox(
+                    incoming_item_result=incoming_item_result,
+                    response_text=safe_error,
+                    delivery_result=delivery_result,
+                    note="photo_route_error",
+                )
                 return
 
             full_response = ""
@@ -2211,12 +2314,18 @@ class KraabUserbot:
                 text=full_response,
             )
 
-            await self._deliver_response_parts(
+            delivery_result = await self._deliver_response_parts(
                 source_message=message,
                 temp_message=temp_msg,
                 is_self=is_self,
                 query=query,
                 full_response=full_response,
+            )
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=full_response,
+                delivery_result=delivery_result,
+                note="llm_response_delivered",
             )
 
             if self.voice_mode:

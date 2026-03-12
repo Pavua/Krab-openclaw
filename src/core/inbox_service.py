@@ -181,6 +181,47 @@ class InboxService:
             encoding="utf-8",
         )
 
+    @staticmethod
+    def _normalize_metadata(payload: dict[str, Any] | None) -> dict[str, Any]:
+        """Нормализует metadata item-а в безопасный dict."""
+        return dict(payload or {})
+
+    @staticmethod
+    def _append_workflow_event(
+        metadata: dict[str, Any] | None,
+        *,
+        action: str,
+        actor: str,
+        status: str,
+        note: str = "",
+        extra: dict[str, Any] | None = None,
+        max_events: int = 12,
+    ) -> dict[str, Any]:
+        """
+        Добавляет компактное событие в workflow trail item-а.
+
+        Trail нужен не ради аудита "на века", а чтобы handoff/runtime snapshot
+        могли объяснить судьбу owner-request без чтения всего лога Telegram.
+        """
+        normalized = InboxService._normalize_metadata(metadata)
+        events_raw = normalized.get("workflow_events")
+        events = [dict(row) for row in events_raw if isinstance(row, dict)] if isinstance(events_raw, list) else []
+        event = {
+            "ts_utc": _now_utc_iso(),
+            "action": str(action or "updated").strip().lower() or "updated",
+            "actor": str(actor or "runtime").strip().lower() or "runtime",
+            "status": str(status or "").strip().lower(),
+        }
+        if note:
+            event["note"] = str(note).strip()
+        for key, value in dict(extra or {}).items():
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            event[str(key)] = value
+        events.insert(0, event)
+        normalized["workflow_events"] = events[: max(1, int(max_events or 12))]
+        return normalized
+
     def _load_items(self) -> list[InboxItem]:
         """Возвращает список items из persisted state."""
         payload = self._load_state()
@@ -271,6 +312,10 @@ class InboxService:
             "request_key",
             "reminder_id",
             "watch_reason",
+            "reply_sent_at_utc",
+            "reply_delivery_mode",
+            "reply_actor",
+            "reply_count",
         ):
             value = metadata.get(key)
             if value not in {"", None}:
@@ -278,6 +323,12 @@ class InboxService:
         excerpt = str(metadata.get("text_excerpt") or "").strip()
         if excerpt:
             selected_metadata["text_excerpt"] = excerpt[:140]
+        reply_excerpt = str(metadata.get("reply_excerpt") or "").strip()
+        if reply_excerpt:
+            selected_metadata["reply_excerpt"] = reply_excerpt[:140]
+        reply_message_ids = metadata.get("reply_message_ids")
+        if isinstance(reply_message_ids, list) and reply_message_ids:
+            selected_metadata["reply_message_ids"] = [str(row).strip() for row in reply_message_ids if str(row).strip()]
         if item.kind == "owner_task" and item.dedupe_key.startswith("task:"):
             task_key = str(item.dedupe_key.partition(":")[2] or "").strip()
             if task_key:
@@ -302,6 +353,11 @@ class InboxService:
                 "approval_scope": item.identity.approval_scope,
             },
             "metadata": selected_metadata,
+            "last_event": (
+                dict(item.metadata.get("workflow_events")[0])
+                if isinstance(item.metadata.get("workflow_events"), list) and item.metadata.get("workflow_events")
+                else None
+            ),
         }
 
     def get_workflow_snapshot(
@@ -336,6 +392,11 @@ class InboxService:
         ][:bucket_limit]
 
         approval_history = _bucket(kind="approval_request", statuses={"approved", "rejected"})
+        replied_requests = [
+            self._compact_item(item)
+            for item in items
+            if item.kind in {"owner_request", "owner_mention"} and str((item.metadata or {}).get("reply_sent_at_utc") or "").strip()
+        ][:bucket_limit]
         trace_index: list[dict[str, Any]] = []
         seen_traces: set[str] = set()
         for item in items:
@@ -355,6 +416,30 @@ class InboxService:
             )
             if len(trace_index) >= traces_limit:
                 break
+        recent_activity: list[dict[str, Any]] = []
+        for item in items:
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            events = metadata.get("workflow_events")
+            if not isinstance(events, list):
+                continue
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                recent_activity.append(
+                    {
+                        "ts_utc": str(event.get("ts_utc") or ""),
+                        "action": str(event.get("action") or ""),
+                        "actor": str(event.get("actor") or ""),
+                        "status": str(event.get("status") or ""),
+                        "note": str(event.get("note") or ""),
+                        "item_id": item.item_id,
+                        "kind": item.kind,
+                        "title": item.title,
+                        "trace_id": item.identity.trace_id,
+                        "approval_scope": item.identity.approval_scope,
+                    }
+                )
+        recent_activity.sort(key=lambda row: str(row.get("ts_utc") or ""), reverse=True)
 
         return {
             "summary": self._build_summary(items),
@@ -364,6 +449,8 @@ class InboxService:
             "pending_owner_tasks": _bucket(kind="owner_task"),
             "incoming_owner_requests": _bucket(kind="owner_request"),
             "incoming_owner_mentions": _bucket(kind="owner_mention"),
+            "recent_replied_requests": replied_requests,
+            "recent_activity": recent_activity[:traces_limit],
             "trace_index": trace_index,
         }
 
@@ -411,6 +498,12 @@ class InboxService:
         item = next((row for row in items if row.dedupe_key == dedupe), None)
         created = item is None
         if item is None:
+            metadata_payload = self._append_workflow_event(
+                metadata,
+                action="created",
+                actor=normalized_source,
+                status=normalized_status,
+            )
             item = InboxItem(
                 item_id=uuid.uuid4().hex[:12],
                 dedupe_key=dedupe,
@@ -423,7 +516,7 @@ class InboxService:
                 created_at_utc=now_iso,
                 updated_at_utc=now_iso,
                 identity=current_identity,
-                metadata=dict(metadata or {}),
+                metadata=metadata_payload,
             )
             items.insert(0, item)
         else:
@@ -435,7 +528,14 @@ class InboxService:
             item.body = str(body or "").strip() or item.body
             item.updated_at_utc = now_iso
             item.identity = current_identity
-            item.metadata = dict(metadata or {})
+            merged_metadata = self._normalize_metadata(item.metadata)
+            merged_metadata.update(self._normalize_metadata(metadata))
+            item.metadata = self._append_workflow_event(
+                merged_metadata,
+                action="upserted",
+                actor=normalized_source,
+                status=normalized_status,
+            )
             items = [row for row in items if row.item_id != item.item_id]
             items.insert(0, item)
 
@@ -446,7 +546,15 @@ class InboxService:
             "item": item.to_dict(),
         }
 
-    def set_item_status(self, item_id: str, *, status: str) -> dict[str, Any]:
+    def set_item_status(
+        self,
+        item_id: str,
+        *,
+        status: str,
+        actor: str = "owner",
+        note: str = "",
+        event_action: str = "",
+    ) -> dict[str, Any]:
         """Обновляет статус item по id."""
         normalized_status = self._normalize_status(status)
         target_id = str(item_id or "").strip()
@@ -458,12 +566,27 @@ class InboxService:
             return {"ok": False, "error": "inbox_item_not_found"}
         item.status = normalized_status
         item.updated_at_utc = _now_utc_iso()
+        item.metadata = self._append_workflow_event(
+            item.metadata,
+            action=str(event_action or normalized_status or "status_changed").strip().lower() or "status_changed",
+            actor=actor,
+            status=normalized_status,
+            note=note,
+        )
         items = [row for row in items if row.item_id != item.item_id]
         items.insert(0, item)
         self._save_items(items)
         return {"ok": True, "item": item.to_dict()}
 
-    def set_status_by_dedupe(self, dedupe_key: str, *, status: str) -> dict[str, Any]:
+    def set_status_by_dedupe(
+        self,
+        dedupe_key: str,
+        *,
+        status: str,
+        actor: str = "owner",
+        note: str = "",
+        event_action: str = "",
+    ) -> dict[str, Any]:
         """Обновляет статус item по dedupe_key, если item существует."""
         normalized_status = self._normalize_status(status)
         dedupe = str(dedupe_key or "").strip()
@@ -473,6 +596,13 @@ class InboxService:
             return {"ok": False, "error": "inbox_item_not_found"}
         item.status = normalized_status
         item.updated_at_utc = _now_utc_iso()
+        item.metadata = self._append_workflow_event(
+            item.metadata,
+            action=str(event_action or normalized_status or "status_changed").strip().lower() or "status_changed",
+            actor=actor,
+            status=normalized_status,
+            note=note,
+        )
         items = [row for row in items if row.item_id != item.item_id]
         items.insert(0, item)
         self._save_items(items)
@@ -590,7 +720,14 @@ class InboxService:
             metadata=payload_metadata,
         )
 
-    def resolve_approval(self, item_id: str, *, approved: bool) -> dict[str, Any]:
+    def resolve_approval(
+        self,
+        item_id: str,
+        *,
+        approved: bool,
+        actor: str = "owner",
+        note: str = "",
+    ) -> dict[str, Any]:
         """Закрывает approval-request решением owner-а."""
         target_id = str(item_id or "").strip()
         if not target_id:
@@ -600,7 +737,66 @@ class InboxService:
             return {"ok": False, "error": "inbox_item_not_found"}
         if item.kind != "approval_request":
             return {"ok": False, "error": "inbox_item_not_approval"}
-        return self.set_item_status(target_id, status="approved" if approved else "rejected")
+        return self.set_item_status(
+            target_id,
+            status="approved" if approved else "rejected",
+            actor=actor,
+            note=note,
+            event_action="approved" if approved else "rejected",
+        )
+
+    def record_incoming_owner_reply(
+        self,
+        *,
+        chat_id: str,
+        message_id: str,
+        response_text: str,
+        delivery_mode: str,
+        reply_message_ids: list[str] | None = None,
+        actor: str = "kraab",
+        note: str = "",
+        status: str = "done",
+    ) -> dict[str, Any]:
+        """
+        Фиксирует, что по owner request уже был отправлен ответ.
+
+        Это связывает transport-факт "ответ реально ушёл" с persisted inbox item-ом,
+        чтобы handoff видел не только входящий запрос, но и его outcome.
+        """
+        dedupe = f"incoming:{str(chat_id or '').strip()}:{str(message_id or '').strip()}"
+        normalized_status = self._normalize_status(status)
+        items = self._load_items()
+        item = next((row for row in items if row.dedupe_key == dedupe), None)
+        if item is None:
+            return {"ok": False, "error": "inbox_item_not_found"}
+
+        excerpt = str(response_text or "").strip()
+        reply_ids = [str(row).strip() for row in (reply_message_ids or []) if str(row).strip()]
+        metadata = self._normalize_metadata(item.metadata)
+        metadata["reply_sent_at_utc"] = _now_utc_iso()
+        metadata["reply_delivery_mode"] = str(delivery_mode or "text").strip().lower() or "text"
+        metadata["reply_excerpt"] = excerpt[:500]
+        metadata["reply_actor"] = str(actor or "kraab").strip().lower() or "kraab"
+        metadata["reply_message_ids"] = reply_ids
+        metadata["reply_count"] = int(metadata.get("reply_count", 0) or 0) + 1
+        item.metadata = self._append_workflow_event(
+            metadata,
+            action="reply_sent",
+            actor=actor,
+            status=normalized_status,
+            note=note,
+            extra={
+                "delivery_mode": metadata["reply_delivery_mode"],
+                "reply_message_ids": reply_ids,
+                "reply_excerpt": excerpt[:140],
+            },
+        )
+        item.status = normalized_status
+        item.updated_at_utc = _now_utc_iso()
+        items = [row for row in items if row.item_id != item.item_id]
+        items.insert(0, item)
+        self._save_items(items)
+        return {"ok": True, "item": item.to_dict()}
 
     def upsert_incoming_owner_request(
         self,
