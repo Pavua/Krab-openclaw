@@ -99,6 +99,7 @@ def test_watch_escalation_opens_and_recovers_without_duplicate_items(tmp_path: P
     done_items = service.list_items(status="done", kind="watch_alert", limit=5)
 
     assert opened["ok"] is True
+    assert opened["item"]["identity"]["trace_id"].startswith("watch:")
     assert recovered["ok"] is True
     assert open_items == []
     assert len(done_items) == 1

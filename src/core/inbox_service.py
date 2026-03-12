@@ -17,9 +17,7 @@ inbox_service.py — persisted owner-visible inbox и escalation foundation.
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -27,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .logger import get_logger
+from .operator_identity import build_trace_id, current_account_id, current_operator_id
 
 
 logger = get_logger(__name__)
@@ -46,19 +45,6 @@ def _default_state_path() -> Path:
     pending items и статусы подтверждения.
     """
     return Path.home() / ".openclaw" / "krab_runtime_state" / "inbox_state.json"
-
-
-def _operator_name() -> str:
-    """Имя текущего оператора для identity-конверта."""
-    home_dir = Path.home()
-    return str(os.getenv("USER", "") or "").strip() or home_dir.name
-
-
-def _account_id() -> str:
-    """Стабильный account-id для текущей macOS-учётки."""
-    home_dir = Path.home()
-    raw = f"{_operator_name()}|{home_dir}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
 
 @dataclass
@@ -153,8 +139,8 @@ class InboxService:
     ) -> InboxIdentity:
         """Строит identity-конверт для текущей учётки."""
         return InboxIdentity(
-            operator_id=_operator_name(),
-            account_id=_account_id(),
+            operator_id=current_operator_id(),
+            account_id=current_account_id(),
             channel_id=str(channel_id or "").strip(),
             team_id=str(team_id or "").strip(),
             trace_id=str(trace_id or "").strip(),
@@ -243,8 +229,8 @@ class InboxService:
         escalation_items = [item for item in open_items if item.kind.startswith("watch_")]
         return {
             "state_path": str(self.state_path),
-            "account_id": _account_id(),
-            "operator_id": _operator_name(),
+            "account_id": current_account_id(),
+            "operator_id": current_operator_id(),
             "total_items": len(items),
             "open_items": len(open_items),
             "attention_items": len(warning_items),
@@ -419,7 +405,10 @@ class InboxService:
                 body=str(digest or "").strip(),
                 severity="error",
                 status="open",
-                identity=self.build_identity(team_id="ops", trace_id=f"watch:{normalized_reason}"),
+                identity=self.build_identity(
+                    team_id="ops",
+                    trace_id=build_trace_id("watch", normalized_reason, metadata.get("ts_utc")),
+                ),
                 metadata=metadata,
             )
         if normalized_reason == "gateway_recovered":
@@ -433,7 +422,10 @@ class InboxService:
                 body=str(digest or "").strip(),
                 severity="warning",
                 status="open",
-                identity=self.build_identity(team_id="ops", trace_id=f"watch:{normalized_reason}"),
+                identity=self.build_identity(
+                    team_id="ops",
+                    trace_id=build_trace_id("watch", normalized_reason, metadata.get("ts_utc")),
+                ),
                 metadata=metadata,
             )
         if normalized_reason == "scheduler_backlog_cleared":
