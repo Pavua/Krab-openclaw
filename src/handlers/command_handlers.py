@@ -21,6 +21,7 @@ from ..core.access_control import (
     update_acl_subject,
 )
 from ..core.exceptions import UserInputError
+from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
@@ -729,6 +730,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!reminders` — список активных напоминаний
 `!rm_remind <id>` — удалить напоминание
 `!cronstatus` — статус scheduler
+`!inbox [list|status|ack|done|cancel]` — owner-visible inbox / escalation
 
 **System**
 `!ls [path]` — список файлов
@@ -889,4 +891,67 @@ async def handle_cronstatus(bot: "KraabUserbot", message: Message) -> None:
         f"- pending: `{status.get('pending_count')}`\n"
         f"- next_due_at: `{status.get('next_due_at') or '-'}`\n"
         f"- storage: `{status.get('storage_path')}`"
+    )
+
+
+async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Owner-visible inbox и escalation foundation.
+
+    Поддерживаем минимальный, но уже полезный набор:
+    - `!inbox` / `!inbox list` — открыть текущие open items;
+    - `!inbox status` — краткий summary;
+    - `!inbox ack <id>` — отметить как просмотренное;
+    - `!inbox done <id>` — закрыть item;
+    - `!inbox cancel <id>` — отменить item вручную.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=2)
+    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "list"
+
+    if action == "status":
+        summary = inbox_service.get_summary()
+        await message.reply(
+            "📥 **Inbox / Escalation**\n"
+            f"- operator: `{summary.get('operator_id')}`\n"
+            f"- account_id: `{summary.get('account_id')}`\n"
+            f"- open_items: `{summary.get('open_items')}`\n"
+            f"- attention_items: `{summary.get('attention_items')}`\n"
+            f"- pending_reminders: `{summary.get('pending_reminders')}`\n"
+            f"- open_escalations: `{summary.get('open_escalations')}`\n"
+            f"- state: `{summary.get('state_path')}`"
+        )
+        return
+
+    if action in {"list", "open"}:
+        rows = inbox_service.list_items(status="open", limit=8)
+        if not rows:
+            await message.reply("📥 Inbox сейчас пуст: открытых items нет.")
+            return
+        lines = ["📥 **Открытые inbox items**"]
+        for item in rows:
+            meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            due = str(meta.get("due_at_iso") or "").strip()
+            due_suffix = f" · due `{due}`" if due else ""
+            lines.append(
+                f"- `{item['item_id']}` · `{item['kind']}` · `{item['severity']}`{due_suffix}\n"
+                f"  {item['title']}"
+            )
+        await message.reply("\n".join(lines))
+        return
+
+    if action not in {"ack", "done", "cancel"}:
+        raise UserInputError(user_message="📥 Формат: `!inbox [list|status|ack <id>|done <id>|cancel <id>]`")
+
+    if len(raw_args) < 3 or not raw_args[2].strip():
+        raise UserInputError(user_message="📥 Укажи item id: `!inbox ack|done|cancel <id>`")
+    target_id = raw_args[2].strip()
+    target_status = {"ack": "acked", "done": "done", "cancel": "cancelled"}[action]
+    result = inbox_service.set_item_status(target_id, status=target_status)
+    if not result.get("ok"):
+        raise UserInputError(user_message=f"📥 Item `{target_id}` не найден.")
+    await message.reply(
+        "✅ Inbox item обновлён.\n"
+        f"- ID: `{target_id}`\n"
+        f"- Новый статус: `{target_status}`"
     )

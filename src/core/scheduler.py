@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ..config import config
+from .inbox_service import inbox_service
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -276,6 +277,14 @@ class KrabScheduler:
         )
         self._reminders[reminder_id] = record
         self._persist()
+        inbox_service.upsert_reminder(
+            reminder_id=record.reminder_id,
+            chat_id=record.chat_id,
+            text=record.text,
+            due_at_iso=record.due_at_iso,
+            retries=record.retries,
+            last_error=record.last_error,
+        )
         self._schedule_reminder(reminder_id)
         return reminder_id
 
@@ -293,6 +302,7 @@ class KrabScheduler:
             task.cancel()
         self._reminders.pop(rid, None)
         self._persist()
+        inbox_service.resolve_reminder(rid, status="cancelled")
         return True
 
     def list_reminders(self, *, chat_id: str | None = None) -> list[dict[str, Any]]:
@@ -371,6 +381,7 @@ class KrabScheduler:
             rec.last_error = ""
             self._reminders.pop(reminder_id, None)
             self._persist()
+            inbox_service.resolve_reminder(reminder_id, status="done")
         except Exception as exc:  # noqa: BLE001
             await self._retry_or_fail(rec, f"send_error:{exc}")
 
@@ -380,12 +391,28 @@ class KrabScheduler:
         if rec.retries > self._max_retries:
             rec.status = "failed"
             self._persist()
+            inbox_service.upsert_reminder(
+                reminder_id=rec.reminder_id,
+                chat_id=rec.chat_id,
+                text=rec.text,
+                due_at_iso=rec.due_at_iso,
+                retries=rec.retries,
+                last_error=reason,
+            )
             logger.warning("scheduler_reminder_failed", reminder_id=rec.reminder_id, reason=reason)
             return
         next_due = _now_local() + timedelta(seconds=self._retry_delay_sec)
         rec.due_at_iso = next_due.isoformat()
         rec.status = "scheduled"
         self._persist()
+        inbox_service.upsert_reminder(
+            reminder_id=rec.reminder_id,
+            chat_id=rec.chat_id,
+            text=rec.text,
+            due_at_iso=rec.due_at_iso,
+            retries=rec.retries,
+            last_error=reason,
+        )
         self._schedule_reminder(rec.reminder_id)
         logger.warning(
             "scheduler_reminder_retry",
@@ -408,6 +435,14 @@ class KrabScheduler:
                 rec = ReminderRecord.from_dict(item)
                 if rec.reminder_id and rec.status == "scheduled":
                     self._reminders[rec.reminder_id] = rec
+                    inbox_service.upsert_reminder(
+                        reminder_id=rec.reminder_id,
+                        chat_id=rec.chat_id,
+                        text=rec.text,
+                        due_at_iso=rec.due_at_iso,
+                        retries=rec.retries,
+                        last_error=rec.last_error,
+                    )
         except Exception as exc:  # noqa: BLE001
             logger.warning("scheduler_load_failed", path=str(self.storage_path), error=str(exc))
 
@@ -428,4 +463,3 @@ class KrabScheduler:
 
 
 krab_scheduler = KrabScheduler()
-

@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+import src.core.scheduler as scheduler_module
+from src.core.inbox_service import InboxService
 from src.core.scheduler import KrabScheduler, parse_due_time, split_reminder_input
 
 
@@ -63,11 +65,14 @@ async def test_scheduler_reminder_delivers_via_bound_sender(tmp_path: Path) -> N
     scheduler = KrabScheduler(storage_path=tmp_path / "reminders.json")
     sent: list[tuple[str, str]] = []
     delivered = asyncio.Event()
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
 
     async def _sender(chat_id: str, text: str) -> None:
         sent.append((chat_id, text))
         delivered.set()
 
+    original_inbox = scheduler_module.inbox_service
+    scheduler_module.inbox_service = inbox
     scheduler.start()
     scheduler.bind_sender(_sender)
     try:
@@ -81,5 +86,10 @@ async def test_scheduler_reminder_delivers_via_bound_sender(tmp_path: Path) -> N
         assert sent[0][0] == "-10012345"
         assert "⏰ Напоминание" in sent[0][1]
         assert scheduler.list_reminders() == []
+        assert inbox.get_summary()["open_items"] == 0
+        done_items = inbox.list_items(status="done", kind="reminder", limit=5)
+        assert done_items
+        assert done_items[0]["metadata"]["chat_id"] == "-10012345"
     finally:
         scheduler.stop()
+        scheduler_module.inbox_service = original_inbox

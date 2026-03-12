@@ -43,6 +43,7 @@ from .handlers import (
     handle_cronstatus,
     handle_diagnose,
     handle_help,
+    handle_inbox,
     handle_ls,
     handle_model,
     handle_panel,
@@ -309,7 +310,7 @@ class KraabUserbot:
         self._known_commands = {
             "status", "model", "clear", "config", "set", "role",
             "voice", "web", "sysinfo", "panel", "restart", "search",
-            "remember", "recall", "ls", "read", "write", "agent",
+            "inbox", "remember", "recall", "ls", "read", "write", "agent",
             "diagnose", "help", "remind", "reminders", "rm_remind", "cronstatus",
             "acl", "access",
         }
@@ -378,6 +379,10 @@ class KraabUserbot:
         @self.client.on_message(filters.command("web", prefixes=prefixes) & _make_command_filter("web"), group=-1)
         async def wrap_web(c, m):
             await run_cmd(handle_web, m)
+
+        @self.client.on_message(filters.command("inbox", prefixes=prefixes) & _make_command_filter("inbox"), group=-1)
+        async def wrap_inbox(c, m):
+            await run_cmd(handle_inbox, m)
 
         @self.client.on_message(
             filters.command("sysinfo", prefixes=prefixes) & _make_command_filter("sysinfo"), group=-1
@@ -1483,7 +1488,7 @@ class KraabUserbot:
             "`!model`, `!model local`, `!model cloud`, `!model auto`, `!model set <model_id>`, `!model load <name>`, `!model unload`, `!model scan`",
         ]
         tool_commands = [
-            "`!search <запрос>`, `!remember <текст>`, `!recall <запрос>`, `!role`, `!agent ...`",
+            "`!search <запрос>`, `!remember <текст>`, `!recall <запрос>`, `!inbox [list|status|ack|done|cancel]`, `!role`, `!agent ...`",
         ]
         system_commands = [
             "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice`",

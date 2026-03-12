@@ -29,6 +29,7 @@ from ..memory_engine import memory_manager
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from .logger import get_logger
+from .inbox_service import inbox_service
 from .openclaw_runtime_models import get_runtime_primary_model
 from .openclaw_workspace import append_workspace_memory_entry
 from .scheduler import krab_scheduler
@@ -323,6 +324,15 @@ class ProactiveWatchService:
             "last_alerted_reason": reason if alerted else str(state.get("last_alerted_reason") or ""),
         }
         self._save_state(payload)
+        if reason:
+            try:
+                inbox_service.report_watch_transition(
+                    reason=reason,
+                    digest=digest,
+                    snapshot=asdict(snapshot),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("proactive_watch_inbox_sync_failed", reason=reason, error=str(exc))
         return {
             "snapshot": asdict(snapshot),
             "reason": reason,

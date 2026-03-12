@@ -36,6 +36,7 @@ from src.core.access_control import (  # noqa: E402
     update_acl_subject,
 )
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
+from src.core.inbox_service import inbox_service  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
 from src.core.mcp_registry import (  # noqa: E402
     LMSTUDIO_MCP_PATH,
@@ -2599,6 +2600,7 @@ class WebApp:
             "openclaw_tier_state": tier_state,
             "telegram_userbot": telegram_userbot_state,
             "scheduler_enabled": bool(getattr(config, "SCHEDULER_ENABLED", False)),
+            "inbox_summary": inbox_service.get_summary(),
             "voice_gateway_configured": bool(
                 str(os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090") or "").strip()
             ),
@@ -3736,6 +3738,7 @@ class WebApp:
                 "openclaw_auth_state": runtime.get("openclaw_auth_state"),
                 "last_runtime_route": runtime.get("last_runtime_route"),
                 "scheduler_enabled": runtime.get("scheduler_enabled"),
+                "inbox_summary": runtime.get("inbox_summary"),
                 "voice_gateway_configured": runtime.get("voice_gateway_configured"),
             }
 
@@ -3798,6 +3801,49 @@ class WebApp:
                     "audio_warmup_enabled": _env_on("PERCEPTOR_AUDIO_WARMUP", "0"),
                     "recommendations": recommendations,
                 },
+            }
+
+        @self.app.get("/api/inbox/status")
+        async def inbox_status():
+            """Возвращает persisted summary owner-visible inbox/escalation слоя."""
+            return {
+                "ok": True,
+                "summary": inbox_service.get_summary(),
+            }
+
+        @self.app.get("/api/inbox/items")
+        async def inbox_items(
+            status: str = Query(default="open"),
+            kind: str = Query(default=""),
+            limit: int = Query(default=20),
+        ):
+            """Возвращает inbox items с простыми фильтрами для owner UI/API."""
+            return {
+                "ok": True,
+                "items": inbox_service.list_items(status=status, kind=kind, limit=limit),
+            }
+
+        @self.app.post("/api/inbox/update")
+        async def inbox_update(
+            payload: dict[str, Any] = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Позволяет owner UI подтверждать или закрывать inbox item."""
+            self._assert_write_access(x_krab_web_key, token)
+            item_id = str(payload.get("item_id") or "").strip()
+            status = str(payload.get("status") or "").strip().lower()
+            if not item_id:
+                raise HTTPException(status_code=400, detail="inbox_empty_item_id")
+            try:
+                result = inbox_service.set_item_status(item_id, status=status)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not result.get("ok"):
+                raise HTTPException(status_code=404, detail=str(result.get("error") or "inbox_item_not_found"))
+            return {
+                "ok": True,
+                "result": result,
             }
 
         @self.app.get("/api/policy")
@@ -4060,8 +4106,10 @@ class WebApp:
                     "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
                     "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
                     "last_runtime_route": runtime_lite.get("last_runtime_route"),
+                    "inbox_summary": runtime_lite.get("inbox_summary"),
                 },
                 "runtime": runtime_lite,
+                "inbox_summary": inbox_service.get_summary(),
                 "services": {
                     "openclaw": openclaw_health,
                     "voice_gateway": voice_health,

@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import src.core.proactive_watch as proactive_watch_module
+from src.core.inbox_service import InboxService
 from src.core.proactive_watch import ProactiveWatchService, ProactiveWatchSnapshot
 
 
@@ -151,3 +152,33 @@ def test_get_status_reads_legacy_state_as_fallback(tmp_path: Path) -> None:
 
     assert status["last_reason"] == "gateway_recovered"
     assert status["last_snapshot"]["primary_model"] == "openai-codex/gpt-5.4"
+
+
+@pytest.mark.asyncio
+async def test_capture_gateway_transition_syncs_inbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`gateway_down -> gateway_recovered` должен открывать и закрывать escalation item в inbox."""
+    service = ProactiveWatchService(state_path=tmp_path / "watch_state.json", alert_cooldown_sec=60)
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    snapshots = [
+        _snapshot(),
+        _snapshot(ts_utc="2026-03-12T05:05:00+00:00", gateway_ok=False),
+        _snapshot(ts_utc="2026-03-12T05:10:00+00:00", gateway_ok=True),
+    ]
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
+    monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+
+    await service.capture(manual=False, persist_memory=True, notify=False)
+    down = await service.capture(manual=False, persist_memory=True, notify=False)
+    up = await service.capture(manual=False, persist_memory=True, notify=False)
+
+    assert down["reason"] == "gateway_down"
+    assert inbox.get_summary()["open_items"] == 0
+    done_items = inbox.list_items(status="done", kind="watch_alert", limit=5)
+    assert up["reason"] == "gateway_recovered"
+    assert done_items
+    assert done_items[0]["dedupe_key"] == "watch:gateway_down"

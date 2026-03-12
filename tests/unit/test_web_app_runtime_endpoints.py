@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from src.config import config
+from src.core.inbox_service import InboxService
 from src.modules.web_app import WebApp
 
 
@@ -2800,6 +2801,59 @@ def test_userbot_acl_update_requires_web_key(monkeypatch: pytest.MonkeyPatch) ->
 
     assert resp.status_code == 403
     assert resp.json()["detail"] == "forbidden: invalid WEB_API_KEY"
+
+
+def test_inbox_status_and_items_return_persisted_summary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Inbox endpoints должны отдавать persisted summary и open items."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    inbox.upsert_reminder(
+        reminder_id="abc123",
+        chat_id="-10077",
+        text="проверить контракт",
+        due_at_iso="2026-03-12T10:00:00+00:00",
+    )
+    monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    client = _make_client()
+
+    status_resp = client.get("/api/inbox/status")
+    items_resp = client.get("/api/inbox/items")
+
+    assert status_resp.status_code == 200
+    assert items_resp.status_code == 200
+    status_payload = status_resp.json()
+    items_payload = items_resp.json()
+    assert status_payload["ok"] is True
+    assert status_payload["summary"]["open_items"] == 1
+    assert items_payload["ok"] is True
+    assert items_payload["items"][0]["kind"] == "reminder"
+
+
+def test_inbox_update_requires_web_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Write endpoint inbox должен уважать WEB_API_KEY."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    item = inbox.upsert_item(
+        dedupe_key="watch:gateway_down",
+        kind="watch_alert",
+        source="proactive-watch",
+        title="Gateway недоступен",
+        body="gateway down",
+        severity="error",
+    )["item"]
+    monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    client = _make_client()
+
+    denied = client.post("/api/inbox/update", json={"item_id": item["item_id"], "status": "acked"})
+    allowed = client.post(
+        "/api/inbox/update",
+        json={"item_id": item["item_id"], "status": "acked"},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "forbidden: invalid WEB_API_KEY"
+    assert allowed.status_code == 200
+    assert allowed.json()["result"]["item"]["status"] == "acked"
 
 
 def test_userbot_acl_update_grants_subject(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
