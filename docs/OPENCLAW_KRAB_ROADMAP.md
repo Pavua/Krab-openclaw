@@ -2,11 +2,24 @@
 
 Дата актуализации: 2026-03-12
 Ветка реализации: `codex/handoff-bundle-polish`
-Текущая ориентировочная готовность большого плана: `99%`
+Текущая ориентировочная готовность большого плана: `99.9%`
 
 ## Цель
 
 Перевести Краба на модель `GPT-5.4 first`, сделать `Telegram userbot` основным owner-каналом, оставить Telegram bot резервным контуром, убрать ложные model IDs и привязать repo/UI к реальному runtime OpenClaw без дублирования уже существующего функционала.
+
+## Cross-Project Decision
+
+- [x] Зафиксирована каноническая позиция по связке `Krab` / `Krab Ear` / `Krab Voice Gateway`:
+  - без жёсткого merge рантаймов;
+  - через versioned API/contracts;
+  - с `Krab` как control plane, `Krab Ear` как audio ingress и `Krab Voice Gateway` как voice/call plane.
+- [x] Документ решения:
+  [docs/CROSS_PROJECT_API_ARCHITECTURE_RU.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/CROSS_PROJECT_API_ARCHITECTURE_RU.md)
+- [x] Первый практический шаг контрактного слоя реализован:
+  - `Krab Voice Gateway` теперь публикует `GET /version`, `GET /capabilities`, `GET /v1/capabilities`;
+  - `Krab` публикует агрегированный `GET /api/ecosystem/capabilities`;
+  - `Krab Ear` capability truth читается через native IPC `get_capabilities`, а не через догадки UI.
 
 ## Канонический source-of-truth
 
@@ -30,6 +43,7 @@
 - [ ] Перевести userbot на общий workspace/state без отдельной амнезии (частично)
 - [ ] Зафиксировать Telegram bot как reserve transport
 - [ ] Развести права owner / full / partial / guest по командам и tool-контру
+- [x] Подключить live voice/audio ingress в userbot через local Perceptor + MLX Whisper
 
 ### Этап 3. GPT-5.4 first routing
 
@@ -118,6 +132,47 @@
   - автоматическая генерация `ATTACH_SUMMARY_RU.md`, `PABLITO_RETURN_CHECKLIST.md`, `HANDOFF_MANIFEST.json`
   - `.zip`-архив рядом с каждой новой handoff-папкой
   - в bundle подтягиваются `pre_release_smoke_latest.json`, `r20_merge_gate_latest.json` и свежие browser evidence-файлы
+- [x] Live `:8080` parallelism truth переподтверждён уже от владельца `pablito` после controlled restart:
+  - `Синхронизировать каталог` обновляет live DOM;
+  - сохранены [artifacts/ops/live_parallelism_truth_latest.json](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/live_parallelism_truth_latest.json) и [artifacts/ops/live-parallelism-block-2026-03-12.png](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/live-parallelism-block-2026-03-12.png)
+- [x] `google-gemini-cli` переподтверждён через безопасный sync-path из локального Gemini CLI store:
+  - `google-gemini-cli:default` снова имеет положительный TTL;
+  - owner UI показывает `OAuth OK`
+- [x] Runtime primary снова переведён в `openai-codex/gpt-5.4` через `gpt54-canary`, а fallback-chain перестроен на `Gemini CLI -> Google -> Qwen -> Google Lite -> Local`
+- [x] Добавлен one-click helper [Login OpenAI Codex OAuth.command](/Users/pablito/Antigravity_AGENTS/Краб/Login%20OpenAI%20Codex%20OAuth.command) для официального OpenClaw login flow и быстрой диагностики реально выданных scopes
+- [x] В runtime возвращён live `Perceptor`:
+  - web panel больше не живёт с `perceptor=None`;
+  - `userbot_bridge` транскрибирует входящие `voice/audio` вместо placeholder `(Голосовое сообщение)`;
+  - групповой trusted voice fallback работает даже без явного текстового триггера
+- [x] Truthful transcriber status теперь различает:
+  - `down`, если `Perceptor/STT` вообще не подключён;
+  - `degraded`, если local STT готов, но `Voice Gateway` или `Krab Ear` просели;
+  - `ready`, если весь voice-stack жив
+- [x] Live audio smoke подтверждён:
+  - isolated `Perceptor` успешно транскрибирует локально сгенерированный macOS audio sample;
+  - связка `KraabUserbot._transcribe_audio_message` подтверждена интеграционным smoke без Telegram-mock placeholder
+- [x] Voice runtime hardened после controlled restart на `2026-03-12`:
+  - `new start_krab.command` больше не берёт `.venv` вслепую, а детерминированно выбирает runtime-env с нужными модулями;
+  - launcher экспортирует `KRAB_PYTHON_BIN` и `KRAB_STT_PYTHON_BIN`, а live runtime подтвердил оба пути как `venv/bin/python`;
+  - `Perceptor` isolated worker сам выбирает Python, где реально установлен `mlx_whisper`, вместо немого завязывания на `sys.executable`;
+  - `KraabUserbot` сериализует обработку сообщений по `chat_id`, чтобы voice/TTS-ответы одного чата не накладывались друг на друга
+- [x] Добавлен базовый `macOS control layer`:
+  - owner/full контур получил команду `!mac ...`;
+  - доступны `status`, `clipboard get/set`, `notification`, `front/list/open app`, `open`, `Finder reveal`;
+  - live smoke на `2026-03-12` подтвердил frontmost app, список приложений, clipboard roundtrip и системное уведомление
+- [x] Добавлен второй слой `macOS control layer`:
+  - доступны `!mac reminders list/add`, `!mac notes list/add`, `!mac calendar list/events/add`;
+  - live smoke на `2026-03-12` подтвердил реальные `list/create/delete` для `Reminders`, `Notes`, `Calendar`;
+  - `list_upcoming_calendar_events` ограничен по количеству календарей, чтобы owner-команда не зависала на больших подписках Calendar
+- [x] Добавлен `proactive watch + long-term memory` слой:
+  - `src/core/proactive_watch.py` собирает owner-oriented runtime/macOS snapshot;
+  - userbot запускает background watch loop и пишет digest в общую `workspace-main-messaging/memory`;
+  - доступны owner-команды `!watch status|now` и `!memory recent [source]`
+- [x] Добавлен `voice runtime profile` слой:
+  - userbot больше не держит `!voice` как тупой toggle, а управляет профилем `enabled/speed/voice/delivery`;
+  - доступны команды `!voice on|off|toggle`, `!voice speed`, `!voice voice`, `!voice delivery`, `!voice reset`;
+  - owner web API теперь отдаёт и обновляет voice runtime через `/api/voice/runtime` и `/api/voice/runtime/update`;
+  - owner UI на `:8080` показывает отдельную карточку `Voice Runtime` c read/write controls
 
 ## Блокеры и риски
 
@@ -125,13 +180,15 @@
 - В рабочем дереве уже есть незакоммиченные изменения, часть из них не относится к этой задаче
 - `src/core/provider_manager.py` уже существует как незакоммиченный файл и требует аккуратной миграции, а не перезаписи
 - Для полного подтверждения migration всё ещё нужен внешний live E2E owner message через `Telegram userbot` после controlled restart
-- Для полного подтверждения reserve-контура всё ещё нужен полный round-trip owner -> reserve bot -> reply; пока подтверждена только живая post-restart delivery из runtime в Telegram
-- В smoke остаётся residual warning `krab-output-sanitizer loaded without install/load-path provenance`; это не runtime-blocker, но хвост доверенной provenance
-- `google-gemini-cli` сейчас хрупкий как fallback: `openclaw models status` показывает `expires in 0m`, а gateway-log фиксировал refresh failure 2026-03-11
-- Live `:8080` для нового блока параллелизма пока не переподтверждён после restart из-под `USER2`:
-  старый `src.main` принадлежит `pablito`, пережил попытку controlled restart и не дал заменить процесс без доступа владельца
-- Для закрытия этого хвоста добавлен helper:
-  [Verify Live Parallelism On Pablito.command](/Users/pablito/Antigravity_AGENTS/Краб/Verify%20Live%20Parallelism%20On%20Pablito.command)
+- Полный `owner -> reserve bot -> reply` уже автоматизирован и подтверждён live E2E отдельным скриптом, но reserve-контур по-прежнему intentionally остаётся менее привилегированным, чем Python userbot
+- Residual warning `krab-output-sanitizer loaded without install/load-path provenance` закрыт через managed path-install provenance record в runtime-конфиге
+- `openai-codex` сейчас упирается во внешний OAuth scope-blocker:
+  - `openclaw models status` показывает профиль `ok expires in 10d`, но live gateway-log фиксирует `HTTP 401: Missing scopes: model.request`
+  - расшифровка access token показывает только `openid/profile/email/offline_access`
+  - официальный `openclaw models auth login --provider openai-codex --set-default` в этой среде открывает flow с теми же базовыми scopes
+  - пока этот scope не появится upstream-способом, runtime как `GPT-5.4 first` остаётся конфигурационно выставленным, но фактически фейловерит в `google-gemini-cli`
+- Evidence по этому blocker-у:
+  [artifacts/ops/openai_codex_scope_check_latest.json](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/openai_codex_scope_check_latest.json)
 
 ## Проверка
 
@@ -157,11 +214,21 @@
 - [x] Live smoke: `live_channel_smoke.py` проходит штатным запуском (`success_rate = 100%`)
 - [x] Live restart: patched launcher поднимает runtime после controlled stop без зависания на `gateway stop`
 - [x] Unit: owner diagnostic questions (`полная диагностика`, `cron`) идут в truthful fast-path без LLM
+- [x] Live browser acceptance: тот же блок параллелизма переподтверждён на основном `:8080` после restart уже от владельца `pablito`
+- [x] Live auth repair: `google-gemini-cli` снова показывает положительный TTL в CLI и owner UI
+- [x] Live routing truth: `openai-codex/gpt-5.4` снова выставлен primary в CLI/API/UI, а scope-blocker отдельно зафиксирован evidence-файлом
+- [x] Live voice/STT smoke: local `Perceptor` и userbot audio-ingress подтверждены после controlled restart
+- [x] Live voice stack: `transcriber/status=ready`, когда одновременно живы `Perceptor`, `Krab Ear` и `Voice Gateway`
+- [x] Live macOS automation smoke: `status`, `Reminders`, `Notes`, `Calendar` подтверждены после controlled restart и cleanup smoke-артефактов
+- [x] Live proactive watch smoke: после controlled restart baseline дождался route warmup, сохранил `route_model_changed` в `data/proactive_watch/state.json` и записал digest в общую workspace-memory
+- [x] Live voice runtime smoke: после controlled restart `/api/transcriber/status` и `/api/voice/runtime` показывают truthful voice-profile (`enabled=false`, `delivery=text+voice`, `speed=1.5`, `voice=ru-RU-DmitryNeural`), а write-endpoint `/api/voice/runtime/update` проходит на живом `:8080`
+- [x] Live owner UI smoke: карточка `Voice Runtime` в `OpenClaw Control Center` загружает профиль через `Обновить Voice Runtime` и сохраняет его через `Сохранить Voice Runtime` без расхождения с runtime
+- [x] Live runtime provenance smoke: `live_channel_smoke.py` больше не ловит warning `loaded without install/load-path provenance` после managed install-record repair
+- [x] Live reserve Telegram E2E: `owner -> reserve bot -> reply` автоматизирован через `scripts/live_reserve_telegram_roundtrip.py` и one-click launcher
 - [ ] Integration: общий workspace/state для userbot и reserve bot
 - [ ] E2E: owner message через userbot после restart
-- [ ] E2E: emergency запрос через Telegram Bot в reserve-safe режиме (delivery post-restart подтверждена, полный inbound round-trip ещё не автоматизирован)
+- [x] E2E: emergency запрос через Telegram Bot в reserve-safe режиме
 - [x] E2E: совместимость `GPT-5.4` в OpenClaw
-- [ ] Live browser acceptance: тот же блок параллелизма должен быть переподтверждён на основном `:8080` после restart уже от владельца `pablito`
 
 ## Merge gate
 
