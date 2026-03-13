@@ -234,3 +234,30 @@ def test_message_sending_external_guard_rewrites_runtime_self_check_block() -> N
         result["content"]
         == "Связь в этом канале есть. Reserve Telegram Bot не подтверждает полный runtime self-check; основной owner-канал живёт в Python userbot."
     )
+
+
+def test_message_sending_external_guard_strips_plaintext_reasoning_prefix() -> None:
+    result = _run_plugin_hook(
+        "message_sending",
+        {
+            "to": "@example_user",
+            "content": (
+                "think\n"
+                "Thinking Process:\n\n"
+                "1. Analyze the User's Request\n"
+                "2. Use external channel rules\n"
+                "3. Draft the response\n"
+                "В этом диалоге отвечает reserve Telegram Bot; основной owner-канал — Python userbot."
+            ),
+        },
+        {
+            "channelId": "telegram",
+            "sessionKey": "agent:main:telegram:direct:@example_user",
+        },
+    )
+
+    assert result is not None
+    assert (
+        result["content"]
+        == "В этом диалоге отвечает reserve Telegram Bot; основной owner-канал — Python userbot."
+    )

@@ -20,6 +20,7 @@ const THINK_BLOCK_RE = /<think>[\s\S]*?<\/think>/gi;
 const THINK_TAG_RE = /<\/?think>/gi;
 const FINAL_BLOCK_RE = /<final>([\s\S]*?)<\/final>/gi;
 const FINAL_TAG_RE = /<\/?final>/gi;
+const PLAINTEXT_REASONING_PREFIX_RE = /^\s*think\s*\n\s*thinking process:\s*[\s\S]*?(?=(?:в этом диалоге отвечает reserve telegram bot|связь в этом канале есть|маршрут ответа в этом канале нужно))/i;
 const BARE_TOKEN_LINE_RE = /^\s*<\|.*\|>\s*$/;
 const TOOL_PACKET_LINE_RE = /^\s*\{.*\}\s*(?:not found)?\s*$/i;
 const ESCAPED_NEWLINES_LINE_RE = /^\s*(?:\\n)+\s*$/;
@@ -292,7 +293,11 @@ function normalizeAssistantEnvelope(raw) {
     .replace(THINK_BLOCK_RE, "")
     .replace(FINAL_BLOCK_RE, "$1")
     .replace(THINK_TAG_RE, "")
-    .replace(FINAL_TAG_RE, "");
+    .replace(FINAL_TAG_RE, "")
+    // OpenClaw/OpenRouter-подобные контуры иногда присылают reasoning не в XML-тегах,
+    // а как plain-text пролог `think\nThinking Process:` перед нормальным ответом.
+    // Для внешних каналов такой пролог считается служебным мусором и не должен уйти пользователю.
+    .replace(PLAINTEXT_REASONING_PREFIX_RE, "");
 }
 
 function normalizeGuardedWhitespace(text) {
