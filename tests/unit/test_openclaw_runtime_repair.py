@@ -35,6 +35,7 @@ from scripts.openclaw_runtime_repair import (
     repair_hooks_config,
     repair_sessions,
     resolve_telegram_bot_token,
+    sync_plugin_allowlist,
     sync_managed_output_sanitizer_plugin,
     sync_auth_profiles_json,
     sync_models_json,
@@ -89,6 +90,34 @@ def test_sync_telegram_channel_token_writes_native_runtime_token(monkeypatch, tm
     assert report["changed"] is True
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["telegram"]["botToken"] == "123:abc"
+
+
+def test_sync_plugin_allowlist_includes_managed_and_enabled_plugins(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "entries": {
+                        "krab-output-sanitizer": {"enabled": True},
+                        "google-gemini-cli-auth": {"enabled": True},
+                        "disabled-plugin": {"enabled": False},
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = sync_plugin_allowlist(openclaw_path)
+
+    assert report["changed"] is True
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["plugins"]["allow"] == [
+        "krab-output-sanitizer",
+        "google-gemini-cli-auth",
+    ]
 
 
 def test_sync_openclaw_json_updates_lmstudio_token_when_present(tmp_path: Path) -> None:
@@ -605,6 +634,11 @@ def test_should_restart_gateway_when_bootstrap_or_group_policy_changed() -> None
 def test_should_restart_gateway_when_telegram_token_synced() -> None:
     steps = {
         "sync_telegram_channel_token": {"changed": True},
+    }
+    assert should_restart_gateway(steps) is True
+
+    steps = {
+        "sync_plugin_allowlist": {"changed": True},
     }
     assert should_restart_gateway(steps) is True
 

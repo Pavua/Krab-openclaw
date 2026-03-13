@@ -319,6 +319,63 @@ def sync_managed_output_sanitizer_plugin(
     }
 
 
+def sync_plugin_allowlist(openclaw_path: Path) -> dict[str, Any]:
+    """
+    Фиксирует явный allowlist доверенных plugin ids в runtime-конфиге.
+
+    Почему это нужно:
+    - без `plugins.allow` native security audit считает любые extensions
+      потенциально автозагружаемыми и поднимает critical finding;
+    - в нашем контуре есть repo-managed `krab-output-sanitizer` и enabled auth
+      plugins, которые нужно разрешить явно, а не неявным discover-механизмом;
+    - allowlist должен быть воспроизводимым после restart на любой учётке.
+    """
+    payload = _read_json(openclaw_path)
+    plugins = payload.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        plugins = {}
+        payload["plugins"] = plugins
+
+    entries = plugins.get("entries")
+    enabled_entry_ids: list[str] = []
+    if isinstance(entries, dict):
+        for plugin_id, entry_payload in entries.items():
+            normalized_id = str(plugin_id or "").strip()
+            if not normalized_id:
+                continue
+            if isinstance(entry_payload, dict) and entry_payload.get("enabled") is True:
+                enabled_entry_ids.append(normalized_id)
+
+    current_allow = plugins.get("allow")
+    current_allow_list = (
+        [str(item).strip() for item in current_allow if str(item).strip()]
+        if isinstance(current_allow, list)
+        else []
+    )
+    desired_allow = list(
+        dict.fromkeys(
+            current_allow_list
+            + [MANAGED_OUTPUT_SANITIZER_PLUGIN_ID]
+            + enabled_entry_ids
+        )
+    )
+
+    if desired_allow == current_allow_list and isinstance(current_allow, list):
+        return {
+            "path": str(openclaw_path),
+            "changed": False,
+            "allow": desired_allow,
+        }
+
+    plugins["allow"] = desired_allow
+    _write_json(openclaw_path, payload)
+    return {
+        "path": str(openclaw_path),
+        "changed": True,
+        "allow": desired_allow,
+    }
+
+
 def repair_output_sanitizer_plugin_config(openclaw_path: Path) -> dict[str, Any]:
     """
     Нормализует runtime-конфиг outbound-плагина для внешних каналов.
@@ -2006,6 +2063,7 @@ def should_restart_gateway(report_steps: dict[str, Any]) -> bool:
         "sync_models_json",
         "sync_openclaw_json",
         "sync_auth_profiles_json",
+        "sync_plugin_allowlist",
         "repair_output_sanitizer_plugin_config",
         "sync_telegram_channel_token",
         "bootstrap_missing_channels",
@@ -2859,6 +2917,7 @@ def main() -> int:
         target_key,
         lmstudio_token,
     )
+    report["steps"]["sync_plugin_allowlist"] = sync_plugin_allowlist(openclaw_path)
     report["steps"]["sync_telegram_channel_token"] = sync_telegram_channel_token(openclaw_path)
     report["steps"]["sync_managed_output_sanitizer_plugin"] = sync_managed_output_sanitizer_plugin(
         openclaw_root=openclaw_root,
