@@ -35,6 +35,10 @@ from src.core.access_control import (  # noqa: E402
     load_acl_runtime_state,
     update_acl_subject,
 )
+from src.core.capability_registry import (  # noqa: E402
+    build_capability_registry,
+    build_policy_matrix,
+)
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.inbox_service import inbox_service  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
@@ -60,6 +64,7 @@ from src.core.observability import (  # noqa: E402
     metrics,
     timeline,
 )
+from src.core.operator_identity import current_account_id, current_operator_id  # noqa: E402
 
 logger = structlog.get_logger("WebApp")
 
@@ -244,6 +249,17 @@ class WebApp:
             raise ValueError("runtime_invalid_context_tokens") from exc
         if value < 4096 or value > 2_000_000:
             raise ValueError("runtime_invalid_context_tokens")
+        return value
+
+    @staticmethod
+    def _normalize_runtime_max_concurrent(raw_value: Any) -> int:
+        """Нормализует queue concurrency для main/subagent без опасных значений."""
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("runtime_invalid_max_concurrent") from exc
+        if value < 1 or value > 64:
+            raise ValueError("runtime_invalid_max_concurrent")
         return value
 
     @classmethod
@@ -443,6 +459,8 @@ class WebApp:
         normalized = str(provider_name or "").strip().lower()
         mapping = {
             "google-gemini-cli": cls._project_root() / "Login Gemini CLI OAuth.command",
+            "google-antigravity": cls._project_root() / "Login Google Antigravity OAuth.command",
+            "openai-codex": cls._project_root() / "Login OpenAI Codex OAuth.command",
             "qwen-portal": cls._project_root() / "Login Qwen Portal OAuth.command",
         }
         return mapping.get(normalized)
@@ -480,25 +498,37 @@ class WebApp:
             base.update(
                 {
                     "recommended": False,
-                    "repair_available": bool(cls._provider_repair_helper_path("google-gemini-cli") and cls._provider_repair_helper_path("google-gemini-cli").exists()),
-                    "repair_label": "Перейти на Gemini CLI",
-                    "repair_action": "migrate_to_gemini_cli",
-                    "repair_detail": "Legacy provider. Вместо него используй официальный Gemini CLI OAuth flow.",
+                    "repair_available": bool(helper_path and helper_path.exists()),
+                    "repair_label": "Перелогинить Antigravity",
+                    "repair_action": "repair_oauth",
+                    "repair_detail": (
+                        "Legacy OAuth-провайдер. Откроет официальный OpenClaw helper "
+                        "для Google Antigravity и обновит auth-профиль без ручного CLI."
+                    ),
                 }
             )
         elif normalized == "openai":
             base.update(
                 {
-                    "manual_only": True,
+                    # Runtime уже умеет использовать `openai/gpt-4o-mini`
+                    # как controlled fallback; UI не должен врать, что это
+                    # строго manual-only путь.
+                    "manual_only": False,
                     "repair_label": "",
                     "repair_action": "",
-                    "repair_detail": "API key модели доступны только для ручного выбора и не должны включаться автоматически.",
+                    "repair_detail": "API key модели доступны для ручного выбора и controlled fallback-цепочки.",
                 }
             )
         elif normalized == "openai-codex":
             base.update(
                 {
-                    "repair_detail": "OAuth-модели видимы, но promotion зависит от разрешённых scopes в самом OpenAI Codex OAuth контуре.",
+                    "repair_available": bool(helper_path and helper_path.exists()),
+                    "repair_label": "Перелогинить OpenAI Codex",
+                    "repair_action": "repair_oauth",
+                    "repair_detail": (
+                        "Откроет официальный OpenClaw OAuth helper для OpenAI Codex "
+                        "и сразу покажет реально выданные scopes."
+                    ),
                 }
             )
         return base
@@ -825,34 +855,56 @@ class WebApp:
 
         disabled_profiles: list[dict[str, str]] = []
         expired_profiles: list[dict[str, str]] = []
+        healthy_profiles: list[str] = []
         failure_counts: dict[str, int] = {}
         cooldown_active = False
         now_ms = time.time() * 1000.0
+        healthy_oauth_remaining_ms: int | None = None
         for profile_name in profile_names:
             profile_payload = profiles.get(profile_name)
             usage = usage_stats.get(profile_name)
+            expired = False
+            expires_at = 0.0
             if isinstance(profile_payload, dict):
                 try:
                     expires_at = float(profile_payload.get("expires", 0) or 0)
                 except (TypeError, ValueError):
                     expires_at = 0.0
                 if expires_at > 0 and expires_at <= now_ms:
+                    expired = True
                     expired_profiles.append({"profile": profile_name, "reason": "expired"})
+            disabled_reason = ""
+            try:
+                cooldown_until = float(usage.get("cooldownUntil", 0) or 0) if isinstance(usage, dict) else 0.0
+            except (TypeError, ValueError):
+                cooldown_until = 0.0
             if not isinstance(usage, dict):
+                if not expired:
+                    healthy_profiles.append(profile_name)
+                    if expires_at > now_ms:
+                        remaining_ms = int(expires_at - now_ms)
+                        healthy_oauth_remaining_ms = remaining_ms if healthy_oauth_remaining_ms is None else max(
+                            healthy_oauth_remaining_ms,
+                            remaining_ms,
+                        )
                 continue
             disabled_reason = str(usage.get("disabledReason", "") or "").strip()
             if disabled_reason:
                 disabled_profiles.append({"profile": profile_name, "reason": disabled_reason})
-            try:
-                cooldown_until = float(usage.get("cooldownUntil", 0) or 0)
-            except (TypeError, ValueError):
-                cooldown_until = 0.0
-            if cooldown_until > now_ms:
+            if cooldown_until > now_ms and not disabled_reason and not expired:
                 cooldown_active = True
             failures = usage.get("failureCounts")
             if isinstance(failures, dict):
                 for failure_key, failure_value in failures.items():
                     failure_counts[str(failure_key)] = failure_counts.get(str(failure_key), 0) + int(failure_value or 0)
+            if not disabled_reason and not expired:
+                healthy_profiles.append(profile_name)
+                if expires_at > now_ms:
+                    remaining_ms = int(expires_at - now_ms)
+                    healthy_oauth_remaining_ms = remaining_ms if healthy_oauth_remaining_ms is None else max(
+                        healthy_oauth_remaining_ms,
+                        remaining_ms,
+                    )
 
         auth_mode = str(provider_payload.get("auth", "") or "").strip().lower()
         api_key_configured = bool(str(provider_payload.get("apiKey", "") or "").strip())
@@ -873,6 +925,14 @@ class WebApp:
         oauth_expected = auth_mode == "oauth"
         quota_truth = cls._quota_state_from_failure_counts(failure_counts)
 
+        if oauth_expected and healthy_profiles:
+            if not isinstance(oauth_remaining_ms, int) and healthy_oauth_remaining_ms is not None:
+                oauth_remaining_ms = healthy_oauth_remaining_ms
+            if str(oauth_status or "") in {"", "missing", "expired"}:
+                oauth_status = "ok"
+            if not oauth_remaining_human and isinstance(oauth_remaining_ms, int):
+                oauth_remaining_human = cls._humanize_remaining_ms(oauth_remaining_ms)
+
         readiness = "ready"
         readiness_label = "Configured"
         detail = "Провайдер готов к выбору."
@@ -881,23 +941,32 @@ class WebApp:
             readiness = "blocked"
             readiness_label = "Scope fail"
             detail = "Runtime фиксирует `Missing scopes: model.request`; OAuth-модели видны, но как primary сейчас неработоспособны."
-        elif disabled_profiles:
+        elif not healthy_profiles and disabled_profiles:
             readiness = "blocked"
             readiness_label = "Disabled"
             detail = f"Профиль отключён: {disabled_profiles[0]['reason']}"
-        elif oauth_expected and oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 0:
-            readiness = "attention"
-            readiness_label = "Re-auth soon"
-            detail = "OpenClaw ещё считает OAuth рабочим, но TTL уже на нуле или ниже; лучше сделать повторный логин до следующего флапа."
-        elif oauth_expected and oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 15 * 60 * 1000:
-            readiness = "attention"
-            readiness_label = "Expiring"
-            detail = "OAuth-профиль живой, но подходит к истечению и может скоро потребовать re-auth."
+        elif auth_mode == "oauth" and healthy_profiles:
+            if oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 0:
+                readiness = "attention"
+                readiness_label = "Re-auth soon"
+                detail = "OpenClaw ещё считает OAuth рабочим, но TTL уже на нуле или ниже; лучше сделать повторный логин до следующего флапа."
+            elif oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 15 * 60 * 1000:
+                readiness = "attention"
+                readiness_label = "Expiring"
+                detail = "OAuth-профиль живой, но подходит к истечению и может скоро потребовать re-auth."
+            elif cooldown_active:
+                readiness = "attention"
+                readiness_label = "Cooldown"
+                detail = "Провайдер в cooldown после недавних ошибок; выбор возможен, но route нестабилен."
+            else:
+                readiness = "ready"
+                readiness_label = "OAuth OK"
+                detail = "OAuth-профиль найден и выглядит рабочим."
         elif oauth_expected and oauth_status in {"expired", "missing"}:
             readiness = "blocked"
             readiness_label = "Expired"
             detail = "Сам OpenClaw считает OAuth-профиль истёкшим или отсутствующим."
-        elif oauth_expected and expired_profiles:
+        elif not healthy_profiles and oauth_expected and expired_profiles:
             readiness = "blocked"
             readiness_label = "Expired"
             detail = "OAuth-профиль истёк и требует повторного логина."
@@ -905,14 +974,6 @@ class WebApp:
             readiness = "attention"
             readiness_label = "Cooldown"
             detail = "Провайдер в cooldown после недавних ошибок; выбор возможен, но route нестабилен."
-        elif legacy:
-            readiness = "attention"
-            readiness_label = "Legacy"
-            detail = "Legacy OAuth-провайдер. Показываем для совместимости, но не рекомендуем для нового primary."
-        elif auth_mode == "oauth" and profile_names:
-            readiness = "ready"
-            readiness_label = "OAuth OK"
-            detail = "OAuth-профиль найден и выглядит рабочим."
         elif auth_mode == "oauth":
             readiness = "attention"
             readiness_label = "OAuth missing"
@@ -934,11 +995,18 @@ class WebApp:
             readiness_label = "Unavailable"
             detail = "Runtime-провайдер пока не описан."
 
+        if legacy and healthy_profiles and readiness != "blocked":
+            if readiness == "ready":
+                detail = "Legacy OAuth-провайдер подключён вручную и сейчас рабочий; держим его как дополнительный fallback, а не как единственный production primary."
+            else:
+                detail = f"Legacy OAuth-провайдер подключён вручную; {detail[0].lower() + detail[1:]}" if detail else "Legacy OAuth-провайдер подключён вручную."
+
         return {
             "provider": normalized_provider,
             "configured": bool(runtime_model_ids or profile_names),
             "runtime_models": runtime_model_ids,
             "profiles": profile_names,
+            "healthy_profiles": healthy_profiles,
             "disabled_profiles": disabled_profiles,
             "expired_profiles": expired_profiles,
             "failure_counts": failure_counts,
@@ -1037,6 +1105,7 @@ class WebApp:
         не только показывать `primary/fallbacks`, но и править:
         - глобальное context window;
         - thinkingDefault;
+        - queue concurrency для main/subagent;
         - per-model thinking для активной цепочки.
         """
         runtime_config = cls._load_openclaw_runtime_config()
@@ -1065,6 +1134,25 @@ class WebApp:
             context_tokens = int(defaults.get("contextTokens", 128000) or 128000)
         except (TypeError, ValueError):
             context_tokens = 128000
+        try:
+            main_max_concurrent = cls._normalize_runtime_max_concurrent(defaults.get("maxConcurrent", 4) or 4)
+        except ValueError:
+            main_max_concurrent = 4
+        subagents = defaults.get("subagents") if isinstance(defaults, dict) else {}
+        if not isinstance(subagents, dict):
+            subagents = {}
+        try:
+            subagent_max_concurrent = cls._normalize_runtime_max_concurrent(
+                subagents.get("maxConcurrent", 8) or 8
+            )
+        except ValueError:
+            subagent_max_concurrent = 8
+
+        execution_preset = "custom"
+        if main_max_concurrent == 1 and subagent_max_concurrent == 1:
+            execution_preset = "sequential"
+        elif main_max_concurrent == 4 and subagent_max_concurrent == 8:
+            execution_preset = "parallel"
 
         chain_items: list[dict[str, Any]] = []
         for index, model_id in enumerate([primary, *fallbacks]):
@@ -1096,9 +1184,38 @@ class WebApp:
             "fallbacks": fallbacks,
             "context_tokens": context_tokens,
             "thinking_default": thinking_default,
+            "main_max_concurrent": main_max_concurrent,
+            "subagent_max_concurrent": subagent_max_concurrent,
+            "execution_preset": execution_preset,
+            "execution_presets": [
+                {
+                    "id": "sequential",
+                    "label": "Sequential",
+                    "main_max_concurrent": 1,
+                    "subagent_max_concurrent": 1,
+                    "description": "Строго последовательно: один запрос main и один subagent одновременно.",
+                },
+                {
+                    "id": "parallel",
+                    "label": "Parallel",
+                    "main_max_concurrent": 4,
+                    "subagent_max_concurrent": 8,
+                    "description": "Безопасный параллельный профиль проекта: main 4, subagent 8.",
+                },
+                {
+                    "id": "custom",
+                    "label": "Custom",
+                    "main_max_concurrent": main_max_concurrent,
+                    "subagent_max_concurrent": subagent_max_concurrent,
+                    "description": "Ручная настройка queue caps под конкретный сценарий.",
+                },
+            ],
             "thinking_modes": ["off", "auto", "low", "medium", "high"],
             "chain_items": chain_items,
-            "max_fallback_slots": max(5, len(fallbacks)),
+            # Держим минимум 8 слотов, потому что текущий production-профиль проекта
+            # уже использует длинную fallback-цепочку и UI должен позволять быстро
+            # добавлять/менять запасные модели без ручного JSON-редактирования.
+            "max_fallback_slots": max(8, len(fallbacks)),
         }
 
     @classmethod
@@ -1109,6 +1226,9 @@ class WebApp:
         fallbacks_raw: list[Any],
         context_tokens_raw: Any,
         thinking_default_raw: Any,
+        execution_preset_raw: Any = "",
+        main_max_concurrent_raw: Any = None,
+        subagent_max_concurrent_raw: Any = None,
         slot_thinking_raw: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
@@ -1142,9 +1262,6 @@ class WebApp:
             seen.add(model_id)
             fallbacks.append(model_id)
 
-        context_tokens = cls._normalize_context_tokens(context_tokens_raw)
-        thinking_default = cls._normalize_thinking_mode(thinking_default_raw)
-
         normalized_slot_thinking: dict[str, str] = {}
         raw_slot_thinking = slot_thinking_raw if isinstance(slot_thinking_raw, dict) else {}
         for model_id, raw_thinking in raw_slot_thinking.items():
@@ -1173,6 +1290,38 @@ class WebApp:
         if not isinstance(defaults, dict):
             defaults = {}
             agents["defaults"] = defaults
+        subagents = defaults.setdefault("subagents", {})
+        if not isinstance(subagents, dict):
+            subagents = {}
+            defaults["subagents"] = subagents
+
+        context_tokens = cls._normalize_context_tokens(
+            context_tokens_raw if context_tokens_raw is not None else defaults.get("contextTokens", 128000)
+        )
+        thinking_default = cls._normalize_thinking_mode(
+            thinking_default_raw if thinking_default_raw not in {None, ""} else defaults.get("thinkingDefault", "off")
+        )
+
+        execution_preset = str(execution_preset_raw or "").strip().lower()
+        if execution_preset == "sequential":
+            main_max_concurrent = 1
+            subagent_max_concurrent = 1
+        elif execution_preset == "parallel":
+            main_max_concurrent = 4
+            subagent_max_concurrent = 8
+        else:
+            main_max_concurrent = cls._normalize_runtime_max_concurrent(
+                main_max_concurrent_raw if main_max_concurrent_raw is not None else defaults.get("maxConcurrent", 4)
+            )
+            subagent_max_concurrent = cls._normalize_runtime_max_concurrent(
+                subagent_max_concurrent_raw if subagent_max_concurrent_raw is not None else subagents.get("maxConcurrent", 8)
+            )
+            if main_max_concurrent == 1 and subagent_max_concurrent == 1:
+                execution_preset = "sequential"
+            elif main_max_concurrent == 4 and subagent_max_concurrent == 8:
+                execution_preset = "parallel"
+            else:
+                execution_preset = "custom"
 
         model_cfg = defaults.setdefault("model", {})
         if not isinstance(model_cfg, dict):
@@ -1205,11 +1354,17 @@ class WebApp:
         if prev_thinking_default != thinking_default:
             defaults["thinkingDefault"] = thinking_default
             changed["agents.defaults.thinkingDefault"] = {"from": prev_thinking_default, "to": thinking_default}
-
-        subagents = defaults.setdefault("subagents", {})
-        if not isinstance(subagents, dict):
-            subagents = {}
-            defaults["subagents"] = subagents
+        prev_main_max_concurrent = defaults.get("maxConcurrent")
+        if prev_main_max_concurrent != main_max_concurrent:
+            defaults["maxConcurrent"] = main_max_concurrent
+            changed["agents.defaults.maxConcurrent"] = {"from": prev_main_max_concurrent, "to": main_max_concurrent}
+        prev_subagent_max_concurrent = subagents.get("maxConcurrent")
+        if prev_subagent_max_concurrent != subagent_max_concurrent:
+            subagents["maxConcurrent"] = subagent_max_concurrent
+            changed["agents.defaults.subagents.maxConcurrent"] = {
+                "from": prev_subagent_max_concurrent,
+                "to": subagent_max_concurrent,
+            }
         prev_sub_model = str(subagents.get("model") or "")
         if prev_sub_model != primary:
             subagents["model"] = primary
@@ -1261,6 +1416,9 @@ class WebApp:
             "fallbacks": fallbacks,
             "context_tokens": context_tokens,
             "thinking_default": thinking_default,
+            "execution_preset": execution_preset,
+            "main_max_concurrent": main_max_concurrent,
+            "subagent_max_concurrent": subagent_max_concurrent,
             "slot_thinking": {
                 model_id: normalized_slot_thinking.get(model_id, thinking_default)
                 for model_id in [primary, *fallbacks]
@@ -1342,6 +1500,14 @@ class WebApp:
                     current_slots=current_slots,
                 )
             )
+            if cls._provider_is_catalog_only_stub(
+                provider_payload=provider_payload,
+                provider_state=provider_state,
+                configured_model_ids=configured_model_ids,
+            ):
+                # Не рисуем фантомные карточки только потому, что в runtime остался
+                # пустой stub провайдера без auth и без реально доступных моделей.
+                continue
             full_catalog_models = full_catalog_providers.get(normalized_provider) if isinstance(full_catalog_providers, dict) else []
             if isinstance(full_catalog_models, list):
                 for model in full_catalog_models:
@@ -1511,6 +1677,43 @@ class WebApp:
         )
 
     @classmethod
+    def _provider_is_catalog_only_stub(
+        cls,
+        provider_payload: dict[str, Any] | None,
+        provider_state: dict[str, Any] | None,
+        configured_model_ids: set[str] | None = None,
+    ) -> bool:
+        """
+        Отсекает фантомный provider stub без runtime-поддержки.
+
+        Зачем это нужно:
+        - OpenClaw может хранить пустой provider entry в models.json;
+        - общий provider catalog при этом всё равно знает десятки моделей провайдера;
+        - без фильтра owner UI показывает красивую, но ложную карточку "доступного"
+          провайдера, хотя runtime даже не умеет его поднять.
+        """
+        payload = provider_payload if isinstance(provider_payload, dict) else {}
+        state = provider_state if isinstance(provider_state, dict) else {}
+        runtime_models = payload.get("models") if isinstance(payload.get("models"), list) else []
+        profiles = state.get("profiles") if isinstance(state.get("profiles"), list) else []
+        auth_mode = str(state.get("auth_mode") or "").strip().lower()
+        effective_kind = str(state.get("effective_kind") or "").strip()
+        detail = str(state.get("detail") or "").strip()
+        readiness_label = str(state.get("readiness_label") or "").strip()
+
+        if runtime_models:
+            return False
+        if configured_model_ids:
+            return False
+        if profiles:
+            return False
+        if auth_mode not in {"", "unknown"}:
+            return False
+        if effective_kind:
+            return False
+        return readiness_label == "Unavailable" and detail == "Runtime-провайдер пока не описан."
+
+    @classmethod
     def _build_runtime_quick_presets(
         cls,
         *,
@@ -1678,8 +1881,10 @@ class WebApp:
             or google_gemini_cli["expired_profiles"]
             or google_gemini_cli["cooldown_active"]
         )
-        antigravity_disabled = bool(google_antigravity["disabled_profiles"])
-        antigravity_legacy_present = bool(google_antigravity["configured"])
+        antigravity_healthy = bool(google_antigravity.get("healthy_profiles"))
+        antigravity_disabled = bool(google_antigravity["disabled_profiles"]) and not antigravity_healthy
+        antigravity_runtime_available = bool(google_antigravity["runtime_models"] or antigravity_healthy)
+        antigravity_legacy_removed = not antigravity_runtime_available
 
         warnings: list[str] = []
         if current_primary_broken:
@@ -1693,12 +1898,16 @@ class WebApp:
             )
         if not target_in_runtime:
             warnings.append("GPT-5.4 пока не описан в runtime models.json OpenClaw и не готов к promotion.")
-        if antigravity_legacy_present:
+        if antigravity_legacy_removed:
             warnings.append(
                 "Legacy provider google-antigravity уже удалён в OpenClaw 2026.3.8+ и не должен использоваться как fallback; миграция идёт через google-gemini-cli или google/* API key."
             )
         elif antigravity_disabled:
             warnings.append("Google Antigravity сейчас disabled в auth-profiles и не должен считаться надёжным fallback.")
+        elif bool(google_antigravity.get("legacy")) and antigravity_healthy:
+            warnings.append(
+                "Google Antigravity подключён вручную через plugin и может использоваться как дополнительный fallback, но не как единственный production primary."
+            )
 
         temporary_primary = current_primary
         if current_primary_broken:
@@ -1708,7 +1917,7 @@ class WebApp:
                     for candidate in current_fallbacks
                     if not (
                         candidate.startswith("google-antigravity/")
-                        and (antigravity_disabled or antigravity_legacy_present)
+                        and (antigravity_disabled or antigravity_legacy_removed)
                     )
                     and not (
                         candidate.startswith("google-gemini-cli/")
@@ -1728,10 +1937,140 @@ class WebApp:
             "openai_codex": openai_codex,
             "google_gemini_cli": google_gemini_cli,
             "google_antigravity": google_antigravity,
-            "google_antigravity_legacy_removed": antigravity_legacy_present,
+            "google_antigravity_legacy_removed": antigravity_legacy_removed,
             "warnings": warnings,
             "workspace": str(defaults.get("workspace", "") or ""),
         }
+
+    @classmethod
+    def _overlay_live_route_on_openclaw_model_routing_status(
+        cls,
+        *,
+        routing: dict[str, Any],
+        last_runtime_route: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Накладывает живую truth последнего runtime-route поверх исторической диагностики."""
+        if not isinstance(routing, dict):
+            routing = {}
+        route_payload = dict(last_runtime_route or {})
+        route_model = str(route_payload.get("model", "") or "").strip()
+        route_provider = str(route_payload.get("provider", "") or "").strip()
+        route_reason = str(route_payload.get("route_reason", "") or "").strip()
+        route_detail = str(route_payload.get("route_detail", "") or "").strip()
+        route_status = str(route_payload.get("status", "") or "").strip().lower()
+        current_primary = str(routing.get("current_primary", "") or "").strip()
+        live_primary_verified = bool(
+            route_status == "ok"
+            and route_model
+            and route_model == current_primary
+        )
+        live_fallback_active = bool(
+            route_status == "ok"
+            and route_model
+            and current_primary
+            and route_model != current_primary
+            and "fallback" in route_detail.lower()
+        )
+        if route_status == "ok" and route_model:
+            routing["live_active_model"] = route_model
+            routing["live_active_provider"] = route_provider
+            routing["live_active_route_reason"] = route_reason
+            routing["live_active_route_detail"] = route_detail
+        if live_primary_verified:
+            routing["current_primary_broken"] = False
+            routing["temporary_primary_recommendation"] = current_primary
+            provider_key = route_provider.replace("-", "_")
+            provider_state = routing.get(provider_key)
+            if isinstance(provider_state, dict):
+                historical_signal_fail_code = str(provider_state.get("signal_fail_code", "") or "").strip()
+                historical_readiness = str(provider_state.get("readiness", "") or "").strip()
+                historical_readiness_label = str(provider_state.get("readiness_label", "") or "").strip()
+                historical_detail = str(provider_state.get("detail", "") or "").strip()
+                if historical_signal_fail_code:
+                    provider_state["historical_signal_fail_code"] = historical_signal_fail_code
+                if historical_readiness:
+                    provider_state["historical_readiness"] = historical_readiness
+                if historical_readiness_label:
+                    provider_state["historical_readiness_label"] = historical_readiness_label
+                if historical_detail:
+                    provider_state["historical_detail"] = historical_detail
+                provider_state["signal_fail_code"] = ""
+                provider_state["readiness"] = "ready"
+                provider_state["readiness_label"] = "Live OK"
+                live_detail = route_detail or "Ответ получен через OpenClaw API."
+                provider_state["detail"] = (
+                    f"Последний live route подтвердил configured primary `{current_primary}`. {live_detail}"
+                )
+            warnings = routing.get("warnings")
+            if isinstance(warnings, list):
+                routing["warnings"] = [
+                    item
+                    for item in warnings
+                    if "openai primary падает с model_not_found" not in str(item).lower()
+                    and "openai primary блокируется по oauth scopes" not in str(item).lower()
+                ]
+            routing["live_primary_verified"] = True
+            routing["live_fallback_active"] = False
+        elif live_fallback_active:
+            routing["current_primary_broken"] = True
+            routing["temporary_primary_recommendation"] = route_model
+            warnings = routing.get("warnings")
+            if isinstance(warnings, list):
+                fallback_warning = (
+                    f"Сейчас active route идёт через fallback `{route_model}`, "
+                    f"а не через configured primary `{current_primary}`."
+                )
+                if fallback_warning not in warnings:
+                    warnings.insert(0, fallback_warning)
+            routing["live_primary_verified"] = False
+            routing["live_fallback_active"] = True
+        else:
+            routing["live_primary_verified"] = False
+            routing["live_fallback_active"] = False
+        return routing
+
+    @classmethod
+    def _overlay_routing_provider_truth_on_cloud_inventory(
+        cls,
+        *,
+        cloud_inventory: list[dict[str, Any]],
+        routing_status: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Переносит provider-level live truth в inventory и provider cards каталога."""
+        for item in cloud_inventory:
+            if not isinstance(item, dict):
+                continue
+            provider_name = str(item.get("provider", "") or "").strip()
+            if not provider_name:
+                continue
+            provider_state = routing_status.get(provider_name.replace("-", "_"))
+            if not isinstance(provider_state, dict):
+                continue
+            item["provider_auth"] = str(provider_state.get("auth_mode") or item.get("provider_auth") or "unknown")
+            item["provider_readiness"] = str(provider_state.get("readiness") or item.get("provider_readiness") or "unknown")
+            item["provider_readiness_label"] = str(
+                provider_state.get("readiness_label") or item.get("provider_readiness_label") or "Configured"
+            )
+            item["provider_detail"] = str(provider_state.get("detail") or item.get("provider_detail") or "")
+            item["provider_quota_state"] = str(
+                provider_state.get("quota_state") or item.get("provider_quota_state") or "unknown"
+            )
+            item["provider_quota_label"] = str(
+                provider_state.get("quota_label") or item.get("provider_quota_label") or ""
+            )
+            item["provider_effective_kind"] = str(
+                provider_state.get("effective_kind") or item.get("provider_effective_kind") or ""
+            )
+            item["provider_effective_detail"] = str(
+                provider_state.get("effective_detail") or item.get("provider_effective_detail") or ""
+            )
+            item["provider_oauth_status"] = str(
+                provider_state.get("oauth_status") or item.get("provider_oauth_status") or ""
+            )
+            item["provider_oauth_remaining_human"] = str(
+                provider_state.get("oauth_remaining_human") or item.get("provider_oauth_remaining_human") or ""
+            )
+        return cloud_inventory
 
     @staticmethod
     def _openclaw_cli_env() -> dict[str, str]:
@@ -1750,6 +2089,178 @@ class WebApp:
         if gateway_token:
             env["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
         return env
+
+    async def _run_openclaw_cli(
+        self,
+        *args: str,
+        timeout: float = 45.0,
+        expect_json: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Безопасно запускает `openclaw` CLI и при необходимости парсит JSON-ответ.
+
+        Почему отдельный helper:
+        - cron/UI не должен дублировать runtime scheduler;
+        - тестам удобнее подменять один seam, чем мокать subprocess по всему модулю;
+        - owner-панель получает truthful state ровно из того же CLI-контура,
+          который пользователь может вызвать вручную.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "openclaw",
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=self._openclaw_cli_env(),
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                if proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                return {
+                    "ok": False,
+                    "error": "openclaw_timeout",
+                    "detail": f"Команда openclaw {' '.join(args)} превысила {int(timeout)} сек.",
+                    "exit_code": None,
+                    "raw": "",
+                }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": "openclaw_exec_failed",
+                "detail": str(exc),
+                "exit_code": None,
+                "raw": "",
+            }
+
+        raw_output = stdout.decode("utf-8", errors="replace")
+        result: dict[str, Any] = {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "raw": raw_output,
+        }
+        if not expect_json:
+            return result
+
+        try:
+            result["data"] = json.loads(raw_output or "{}")
+        except Exception as exc:
+            result["ok"] = False
+            result["error"] = "openclaw_json_parse_failed"
+            result["detail"] = f"Не удалось распарсить JSON ответа openclaw: {exc}"
+        return result
+
+    @staticmethod
+    def _normalize_openclaw_cron_job(job: dict[str, Any]) -> dict[str, Any]:
+        """
+        Сжимает cron job до стабильной UI-формы.
+
+        Оставляем только те поля, которые реально нужны owner-панели, чтобы
+        фронт не зависел от всей вложенной схемы OpenClaw.
+        """
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        state = job.get("state") if isinstance(job.get("state"), dict) else {}
+        schedule = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
+        schedule_kind = str(schedule.get("kind") or "unknown").strip().lower()
+        schedule_label = "unknown"
+        if schedule_kind == "every":
+            every_ms = int(schedule.get("everyMs") or 0)
+            schedule_label = f"Каждые {every_ms // 1000}с" if every_ms > 0 else "Каждые ?"
+            if every_ms and every_ms % 60000 == 0:
+                schedule_label = f"Каждые {every_ms // 60000}м"
+            elif every_ms and every_ms % 3600000 == 0:
+                schedule_label = f"Каждые {every_ms // 3600000}ч"
+        elif schedule_kind == "cron":
+            expr = str(schedule.get("expr") or "").strip() or "?"
+            tz = str(schedule.get("tz") or "").strip()
+            schedule_label = f"Cron: {expr}" if not tz else f"Cron: {expr} ({tz})"
+
+        payload_kind = str(payload.get("kind") or "unknown").strip()
+        payload_text = str(payload.get("text") or payload.get("message") or "").strip()
+        return {
+            "id": str(job.get("id") or "").strip(),
+            "name": str(job.get("name") or "Без названия").strip(),
+            "enabled": bool(job.get("enabled")),
+            "agent_id": str(job.get("agentId") or "").strip(),
+            "session_target": str(job.get("sessionTarget") or "").strip(),
+            "wake_mode": str(job.get("wakeMode") or "").strip(),
+            "schedule_kind": schedule_kind,
+            "schedule_label": schedule_label,
+            "payload_kind": payload_kind,
+            "payload_text": payload_text,
+            "description": str(job.get("description") or "").strip(),
+            "updated_at_ms": int(job.get("updatedAtMs") or 0),
+            "created_at_ms": int(job.get("createdAtMs") or 0),
+            "last_run_at_ms": int(state.get("lastRunAtMs") or 0),
+            "last_status": str(state.get("lastStatus") or state.get("lastRunStatus") or "unknown").strip(),
+            "last_error": str(state.get("lastError") or "").strip(),
+            "consecutive_errors": int(state.get("consecutiveErrors") or 0),
+        }
+
+    async def _collect_openclaw_cron_snapshot(self, *, include_all: bool = True) -> dict[str, Any]:
+        """
+        Возвращает статус scheduler и список cron jobs из настоящего OpenClaw CLI.
+        """
+        status_result = await self._run_openclaw_cli(
+            "cron",
+            "status",
+            "--json",
+            timeout=35.0,
+            expect_json=True,
+        )
+        if not status_result.get("ok"):
+            return {
+                "ok": False,
+                "error": status_result.get("error") or "cron_status_failed",
+                "detail": status_result.get("detail") or status_result.get("raw") or "Не удалось прочитать cron status",
+            }
+
+        list_args = ["cron", "list", "--json"]
+        if include_all:
+            list_args.append("--all")
+        jobs_result = await self._run_openclaw_cli(
+            *list_args,
+            timeout=35.0,
+            expect_json=True,
+        )
+        if not jobs_result.get("ok"):
+            return {
+                "ok": False,
+                "error": jobs_result.get("error") or "cron_jobs_failed",
+                "detail": jobs_result.get("detail") or jobs_result.get("raw") or "Не удалось прочитать cron jobs",
+            }
+
+        status_payload = status_result.get("data") if isinstance(status_result.get("data"), dict) else {}
+        jobs_payload = jobs_result.get("data") if isinstance(jobs_result.get("data"), dict) else {}
+        jobs_raw = jobs_payload.get("jobs") if isinstance(jobs_payload.get("jobs"), list) else []
+        jobs = [
+            self._normalize_openclaw_cron_job(job)
+            for job in jobs_raw
+            if isinstance(job, dict)
+        ]
+        jobs.sort(key=lambda item: ((not item["enabled"]), item["name"].lower(), item["id"]))
+        enabled_jobs = sum(1 for item in jobs if item["enabled"])
+        disabled_jobs = max(0, len(jobs) - enabled_jobs)
+        return {
+            "ok": True,
+            "status": {
+                "enabled": bool(status_payload.get("enabled")),
+                "store_path": str(status_payload.get("storePath") or "").strip(),
+                "jobs_total_runtime": int(status_payload.get("jobs") or 0),
+                "next_wake_at_ms": status_payload.get("nextWakeAtMs"),
+            },
+            "summary": {
+                "total": len(jobs),
+                "enabled": enabled_jobs,
+                "disabled": disabled_jobs,
+                "include_all": bool(include_all),
+            },
+            "jobs": jobs,
+        }
 
     @staticmethod
     def _clone_jsonish_dict(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1976,6 +2487,376 @@ class WebApp:
             "branch": _run_git(["rev-parse", "--abbrev-ref", "HEAD"]),
             "head": _run_git(["rev-parse", "HEAD"]),
             "status_short": _run_git(["status", "--short", "--branch"]),
+        }
+
+    @staticmethod
+    def _default_browser_state_root() -> Path:
+        """
+        Возвращает канонический root browser-state для текущей macOS-учётки.
+
+        Почему это отдельный helper:
+        - multi-account стратегия проекта теперь опирается на split browser state;
+        - handoff и readiness должны явно показывать, какой профиль Chrome
+          относится именно к текущему `HOME`, а не к соседней учётке.
+        """
+        env_candidates = (
+            "CHROME_USER_DATA_DIR",
+            "GOOGLE_CHROME_USER_DATA_DIR",
+            "OPENCLAW_BROWSER_PROFILE_DIR",
+        )
+        for key in env_candidates:
+            raw = str(os.getenv(key, "") or "").strip()
+            if raw:
+                return Path(raw).expanduser()
+        return Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+
+    def _runtime_operator_profile(self) -> dict[str, Any]:
+        """
+        Возвращает machine-readable профиль текущей учётки/runtime.
+
+        Зачем:
+        - соседняя macOS-учётка должна видеть, в каком именно runtime-контуре она
+          сейчас работает;
+        - handoff bundle должен фиксировать не только сервисы, но и identity/state
+          активного оператора.
+        """
+        home_dir = Path.home()
+        operator_name = current_operator_id()
+        browser_state_root = self._default_browser_state_root()
+        project_root = self._project_root()
+        fingerprint = current_account_id()
+
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "operator_id": operator_name,
+            "operator_name": operator_name,
+            "account_id": fingerprint,
+            "account_mode": "split_runtime_per_account",
+            "home_dir": str(home_dir),
+            "project_root": str(project_root),
+            "project_exists": project_root.exists(),
+            "project_writable": bool(os.access(project_root, os.W_OK)),
+            "python_executable": sys.executable,
+            "openclaw_home": str(home_dir / ".openclaw"),
+            "openclaw_home_exists": (home_dir / ".openclaw").exists(),
+            "openclaw_config_path": str(self._openclaw_config_path()),
+            "openclaw_models_path": str(self._openclaw_models_config_path()),
+            "openclaw_auth_profiles_path": str(self._openclaw_auth_profiles_path()),
+            "workspace_main_dir": str(getattr(config, "OPENCLAW_MAIN_WORKSPACE_DIR", "")),
+            "userbot_acl_file": str(getattr(config, "USERBOT_ACL_FILE", "")),
+            "browser_state_root": str(browser_state_root),
+            "browser_state_root_exists": browser_state_root.exists(),
+            "owner_chrome_helper_path": str(self._chrome_remote_debugging_helper_path()),
+            "web_public_base_url": self._public_base_url(),
+            "notes": [
+                "Канонический режим для нескольких macOS-учёток: shared repo/docs/artifacts, но split runtime/auth/secrets/browser state.",
+                "Если запускаешь проект из соседней учётки, truth нужно проверять по этой карточке, а не по старому handoff на другой HOME.",
+                "Параллельные диалоги допустимы, но один mutating implementation dialog на активный runtime-контур остаётся safer default.",
+            ],
+        }
+
+    def _assistant_capabilities_snapshot(self) -> dict[str, Any]:
+        """Возвращает единый assistant capability-срез для web-native контура."""
+        return {
+            "ok": True,
+            "mode": "web_native",
+            "endpoint": "/api/assistant/query",
+            "preflight_endpoint": "/api/model/preflight",
+            "feedback_endpoint": "/api/model/feedback",
+            "model_catalog_endpoint": "/api/model/catalog",
+            "model_apply_endpoint": "/api/model/apply",
+            "attachment_endpoint": "/api/assistant/attachment",
+            "policy_endpoint": "/api/policy",
+            "policy_matrix_endpoint": "/api/policy/matrix",
+            "registry_endpoint": "/api/capabilities/registry",
+            "auth": "X-Krab-Web-Key header or token query (if WEB_API_KEY configured)",
+            "task_types": ["chat", "coding", "reasoning", "creative", "moderation", "security", "infra", "review"],
+            "notes": [
+                "Работает без Telegram-интерфейса.",
+                "Использует тот же роутер моделей и policy, что и Telegram-бот.",
+                "Для критичных задач можно передать `confirm_expensive=true`.",
+                "Оценки качества 1-5 можно отправлять через /api/model/feedback.",
+                "Модельные слоты и режимы можно менять через /api/model/apply.",
+                "Файлы можно загружать через /api/assistant/attachment.",
+            ],
+        }
+
+    async def _ecosystem_capabilities_snapshot(self) -> dict[str, Any]:
+        """Собирает truthful capability-срез control plane и внешних сервисов."""
+        voice_gateway = self.deps.get("voice_gateway_client")
+        krab_ear = self.deps.get("krab_ear_client")
+
+        voice_caps, ear_caps = await asyncio.gather(
+            self._safe_client_capabilities_summary(voice_gateway, source="voice_gateway"),
+            self._safe_client_capabilities_summary(krab_ear, source="krab_ear"),
+        )
+
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(),
+            "services": {
+                "krab": {
+                    "ok": True,
+                    "status": "ok",
+                    "source": "web_app",
+                    "detail": {
+                        "mode": "control_plane",
+                        "assistant_endpoint": "/api/assistant/query",
+                        "assistant_capabilities_endpoint": "/api/assistant/capabilities",
+                        "ecosystem_health_endpoint": "/api/ecosystem/health",
+                        "ecosystem_capabilities_endpoint": "/api/ecosystem/capabilities",
+                        "capability_registry_endpoint": "/api/capabilities/registry",
+                        "policy_matrix_endpoint": "/api/policy/matrix",
+                    },
+                },
+                "voice_gateway": voice_caps,
+                "krab_ear": ear_caps,
+            },
+            "notes": [
+                "Krab остаётся control plane и не встраивает Ear/Voice рантаймы в монолит.",
+                "Krab Ear читается по native IPC-контракту.",
+                "Krab Voice Gateway читается по HTTP contract-first endpoint'у /v1/capabilities.",
+            ],
+        }
+
+    def _policy_matrix_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Собирает policy matrix поверх ACL и live runtime-lite truth."""
+        return build_policy_matrix(
+            operator_id=current_operator_id(),
+            account_id=current_account_id(),
+            acl_state=load_acl_runtime_state(),
+            web_write_requires_key=bool(self._web_api_key()),
+            runtime_lite=runtime_lite or {},
+        )
+
+    async def _capability_registry_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Собирает единый capability registry поверх уже подтверждённых truthful-срезов."""
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        operator_profile = self._runtime_operator_profile()
+        assistant_caps = self._assistant_capabilities_snapshot()
+        ecosystem_caps, translator_snapshot = await asyncio.gather(
+            self._ecosystem_capabilities_snapshot(),
+            self._translator_readiness_snapshot(runtime_lite=runtime_state),
+        )
+        policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_state)
+        return build_capability_registry(
+            operator_profile=operator_profile,
+            runtime_lite=runtime_state,
+            assistant_capabilities=assistant_caps,
+            ecosystem_capabilities=ecosystem_caps,
+            translator_readiness=translator_snapshot,
+            policy_matrix=policy_matrix,
+        )
+
+    async def _safe_client_health_summary(
+        self,
+        client: Any,
+        *,
+        source: str,
+        timeout_sec: float = 3.5,
+    ) -> dict[str, Any]:
+        """Безопасно возвращает нормализованный health-summary клиента."""
+        if not client:
+            return {
+                "ok": False,
+                "status": "not_configured",
+                "source": source,
+                "detail": {},
+            }
+        if hasattr(client, "health_report"):
+            try:
+                return await asyncio.wait_for(client.health_report(), timeout=timeout_sec)
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False,
+                    "status": "timeout",
+                    "source": source,
+                    "detail": "timeout",
+                }
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "source": source,
+                    "detail": str(exc),
+                }
+        if hasattr(client, "health_check"):
+            try:
+                ok = bool(await asyncio.wait_for(client.health_check(), timeout=timeout_sec))
+                return {
+                    "ok": ok,
+                    "status": "ok" if ok else "down",
+                    "source": source,
+                    "detail": {},
+                }
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False,
+                    "status": "timeout",
+                    "source": source,
+                    "detail": "timeout",
+                }
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "status": "error",
+                    "source": source,
+                    "detail": str(exc),
+                }
+        return {
+            "ok": False,
+            "status": "not_supported",
+            "source": source,
+            "detail": {},
+        }
+
+    async def _safe_client_capabilities_summary(
+        self,
+        client: Any,
+        *,
+        source: str,
+        timeout_sec: float = 4.0,
+    ) -> dict[str, Any]:
+        """Безопасно возвращает capability summary клиента."""
+        if not client or not hasattr(client, "capabilities_report"):
+            return {
+                "ok": False,
+                "status": "not_configured",
+                "source": source,
+                "detail": {},
+            }
+        try:
+            return await asyncio.wait_for(client.capabilities_report(), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "status": "timeout",
+                "source": source,
+                "detail": "timeout",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "status": "error",
+                "source": source,
+                "detail": str(exc),
+            }
+
+    async def _translator_readiness_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Собирает агрегированную готовность translator-контура.
+
+        Почему отдельный snapshot:
+        - переводчик звонков теперь отдельный продуктовый трек экосистемы;
+        - handoff и соседняя учётка должны видеть не фантазии о переводчике,
+          а реальное состояние foundation через Krab/Ear/Voice Gateway.
+        """
+        voice_gateway = self.deps.get("voice_gateway_client")
+        krab_ear = self.deps.get("krab_ear_client")
+        perceptor = self.deps.get("perceptor")
+        kraab_userbot = self.deps.get("kraab_userbot")
+
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        voice_gateway_health, voice_gateway_caps, krab_ear_health, krab_ear_caps = await asyncio.gather(
+            self._safe_client_health_summary(voice_gateway, source="voice_gateway"),
+            self._safe_client_capabilities_summary(voice_gateway, source="voice_gateway"),
+            self._safe_client_health_summary(krab_ear, source="krab_ear"),
+            self._safe_client_capabilities_summary(krab_ear, source="krab_ear"),
+        )
+
+        perceptor_ready = bool(perceptor) and hasattr(perceptor, "transcribe")
+        voice_profile: dict[str, Any] = {}
+        if kraab_userbot and hasattr(kraab_userbot, "get_voice_runtime_profile"):
+            try:
+                voice_profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
+            except Exception:
+                voice_profile = {}
+
+        voice_stack_ready = bool(voice_gateway_health.get("ok") and krab_ear_health.get("ok"))
+        foundation_ready = bool(perceptor_ready and voice_stack_ready)
+        live_voice_ready = bool(foundation_ready and voice_profile.get("enabled"))
+
+        if foundation_ready:
+            readiness = "ready"
+        elif perceptor_ready or bool(voice_gateway_health.get("ok")) or bool(krab_ear_health.get("ok")):
+            readiness = "degraded"
+        else:
+            readiness = "planned"
+
+        recommendations: list[str] = []
+        if not perceptor_ready:
+            recommendations.append("Локальный STT/perceptor ещё не подтверждён для translator foundation.")
+        if not bool(voice_gateway_health.get("ok")):
+            recommendations.append("Krab Voice Gateway должен быть живым, потому что он канонический backend call translator трека.")
+        if not bool(krab_ear_health.get("ok")):
+            recommendations.append("Krab Ear должен быть доступен как low-latency local perception/STT контур.")
+        if voice_profile and not bool(voice_profile.get("enabled")):
+            recommendations.append("Voice replies сейчас выключены; voice-first контур translator v1 останется неполным.")
+        if not recommendations:
+            recommendations.append("Foundation translator-контура подтверждён; можно двигаться к iPhone companion и ordinary-call flow.")
+
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "readiness": readiness,
+            "foundation_ready": foundation_ready,
+            "live_voice_ready": live_voice_ready,
+            "v1_target": "iphone_companion",
+            "canonical_backend": "krab_voice_gateway",
+            "ordinary_calls": {
+                "path": "iphone_companion",
+                "status": "foundation_ready" if foundation_ready else "in_progress",
+            },
+            "internet_calls": {
+                "path": "voice_gateway_session_adapters",
+                "status": "planned",
+            },
+            "languages": ["es-ru", "es-en", "en-ru", "auto-detect"],
+            "delivery_paths": {
+                "debug_install": "xcode_free_signing",
+                "daily_use": "altstore_or_sidestore",
+                "paid_apple_developer_required": False,
+            },
+            "services": {
+                "krab": {
+                    "ok": True,
+                    "status": "ok",
+                    "source": "web_app",
+                    "detail": {
+                        "mode": "orchestration_policy_ui",
+                        "assistant_capabilities_endpoint": "/api/assistant/capabilities",
+                        "ecosystem_capabilities_endpoint": "/api/ecosystem/capabilities",
+                    },
+                },
+                "voice_gateway": voice_gateway_health,
+                "voice_gateway_capabilities": voice_gateway_caps,
+                "krab_ear": krab_ear_health,
+                "krab_ear_capabilities": krab_ear_caps,
+            },
+            "runtime": {
+                "voice_profile": voice_profile,
+                "telegram_userbot_state": runtime_state.get("telegram_userbot", {}),
+                "runtime_lite_route": runtime_state.get("last_runtime_route", {}),
+            },
+            "notes": [
+                "Переводчик звонков интегрируется в экосистему Краба, но не merge-ится внутрь OpenClaw как монолит.",
+                "Старые RealTimeVoiceTranslator-проекты рассматриваются только как доноры UX и companion flow.",
+                "Для ordinary calls v1 целевой delivery path — iPhone companion; internet-call adapters идут следующим слоем.",
+            ],
+            "recommendations": recommendations,
         }
 
     def _telegram_session_snapshot(self) -> dict[str, Any]:
@@ -3222,10 +4103,16 @@ class WebApp:
         elif debug_attach_confirmed:
             state = "debug_attached"
             readiness = "attention"
-            stage_label = "Подключён Debug browser"
-            summary = "Dedicated browser relay жив, но это не attach к обычному Chrome владельца."
+            stage_label = "Активен Debug browser"
+            summary = (
+                "Сейчас активен отдельный OpenClaw Debug browser. "
+                "Это не обычный Chrome владельца и не его профиль/расширения."
+            )
             warnings.append("Сейчас активен dedicated debug browser, а не обычный Chrome владельца.")
-            next_step = "Если нужен owner browser, включи Remote Debugging в обычном Chrome и переподключи `chrome-profile`."
+            next_step = (
+                "Если нужен именно обычный Chrome владельца, нажми `Открыть Мой Chrome`, "
+                "включи Remote Debugging и затем обнови статус."
+            )
         elif attached_by_runtime:
             state = "attached"
             readiness = "ready"
@@ -3243,7 +4130,10 @@ class WebApp:
             if active_contour == "debug_browser":
                 stage_label = "Нужна авторизация Debug browser"
                 warnings.append("Dedicated debug browser отвечает, но требует авторизацию/attach.")
-                next_step = "Авторизуй debug browser или переключись на attach к обычному Chrome."
+                next_step = (
+                    "Авторизуй отдельный debug browser или используй кнопку `Открыть Мой Chrome` "
+                    "для перехода в обычный профиль."
+                )
             else:
                 stage_label = "Нужна авторизация relay"
                 warnings.append("Browser relay отвечает, но требует авторизацию/attach.")
@@ -3260,7 +4150,10 @@ class WebApp:
             if active_contour == "debug_browser":
                 stage_label = "Debug browser без вкладки"
                 warnings.append("Dedicated debug browser жив, но owner Chrome ещё не attach-нут.")
-                next_step = "Открой вкладку в debug browser или переключись на attach к обычному Chrome."
+                next_step = (
+                    "Открой вкладку в отдельном debug browser или используй `Открыть Мой Chrome`, "
+                    "если нужен обычный профиль."
+                )
             else:
                 stage_label = "Нет подключённой вкладки"
                 warnings.append("Relay жив, но вкладка ещё не attach-нута.")
@@ -3475,7 +4368,7 @@ class WebApp:
 
         relay_detail = summary
         if active_contour == "debug_browser":
-            relay_detail = "Active contour: Debug browser. " + summary
+            relay_detail = "Active contour: Debug browser (отдельное окно OpenClaw). " + summary
         elif active_contour == "my_chrome":
             relay_detail = "Active contour: Мой Chrome. " + summary
 
@@ -3505,7 +4398,7 @@ class WebApp:
                 "active_label": active_label if relay_running else "Не активен",
                 "detail": relay_detail,
                 "next_step": next_step,
-                "preferred_for": "Быстрый доступ через OpenClaw relay/extension.",
+                "preferred_for": "Изолированный relay-контур через отдельный OpenClaw Debug browser.",
                 "confirmed": relay_ready,
             },
             {
@@ -3517,7 +4410,7 @@ class WebApp:
                 "active_label": "Мой Chrome" if bool(runtime.get("owner_attach_confirmed")) else "Не подтверждён",
                 "detail": str(chrome_profile.get("detail") or "Обычный Chrome профиль пока не подтверждён."),
                 "next_step": chrome_next_step,
-                "preferred_for": "Полный DevTools-контур поверх обычного Chrome профиля.",
+                "preferred_for": "Полный owner-контур поверх обычного Chrome профиля владельца.",
                 "confirmed": bool(runtime.get("owner_attach_confirmed")),
             },
         ]
@@ -3752,6 +4645,7 @@ class WebApp:
             voice_gateway = self.deps.get("voice_gateway_client")
             krab_ear = self.deps.get("krab_ear_client")
             perceptor = self.deps.get("perceptor")
+            kraab_userbot = self.deps.get("kraab_userbot")
 
             openclaw_ok = False
             voice_gateway_ok = False
@@ -3773,17 +4667,39 @@ class WebApp:
                 return str(os.getenv(key, default)).strip().lower() in {"1", "true", "yes", "on"}
 
             stt_isolated_worker = _env_on("STT_ISOLATED_WORKER", "1")
+            perceptor_ready = bool(perceptor) and hasattr(perceptor, "transcribe")
             perceptor_isolated_worker = bool(getattr(perceptor, "stt_isolated_worker", stt_isolated_worker))
             stt_worker_timeout = int(str(os.getenv("STT_WORKER_TIMEOUT_SECONDS", "240")).strip() or "240")
+            voice_stack_ready = bool(voice_gateway_ok and krab_ear_ok)
+            voice_profile = {}
+            if kraab_userbot and hasattr(kraab_userbot, "get_voice_runtime_profile"):
+                try:
+                    voice_profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
+                except Exception:
+                    voice_profile = {}
+            live_voice_ready = bool(perceptor_ready and voice_stack_ready and voice_profile.get("enabled"))
 
-            readiness = "ready" if (voice_gateway_ok and perceptor_isolated_worker) else (
-                "degraded" if voice_gateway_ok else "down"
-            )
+            if perceptor_ready and perceptor_isolated_worker and voice_stack_ready:
+                readiness = "ready"
+            elif perceptor_ready:
+                readiness = "degraded"
+            else:
+                readiness = "down"
             recommendations: list[str] = []
-            if not voice_gateway_ok:
+            if not perceptor_ready:
+                recommendations.append("Perceptor/STT не подключён: voice notes не будут транскрибироваться")
                 recommendations.append("Запусти ./transcriber_doctor.command --heal")
-            if not perceptor_isolated_worker:
+            if perceptor_ready and not perceptor_isolated_worker:
                 recommendations.append("Включи STT_ISOLATED_WORKER=1 и перезапусти Krab")
+            if not voice_gateway_ok:
+                recommendations.append("Voice Gateway недоступен: звонки и live voice-stream будут ограничены")
+            if not krab_ear_ok:
+                recommendations.append("Krab Ear недоступен: wake/call-часть voice-контура деградировала")
+            if voice_profile:
+                if not bool(voice_profile.get("enabled")):
+                    recommendations.append("Voice replies выключены: входящий voice ingress готов, но ответы голосом отключены")
+                elif live_voice_ready:
+                    recommendations.append("Voice replies включены: foundation для live voice готова")
             if not recommendations:
                 recommendations.append("Система транскрибации в рабочем режиме")
 
@@ -3794,13 +4710,86 @@ class WebApp:
                     "openclaw_ok": openclaw_ok,
                     "voice_gateway_ok": voice_gateway_ok,
                     "krab_ear_ok": krab_ear_ok,
+                    "perceptor_ready": perceptor_ready,
                     "stt_isolated_worker": perceptor_isolated_worker,
                     "stt_worker_timeout_seconds": stt_worker_timeout,
                     "voice_gateway_url": os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090"),
                     "whisper_model": str(getattr(perceptor, "whisper_model", "")),
                     "audio_warmup_enabled": _env_on("PERCEPTOR_AUDIO_WARMUP", "0"),
+                    "voice_profile": voice_profile,
+                    "live_voice_ready": live_voice_ready,
                     "recommendations": recommendations,
                 },
+            }
+
+        @self.app.get("/api/voice/runtime")
+        async def voice_runtime_status():
+            """
+            Возвращает сводку по voice-runtime userbot.
+
+            Держим endpoint отдельно от transcriber/status, потому что owner UI и
+            будущий live-voice контур должны видеть не только health входящего STT,
+            но и текущий профиль доставки ответов.
+            """
+            kraab_userbot = self.deps.get("kraab_userbot")
+            if not kraab_userbot or not hasattr(kraab_userbot, "get_voice_runtime_profile"):
+                return {
+                    "ok": False,
+                    "error": "voice_runtime_not_available",
+                }
+            profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
+            return {
+                "ok": True,
+                "voice": profile,
+            }
+
+        @self.app.post("/api/voice/runtime/update")
+        async def voice_runtime_update(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Обновляет voice-runtime profile userbot через owner web-key."""
+            self._assert_write_access(x_krab_web_key, token)
+            kraab_userbot = self.deps.get("kraab_userbot")
+            if not kraab_userbot or not hasattr(kraab_userbot, "update_voice_runtime_profile"):
+                raise HTTPException(status_code=503, detail="voice_runtime_not_available")
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="voice_update_body_required")
+            profile = dict(
+                kraab_userbot.update_voice_runtime_profile(
+                    enabled=body.get("enabled") if "enabled" in body else None,
+                    speed=body.get("speed") if "speed" in body else None,
+                    voice=body.get("voice") if "voice" in body else None,
+                    delivery=body.get("delivery") if "delivery" in body else None,
+                    persist=True,
+                )
+                or {}
+            )
+            return {
+                "ok": True,
+                "voice": profile,
+            }
+
+        @self.app.get("/api/openclaw/cron/status")
+        async def openclaw_cron_status():
+            """Возвращает truthful snapshot scheduler и recurring jobs из OpenClaw CLI."""
+            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
+            if not snapshot.get("ok"):
+                return snapshot
+            return snapshot
+
+        @self.app.get("/api/openclaw/cron/jobs")
+        async def openclaw_cron_jobs(include_all: bool = Query(default=True)):
+            """Возвращает recurring jobs для owner UI без дублирования cron-движка."""
+            snapshot = await self._collect_openclaw_cron_snapshot(include_all=bool(include_all))
+            if not snapshot.get("ok"):
+                return snapshot
+            return {
+                "ok": True,
+                "summary": snapshot.get("summary") or {},
+                "jobs": snapshot.get("jobs") or [],
             }
 
         @self.app.get("/api/inbox/status")
@@ -3950,13 +4939,202 @@ class WebApp:
                 "result": result,
             }
 
+        @self.app.post("/api/openclaw/cron/jobs/create")
+        async def openclaw_cron_job_create(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Создаёт recurring cron job через нативный `openclaw cron add`."""
+            self._assert_write_access(x_krab_web_key, token)
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="cron_create_body_required")
+
+            name = str(body.get("name") or "").strip()
+            every = str(body.get("every") or "").strip()
+            task_kind = str(body.get("task_kind") or "system").strip().lower()
+            payload_text = str(body.get("payload_text") or "").strip()
+            session_target = str(body.get("session_target") or "main").strip().lower()
+            wake_mode = str(body.get("wake_mode") or "now").strip().lower()
+            agent_id = str(body.get("agent_id") or "main").strip()
+            thinking = str(body.get("thinking") or "").strip().lower()
+            model = str(body.get("model") or "").strip()
+            description = str(body.get("description") or "").strip()
+
+            if not name:
+                raise HTTPException(status_code=400, detail="cron_name_required")
+            if not every:
+                raise HTTPException(status_code=400, detail="cron_every_required")
+            if not payload_text:
+                raise HTTPException(status_code=400, detail="cron_payload_required")
+            if task_kind not in {"system", "agent"}:
+                raise HTTPException(status_code=400, detail="cron_task_kind_invalid")
+            if session_target not in {"main", "isolated"}:
+                raise HTTPException(status_code=400, detail="cron_session_target_invalid")
+            if wake_mode not in {"now", "next-heartbeat"}:
+                raise HTTPException(status_code=400, detail="cron_wake_mode_invalid")
+
+            command: list[str] = [
+                "cron",
+                "add",
+                "--json",
+                "--name",
+                name,
+                "--every",
+                every,
+                "--session",
+                session_target,
+                "--wake",
+                wake_mode,
+            ]
+            if description:
+                command.extend(["--description", description])
+            if bool(body.get("disabled")):
+                command.append("--disabled")
+            if bool(body.get("announce")):
+                command.append("--announce")
+            if task_kind == "agent":
+                command.extend(["--agent", agent_id or "main", "--message", payload_text])
+                if thinking:
+                    command.extend(["--thinking", thinking])
+                if model:
+                    command.extend(["--model", model])
+            else:
+                command.extend(["--system-event", payload_text])
+
+            create_result = await self._run_openclaw_cli(
+                *command,
+                timeout=45.0,
+                expect_json=True,
+            )
+            if not create_result.get("ok"):
+                return {
+                    "ok": False,
+                    "error": create_result.get("error") or "cron_create_failed",
+                    "detail": create_result.get("detail") or create_result.get("raw") or "Не удалось создать recurring job",
+                }
+
+            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
+            if not snapshot.get("ok"):
+                return snapshot
+            return {
+                "ok": True,
+                "created": create_result.get("data") or {},
+                "summary": snapshot.get("summary") or {},
+                "jobs": snapshot.get("jobs") or [],
+                "status": snapshot.get("status") or {},
+            }
+
+        @self.app.post("/api/openclaw/cron/jobs/toggle")
+        async def openclaw_cron_job_toggle(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Включает или выключает recurring job через OpenClaw CLI."""
+            self._assert_write_access(x_krab_web_key, token)
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="cron_toggle_body_required")
+            job_id = str(body.get("id") or "").strip()
+            enabled = body.get("enabled")
+            if not job_id:
+                raise HTTPException(status_code=400, detail="cron_id_required")
+            if not isinstance(enabled, bool):
+                raise HTTPException(status_code=400, detail="cron_enabled_bool_required")
+
+            command = ["cron", "enable" if enabled else "disable", job_id]
+            toggle_result = await self._run_openclaw_cli(
+                *command,
+                timeout=35.0,
+                expect_json=False,
+            )
+            if not toggle_result.get("ok"):
+                return {
+                    "ok": False,
+                    "error": toggle_result.get("error") or "cron_toggle_failed",
+                    "detail": toggle_result.get("detail") or toggle_result.get("raw") or "Не удалось изменить состояние recurring job",
+                }
+
+            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
+            if not snapshot.get("ok"):
+                return snapshot
+            return {
+                "ok": True,
+                "detail": toggle_result.get("raw") or "",
+                "summary": snapshot.get("summary") or {},
+                "jobs": snapshot.get("jobs") or [],
+                "status": snapshot.get("status") or {},
+            }
+
+        @self.app.post("/api/openclaw/cron/jobs/remove")
+        async def openclaw_cron_job_remove(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Удаляет recurring job через OpenClaw CLI."""
+            self._assert_write_access(x_krab_web_key, token)
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="cron_remove_body_required")
+            job_id = str(body.get("id") or "").strip()
+            if not job_id:
+                raise HTTPException(status_code=400, detail="cron_id_required")
+
+            remove_result = await self._run_openclaw_cli(
+                "cron",
+                "rm",
+                "--json",
+                job_id,
+                timeout=35.0,
+                expect_json=True,
+            )
+            if not remove_result.get("ok"):
+                return {
+                    "ok": False,
+                    "error": remove_result.get("error") or "cron_remove_failed",
+                    "detail": remove_result.get("detail") or remove_result.get("raw") or "Не удалось удалить recurring job",
+                }
+
+            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
+            if not snapshot.get("ok"):
+                return snapshot
+            return {
+                "ok": True,
+                "removed": remove_result.get("data") or {},
+                "summary": snapshot.get("summary") or {},
+                "jobs": snapshot.get("jobs") or [],
+                "status": snapshot.get("status") or {},
+            }
+
         @self.app.get("/api/policy")
         async def get_policy():
             """Возвращает runtime-политику AI (queue/guardrails/reactions)."""
             ai_runtime = self.deps.get("ai_runtime")
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_lite)
             if not ai_runtime:
-                return {"ok": False, "error": "ai_runtime_not_configured"}
-            return {"ok": True, "policy": ai_runtime.get_policy_snapshot()}
+                return {
+                    "ok": False,
+                    "error": "ai_runtime_not_configured",
+                    "policy_matrix": policy_matrix,
+                }
+            return {
+                "ok": True,
+                "policy": ai_runtime.get_policy_snapshot(),
+                "policy_matrix": policy_matrix,
+            }
+
+        @self.app.get("/api/policy/matrix")
+        async def get_policy_matrix():
+            """Возвращает unified policy matrix для owner/full/partial/guest."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            return {
+                "ok": True,
+                "policy_matrix": self._policy_matrix_snapshot(runtime_lite=runtime_lite),
+            }
 
         @self.app.get("/api/queue")
         async def get_queue():
@@ -4150,6 +5328,29 @@ class WebApp:
                 "latest_files_to_attach_path": str(files_to_attach) if files_to_attach and files_to_attach.exists() else None,
             }
 
+        @self.app.get("/api/runtime/operator-profile")
+        async def runtime_operator_profile():
+            """Возвращает machine-readable профиль текущей учётки/runtime для multi-account handoff."""
+            return {
+                "ok": True,
+                "profile": self._runtime_operator_profile(),
+            }
+
+        @self.app.get("/api/capabilities/registry")
+        async def capability_registry():
+            """Возвращает единый capability registry поверх truthful runtime-срезов."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            return await self._capability_registry_snapshot(runtime_lite=runtime_lite)
+
+        @self.app.get("/api/translator/readiness")
+        async def translator_readiness():
+            """Возвращает truthful readiness translator-контура внутри экосистемы Краба."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            snapshot = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            snapshot["capability_registry_endpoint"] = "/api/capabilities/registry"
+            snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
+            return snapshot
+
         @self.app.get("/api/runtime/handoff")
         async def runtime_handoff():
             """
@@ -4163,21 +5364,25 @@ class WebApp:
             voice_gateway = self.deps.get("voice_gateway_client")
             krab_ear = self.deps.get("krab_ear_client")
 
-            async def _safe_health(client: Any, *, timeout_sec: float = 3.5) -> dict[str, Any]:
-                if not client or not hasattr(client, "health_check"):
-                    return {"ok": False, "state": "not_configured", "error": ""}
-                try:
-                    result = await asyncio.wait_for(client.health_check(), timeout=timeout_sec)
-                    return {"ok": bool(result), "state": "up" if bool(result) else "down", "error": ""}
-                except asyncio.TimeoutError:
-                    return {"ok": False, "state": "down", "error": "timeout"}
-                except Exception as exc:
-                    return {"ok": False, "state": "down", "error": str(exc)}
-
             runtime_lite = await self._collect_runtime_lite_snapshot()
-            openclaw_health = await _safe_health(openclaw, timeout_sec=3.0)
-            voice_health = await _safe_health(voice_gateway, timeout_sec=3.0)
-            krab_ear_health = await _safe_health(krab_ear, timeout_sec=3.0)
+            operator_profile = self._runtime_operator_profile()
+            translator_snapshot = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            capability_registry = await self._capability_registry_snapshot(runtime_lite=runtime_lite)
+            openclaw_health = await self._safe_client_health_summary(
+                openclaw,
+                source="openclaw",
+                timeout_sec=3.0,
+            )
+            voice_health = await self._safe_client_health_summary(
+                voice_gateway,
+                source="voice_gateway",
+                timeout_sec=3.0,
+            )
+            krab_ear_health = await self._safe_client_health_summary(
+                krab_ear,
+                source="krab_ear",
+                timeout_sec=3.0,
+            )
 
             cloud_runtime: dict[str, Any] = {"available": False, "error": "not_supported"}
             if openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
@@ -4216,6 +5421,10 @@ class WebApp:
                 "runtime": runtime_lite,
                 "inbox_summary": operator_workflow.get("summary") or {},
                 "operator_workflow": operator_workflow,
+                "operator_profile": operator_profile,
+                "capability_registry_summary": capability_registry.get("summary") or {},
+                "policy_matrix_summary": (capability_registry.get("policy_matrix") or {}).get("summary") or {},
+                "translator_readiness": translator_snapshot,
                 "services": {
                     "openclaw": openclaw_health,
                     "voice_gateway": voice_health,
@@ -4239,6 +5448,10 @@ class WebApp:
                     "latest_context_checkpoint": str(latest_checkpoint) if latest_checkpoint else None,
                     "latest_transition_pack_dir": str(latest_pack_dir) if latest_pack_dir else None,
                     "latest_transfer_prompt": latest_transfer_prompt,
+                    "master_plan_doc": str(self._project_root() / "docs" / "MASTER_PLAN_VNEXT_RU.md"),
+                    "translator_audit_doc": str(self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"),
+                    "multi_account_doc": str(self._project_root() / "docs" / "MULTI_ACCOUNT_SWITCHOVER_RU.md"),
+                    "parallel_dialog_doc": str(self._project_root() / "docs" / "PARALLEL_DIALOG_PROTOCOL_RU.md"),
                 },
             }
 
@@ -4461,12 +5674,12 @@ class WebApp:
             Требует WEB_API_KEY.
             """
             self._assert_write_access(x_krab_web_key, token)
-            script_path = "/Users/pablito/Antigravity_AGENTS/Краб/scripts/signal_ops_guard.command"
+            script_path = "/Users/pablito/Antigravity_AGENTS/Краб/scripts/signal_ops_guard.py"
 
             try:
                 # Запускаем с флагом --once для разовой проверки
                 proc = await asyncio.create_subprocess_exec(
-                    script_path, "--once",
+                    sys.executable, script_path, "--once",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                 )
@@ -4500,6 +5713,11 @@ class WebApp:
                 )
             report = await health_service.collect()
             return {"ok": True, "report": report}
+
+        @self.app.get("/api/ecosystem/capabilities")
+        async def ecosystem_capabilities():
+            """Возвращает capability-срез по control plane и внешним voice/audio сервисам."""
+            return await self._ecosystem_capabilities_snapshot()
 
         @self.app.get("/api/system/diagnostics")
         async def system_diagnostics():
@@ -4991,7 +6209,21 @@ class WebApp:
                 }
                 for preset_id, preset_payload in quick_presets_map.items()
             ]
-            routing_status = self._build_openclaw_model_routing_status()
+            openclaw = self.deps.get("openclaw_client")
+            last_runtime_route: dict[str, Any] = {}
+            if openclaw and hasattr(openclaw, "get_last_runtime_route"):
+                try:
+                    last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
+                except Exception:
+                    last_runtime_route = {}
+            routing_status = self._overlay_live_route_on_openclaw_model_routing_status(
+                routing=self._build_openclaw_model_routing_status(),
+                last_runtime_route=last_runtime_route,
+            )
+            cloud_inventory = self._overlay_routing_provider_truth_on_cloud_inventory(
+                cloud_inventory=cloud_inventory,
+                routing_status=routing_status,
+            )
             runtime_controls = self._build_openclaw_runtime_controls()
 
             router_usage_summary = {}
@@ -5078,7 +6310,7 @@ class WebApp:
                 "parallelism_truth": parallelism_truth,
                 "catalog_guidance": {
                     "primary_flow": "Сначала выбери режим и пресет. Точный слот меняй только в advanced override.",
-                    "openai_manual_only": True,
+                    "openai_manual_only": False,
                 },
             }
 
@@ -5155,58 +6387,10 @@ class WebApp:
                     last_runtime_route = dict(openclaw.get_last_runtime_route() or {})
                 except Exception:
                     last_runtime_route = {}
-
-            route_model = str(last_runtime_route.get("model", "") or "").strip()
-            route_provider = str(last_runtime_route.get("provider", "") or "").strip()
-            route_reason = str(last_runtime_route.get("route_reason", "") or "").strip()
-            route_detail = str(last_runtime_route.get("route_detail", "") or "").strip()
-            route_status = str(last_runtime_route.get("status", "") or "").strip().lower()
-            current_primary = str(routing.get("current_primary", "") or "").strip()
-            live_primary_verified = bool(
-                route_status == "ok"
-                and route_model
-                and route_model == current_primary
+            routing = self._overlay_live_route_on_openclaw_model_routing_status(
+                routing=routing,
+                last_runtime_route=last_runtime_route,
             )
-            live_fallback_active = bool(
-                route_status == "ok"
-                and route_model
-                and current_primary
-                and route_model != current_primary
-                and "fallback" in route_detail.lower()
-            )
-            if route_status == "ok" and route_model:
-                routing["live_active_model"] = route_model
-                routing["live_active_provider"] = route_provider
-                routing["live_active_route_reason"] = route_reason
-                routing["live_active_route_detail"] = route_detail
-            if live_primary_verified:
-                routing["current_primary_broken"] = False
-                routing["temporary_primary_recommendation"] = current_primary
-                warnings = routing.get("warnings")
-                if isinstance(warnings, list):
-                    routing["warnings"] = [
-                        item
-                        for item in warnings
-                        if "openai primary падает с model_not_found" not in str(item).lower()
-                    ]
-                routing["live_primary_verified"] = True
-                routing["live_fallback_active"] = False
-            elif live_fallback_active:
-                routing["current_primary_broken"] = True
-                routing["temporary_primary_recommendation"] = route_model
-                warnings = routing.get("warnings")
-                if isinstance(warnings, list):
-                    fallback_warning = (
-                        f"Сейчас active route идёт через fallback `{route_model}`, "
-                        f"а не через configured primary `{current_primary}`."
-                    )
-                    if fallback_warning not in warnings:
-                        warnings.insert(0, fallback_warning)
-                routing["live_primary_verified"] = False
-                routing["live_fallback_active"] = True
-            else:
-                routing["live_primary_verified"] = False
-                routing["live_fallback_active"] = False
 
             return {
                 "ok": True,
@@ -5380,6 +6564,9 @@ class WebApp:
                 fallbacks_raw = payload.get("fallbacks") if isinstance(payload.get("fallbacks"), list) else []
                 context_tokens_raw = payload.get("context_tokens")
                 thinking_default_raw = payload.get("thinking_default", "off")
+                execution_preset_raw = payload.get("execution_preset", "")
+                main_max_concurrent_raw = payload.get("main_max_concurrent")
+                subagent_max_concurrent_raw = payload.get("subagent_max_concurrent")
                 slot_thinking_raw = payload.get("slot_thinking")
                 try:
                     applied = self._apply_openclaw_runtime_controls(
@@ -5387,6 +6574,9 @@ class WebApp:
                         fallbacks_raw=list(fallbacks_raw),
                         context_tokens_raw=context_tokens_raw,
                         thinking_default_raw=thinking_default_raw,
+                        execution_preset_raw=execution_preset_raw,
+                        main_max_concurrent_raw=main_max_concurrent_raw,
+                        subagent_max_concurrent_raw=subagent_max_concurrent_raw,
                         slot_thinking_raw=slot_thinking_raw if isinstance(slot_thinking_raw, dict) else {},
                     )
                 except ValueError as exc:
@@ -5765,25 +6955,7 @@ class WebApp:
         @self.app.get("/api/assistant/capabilities")
         async def assistant_capabilities():
             """Возвращает возможности web-native assistant режима."""
-            return {
-                "mode": "web_native",
-                "endpoint": "/api/assistant/query",
-                "preflight_endpoint": "/api/model/preflight",
-                "feedback_endpoint": "/api/model/feedback",
-                "model_catalog_endpoint": "/api/model/catalog",
-                "model_apply_endpoint": "/api/model/apply",
-                "attachment_endpoint": "/api/assistant/attachment",
-                "auth": "X-Krab-Web-Key header or token query (if WEB_API_KEY configured)",
-                "task_types": ["chat", "coding", "reasoning", "creative", "moderation", "security", "infra", "review"],
-                "notes": [
-                    "Работает без Telegram-интерфейса.",
-                    "Использует тот же роутер моделей и policy, что и Telegram-бот.",
-                    "Для критичных задач можно передать `confirm_expensive=true`.",
-                    "Оценки качества 1-5 можно отправлять через /api/model/feedback.",
-                    "Модельные слоты и режимы можно менять через /api/model/apply.",
-                    "Файлы можно загружать через /api/assistant/attachment.",
-                ],
-            }
+            return self._assistant_capabilities_snapshot()
 
         @self.app.post("/api/assistant/query")
         async def assistant_query(

@@ -27,15 +27,18 @@ from pyrogram.types import Message
 
 from .config import config
 from .core.access_control import AccessLevel, AccessProfile, resolve_access_profile
+from .core.capability_registry import resolve_access_mode
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
 from .core.logger import get_logger
 from .core.mcp_registry import resolve_managed_server_launch
+from .core.proactive_watch import proactive_watch
 from .core.openclaw_workspace import load_workspace_prompt_bundle
 from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .employee_templates import ROLES, get_role_prompt
+from .integrations.macos_automation import macos_automation
 from .handlers import (
     handle_agent,
     handle_acl,
@@ -46,6 +49,8 @@ from .handlers import (
     handle_help,
     handle_inbox,
     handle_ls,
+    handle_macos,
+    handle_memory,
     handle_model,
     handle_panel,
     handle_read,
@@ -61,6 +66,7 @@ from .handlers import (
     handle_status,
     handle_sysinfo,
     handle_voice,
+    handle_watch,
     handle_web,
     handle_write,
 )
@@ -151,20 +157,33 @@ class KraabUserbot:
     _think_block_pattern = re.compile(r"(?is)<think>.*?</think>")
     _final_block_pattern = re.compile(r"(?is)<final>(.*?)</final>")
     _think_final_tag_pattern = re.compile(r"(?i)</?(?:think|final)>")
+    _voice_delivery_modes = {"text+voice", "voice-only"}
     _deferred_intent_pattern = re.compile(
         r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
     )
 
-    def __init__(self):
+    def __init__(self, *, perceptor: object | None = None):
         """Инициализация юзербота и клиента Pyrogram"""
         self.client: Client | None = None
         self.me = None
         self.current_role = "default"
-        self.voice_mode = False
+        self.voice_mode = bool(getattr(config, "VOICE_MODE_DEFAULT", False))
+        self.voice_reply_speed = self._normalize_voice_reply_speed(
+            getattr(config, "VOICE_REPLY_SPEED", 1.5)
+        )
+        self.voice_reply_voice = self._normalize_voice_reply_voice(
+            getattr(config, "VOICE_REPLY_VOICE", "ru-RU-DmitryNeural")
+        )
+        self.voice_reply_delivery = self._normalize_voice_reply_delivery(
+            getattr(config, "VOICE_REPLY_DELIVERY", "text+voice")
+        )
+        self.perceptor = perceptor
         self.maintenance_task: Optional[asyncio.Task] = None
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
+        self._proactive_watch_task: Optional[asyncio.Task] = None
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
+        self._chat_processing_locks: dict[str, asyncio.Lock] = {}
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
@@ -311,7 +330,9 @@ class KraabUserbot:
         self._known_commands = {
             "status", "model", "clear", "config", "set", "role",
             "voice", "web", "sysinfo", "panel", "restart", "search",
-            "inbox", "remember", "recall", "ls", "read", "write", "agent",
+            "mac", "watch", "memory",
+            "inbox",
+            "remember", "recall", "ls", "read", "write", "agent",
             "diagnose", "help", "remind", "reminders", "rm_remind", "cronstatus",
             "acl", "access",
         }
@@ -380,6 +401,18 @@ class KraabUserbot:
         @self.client.on_message(filters.command("web", prefixes=prefixes) & _make_command_filter("web"), group=-1)
         async def wrap_web(c, m):
             await run_cmd(handle_web, m)
+
+        @self.client.on_message(filters.command("mac", prefixes=prefixes) & _make_command_filter("mac"), group=-1)
+        async def wrap_mac(c, m):
+            await run_cmd(handle_macos, m)
+
+        @self.client.on_message(filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1)
+        async def wrap_watch(c, m):
+            await run_cmd(handle_watch, m)
+
+        @self.client.on_message(filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1)
+        async def wrap_memory(c, m):
+            await run_cmd(handle_memory, m)
 
         @self.client.on_message(filters.command("inbox", prefixes=prefixes) & _make_command_filter("inbox"), group=-1)
         async def wrap_inbox(c, m):
@@ -467,7 +500,7 @@ class KraabUserbot:
             await run_cmd(handle_cronstatus, m)
 
         # Обработка обычных сообщений и медиа
-        @self.client.on_message((filters.text | filters.photo | filters.voice) & ~filters.bot, group=0)
+        @self.client.on_message((filters.text | filters.photo | filters.voice | filters.audio) & ~filters.bot, group=0)
         async def wrap_message(c, m):
             await self._process_message(m)
 
@@ -587,6 +620,62 @@ class KraabUserbot:
         for part in self._split_message(payload):
             await self.client.send_message(target_chat, part)
 
+    async def _send_proactive_watch_alert(self, text: str) -> None:
+        """
+        Отправляет watch-alert в Saved Messages владельца.
+
+        Это даёт владельцу фоновую проактивность без шума в рабочих чатах.
+        """
+        if not self.client or not self.client.is_connected:
+            raise RuntimeError("telegram_client_not_ready")
+        for part in self._split_message(str(text or "").strip()):
+            await self.client.send_message("me", part)
+
+    def _ensure_proactive_watch_started(self) -> None:
+        """Запускает фоновый proactive watch, если он включён конфигом."""
+        if not bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)):
+            return
+        if self._proactive_watch_task and not self._proactive_watch_task.done():
+            return
+        self._proactive_watch_task = asyncio.create_task(self._run_proactive_watch_loop())
+
+    async def _run_proactive_watch_loop(self) -> None:
+        """
+        Периодически снимает owner-oriented runtime digest.
+
+        Первый проход строит baseline без alert.
+        Следующие проходы сообщают только про реальные переходы состояния.
+        """
+        interval_sec = max(60, int(getattr(config, "PROACTIVE_WATCH_INTERVAL_SEC", 900) or 900))
+        baseline_ready = False
+        try:
+            while True:
+                if self.client and self.client.is_connected:
+                    # Даём runtime прогреться: scheduler, wake-up и route warmup должны
+                    # успеть стабилизироваться до baseline, иначе первый snapshot
+                    # получается правдивым, но слишком "холодным" и мало полезным.
+                    if not baseline_ready:
+                        await asyncio.sleep(min(20, max(5, interval_sec // 6)))
+                    result = await proactive_watch.capture(
+                        manual=False,
+                        persist_memory=True,
+                        notify=baseline_ready,
+                        notifier=self._send_proactive_watch_alert,
+                    )
+                    baseline_ready = True
+                    if result.get("reason"):
+                        logger.info(
+                            "proactive_watch_transition_captured",
+                            reason=result.get("reason"),
+                            alerted=bool(result.get("alerted")),
+                            wrote_memory=bool(result.get("wrote_memory")),
+                        )
+                await asyncio.sleep(interval_sec)
+        except asyncio.CancelledError:
+            logger.info("proactive_watch_task_cancelled")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("proactive_watch_loop_failed", error=str(exc), non_fatal=True)
+
     def _sync_scheduler_runtime(self) -> None:
         """
         Синхронизирует состояние scheduler с runtime:
@@ -625,7 +714,115 @@ class KraabUserbot:
             "client_connected": client_connected,
             "authorized_user": me_username,
             "authorized_user_id": me_id,
+            "voice_profile": self.get_voice_runtime_profile(),
         }
+
+    @classmethod
+    def _normalize_voice_reply_speed(cls, value: Any) -> float:
+        """
+        Нормализует коэффициент скорости TTS.
+
+        Почему clamp здесь:
+        - команда `!voice speed` не должна ломать TTS мусорным значением;
+        - сохраняем предсказуемый диапазон и для runtime, и для .env.
+        """
+        del cls
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = 1.5
+        return max(0.75, min(2.5, round(numeric, 2)))
+
+    @classmethod
+    def _normalize_voice_reply_voice(cls, value: Any) -> str:
+        """Возвращает непустой voice-id для edge-tts."""
+        del cls
+        normalized = str(value or "").strip()
+        return normalized or "ru-RU-DmitryNeural"
+
+    @classmethod
+    def _normalize_voice_reply_delivery(cls, value: Any) -> str:
+        """Нормализует режим доставки voice-ответа."""
+        normalized = str(value or "").strip().lower()
+        if normalized in cls._voice_delivery_modes:
+            return normalized
+        return "text+voice"
+
+    def get_voice_runtime_profile(self) -> dict[str, Any]:
+        """
+        Возвращает живой профиль voice-runtime userbot.
+
+        Это source-of-truth для команд, web API и handoff:
+        - включена ли озвучка ответов;
+        - какой голос/скорость/режим доставки активны;
+        - готов ли входящий voice ingress через perceptor.
+        """
+        perceptor = getattr(self, "perceptor", None)
+        perceptor_ready = bool(perceptor) and hasattr(perceptor, "transcribe")
+        return {
+            "enabled": bool(getattr(self, "voice_mode", False)),
+            "delivery": self._normalize_voice_reply_delivery(
+                getattr(self, "voice_reply_delivery", "text+voice")
+            ),
+            "speed": self._normalize_voice_reply_speed(
+                getattr(self, "voice_reply_speed", 1.5)
+            ),
+            "voice": self._normalize_voice_reply_voice(
+                getattr(self, "voice_reply_voice", "ru-RU-DmitryNeural")
+            ),
+            "input_transcription_ready": perceptor_ready,
+            "output_tts_ready": True,
+            "live_voice_foundation": bool(perceptor_ready),
+        }
+
+    def update_voice_runtime_profile(
+        self,
+        *,
+        enabled: Any | None = None,
+        speed: Any | None = None,
+        voice: Any | None = None,
+        delivery: Any | None = None,
+        persist: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Обновляет voice-профиль userbot и при необходимости сохраняет его в `.env`.
+
+        Держим это в runtime-классе, а не в command handler:
+        - web API и Telegram команды используют одну и ту же логику;
+        - handoff/runtime-status не расходятся с фактическим поведением доставки.
+        """
+        if enabled is not None:
+            self.voice_mode = bool(enabled)
+            if persist:
+                config.update_setting("VOICE_MODE_DEFAULT", "1" if self.voice_mode else "0")
+        if speed is not None:
+            self.voice_reply_speed = self._normalize_voice_reply_speed(speed)
+            if persist:
+                config.update_setting("VOICE_REPLY_SPEED", str(self.voice_reply_speed))
+        if voice is not None:
+            self.voice_reply_voice = self._normalize_voice_reply_voice(voice)
+            if persist:
+                config.update_setting("VOICE_REPLY_VOICE", self.voice_reply_voice)
+        if delivery is not None:
+            self.voice_reply_delivery = self._normalize_voice_reply_delivery(delivery)
+            if persist:
+                config.update_setting("VOICE_REPLY_DELIVERY", self.voice_reply_delivery)
+        return self.get_voice_runtime_profile()
+
+    def _should_send_voice_reply(self) -> bool:
+        """Определяет, нужно ли вообще генерировать TTS для текущего ответа."""
+        return bool(self.voice_mode)
+
+    def _should_send_full_text_reply(self) -> bool:
+        """
+        Определяет, нужен ли полный текстовый дубль вместе с voice.
+
+        `voice-only` полезен для будущего live-режима и для чатов, где длинные
+        текстовые полотна мешают. По умолчанию остаёмся в безопасном `text+voice`.
+        """
+        if not self._should_send_voice_reply():
+            return True
+        return self._normalize_voice_reply_delivery(self.voice_reply_delivery) != "voice-only"
 
     async def start(self):
         """Запуск юзербота"""
@@ -775,6 +972,7 @@ class KraabUserbot:
         # Запуск фоновых задач (Safe Start)
         self._ensure_maintenance_started()
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
+        self._ensure_proactive_watch_started()
 
     @staticmethod
     def _is_auth_key_invalid(exc: Exception) -> bool:
@@ -900,6 +1098,8 @@ class KraabUserbot:
                 logger.warning("scheduler_stop_failed", error=str(exc), non_fatal=True)
         if self._telegram_watchdog_task:
             self._telegram_watchdog_task.cancel()
+        if self._proactive_watch_task:
+            self._proactive_watch_task.cancel()
         try:
             await self._safe_stop_client(reason="runtime_stop")
         except Exception as exc:  # noqa: BLE001
@@ -1046,6 +1246,61 @@ class KraabUserbot:
         cleaned = re.sub(r"(?mi)^\s*(assistant|user|system)\s*$", "", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
+
+    @classmethod
+    def _extract_live_stream_text(cls, text: str, *, allow_reasoning: bool = False) -> str:
+        """
+        Возвращает лучший доступный текст для промежуточного live-stream отображения.
+
+        Почему это отдельный helper:
+        - часть провайдеров стримит ответ внутри `<final>` и закрывает тег только
+          в самом конце; старое поведение из-за этого показывало почти пустой draft
+          до финального чанка;
+        - reasoning полезно держать отдельным опциональным режимом, а не мешать в
+          обычный пользовательский текст.
+        """
+        raw = str(text or "")
+        if not raw:
+            return ""
+
+        if "<final>" in raw.lower():
+            lower_raw = raw.lower()
+            start = lower_raw.rfind("<final>")
+            if start >= 0:
+                partial_final = raw[start + len("<final>") :]
+                end = partial_final.lower().find("</final>")
+                if end >= 0:
+                    partial_final = partial_final[:end]
+                partial_final = cls._reply_to_tag_pattern.sub("", partial_final)
+                partial_final = cls._tool_response_block_pattern.sub("", partial_final)
+                partial_final = cls._llm_transport_tokens_pattern.sub("", partial_final)
+                partial_final = cls._think_final_tag_pattern.sub("", partial_final)
+                partial_final = re.sub(r"[ \t]{2,}", " ", partial_final)
+                partial_final = re.sub(r"\n{3,}", "\n\n", partial_final).strip()
+                if partial_final:
+                    return partial_final
+
+        lower_raw = raw.lower()
+        if allow_reasoning and "<think>" in lower_raw:
+            start = lower_raw.rfind("<think>")
+            partial_think = raw[start + len("<think>") :]
+            end = partial_think.lower().find("</think>")
+            if end >= 0:
+                partial_think = partial_think[:end]
+            partial_think = cls._reply_to_tag_pattern.sub("", partial_think)
+            partial_think = cls._tool_response_block_pattern.sub("", partial_think)
+            partial_think = cls._llm_transport_tokens_pattern.sub("", partial_think)
+            partial_think = cls._think_final_tag_pattern.sub("", partial_think)
+            partial_think = re.sub(r"[ \t]{2,}", " ", partial_think)
+            partial_think = re.sub(r"\n{3,}", "\n\n", partial_think).strip()
+            if partial_think:
+                return f"🧠 {partial_think}"
+
+        cleaned = cls._strip_transport_markup(raw)
+        if cleaned:
+            return cleaned
+
+        return ""
 
     @staticmethod
     def _should_force_cloud_for_photo_route(*, has_images: bool) -> bool:
@@ -1329,17 +1584,10 @@ class KraabUserbot:
         access_level: str | AccessLevel | None,
     ) -> str:
         """Нормализует access_level для truthful runtime-summary."""
-        if isinstance(access_level, AccessLevel):
-            return access_level.value
-        normalized = str(access_level or "").strip().lower()
-        if normalized in {
-            AccessLevel.OWNER.value,
-            AccessLevel.FULL.value,
-            AccessLevel.PARTIAL.value,
-            AccessLevel.GUEST.value,
-        }:
-            return normalized
-        return AccessLevel.FULL.value if is_allowed_sender else AccessLevel.GUEST.value
+        return resolve_access_mode(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_level,
+        )
 
     def _build_runtime_capability_status(
         self,
@@ -1385,9 +1633,11 @@ class KraabUserbot:
                 [
                     "- Искать информацию в вебе по команде `!search`.",
                     "- Запоминать и вспоминать факты по командам `!remember` и `!recall`.",
+                    "- Снимать owner-digest, читать последние записи общей памяти и вести owner-visible inbox через `!watch`, `!memory recent`, `!inbox`.",
                     "- Работать с файлами по путям через `!ls`, `!read`, `!write`.",
+                    "- Выполнять базовые действия в macOS через `!mac` (clipboard, notifications, apps, Finder/open, Notes, Reminders, Calendar).",
                     "- Управлять браузерным/веб-контуром через `!web` и открывать панель через `!panel`.",
-                    "- Отправлять голосовой ответ в режиме `!voice`.",
+                    "- Управлять voice-профилем ответов через `!voice` (вкл/выкл, скорость, голос, delivery).",
                 ]
             )
         elif access_mode == AccessLevel.PARTIAL.value:
@@ -1408,13 +1658,13 @@ class KraabUserbot:
 
         limitations: list[str] = [
             "- Актуальные данные из интернета подтягиваю не автоматически в каждом ответе, а через явный инструментальный маршрут или команду.",
-            "- Не выполняю физические действия в реальном мире, только даю текстовые инструкции и результаты.",
+            "- Не выполняю физические действия в реальном мире, но могу делать ограниченные системные действия внутри macOS по явной owner-команде.",
             "- Не запоминаю всю переписку навсегда автоматически: долговременная память у меня точечная и управляется отдельно.",
             "- Качество анализа фото зависит от того, какая модель и какой маршрут сейчас доступны.",
         ]
         if access_mode in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
             limitations.append(
-                "- Голосовой ответ есть, но полноценное понимание входящих голосовых сообщений всё ещё ограничено текущим контуром."
+                "- Голосовой ingress уже работает, но полноценный live-call/WebRTC-контур ещё не доведён до финального режима."
             )
             limitations.append(
                 "- Работа с файлами идёт через команды и пути, а не как полностью бесшовная загрузка любых вложений в обычном диалоге."
@@ -1489,10 +1739,10 @@ class KraabUserbot:
             "`!model`, `!model local`, `!model cloud`, `!model auto`, `!model set <model_id>`, `!model load <name>`, `!model unload`, `!model scan`",
         ]
         tool_commands = [
-            "`!search <запрос>`, `!remember <текст>`, `!recall <запрос>`, `!inbox [list|status|ack|done|cancel]`, `!role`, `!agent ...`",
+            "`!search <запрос>`, `!remember <текст>`, `!recall <запрос>`, `!watch status|now`, `!memory recent [source]`, `!inbox [list|status|ack|done|cancel]`, `!role`, `!agent ...`",
         ]
         system_commands = [
-            "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice`",
+            "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice ...`, `!mac ...`",
         ]
         if bool(getattr(config, "SCHEDULER_ENABLED", False)):
             tool_commands.append("`!remind <время> | <текст>`, `!reminders`, `!rm_remind <id>`, `!cronstatus`")
@@ -1559,7 +1809,9 @@ class KraabUserbot:
             f"- Firecrawl: {'configured' if firecrawl_ready else 'missing key / credits'}",
             f"- Browser relay MCP: {'configured' if browser_ready else 'missing config'}",
             f"- Chrome profile DevTools: {'configured' if chrome_profile_ready else 'missing config'}",
+            f"- macOS automation: {'configured' if macos_automation.is_available() else 'unavailable'}",
             "- Memory engine: ON",
+            f"- Proactive watch: {'ON' if bool(getattr(config, 'PROACTIVE_WATCH_ENABLED', False)) else 'OFF'}",
             "- Файловый MCP-контур: ON",
         ]
         return (
@@ -1695,6 +1947,22 @@ class KraabUserbot:
           обычный AI-ответ;
         - так не дублируем логику split/edit/reply в нескольких ветках.
         """
+        if not self._should_send_full_text_reply():
+            placeholder = "🦀 Голосовой ответ отправлен. Если нужен текстовый дубль, переключи `!voice delivery text+voice`."
+            if is_self:
+                updated = await self._safe_edit(source_message, placeholder)
+                return {
+                    "delivery_mode": "placeholder_only",
+                    "text_message_ids": [str(getattr(updated, "id", "") or "")] if getattr(updated, "id", None) else [],
+                    "parts_count": 1,
+                }
+            updated = await self._safe_edit(temp_message, placeholder)
+            return {
+                "delivery_mode": "placeholder_only",
+                "text_message_ids": [str(getattr(updated, "id", "") or "")] if getattr(updated, "id", None) else [],
+                "parts_count": 1,
+            }
+
         parts = self._split_message(
             f"🦀 {query}\n\n{full_response}" if is_self else full_response
         )
@@ -1710,6 +1978,29 @@ class KraabUserbot:
                     delivered_ids.append(str(sent.id))
             return {
                 "delivery_mode": "edit_and_reply",
+                "text_message_ids": delivered_ids,
+                "parts_count": len(parts),
+            }
+
+        if self._should_send_voice_reply():
+            # Для связки `text+voice` делаем явную текстовую отправку отдельным
+            # сообщением: edit плейсхолдера в некоторых клиентах теряется
+            # визуально, а send_message даёт надёжный финальный event доставки.
+            sent = await self.client.send_message(source_message.chat.id, parts[0])
+            if getattr(sent, "id", None):
+                delivered_ids.append(str(sent.id))
+            for part in parts[1:]:
+                sent = await self.client.send_message(source_message.chat.id, part)
+                if getattr(sent, "id", None):
+                    delivered_ids.append(str(sent.id))
+            try:
+                delete_coro = getattr(temp_message, "delete", None)
+                if callable(delete_coro):
+                    await delete_coro()
+            except Exception:
+                pass
+            return {
+                "delivery_mode": "send_message",
                 "text_message_ids": delivered_ids,
                 "parts_count": len(parts),
             }
@@ -1748,8 +2039,8 @@ class KraabUserbot:
         """
         Фиксирует outcome для ранее захваченного owner request.
 
-        Важно не гадать по transport-логам задним числом: если ответ уже ушёл,
-        persisted inbox должен видеть это сразу.
+        Важно не гадать по Telegram-логам задним числом: если ответ уже доставлен,
+        transport-слой обязан сразу отметить это в persisted inbox.
         """
         if not isinstance(incoming_item_result, dict) or not incoming_item_result.get("ok"):
             return {"ok": False, "skipped": True, "reason": "incoming_item_missing"}
@@ -1788,6 +2079,11 @@ class KraabUserbot:
         if has_images:
             return "Опиши присланное изображение на русском языке."
         return ""
+
+    @staticmethod
+    def _message_has_audio(message: Message) -> bool:
+        """Определяет voice/audio attachment, который можно отдать в STT."""
+        return bool(getattr(message, "voice", None) or getattr(message, "audio", None))
 
     @staticmethod
     def _should_capture_incoming_owner_item(
@@ -1867,6 +2163,77 @@ class KraabUserbot:
             has_audio=bool(has_audio_message),
         )
 
+    @staticmethod
+    def _voice_download_suffix(message: Message) -> str:
+        """Подбирает расширение для временного voice/audio файла."""
+        voice = getattr(message, "voice", None)
+        if voice:
+            return ".ogg"
+        audio = getattr(message, "audio", None)
+        if audio:
+            file_name = str(getattr(audio, "file_name", "") or "").strip()
+            suffix = Path(file_name).suffix.strip()
+            if suffix:
+                return suffix if suffix.startswith(".") else f".{suffix}"
+        return ".ogg"
+
+    async def _transcribe_audio_message(self, message: Message) -> tuple[str, str]:
+        """
+        Скачивает входящее аудио и прогоняет его через Perceptor.
+
+        Возвращает `(текст, ошибка)`, чтобы вызывающий код мог честно показать
+        пользователю реальную причину сбоя, а не маскировать её placeholder-ом.
+        """
+        perceptor = getattr(self, "perceptor", None)
+        if not perceptor or not hasattr(perceptor, "transcribe"):
+            return "", "❌ Голосовой контур сейчас не подключён. Нужен активный perceptor/STT."
+        if not self.client:
+            return "", "❌ Telegram client не готов к загрузке аудио."
+
+        voice_dir = config.BASE_DIR / "data" / "voice_inbox"
+        voice_dir.mkdir(parents=True, exist_ok=True)
+        message_id = int(getattr(message, "id", 0) or 0)
+        file_path = voice_dir / (
+            f"voice_{int(time.time() * 1000)}_{message_id}{self._voice_download_suffix(message)}"
+        )
+        download_timeout_sec = float(getattr(config, "VOICE_DOWNLOAD_TIMEOUT_SEC", 45.0))
+        stt_timeout_sec = float(
+            max(
+                20.0,
+                float(getattr(perceptor, "stt_worker_timeout_seconds", 240) or 240) + 15.0,
+            )
+        )
+        saved_path = file_path
+
+        try:
+            downloaded = await asyncio.wait_for(
+                self.client.download_media(message, file_name=str(file_path)),
+                timeout=max(5.0, download_timeout_sec),
+            )
+            if downloaded:
+                saved_path = Path(str(downloaded))
+            transcript = await asyncio.wait_for(
+                perceptor.transcribe(str(saved_path), model_manager),
+                timeout=stt_timeout_sec,
+            )
+            normalized = str(transcript or "").strip()
+            if not normalized:
+                return "", "❌ Не удалось распознать голосовое сообщение."
+            if normalized.lower().startswith("ошибка транскрибации"):
+                return "", f"❌ {normalized}"
+            return normalized, ""
+        except asyncio.TimeoutError:
+            return "", "❌ Таймаут обработки голосового сообщения. Попробуй отправить его ещё раз."
+        except Exception as exc:  # noqa: BLE001
+            logger.error("voice_message_transcription_failed", error=str(exc))
+            return "", "❌ Ошибка обработки голосового сообщения. Попробуй отправить его ещё раз."
+        finally:
+            try:
+                if saved_path.exists():
+                    saved_path.unlink()
+            except Exception:
+                pass
+
     def _apply_optional_disclosure(self, *, chat_id: str, text: str) -> str:
         """
         Опционально добавляет дисклеймер в первый ответ для конкретного чата.
@@ -1942,6 +2309,443 @@ class KraabUserbot:
             return parts[1].strip()
         return ""
 
+    def _get_chat_processing_lock(self, chat_id: str) -> asyncio.Lock:
+        """
+        Возвращает lock на конкретный чат.
+
+        Почему это нужно:
+        - без сериализации несколько сообщений из одного Telegram-чата могут
+          одновременно зайти в LLM/TTS;
+        - в voice-режиме это даёт наложение озвучки, гонки редактирования и
+          ситуацию, когда текст/голос приезжают в перепутанном порядке;
+        - per-chat lock убирает гонку локально, не запрещая параллельную
+          обработку разных чатов.
+        """
+        chat_key = str(chat_id or "").strip() or "unknown"
+        locks = getattr(self, "_chat_processing_locks", None)
+        if locks is None:
+            locks = {}
+            self._chat_processing_locks = locks
+        lock = locks.get(chat_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[chat_key] = lock
+        return lock
+
+    async def _process_message_serialized(
+        self,
+        *,
+        message: Message,
+        user: Any,
+        access_profile: AccessProfile,
+        is_allowed_sender: bool,
+        chat_id: str,
+    ) -> None:
+        """Обрабатывает одно входящее сообщение под эксклюзивным lock чата."""
+        text = message.text or message.caption or ""
+        has_audio_message = self._message_has_audio(message)
+
+        if text and text.lstrip()[:1] in ("!", "/", "."):
+            cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
+            if cmd_word in self._known_commands:
+                if not access_profile.can_execute_command(cmd_word, self._known_commands):
+                    await message.reply(self._build_command_access_denied_text(cmd_word, access_profile))
+                return
+
+        if not text and not message.photo and not has_audio_message:
+            return
+
+        runtime_chat_id = self._build_runtime_chat_scope_id(
+            chat_id=chat_id,
+            user_id=int(user.id),
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_profile.level,
+        )
+        is_self = user.id == self.me.id
+        has_trigger = self._is_trigger(text)
+        has_group_audio_fallback = (
+            has_audio_message
+            and is_allowed_sender
+            and bool(getattr(config, "GROUP_VOICE_FALLBACK_TRIGGER", True))
+        )
+
+        is_reply_to_me = (
+            message.reply_to_message
+            and message.reply_to_message.from_user
+            and message.reply_to_message.from_user.id == self.me.id
+        )
+
+        if not (
+            has_trigger
+            or message.chat.type == enums.ChatType.PRIVATE
+            or is_reply_to_me
+            or has_group_audio_fallback
+        ):
+            return
+
+        query = self._get_clean_text(text)
+        if not query and has_audio_message:
+            query, voice_error = await self._transcribe_audio_message(message)
+            if not query:
+                await message.reply(voice_error or "❌ Не удалось распознать голосовое сообщение.")
+                return
+        if not query and not message.photo and not has_audio_message and not is_reply_to_me:
+            return
+
+        incoming_item_result: dict[str, Any] | None = None
+        try:
+            incoming_item_result = self._sync_incoming_message_to_inbox(
+                message=message,
+                user=user,
+                query=query,
+                is_self=is_self,
+                is_allowed_sender=is_allowed_sender,
+                has_trigger=has_trigger,
+                is_reply_to_me=bool(is_reply_to_me),
+                has_audio_message=has_audio_message,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("incoming_message_inbox_sync_failed", chat_id=chat_id, error=str(exc))
+
+        logger.info(
+            "processing_ai_request",
+            chat_id=chat_id,
+            user=user.username,
+            has_photo=bool(message.photo),
+            has_audio=bool(has_audio_message),
+        )
+        action = enums.ChatAction.RECORD_AUDIO if self._should_send_voice_reply() else enums.ChatAction.TYPING
+        await self.client.send_chat_action(message.chat.id, action)
+
+        # Переключение ролей
+        if has_trigger and any(p in text.lower() for p in ["стань", "будь", "как"]):
+            for role in ROLES:
+                if role in text.lower():
+                    self.current_role = role
+                    await message.reply(f"🎭 **Режим изменен:** `{role}`. Слушаю.")
+                    return
+
+        temp_msg = message
+        if not is_self:
+            temp_msg = await message.reply("🦀 ...")
+        else:
+            message = await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
+
+        if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
+            runtime_text = await self._build_runtime_truth_status(
+                is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
+            )
+            runtime_text = self._apply_optional_disclosure(
+                chat_id=chat_id,
+                text=runtime_text,
+            )
+            delivery_result = await self._deliver_response_parts(
+                source_message=message,
+                temp_message=temp_msg,
+                is_self=is_self,
+                query=query,
+                full_response=runtime_text,
+            )
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=runtime_text,
+                delivery_result=delivery_result,
+                note="runtime_truth_fastpath",
+            )
+            return
+
+        if self._looks_like_capability_status_question(query):
+            capability_text = self._build_runtime_capability_status(
+                is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
+            )
+            capability_text = self._apply_optional_disclosure(
+                chat_id=chat_id,
+                text=capability_text,
+            )
+            delivery_result = await self._deliver_response_parts(
+                source_message=message,
+                temp_message=temp_msg,
+                is_self=is_self,
+                query=query,
+                full_response=capability_text,
+            )
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=capability_text,
+                delivery_result=delivery_result,
+                note="capability_truth_fastpath",
+            )
+            return
+
+        if self._looks_like_commands_question(query):
+            commands_text = self._build_runtime_commands_status(
+                is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
+            )
+            commands_text = self._apply_optional_disclosure(
+                chat_id=chat_id,
+                text=commands_text,
+            )
+            delivery_result = await self._deliver_response_parts(
+                source_message=message,
+                temp_message=temp_msg,
+                is_self=is_self,
+                query=query,
+                full_response=commands_text,
+            )
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=commands_text,
+                delivery_result=delivery_result,
+                note="commands_truth_fastpath",
+            )
+            return
+
+        if self._looks_like_integrations_question(query):
+            integrations_text = await self._build_runtime_integrations_status(
+                is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
+            )
+            integrations_text = self._apply_optional_disclosure(
+                chat_id=chat_id,
+                text=integrations_text,
+            )
+            delivery_result = await self._deliver_response_parts(
+                source_message=message,
+                temp_message=temp_msg,
+                is_self=is_self,
+                query=query,
+                full_response=integrations_text,
+            )
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=integrations_text,
+                delivery_result=delivery_result,
+                note="integrations_truth_fastpath",
+            )
+            return
+
+        # VISION: Обработка фото
+        images = []
+        photo_error = ""
+        if message.photo:
+            try:
+                if is_self:
+                    message = await self._safe_edit(message, f"🦀 {query}\n\n👀 *Разглядываю фото...*")
+                else:
+                    temp_msg = await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
+
+                # Защита от зависания media-path: ограничиваем download timeout.
+                photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
+                photo_obj = await asyncio.wait_for(
+                    self.client.download_media(message, in_memory=True),
+                    timeout=max(5.0, photo_timeout_sec),
+                )
+                if photo_obj:
+                    img_bytes = photo_obj.getvalue()
+                    b64_img = base64.b64encode(img_bytes).decode("utf-8")
+                    images.append(b64_img)
+                else:
+                    photo_error = "❌ Не удалось прочитать фото. Отправь изображение повторно."
+            except asyncio.TimeoutError:
+                photo_error = "❌ Таймаут загрузки фото. Повтори отправку изображения."
+                logger.error(
+                    "photo_processing_timeout",
+                    chat_id=chat_id,
+                    timeout_sec=float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0)),
+                )
+            except Exception as e:
+                logger.error("photo_processing_error", error=str(e))
+                photo_error = "❌ Ошибка обработки фото. Попробуй отправить его ещё раз."
+
+        # Для фото-пути не продолжаем в AI-stream без успешно загруженного изображения:
+        # это исключает зависание на «Разглядываю фото...» и пустые/необъяснимые ответы.
+        if message.photo and not images:
+            safe_query = (query or "(Фото)").strip()
+            safe_error = photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
+            if is_self:
+                message = await self._safe_edit(message, f"🦀 {safe_query}\n\n{safe_error}")
+                delivery_result = {
+                    "delivery_mode": "edit_error",
+                    "text_message_ids": [str(getattr(message, "id", "") or "")] if getattr(message, "id", None) else [],
+                    "parts_count": 1,
+                }
+            else:
+                temp_msg = await self._safe_edit(temp_msg, safe_error)
+                delivery_result = {
+                    "delivery_mode": "edit_error",
+                    "text_message_ids": [str(getattr(temp_msg, "id", "") or "")] if getattr(temp_msg, "id", None) else [],
+                    "parts_count": 1,
+                }
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=safe_error,
+                delivery_result=delivery_result,
+                note="photo_route_error",
+            )
+            return
+
+        full_response = ""
+        full_response_raw = ""
+        last_edit_time = 0.0
+
+        system_prompt = self._build_system_prompt_for_sender(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_profile.level,
+        )
+
+        # CONTEXT: Добавляем контекст чата для групп
+        if is_allowed_sender and message.chat.type != enums.ChatType.PRIVATE:
+            context = await self._get_chat_context(message.chat.id)
+            if context:
+                system_prompt += f"\n\n[CONTEXT OF LAST MESSAGES]\n{context}\n[END CONTEXT]\n\nReply to the user request taking into account the context above."
+
+        first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
+            has_photo=bool(images)
+        )
+        max_output_tokens = int(
+            getattr(
+                config,
+                "USERBOT_PHOTO_MAX_OUTPUT_TOKENS" if images else "USERBOT_MAX_OUTPUT_TOKENS",
+                0,
+            )
+            or 0
+        )
+        effective_query = self._build_effective_user_query(
+            query=query,
+            has_images=bool(images),
+        )
+        force_cloud = bool(getattr(config, "FORCE_CLOUD", False))
+        if self._should_force_cloud_for_photo_route(has_images=bool(images)):
+            logger.info(
+                "userbot_photo_route_forced_to_cloud",
+                chat_id=chat_id,
+                preferred_vision=str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or ""),
+            )
+            force_cloud = True
+
+        stream = openclaw_client.send_message_stream(
+            message=effective_query,
+            chat_id=runtime_chat_id,
+            system_prompt=system_prompt,
+            images=images,
+            force_cloud=force_cloud,
+            max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
+        )
+        stream_iter = stream.__aiter__()
+        received_any_chunk = False
+
+        while True:
+            wait_timeout = chunk_timeout_sec if received_any_chunk else first_chunk_timeout_sec
+            try:
+                chunk = await asyncio.wait_for(
+                    stream_iter.__anext__(),
+                    timeout=wait_timeout,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                logger.error(
+                    "openclaw_stream_chunk_timeout",
+                    chat_id=chat_id,
+                    timeout_sec=wait_timeout,
+                    first_chunk=not received_any_chunk,
+                    has_photo=bool(images),
+                )
+                full_response = (
+                    "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
+                )
+                try:
+                    await stream.aclose()
+                except Exception:
+                    pass
+                break
+
+            full_response_raw += chunk
+            received_any_chunk = True
+            stream_display = (
+                self._extract_live_stream_text(
+                    full_response_raw,
+                    allow_reasoning=bool(getattr(config, "TELEGRAM_STREAM_SHOW_REASONING", False)),
+                )
+                if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True))
+                else full_response_raw
+            )
+            if stream_display:
+                full_response = stream_display
+
+            update_interval = float(getattr(config, "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", 0.75) or 0.75)
+            update_interval = max(0.25, update_interval)
+            if stream_display and (time.time() - last_edit_time > update_interval):
+                last_edit_time = time.time()
+                try:
+                    display = f"{stream_display} ▌"
+                    if is_self:
+                        message = await self._safe_edit(message, f"🦀 {query}\n\n{display}")
+                    else:
+                        temp_msg = await self._safe_edit(temp_msg, display)
+                except Exception:
+                    pass
+
+        if not full_response:
+            full_response = self._extract_live_stream_text(full_response_raw, allow_reasoning=False)
+        if not full_response:
+            full_response = "❌ Модель не вернула ответ."
+
+        # Нормализация: защита от пустого/невидимого вывода модели.
+        if not str(full_response).strip():
+            full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
+
+        if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True)):
+            full_response = self._strip_transport_markup(full_response)
+            if not full_response:
+                full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
+        full_response = self._apply_deferred_action_guard(full_response)
+
+        # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
+        # а не доверяем декларативному тексту самой LLM.
+        if is_allowed_sender and self._looks_like_model_status_question(query):
+            route_meta = {}
+            if hasattr(openclaw_client, "get_last_runtime_route"):
+                try:
+                    route_meta = openclaw_client.get_last_runtime_route() or {}
+                except Exception:
+                    route_meta = {}
+            if route_meta:
+                full_response = self._build_runtime_model_status(route_meta)
+
+        full_response = self._apply_optional_disclosure(
+            chat_id=chat_id,
+            text=full_response,
+        )
+
+        delivery_result = await self._deliver_response_parts(
+            source_message=message,
+            temp_message=temp_msg,
+            is_self=is_self,
+            query=query,
+            full_response=full_response,
+        )
+        self._record_incoming_reply_to_inbox(
+            incoming_item_result=incoming_item_result,
+            response_text=full_response,
+            delivery_result=delivery_result,
+            note="llm_response_delivered",
+        )
+
+        if self._should_send_voice_reply():
+            voice_path = await text_to_speech(
+                full_response,
+                speed=self.voice_reply_speed,
+                voice=self.voice_reply_voice,
+            )
+            if voice_path:
+                await self.client.send_voice(message.chat.id, voice_path)
+                if os.path.exists(voice_path):
+                    os.remove(voice_path)
+
     async def _process_message(self, message: Message):
         """Главный обработчик входящих сообщений"""
         try:
@@ -1956,384 +2760,15 @@ class KraabUserbot:
                     source="legacy_allowed_sender_override",
                     matched_subject=str(getattr(user, "username", "") or getattr(user, "id", "")),
                 )
-
-            text = message.text or message.caption or ""
-            has_voice = bool(getattr(message, "voice", None))
-
-            if text and text.lstrip()[:1] in ("!", "/", "."):
-                cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
-                if cmd_word in self._known_commands:
-                    if not access_profile.can_execute_command(cmd_word, self._known_commands):
-                        await message.reply(self._build_command_access_denied_text(cmd_word, access_profile))
-                    return
-
-            if not text and not message.photo and not has_voice:
-                return
-
             chat_id = str(message.chat.id)
-            runtime_chat_id = self._build_runtime_chat_scope_id(
-                chat_id=chat_id,
-                user_id=int(user.id),
-                is_allowed_sender=is_allowed_sender,
-                access_level=access_profile.level,
-            )
-            is_self = user.id == self.me.id
-            has_trigger = self._is_trigger(text)
-
-            is_reply_to_me = (
-                message.reply_to_message
-                and message.reply_to_message.from_user
-                and message.reply_to_message.from_user.id == self.me.id
-            )
-
-            if not (has_trigger or message.chat.type == enums.ChatType.PRIVATE or is_reply_to_me):
-                return
-
-            query = self._get_clean_text(text)
-            if not query and has_voice:
-                query = "(Голосовое сообщение)"
-            if not query and not message.photo and not has_voice and not is_reply_to_me:
-                return
-
-            incoming_item_result: dict[str, Any] | None = None
-            try:
-                incoming_item_result = self._sync_incoming_message_to_inbox(
+            async with self._get_chat_processing_lock(chat_id):
+                await self._process_message_serialized(
                     message=message,
                     user=user,
-                    query=query,
-                    is_self=is_self,
+                    access_profile=access_profile,
                     is_allowed_sender=is_allowed_sender,
-                    has_trigger=has_trigger,
-                    is_reply_to_me=bool(is_reply_to_me),
-                    has_audio_message=bool(has_voice),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("incoming_message_inbox_sync_failed", chat_id=chat_id, error=str(exc))
-
-            logger.info(
-                "processing_ai_request",
-                chat_id=chat_id,
-                user=user.username,
-                has_photo=bool(message.photo),
-            )
-            action = enums.ChatAction.RECORD_AUDIO if self.voice_mode else enums.ChatAction.TYPING
-            await self.client.send_chat_action(message.chat.id, action)
-
-            # Переключение ролей
-            if has_trigger and any(p in text.lower() for p in ["стань", "будь", "как"]):
-                for role in ROLES:
-                    if role in text.lower():
-                        self.current_role = role
-                        await message.reply(f"🎭 **Режим изменен:** `{role}`. Слушаю.")
-                        return
-
-            temp_msg = message
-            if not is_self:
-                temp_msg = await message.reply("🦀 ...")
-            else:
-                message = await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
-
-            if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
-                runtime_text = await self._build_runtime_truth_status(
-                    is_allowed_sender=is_allowed_sender,
-                    access_level=access_profile.level,
-                )
-                runtime_text = self._apply_optional_disclosure(
                     chat_id=chat_id,
-                    text=runtime_text,
                 )
-                delivery_result = await self._deliver_response_parts(
-                    source_message=message,
-                    temp_message=temp_msg,
-                    is_self=is_self,
-                    query=query,
-                    full_response=runtime_text,
-                )
-                self._record_incoming_reply_to_inbox(
-                    incoming_item_result=incoming_item_result,
-                    response_text=runtime_text,
-                    delivery_result=delivery_result,
-                    note="runtime_truth_fastpath",
-                )
-                return
-
-            if self._looks_like_capability_status_question(query):
-                capability_text = self._build_runtime_capability_status(
-                    is_allowed_sender=is_allowed_sender,
-                    access_level=access_profile.level,
-                )
-                capability_text = self._apply_optional_disclosure(
-                    chat_id=chat_id,
-                    text=capability_text,
-                )
-                delivery_result = await self._deliver_response_parts(
-                    source_message=message,
-                    temp_message=temp_msg,
-                    is_self=is_self,
-                    query=query,
-                    full_response=capability_text,
-                )
-                self._record_incoming_reply_to_inbox(
-                    incoming_item_result=incoming_item_result,
-                    response_text=capability_text,
-                    delivery_result=delivery_result,
-                    note="capability_truth_fastpath",
-                )
-                return
-
-            if self._looks_like_commands_question(query):
-                commands_text = self._build_runtime_commands_status(
-                    is_allowed_sender=is_allowed_sender,
-                    access_level=access_profile.level,
-                )
-                commands_text = self._apply_optional_disclosure(
-                    chat_id=chat_id,
-                    text=commands_text,
-                )
-                delivery_result = await self._deliver_response_parts(
-                    source_message=message,
-                    temp_message=temp_msg,
-                    is_self=is_self,
-                    query=query,
-                    full_response=commands_text,
-                )
-                self._record_incoming_reply_to_inbox(
-                    incoming_item_result=incoming_item_result,
-                    response_text=commands_text,
-                    delivery_result=delivery_result,
-                    note="commands_truth_fastpath",
-                )
-                return
-
-            if self._looks_like_integrations_question(query):
-                integrations_text = await self._build_runtime_integrations_status(
-                    is_allowed_sender=is_allowed_sender,
-                    access_level=access_profile.level,
-                )
-                integrations_text = self._apply_optional_disclosure(
-                    chat_id=chat_id,
-                    text=integrations_text,
-                )
-                delivery_result = await self._deliver_response_parts(
-                    source_message=message,
-                    temp_message=temp_msg,
-                    is_self=is_self,
-                    query=query,
-                    full_response=integrations_text,
-                )
-                self._record_incoming_reply_to_inbox(
-                    incoming_item_result=incoming_item_result,
-                    response_text=integrations_text,
-                    delivery_result=delivery_result,
-                    note="integrations_truth_fastpath",
-                )
-                return
-
-            # VISION: Обработка фото
-            images = []
-            photo_error = ""
-            if message.photo:
-                try:
-                    if is_self:
-                        message = await self._safe_edit(message, f"🦀 {query}\n\n👀 *Разглядываю фото...*")
-                    else:
-                        temp_msg = await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
-
-                    # Защита от зависания media-path: ограничиваем download timeout.
-                    photo_timeout_sec = float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0))
-                    photo_obj = await asyncio.wait_for(
-                        self.client.download_media(message, in_memory=True),
-                        timeout=max(5.0, photo_timeout_sec),
-                    )
-                    if photo_obj:
-                        img_bytes = photo_obj.getvalue()
-                        b64_img = base64.b64encode(img_bytes).decode("utf-8")
-                        images.append(b64_img)
-                    else:
-                        photo_error = "❌ Не удалось прочитать фото. Отправь изображение повторно."
-                except asyncio.TimeoutError:
-                    photo_error = "❌ Таймаут загрузки фото. Повтори отправку изображения."
-                    logger.error(
-                        "photo_processing_timeout",
-                        chat_id=chat_id,
-                        timeout_sec=float(getattr(config, "PHOTO_DOWNLOAD_TIMEOUT_SEC", 40.0)),
-                    )
-                except Exception as e:
-                    logger.error("photo_processing_error", error=str(e))
-                    photo_error = "❌ Ошибка обработки фото. Попробуй отправить его ещё раз."
-
-            # Для фото-пути не продолжаем в AI-stream без успешно загруженного изображения:
-            # это исключает зависание на «Разглядываю фото...» и пустые/необъяснимые ответы.
-            if message.photo and not images:
-                safe_query = (query or "(Фото)").strip()
-                safe_error = photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
-                if is_self:
-                    message = await self._safe_edit(message, f"🦀 {safe_query}\n\n{safe_error}")
-                    delivery_result = {
-                        "delivery_mode": "edit_error",
-                        "text_message_ids": [str(getattr(message, "id", "") or "")] if getattr(message, "id", None) else [],
-                        "parts_count": 1,
-                    }
-                else:
-                    temp_msg = await self._safe_edit(temp_msg, safe_error)
-                    delivery_result = {
-                        "delivery_mode": "edit_error",
-                        "text_message_ids": [str(getattr(temp_msg, "id", "") or "")] if getattr(temp_msg, "id", None) else [],
-                        "parts_count": 1,
-                    }
-                self._record_incoming_reply_to_inbox(
-                    incoming_item_result=incoming_item_result,
-                    response_text=safe_error,
-                    delivery_result=delivery_result,
-                    note="photo_route_error",
-                )
-                return
-
-            full_response = ""
-            full_response_raw = ""
-            last_edit_time = 0
-
-            system_prompt = self._build_system_prompt_for_sender(
-                is_allowed_sender=is_allowed_sender,
-                access_level=access_profile.level,
-            )
-
-            # CONTEXT: Добавляем контекст чата для групп
-            if is_allowed_sender and message.chat.type != enums.ChatType.PRIVATE:
-                context = await self._get_chat_context(message.chat.id)
-                if context:
-                    system_prompt += f"\n\n[CONTEXT OF LAST MESSAGES]\n{context}\n[END CONTEXT]\n\nReply to the user request taking into account the context above."
-
-            first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
-                has_photo=bool(images)
-            )
-            max_output_tokens = int(
-                getattr(
-                    config,
-                    "USERBOT_PHOTO_MAX_OUTPUT_TOKENS" if images else "USERBOT_MAX_OUTPUT_TOKENS",
-                    0,
-                )
-                or 0
-            )
-            effective_query = self._build_effective_user_query(
-                query=query,
-                has_images=bool(images),
-            )
-            force_cloud = bool(getattr(config, "FORCE_CLOUD", False))
-            if self._should_force_cloud_for_photo_route(has_images=bool(images)):
-                logger.info(
-                    "userbot_photo_route_forced_to_cloud",
-                    chat_id=chat_id,
-                    preferred_vision=str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or ""),
-                )
-                force_cloud = True
-
-            stream = openclaw_client.send_message_stream(
-                message=effective_query,
-                chat_id=runtime_chat_id,
-                system_prompt=system_prompt,
-                images=images,
-                force_cloud=force_cloud,
-                max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
-            )
-            stream_iter = stream.__aiter__()
-            received_any_chunk = False
-
-            while True:
-                wait_timeout = chunk_timeout_sec if received_any_chunk else first_chunk_timeout_sec
-                try:
-                    chunk = await asyncio.wait_for(
-                        stream_iter.__anext__(),
-                        timeout=wait_timeout,
-                    )
-                except StopAsyncIteration:
-                    break
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "openclaw_stream_chunk_timeout",
-                        chat_id=chat_id,
-                        timeout_sec=wait_timeout,
-                        first_chunk=not received_any_chunk,
-                        has_photo=bool(images),
-                    )
-                    full_response = (
-                        "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
-                    )
-                    try:
-                        await stream.aclose()
-                    except Exception:
-                        pass
-                    break
-
-                full_response_raw += chunk
-                received_any_chunk = True
-                full_response = (
-                    self._strip_transport_markup(full_response_raw)
-                    if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True))
-                    else full_response_raw
-                )
-
-                if time.time() - last_edit_time > 1.5:
-                    last_edit_time = time.time()
-                    try:
-                        display = (full_response or "…") + " ▌"
-                        if is_self:
-                            message = await self._safe_edit(message, f"🦀 {query}\n\n{display}")
-                        else:
-                            temp_msg = await self._safe_edit(temp_msg, display)
-                    except Exception:
-                        pass
-
-            if not full_response:
-                full_response = "❌ Модель не вернула ответ."
-
-            # Нормализация: защита от пустого/невидимого вывода модели.
-            if not str(full_response).strip():
-                full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
-
-            if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True)):
-                full_response = self._strip_transport_markup(full_response)
-                if not full_response:
-                    full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
-            full_response = self._apply_deferred_action_guard(full_response)
-
-            # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
-            # а не доверяем декларативному тексту самой LLM.
-            if is_allowed_sender and self._looks_like_model_status_question(query):
-                route_meta = {}
-                if hasattr(openclaw_client, "get_last_runtime_route"):
-                    try:
-                        route_meta = openclaw_client.get_last_runtime_route() or {}
-                    except Exception:
-                        route_meta = {}
-                if route_meta:
-                    full_response = self._build_runtime_model_status(route_meta)
-
-            full_response = self._apply_optional_disclosure(
-                chat_id=chat_id,
-                text=full_response,
-            )
-
-            delivery_result = await self._deliver_response_parts(
-                source_message=message,
-                temp_message=temp_msg,
-                is_self=is_self,
-                query=query,
-                full_response=full_response,
-            )
-            self._record_incoming_reply_to_inbox(
-                incoming_item_result=incoming_item_result,
-                response_text=full_response,
-                delivery_result=delivery_result,
-                note="llm_response_delivered",
-            )
-
-            if self.voice_mode:
-                voice_path = await text_to_speech(full_response)
-                if voice_path:
-                    await self.client.send_voice(message.chat.id, voice_path)
-                    if os.path.exists(voice_path):
-                        os.remove(voice_path)
 
         except KrabError as e:
             logger.warning("provider_error", error=str(e), retryable=e.retryable)
