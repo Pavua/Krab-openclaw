@@ -152,6 +152,8 @@ def test_inbox_status_returns_workflow_snapshot(monkeypatch: pytest.MonkeyPatch,
     assert data["workflow"]["recent_replied_requests"][0]["metadata"]["message_id"] == "55"
     assert data["workflow"]["recent_replied_requests"][0]["metadata"]["reply_message_ids"] == ["7001"]
     assert data["workflow"]["approval_history"][0]["identity"]["approval_scope"] == "money"
+    assert data["workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"] == "approved"
+    assert data["workflow"]["recent_owner_actions"][0]["action"] == "approved"
 
 
 def test_runtime_handoff_contains_operator_workflow(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -169,6 +171,7 @@ def test_runtime_handoff_contains_operator_workflow(monkeypatch: pytest.MonkeyPa
     assert data["operator_workflow"]["summary"]["pending_owner_requests"] == 0
     assert data["operator_workflow"]["pending_owner_tasks"][0]["metadata"]["task_key"] == "reserve-safe-smoke"
     assert data["operator_workflow"]["recent_activity"][0]["action"] == "reply_sent"
+    assert data["operator_workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"] == "approved"
     assert data["inbox_summary"]["pending_owner_tasks"] == 1
 
 
@@ -192,4 +195,5 @@ def test_ops_runtime_snapshot_contains_operator_workflow(monkeypatch: pytest.Mon
     assert data["ok"] is True
     assert data["operator_workflow"]["summary"]["pending_owner_tasks"] == 1
     assert data["operator_workflow"]["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Transport persistence проверен."
+    assert data["operator_workflow"]["recent_owner_actions"][0]["action"] == "approved"
     assert data["operator_workflow"]["trace_index"]

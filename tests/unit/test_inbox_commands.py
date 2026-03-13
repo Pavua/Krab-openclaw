@@ -67,7 +67,7 @@ async def test_handle_inbox_done_updates_item(tmp_path) -> None:
         body="gateway down",
         severity="error",
     )["item"]
-    message = _make_message(f"!inbox done {item['item_id']}")
+    message = _make_message(f"!inbox done {item['item_id']} | smoke завершён")
     bot = SimpleNamespace()
     original = command_handlers_module.inbox_service
     command_handlers_module.inbox_service = inbox
@@ -77,7 +77,10 @@ async def test_handle_inbox_done_updates_item(tmp_path) -> None:
         command_handlers_module.inbox_service = original
 
     message.reply.assert_awaited_once()
-    assert inbox.list_items(status="done", kind="watch_alert", limit=5)
+    done_items = inbox.list_items(status="done", kind="watch_alert", limit=5)
+    assert done_items
+    assert done_items[0]["metadata"]["resolved_by"] == "telegram-owner"
+    assert done_items[0]["metadata"]["resolution_note"] == "smoke завершён"
 
 
 @pytest.mark.asyncio
@@ -126,7 +129,7 @@ async def test_handle_inbox_approve_updates_approval_request(tmp_path) -> None:
         request_key="paid-cloud",
         approval_scope="money",
     )["item"]
-    message = _make_message(f"!inbox approve {item['item_id']}")
+    message = _make_message(f"!inbox approve {item['item_id']} | budget ok")
     bot = SimpleNamespace()
     original = command_handlers_module.inbox_service
     command_handlers_module.inbox_service = inbox
@@ -138,6 +141,8 @@ async def test_handle_inbox_approve_updates_approval_request(tmp_path) -> None:
     message.reply.assert_awaited_once()
     approved_items = inbox.list_items(status="approved", kind="approval_request", limit=5)
     assert approved_items
+    assert approved_items[0]["metadata"]["approval_decision"] == "approved"
+    assert approved_items[0]["metadata"]["resolution_note"] == "budget ok"
 
 
 @pytest.mark.asyncio

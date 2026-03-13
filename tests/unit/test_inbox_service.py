@@ -219,6 +219,8 @@ def test_workflow_snapshot_exposes_trace_index_and_approval_history(tmp_path: Pa
     assert workflow["summary"]["pending_owner_requests"] == 1
     assert workflow["approval_history"][0]["status"] == "approved"
     assert workflow["approval_history"][0]["identity"]["approval_scope"] == "money"
+    assert workflow["recent_approval_decisions"][0]["metadata"]["approval_decision"] == "approved"
+    assert workflow["recent_owner_actions"][0]["action"] == "approved"
     assert workflow["pending_owner_tasks"][0]["metadata"]["task_key"] == "reserve-delivery"
     assert workflow["incoming_owner_requests"][0]["metadata"]["message_id"] == "77"
     assert workflow["trace_index"]
@@ -253,3 +255,27 @@ def test_record_incoming_owner_reply_persists_reply_and_recent_activity(tmp_path
     assert workflow["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Handoff truth синхронизирован."
     assert workflow["recent_activity"][0]["action"] == "reply_sent"
     assert workflow["recent_activity"][0]["note"] == "llm_response_delivered"
+
+
+def test_set_item_status_persists_owner_resolution_metadata(tmp_path: Path) -> None:
+    """Owner-action должен оставлять resolution metadata и попадать в recent owner actions."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    task = service.upsert_owner_task(
+        title="Проверить reserve-safe режим",
+        body="Нужен smoke.",
+        task_key="reserve-safe",
+    )["item"]
+
+    result = service.set_item_status(
+        task["item_id"],
+        status="done",
+        actor="owner-ui",
+        note="smoke подтвержден",
+    )
+    workflow = service.get_workflow_snapshot(limit_per_bucket=3, trace_limit=6)
+
+    assert result["ok"] is True
+    assert result["item"]["metadata"]["resolved_by"] == "owner-ui"
+    assert result["item"]["metadata"]["resolution_note"] == "smoke подтвержден"
+    assert workflow["recent_owner_actions"][0]["actor"] == "owner-ui"
+    assert workflow["recent_owner_actions"][0]["note"] == "smoke подтвержден"

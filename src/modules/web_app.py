@@ -3835,14 +3835,32 @@ class WebApp:
             self._assert_write_access(x_krab_web_key, token)
             item_id = str(payload.get("item_id") or "").strip()
             status = str(payload.get("status") or "").strip().lower()
+            note = str(payload.get("note") or "").strip()
+            actor = str(payload.get("actor") or "owner-ui").strip().lower() or "owner-ui"
             if not item_id:
                 raise HTTPException(status_code=400, detail="inbox_empty_item_id")
             try:
-                result = inbox_service.set_item_status(item_id, status=status)
+                if status in {"approved", "rejected"}:
+                    result = inbox_service.resolve_approval(
+                        item_id,
+                        approved=(status == "approved"),
+                        actor=actor,
+                        note=note,
+                    )
+                else:
+                    result = inbox_service.set_item_status(
+                        item_id,
+                        status=status,
+                        actor=actor,
+                        note=note,
+                    )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not result.get("ok"):
-                raise HTTPException(status_code=404, detail=str(result.get("error") or "inbox_item_not_found"))
+                error = str(result.get("error") or "inbox_item_not_found")
+                if error == "inbox_item_not_approval":
+                    raise HTTPException(status_code=400, detail=error)
+                raise HTTPException(status_code=404, detail=error)
             return {
                 "ok": True,
                 "result": result,
@@ -3892,6 +3910,7 @@ class WebApp:
                         severity=str(payload.get("severity") or "warning").strip().lower() or "warning",
                         channel_id=channel_id,
                         team_id=team_id,
+                        trace_id=str(payload.get("trace_id") or "").strip(),
                         approval_scope=str(payload.get("approval_scope") or "owner").strip() or "owner",
                         requested_action=str(payload.get("requested_action") or "").strip(),
                         metadata=metadata,

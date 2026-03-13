@@ -2846,7 +2846,7 @@ def test_inbox_update_requires_web_key(monkeypatch: pytest.MonkeyPatch, tmp_path
     denied = client.post("/api/inbox/update", json={"item_id": item["item_id"], "status": "acked"})
     allowed = client.post(
         "/api/inbox/update",
-        json={"item_id": item["item_id"], "status": "acked"},
+        json={"item_id": item["item_id"], "status": "acked", "note": "owner ui saw it"},
         headers={"X-Krab-Web-Key": "secret"},
     )
 
@@ -2854,6 +2854,8 @@ def test_inbox_update_requires_web_key(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert denied.json()["detail"] == "forbidden: invalid WEB_API_KEY"
     assert allowed.status_code == 200
     assert allowed.json()["result"]["item"]["status"] == "acked"
+    assert allowed.json()["result"]["item"]["metadata"]["last_action_actor"] == "owner-ui"
+    assert allowed.json()["result"]["item"]["metadata"]["last_action_note"] == "owner ui saw it"
 
 
 def test_inbox_create_builds_owner_task_and_approval_request(
@@ -2883,6 +2885,7 @@ def test_inbox_create_builds_owner_task_and_approval_request(
             "title": "Разрешить платный cloud route",
             "body": "Нужен production smoke.",
             "request_key": "paid-cloud-route",
+            "trace_id": "approval:manual-trace",
             "approval_scope": "money",
             "requested_action": "enable_paid_cloud_route",
         },
@@ -2894,6 +2897,41 @@ def test_inbox_create_builds_owner_task_and_approval_request(
     assert task_resp.json()["result"]["item"]["kind"] == "owner_task"
     assert approval_resp.json()["result"]["item"]["kind"] == "approval_request"
     assert approval_resp.json()["result"]["item"]["identity"]["approval_scope"] == "money"
+    assert approval_resp.json()["result"]["item"]["identity"]["trace_id"] == "approval:manual-trace"
+
+
+def test_inbox_update_approval_path_preserves_owner_note(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Approval update через web API должен писать owner decision trail, а не обычный status change."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    item = inbox.upsert_approval_request(
+        title="Разрешить платный cloud route",
+        body="Нужен production smoke.",
+        request_key="paid-cloud-route",
+        approval_scope="money",
+    )["item"]
+    monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    client = _make_client()
+
+    resp = client.post(
+        "/api/inbox/update",
+        json={
+            "item_id": item["item_id"],
+            "status": "approved",
+            "actor": "owner-ui",
+            "note": "approved after smoke",
+        },
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["result"]["item"]["status"] == "approved"
+    assert data["result"]["item"]["metadata"]["approval_decision"] == "approved"
+    assert data["result"]["item"]["metadata"]["resolution_note"] == "approved after smoke"
 
 
 def test_userbot_acl_update_grants_subject(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

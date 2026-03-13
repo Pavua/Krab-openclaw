@@ -994,14 +994,27 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
         )
 
     if len(raw_args) < 3 or not raw_args[2].strip():
-        raise UserInputError(user_message="📥 Укажи item id: `!inbox ack|done|cancel|approve|reject <id>`")
-    target_id = raw_args[2].strip()
+        raise UserInputError(user_message="📥 Укажи item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`")
+    target_payload = raw_args[2].strip()
+    target_id, note = [part.strip() for part in target_payload.split("|", maxsplit=1)] if "|" in target_payload else (target_payload, "")
+    if not target_id:
+        raise UserInputError(user_message="📥 Укажи корректный item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`")
     if action in {"approve", "reject"}:
-        result = inbox_service.resolve_approval(target_id, approved=(action == "approve"))
+        result = inbox_service.resolve_approval(
+            target_id,
+            approved=(action == "approve"),
+            actor="telegram-owner",
+            note=note,
+        )
         target_status = "approved" if action == "approve" else "rejected"
     else:
         target_status = {"ack": "acked", "done": "done", "cancel": "cancelled"}[action]
-        result = inbox_service.set_item_status(target_id, status=target_status)
+        result = inbox_service.set_item_status(
+            target_id,
+            status=target_status,
+            actor="telegram-owner",
+            note=note,
+        )
     if not result.get("ok"):
         if result.get("error") == "inbox_item_not_approval":
             raise UserInputError(user_message=f"📥 Item `{target_id}` не является approval-request.")
@@ -1010,4 +1023,5 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
         "✅ Inbox item обновлён.\n"
         f"- ID: `{target_id}`\n"
         f"- Новый статус: `{target_status}`"
+        + (f"\n- Note: {note}" if note else "")
     )

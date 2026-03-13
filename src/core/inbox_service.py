@@ -240,6 +240,12 @@ class InboxService:
         items.sort(key=lambda item: item.updated_at_utc, reverse=True)
         return items[: self.max_items]
 
+    @staticmethod
+    def _is_owner_action_actor(actor: str) -> bool:
+        """Определяет, относится ли actor к owner-facing контуру управления."""
+        normalized = str(actor or "").strip().lower()
+        return normalized in {"owner", "telegram-owner", "owner-ui"}
+
     def list_items(
         self,
         *,
@@ -316,6 +322,11 @@ class InboxService:
             "reply_delivery_mode",
             "reply_actor",
             "reply_count",
+            "resolved_at_utc",
+            "resolved_by",
+            "approval_decision",
+            "last_action_actor",
+            "last_action_status",
         ):
             value = metadata.get(key)
             if value not in {"", None}:
@@ -326,6 +337,12 @@ class InboxService:
         reply_excerpt = str(metadata.get("reply_excerpt") or "").strip()
         if reply_excerpt:
             selected_metadata["reply_excerpt"] = reply_excerpt[:140]
+        resolution_note = str(metadata.get("resolution_note") or "").strip()
+        if resolution_note:
+            selected_metadata["resolution_note"] = resolution_note[:140]
+        last_action_note = str(metadata.get("last_action_note") or "").strip()
+        if last_action_note:
+            selected_metadata["last_action_note"] = last_action_note[:140]
         reply_message_ids = metadata.get("reply_message_ids")
         if isinstance(reply_message_ids, list) and reply_message_ids:
             selected_metadata["reply_message_ids"] = [str(row).strip() for row in reply_message_ids if str(row).strip()]
@@ -392,6 +409,11 @@ class InboxService:
         ][:bucket_limit]
 
         approval_history = _bucket(kind="approval_request", statuses={"approved", "rejected"})
+        recent_approval_decisions = [
+            self._compact_item(item)
+            for item in items
+            if item.kind == "approval_request" and item.status in {"approved", "rejected"}
+        ][:bucket_limit]
         replied_requests = [
             self._compact_item(item)
             for item in items
@@ -440,16 +462,24 @@ class InboxService:
                     }
                 )
         recent_activity.sort(key=lambda row: str(row.get("ts_utc") or ""), reverse=True)
+        recent_owner_actions = [
+            dict(row)
+            for row in recent_activity
+            if self._is_owner_action_actor(str(row.get("actor") or ""))
+            and str(row.get("action") or "") not in {"created", "upserted"}
+        ][:traces_limit]
 
         return {
             "summary": self._build_summary(items),
             "attention_items": attention_items,
             "pending_approvals": _bucket(kind="approval_request"),
             "approval_history": approval_history,
+            "recent_approval_decisions": recent_approval_decisions,
             "pending_owner_tasks": _bucket(kind="owner_task"),
             "incoming_owner_requests": _bucket(kind="owner_request"),
             "incoming_owner_mentions": _bucket(kind="owner_mention"),
             "recent_replied_requests": replied_requests,
+            "recent_owner_actions": recent_owner_actions,
             "recent_activity": recent_activity[:traces_limit],
             "trace_index": trace_index,
         }
@@ -554,6 +584,7 @@ class InboxService:
         actor: str = "owner",
         note: str = "",
         event_action: str = "",
+        metadata_updates: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Обновляет статус item по id."""
         normalized_status = self._normalize_status(status)
@@ -566,10 +597,23 @@ class InboxService:
             return {"ok": False, "error": "inbox_item_not_found"}
         item.status = normalized_status
         item.updated_at_utc = _now_utc_iso()
+        normalized_actor = str(actor or "owner").strip().lower() or "owner"
+        metadata = self._normalize_metadata(item.metadata)
+        metadata["last_action_actor"] = normalized_actor
+        metadata["last_action_status"] = normalized_status
+        metadata["last_action_at_utc"] = item.updated_at_utc
+        if note:
+            metadata["last_action_note"] = str(note).strip()
+        if normalized_status in self._closed_statuses:
+            metadata["resolved_at_utc"] = item.updated_at_utc
+            metadata["resolved_by"] = normalized_actor
+            if note:
+                metadata["resolution_note"] = str(note).strip()
+        metadata.update(self._normalize_metadata(metadata_updates))
         item.metadata = self._append_workflow_event(
-            item.metadata,
+            metadata,
             action=str(event_action or normalized_status or "status_changed").strip().lower() or "status_changed",
-            actor=actor,
+            actor=normalized_actor,
             status=normalized_status,
             note=note,
         )
@@ -586,6 +630,7 @@ class InboxService:
         actor: str = "owner",
         note: str = "",
         event_action: str = "",
+        metadata_updates: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Обновляет статус item по dedupe_key, если item существует."""
         normalized_status = self._normalize_status(status)
@@ -596,10 +641,23 @@ class InboxService:
             return {"ok": False, "error": "inbox_item_not_found"}
         item.status = normalized_status
         item.updated_at_utc = _now_utc_iso()
+        normalized_actor = str(actor or "owner").strip().lower() or "owner"
+        metadata = self._normalize_metadata(item.metadata)
+        metadata["last_action_actor"] = normalized_actor
+        metadata["last_action_status"] = normalized_status
+        metadata["last_action_at_utc"] = item.updated_at_utc
+        if note:
+            metadata["last_action_note"] = str(note).strip()
+        if normalized_status in self._closed_statuses:
+            metadata["resolved_at_utc"] = item.updated_at_utc
+            metadata["resolved_by"] = normalized_actor
+            if note:
+                metadata["resolution_note"] = str(note).strip()
+        metadata.update(self._normalize_metadata(metadata_updates))
         item.metadata = self._append_workflow_event(
-            item.metadata,
+            metadata,
             action=str(event_action or normalized_status or "status_changed").strip().lower() or "status_changed",
-            actor=actor,
+            actor=normalized_actor,
             status=normalized_status,
             note=note,
         )
@@ -693,6 +751,7 @@ class InboxService:
         severity: str = "warning",
         channel_id: str = "",
         team_id: str = "",
+        trace_id: str = "",
         approval_scope: str = "owner",
         requested_action: str = "",
         metadata: dict[str, Any] | None = None,
@@ -714,7 +773,7 @@ class InboxService:
             identity=self.build_identity(
                 channel_id=channel_id,
                 team_id=team_id or "owner",
-                trace_id=build_trace_id("approval", request_key or title, requested_action),
+                trace_id=str(trace_id or "").strip() or build_trace_id("approval", request_key or title, requested_action),
                 approval_scope=str(approval_scope or "owner").strip() or "owner",
             ),
             metadata=payload_metadata,
@@ -743,6 +802,7 @@ class InboxService:
             actor=actor,
             note=note,
             event_action="approved" if approved else "rejected",
+            metadata_updates={"approval_decision": "approved" if approved else "rejected"},
         )
 
     def record_incoming_owner_reply(
