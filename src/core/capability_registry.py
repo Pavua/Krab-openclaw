@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .access_control import AccessLevel, PARTIAL_ACCESS_COMMANDS
+from .operator_identity import build_identity_envelope
 
 
 _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
@@ -188,6 +189,195 @@ def build_policy_matrix(
     }
 
 
+def build_channel_capability_snapshot(
+    *,
+    operator_profile: dict[str, Any],
+    runtime_lite: dict[str, Any],
+    runtime_channels_config: dict[str, Any] | None = None,
+    policy_matrix: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Строит truthful channel capability snapshot для primary/reserve/runtime каналов."""
+    operator_payload = operator_profile if isinstance(operator_profile, dict) else {}
+    runtime_state = runtime_lite if isinstance(runtime_lite, dict) else {}
+    channels_config = runtime_channels_config if isinstance(runtime_channels_config, dict) else {}
+    policy_payload = policy_matrix if isinstance(policy_matrix, dict) else {}
+
+    operator_id = str(operator_payload.get("operator_id") or operator_payload.get("operator_name") or "").strip()
+    account_id = str(operator_payload.get("account_id") or "").strip()
+
+    telegram_userbot = runtime_state.get("telegram_userbot") if isinstance(runtime_state.get("telegram_userbot"), dict) else {}
+    userbot_status = str(
+        telegram_userbot.get("startup_state")
+        or telegram_userbot.get("state")
+        or runtime_state.get("telegram_userbot_state")
+        or "unknown"
+    ).strip() or "unknown"
+
+    telegram_cfg = channels_config.get("telegram") if isinstance(channels_config.get("telegram"), dict) else {}
+    reserve_enabled = bool(telegram_cfg.get("enabled"))
+    reserve_dm_policy = str(telegram_cfg.get("dmPolicy") or "unknown").strip().lower() or "unknown"
+    reserve_group_policy = str(telegram_cfg.get("groupPolicy") or "unknown").strip().lower() or "unknown"
+    reserve_allow_from = telegram_cfg.get("allowFrom") if isinstance(telegram_cfg.get("allowFrom"), list) else []
+    reserve_group_allow_from = (
+        telegram_cfg.get("groupAllowFrom") if isinstance(telegram_cfg.get("groupAllowFrom"), list) else []
+    )
+    reserve_safe = reserve_enabled and reserve_dm_policy == "allowlist" and reserve_group_policy == "allowlist"
+
+    reserve_status = "disabled"
+    if reserve_enabled and reserve_safe:
+        reserve_status = "reserve_safe"
+    elif reserve_enabled:
+        reserve_status = "attention"
+
+    channels: list[dict[str, Any]] = [
+        {
+            "id": "telegram_userbot",
+            "label": "Python Telegram userbot",
+            "kind": "telegram_userbot",
+            "transport_role": "primary",
+            "status": userbot_status,
+            "identity": build_identity_envelope(
+                operator_id=operator_id,
+                account_id=account_id,
+                channel_id="telegram_userbot",
+                team_id="owner",
+                approval_scope="owner",
+            ),
+            "semantics": {
+                "streaming": "confirmed",
+                "attachments": ["text", "photo", "audio", "voice"],
+                "approvals": "owner_inbox_linked",
+                "action_reporting": "confirmed",
+                "runtime_self_check": "confirmed",
+            },
+            "capabilities": {
+                "inbound_owner_requests": True,
+                "reply_trace": True,
+                "shared_memory": True,
+                "owner_tools_confirmed": True,
+                "access_roles": list(policy_payload.get("role_order") or []),
+            },
+            "notes": [
+                "Это richest contour и основной owner transport текущего runtime.",
+                "Здесь уже подтверждены inbox capture, reply trace и truthful self-check.",
+            ],
+        },
+        {
+            "id": "telegram_reserve_bot",
+            "label": "Reserve Telegram Bot",
+            "kind": "telegram_reserve_bot",
+            "transport_role": "reserve_safe",
+            "status": reserve_status,
+            "identity": build_identity_envelope(
+                operator_id=operator_id,
+                account_id=account_id,
+                channel_id="telegram_reserve_bot",
+                team_id="reserve",
+                approval_scope="owner",
+            ),
+            "semantics": {
+                "streaming": "not_confirmed",
+                "attachments": ["text"],
+                "approvals": "not_confirmed",
+                "action_reporting": "text_only",
+                "runtime_self_check": "not_confirmed",
+            },
+            "capabilities": {
+                "inbound_owner_requests": False,
+                "reply_trace": False,
+                "shared_memory": True,
+                "owner_tools_confirmed": False,
+                "reserve_safe": reserve_safe,
+            },
+            "policy": {
+                "enabled": reserve_enabled,
+                "dm_policy": reserve_dm_policy,
+                "group_policy": reserve_group_policy,
+                "allow_from_count": len(reserve_allow_from),
+                "group_allow_from_count": len(reserve_group_allow_from),
+            },
+            "notes": [
+                "Это safe contour для деградации и emergency delivery, а не owner-rich primary transport.",
+                "Memory общая, но owner-инструменты и полный runtime self-check здесь не подтверждаются.",
+            ],
+        },
+    ]
+
+    extra_runtime_channels: list[dict[str, Any]] = []
+    for name, payload in sorted(channels_config.items()):
+        normalized_name = str(name or "").strip().lower()
+        if not normalized_name or normalized_name == "telegram":
+            continue
+        config_payload = payload if isinstance(payload, dict) else {}
+        enabled = bool(config_payload.get("enabled"))
+        extra_runtime_channels.append(
+            {
+                "id": f"runtime_{normalized_name}",
+                "label": normalized_name,
+                "kind": normalized_name,
+                "transport_role": "runtime_channel",
+                "status": "enabled" if enabled else "disabled",
+                "identity": build_identity_envelope(
+                    operator_id=operator_id,
+                    account_id=account_id,
+                    channel_id=normalized_name,
+                    team_id="runtime",
+                    approval_scope="owner",
+                ),
+                "semantics": {
+                    "streaming": "unknown",
+                    "attachments": ["text"],
+                    "approvals": "unknown",
+                    "action_reporting": "unknown",
+                    "runtime_self_check": "unknown",
+                },
+                "capabilities": {
+                    "configured": enabled,
+                    "owner_tools_confirmed": False,
+                },
+                "policy": {
+                    "enabled": enabled,
+                    "dm_policy": str(config_payload.get("dmPolicy") or "").strip().lower(),
+                    "group_policy": str(config_payload.get("groupPolicy") or "").strip().lower(),
+                },
+                "notes": [
+                    "Канал найден в runtime-конфиге OpenClaw, но parity-семантика для него ещё не подтверждена.",
+                ],
+            }
+        )
+
+    channels.extend(extra_runtime_channels)
+
+    parity_gaps: list[str] = []
+    if not reserve_safe:
+        parity_gaps.append("Reserve Telegram Bot ещё не подтверждён в reserve-safe parity режиме.")
+    parity_gaps.append("Reserve Telegram Bot пока не подтверждает streaming и полноценный runtime self-check.")
+    parity_gaps.append("Attachment normalization и approval semantics пока richest только в Python userbot.")
+    if extra_runtime_channels:
+        parity_gaps.append("Дополнительные runtime channels найдены, но их parity semantics ещё не сведены к общему контракту.")
+
+    ready_channels = sum(
+        1
+        for row in channels
+        if str(row.get("status") or "").strip().lower() in {"running", "ready", "enabled", "reserve_safe"}
+    )
+
+    return {
+        "ok": True,
+        "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "channels": channels,
+        "summary": {
+            "primary_transport": "telegram_userbot",
+            "reserve_transport": "telegram_reserve_bot",
+            "reserve_safe": reserve_safe,
+            "configured_runtime_channels": len(extra_runtime_channels),
+            "total_channels": len(channels),
+            "ready_channels": ready_channels,
+        },
+        "parity_gaps": parity_gaps,
+    }
+
+
 def build_capability_registry(
     *,
     operator_profile: dict[str, Any],
@@ -196,6 +386,7 @@ def build_capability_registry(
     ecosystem_capabilities: dict[str, Any],
     translator_readiness: dict[str, Any],
     policy_matrix: dict[str, Any],
+    channel_capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Собирает единый registry snapshot поверх уже подтверждённых truthful-срезов."""
     assistant_payload = assistant_capabilities if isinstance(assistant_capabilities, dict) else {}
@@ -205,6 +396,7 @@ def build_capability_registry(
     operator_payload = operator_profile if isinstance(operator_profile, dict) else {}
 
     ecosystem_services = ecosystem_payload.get("services") if isinstance(ecosystem_payload.get("services"), dict) else {}
+    channel_payload = channel_capabilities if isinstance(channel_capabilities, dict) else {}
     assistant_status = "ok"
     ecosystem_status = "ok" if all(
         bool((service or {}).get("ok", False))
@@ -226,6 +418,12 @@ def build_capability_registry(
         system_status = "degraded"
     if browser_readiness and str(browser_readiness.get("readiness") or "").strip().lower() == "blocked":
         system_status = "degraded"
+    channel_summary = channel_payload.get("summary") if isinstance(channel_payload.get("summary"), dict) else {}
+    channels_status = "degraded"
+    if bool(channel_summary.get("reserve_safe")) and bool(channel_summary.get("ready_channels")):
+        channels_status = "ready"
+    elif bool(channel_summary.get("ready_channels")):
+        channels_status = "attention"
 
     contours = {
         "assistant": {
@@ -259,6 +457,13 @@ def build_capability_registry(
             "voice_enabled": bool(voice_profile.get("enabled")),
         },
     }
+    if channel_payload:
+        contours["channels"] = {
+            "status": channels_status,
+            "summary": channel_summary,
+            "parity_gaps": list(channel_payload.get("parity_gaps") or []),
+            "channels": list(channel_payload.get("channels") or []),
+        }
 
     ready_contours = sum(
         1 for contour in contours.values()
@@ -286,6 +491,7 @@ def build_capability_registry(
             "ready_contours": ready_contours,
             "degraded_contours": max(0, len(contours) - ready_contours),
             "primary_transport": "telegram_userbot",
+            "reserve_transport": "telegram_reserve_bot",
             "translator_backend": str(translator_payload.get("canonical_backend") or "").strip(),
         },
         "notes": [
@@ -298,6 +504,7 @@ def build_capability_registry(
 
 __all__ = [
     "build_capability_registry",
+    "build_channel_capability_snapshot",
     "build_policy_matrix",
     "resolve_access_mode",
 ]

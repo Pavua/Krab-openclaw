@@ -37,6 +37,7 @@ from src.core.access_control import (  # noqa: E402
 )
 from src.core.capability_registry import (  # noqa: E402
     build_capability_registry,
+    build_channel_capability_snapshot,
     build_policy_matrix,
 )
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
@@ -2634,6 +2635,24 @@ class WebApp:
             runtime_lite=runtime_lite or {},
         )
 
+    def _channel_capabilities_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+        policy_matrix: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Собирает truthful channel capability snapshot для primary/reserve/runtime каналов."""
+        runtime_state = runtime_lite or {}
+        policy_payload = policy_matrix if isinstance(policy_matrix, dict) else self._policy_matrix_snapshot(runtime_lite=runtime_state)
+        runtime_config = self._load_openclaw_runtime_config()
+        runtime_channels = runtime_config.get("channels") if isinstance(runtime_config.get("channels"), dict) else {}
+        return build_channel_capability_snapshot(
+            operator_profile=self._runtime_operator_profile(),
+            runtime_lite=runtime_state,
+            runtime_channels_config=runtime_channels,
+            policy_matrix=policy_payload,
+        )
+
     async def _capability_registry_snapshot(
         self,
         *,
@@ -2643,11 +2662,15 @@ class WebApp:
         runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
         operator_profile = self._runtime_operator_profile()
         assistant_caps = self._assistant_capabilities_snapshot()
+        policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_state)
+        channel_capabilities = self._channel_capabilities_snapshot(
+            runtime_lite=runtime_state,
+            policy_matrix=policy_matrix,
+        )
         ecosystem_caps, translator_snapshot = await asyncio.gather(
             self._ecosystem_capabilities_snapshot(),
             self._translator_readiness_snapshot(runtime_lite=runtime_state),
         )
-        policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_state)
         return build_capability_registry(
             operator_profile=operator_profile,
             runtime_lite=runtime_state,
@@ -2655,6 +2678,7 @@ class WebApp:
             ecosystem_capabilities=ecosystem_caps,
             translator_readiness=translator_snapshot,
             policy_matrix=policy_matrix,
+            channel_capabilities=channel_capabilities,
         )
 
     async def _safe_client_health_summary(
@@ -5342,6 +5366,19 @@ class WebApp:
             runtime_lite = await self._collect_runtime_lite_snapshot()
             return await self._capability_registry_snapshot(runtime_lite=runtime_lite)
 
+        @self.app.get("/api/channels/capabilities")
+        async def channel_capabilities():
+            """Возвращает unified channel capability parity snapshot."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            policy_matrix = self._policy_matrix_snapshot(runtime_lite=runtime_lite)
+            return {
+                "ok": True,
+                "channel_capabilities": self._channel_capabilities_snapshot(
+                    runtime_lite=runtime_lite,
+                    policy_matrix=policy_matrix,
+                ),
+            }
+
         @self.app.get("/api/translator/readiness")
         async def translator_readiness():
             """Возвращает truthful readiness translator-контура внутри экосистемы Краба."""
@@ -5424,6 +5461,9 @@ class WebApp:
                 "operator_profile": operator_profile,
                 "capability_registry_summary": capability_registry.get("summary") or {},
                 "policy_matrix_summary": (capability_registry.get("policy_matrix") or {}).get("summary") or {},
+                "channel_capabilities_summary": (
+                    (capability_registry.get("contours") or {}).get("channels", {}).get("summary") or {}
+                ),
                 "translator_readiness": translator_snapshot,
                 "services": {
                     "openclaw": openclaw_health,

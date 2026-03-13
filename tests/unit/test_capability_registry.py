@@ -13,6 +13,7 @@ from __future__ import annotations
 from src.core.access_control import AccessLevel
 from src.core.capability_registry import (
     build_capability_registry,
+    build_channel_capability_snapshot,
     build_policy_matrix,
     resolve_access_mode,
 )
@@ -107,3 +108,39 @@ def test_build_capability_registry_aggregates_truthful_contours() -> None:
     assert registry["contours"]["assistant"]["mode"] == "web_native"
     assert registry["contours"]["translator"]["canonical_backend"] == "krab_voice_gateway"
     assert registry["summary"]["primary_transport"] == "telegram_userbot"
+
+
+def test_build_channel_capability_snapshot_marks_reserve_safe_and_parity_gaps() -> None:
+    """Channel snapshot должен различать primary userbot и reserve-safe bot."""
+    snapshot = build_channel_capability_snapshot(
+        operator_profile={
+            "operator_id": "USER2",
+            "account_id": "abc123def456",
+        },
+        runtime_lite={
+            "telegram_userbot": {"startup_state": "running"},
+        },
+        runtime_channels_config={
+            "telegram": {
+                "enabled": True,
+                "dmPolicy": "allowlist",
+                "groupPolicy": "allowlist",
+                "allowFrom": ["312322764"],
+                "groupAllowFrom": ["312322764"],
+            },
+            "imessage": {
+                "enabled": True,
+                "dmPolicy": "open",
+            },
+        },
+        policy_matrix={
+            "role_order": ["owner", "full", "partial", "guest"],
+        },
+    )
+
+    assert snapshot["ok"] is True
+    assert snapshot["summary"]["reserve_safe"] is True
+    assert snapshot["summary"]["primary_transport"] == "telegram_userbot"
+    assert snapshot["channels"][0]["identity"]["operator_id"] == "USER2"
+    assert snapshot["channels"][1]["policy"]["dm_policy"] == "allowlist"
+    assert any("parity semantics" in item.lower() for item in snapshot["parity_gaps"])

@@ -73,6 +73,23 @@ def test_policy_matrix_endpoint_returns_acl_policy_truth(monkeypatch) -> None:
 def test_capability_registry_endpoint_aggregates_contours(monkeypatch) -> None:
     """`/api/capabilities/registry` должен собирать unified capability registry."""
     monkeypatch.setattr("src.modules.web_app.load_acl_runtime_state", lambda: {"owner": ["pablito"], "full": [], "partial": []})
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_config",
+        classmethod(
+            lambda cls: {
+                "channels": {
+                    "telegram": {
+                        "enabled": True,
+                        "dmPolicy": "allowlist",
+                        "groupPolicy": "allowlist",
+                        "allowFrom": ["312322764"],
+                        "groupAllowFrom": ["312322764"],
+                    }
+                }
+            }
+        ),
+    )
     client = TestClient(_make_app(kraab_userbot=_FakeUserbot()).app)
 
     resp = client.get("/api/capabilities/registry")
@@ -83,7 +100,43 @@ def test_capability_registry_endpoint_aggregates_contours(monkeypatch) -> None:
     assert data["contours"]["assistant"]["mode"] == "web_native"
     assert data["contours"]["telegram_userbot"]["primary_transport"] is True
     assert data["contours"]["translator"]["canonical_backend"] == "krab_voice_gateway"
+    assert data["contours"]["channels"]["summary"]["reserve_safe"] is True
     assert data["policy_matrix"]["roles"]["owner"]["subjects"] == ["pablito"]
+
+
+def test_channel_capabilities_endpoint_returns_primary_and_reserve_truth(monkeypatch) -> None:
+    """`/api/channels/capabilities` должен отдавать parity snapshot по primary/reserve каналам."""
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_config",
+        classmethod(
+            lambda cls: {
+                "channels": {
+                    "telegram": {
+                        "enabled": True,
+                        "dmPolicy": "allowlist",
+                        "groupPolicy": "allowlist",
+                        "allowFrom": ["312322764"],
+                        "groupAllowFrom": ["312322764"],
+                    },
+                    "imessage": {"enabled": False},
+                }
+            }
+        ),
+    )
+    client = TestClient(_make_app(kraab_userbot=_FakeUserbot()).app)
+
+    resp = client.get("/api/channels/capabilities")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    snapshot = data["channel_capabilities"]
+    assert snapshot["summary"]["primary_transport"] == "telegram_userbot"
+    assert snapshot["summary"]["reserve_transport"] == "telegram_reserve_bot"
+    assert snapshot["summary"]["reserve_safe"] is True
+    assert snapshot["channels"][0]["semantics"]["streaming"] == "confirmed"
+    assert snapshot["channels"][1]["semantics"]["runtime_self_check"] == "not_confirmed"
 
 
 def test_translator_readiness_exposes_registry_refs() -> None:

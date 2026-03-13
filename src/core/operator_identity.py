@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+from typing import Any
 
 
 def current_operator_id() -> str:
@@ -50,4 +51,42 @@ def build_trace_id(source: str, *parts: object) -> str:
     return f"{normalized_source}:{digest}"
 
 
-__all__ = ["build_trace_id", "current_account_id", "current_operator_id"]
+def build_identity_envelope(
+    *,
+    operator_id: str = "",
+    account_id: str = "",
+    channel_id: str = "",
+    team_id: str = "",
+    trace_id: str = "",
+    approval_scope: str = "owner",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Собирает типизированный identity-envelope для runtime/web/channel слоёв.
+
+    Зачем это отдельно от InboxIdentity:
+    - не все контуры хотят тянуть dataclass inbox-сервиса;
+    - web snapshots, capability registry и channel matrix должны использовать ту же
+      identity-семантику без ручного дублирования полей;
+    - это безопасный bridge между machine-readable JSON и persisted inbox-layer.
+    """
+    payload = {
+        "operator_id": str(operator_id or current_operator_id()).strip(),
+        "account_id": str(account_id or current_account_id()).strip(),
+        "channel_id": str(channel_id or "").strip(),
+        "team_id": str(team_id or "").strip(),
+        "trace_id": str(trace_id or "").strip(),
+        "approval_scope": str(approval_scope or "owner").strip() or "owner",
+    }
+    extra = dict(metadata or {})
+    if extra:
+        payload["metadata"] = extra
+    return payload
+
+
+__all__ = [
+    "build_identity_envelope",
+    "build_trace_id",
+    "current_account_id",
+    "current_operator_id",
+]
