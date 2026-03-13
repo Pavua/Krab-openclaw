@@ -16,6 +16,7 @@ from pathlib import Path
 from scripts.openclaw_runtime_repair import (
     apply_group_policy,
     apply_dm_policy,
+    bootstrap_missing_channels,
     choose_target_key,
     choose_lmstudio_token,
     detect_active_channels,
@@ -33,10 +34,12 @@ from scripts.openclaw_runtime_repair import (
     repair_reply_to_modes,
     repair_hooks_config,
     repair_sessions,
+    resolve_telegram_bot_token,
     sync_managed_output_sanitizer_plugin,
     sync_auth_profiles_json,
     sync_models_json,
     sync_openclaw_json,
+    sync_telegram_channel_token,
     should_restart_gateway,
 )
 
@@ -67,6 +70,25 @@ def test_choose_lmstudio_token_prefers_primary_over_legacy() -> None:
         legacy_token="lm-legacy-token",
     )
     assert token == "lm-primary-token"
+
+
+def test_resolve_telegram_bot_token_prefers_openclaw_specific_env(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCLAW_TELEGRAM_BOT_TOKEN", "123:preferred")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:legacy")
+
+    assert resolve_telegram_bot_token() == "123:preferred"
+
+
+def test_sync_telegram_channel_token_writes_native_runtime_token(monkeypatch, tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(json.dumps({"channels": {"telegram": {"enabled": True}}}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("OPENCLAW_TELEGRAM_BOT_TOKEN", "123:abc")
+
+    report = sync_telegram_channel_token(openclaw_path)
+
+    assert report["changed"] is True
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["channels"]["telegram"]["botToken"] == "123:abc"
 
 
 def test_sync_openclaw_json_updates_lmstudio_token_when_present(tmp_path: Path) -> None:
@@ -195,6 +217,43 @@ def test_repair_output_sanitizer_plugin_config_enforces_truthful_external_defaul
     assert entry["config"]["externalChannelAllowedTools"] == ["web_search", "web_fetch", "weather", "time"]
     assert isinstance(entry["config"]["ownerAliases"], list)
     assert isinstance(entry["config"]["trustedPeers"], dict)
+
+
+def test_repair_output_sanitizer_plugin_config_seeds_telegram_trusted_peers(monkeypatch, tmp_path: Path) -> None:
+    """Telegram trusted peers должны подтягиваться в sanitizer config из repair foundation."""
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "plugins": {
+                    "entries": {
+                        "krab-output-sanitizer": {
+                            "enabled": True,
+                            "config": {
+                                "enabled": True,
+                                "trustedPeers": {},
+                            },
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.openclaw_runtime_repair.derive_telegram_trusted_peers",
+        lambda project_root: ["312322764", "p0lrd"],
+    )
+
+    report = repair_output_sanitizer_plugin_config(openclaw_path)
+
+    assert report["changed"] is True
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["plugins"]["entries"]["krab-output-sanitizer"]["config"]["trustedPeers"]["telegram"] == [
+        "312322764",
+        "p0lrd",
+    ]
 
 
 def test_sync_auth_profiles_json_updates_lmstudio_and_google_tokens(tmp_path: Path) -> None:
@@ -529,6 +588,27 @@ def test_should_restart_gateway_when_plugin_sync_or_config_changed() -> None:
     assert should_restart_gateway(steps) is True
 
 
+def test_should_restart_gateway_when_bootstrap_or_group_policy_changed() -> None:
+    steps = {
+        "bootstrap_missing_channels": {"changed": True},
+        "group_policy": {"changed": False},
+    }
+    assert should_restart_gateway(steps) is True
+
+    steps = {
+        "bootstrap_missing_channels": {"changed": False},
+        "group_policy": {"changed": True},
+    }
+    assert should_restart_gateway(steps) is True
+
+
+def test_should_restart_gateway_when_telegram_token_synced() -> None:
+    steps = {
+        "sync_telegram_channel_token": {"changed": True},
+    }
+    assert should_restart_gateway(steps) is True
+
+
 def test_should_restart_gateway_ignores_allowlist_only_changes() -> None:
     steps = {
         "repair_sessions": {"changed": False},
@@ -602,7 +682,63 @@ def test_apply_dm_policy_allowlist_replaces_wildcard_with_trusted_peers(tmp_path
 
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["telegram"]["dmPolicy"] == "allowlist"
-    assert payload["channels"]["telegram"]["allowFrom"] == ["312322764", "trusted_user"]
+    assert payload["channels"]["telegram"]["allowFrom"] == ["312322764"]
+
+
+def test_apply_dm_policy_allowlist_for_telegram_does_not_switch_without_numeric_ids(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "channels": {
+                    "telegram": {"enabled": True, "dmPolicy": "pairing", "allowFrom": ["p0lrd"]},
+                },
+                "plugins": {
+                    "entries": {
+                        "krab-output-sanitizer": {
+                            "config": {
+                                "trustedPeers": {
+                                    "telegram": ["p0lrd", "trusted_user"],
+                                }
+                            }
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = apply_dm_policy(openclaw_path, ("telegram",), "allowlist")
+
+    assert report["changed"] is False
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["channels"]["telegram"]["dmPolicy"] == "pairing"
+    assert payload["channels"]["telegram"]["allowFrom"] == ["p0lrd"]
+
+
+def test_bootstrap_missing_channels_creates_telegram_reserve_block(monkeypatch, tmp_path: Path) -> None:
+    """Bootstrap должен материализовать отсутствующий `channels.telegram` для reserve-safe repair path."""
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("OPENCLAW_TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setattr(
+        "scripts.openclaw_runtime_repair.derive_telegram_trusted_peers",
+        lambda project_root: ["312322764", "p0lrd"],
+    )
+
+    report = bootstrap_missing_channels(openclaw_path, ("telegram",))
+
+    assert report["changed"] is True
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    telegram_cfg = payload["channels"]["telegram"]
+    assert telegram_cfg["enabled"] is True
+    assert telegram_cfg["streamMode"] == "partial"
+    assert telegram_cfg["dmPolicy"] == "pairing"
+    assert telegram_cfg["replyToMode"] == "off"
+    assert telegram_cfg["allowFrom"] == ["312322764"]
+    assert telegram_cfg["groupAllowFrom"] == ["312322764"]
 
 
 def test_apply_group_policy_allowlist_uses_dm_allowlist_for_telegram_senders(tmp_path: Path) -> None:
@@ -634,6 +770,37 @@ def test_apply_group_policy_allowlist_uses_dm_allowlist_for_telegram_senders(tmp
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["telegram"]["groupPolicy"] == "allowlist"
     assert payload["channels"]["telegram"]["groupAllowFrom"] == ["312322764"]
+
+
+def test_apply_group_policy_allowlist_for_telegram_ignores_usernames_and_group_ids(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "channels": {
+                    "telegram": {
+                        "enabled": True,
+                        "groupPolicy": "open",
+                        "allowFrom": ["312322764", "p0lrd", "-1001804661353", "6435872621"],
+                        "groupAllowFrom": ["p0lrd", "-1001804661353"],
+                        "groups": {
+                            "-1001804661353": {"enabled": True},
+                        },
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = apply_group_policy(openclaw_path, ("telegram",), "allowlist")
+
+    assert report["changed"] is True
+    assert report["group_allow_from_fixed"]["telegram"] == "derived_from_dm_allowlist"
+
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    assert payload["channels"]["telegram"]["groupAllowFrom"] == ["312322764", "6435872621"]
 
 
 def test_apply_group_policy_allowlist_rewrites_invalid_telegram_group_ids(tmp_path: Path) -> None:

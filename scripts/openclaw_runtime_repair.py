@@ -40,6 +40,8 @@ import json
 import os
 import re
 import shutil
+import sqlite3
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -386,6 +388,19 @@ def repair_output_sanitizer_plugin_config(openclaw_path: Path) -> dict[str, Any]
     if not isinstance(trusted_peers, dict):
         config_payload["trustedPeers"] = {}
         changed_entries.append("plugins.entries.krab-output-sanitizer.config.trustedPeers")
+        trusted_peers = config_payload["trustedPeers"]
+
+    telegram_candidates = derive_telegram_trusted_peers(project_root=REPO_ROOT)
+    current_telegram_peers = trusted_peers.get("telegram")
+    current_telegram_list = (
+        [str(item).strip() for item in current_telegram_peers if str(item).strip()]
+        if isinstance(current_telegram_peers, list)
+        else []
+    )
+    desired_telegram_peers = list(dict.fromkeys(current_telegram_list + telegram_candidates))
+    if desired_telegram_peers and desired_telegram_peers != current_telegram_list:
+        trusted_peers["telegram"] = desired_telegram_peers
+        changed_entries.append("plugins.entries.krab-output-sanitizer.config.trustedPeers.telegram")
 
     if changed_entries:
         _write_json(openclaw_path, payload)
@@ -394,6 +409,242 @@ def repair_output_sanitizer_plugin_config(openclaw_path: Path) -> dict[str, Any]
         "path": str(openclaw_path),
         "changed": bool(changed_entries),
         "entries": changed_entries,
+    }
+
+
+def _normalized_env_subjects(raw_items: list[str]) -> list[str]:
+    """Нормализует потенциальные Telegram subjects из env/runtime hints."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        item = str(raw or "").strip()
+        if not item:
+            continue
+        if item.startswith("@"):
+            item = item[1:]
+        if not item:
+            continue
+        if item in {"*", "+"}:
+            continue
+        if item not in seen:
+            seen.add(item)
+            normalized.append(item)
+    return normalized
+
+
+def _resolve_telegram_numeric_ids_via_session(
+    *,
+    project_root: Path,
+    usernames: list[str],
+) -> list[str]:
+    """
+    Пытается безопасно зарезолвить Telegram usernames в numeric sender IDs.
+
+    Почему через копию session:
+    - живой `kraab.session` часто держится рантаймом под SQLite lock;
+    - нам нужен best-effort resolve без остановки userbot;
+    - копия session-файла позволяет прочитать MTProto авторизацию отдельно.
+    """
+    normalized_usernames = [str(item).strip().lstrip("@") for item in usernames if str(item).strip()]
+    if not normalized_usernames:
+        return []
+
+    api_id_raw = str(os.getenv("TELEGRAM_API_ID", "") or "").strip()
+    api_hash = str(os.getenv("TELEGRAM_API_HASH", "") or "").strip()
+    if not api_id_raw or not api_hash:
+        return []
+
+    try:
+        api_id = int(api_id_raw)
+    except ValueError:
+        return []
+
+    session_name = str(os.getenv("TELEGRAM_SESSION_NAME", "kraab") or "kraab").strip() or "kraab"
+    session_dir = project_root / "data" / "sessions"
+    session_src = session_dir / f"{session_name}.session"
+    if not session_src.exists():
+        return []
+
+    try:
+        from pyrogram import Client
+    except Exception:
+        return []
+
+    resolved_ids: list[str] = []
+    seen: set[str] = set()
+    with tempfile.TemporaryDirectory(prefix="krab_telegram_resolve_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        session_copy = tmp_path / f"{session_name}_copy.session"
+        try:
+            shutil.copy2(session_src, session_copy)
+        except OSError:
+            return []
+
+        try:
+            with Client(f"{session_name}_copy", api_id=api_id, api_hash=api_hash, workdir=str(tmp_path)) as app:
+                for username in normalized_usernames:
+                    try:
+                        user = app.get_users(username)
+                    except Exception:
+                        continue
+                    user_id = str(getattr(user, "id", "") or "").strip()
+                    if user_id and user_id not in seen:
+                        seen.add(user_id)
+                        resolved_ids.append(user_id)
+        except sqlite3.Error:
+            return []
+        except Exception:
+            return []
+    return resolved_ids
+
+
+def derive_telegram_trusted_peers(*, project_root: Path) -> list[str]:
+    """
+    Собирает trusted peers для Telegram из env и, при возможности, из session-resolve.
+
+    Это нужно для двух сценариев:
+    - reserve-safe repair должен уметь восстановить allowlist даже если credentials/*
+      ещё не заполнены руками;
+    - на второй macOS-учётке у нас часто есть owner usernames, но нет заранее
+      записанного numeric chat id в `.env`.
+    """
+    direct_subjects = _normalized_env_subjects(
+        [
+            str(os.getenv("OPENCLAW_TELEGRAM_CHAT_ID", "") or ""),
+            str(os.getenv("OWNER_TELEGRAM_ID", "") or ""),
+            str(os.getenv("OPENCLAW_ALERT_TARGET", "") or ""),
+            str(os.getenv("OWNER_USERNAME", "") or ""),
+            *[part for part in str(os.getenv("OWNER_USER_IDS", "") or "").split(",")],
+            *[part for part in str(os.getenv("ALLOWED_USERS", "") or "").split(",")],
+        ]
+    )
+    numeric_ids = [item for item in direct_subjects if item.isdigit()]
+    usernames = [item for item in direct_subjects if not item.isdigit()]
+    resolved_numeric_ids = _resolve_telegram_numeric_ids_via_session(
+        project_root=project_root,
+        usernames=usernames,
+    )
+    return list(dict.fromkeys(numeric_ids + resolved_numeric_ids + usernames))
+
+
+def resolve_telegram_bot_token() -> str:
+    """
+    Возвращает каноничный bot token для native Telegram-контура OpenClaw.
+
+    Почему helper отдельный:
+    - repo/runtime glue исторически использовал `OPENCLAW_TELEGRAM_BOT_TOKEN`;
+    - сам OpenClaw native transport ожидает `TELEGRAM_BOT_TOKEN` либо
+      `channels.telegram.botToken` внутри runtime-конфига;
+    - для repair важно свести оба мира к одному truth-источнику.
+    """
+    preferred = str(os.getenv("OPENCLAW_TELEGRAM_BOT_TOKEN", "") or "").strip()
+    legacy = str(os.getenv("TELEGRAM_BOT_TOKEN", "") or "").strip()
+    return preferred or legacy
+
+
+def sync_telegram_channel_token(openclaw_path: Path) -> dict[str, Any]:
+    """
+    Синхронизирует Telegram bot token в native runtime-конфиг OpenClaw.
+
+    Почему это нужно:
+    - reserve-safe owner-слой мог выглядеть зелёным даже без реального
+      `channels.telegram.botToken`;
+    - `openclaw status` при этом честно показывал `Telegram: not configured`
+      и `tokenSource=none`;
+    - хранение токена прямо в per-account runtime-конфиге делает контур
+      воспроизводимым после restart на текущей macOS-учётке.
+    """
+    payload = _read_json(openclaw_path)
+    channels = payload.setdefault("channels", {})
+    if not isinstance(channels, dict):
+        channels = {}
+        payload["channels"] = channels
+
+    telegram = channels.get("telegram")
+    if not isinstance(telegram, dict):
+        telegram = {}
+        channels["telegram"] = telegram
+
+    token = resolve_telegram_bot_token()
+    if not token:
+        return {
+            "path": str(openclaw_path),
+            "changed": False,
+            "token_present": False,
+            "reason": "missing_env_token",
+        }
+
+    current = str(telegram.get("botToken", "") or "").strip()
+    if current == token:
+        return {
+            "path": str(openclaw_path),
+            "changed": False,
+            "token_present": True,
+            "token_masked": mask_secret(token),
+        }
+
+    telegram["botToken"] = token
+    _write_json(openclaw_path, payload)
+    return {
+        "path": str(openclaw_path),
+        "changed": True,
+        "token_present": True,
+        "token_masked": mask_secret(token),
+    }
+
+
+def bootstrap_missing_channels(openclaw_path: Path, channels: tuple[str, ...]) -> dict[str, Any]:
+    """
+    Создаёт минимальный channel block для отсутствующих каналов, если это безопасно.
+
+    Почему это нужно:
+    - раньше repair-path молча ничего не делал, когда `channels.telegram` отсутствовал;
+    - owner UI тогда честно показывал reserve disabled, но self-healing не происходил;
+    - для Telegram reserve-safe нам нужен хотя бы минимальный runtime block, чтобы
+      дальше apply_dm_policy/apply_group_policy могли довести его до allowlist-режима.
+    """
+    payload = _read_json(openclaw_path)
+    channel_cfg = payload.setdefault("channels", {})
+    created: list[str] = []
+    details: dict[str, Any] = {}
+
+    for channel in channels:
+        if channel in channel_cfg and isinstance(channel_cfg.get(channel), dict):
+            continue
+        if channel != "telegram":
+            continue
+        token_present = bool(resolve_telegram_bot_token())
+        if not token_present:
+            details[channel] = {"created": False, "reason": "missing_bot_token"}
+            continue
+        trusted_peers = derive_telegram_trusted_peers(project_root=REPO_ROOT)
+        numeric_ids = _filter_telegram_sender_ids(trusted_peers)
+        channel_cfg[channel] = {
+            "enabled": True,
+            "streamMode": "partial",
+            "dmPolicy": "pairing",
+            "groupPolicy": "open",
+            "replyToMode": "off",
+        }
+        if numeric_ids:
+            channel_cfg[channel]["groupAllowFrom"] = list(dict.fromkeys(numeric_ids))
+            # Для native Telegram-конфига OpenClaw allowFrom тоже должен быть numeric-only.
+            channel_cfg[channel]["allowFrom"] = list(dict.fromkeys(numeric_ids))
+        created.append(channel)
+        details[channel] = {
+            "created": True,
+            "trusted_peers": trusted_peers,
+            "numeric_sender_ids": numeric_ids,
+        }
+
+    if created:
+        _write_json(openclaw_path, payload)
+
+    return {
+        "path": str(openclaw_path),
+        "changed": bool(created),
+        "channels": created,
+        "details": details,
     }
 
 
@@ -1713,6 +1964,31 @@ def detect_active_channels(openclaw_payload: dict[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(discovered))
 
 
+def _filter_telegram_sender_ids(values: list[str]) -> list[str]:
+    """
+    Оставляет только корректные Telegram sender IDs для groupAllowFrom.
+
+    Почему отдельный helper:
+    - `allowFrom` у Telegram может держать и numeric IDs, и usernames;
+    - `groupAllowFrom` для reserve-safe должен содержать только sender IDs,
+      иначе OpenClaw позже честно ругнётся на невалидные allowFrom entries;
+    - отрицательные chat/group IDs сюда тоже попадать не должны.
+    """
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        item = str(raw or "").strip()
+        if not item or item in {"*", "+"}:
+            continue
+        if not item.isdigit():
+            continue
+        if item in seen:
+            continue
+        seen.add(item)
+        filtered.append(item)
+    return filtered
+
+
 def should_restart_gateway(report_steps: dict[str, Any]) -> bool:
     """
     Определяет, нужен ли перезапуск живого OpenClaw gateway после repair.
@@ -1731,6 +2007,8 @@ def should_restart_gateway(report_steps: dict[str, Any]) -> bool:
         "sync_openclaw_json",
         "sync_auth_profiles_json",
         "repair_output_sanitizer_plugin_config",
+        "sync_telegram_channel_token",
+        "bootstrap_missing_channels",
         "repair_lmstudio_catalog_models_json",
         "repair_lmstudio_catalog_openclaw_json",
         "repair_external_reasoning",
@@ -1742,6 +2020,8 @@ def should_restart_gateway(report_steps: dict[str, Any]) -> bool:
         "repair_reply_to_modes",
         "repair_sessions",
         "dm_policy",
+        "group_policy",
+        "repair_group_policy",
     )
     for step_name in restart_sensitive_steps:
         step_payload = report_steps.get(step_name)
@@ -2191,9 +2471,6 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
         current = str(cfg.get("dmPolicy", "") or "").strip().lower()
         if "dmPolicy" not in cfg:
             continue
-        if current != policy:
-            cfg["dmPolicy"] = policy
-            changed_channels.append(channel)
 
         allow_from = cfg.get("allowFrom")
         allow_from_list = allow_from if isinstance(allow_from, list) else []
@@ -2202,13 +2479,22 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
             for item in allow_from_list
             if str(item).strip() and str(item).strip() not in {"*", "+"}
         ]
+        if channel == "telegram":
+            normalized_allow_from = _filter_telegram_sender_ids(normalized_allow_from)
 
         if policy == "open":
             # Для open OpenClaw требует wildcard в allowFrom.
+            changed = False
+            if current != policy:
+                cfg["dmPolicy"] = policy
+                changed = True
             if "*" not in allow_from_list:
                 cfg["allowFrom"] = ["*"]
                 allow_from_fixed[channel] = "set_wildcard"
                 allow_from_changes += 1
+                changed = True
+            if changed:
+                changed_channels.append(channel)
         elif policy == "allowlist":
             # Для allowlist wildcard нельзя сохранять: иначе канал останется фактически открытым.
             desired_allow_from = list(normalized_allow_from)
@@ -2225,6 +2511,8 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
                                 for x in raw
                                 if str(x).strip() and str(x).strip() not in {"*", "+"}
                             ]
+                            if channel == "telegram":
+                                loaded = _filter_telegram_sender_ids(loaded)
                     except (OSError, ValueError):
                         loaded = []
                 if loaded:
@@ -2238,13 +2526,24 @@ def apply_dm_policy(openclaw_path: Path, channels: tuple[str, ...], policy: str)
                             for x in trusted
                             if str(x).strip() and str(x).strip() not in {"*", "+"}
                         ]
+                        if channel == "telegram":
+                            derived = _filter_telegram_sender_ids(derived)
                         if derived:
                             desired_allow_from = derived
                             source = "derived_from_trusted_peers"
+            changed = False
+            if current != policy and not desired_allow_from:
+                continue
+            if current != policy:
+                cfg["dmPolicy"] = policy
+                changed = True
             if desired_allow_from and desired_allow_from != allow_from_list:
                 cfg["allowFrom"] = desired_allow_from
                 allow_from_fixed[channel] = source or "sanitized_inline_allowlist"
                 allow_from_changes += 1
+                changed = True
+            if changed:
+                changed_channels.append(channel)
 
     if changed_channels or allow_from_changes > 0:
         _write_json(openclaw_path, payload)
@@ -2318,13 +2617,11 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
                 if str(group_id).strip()
                 and (not isinstance(group_meta, dict) or bool(group_meta.get("enabled", True)))
             }
-            # В Telegram `groupAllowFrom` — это sender IDs.
-            # Отрицательные значения и chat IDs из `groups` считаем заведомо
-            # сломанным наследием прошлой схемы и вычищаем до нормального derivation.
+            # В Telegram `groupAllowFrom` — это только numeric sender IDs.
+            # Usernames и group/chat IDs здесь недопустимы.
+            normalized_group_allow_from = _filter_telegram_sender_ids(normalized_group_allow_from)
             normalized_group_allow_from = [
-                item
-                for item in normalized_group_allow_from
-                if not item.startswith("-") and item not in enabled_group_ids
+                item for item in normalized_group_allow_from if item not in enabled_group_ids
             ]
 
         desired_group_allow_from = list(normalized_group_allow_from)
@@ -2336,9 +2633,7 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
                 if str(item).strip() and str(item).strip() not in {"*", "+"}
             ]
             if channel == "telegram":
-                derived_from_dm_allowlist = [
-                    item for item in derived_from_dm_allowlist if not item.startswith("-")
-                ]
+                derived_from_dm_allowlist = _filter_telegram_sender_ids(derived_from_dm_allowlist)
             if derived_from_dm_allowlist:
                 desired_group_allow_from = derived_from_dm_allowlist
                 source = "derived_from_dm_allowlist"
@@ -2354,9 +2649,7 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
                                 if str(x).strip() and str(x).strip() not in {"*", "+"}
                             ]
                             if channel == "telegram":
-                                desired_group_allow_from = [
-                                    item for item in desired_group_allow_from if not item.startswith("-")
-                                ]
+                                desired_group_allow_from = _filter_telegram_sender_ids(desired_group_allow_from)
                             if desired_group_allow_from:
                                 source = "loaded_from_credentials"
                     except (OSError, ValueError):
@@ -2370,9 +2663,7 @@ def apply_group_policy(openclaw_path: Path, channels: tuple[str, ...], policy: s
                         if str(x).strip() and str(x).strip() not in {"*", "+"}
                     ]
                     if channel == "telegram":
-                        desired_group_allow_from = [
-                            item for item in desired_group_allow_from if not item.startswith("-")
-                        ]
+                        desired_group_allow_from = _filter_telegram_sender_ids(desired_group_allow_from)
                     if desired_group_allow_from:
                         source = "derived_from_trusted_peers"
 
@@ -2568,6 +2859,7 @@ def main() -> int:
         target_key,
         lmstudio_token,
     )
+    report["steps"]["sync_telegram_channel_token"] = sync_telegram_channel_token(openclaw_path)
     report["steps"]["sync_managed_output_sanitizer_plugin"] = sync_managed_output_sanitizer_plugin(
         openclaw_root=openclaw_root,
     )
@@ -2586,6 +2878,7 @@ def main() -> int:
         openclaw_path,
         default_model=default_model,
     )
+    report["steps"]["bootstrap_missing_channels"] = bootstrap_missing_channels(openclaw_path, channels)
     report["steps"]["repair_group_policy"] = repair_group_policy_allowlist(openclaw_path, channels)
     preferred_vision_model = str(os.getenv("LOCAL_PREFERRED_VISION_MODEL", "auto") or "").strip()
     report["steps"]["repair_lmstudio_catalog_models_json"] = repair_lmstudio_provider_catalog(
