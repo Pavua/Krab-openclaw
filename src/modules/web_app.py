@@ -3886,37 +3886,64 @@ class WebApp:
             source = str(payload.get("source") or "owner-ui").strip().lower() or "owner-ui"
             channel_id = str(payload.get("channel_id") or "").strip()
             team_id = str(payload.get("team_id") or "").strip()
+            source_item_id = str(payload.get("source_item_id") or "").strip()
             metadata = dict(payload.get("metadata") or {})
 
             try:
                 if kind == "owner_task":
-                    result = inbox_service.upsert_owner_task(
-                        title=title,
-                        body=body,
-                        task_key=str(payload.get("task_key") or "").strip(),
-                        source=source,
-                        severity=severity,
-                        channel_id=channel_id,
-                        team_id=team_id,
-                        trace_id=str(payload.get("trace_id") or "").strip(),
-                        metadata=metadata,
-                    )
+                    if source_item_id:
+                        result = inbox_service.escalate_item_to_owner_task(
+                            source_item_id=source_item_id,
+                            title=title,
+                            body=body,
+                            task_key=str(payload.get("task_key") or "").strip(),
+                            source=source,
+                            severity=severity,
+                            metadata=metadata,
+                        )
+                    else:
+                        result = inbox_service.upsert_owner_task(
+                            title=title,
+                            body=body,
+                            task_key=str(payload.get("task_key") or "").strip(),
+                            source=source,
+                            severity=severity,
+                            channel_id=channel_id,
+                            team_id=team_id,
+                            trace_id=str(payload.get("trace_id") or "").strip(),
+                            metadata=metadata,
+                        )
                 else:
-                    result = inbox_service.upsert_approval_request(
-                        title=title,
-                        body=body,
-                        request_key=str(payload.get("request_key") or "").strip(),
-                        source=source,
-                        severity=str(payload.get("severity") or "warning").strip().lower() or "warning",
-                        channel_id=channel_id,
-                        team_id=team_id,
-                        trace_id=str(payload.get("trace_id") or "").strip(),
-                        approval_scope=str(payload.get("approval_scope") or "owner").strip() or "owner",
-                        requested_action=str(payload.get("requested_action") or "").strip(),
-                        metadata=metadata,
-                    )
+                    if source_item_id:
+                        result = inbox_service.escalate_item_to_approval_request(
+                            source_item_id=source_item_id,
+                            title=title,
+                            body=body,
+                            request_key=str(payload.get("request_key") or "").strip(),
+                            source=source,
+                            severity=str(payload.get("severity") or "warning").strip().lower() or "warning",
+                            approval_scope=str(payload.get("approval_scope") or "owner").strip() or "owner",
+                            requested_action=str(payload.get("requested_action") or "").strip(),
+                            metadata=metadata,
+                        )
+                    else:
+                        result = inbox_service.upsert_approval_request(
+                            title=title,
+                            body=body,
+                            request_key=str(payload.get("request_key") or "").strip(),
+                            source=source,
+                            severity=str(payload.get("severity") or "warning").strip().lower() or "warning",
+                            channel_id=channel_id,
+                            team_id=team_id,
+                            trace_id=str(payload.get("trace_id") or "").strip(),
+                            approval_scope=str(payload.get("approval_scope") or "owner").strip() or "owner",
+                            requested_action=str(payload.get("requested_action") or "").strip(),
+                            metadata=metadata,
+                        )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not result.get("ok"):
+                raise HTTPException(status_code=404, detail=str(result.get("error") or "inbox_item_not_found"))
 
             return {
                 "ok": True,

@@ -119,12 +119,19 @@ def _seed_inbox(inbox: InboxService) -> None:
         requested_action="enable_paid_provider",
     )["item"]
     inbox.resolve_approval(approval["item_id"], approved=True)
-    inbox.upsert_incoming_owner_request(
+    source_request = inbox.upsert_incoming_owner_request(
         chat_id="123",
         message_id="55",
         text="Проверь transport persistence",
         sender_username="owner",
         chat_type="private",
+    )["item"]
+    inbox.escalate_item_to_owner_task(
+        source_item_id=source_request["item_id"],
+        title="Собрать post-restart followup",
+        body="Нужен отдельный owner-task из incoming request.",
+        task_key="post-restart-followup",
+        source="owner-ui",
     )
     inbox.record_incoming_owner_reply(
         chat_id="123",
@@ -148,12 +155,14 @@ def test_inbox_status_returns_workflow_snapshot(monkeypatch: pytest.MonkeyPatch,
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
-    assert data["summary"]["pending_owner_tasks"] == 1
+    assert data["summary"]["pending_owner_tasks"] == 2
     assert data["workflow"]["recent_replied_requests"][0]["metadata"]["message_id"] == "55"
     assert data["workflow"]["recent_replied_requests"][0]["metadata"]["reply_message_ids"] == ["7001"]
     assert data["workflow"]["approval_history"][0]["identity"]["approval_scope"] == "money"
     assert data["workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"] == "approved"
     assert data["workflow"]["recent_owner_actions"][0]["action"] == "approved"
+    assert data["workflow"]["escalated_owner_items"][0]["metadata"]["followup_latest_kind"] == "owner_task"
+    assert data["workflow"]["linked_followups"][0]["metadata"]["source_kind"] == "owner_request"
 
 
 def test_runtime_handoff_contains_operator_workflow(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -169,10 +178,11 @@ def test_runtime_handoff_contains_operator_workflow(monkeypatch: pytest.MonkeyPa
     data = resp.json()
     assert data["ok"] is True
     assert data["operator_workflow"]["summary"]["pending_owner_requests"] == 0
-    assert data["operator_workflow"]["pending_owner_tasks"][0]["metadata"]["task_key"] == "reserve-safe-smoke"
+    assert data["operator_workflow"]["pending_owner_tasks"][0]["metadata"]["task_key"] == "post-restart-followup"
     assert data["operator_workflow"]["recent_activity"][0]["action"] == "reply_sent"
     assert data["operator_workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"] == "approved"
-    assert data["inbox_summary"]["pending_owner_tasks"] == 1
+    assert data["operator_workflow"]["linked_followups"][0]["metadata"]["source_item_id"]
+    assert data["inbox_summary"]["pending_owner_tasks"] == 2
 
 
 def test_ops_runtime_snapshot_contains_operator_workflow(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -193,7 +203,8 @@ def test_ops_runtime_snapshot_contains_operator_workflow(monkeypatch: pytest.Mon
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
-    assert data["operator_workflow"]["summary"]["pending_owner_tasks"] == 1
+    assert data["operator_workflow"]["summary"]["pending_owner_tasks"] == 2
     assert data["operator_workflow"]["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Transport persistence проверен."
     assert data["operator_workflow"]["recent_owner_actions"][0]["action"] == "approved"
+    assert data["operator_workflow"]["escalated_owner_items"][0]["metadata"]["followup_count"] == 1
     assert data["operator_workflow"]["trace_index"]

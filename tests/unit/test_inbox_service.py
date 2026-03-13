@@ -279,3 +279,38 @@ def test_set_item_status_persists_owner_resolution_metadata(tmp_path: Path) -> N
     assert result["item"]["metadata"]["resolution_note"] == "smoke подтвержден"
     assert workflow["recent_owner_actions"][0]["actor"] == "owner-ui"
     assert workflow["recent_owner_actions"][0]["note"] == "smoke подтвержден"
+
+
+def test_escalate_owner_mention_to_followup_preserves_trace_and_links_source(tmp_path: Path) -> None:
+    """Эскалация mention/request должна наследовать trace и оставлять link на исходный item."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    source = service.upsert_incoming_owner_request(
+        chat_id="-100777",
+        message_id="11",
+        text="Краб, вынеси это в approval",
+        sender_username="owner",
+        chat_type="group",
+        is_reply_to_me=True,
+        has_trigger=True,
+    )["item"]
+
+    followup = service.escalate_item_to_approval_request(
+        source_item_id=source["item_id"],
+        title="Разрешить внешний API",
+        body="Нужен budget approval для mention-flow.",
+        request_key="mention-approval",
+        source="owner-ui",
+        approval_scope="money",
+        requested_action="enable_external_api",
+    )
+    workflow = service.get_workflow_snapshot(limit_per_bucket=4, trace_limit=8)
+    source_rows = service.list_items(kind="owner_mention", limit=5)
+
+    assert followup["ok"] is True
+    assert followup["item"]["identity"]["trace_id"] == source["identity"]["trace_id"]
+    assert followup["item"]["metadata"]["source_item_id"] == source["item_id"]
+    assert followup["item"]["metadata"]["source_kind"] == "owner_mention"
+    assert source_rows[0]["metadata"]["followup_count"] == 1
+    assert source_rows[0]["metadata"]["followup_latest_kind"] == "approval_request"
+    assert workflow["escalated_owner_items"][0]["item_id"] == source["item_id"]
+    assert workflow["linked_followups"][0]["metadata"]["source_item_id"] == source["item_id"]

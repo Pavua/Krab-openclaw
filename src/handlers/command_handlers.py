@@ -906,7 +906,9 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
     - `!inbox cancel <id>` — отменить item вручную.
     - `!inbox approve <id>` / `!inbox reject <id>` — принять решение по approval item;
     - `!inbox task <title> | <body>` — создать owner-task;
+    - `!inbox taskfrom <source_id> | <title> | <body>` — эскалировать item в owner-task;
     - `!inbox approval <scope> | <title> | <body>` — создать approval-request.
+    - `!inbox approvalfrom <source_id> | <scope> | <title> | <body>` — эскалировать item в approval.
     """
     del bot
     raw_args = str(message.text or "").split(maxsplit=2)
@@ -963,6 +965,29 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
         )
         return
 
+    if action == "taskfrom":
+        if len(raw_args) < 3 or raw_args[2].count("|") < 2:
+            raise UserInputError(user_message="📥 Формат: `!inbox taskfrom <source_id> | <title> | <body>`")
+        source_item_id, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=2)]
+        if not source_item_id or not title or not body:
+            raise UserInputError(user_message="📥 Для taskfrom нужны source_id, заголовок и описание.")
+        created = inbox_service.escalate_item_to_owner_task(
+            source_item_id=source_item_id,
+            title=title,
+            body=body,
+            source="telegram-owner",
+            metadata={"requested_via": "telegram"},
+        )
+        if not created.get("ok"):
+            raise UserInputError(user_message=f"📥 Source item `{source_item_id}` не найден.")
+        await message.reply(
+            "📝 Owner-task создан из inbox item.\n"
+            f"- Source: `{source_item_id}`\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Trace: `{created['item']['identity']['trace_id']}`"
+        )
+        return
+
     if action == "approval":
         if len(raw_args) < 3 or raw_args[2].count("|") < 2:
             raise UserInputError(user_message="📥 Формат: `!inbox approval <scope> | <title> | <body>`")
@@ -985,11 +1010,37 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
         )
         return
 
+    if action == "approvalfrom":
+        if len(raw_args) < 3 or raw_args[2].count("|") < 3:
+            raise UserInputError(user_message="📥 Формат: `!inbox approvalfrom <source_id> | <scope> | <title> | <body>`")
+        source_item_id, scope, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=3)]
+        if not source_item_id or not scope or not title or not body:
+            raise UserInputError(user_message="📥 Для approvalfrom нужны source_id, scope, заголовок и описание.")
+        created = inbox_service.escalate_item_to_approval_request(
+            source_item_id=source_item_id,
+            title=title,
+            body=body,
+            source="telegram-owner",
+            approval_scope=scope,
+            requested_action=title,
+            metadata={"requested_via": "telegram"},
+        )
+        if not created.get("ok"):
+            raise UserInputError(user_message=f"📥 Source item `{source_item_id}` не найден.")
+        await message.reply(
+            "🛂 Approval-request создан из inbox item.\n"
+            f"- Source: `{source_item_id}`\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Scope: `{scope}`\n"
+            f"- Trace: `{created['item']['identity']['trace_id']}`"
+        )
+        return
+
     if action not in {"ack", "done", "cancel", "approve", "reject"}:
         raise UserInputError(
             user_message=(
                 "📥 Формат: "
-                "`!inbox [list|status|ack <id>|done <id>|cancel <id>|approve <id>|reject <id>|task <title> | <body>|approval <scope> | <title> | <body>]`"
+                "`!inbox [list|status|ack <id>|done <id>|cancel <id>|approve <id>|reject <id>|task <title> | <body>|taskfrom <source_id> | <title> | <body>|approval <scope> | <title> | <body>|approvalfrom <source_id> | <scope> | <title> | <body>]`"
             )
         )
 

@@ -2934,6 +2934,42 @@ def test_inbox_update_approval_path_preserves_owner_note(
     assert data["result"]["item"]["metadata"]["resolution_note"] == "approved after smoke"
 
 
+def test_inbox_create_can_escalate_from_existing_source_item(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Create endpoint должен уметь создавать linked followup из входящего owner item."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    source_item = inbox.upsert_incoming_owner_request(
+        chat_id="-100777",
+        message_id="41",
+        text="Вынеси это в owner-task",
+        sender_username="owner",
+        chat_type="group",
+        is_reply_to_me=True,
+    )["item"]
+    monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    client = _make_client()
+
+    resp = client.post(
+        "/api/inbox/create",
+        json={
+            "kind": "owner_task",
+            "source_item_id": source_item["item_id"],
+            "title": "Разобрать кейс",
+            "body": "Нужен linked followup task.",
+            "task_key": "linked-followup",
+        },
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["result"]["item"]["metadata"]["source_item_id"] == source_item["item_id"]
+    assert data["result"]["item"]["identity"]["trace_id"] == source_item["identity"]["trace_id"]
+
+
 def test_userbot_acl_update_grants_subject(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`/api/userbot/acl/update` должен применять grant/revoke через общий ACL helper."""
     acl_path = tmp_path / "krab_userbot_acl.json"

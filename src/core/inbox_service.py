@@ -240,6 +240,13 @@ class InboxService:
         items.sort(key=lambda item: item.updated_at_utc, reverse=True)
         return items[: self.max_items]
 
+    def _find_item_by_id(self, item_id: str) -> InboxItem | None:
+        """Возвращает item по id из persisted state, если он существует."""
+        target_id = str(item_id or "").strip()
+        if not target_id:
+            return None
+        return next((row for row in self._load_items() if row.item_id == target_id), None)
+
     @staticmethod
     def _is_owner_action_actor(actor: str) -> bool:
         """Определяет, относится ли actor к owner-facing контуру управления."""
@@ -327,6 +334,14 @@ class InboxService:
             "approval_decision",
             "last_action_actor",
             "last_action_status",
+            "source_item_id",
+            "source_kind",
+            "source_trace_id",
+            "followup_count",
+            "followup_latest_item_id",
+            "followup_latest_kind",
+            "followup_latest_status",
+            "followup_latest_at_utc",
         ):
             value = metadata.get(key)
             if value not in {"", None}:
@@ -343,9 +358,15 @@ class InboxService:
         last_action_note = str(metadata.get("last_action_note") or "").strip()
         if last_action_note:
             selected_metadata["last_action_note"] = last_action_note[:140]
+        source_excerpt = str(metadata.get("source_excerpt") or "").strip()
+        if source_excerpt:
+            selected_metadata["source_excerpt"] = source_excerpt[:140]
         reply_message_ids = metadata.get("reply_message_ids")
         if isinstance(reply_message_ids, list) and reply_message_ids:
             selected_metadata["reply_message_ids"] = [str(row).strip() for row in reply_message_ids if str(row).strip()]
+        followup_ids = metadata.get("followup_ids")
+        if isinstance(followup_ids, list) and followup_ids:
+            selected_metadata["followup_ids"] = [str(row).strip() for row in followup_ids if str(row).strip()]
         if item.kind == "owner_task" and item.dedupe_key.startswith("task:"):
             task_key = str(item.dedupe_key.partition(":")[2] or "").strip()
             if task_key:
@@ -414,6 +435,16 @@ class InboxService:
             for item in items
             if item.kind == "approval_request" and item.status in {"approved", "rejected"}
         ][:bucket_limit]
+        escalated_owner_items = [
+            self._compact_item(item)
+            for item in items
+            if item.kind in {"owner_request", "owner_mention"} and int((item.metadata or {}).get("followup_count", 0) or 0) > 0
+        ][:bucket_limit]
+        linked_followups = [
+            self._compact_item(item)
+            for item in items
+            if str((item.metadata or {}).get("source_item_id") or "").strip()
+        ][:bucket_limit]
         replied_requests = [
             self._compact_item(item)
             for item in items
@@ -466,7 +497,7 @@ class InboxService:
             dict(row)
             for row in recent_activity
             if self._is_owner_action_actor(str(row.get("actor") or ""))
-            and str(row.get("action") or "") not in {"created", "upserted"}
+            and str(row.get("action") or "") not in {"created", "upserted", "followup_created"}
         ][:traces_limit]
 
         return {
@@ -478,6 +509,8 @@ class InboxService:
             "pending_owner_tasks": _bucket(kind="owner_task"),
             "incoming_owner_requests": _bucket(kind="owner_request"),
             "incoming_owner_mentions": _bucket(kind="owner_mention"),
+            "escalated_owner_items": escalated_owner_items,
+            "linked_followups": linked_followups,
             "recent_replied_requests": replied_requests,
             "recent_owner_actions": recent_owner_actions,
             "recent_activity": recent_activity[:traces_limit],
@@ -740,6 +773,151 @@ class InboxService:
             ),
             metadata=dict(metadata or {}),
         )
+
+    def _build_followup_metadata(
+        self,
+        *,
+        source_item: InboxItem,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Собирает metadata followup item-а, связанного с исходным inbox событием.
+
+        Это нужно, чтобы task/approval, созданные из owner mention/request, не
+        теряли происхождение после restart/handoff и были читаемы в snapshot-е.
+        """
+        payload = dict(metadata or {})
+        source_meta = source_item.metadata if isinstance(source_item.metadata, dict) else {}
+        payload.setdefault("source_item_id", source_item.item_id)
+        payload.setdefault("source_kind", source_item.kind)
+        payload.setdefault("source_trace_id", source_item.identity.trace_id)
+        payload.setdefault("source_title", source_item.title)
+        payload.setdefault("source_excerpt", str(source_meta.get("text_excerpt") or source_item.title or "").strip()[:500])
+        payload.setdefault("source_chat_id", str(source_meta.get("chat_id") or source_item.identity.channel_id or "").strip())
+        payload.setdefault("source_message_id", str(source_meta.get("message_id") or "").strip())
+        return payload
+
+    def _link_followup_to_source(
+        self,
+        *,
+        source_item_id: str,
+        followup_item_id: str,
+        followup_kind: str,
+        followup_status: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Записывает на исходный item факт созданного followup-а и общий trace trail."""
+        target_id = str(source_item_id or "").strip()
+        if not target_id:
+            return {"ok": False, "error": "inbox_empty_source_item_id"}
+        items = self._load_items()
+        source_item = next((row for row in items if row.item_id == target_id), None)
+        if source_item is None:
+            return {"ok": False, "error": "inbox_item_not_found"}
+        metadata = self._normalize_metadata(source_item.metadata)
+        followup_ids = [str(row).strip() for row in metadata.get("followup_ids", []) if str(row).strip()] if isinstance(metadata.get("followup_ids"), list) else []
+        normalized_followup_id = str(followup_item_id or "").strip()
+        already_linked = normalized_followup_id in followup_ids if normalized_followup_id else False
+        if normalized_followup_id and normalized_followup_id not in followup_ids:
+            followup_ids.insert(0, normalized_followup_id)
+        metadata["followup_ids"] = followup_ids[:8]
+        metadata["followup_count"] = int(metadata.get("followup_count", 0) or 0) + (0 if already_linked else 1)
+        metadata["followup_latest_item_id"] = normalized_followup_id
+        metadata["followup_latest_kind"] = str(followup_kind or "").strip().lower()
+        metadata["followup_latest_status"] = str(followup_status or "").strip().lower()
+        metadata["followup_latest_at_utc"] = _now_utc_iso()
+        source_item.updated_at_utc = _now_utc_iso()
+        source_item.metadata = self._append_workflow_event(
+            metadata,
+            action="followup_created",
+            actor=actor,
+            status=source_item.status,
+            extra={
+                "followup_item_id": normalized_followup_id,
+                "followup_kind": metadata["followup_latest_kind"],
+                "followup_status": metadata["followup_latest_status"],
+            },
+        )
+        items = [row for row in items if row.item_id != source_item.item_id]
+        items.insert(0, source_item)
+        self._save_items(items)
+        return {"ok": True, "item": source_item.to_dict()}
+
+    def escalate_item_to_owner_task(
+        self,
+        *,
+        source_item_id: str,
+        title: str,
+        body: str,
+        task_key: str = "",
+        source: str = "owner",
+        severity: str = "info",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Создаёт owner-task, связанный с исходным inbox item и его trace."""
+        source_item = self._find_item_by_id(source_item_id)
+        if source_item is None:
+            return {"ok": False, "error": "inbox_item_not_found"}
+        result = self.upsert_owner_task(
+            title=title,
+            body=body,
+            task_key=task_key,
+            source=source,
+            severity=severity,
+            channel_id=source_item.identity.channel_id,
+            team_id=source_item.identity.team_id or "owner",
+            trace_id=source_item.identity.trace_id,
+            metadata=self._build_followup_metadata(source_item=source_item, metadata=metadata),
+        )
+        if result.get("ok") and isinstance(result.get("item"), dict):
+            self._link_followup_to_source(
+                source_item_id=source_item.item_id,
+                followup_item_id=str(result["item"].get("item_id") or ""),
+                followup_kind="owner_task",
+                followup_status=str(result["item"].get("status") or ""),
+                actor=str(source or "owner").strip().lower() or "owner",
+            )
+        return result
+
+    def escalate_item_to_approval_request(
+        self,
+        *,
+        source_item_id: str,
+        title: str,
+        body: str,
+        request_key: str = "",
+        source: str = "owner",
+        severity: str = "warning",
+        approval_scope: str = "owner",
+        requested_action: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Создаёт approval-request, связанный с исходным inbox item и его trace."""
+        source_item = self._find_item_by_id(source_item_id)
+        if source_item is None:
+            return {"ok": False, "error": "inbox_item_not_found"}
+        result = self.upsert_approval_request(
+            title=title,
+            body=body,
+            request_key=request_key,
+            source=source,
+            severity=severity,
+            channel_id=source_item.identity.channel_id,
+            team_id=source_item.identity.team_id or "owner",
+            trace_id=source_item.identity.trace_id,
+            approval_scope=approval_scope,
+            requested_action=requested_action,
+            metadata=self._build_followup_metadata(source_item=source_item, metadata=metadata),
+        )
+        if result.get("ok") and isinstance(result.get("item"), dict):
+            self._link_followup_to_source(
+                source_item_id=source_item.item_id,
+                followup_item_id=str(result["item"].get("item_id") or ""),
+                followup_kind="approval_request",
+                followup_status=str(result["item"].get("status") or ""),
+                actor=str(source or "owner").strip().lower() or "owner",
+            )
+        return result
 
     def upsert_approval_request(
         self,

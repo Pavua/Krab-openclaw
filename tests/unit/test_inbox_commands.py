@@ -165,3 +165,61 @@ async def test_handle_inbox_approve_rejects_non_approval_item(tmp_path) -> None:
         command_handlers_module.inbox_service = original
 
     assert "approval-request" in str(exc_info.value.user_message or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_inbox_taskfrom_creates_linked_owner_task(tmp_path) -> None:
+    """`!inbox taskfrom ...` должен наследовать trace и source-link от входящего item."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    source = inbox.upsert_incoming_owner_request(
+        chat_id="-100777",
+        message_id="55",
+        text="Сделай followup task",
+        sender_username="owner",
+        chat_type="group",
+        is_reply_to_me=True,
+    )["item"]
+    message = _make_message(f"!inbox taskfrom {source['item_id']} | Проверить кейс | Нужен followup")
+    bot = SimpleNamespace()
+    original = command_handlers_module.inbox_service
+    command_handlers_module.inbox_service = inbox
+    try:
+        await handle_inbox(bot, message)
+    finally:
+        command_handlers_module.inbox_service = original
+
+    message.reply.assert_awaited_once()
+    items = inbox.list_items(status="open", kind="owner_task", limit=5)
+    assert items
+    assert items[0]["identity"]["trace_id"] == source["identity"]["trace_id"]
+    assert items[0]["metadata"]["source_item_id"] == source["item_id"]
+
+
+@pytest.mark.asyncio
+async def test_handle_inbox_approvalfrom_creates_linked_approval(tmp_path) -> None:
+    """`!inbox approvalfrom ...` должен создавать approval с link на исходный item."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    source = inbox.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="99",
+        text="Нужен approval",
+        sender_username="owner",
+        chat_type="private",
+    )["item"]
+    message = _make_message(
+        f"!inbox approvalfrom {source['item_id']} | money | Разрешить API | Нужен бюджет"
+    )
+    bot = SimpleNamespace()
+    original = command_handlers_module.inbox_service
+    command_handlers_module.inbox_service = inbox
+    try:
+        await handle_inbox(bot, message)
+    finally:
+        command_handlers_module.inbox_service = original
+
+    message.reply.assert_awaited_once()
+    items = inbox.list_items(status="open", kind="approval_request", limit=5)
+    assert items
+    assert items[0]["identity"]["trace_id"] == source["identity"]["trace_id"]
+    assert items[0]["metadata"]["source_item_id"] == source["item_id"]
+    assert items[0]["identity"]["approval_scope"] == "money"
