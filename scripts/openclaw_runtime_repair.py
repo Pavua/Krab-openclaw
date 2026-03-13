@@ -376,6 +376,78 @@ def sync_plugin_allowlist(openclaw_path: Path) -> dict[str, Any]:
     }
 
 
+def sync_managed_output_sanitizer_install_record(
+    *,
+    openclaw_path: Path,
+    openclaw_root: Path,
+) -> dict[str, Any]:
+    """
+    Пишет install record для repo-managed sanitizer plugin в runtime-конфиг.
+
+    Почему это нужно:
+    - `plugins.allow` снимает risk про auto-load, но не даёт provenance trail;
+    - native loader продолжает ругаться на `loaded without install/load-path provenance`,
+      пока plugin не связан с `plugins.installs` или `plugins.load.paths`;
+    - для нашего managed extension достаточно path-install record, который
+      детерминированно указывает на live extension dir текущей учётки.
+    """
+    payload = _read_json(openclaw_path)
+    plugins = payload.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        plugins = {}
+        payload["plugins"] = plugins
+
+    installs = plugins.get("installs")
+    if not isinstance(installs, dict):
+        installs = {}
+        plugins["installs"] = installs
+
+    target_dir = openclaw_root / "extensions" / MANAGED_OUTPUT_SANITIZER_PLUGIN_ID
+    current_record = installs.get(MANAGED_OUTPUT_SANITIZER_PLUGIN_ID)
+    current = current_record if isinstance(current_record, dict) else {}
+    desired = {
+        "source": "path",
+        "sourcePath": str(target_dir),
+        "installPath": str(target_dir),
+    }
+
+    changed = False
+    next_record = dict(current)
+    for key, value in desired.items():
+        if next_record.get(key) != value:
+            next_record[key] = value
+            changed = True
+
+    if "installedAt" not in next_record or not str(next_record.get("installedAt") or "").strip():
+        next_record["installedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        changed = True
+
+    if not changed and isinstance(current_record, dict):
+        return {
+            "path": str(openclaw_path),
+            "changed": False,
+            "plugin_id": MANAGED_OUTPUT_SANITIZER_PLUGIN_ID,
+            "install_record": {
+                "source": next_record.get("source"),
+                "sourcePath": next_record.get("sourcePath"),
+                "installPath": next_record.get("installPath"),
+            },
+        }
+
+    installs[MANAGED_OUTPUT_SANITIZER_PLUGIN_ID] = next_record
+    _write_json(openclaw_path, payload)
+    return {
+        "path": str(openclaw_path),
+        "changed": True,
+        "plugin_id": MANAGED_OUTPUT_SANITIZER_PLUGIN_ID,
+        "install_record": {
+            "source": next_record.get("source"),
+            "sourcePath": next_record.get("sourcePath"),
+            "installPath": next_record.get("installPath"),
+        },
+    }
+
+
 def repair_output_sanitizer_plugin_config(openclaw_path: Path) -> dict[str, Any]:
     """
     Нормализует runtime-конфиг outbound-плагина для внешних каналов.
@@ -2064,6 +2136,7 @@ def should_restart_gateway(report_steps: dict[str, Any]) -> bool:
         "sync_openclaw_json",
         "sync_auth_profiles_json",
         "sync_plugin_allowlist",
+        "sync_managed_output_sanitizer_install_record",
         "repair_output_sanitizer_plugin_config",
         "sync_telegram_channel_token",
         "bootstrap_missing_channels",
@@ -2920,6 +2993,10 @@ def main() -> int:
     report["steps"]["sync_plugin_allowlist"] = sync_plugin_allowlist(openclaw_path)
     report["steps"]["sync_telegram_channel_token"] = sync_telegram_channel_token(openclaw_path)
     report["steps"]["sync_managed_output_sanitizer_plugin"] = sync_managed_output_sanitizer_plugin(
+        openclaw_root=openclaw_root,
+    )
+    report["steps"]["sync_managed_output_sanitizer_install_record"] = sync_managed_output_sanitizer_install_record(
+        openclaw_path=openclaw_path,
         openclaw_root=openclaw_root,
     )
     report["steps"]["repair_output_sanitizer_plugin_config"] = repair_output_sanitizer_plugin_config(

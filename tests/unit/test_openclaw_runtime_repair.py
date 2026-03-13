@@ -36,6 +36,7 @@ from scripts.openclaw_runtime_repair import (
     repair_sessions,
     resolve_telegram_bot_token,
     sync_plugin_allowlist,
+    sync_managed_output_sanitizer_install_record,
     sync_managed_output_sanitizer_plugin,
     sync_auth_profiles_json,
     sync_models_json,
@@ -118,6 +119,26 @@ def test_sync_plugin_allowlist_includes_managed_and_enabled_plugins(tmp_path: Pa
         "krab-output-sanitizer",
         "google-gemini-cli-auth",
     ]
+
+
+def test_sync_managed_output_sanitizer_install_record_writes_path_provenance(tmp_path: Path) -> None:
+    openclaw_root = tmp_path / "runtime"
+    openclaw_path = openclaw_root / "openclaw.json"
+    openclaw_path.parent.mkdir(parents=True, exist_ok=True)
+    openclaw_path.write_text(json.dumps({"plugins": {}}, ensure_ascii=False), encoding="utf-8")
+
+    report = sync_managed_output_sanitizer_install_record(
+        openclaw_path=openclaw_path,
+        openclaw_root=openclaw_root,
+    )
+
+    assert report["changed"] is True
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    install = payload["plugins"]["installs"]["krab-output-sanitizer"]
+    assert install["source"] == "path"
+    assert install["sourcePath"].endswith("/extensions/krab-output-sanitizer")
+    assert install["installPath"].endswith("/extensions/krab-output-sanitizer")
+    assert isinstance(install["installedAt"], str)
 
 
 def test_sync_openclaw_json_updates_lmstudio_token_when_present(tmp_path: Path) -> None:
@@ -639,6 +660,11 @@ def test_should_restart_gateway_when_telegram_token_synced() -> None:
 
     steps = {
         "sync_plugin_allowlist": {"changed": True},
+    }
+    assert should_restart_gateway(steps) is True
+
+    steps = {
+        "sync_managed_output_sanitizer_install_record": {"changed": True},
     }
     assert should_restart_gateway(steps) is True
 
