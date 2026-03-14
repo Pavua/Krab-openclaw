@@ -1,0 +1,38 @@
+{
+  "created_at": "2026-03-14T18:33:00+01:00",
+  "bundle_path": "/Users/Shared/Antigravity_AGENTS/Краб/artifacts/handoff_20260314_183113",
+  "repo_path": "/Users/Shared/Antigravity_AGENTS/Краб",
+  "runtime_account": "USER3",
+  "git": {
+    "remote": "https://github.com/Pavua/Krab-openclaw.git",
+    "branch": "codex/companion-runtime-adaptive-fix"
+  },
+  "files": [
+    "ATTACH_SUMMARY_RU.md",
+    "CALL_TRANSLATOR_AUDIT_RU.md",
+    "HANDOFF_MANIFEST.json",
+    "IPHONE_COMPANION_XCODE_FREE_SIGNING_RU.md",
+    "KRAB_SKILLS_REGISTRY_RU.md",
+    "MASTER_PLAN_VNEXT_RU.md",
+    "MULTI_ACCOUNT_SWITCHOVER_RU.md",
+    "NEW_CHAT_BOOTSTRAP_PROMPT.md",
+    "NEW_CHAT_PROMPT_RU.md",
+    "NEXT_CHAT_CHECKPOINT_RU.md",
+    "OPENCLAW_KRAB_ROADMAP.md",
+    "Open iPhone Companion Skeleton.command",
+    "PABLITO_RETURN_CHECKLIST_RU.md",
+    "PARALLEL_DIALOG_PROTOCOL_RU.md",
+    "PLAN-Краб+переводчик 12.03.2026.md",
+    "START_NEXT_CHAT.md",
+    "krab-owner-panel-2026-03-14.png",
+    "krab-owner-panel-companion-attention-2026-03-14.png",
+    "krab-owner-panel-companion-registered-2026-03-14.png",
+    "krab-owner-panel-companion-trial-ready-2026-03-14.png",
+    "krab-owner-panel-onboarding-export-2026-03-14.png",
+    "openclaw_runtime_thinking_alias_fix_user3_latest.json",
+    "translator_mobile_onboarding_latest_user3.json",
+    "translator_mobile_trial_ready_user3_latest.json",
+    "Стартовый промпт на USER3.md"
+  ],
+  "updated_at": "2026-03-14T18:08:00.612199+00:00"
+}

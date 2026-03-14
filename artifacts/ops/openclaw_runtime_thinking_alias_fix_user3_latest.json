@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "generated_at_utc": "2026-03-14T18:03:24.918230+00:00",
+  "user": "USER3",
+  "config_path": "/Users/USER3/.openclaw/openclaw.json",
+  "backup_path": "/Users/USER3/.openclaw/openclaw.json.bak_thinking_alias_fix_20260314_180324Z",
+  "changes": [
+    {
+      "path": "agents.defaults.thinkingDefault",
+      "from": "auto",
+      "to": "adaptive"
+    }
+  ]
+}

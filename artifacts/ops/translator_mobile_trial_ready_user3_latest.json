@@ -1,0 +1,717 @@
+{
+  "ok": true,
+  "generated_at_utc": "2026-03-14T18:11:04.140101+00:00",
+  "user": "USER3",
+  "base_url": "http://127.0.0.1:8080",
+  "screenshot_path": "/Users/Shared/Antigravity_AGENTS/Краб/output/playwright/translator-mobile-trial-ready-user3-20260314.png",
+  "summary": {
+    "session_id": "vs_0b93dc247b1d",
+    "session_status": "created",
+    "device_id": "iphone-dev-1",
+    "mobile_status": "bound",
+    "current_device_binding_status": "pending",
+    "bound_devices": 1,
+    "delivery_status": "trial_ready",
+    "ordinary_calls_status": "trial_ready",
+    "preflight_status": "ready_for_trial",
+    "timeline_total": 0,
+    "why_status": "ready",
+    "gateway_active_session": true,
+    "gateway_bound_session_id": "vs_0b93dc247b1d",
+    "gateway_why_code": "no_audio_stream"
+  },
+  "sources": {
+    "control_plane": {
+      "http_status": 200,
+      "path": "/api/translator/control-plane",
+      "payload": {
+        "ok": true,
+        "collected_at": "2026-03-14T18:11:03+00:00",
+        "readiness": {
+          "status": "ready",
+          "foundation_ready": true,
+          "live_voice_ready": true
+        },
+        "account_runtime": {
+          "status": "ready",
+          "operator_id": "USER3",
+          "account_id": "83e7da07f5b6",
+          "account_mode": "split_runtime_per_account",
+          "userbot_authorized": true,
+          "userbot_authorized_user": "yung_nagato",
+          "shared_workspace_attached": true,
+          "shared_memory_ready": true,
+          "scheduler_enabled": true,
+          "voice_gateway_configured": true,
+          "openclaw_auth_state": "configured",
+          "current_route_model": "google/gemini-3.1-pro-preview",
+          "current_route_channel": "openclaw_cloud"
+        },
+        "approval_state": {
+          "pending_approvals": 0,
+          "open_escalations": 0,
+          "pending_owner_tasks": 0
+        },
+        "gateway_contract": {
+          "status": "ok",
+          "ok": true,
+          "service": "krab-voice-gateway",
+          "contract_version": "voice-gateway.v1",
+          "translation_modes": [
+            "auto_to_ru",
+            "ru_es_duplex"
+          ],
+          "session_sources": [
+            "mic",
+            "twilio_pstn",
+            "mobile"
+          ],
+          "timeline_supported": true,
+          "why_supported": true,
+          "device_binding_supported": true,
+          "quick_phrases_supported": true,
+          "endpoints": {
+            "sessions": "/v1/sessions",
+            "runtime": "/v1/sessions/{session_id}/runtime",
+            "diagnostics": "/v1/sessions/{session_id}/diagnostics",
+            "timeline": "/v1/sessions/{session_id}/timeline",
+            "quick_phrases": "/v1/quick-phrases"
+          }
+        },
+        "sessions": {
+          "count": 1,
+          "active_count": 1,
+          "current_session_id": "vs_0b93dc247b1d",
+          "items": [
+            {
+              "id": "vs_0b93dc247b1d",
+              "status": "created",
+              "translation_mode": "auto_to_ru",
+              "notify_mode": "auto_on",
+              "tts_mode": "hybrid",
+              "source": "mobile",
+              "src_lang": "auto",
+              "tgt_lang": "ru",
+              "device_bound": false,
+              "updated_at": "2026-03-14T18:05:26+00:00"
+            }
+          ]
+        },
+        "current_session": {
+          "id": "vs_0b93dc247b1d",
+          "status": "created",
+          "translation_mode": "auto_to_ru",
+          "notify_mode": "auto_on",
+          "tts_mode": "hybrid",
+          "source": "mobile",
+          "src_lang": "auto",
+          "tgt_lang": "ru",
+          "device_binding_status": "pending",
+          "device_bound": false,
+          "meta": {
+            "label": "Companion Trial USER3 2026-03-14",
+            "prepared_via": "owner_mobile_trial_prep",
+            "device_id": "iphone-dev-1"
+          },
+          "diagnostics": {
+            "session_id": "vs_0b93dc247b1d",
+            "created_at": "2026-03-14T18:05:26+00:00",
+            "updated_at": "2026-03-14T18:05:26+00:00",
+            "counters": {
+              "call_state": 1
+            },
+            "latency_ms": {
+              "call_state": 20.0,
+              "call_state_samples": 1
+            },
+            "pipeline": {
+              "mode": "hybrid",
+              "last_fallback": "",
+              "last_error": "",
+              "cache_hits": 0,
+              "cache_misses": 0,
+              "last_call_state_at": "2026-03-14T18:05:26+00:00"
+            },
+            "costs": {
+              "total_usd": 0.0,
+              "breakdown": {
+                "twilio": 0.0,
+                "ai": 0.0
+              }
+            },
+            "translation_mode": "auto_to_ru",
+            "notify_mode": "auto_on",
+            "source": "mobile",
+            "runtime": {
+              "buffering_mode": "adaptive",
+              "target_latency_ms": 420,
+              "min_latency_ms": 180,
+              "max_latency_ms": 1200,
+              "vad_sensitivity": 0.38,
+              "silence_increase_step_ms": 35,
+              "speech_decrease_step_ms": 25
+            },
+            "status": "created",
+            "timeline_size": 0
+          },
+          "diagnostics_why": {
+            "ok": true,
+            "session_id": "vs_0b93dc247b1d",
+            "status": "created",
+            "why": {
+              "code": "no_audio_stream",
+              "message": "В сессию не поступает аудиопоток.",
+              "recommendations": [
+                "Проверьте источник захвата и разрешения микрофона.",
+                "Для PSTN/Twilio убедитесь, что Media Stream действительно подключён."
+              ],
+              "metrics": {
+                "stt_partial": 0,
+                "translation_partial": 0,
+                "speech_ratio": 0.0,
+                "buffering_mode": "adaptive",
+                "last_error": ""
+              }
+            }
+          },
+          "timeline_summary": {
+            "ok": true,
+            "session_id": "vs_0b93dc247b1d",
+            "status": "created",
+            "limit": 400,
+            "summary": "Недостаточно данных для summary: в сессии ещё нет текстовых событий.",
+            "tasks": [],
+            "items_used": 0,
+            "stats": {
+              "count": 0,
+              "text_chars": 0,
+              "first_ts": "",
+              "last_ts": "",
+              "by_kind": {}
+            }
+          }
+        },
+        "runtime_policy": {
+          "status": "from_active_session",
+          "translation_mode": "auto_to_ru",
+          "notify_mode": "auto_on",
+          "tts_mode": "hybrid",
+          "source": "mobile",
+          "src_lang": "auto",
+          "tgt_lang": "ru",
+          "language_pair": "auto-ru",
+          "bilingual_mode": false,
+          "voice_strategy": "voice-first",
+          "summary_available": true,
+          "quick_phrases_available": true,
+          "supported_translation_modes": [
+            "auto_to_ru",
+            "ru_es_duplex"
+          ],
+          "supported_session_sources": [
+            "mic",
+            "twilio_pstn",
+            "mobile"
+          ],
+          "runtime_tuning": {
+            "buffering_modes": [
+              "adaptive",
+              "low_latency",
+              "stable"
+            ],
+            "supports_target_latency_ms": true,
+            "supports_vad_sensitivity": true
+          }
+        },
+        "operator_actions": {
+          "gateway_available": true,
+          "current_session_id": "vs_0b93dc247b1d",
+          "current_session_status": "created",
+          "start_available": true,
+          "policy_update_available": true,
+          "pause_available": false,
+          "resume_available": true,
+          "stop_available": true,
+          "runtime_tune_available": true,
+          "quick_phrase_available": true,
+          "supported_status_actions": [
+            "resume",
+            "stop"
+          ],
+          "draft_defaults": {
+            "source": "mobile",
+            "translation_mode": "auto_to_ru",
+            "notify_mode": "auto_on",
+            "tts_mode": "hybrid",
+            "src_lang": "auto",
+            "tgt_lang": "ru",
+            "buffering_mode": "adaptive",
+            "target_latency_ms": 420,
+            "vad_sensitivity": 0.38,
+            "quick_phrase_source_lang": "ru",
+            "quick_phrase_target_lang": "es",
+            "quick_phrase_voice": "default",
+            "quick_phrase_style": "neutral"
+          }
+        },
+        "quick_phrases": {
+          "status": "ready",
+          "source_lang": "ru",
+          "target_lang": "es",
+          "selection_reason": "gateway_library_default",
+          "count": 5,
+          "items": [
+            {
+              "id": "speak_slow",
+              "category": "base",
+              "source_text": "Говорите медленнее, пожалуйста",
+              "translated_text": "Hable más despacio, por favor"
+            },
+            {
+              "id": "repeat",
+              "category": "base",
+              "source_text": "Повторите, пожалуйста",
+              "translated_text": "Repita, por favor"
+            },
+            {
+              "id": "lang_limit",
+              "category": "base",
+              "source_text": "Я не очень хорошо говорю по-испански",
+              "translated_text": "No hablo muy bien español"
+            },
+            {
+              "id": "need_minutes",
+              "category": "business",
+              "source_text": "Пришлите, пожалуйста, краткое резюме договорённостей",
+              "translated_text": "Envíe, por favor, un breve resumen de los acuerdos"
+            },
+            {
+              "id": "need_callback",
+              "category": "business",
+              "source_text": "Давайте созвонимся позже сегодня",
+              "translated_text": "Hablemos más позже сегодня"
+            }
+          ]
+        },
+        "links": {
+          "translator_readiness_endpoint": "/api/translator/readiness",
+          "translator_control_plane_endpoint": "/api/translator/control-plane",
+          "capability_registry_endpoint": "/api/capabilities/registry",
+          "policy_matrix_endpoint": "/api/policy/matrix"
+        }
+      }
+    },
+    "session_inspector": {
+      "http_status": 200,
+      "path": "/api/translator/session-inspector",
+      "payload": {
+        "ok": true,
+        "collected_at": "2026-03-14T18:11:03+00:00",
+        "status": "ready",
+        "session_id": "vs_0b93dc247b1d",
+        "session_status": "created",
+        "gateway_status": "ok",
+        "readiness_status": "ready",
+        "why_report": {
+          "status": "ready",
+          "count": 4,
+          "items": [
+            "code",
+            "message",
+            "recommendations",
+            "metrics"
+          ]
+        },
+        "timeline": {
+          "status": "ready",
+          "count": 0,
+          "summary": "Недостаточно данных для summary: в сессии ещё нет текстовых событий.",
+          "tasks": [],
+          "stats": {
+            "count": 0,
+            "text_chars": 0,
+            "first_ts": "",
+            "last_ts": "",
+            "by_kind": {}
+          },
+          "recent_items": [],
+          "export_preview": "# Session Timeline Export: vs_0b93dc247b1d\n\n- exported_at: 2026-03-14T18:11:03+00:00\n- entries: 0",
+          "export_format": "md"
+        },
+        "actions": {
+          "rebuild_summary_available": true,
+          "escalate_available": true
+        },
+        "escalation": {
+          "can_escalate": true,
+          "suggested_kind": "owner_task",
+          "suggested_title": "Translator session vs_0b93dc247b1d: investigate degradation",
+          "suggested_body": "Session: `vs_0b93dc247b1d`\n\nStatus: `created`\n\nWhy-report:\n- code\n- message\n- recommendations\n- metrics\n\nTimeline summary:\nНедостаточно данных для summary: в сессии ещё нет текстовых событий.\n\nTimeline stats: count=0, text_chars=0\n\nTimeline export preview:\n```md\n# Session Timeline Export: vs_0b93dc247b1d\n\n- exported_at: 2026-03-14T18:11:03+00:00\n- entries: 0\n```",
+          "inbox_summary": {
+            "state_path": "/Users/USER3/.openclaw/krab_runtime_state/inbox_state.json",
+            "account_id": "83e7da07f5b6",
+            "operator_id": "USER3",
+            "total_items": 1,
+            "open_items": 0,
+            "attention_items": 0,
+            "pending_reminders": 0,
+            "open_escalations": 0,
+            "pending_owner_tasks": 0,
+            "pending_approvals": 0,
+            "pending_owner_requests": 0,
+            "pending_owner_mentions": 0,
+            "latest_open_items": []
+          }
+        },
+        "links": {
+          "control_plane_endpoint": "/api/translator/control-plane",
+          "session_inspector_endpoint": "/api/translator/session-inspector",
+          "inbox_status_endpoint": "/api/inbox/status"
+        }
+      }
+    },
+    "mobile_readiness": {
+      "http_status": 200,
+      "path": "/api/translator/mobile-readiness",
+      "payload": {
+        "ok": true,
+        "collected_at": "2026-03-14T18:11:04+00:00",
+        "status": "bound",
+        "delivery_path": "iphone_companion",
+        "gateway_status": "ok",
+        "summary": {
+          "registered_devices": 1,
+          "push_enabled_devices": 0,
+          "bound_devices": 1,
+          "current_session_id": "vs_0b93dc247b1d",
+          "current_session_status": "created",
+          "current_device_binding_status": "pending"
+        },
+        "actions": {
+          "register_available": true,
+          "bind_available": true,
+          "trial_prep_available": true,
+          "remove_available": true,
+          "session_snapshot_available": true,
+          "recommended_next_step": "companion_ready_for_resume",
+          "draft_defaults": {
+            "device_id": "iphone-dev-1",
+            "app_version": "0.1.0",
+            "locale": "ru",
+            "preferred_source_lang": "auto",
+            "preferred_target_lang": "ru",
+            "apns_environment": "development",
+            "notify_default": true
+          }
+        },
+        "devices": {
+          "status": "ready",
+          "count": 1,
+          "selected_device_id": "iphone-dev-1",
+          "items": [
+            {
+              "device_id": "iphone-dev-1",
+              "locale": "ru",
+              "app_version": "0.1.0",
+              "apns_environment": "development",
+              "push_enabled": false,
+              "notify_default": true,
+              "bound_session_id": "vs_0b93dc247b1d",
+              "updated_at": "2026-03-14T18:05:26+00:00",
+              "preferred_source_lang": "auto",
+              "preferred_target_lang": "ru",
+              "voip_push_token_masked": ""
+            }
+          ]
+        },
+        "selected_device_snapshot": {
+          "status": "ready",
+          "device_id": "iphone-dev-1",
+          "active_session": true,
+          "timeline_count": 0,
+          "why_items": [],
+          "timeline_preview": []
+        },
+        "notes": [
+          "iPhone companion остаётся основным delivery path ordinary-call translator v1.",
+          "Companion path трактуем как call-assist architecture, а не как свободный захват системного PSTN аудио."
+        ],
+        "links": {
+          "mobile_readiness_endpoint": "/api/translator/mobile-readiness",
+          "control_plane_endpoint": "/api/translator/control-plane",
+          "session_inspector_endpoint": "/api/translator/session-inspector"
+        }
+      }
+    },
+    "delivery_matrix": {
+      "http_status": 200,
+      "path": "/api/translator/delivery-matrix",
+      "payload": {
+        "ok": true,
+        "collected_at": "2026-03-14T18:11:04+00:00",
+        "status": "trial_ready",
+        "primary_delivery_path": "iphone_companion",
+        "canonical_backend": "krab_voice_gateway",
+        "gateway_status": "ok",
+        "ordinary_calls": {
+          "status": "trial_ready",
+          "path": "iphone_companion",
+          "session_source": "mobile",
+          "active_session_id": "vs_0b93dc247b1d",
+          "active_session_status": "created",
+          "mobile_status": "bound",
+          "selected_device_id": "iphone-dev-1",
+          "ready_for_trial": true,
+          "summary": {
+            "registered_devices": 1,
+            "bound_devices": 1,
+            "push_enabled_devices": 0
+          },
+          "blockers": [],
+          "next_steps": [
+            "Ordinary-call track готов к controlled live trial на companion architecture."
+          ]
+        },
+        "internet_calls": {
+          "status": "design_ready",
+          "path": "voice_gateway_session_adapters",
+          "phase": "after_ordinary_v1",
+          "adapters": [
+            {
+              "id": "telegram_call_adapter",
+              "status": "planned"
+            },
+            {
+              "id": "whatsapp_call_adapter",
+              "status": "planned"
+            },
+            {
+              "id": "meet_call_adapter",
+              "status": "planned"
+            }
+          ],
+          "blockers": [
+            "Internet-call adapters идут вторым слоем после ordinary-call v1 и не считаются предпосылкой для первого релиза."
+          ],
+          "next_steps": [
+            "Сначала подтвердить ordinary-call flow через iPhone companion architecture.",
+            "Потом проектировать channel-specific adapters для Telegram, WhatsApp и Meet как отдельный Gateway слой."
+          ]
+        },
+        "guardrails": [
+          "Ordinary calls v1 идут через iPhone companion / call-assist architecture, а не через предположение о полном захвате системного PSTN аудио.",
+          "Internet-call adapters не подменяют ordinary-call track и проектируются только после подтверждения v1 companion flow.",
+          "Owner panel обязана показывать truthful blockers и не рисовать fake-ready состояние при down Gateway."
+        ],
+        "evidence": [
+          "/api/translator/readiness",
+          "/api/translator/control-plane",
+          "/api/translator/mobile-readiness",
+          "/Users/Shared/Antigravity_AGENTS/Краб/docs/CALL_TRANSLATOR_AUDIT_RU.md"
+        ],
+        "links": {
+          "translator_readiness_endpoint": "/api/translator/readiness",
+          "translator_control_plane_endpoint": "/api/translator/control-plane",
+          "translator_mobile_readiness_endpoint": "/api/translator/mobile-readiness"
+        }
+      }
+    },
+    "live_trial_preflight": {
+      "http_status": 200,
+      "path": "/api/translator/live-trial-preflight",
+      "payload": {
+        "ok": true,
+        "status": "ready_for_trial",
+        "generated_at_utc": "2026-03-14T18:11:04+00:00",
+        "project_root": "/Users/Shared/Antigravity_AGENTS/Краб",
+        "current_account": {
+          "user": "USER3",
+          "home_dir": "/Users/USER3"
+        },
+        "runtime": {
+          "runtime_up": true,
+          "telegram_session_state": "ready",
+          "voice_gateway_configured": true,
+          "workspace_attached": true,
+          "userbot_ready": true,
+          "route_model": "google/gemini-3.1-pro-preview",
+          "route_channel": "openclaw_cloud"
+        },
+        "services": {
+          "voice_gateway": {
+            "ok": true,
+            "status": "ok",
+            "latency_ms": 7,
+            "contract_version": null
+          },
+          "krab_ear": {
+            "ok": true,
+            "status": "ok",
+            "latency_ms": 0
+          },
+          "perceptor": {
+            "ok": true,
+            "status": "ready",
+            "whisper_model": "mlx-community/whisper-large-v3-turbo"
+          }
+        },
+        "helpers": {
+          "start_full_ecosystem": {
+            "label": "Start Full Ecosystem.command",
+            "kind": "repo_command",
+            "path": "/Users/Shared/Antigravity_AGENTS/Краб/Start Full Ecosystem.command",
+            "exists": true,
+            "executable": true
+          },
+          "check_full_ecosystem": {
+            "label": "Check Full Ecosystem.command",
+            "kind": "repo_command",
+            "path": "/Users/Shared/Antigravity_AGENTS/Краб/Check Full Ecosystem.command",
+            "exists": true,
+            "executable": true
+          },
+          "voice_gateway_start": {
+            "label": "Krab Voice Gateway start",
+            "kind": "external_command",
+            "path": "/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway/scripts/start_gateway.command",
+            "exists": true,
+            "executable": true
+          },
+          "krab_ear_start": {
+            "label": "Krab Ear start",
+            "kind": "external_command",
+            "path": "/Users/Shared/Antigravity_AGENTS/Krab Ear/scripts/start_agent.command",
+            "exists": true,
+            "executable": true
+          }
+        },
+        "translator": {
+          "foundation_ready": true,
+          "ordinary_calls_status": "trial_ready",
+          "internet_calls_status": "design_ready",
+          "mobile_status": "bound",
+          "selected_device_id": "iphone-dev-1",
+          "active_session_id": "vs_0b93dc247b1d",
+          "bound_devices": 1,
+          "registered_devices": 1,
+          "bind_available": true,
+          "recommended_next_step": "companion_ready_for_resume"
+        },
+        "actions": {
+          "launcher_recommended": false,
+          "next_step": "Можно переходить к controlled live trial ordinary-call translator path.",
+          "checklist": [
+            "Можно переходить к controlled live trial ordinary-call translator path."
+          ]
+        },
+        "notes": [
+          "Preflight не запускает сервисы сам: он только показывает truthful readiness и ближайшие helper'ы.",
+          "Ordinary-call v1 по проектной архитектуре идёт через iPhone companion/call-assist path.",
+          "Internet-call adapters считаются следующим слоем после подтверждения ordinary-call trial."
+        ],
+        "links": {
+          "translator_readiness_endpoint": "/api/translator/readiness",
+          "translator_delivery_matrix_endpoint": "/api/translator/delivery-matrix",
+          "translator_mobile_readiness_endpoint": "/api/translator/mobile-readiness"
+        }
+      }
+    }
+  },
+  "gateway_mobile_session_snapshot": {
+    "http_status": 200,
+    "path": "/v1/mobile/devices/iphone-dev-1/session-snapshot?limit=8",
+    "payload": {
+      "ok": true,
+      "device": {
+        "device_id": "iphone-dev-1",
+        "platform": "ios",
+        "apns_environment": "development",
+        "app_version": "0.1.0",
+        "locale": "ru",
+        "preferred_source_lang": "auto",
+        "preferred_target_lang": "ru",
+        "notify_default": true,
+        "bound_session_id": "vs_0b93dc247b1d",
+        "created_at": "2026-03-14T17:16:44+00:00",
+        "updated_at": "2026-03-14T18:05:26+00:00",
+        "last_seen_at": "2026-03-14T18:05:26+00:00",
+        "voip_push_token_masked": "",
+        "push_enabled": false
+      },
+      "active_session": true,
+      "session": {
+        "id": "vs_0b93dc247b1d",
+        "status": "created",
+        "translation_mode": "auto_to_ru",
+        "notify_mode": "auto_on",
+        "tts_mode": "hybrid",
+        "source": "mobile",
+        "src_lang": "auto",
+        "tgt_lang": "ru",
+        "created_at": "2026-03-14T18:05:26+00:00",
+        "updated_at": "2026-03-14T18:05:26+00:00",
+        "meta": {
+          "label": "Companion Trial USER3 2026-03-14",
+          "prepared_via": "owner_mobile_trial_prep",
+          "device_id": "iphone-dev-1"
+        }
+      },
+      "timeline_count": 0,
+      "timeline": [],
+      "diagnostics": {
+        "session_id": "vs_0b93dc247b1d",
+        "created_at": "2026-03-14T18:05:26+00:00",
+        "updated_at": "2026-03-14T18:05:26+00:00",
+        "counters": {
+          "call_state": 1
+        },
+        "latency_ms": {
+          "call_state": 20.0,
+          "call_state_samples": 1
+        },
+        "pipeline": {
+          "mode": "hybrid",
+          "last_fallback": "",
+          "last_error": "",
+          "cache_hits": 0,
+          "cache_misses": 0,
+          "last_call_state_at": "2026-03-14T18:05:26+00:00"
+        },
+        "costs": {
+          "total_usd": 0.0,
+          "breakdown": {
+            "twilio": 0.0,
+            "ai": 0.0
+          }
+        },
+        "translation_mode": "auto_to_ru",
+        "notify_mode": "auto_on",
+        "source": "mobile",
+        "runtime": {
+          "buffering_mode": "adaptive",
+          "target_latency_ms": 420,
+          "min_latency_ms": 180,
+          "max_latency_ms": 1200,
+          "vad_sensitivity": 0.38,
+          "silence_increase_step_ms": 35,
+          "speech_decrease_step_ms": 25
+        }
+      },
+      "why": {
+        "code": "no_audio_stream",
+        "message": "В сессию не поступает аудиопоток.",
+        "recommendations": [
+          "Проверьте источник захвата и разрешения микрофона.",
+          "Для PSTN/Twilio убедитесь, что Media Stream действительно подключён."
+        ],
+        "metrics": {
+          "stt_partial": 0,
+          "translation_partial": 0,
+          "speech_ratio": 0.0,
+          "buffering_mode": "adaptive",
+          "last_error": ""
+        }
+      }
+    }
+  }
+}

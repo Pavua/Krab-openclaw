@@ -243,11 +243,14 @@ class WebApp:
 
     @staticmethod
     def _normalize_thinking_mode(raw_value: Any, *, allow_blank: bool = False) -> str:
-        """Ограничивает thinking к набору режимов, которые уже используются в runtime."""
+        """Ограничивает thinking к набору режимов, которые реально принимает OpenClaw runtime."""
         normalized = str(raw_value or "").strip().lower()
         if not normalized and allow_blank:
             return ""
-        allowed = {"off", "auto", "low", "medium", "high"}
+        # OpenClaw 2026.3.11 переименовал legacy `auto` в `adaptive`.
+        # Поддерживаем алиас, чтобы не ломать старые draft'ы UI и уже записанные конфиги.
+        normalized = {"auto": "adaptive"}.get(normalized, normalized)
+        allowed = {"off", "minimal", "low", "medium", "high", "xhigh", "adaptive"}
         if normalized not in allowed:
             raise ValueError("runtime_invalid_thinking_mode")
         return normalized
@@ -1215,7 +1218,7 @@ class WebApp:
                     "description": "Ручная настройка queue caps под конкретный сценарий.",
                 },
             ],
-            "thinking_modes": ["off", "auto", "low", "medium", "high"],
+            "thinking_modes": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
             "chain_items": chain_items,
             # Держим минимум 8 слотов, потому что текущий production-профиль проекта
             # уже использует длинную fallback-цепочку и UI должен позволять быстро

@@ -2486,10 +2486,12 @@
     function buildThinkingModeLabel(value) {
       const normalized = String(value || "").trim().toLowerCase();
       if (normalized === "off") return "Off";
-      if (normalized === "auto") return "Auto";
+      if (normalized === "minimal") return "Minimal";
       if (normalized === "low") return "Low";
       if (normalized === "medium") return "Medium";
       if (normalized === "high") return "High";
+      if (normalized === "xhigh") return "XHigh";
+      if (normalized === "adaptive" || normalized === "auto") return "Adaptive";
       return normalized || "off";
     }
 
@@ -2691,10 +2693,12 @@
       const modelOptions = getEditableChainModelOptionsFromCatalog(catalog);
       const thinkingOptions = [
         { value: "off", label: "Off" },
-        { value: "auto", label: "Auto" },
+        { value: "minimal", label: "Minimal" },
         { value: "low", label: "Low" },
         { value: "medium", label: "Medium" },
         { value: "high", label: "High" },
+        { value: "xhigh", label: "XHigh" },
+        { value: "adaptive", label: "Adaptive" },
       ];
       fillSelect("runtimeThinkingDefaultSelect", thinkingOptions, thinkingDefault);
       fillSelect(
