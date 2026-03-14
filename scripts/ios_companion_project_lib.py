@@ -37,6 +37,8 @@ REQUIRED_SWIFT_FILES = (
     "CallManager.swift",
     "PushRegistryManager.swift",
     "Models.swift",
+    "AudioCaptureManager.swift",
+    "SpeechRecognitionManager.swift",
 )
 
 
@@ -197,6 +199,7 @@ def make_project_spec(config: GenerationConfig) -> str:
 {development_team_line}                INFOPLIST_KEY_CFBundleDisplayName: {_yaml_quote(config.app_name)}
                 INFOPLIST_KEY_LSRequiresIPhoneOS: YES
                 INFOPLIST_KEY_NSMicrophoneUsageDescription: {_yaml_quote('Нужен доступ к микрофону для перевода звонка.')}
+                INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: {_yaml_quote('Нужен доступ к распознаванию речи для живых субтитров и перевода.')}
                 INFOPLIST_KEY_NSLocalNetworkUsageDescription: {_yaml_quote('Нужен доступ к локальной сети для подключения к Krab Gateway.')}
                 INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
             scheme:
@@ -220,7 +223,7 @@ def make_local_readme(config: GenerationConfig) -> str:
 
         - Сгенерирован проект `{config.app_name}.xcodeproj` через `xcodegen`.
         - Подключён SwiftUI skeleton из `{config.skeleton_dir}`.
-        - Прописаны `NSMicrophoneUsageDescription` и `NSLocalNetworkUsageDescription`.
+        - Прописаны `NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription` и `NSLocalNetworkUsageDescription`.
         - Bundle ID по умолчанию: `{config.bundle_id}`.
         - Team для free signing: `{config.team_name or config.development_team or "нужно выбрать вручную"}`.
 
