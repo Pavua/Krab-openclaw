@@ -21,8 +21,10 @@ fi
 if gh auth status >/dev/null 2>&1; then
   echo "✅ GitHub CLI уже авторизован."
 else
-  echo "🌐 Откроется браузерная авторизация GitHub..."
-  if ! gh auth login --hostname github.com --git-protocol https --web; then
+  echo "🌐 Запускаю device-flow авторизацию GitHub..."
+  echo "Если браузер не откроется автоматически — открой https://github.com/login/device вручную."
+  open "https://github.com/login/device" >/dev/null 2>&1 || true
+  if ! gh auth login --hostname github.com --git-protocol https --device; then
     echo "❌ Авторизация GitHub не завершилась."
     read -p "Нажми Enter для закрытия окна..."
     exit 1
