@@ -35,6 +35,10 @@ from src.core.access_control import (  # noqa: E402
     load_acl_runtime_state,
     update_acl_subject,
 )
+from src.core.auth_recovery_readiness import (  # noqa: E402
+    build_auth_recovery_readiness_snapshot,
+    provider_repair_helper_path,
+)
 from src.core.capability_registry import (  # noqa: E402
     build_capability_registry,
     build_channel_capability_snapshot,
@@ -55,6 +59,7 @@ from src.core.model_aliases import (  # noqa: E402
     parse_model_set_request,
     render_model_presets_text,
 )
+from src.core.openclaw_workspace import build_workspace_state_snapshot  # noqa: E402
 from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
     discover_gateway_signal_log,
     runtime_auth_failed_providers_from_signal_log,
@@ -66,6 +71,12 @@ from src.core.observability import (  # noqa: E402
     timeline,
 )
 from src.core.operator_identity import current_account_id, current_operator_id  # noqa: E402
+from src.core.translator_mobile_onboarding import (  # noqa: E402
+    build_translator_mobile_onboarding_packet,
+)
+from src.core.translator_live_trial_preflight import (  # noqa: E402
+    build_translator_live_trial_preflight,
+)
 
 logger = structlog.get_logger("WebApp")
 
@@ -457,14 +468,7 @@ class WebApp:
     @classmethod
     def _provider_repair_helper_path(cls, provider_name: str) -> Path | None:
         """Возвращает helper `.command` для провайдера, если он уже есть или поддерживается."""
-        normalized = str(provider_name or "").strip().lower()
-        mapping = {
-            "google-gemini-cli": cls._project_root() / "Login Gemini CLI OAuth.command",
-            "google-antigravity": cls._project_root() / "Login Google Antigravity OAuth.command",
-            "openai-codex": cls._project_root() / "Login OpenAI Codex OAuth.command",
-            "qwen-portal": cls._project_root() / "Login Qwen Portal OAuth.command",
-        }
-        return mapping.get(normalized)
+        return provider_repair_helper_path(cls._project_root(), str(provider_name or "").strip().lower())
 
     @classmethod
     def _provider_ui_metadata(cls, provider_name: str) -> dict[str, Any]:
@@ -1446,6 +1450,16 @@ class WebApp:
         auth_profiles = cls._load_openclaw_auth_profiles()
         full_catalog = cls._openclaw_models_full_catalog()
         status_snapshot = cls._openclaw_models_status_snapshot()
+        auth_recovery = build_auth_recovery_readiness_snapshot(
+            project_root=cls._project_root(),
+            status_payload=status_snapshot.get("raw") if isinstance(status_snapshot, dict) else {},
+            auth_profiles_payload=auth_profiles,
+            runtime_models_payload=runtime_models,
+            runtime_config_payload=runtime_config,
+        )
+        auth_recovery_by_name = auth_recovery.get("providers_by_name") if isinstance(auth_recovery, dict) else {}
+        if not isinstance(auth_recovery_by_name, dict):
+            auth_recovery_by_name = {}
         providers = runtime_models.get("providers")
         if not isinstance(providers, dict):
             providers = {}
@@ -1493,6 +1507,12 @@ class WebApp:
                 status_snapshot=status_snapshot,
             )
             provider_ui = cls._provider_ui_metadata(normalized_provider)
+            provider_auth_recovery = auth_recovery_by_name.get(normalized_provider)
+            if isinstance(provider_auth_recovery, dict):
+                provider_ui = {
+                    **provider_ui,
+                    "auth_recovery": dict(provider_auth_recovery),
+                }
             configured_model_ids = set(str(item or "").strip() for item in (provider_state.get("runtime_models") or []) if str(item or "").strip())
             configured_model_ids.update(
                 cls._runtime_provider_model_ids_from_config(
@@ -1548,6 +1568,7 @@ class WebApp:
                         "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
                         "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
                         "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_auth_recovery": dict(provider_auth_recovery or {}),
                         "provider_ui": dict(provider_ui),
                         "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
                         "name": cls._friendly_model_name(canonical_id, raw_name),
@@ -1598,6 +1619,7 @@ class WebApp:
                         "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
                         "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
                         "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_auth_recovery": dict(provider_auth_recovery or {}),
                         "provider_ui": dict(provider_ui),
                         "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
                         "name": cls._friendly_model_name(canonical_id, str(model.get("name", "") or "")),
@@ -1647,6 +1669,7 @@ class WebApp:
                     "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
                     "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
                     "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                    "provider_auth_recovery": dict(provider_auth_recovery or {}),
                     "provider_ui": dict(provider_ui),
                     "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
                     "name": cls._friendly_model_name(canonical_id),
@@ -2651,6 +2674,11 @@ class WebApp:
             runtime_lite=runtime_state,
             runtime_channels_config=runtime_channels,
             policy_matrix=policy_payload,
+            workspace_state=(
+                runtime_state.get("workspace_state")
+                if isinstance(runtime_state.get("workspace_state"), dict)
+                else build_workspace_state_snapshot()
+            ),
         )
 
     async def _capability_registry_snapshot(
@@ -2794,6 +2822,22 @@ class WebApp:
         kraab_userbot = self.deps.get("kraab_userbot")
 
         runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        operator_profile = self._runtime_operator_profile()
+        workspace_state = (
+            runtime_state.get("workspace_state")
+            if isinstance(runtime_state.get("workspace_state"), dict)
+            else {}
+        )
+        telegram_userbot_state = (
+            runtime_state.get("telegram_userbot")
+            if isinstance(runtime_state.get("telegram_userbot"), dict)
+            else {}
+        )
+        last_runtime_route = (
+            runtime_state.get("last_runtime_route")
+            if isinstance(runtime_state.get("last_runtime_route"), dict)
+            else {}
+        )
         voice_gateway_health, voice_gateway_caps, krab_ear_health, krab_ear_caps = await asyncio.gather(
             self._safe_client_health_summary(voice_gateway, source="voice_gateway"),
             self._safe_client_capabilities_summary(voice_gateway, source="voice_gateway"),
@@ -2809,9 +2853,25 @@ class WebApp:
             except Exception:
                 voice_profile = {}
 
+        voice_gateway_caps_detail = (
+            voice_gateway_caps.get("detail")
+            if isinstance(voice_gateway_caps.get("detail"), dict)
+            else {}
+        )
+        krab_ear_caps_detail = (
+            krab_ear_caps.get("detail")
+            if isinstance(krab_ear_caps.get("detail"), dict)
+            else {}
+        )
         voice_stack_ready = bool(voice_gateway_health.get("ok") and krab_ear_health.get("ok"))
         foundation_ready = bool(perceptor_ready and voice_stack_ready)
         live_voice_ready = bool(foundation_ready and voice_profile.get("enabled"))
+        perceptor_whisper_model = str(getattr(perceptor, "whisper_model", "") or "").strip()
+        account_runtime_ready = bool(
+            telegram_userbot_state.get("client_connected")
+            and workspace_state.get("shared_workspace_attached")
+            and runtime_state.get("voice_gateway_configured")
+        )
 
         if foundation_ready:
             readiness = "ready"
@@ -2832,6 +2892,95 @@ class WebApp:
         if not recommendations:
             recommendations.append("Foundation translator-контура подтверждён; можно двигаться к iPhone companion и ordinary-call flow.")
 
+        foundation_checks = {
+            "perceptor": {
+                "ready": perceptor_ready,
+                "status": "ready" if perceptor_ready else "missing",
+                "label": "Perceptor / STT",
+                "detail": {
+                    "whisper_model": perceptor_whisper_model,
+                    "isolated_worker": bool(getattr(perceptor, "stt_isolated_worker", False)),
+                },
+            },
+            "voice_gateway": {
+                "ready": bool(voice_gateway_health.get("ok")),
+                "status": str(voice_gateway_health.get("status") or "unknown"),
+                "label": "Krab Voice Gateway",
+                "detail": {
+                    "source": voice_gateway_health.get("source"),
+                    "latency_ms": voice_gateway_health.get("latency_ms"),
+                    "contract_version": voice_gateway_caps_detail.get("contract_version"),
+                    "service": voice_gateway_caps_detail.get("service"),
+                },
+            },
+            "krab_ear": {
+                "ready": bool(krab_ear_health.get("ok")),
+                "status": str(krab_ear_health.get("status") or "unknown"),
+                "label": "Krab Ear",
+                "detail": {
+                    "source": krab_ear_health.get("source"),
+                    "latency_ms": krab_ear_health.get("latency_ms"),
+                    "transport": krab_ear_caps_detail.get("transport"),
+                },
+            },
+            "voice_replies": {
+                "ready": bool(voice_profile.get("enabled")),
+                "status": "enabled" if voice_profile.get("enabled") else "disabled",
+                "label": "Voice replies",
+                "detail": {
+                    "delivery": voice_profile.get("delivery"),
+                    "speed": voice_profile.get("speed"),
+                    "voice": voice_profile.get("voice"),
+                },
+            },
+            "voice_ingress": {
+                "ready": bool(voice_profile.get("input_transcription_ready")),
+                "status": "ready" if voice_profile.get("input_transcription_ready") else "missing",
+                "label": "Voice ingress",
+                "detail": {
+                    "input_transcription_ready": bool(voice_profile.get("input_transcription_ready")),
+                    "output_tts_ready": bool(voice_profile.get("output_tts_ready")),
+                },
+            },
+        }
+
+        active_session_payload = {}
+        if isinstance(voice_gateway_caps_detail.get("active_session"), dict):
+            active_session_payload = dict(voice_gateway_caps_detail.get("active_session") or {})
+        elif isinstance(voice_gateway_caps_detail.get("session"), dict):
+            active_session_payload = dict(voice_gateway_caps_detail.get("session") or {})
+
+        active_session_status = (
+            str(active_session_payload.get("status") or "").strip()
+            or ("not_reported" if voice_gateway_caps.get("ok") else "gateway_unavailable")
+        )
+        active_session = {
+            "status": active_session_status,
+            "session_id": str(
+                active_session_payload.get("session_id")
+                or active_session_payload.get("id")
+                or ""
+            ).strip(),
+            "label": str(
+                active_session_payload.get("label")
+                or active_session_payload.get("session_label")
+                or ""
+            ).strip(),
+            "timeline_status": str(
+                active_session_payload.get("timeline_status")
+                or ("available" if active_session_payload.get("timeline") else "not_reported")
+            ).strip(),
+            "diagnostics_status": str(
+                active_session_payload.get("diagnostics_status")
+                or ("available" if active_session_payload.get("diagnostics") else "not_reported")
+            ).strip(),
+            "device_binding_status": str(
+                active_session_payload.get("device_binding_status")
+                or active_session_payload.get("device_status")
+                or "not_reported"
+            ).strip(),
+        }
+
         return {
             "ok": True,
             "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -2840,6 +2989,7 @@ class WebApp:
             "live_voice_ready": live_voice_ready,
             "v1_target": "iphone_companion",
             "canonical_backend": "krab_voice_gateway",
+            "foundation_checks": foundation_checks,
             "ordinary_calls": {
                 "path": "iphone_companion",
                 "status": "foundation_ready" if foundation_ready else "in_progress",
@@ -2853,6 +3003,32 @@ class WebApp:
                 "debug_install": "xcode_free_signing",
                 "daily_use": "altstore_or_sidestore",
                 "paid_apple_developer_required": False,
+            },
+            "account_runtime": {
+                "status": "ready" if account_runtime_ready else "attention",
+                "operator_id": str(operator_profile.get("operator_id") or "").strip(),
+                "account_id": str(operator_profile.get("account_id") or "").strip(),
+                "account_mode": str(operator_profile.get("account_mode") or "").strip(),
+                "userbot_authorized": bool(telegram_userbot_state.get("client_connected")),
+                "userbot_authorized_user": str(telegram_userbot_state.get("authorized_user") or "").strip(),
+                "shared_workspace_attached": bool(workspace_state.get("shared_workspace_attached")),
+                "shared_memory_ready": bool(workspace_state.get("shared_memory_ready")),
+                "scheduler_enabled": bool(runtime_state.get("scheduler_enabled")),
+                "voice_gateway_configured": bool(runtime_state.get("voice_gateway_configured")),
+                "openclaw_auth_state": str(runtime_state.get("openclaw_auth_state") or "unknown"),
+                "current_route_model": str(last_runtime_route.get("model") or "").strip(),
+                "current_route_channel": str(last_runtime_route.get("channel") or "").strip(),
+            },
+            "active_session": active_session,
+            "product_surface": {
+                "owner_panel_endpoint": "/api/translator/readiness",
+                "control_plane_endpoint": "/api/translator/control-plane",
+                "delivery_matrix_endpoint": "/api/translator/delivery-matrix",
+                "live_trial_preflight_endpoint": "/api/translator/live-trial-preflight",
+                "runtime_snapshot_endpoint": "/api/ops/runtime_snapshot",
+                "capability_registry_endpoint": "/api/capabilities/registry",
+                "policy_matrix_endpoint": "/api/policy/matrix",
+                "translator_audit_doc": str(self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"),
             },
             "services": {
                 "krab": {
@@ -2872,8 +3048,8 @@ class WebApp:
             },
             "runtime": {
                 "voice_profile": voice_profile,
-                "telegram_userbot_state": runtime_state.get("telegram_userbot", {}),
-                "runtime_lite_route": runtime_state.get("last_runtime_route", {}),
+                "telegram_userbot_state": telegram_userbot_state,
+                "runtime_lite_route": last_runtime_route,
             },
             "notes": [
                 "Переводчик звонков интегрируется в экосистему Краба, но не merge-ится внутрь OpenClaw как монолит.",
@@ -2882,6 +3058,923 @@ class WebApp:
             ],
             "recommendations": recommendations,
         }
+
+    async def _translator_control_plane_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Собирает control-plane срез translator session/policy слоя.
+
+        Почему отдельный snapshot:
+        - readiness отвечает на вопрос "насколько фундамент жив";
+        - control-plane отвечает на вопрос "какая сейчас policy/session truth";
+        - owner UI не должен ходить напрямую в Voice Gateway и знать его HTTP-детали.
+        """
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_state)
+        voice_gateway = self.deps.get("voice_gateway_client")
+        workflow = inbox_service.get_workflow_snapshot()
+        workflow_summary = workflow.get("summary") if isinstance(workflow, dict) else {}
+
+        gateway_caps = (
+            ((readiness.get("services") or {}).get("voice_gateway_capabilities") or {})
+            if isinstance(readiness.get("services"), dict)
+            else {}
+        )
+        gateway_caps_detail = gateway_caps.get("detail") if isinstance(gateway_caps.get("detail"), dict) else {}
+        session_contract = gateway_caps_detail.get("session") if isinstance(gateway_caps_detail.get("session"), dict) else {}
+        translation_contract = (
+            gateway_caps_detail.get("translation")
+            if isinstance(gateway_caps_detail.get("translation"), dict)
+            else {}
+        )
+        mobile_contract = gateway_caps_detail.get("mobile") if isinstance(gateway_caps_detail.get("mobile"), dict) else {}
+        endpoints_contract = (
+            ((gateway_caps_detail.get("api") or {}).get("endpoints") or {})
+            if isinstance(gateway_caps_detail.get("api"), dict)
+            else {}
+        )
+
+        sessions_payload: dict[str, Any] = {"ok": False, "error": "voice_gateway_unavailable"}
+        quick_phrases_payload: dict[str, Any] = {"ok": False, "error": "voice_gateway_unavailable"}
+        diagnostics_payload: dict[str, Any] = {}
+        diagnostics_why_payload: dict[str, Any] = {}
+        timeline_summary_payload: dict[str, Any] = {}
+        session_items_raw: list[dict[str, Any]] = []
+
+        if voice_gateway and hasattr(voice_gateway, "list_sessions"):
+            try:
+                sessions_payload = await voice_gateway.list_sessions(limit=8)
+            except Exception as exc:  # noqa: BLE001
+                sessions_payload = {"ok": False, "error": str(exc)}
+
+        if isinstance(sessions_payload.get("items"), list):
+            session_items_raw = [
+                dict(item)
+                for item in sessions_payload.get("items", [])
+                if isinstance(item, dict)
+            ]
+
+        def _session_priority(item: dict[str, Any]) -> tuple[int, str]:
+            status = str(item.get("status") or "").strip().lower()
+            updated_at = str(item.get("updated_at") or item.get("created_at") or "")
+            order = {
+                "running": 0,
+                "paused": 1,
+                "created": 2,
+                "failed": 3,
+                "stopped": 4,
+            }
+            return (order.get(status, 9), updated_at)
+
+        session_items = sorted(session_items_raw, key=_session_priority)
+        current_session = session_items[0] if session_items else {}
+        current_session_id = str(current_session.get("id") or "").strip()
+        current_source_lang = str(current_session.get("src_lang") or "").strip().lower() or "auto"
+        current_target_lang = str(current_session.get("tgt_lang") or "").strip().lower() or "ru"
+
+        if current_session_id and voice_gateway and hasattr(voice_gateway, "get_diagnostics"):
+            diagnostics_tasks: list[Any] = []
+            diagnostics_tasks.append(voice_gateway.get_diagnostics(current_session_id))
+            diagnostics_tasks.append(
+                voice_gateway.get_diagnostics_why(current_session_id)
+                if hasattr(voice_gateway, "get_diagnostics_why")
+                else asyncio.sleep(0, result={"ok": False, "error": "not_supported"})
+            )
+            diagnostics_tasks.append(
+                voice_gateway.get_timeline_summary(current_session_id)
+                if hasattr(voice_gateway, "get_timeline_summary")
+                else asyncio.sleep(0, result={"ok": False, "error": "not_supported"})
+            )
+            diagnostics_payload, diagnostics_why_payload, timeline_summary_payload = await asyncio.gather(*diagnostics_tasks)
+
+        quick_phrase_source_lang = current_source_lang if current_source_lang in {"ru", "es"} else "ru"
+        quick_phrase_target_lang = current_target_lang if current_target_lang in {"ru", "es"} else "es"
+        if quick_phrase_source_lang == quick_phrase_target_lang:
+            quick_phrase_target_lang = "es" if quick_phrase_source_lang == "ru" else "ru"
+
+        if voice_gateway and hasattr(voice_gateway, "list_quick_phrases"):
+            try:
+                quick_phrases_payload = await voice_gateway.list_quick_phrases(
+                    source_lang=quick_phrase_source_lang,
+                    target_lang=quick_phrase_target_lang,
+                    limit=6,
+                )
+            except Exception as exc:  # noqa: BLE001
+                quick_phrases_payload = {"ok": False, "error": str(exc)}
+
+        current_meta = current_session.get("meta") if isinstance(current_session.get("meta"), dict) else {}
+        current_diag = diagnostics_payload.get("result") if isinstance(diagnostics_payload.get("result"), dict) else {}
+        current_why = diagnostics_why_payload.get("result") if isinstance(diagnostics_why_payload.get("result"), dict) else {}
+        current_timeline_summary = (
+            timeline_summary_payload.get("result")
+            if isinstance(timeline_summary_payload.get("result"), dict)
+            else {}
+        )
+
+        active_count = sum(1 for item in session_items if str(item.get("status") or "").strip().lower() in {"running", "paused", "created"})
+        current_translation_mode = str(current_session.get("translation_mode") or "").strip()
+        current_status = str(current_session.get("status") or "").strip().lower()
+        current_source = str(current_session.get("source") or "").strip()
+        device_bound = bool(current_meta.get("device_bound"))
+        if device_bound:
+            device_binding_status = "bound"
+        elif current_source == "mobile":
+            device_binding_status = "pending"
+        elif current_session_id:
+            device_binding_status = "not_bound"
+        else:
+            device_binding_status = "not_reported"
+
+        runtime_policy_status = "from_active_session" if current_session_id else (
+            "gateway_unavailable" if not bool(gateway_caps.get("ok")) else "not_reported"
+        )
+        runtime_policy = {
+            "status": runtime_policy_status,
+            "translation_mode": current_translation_mode,
+            "notify_mode": str(current_session.get("notify_mode") or "").strip(),
+            "tts_mode": str(current_session.get("tts_mode") or "").strip(),
+            "source": current_source,
+            "src_lang": current_source_lang,
+            "tgt_lang": current_target_lang,
+            "language_pair": (
+                f"{current_source_lang}-{current_target_lang}"
+                if current_session_id
+                else ""
+            ),
+            "bilingual_mode": current_translation_mode == "ru_es_duplex",
+            "voice_strategy": "voice-first" if bool(readiness.get("live_voice_ready")) else "subtitles-first",
+            "summary_available": bool(translation_contract.get("summary")),
+            "quick_phrases_available": bool(translation_contract.get("quick_phrases")),
+            "supported_translation_modes": list(session_contract.get("translation_modes") or []),
+            "supported_session_sources": list(session_contract.get("sources") or []),
+            "runtime_tuning": dict(session_contract.get("runtime_tuning") or {}),
+        }
+
+        session_rows = []
+        for item in session_items[:6]:
+            meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+            session_rows.append(
+                {
+                    "id": str(item.get("id") or "").strip(),
+                    "status": str(item.get("status") or "").strip(),
+                    "translation_mode": str(item.get("translation_mode") or "").strip(),
+                    "notify_mode": str(item.get("notify_mode") or "").strip(),
+                    "tts_mode": str(item.get("tts_mode") or "").strip(),
+                    "source": str(item.get("source") or "").strip(),
+                    "src_lang": str(item.get("src_lang") or "").strip(),
+                    "tgt_lang": str(item.get("tgt_lang") or "").strip(),
+                    "device_bound": bool(meta.get("device_bound")),
+                    "updated_at": str(item.get("updated_at") or item.get("created_at") or "").strip(),
+                }
+            )
+
+        current_session_payload = {
+            "id": current_session_id,
+            "status": str(current_session.get("status") or "").strip() or "not_reported",
+            "translation_mode": current_translation_mode,
+            "notify_mode": str(current_session.get("notify_mode") or "").strip(),
+            "tts_mode": str(current_session.get("tts_mode") or "").strip(),
+            "source": current_source,
+            "src_lang": current_source_lang if current_session_id else "",
+            "tgt_lang": current_target_lang if current_session_id else "",
+            "device_binding_status": device_binding_status,
+            "device_bound": device_bound,
+            "meta": current_meta,
+            "diagnostics": current_diag,
+            "diagnostics_why": current_why,
+            "timeline_summary": current_timeline_summary,
+        }
+
+        quick_phrase_items = [
+            {
+                "id": str(item.get("id") or "").strip(),
+                "category": str(item.get("category") or "").strip(),
+                "source_text": str(item.get("source_text") or "").strip(),
+                "translated_text": str(item.get("translated_text") or "").strip(),
+            }
+            for item in (quick_phrases_payload.get("items") or [])
+            if isinstance(item, dict)
+        ]
+        runtime_tuning_contract = dict(session_contract.get("runtime_tuning") or {})
+        runtime_diag = current_diag.get("runtime") if isinstance(current_diag.get("runtime"), dict) else {}
+        supported_sources = [str(item).strip() for item in (session_contract.get("sources") or []) if str(item).strip()]
+        supported_translation_modes = [
+            str(item).strip() for item in (session_contract.get("translation_modes") or []) if str(item).strip()
+        ]
+        buffering_modes = [
+            str(item).strip() for item in (runtime_tuning_contract.get("buffering_modes") or []) if str(item).strip()
+        ]
+        draft_defaults = {
+            "source": current_source or (supported_sources[0] if supported_sources else "mic"),
+            "translation_mode": current_translation_mode or (
+                supported_translation_modes[0] if supported_translation_modes else "auto_to_ru"
+            ),
+            "notify_mode": str(current_session.get("notify_mode") or "").strip() or "auto_on",
+            "tts_mode": str(current_session.get("tts_mode") or "").strip() or "hybrid",
+            "src_lang": current_source_lang if current_session_id else "auto",
+            "tgt_lang": current_target_lang if current_session_id else "ru",
+            "buffering_mode": str(runtime_diag.get("buffering_mode") or "").strip()
+            or (buffering_modes[0] if buffering_modes else "adaptive"),
+            "target_latency_ms": runtime_diag.get("target_latency_ms"),
+            "vad_sensitivity": runtime_diag.get("vad_sensitivity"),
+            "quick_phrase_source_lang": quick_phrase_source_lang,
+            "quick_phrase_target_lang": quick_phrase_target_lang,
+            "quick_phrase_voice": "default",
+            "quick_phrase_style": "neutral",
+        }
+        operator_actions = {
+            "gateway_available": bool(gateway_caps.get("ok")),
+            "current_session_id": current_session_id,
+            "current_session_status": current_status or "not_reported",
+            "start_available": bool(gateway_caps.get("ok")),
+            "policy_update_available": bool(current_session_id),
+            "pause_available": current_status == "running",
+            "resume_available": current_status in {"paused", "created"},
+            "stop_available": bool(current_session_id),
+            "runtime_tune_available": bool(current_session_id and runtime_tuning_contract),
+            "quick_phrase_available": bool(current_session_id and translation_contract.get("quick_phrases")),
+            "supported_status_actions": [
+                action
+                for action, enabled in (
+                    ("pause", current_status == "running"),
+                    ("resume", current_status in {"paused", "created"}),
+                    ("stop", bool(current_session_id)),
+                )
+                if enabled
+            ],
+            "draft_defaults": draft_defaults,
+        }
+
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "readiness": {
+                "status": str(readiness.get("readiness") or "unknown"),
+                "foundation_ready": bool(readiness.get("foundation_ready")),
+                "live_voice_ready": bool(readiness.get("live_voice_ready")),
+            },
+            "account_runtime": dict(readiness.get("account_runtime") or {}),
+            "approval_state": {
+                "pending_approvals": int((workflow_summary or {}).get("pending_approvals") or 0),
+                "open_escalations": int((workflow_summary or {}).get("open_escalations") or 0),
+                "pending_owner_tasks": int((workflow_summary or {}).get("pending_owner_tasks") or 0),
+            },
+            "gateway_contract": {
+                "status": str(gateway_caps.get("status") or "unknown"),
+                "ok": bool(gateway_caps.get("ok")),
+                "service": str(gateway_caps_detail.get("service") or "").strip(),
+                "contract_version": str(gateway_caps_detail.get("contract_version") or "").strip(),
+                "translation_modes": list(session_contract.get("translation_modes") or []),
+                "session_sources": list(session_contract.get("sources") or []),
+                "timeline_supported": bool(((session_contract.get("timeline") or {}) if isinstance(session_contract.get("timeline"), dict) else {}).get("summary")),
+                "why_supported": bool(((gateway_caps_detail.get("diagnostics") or {}) if isinstance(gateway_caps_detail.get("diagnostics"), dict) else {}).get("why_endpoint")),
+                "device_binding_supported": bool(mobile_contract.get("session_binding")),
+                "quick_phrases_supported": bool(translation_contract.get("quick_phrases")),
+                "endpoints": {
+                    "sessions": str(endpoints_contract.get("sessions") or "/v1/sessions"),
+                    "runtime": str(endpoints_contract.get("session_runtime") or "/v1/sessions/{session_id}/runtime"),
+                    "diagnostics": str(endpoints_contract.get("session_diagnostics") or "/v1/sessions/{session_id}/diagnostics"),
+                    "timeline": str(endpoints_contract.get("session_timeline") or "/v1/sessions/{session_id}/timeline"),
+                    "quick_phrases": str(endpoints_contract.get("quick_phrases") or "/v1/quick-phrases"),
+                },
+            },
+            "sessions": {
+                "count": len(session_items),
+                "active_count": active_count,
+                "current_session_id": current_session_id,
+                "items": session_rows,
+            },
+            "current_session": current_session_payload,
+            "runtime_policy": runtime_policy,
+            "operator_actions": operator_actions,
+            "quick_phrases": {
+                "status": "ready" if bool(quick_phrases_payload.get("ok")) else "unavailable",
+                "source_lang": quick_phrase_source_lang,
+                "target_lang": quick_phrase_target_lang,
+                "selection_reason": (
+                    "active_session_pair" if current_session_id and current_source_lang in {"ru", "es"} and current_target_lang in {"ru", "es"}
+                    else "gateway_library_default"
+                ),
+                "count": len(quick_phrase_items),
+                "items": quick_phrase_items,
+            },
+            "links": {
+                "translator_readiness_endpoint": "/api/translator/readiness",
+                "translator_control_plane_endpoint": "/api/translator/control-plane",
+                "capability_registry_endpoint": "/api/capabilities/registry",
+                "policy_matrix_endpoint": "/api/policy/matrix",
+            },
+        }
+
+    async def _translator_session_inspector_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+        current_control_plane: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Возвращает расследовательский срез translator session.
+
+        Нужен для operator-facing UI:
+        - why-report и timeline не должны жить только внутри Gateway;
+        - owner panel должна уметь объяснить деградацию и эскалировать её в inbox;
+        - snapshot должен честно работать и при `gateway_unavailable`, и при отсутствии session.
+        """
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
+        voice_gateway = self.deps.get("voice_gateway_client")
+        current_session = (
+            dict(control_plane.get("current_session") or {})
+            if isinstance(control_plane.get("current_session"), dict)
+            else {}
+        )
+        current_session_id = str(current_session.get("id") or "").strip()
+        current_session_status = str(current_session.get("status") or "").strip() or "not_reported"
+        gateway_contract = (
+            dict(control_plane.get("gateway_contract") or {})
+            if isinstance(control_plane.get("gateway_contract"), dict)
+            else {}
+        )
+        gateway_status = str(gateway_contract.get("status") or "unknown").strip() or "unknown"
+        readiness = (
+            dict(control_plane.get("readiness") or {})
+            if isinstance(control_plane.get("readiness"), dict)
+            else {}
+        )
+        timeline_preview_payload: dict[str, Any] = {}
+        timeline_stats_payload: dict[str, Any] = {}
+        timeline_export_payload: dict[str, Any] = {}
+
+        if current_session_id and voice_gateway:
+            tasks: list[Any] = []
+            tasks.append(
+                voice_gateway.get_timeline(current_session_id, limit=8)
+                if hasattr(voice_gateway, "get_timeline")
+                else asyncio.sleep(0, result={"ok": False, "error": "not_supported"})
+            )
+            tasks.append(
+                voice_gateway.get_timeline_stats(current_session_id, limit=200)
+                if hasattr(voice_gateway, "get_timeline_stats")
+                else asyncio.sleep(0, result={"ok": False, "error": "not_supported"})
+            )
+            tasks.append(
+                voice_gateway.export_timeline(current_session_id, format="md", limit=40)
+                if hasattr(voice_gateway, "export_timeline")
+                else asyncio.sleep(0, result={"ok": False, "error": "not_supported"})
+            )
+            timeline_preview_payload, timeline_stats_payload, timeline_export_payload = await asyncio.gather(*tasks)
+
+        why_raw = (
+            dict(current_session.get("diagnostics_why") or {})
+            if isinstance(current_session.get("diagnostics_why"), dict)
+            else {}
+        )
+        why_items = [str(item).strip() for item in (why_raw.get("why") or []) if str(item).strip()]
+        if why_raw and not why_items:
+            why_items = [str(why_raw.get("detail") or why_raw.get("status") or "").strip()] if (
+                str(why_raw.get("detail") or why_raw.get("status") or "").strip()
+            ) else []
+
+        timeline_preview_result = (
+            dict(timeline_preview_payload.get("result") or {})
+            if isinstance(timeline_preview_payload.get("result"), dict)
+            else {}
+        )
+        timeline_stats_result = (
+            dict(timeline_stats_payload.get("result") or {})
+            if isinstance(timeline_stats_payload.get("result"), dict)
+            else {}
+        )
+        timeline_summary = (
+            dict(current_session.get("timeline_summary") or {})
+            if isinstance(current_session.get("timeline_summary"), dict)
+            else {}
+        )
+        timeline_items = []
+        for item in (timeline_preview_result.get("items") or []):
+            if not isinstance(item, dict):
+                continue
+            timeline_items.append(
+                {
+                    "ts": str(item.get("ts") or item.get("timestamp") or "").strip(),
+                    "kind": str(item.get("kind") or item.get("type") or "").strip(),
+                    "text": str(item.get("text") or "").strip(),
+                }
+            )
+        export_text = str(timeline_export_payload.get("result") or "").strip()
+        export_preview = "\n".join(export_text.splitlines()[:10]).strip()
+        suggested_body_parts = []
+        if current_session_id:
+            suggested_body_parts.append(f"Session: `{current_session_id}`")
+            suggested_body_parts.append(f"Status: `{current_session_status}`")
+        if why_items:
+            suggested_body_parts.append("Why-report:\n" + "\n".join(f"- {item}" for item in why_items[:4]))
+        summary_text = str(timeline_summary.get("summary") or "").strip()
+        if summary_text:
+            suggested_body_parts.append(f"Timeline summary:\n{summary_text}")
+        stats_payload = timeline_stats_result.get("stats") if isinstance(timeline_stats_result.get("stats"), dict) else {}
+        if stats_payload:
+            stats_line = ", ".join(
+                f"{key}={value}"
+                for key, value in stats_payload.items()
+                if isinstance(value, (int, float))
+            )
+            if stats_line:
+                suggested_body_parts.append(f"Timeline stats: {stats_line}")
+        if export_preview:
+            suggested_body_parts.append(f"Timeline export preview:\n```md\n{export_preview}\n```")
+
+        if current_session_id:
+            inspector_status = "ready" if timeline_preview_result or why_items or timeline_summary else "session_active"
+        elif gateway_status in {"error", "timeout", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
+            inspector_status = "gateway_unavailable"
+        else:
+            inspector_status = "idle"
+
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "status": inspector_status,
+            "session_id": current_session_id,
+            "session_status": current_session_status,
+            "gateway_status": gateway_status,
+            "readiness_status": str(readiness.get("status") or "").strip(),
+            "why_report": {
+                "status": (
+                    "ready"
+                    if why_items
+                    else ("gateway_unavailable" if inspector_status == "gateway_unavailable" else "not_reported")
+                ),
+                "count": len(why_items),
+                "items": why_items[:6],
+            },
+            "timeline": {
+                "status": "ready" if timeline_preview_result else (
+                    "gateway_unavailable" if inspector_status == "gateway_unavailable" else "not_reported"
+                ),
+                "count": int(timeline_preview_result.get("count") or len(timeline_items)),
+                "summary": summary_text,
+                "tasks": [
+                    str(item).strip()
+                    for item in (timeline_summary.get("tasks") or [])
+                    if str(item).strip()
+                ][:6],
+                "stats": dict(stats_payload) if isinstance(stats_payload, dict) else {},
+                "recent_items": timeline_items[:8],
+                "export_preview": export_preview,
+                "export_format": "md",
+            },
+            "actions": {
+                "rebuild_summary_available": bool(current_session_id),
+                "escalate_available": bool(current_session_id),
+            },
+            "escalation": {
+                "can_escalate": bool(current_session_id),
+                "suggested_kind": "owner_task",
+                "suggested_title": (
+                    f"Translator session {current_session_id}: investigate degradation"
+                    if current_session_id
+                    else "Translator session: investigate degradation"
+                ),
+                "suggested_body": "\n\n".join(part for part in suggested_body_parts if part).strip(),
+                "inbox_summary": inbox_service.get_summary(),
+            },
+            "links": {
+                "control_plane_endpoint": "/api/translator/control-plane",
+                "session_inspector_endpoint": "/api/translator/session-inspector",
+                "inbox_status_endpoint": "/api/inbox/status",
+            },
+        }
+
+    async def _translator_mobile_readiness_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+        current_control_plane: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Возвращает readiness companion/iPhone device слоя переводчика.
+
+        Нужен, чтобы owner panel видела:
+        - есть ли у нас зарегистрированные companion-девайсы;
+        - можно ли привязать их к текущей session;
+        - что реально вернёт device resume snapshot.
+        """
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
+        voice_gateway = self.deps.get("voice_gateway_client")
+        gateway_contract = (
+            dict(control_plane.get("gateway_contract") or {})
+            if isinstance(control_plane.get("gateway_contract"), dict)
+            else {}
+        )
+        current_session = (
+            dict(control_plane.get("current_session") or {})
+            if isinstance(control_plane.get("current_session"), dict)
+            else {}
+        )
+        current_session_id = str(current_session.get("id") or "").strip()
+        current_session_status = str(current_session.get("status") or "not_reported").strip() or "not_reported"
+        current_device_binding_status = str(current_session.get("device_binding_status") or "not_reported").strip()
+        mobile_available = bool(gateway_contract.get("device_binding_supported"))
+
+        devices_payload: dict[str, Any] = {"ok": False, "error": "voice_gateway_unavailable"}
+        device_snapshot_payload: dict[str, Any] = {}
+        devices: list[dict[str, Any]] = []
+        selected_device: dict[str, Any] = {}
+
+        if voice_gateway and hasattr(voice_gateway, "list_mobile_devices"):
+            try:
+                devices_payload = await voice_gateway.list_mobile_devices(limit=8)
+            except Exception as exc:  # noqa: BLE001
+                devices_payload = {"ok": False, "error": str(exc)}
+
+        if isinstance(devices_payload.get("items"), list):
+            devices = [dict(item) for item in devices_payload.get("items") if isinstance(item, dict)]
+        devices.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+
+        bound_device = next(
+            (
+                item
+                for item in devices
+                if current_session_id and str(item.get("bound_session_id") or "").strip() == current_session_id
+            ),
+            None,
+        )
+        selected_device = dict(bound_device or (devices[0] if devices else {}))
+        selected_device_id = str(selected_device.get("device_id") or "").strip().lower()
+
+        if selected_device_id and voice_gateway and hasattr(voice_gateway, "get_mobile_session_snapshot"):
+            try:
+                device_snapshot_payload = await voice_gateway.get_mobile_session_snapshot(
+                    selected_device_id,
+                    session_id=current_session_id,
+                    limit=8,
+                )
+            except Exception as exc:  # noqa: BLE001
+                device_snapshot_payload = {"ok": False, "error": str(exc)}
+
+        push_enabled_count = sum(1 for item in devices if bool(item.get("push_enabled")))
+        bound_count = sum(1 for item in devices if str(item.get("bound_session_id") or "").strip())
+        device_snapshot = (
+            dict(device_snapshot_payload.get("result") or {})
+            if isinstance(device_snapshot_payload.get("result"), dict)
+            else {}
+        )
+        snapshot_timeline = [dict(item) for item in (device_snapshot.get("timeline") or []) if isinstance(item, dict)]
+        snapshot_why = (
+            dict(device_snapshot.get("why") or {})
+            if isinstance(device_snapshot.get("why"), dict)
+            else {}
+        )
+        snapshot_why_items = [str(item).strip() for item in (snapshot_why.get("why") or []) if str(item).strip()]
+
+        if not bool(gateway_contract.get("ok")):
+            status = "gateway_unavailable"
+        elif devices:
+            if bound_device and current_session_id:
+                status = "bound"
+            elif push_enabled_count:
+                status = "registered"
+            else:
+                status = "attention"
+        else:
+            status = "not_configured"
+
+        recommended_next_step = "register_companion"
+        if status == "gateway_unavailable":
+            recommended_next_step = "restore_gateway"
+        elif current_session_id and devices and not bound_device:
+            recommended_next_step = "bind_device_to_active_session"
+        elif bound_device and current_session_status in {"created", "running", "paused"}:
+            recommended_next_step = "companion_ready_for_resume"
+
+        draft_defaults = {
+            "device_id": selected_device_id,
+            "app_version": str(selected_device.get("app_version") or "0.1.0").strip() or "0.1.0",
+            "locale": str(selected_device.get("locale") or "ru").strip() or "ru",
+            "preferred_source_lang": str(selected_device.get("preferred_source_lang") or "auto").strip() or "auto",
+            "preferred_target_lang": str(selected_device.get("preferred_target_lang") or "ru").strip() or "ru",
+            "apns_environment": str(selected_device.get("apns_environment") or "development").strip() or "development",
+            "notify_default": bool(selected_device.get("notify_default", True)),
+        }
+
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "status": status,
+            "delivery_path": "iphone_companion",
+            "gateway_status": str(gateway_contract.get("status") or "unknown").strip(),
+            "summary": {
+                "registered_devices": len(devices),
+                "push_enabled_devices": push_enabled_count,
+                "bound_devices": bound_count,
+                "current_session_id": current_session_id,
+                "current_session_status": current_session_status,
+                "current_device_binding_status": current_device_binding_status,
+            },
+            "actions": {
+                "register_available": bool(gateway_contract.get("ok")) and mobile_available,
+                "bind_available": bool(gateway_contract.get("ok")) and mobile_available and bool(current_session_id) and bool(devices),
+                "trial_prep_available": bool(gateway_contract.get("ok")) and mobile_available,
+                "remove_available": bool(gateway_contract.get("ok")) and mobile_available and bool(devices),
+                "session_snapshot_available": bool(device_snapshot),
+                "recommended_next_step": recommended_next_step,
+                "draft_defaults": draft_defaults,
+            },
+            "devices": {
+                "status": "ready" if devices_payload.get("ok") else (
+                    "gateway_unavailable" if status == "gateway_unavailable" else "unavailable"
+                ),
+                "count": len(devices),
+                "selected_device_id": selected_device_id,
+                "items": [
+                    {
+                        "device_id": str(item.get("device_id") or "").strip(),
+                        "locale": str(item.get("locale") or "").strip(),
+                        "app_version": str(item.get("app_version") or "").strip(),
+                        "apns_environment": str(item.get("apns_environment") or "").strip(),
+                        "push_enabled": bool(item.get("push_enabled")),
+                        "notify_default": bool(item.get("notify_default", True)),
+                        "bound_session_id": str(item.get("bound_session_id") or "").strip(),
+                        "updated_at": str(item.get("updated_at") or "").strip(),
+                        "preferred_source_lang": str(item.get("preferred_source_lang") or "").strip(),
+                        "preferred_target_lang": str(item.get("preferred_target_lang") or "").strip(),
+                        "voip_push_token_masked": str(item.get("voip_push_token_masked") or "").strip(),
+                    }
+                    for item in devices[:6]
+                ],
+            },
+            "selected_device_snapshot": {
+                "status": "ready" if device_snapshot else (
+                    "gateway_unavailable" if status == "gateway_unavailable" else "not_reported"
+                ),
+                "device_id": selected_device_id,
+                "active_session": bool(device_snapshot.get("active_session")),
+                "timeline_count": int(device_snapshot.get("timeline_count") or len(snapshot_timeline)),
+                "why_items": snapshot_why_items[:4],
+                "timeline_preview": [
+                    {
+                        "kind": str(item.get("kind") or item.get("type") or "").strip(),
+                        "text": str(item.get("text") or "").strip(),
+                    }
+                    for item in snapshot_timeline[:4]
+                ],
+            },
+            "notes": [
+                "iPhone companion остаётся основным delivery path ordinary-call translator v1.",
+                "Companion path трактуем как call-assist architecture, а не как свободный захват системного PSTN аудио.",
+            ],
+            "links": {
+                "mobile_readiness_endpoint": "/api/translator/mobile-readiness",
+                "control_plane_endpoint": "/api/translator/control-plane",
+                "session_inspector_endpoint": "/api/translator/session-inspector",
+            },
+        }
+
+    async def _translator_delivery_matrix_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+        current_readiness: dict[str, Any] | None = None,
+        current_control_plane: dict[str, Any] | None = None,
+        current_mobile_readiness: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Возвращает product truth по delivery/scenario tracks переводчика.
+
+        Этот слой нужен owner panel, чтобы она отвечала не только "что живо",
+        но и "какой именно call-track готов, чем он ограничен и что делать дальше".
+        """
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_state)
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
+        mobile_readiness = current_mobile_readiness or await self._translator_mobile_readiness_snapshot(
+            runtime_lite=runtime_state,
+            current_control_plane=control_plane,
+        )
+
+        services = dict(readiness.get("services") or {}) if isinstance(readiness.get("services"), dict) else {}
+        account_runtime = (
+            dict(readiness.get("account_runtime") or {})
+            if isinstance(readiness.get("account_runtime"), dict)
+            else {}
+        )
+        current_session = (
+            dict(control_plane.get("current_session") or {})
+            if isinstance(control_plane.get("current_session"), dict)
+            else {}
+        )
+        gateway_contract = (
+            dict(control_plane.get("gateway_contract") or {})
+            if isinstance(control_plane.get("gateway_contract"), dict)
+            else {}
+        )
+        mobile_summary = (
+            dict(mobile_readiness.get("summary") or {})
+            if isinstance(mobile_readiness.get("summary"), dict)
+            else {}
+        )
+        mobile_actions = (
+            dict(mobile_readiness.get("actions") or {})
+            if isinstance(mobile_readiness.get("actions"), dict)
+            else {}
+        )
+        mobile_devices = (
+            dict(mobile_readiness.get("devices") or {})
+            if isinstance(mobile_readiness.get("devices"), dict)
+            else {}
+        )
+
+        gateway_status = str(
+            gateway_contract.get("status")
+            or (services.get("voice_gateway") or {}).get("status")
+            or "unknown"
+        ).strip() or "unknown"
+        mobile_status = str(mobile_readiness.get("status") or "unknown").strip() or "unknown"
+        session_id = str(current_session.get("id") or "").strip()
+        session_status = str(current_session.get("status") or "not_reported").strip() or "not_reported"
+        selected_device_id = str(mobile_devices.get("selected_device_id") or "").strip()
+
+        ordinary_blockers: list[str] = []
+        ordinary_next_steps: list[str] = []
+
+        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
+            ordinary_blockers.append("Krab Voice Gateway сейчас недоступен, поэтому ordinary-call track не может перейти в live trial.")
+        if not bool(account_runtime.get("userbot_authorized")):
+            ordinary_blockers.append("Telegram userbot этой учётки ещё не авторизован, поэтому owner-runtime truth неполный.")
+        if not bool(account_runtime.get("shared_workspace_attached")):
+            ordinary_blockers.append("Shared workspace не прикреплён; restart-proof state для translator track не подтверждён.")
+        if mobile_status == "not_configured":
+            ordinary_blockers.append("iPhone companion ещё не зарегистрирован в device registry.")
+        elif mobile_status == "registered":
+            ordinary_blockers.append("Companion зарегистрирован, но ещё не привязан к активной translator session.")
+        elif mobile_status == "attention":
+            ordinary_blockers.append("Companion виден частично: push/device binding truth требует донастройки.")
+
+        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
+            ordinary_next_steps.append("Поднять Krab Voice Gateway и повторно обновить translator card.")
+        if mobile_status == "not_configured":
+            ordinary_next_steps.append("Зарегистрировать iPhone companion через owner panel или gateway helper.")
+        elif mobile_status == "registered":
+            ordinary_next_steps.append("Создать или возобновить translator session и привязать companion к active session.")
+        elif mobile_status == "bound":
+            ordinary_next_steps.append("Ordinary-call track готов к controlled live trial на companion architecture.")
+        if not ordinary_next_steps:
+            ordinary_next_steps.append("Уточнить live gateway/mobile truth и повторить readiness refresh.")
+
+        if ordinary_blockers:
+            if mobile_status == "registered" and bool(mobile_actions.get("bind_available")):
+                ordinary_status = "device_ready"
+            else:
+                ordinary_status = "blocked"
+        elif mobile_status == "bound" and session_status in {"created", "running", "paused"}:
+            ordinary_status = "trial_ready"
+        elif mobile_status == "registered":
+            ordinary_status = "device_ready"
+        else:
+            ordinary_status = "in_progress"
+
+        internet_blockers = [
+            "Internet-call adapters идут вторым слоем после ordinary-call v1 и не считаются предпосылкой для первого релиза.",
+        ]
+        internet_next_steps = [
+            "Сначала подтвердить ordinary-call flow через iPhone companion architecture.",
+            "Потом проектировать channel-specific adapters для Telegram, WhatsApp и Meet как отдельный Gateway слой.",
+        ]
+        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
+            internet_blockers.append("Без живого Krab Voice Gateway нельзя подтвердить adapter contracts и realtime event flow.")
+            internet_status = "blocked"
+        elif ordinary_status in {"trial_ready", "device_ready"}:
+            internet_status = "design_ready"
+        else:
+            internet_status = "planned"
+
+        return {
+            "ok": True,
+            "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "status": ordinary_status if ordinary_status == "trial_ready" else (
+                "blocked" if ordinary_status == "blocked" or internet_status == "blocked" else "in_progress"
+            ),
+            "primary_delivery_path": "iphone_companion",
+            "canonical_backend": "krab_voice_gateway",
+            "gateway_status": gateway_status,
+            "ordinary_calls": {
+                "status": ordinary_status,
+                "path": "iphone_companion",
+                "session_source": "mobile",
+                "active_session_id": session_id,
+                "active_session_status": session_status,
+                "mobile_status": mobile_status,
+                "selected_device_id": selected_device_id,
+                "ready_for_trial": ordinary_status == "trial_ready",
+                "summary": {
+                    "registered_devices": int(mobile_summary.get("registered_devices") or 0),
+                    "bound_devices": int(mobile_summary.get("bound_devices") or 0),
+                    "push_enabled_devices": int(mobile_summary.get("push_enabled_devices") or 0),
+                },
+                "blockers": ordinary_blockers[:4],
+                "next_steps": ordinary_next_steps[:4],
+            },
+            "internet_calls": {
+                "status": internet_status,
+                "path": "voice_gateway_session_adapters",
+                "phase": "after_ordinary_v1",
+                "adapters": [
+                    {"id": "telegram_call_adapter", "status": "planned"},
+                    {"id": "whatsapp_call_adapter", "status": "planned"},
+                    {"id": "meet_call_adapter", "status": "planned"},
+                ],
+                "blockers": internet_blockers[:4],
+                "next_steps": internet_next_steps[:4],
+            },
+            "guardrails": [
+                "Ordinary calls v1 идут через iPhone companion / call-assist architecture, а не через предположение о полном захвате системного PSTN аудио.",
+                "Internet-call adapters не подменяют ordinary-call track и проектируются только после подтверждения v1 companion flow.",
+                "Owner panel обязана показывать truthful blockers и не рисовать fake-ready состояние при down Gateway.",
+            ],
+            "evidence": [
+                "/api/translator/readiness",
+                "/api/translator/control-plane",
+                "/api/translator/mobile-readiness",
+                str(self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"),
+            ],
+            "links": {
+                "translator_readiness_endpoint": "/api/translator/readiness",
+                "translator_control_plane_endpoint": "/api/translator/control-plane",
+                "translator_mobile_readiness_endpoint": "/api/translator/mobile-readiness",
+            },
+        }
+
+    async def _translator_live_trial_preflight_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+        current_readiness: dict[str, Any] | None = None,
+        current_delivery_matrix: dict[str, Any] | None = None,
+        current_mobile_readiness: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Собирает truthful preflight для controlled live trial ordinary-call translator path."""
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_state)
+        mobile_readiness = current_mobile_readiness or await self._translator_mobile_readiness_snapshot(
+            runtime_lite=runtime_state,
+        )
+        delivery_matrix = current_delivery_matrix or await self._translator_delivery_matrix_snapshot(
+            runtime_lite=runtime_state,
+            current_readiness=readiness,
+            current_mobile_readiness=mobile_readiness,
+        )
+        return build_translator_live_trial_preflight(
+            project_root=self._project_root(),
+            runtime_lite=runtime_state,
+            translator_readiness=readiness,
+            delivery_matrix=delivery_matrix,
+            mobile_readiness=mobile_readiness,
+        )
+
+    async def _translator_mobile_onboarding_snapshot(
+        self,
+        *,
+        runtime_lite: dict[str, Any] | None = None,
+        current_readiness: dict[str, Any] | None = None,
+        current_control_plane: dict[str, Any] | None = None,
+        current_mobile_readiness: dict[str, Any] | None = None,
+        current_delivery_matrix: dict[str, Any] | None = None,
+        current_live_trial_preflight: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Собирает truthful onboarding packet для реального выхода на iPhone companion."""
+        runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
+        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_state)
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
+        mobile_readiness = current_mobile_readiness or await self._translator_mobile_readiness_snapshot(
+            runtime_lite=runtime_state,
+            current_control_plane=control_plane,
+        )
+        delivery_matrix = current_delivery_matrix or await self._translator_delivery_matrix_snapshot(
+            runtime_lite=runtime_state,
+            current_readiness=readiness,
+            current_control_plane=control_plane,
+            current_mobile_readiness=mobile_readiness,
+        )
+        live_trial_preflight = current_live_trial_preflight or await self._translator_live_trial_preflight_snapshot(
+            runtime_lite=runtime_state,
+            current_readiness=readiness,
+            current_delivery_matrix=delivery_matrix,
+            current_mobile_readiness=mobile_readiness,
+        )
+        return build_translator_mobile_onboarding_packet(
+            project_root=self._project_root(),
+            runtime_lite=runtime_state,
+            translator_readiness=readiness,
+            control_plane=control_plane,
+            mobile_readiness=mobile_readiness,
+            delivery_matrix=delivery_matrix,
+            live_trial_preflight=live_trial_preflight,
+        )
 
     def _telegram_session_snapshot(self) -> dict[str, Any]:
         """
@@ -3494,6 +4587,7 @@ class WebApp:
             last_runtime_route=last_runtime_route,
             tier_state=tier_state,
         )
+        workspace_state = build_workspace_state_snapshot()
 
         return {
             "telegram_session_state": telegram_session.get("state", "unknown"),
@@ -3506,6 +4600,7 @@ class WebApp:
             "telegram_userbot": telegram_userbot_state,
             "scheduler_enabled": bool(getattr(config, "SCHEDULER_ENABLED", False)),
             "inbox_summary": inbox_service.get_summary(),
+            "workspace_state": workspace_state,
             "voice_gateway_configured": bool(
                 str(os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090") or "").strip()
             ),
@@ -4562,6 +5657,182 @@ class WebApp:
             "has_extracted_text": bool(extracted),
         }
 
+    @staticmethod
+    def _translator_gateway_error_detail(result: dict[str, Any], *, fallback: str) -> tuple[int, str]:
+        """Нормализует ошибку Voice Gateway клиента в HTTP-код и короткий detail."""
+        error = str(result.get("error") or fallback).strip() or fallback
+        detail_payload = result.get("detail")
+        detail = ""
+        if isinstance(detail_payload, dict):
+            detail = str(detail_payload.get("detail") or detail_payload.get("error") or "").strip()
+        elif detail_payload not in (None, ""):
+            detail = str(detail_payload).strip()
+        if not detail:
+            detail = error
+
+        if error in {"session_id_required", "quick_phrase_text_required", "translator_session_required"}:
+            return 400, detail
+        if error.startswith("http_"):
+            try:
+                status_code = int(error.split("_", 1)[1])
+            except (TypeError, ValueError):
+                status_code = 502
+            return status_code, detail
+        if "connect" in error.lower() or "timed out" in error.lower() or "network" in error.lower():
+            return 503, "translator_gateway_unavailable"
+        return 503, detail
+
+    def _translator_gateway_client_or_raise(self) -> Any:
+        """Возвращает Voice Gateway клиент или бросает 503, если translator backend не подключён."""
+        client = self.deps.get("voice_gateway_client")
+        if client is None:
+            raise HTTPException(status_code=503, detail="translator_gateway_not_available")
+        return client
+
+    @staticmethod
+    def _translator_mobile_gateway_error_detail(result: dict[str, Any], *, fallback: str) -> tuple[int, str]:
+        """Нормализует mobile/companion ошибки Voice Gateway для owner-facing API."""
+        error = str(result.get("error") or fallback).strip() or fallback
+        detail_payload = result.get("detail")
+        detail = ""
+        if isinstance(detail_payload, dict):
+            detail = str(detail_payload.get("detail") or detail_payload.get("error") or "").strip()
+        elif detail_payload not in (None, ""):
+            detail = str(detail_payload).strip()
+        if not detail:
+            detail = error
+        if error in {"device_id_required", "session_id_required"}:
+            return 400, detail
+        if error.startswith("http_"):
+            try:
+                return int(error.split("_", 1)[1]), detail
+            except (TypeError, ValueError):
+                return 502, detail
+        if "connect" in error.lower() or "timed out" in error.lower() or "network" in error.lower():
+            return 503, "translator_gateway_unavailable"
+        return 503, detail
+
+    async def _translator_resolve_session_context(
+        self,
+        *,
+        requested_session_id: str = "",
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """
+        Разрешает session context для write-операций translator-контура.
+
+        Возвращает:
+        - `session_id`
+        - `runtime_lite`
+        - `control_plane`
+        """
+        runtime_lite = await self._collect_runtime_lite_snapshot()
+        control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+        session_id = str(requested_session_id or "").strip() or str(
+            ((control_plane.get("sessions") or {}).get("current_session_id") or "")
+        ).strip()
+        if not session_id:
+            raise HTTPException(status_code=400, detail="translator_session_required")
+        return session_id, runtime_lite, control_plane
+
+    async def _translator_action_response(
+        self,
+        *,
+        action: str,
+        gateway_result: dict[str, Any],
+        runtime_lite: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Собирает единый ответ write-операций translator-контура с новым truthful snapshot."""
+        runtime_payload = runtime_lite or await self._collect_runtime_lite_snapshot()
+        readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_payload)
+        control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_payload)
+        session_inspector = await self._translator_session_inspector_snapshot(
+            runtime_lite=runtime_payload,
+            current_control_plane=control_plane,
+        )
+        mobile_readiness = await self._translator_mobile_readiness_snapshot(
+            runtime_lite=runtime_payload,
+            current_control_plane=control_plane,
+        )
+        delivery_matrix = await self._translator_delivery_matrix_snapshot(
+            runtime_lite=runtime_payload,
+            current_readiness=readiness,
+            current_control_plane=control_plane,
+            current_mobile_readiness=mobile_readiness,
+        )
+        live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
+            runtime_lite=runtime_payload,
+            current_readiness=readiness,
+            current_delivery_matrix=delivery_matrix,
+            current_mobile_readiness=mobile_readiness,
+        )
+        return {
+            "ok": True,
+            "action": action,
+            "session_id": str(gateway_result.get("session_id") or "").strip(),
+            "gateway_result": gateway_result.get("result") if isinstance(gateway_result.get("result"), dict) else {},
+            "readiness": readiness,
+            "control_plane": control_plane,
+            "session_inspector": session_inspector,
+            "mobile_readiness": mobile_readiness,
+            "delivery_matrix": delivery_matrix,
+            "live_trial_preflight": live_trial_preflight,
+        }
+
+    async def _translator_mobile_action_response(
+        self,
+        *,
+        action: str,
+        gateway_result: dict[str, Any],
+        runtime_lite: dict[str, Any] | None = None,
+        current_readiness: dict[str, Any] | None = None,
+        current_control_plane: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Собирает единый ответ для mobile/companion write-операций.
+
+        Почему отдельный helper:
+        - mobile lifecycle теперь включает не только `register/bind`, но и orchestration
+          вроде trial-prep;
+        - все эти операции должны отдавать один и тот же truthful snapshot без
+          дублирования кода по route-функциям.
+        """
+        runtime_payload = runtime_lite or await self._collect_runtime_lite_snapshot()
+        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_payload)
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_payload)
+        session_inspector = await self._translator_session_inspector_snapshot(
+            runtime_lite=runtime_payload,
+            current_control_plane=control_plane,
+        )
+        mobile_readiness = await self._translator_mobile_readiness_snapshot(
+            runtime_lite=runtime_payload,
+            current_control_plane=control_plane,
+        )
+        delivery_matrix = await self._translator_delivery_matrix_snapshot(
+            runtime_lite=runtime_payload,
+            current_readiness=readiness,
+            current_control_plane=control_plane,
+            current_mobile_readiness=mobile_readiness,
+        )
+        live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
+            runtime_lite=runtime_payload,
+            current_readiness=readiness,
+            current_delivery_matrix=delivery_matrix,
+            current_mobile_readiness=mobile_readiness,
+        )
+        return {
+            "ok": True,
+            "action": action,
+            "device_id": str(gateway_result.get("device_id") or "").strip(),
+            "session_id": str(gateway_result.get("session_id") or "").strip(),
+            "gateway_result": gateway_result.get("result") if isinstance(gateway_result.get("result"), dict) else {},
+            "readiness": readiness,
+            "control_plane": control_plane,
+            "session_inspector": session_inspector,
+            "mobile_readiness": mobile_readiness,
+            "delivery_matrix": delivery_matrix,
+            "live_trial_preflight": live_trial_preflight,
+        }
+
     def _setup_routes(self):
         @self.app.get("/", response_class=HTMLResponse)
         async def index():
@@ -5388,6 +6659,758 @@ class WebApp:
             snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
             return snapshot
 
+        @self.app.get("/api/translator/control-plane")
+        async def translator_control_plane():
+            """Возвращает session/policy truth translator-контура через control-plane Краба."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            return await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+
+        @self.app.get("/api/translator/session-inspector")
+        async def translator_session_inspector():
+            """Возвращает why-report, timeline digest и escalation context для translator session."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            return await self._translator_session_inspector_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+
+        @self.app.get("/api/translator/mobile-readiness")
+        async def translator_mobile_readiness():
+            """Возвращает readiness iPhone companion/mobile device слоя переводчика."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            return await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+
+        @self.app.get("/api/translator/delivery-matrix")
+        async def translator_delivery_matrix():
+            """Возвращает product truth по ordinary/internet call tracks переводчика."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            mobile_readiness = await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            return await self._translator_delivery_matrix_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+            )
+
+        @self.app.get("/api/translator/live-trial-preflight")
+        async def translator_live_trial_preflight():
+            """Возвращает one-shot truthful preflight для ordinary-call live trial."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            mobile_readiness = await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            delivery_matrix = await self._translator_delivery_matrix_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+            )
+            return await self._translator_live_trial_preflight_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_mobile_readiness=mobile_readiness,
+            )
+
+        @self.app.get("/api/translator/mobile/onboarding")
+        async def translator_mobile_onboarding():
+            """Возвращает onboarding packet для реального iPhone companion trial."""
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            mobile_readiness = await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            delivery_matrix = await self._translator_delivery_matrix_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+            )
+            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_mobile_readiness=mobile_readiness,
+            )
+            return await self._translator_mobile_onboarding_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_live_trial_preflight=live_trial_preflight,
+            )
+
+        @self.app.post("/api/translator/mobile/onboarding/export")
+        async def translator_mobile_onboarding_export(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Собирает и пишет onboarding packet в ops artifacts одним owner-вызовом."""
+            self._assert_write_access(x_krab_web_key, token)
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            mobile_readiness = await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            delivery_matrix = await self._translator_delivery_matrix_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+            )
+            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_mobile_readiness=mobile_readiness,
+            )
+            onboarding = await self._translator_mobile_onboarding_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_live_trial_preflight=live_trial_preflight,
+            )
+            ops_dir = self._project_root() / "artifacts" / "ops"
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+            versioned_path = ops_dir / f"translator_mobile_onboarding_{stamp}.json"
+            latest_path = ops_dir / "translator_mobile_onboarding_latest.json"
+            self._write_json_file(versioned_path, onboarding)
+            latest_written = False
+            latest_error = ""
+            effective_latest_path = latest_path
+            try:
+                self._write_json_file(latest_path, onboarding)
+                latest_written = True
+            except OSError as exc:
+                latest_error = str(exc)
+                raw_user = str(os.getenv("USER") or Path.home().name or "user").strip().lower()
+                safe_user = re.sub(r"[^a-z0-9_-]+", "_", raw_user) or "user"
+                fallback_latest_path = ops_dir / f"translator_mobile_onboarding_latest_{safe_user}.json"
+                try:
+                    self._write_json_file(fallback_latest_path, onboarding)
+                    effective_latest_path = fallback_latest_path
+                    latest_written = True
+                except OSError as fallback_exc:
+                    latest_error = f"{latest_error}; fallback_failed: {fallback_exc}"
+            return {
+                "ok": True,
+                "action": "export_mobile_onboarding_packet",
+                "artifacts": {
+                    "latest_path": str(latest_path),
+                    "latest_path_effective": str(effective_latest_path),
+                    "latest_written": latest_written,
+                    "latest_write_error": latest_error,
+                    "versioned_path": str(versioned_path),
+                },
+                "onboarding": onboarding,
+            }
+
+        @self.app.post("/api/translator/session/start")
+        async def translator_session_start(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Создаёт translator session из owner panel без прямого доступа UI к Voice Gateway."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_session_start_body_required")
+
+            source = str(body.get("source") or "mic").strip() or "mic"
+            translation_mode = str(body.get("translation_mode") or "auto_to_ru").strip() or "auto_to_ru"
+            notify_mode = str(body.get("notify_mode") or "auto_on").strip() or "auto_on"
+            tts_mode = str(body.get("tts_mode") or "hybrid").strip() or "hybrid"
+            src_lang = str(body.get("src_lang") or "auto").strip() or "auto"
+            tgt_lang = str(body.get("tgt_lang") or "ru").strip() or "ru"
+            label = str(body.get("label") or "").strip()
+            meta = dict(body.get("meta") or {}) if isinstance(body.get("meta"), dict) else {}
+            meta["initiated_by"] = "owner_panel"
+            meta["operator_id"] = current_operator_id()
+            meta["account_id"] = current_account_id()
+            if label:
+                meta["session_label"] = label
+
+            result = await voice_gateway.start_session(
+                source=source,
+                translation_mode=translation_mode,
+                notify_mode=notify_mode,
+                tts_mode=tts_mode,
+                src_lang=src_lang,
+                tgt_lang=tgt_lang,
+                meta=meta,
+            )
+            if not result.get("ok"):
+                status_code, detail = self._translator_gateway_error_detail(
+                    result,
+                    fallback="translator_session_start_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            return await self._translator_action_response(action="start_session", gateway_result=result)
+
+        @self.app.post("/api/translator/session/policy")
+        async def translator_session_policy_update(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Обновляет policy текущей translator session через owner panel."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_session_policy_body_required")
+
+            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+            patch: dict[str, Any] = {}
+            for key in ("translation_mode", "notify_mode", "tts_mode", "src_lang", "tgt_lang"):
+                value = body.get(key)
+                if value is not None:
+                    clean = str(value).strip()
+                    if clean:
+                        patch[key] = clean
+            if not patch:
+                raise HTTPException(status_code=400, detail="translator_session_policy_patch_required")
+
+            result = await voice_gateway.patch_session(session_id, **patch)
+            if not result.get("ok"):
+                status_code, detail = self._translator_gateway_error_detail(
+                    result,
+                    fallback="translator_session_policy_update_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            return await self._translator_action_response(
+                action="update_session_policy",
+                gateway_result=result,
+                runtime_lite=runtime_lite,
+            )
+
+        @self.app.post("/api/translator/session/action")
+        async def translator_session_action(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Выполняет lifecycle-действие над translator session: pause/resume/stop."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_session_action_body_required")
+
+            action = str(body.get("action") or "").strip().lower()
+            if action not in {"pause", "resume", "stop"}:
+                raise HTTPException(status_code=400, detail="translator_session_action_invalid")
+
+            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+            if action == "stop":
+                result = await voice_gateway.stop_session(session_id)
+            else:
+                target_status = "paused" if action == "pause" else "running"
+                result = await voice_gateway.patch_session(session_id, status=target_status)
+
+            if not result.get("ok"):
+                status_code, detail = self._translator_gateway_error_detail(
+                    result,
+                    fallback=f"translator_session_{action}_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            return await self._translator_action_response(
+                action=f"{action}_session",
+                gateway_result=result,
+                runtime_lite=runtime_lite,
+            )
+
+        @self.app.post("/api/translator/session/runtime-tune")
+        async def translator_session_runtime_tune(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Обновляет runtime tuning текущей translator session."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_runtime_tune_body_required")
+
+            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+            buffering_mode = str(body.get("buffering_mode") or "").strip() or None
+            target_latency_raw = body.get("target_latency_ms")
+            vad_raw = body.get("vad_sensitivity")
+
+            target_latency_ms = None
+            if target_latency_raw not in (None, ""):
+                try:
+                    target_latency_ms = int(target_latency_raw)
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail="translator_target_latency_invalid") from exc
+
+            vad_sensitivity = None
+            if vad_raw not in (None, ""):
+                try:
+                    vad_sensitivity = float(vad_raw)
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail="translator_vad_sensitivity_invalid") from exc
+
+            if buffering_mode is None and target_latency_ms is None and vad_sensitivity is None:
+                raise HTTPException(status_code=400, detail="translator_runtime_tune_patch_required")
+
+            result = await voice_gateway.tune_runtime(
+                session_id,
+                buffering_mode=buffering_mode,
+                target_latency_ms=target_latency_ms,
+                vad_sensitivity=vad_sensitivity,
+            )
+            if not result.get("ok"):
+                status_code, detail = self._translator_gateway_error_detail(
+                    result,
+                    fallback="translator_runtime_tune_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            return await self._translator_action_response(
+                action="runtime_tune_session",
+                gateway_result=result,
+                runtime_lite=runtime_lite,
+            )
+
+        @self.app.post("/api/translator/session/quick-phrase")
+        async def translator_session_quick_phrase(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Публикует quick-phrase в текущую translator session через owner panel."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_quick_phrase_body_required")
+
+            session_id, runtime_lite, control_plane = await self._translator_resolve_session_context(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+            text = str(body.get("text") or "").strip()
+            if not text:
+                raise HTTPException(status_code=400, detail="translator_quick_phrase_text_required")
+
+            defaults = (
+                ((control_plane.get("operator_actions") or {}).get("draft_defaults") or {})
+                if isinstance(control_plane.get("operator_actions"), dict)
+                else {}
+            )
+            source_lang = str(body.get("source_lang") or defaults.get("quick_phrase_source_lang") or "ru").strip() or "ru"
+            target_lang = str(body.get("target_lang") or defaults.get("quick_phrase_target_lang") or "es").strip() or "es"
+            voice = str(body.get("voice") or defaults.get("quick_phrase_voice") or "default").strip() or "default"
+            style = str(body.get("style") or defaults.get("quick_phrase_style") or "neutral").strip() or "neutral"
+
+            result = await voice_gateway.send_quick_phrase(
+                session_id,
+                text=text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                voice=voice,
+                style=style,
+            )
+            if not result.get("ok"):
+                status_code, detail = self._translator_gateway_error_detail(
+                    result,
+                    fallback="translator_quick_phrase_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            return await self._translator_action_response(
+                action="quick_phrase_session",
+                gateway_result=result,
+                runtime_lite=runtime_lite,
+            )
+
+        @self.app.post("/api/translator/session/summary")
+        async def translator_session_summary(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Принудительно пересобирает session summary через Voice Gateway."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_session_summary_body_required")
+            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+            max_items_raw = body.get("max_items", 20)
+            try:
+                max_items = int(max_items_raw)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="translator_summary_max_items_invalid") from exc
+            result = await voice_gateway.build_summary(session_id, max_items=max_items)
+            if not result.get("ok"):
+                status_code, detail = self._translator_gateway_error_detail(
+                    result,
+                    fallback="translator_session_summary_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            return await self._translator_action_response(
+                action="build_session_summary",
+                gateway_result=result,
+                runtime_lite=runtime_lite,
+            )
+
+        @self.app.post("/api/translator/session/escalate")
+        async def translator_session_escalate(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Эскалирует diagnostics текущей translator session в owner inbox."""
+            self._assert_write_access(x_krab_web_key, token)
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_session_escalate_body_required")
+
+            session_id, runtime_lite, control_plane = await self._translator_resolve_session_context(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+            inspector = await self._translator_session_inspector_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            escalation = (
+                dict(inspector.get("escalation") or {})
+                if isinstance(inspector.get("escalation"), dict)
+                else {}
+            )
+            title = str(body.get("title") or escalation.get("suggested_title") or "").strip()
+            summary_body = str(body.get("body") or escalation.get("suggested_body") or "").strip()
+            if not title or not summary_body:
+                raise HTTPException(status_code=400, detail="translator_session_escalation_title_body_required")
+
+            why_items = (
+                [str(item).strip() for item in ((inspector.get("why_report") or {}).get("items") or []) if str(item).strip()]
+                if isinstance(inspector.get("why_report"), dict)
+                else []
+            )
+            severity = "warning" if why_items or str(inspector.get("status") or "") == "gateway_unavailable" else "info"
+            task_key = str(body.get("task_key") or f"translator-session:{session_id}:diagnostics").strip()
+            result = inbox_service.upsert_owner_task(
+                title=title,
+                body=summary_body,
+                task_key=task_key,
+                source="translator-ui",
+                severity=severity,
+                team_id="translator",
+                trace_id=f"translator-session:{session_id}",
+                metadata={
+                    "translator_session_id": session_id,
+                    "translator_session_status": str(inspector.get("session_status") or "").strip(),
+                    "translator_gateway_status": str(inspector.get("gateway_status") or "").strip(),
+                    "translator_why_items": why_items,
+                    "translator_timeline_stats": (
+                        ((inspector.get("timeline") or {}).get("stats") or {})
+                        if isinstance(inspector.get("timeline"), dict)
+                        else {}
+                    ),
+                    "source_surface": "owner_panel_translator",
+                },
+            )
+            if not result.get("ok"):
+                raise HTTPException(status_code=500, detail=str(result.get("error") or "translator_session_escalation_failed"))
+            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            return {
+                "ok": True,
+                "action": "escalate_session",
+                "session_id": session_id,
+                "inbox_result": result.get("item") if isinstance(result.get("item"), dict) else result,
+                "readiness": readiness,
+                "control_plane": control_plane,
+                "session_inspector": inspector,
+                "inbox_summary": inbox_service.get_summary(),
+            }
+
+        @self.app.post("/api/translator/mobile/register")
+        async def translator_mobile_register(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Регистрирует/обновляет iPhone companion через owner panel."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_mobile_register_body_required")
+
+            result = await voice_gateway.register_mobile_device(
+                device_id=str(body.get("device_id") or "").strip(),
+                voip_push_token=str(body.get("voip_push_token") or "").strip(),
+                apns_environment=str(body.get("apns_environment") or "development").strip() or "development",
+                app_version=str(body.get("app_version") or "").strip(),
+                locale=str(body.get("locale") or "ru").strip() or "ru",
+                preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip() or "auto",
+                preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip() or "ru",
+                notify_default=bool(body.get("notify_default", True)),
+            )
+            if not result.get("ok"):
+                status_code, detail = self._translator_mobile_gateway_error_detail(
+                    result,
+                    fallback="translator_mobile_register_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            return await self._translator_mobile_action_response(
+                action="register_mobile_device",
+                gateway_result=result,
+                runtime_lite=runtime_lite,
+            )
+
+        @self.app.post("/api/translator/mobile/trial-prep")
+        async def translator_mobile_trial_prep(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Подготавливает companion-trial в один controlled owner flow.
+
+            Сценарий:
+            1) берём device из body или из текущего mobile snapshot;
+            2) при необходимости делаем upsert регистрации;
+            3) если active session ещё нет, создаём `mobile` session;
+            4) привязываем device к session;
+            5) отдаём единый truthful snapshot после orchestration.
+
+            Важно:
+            - без device id endpoint не создаёт session "впустую";
+            - это owner-driven orchestration, а не скрытая background automation.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_mobile_trial_prep_body_required")
+
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            mobile_readiness = await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+
+            requested_device_id = str(body.get("device_id") or "").strip().lower()
+            selected_device_id = str(
+                ((mobile_readiness.get("devices") or {}).get("selected_device_id") or "")
+            ).strip().lower()
+            device_id = requested_device_id or selected_device_id
+            if not device_id:
+                raise HTTPException(status_code=400, detail="device_id_required_for_trial_prep")
+
+            existing_devices = (
+                [dict(item) for item in ((mobile_readiness.get("devices") or {}).get("items") or []) if isinstance(item, dict)]
+                if isinstance(mobile_readiness.get("devices"), dict)
+                else []
+            )
+            known_device = next(
+                (
+                    item
+                    for item in existing_devices
+                    if str(item.get("device_id") or "").strip().lower() == device_id
+                ),
+                None,
+            )
+
+            performed_steps: list[str] = []
+            last_gateway_result: dict[str, Any] = {
+                "ok": True,
+                "device_id": device_id,
+            }
+
+            if requested_device_id or known_device is None:
+                register_result = await voice_gateway.register_mobile_device(
+                    device_id=device_id,
+                    voip_push_token=str(body.get("voip_push_token") or "").strip(),
+                    apns_environment=str(body.get("apns_environment") or "development").strip() or "development",
+                    app_version=str(body.get("app_version") or "").strip(),
+                    locale=str(body.get("locale") or "ru").strip() or "ru",
+                    preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip() or "auto",
+                    preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip() or "ru",
+                    notify_default=bool(body.get("notify_default", True)),
+                )
+                if not register_result.get("ok"):
+                    status_code, detail = self._translator_mobile_gateway_error_detail(
+                        register_result,
+                        fallback="translator_mobile_trial_register_failed",
+                    )
+                    raise HTTPException(status_code=status_code, detail=detail)
+                last_gateway_result = register_result
+                performed_steps.append("device_registered")
+
+            session_id = str(body.get("session_id") or "").strip() or str(
+                ((control_plane.get("sessions") or {}).get("current_session_id") or "")
+            ).strip()
+            if not session_id:
+                start_result = await voice_gateway.start_session(
+                    source=str(body.get("source") or "mobile").strip() or "mobile",
+                    translation_mode=str(body.get("translation_mode") or "auto_to_ru").strip() or "auto_to_ru",
+                    notify_mode=str(body.get("notify_mode") or "auto_on").strip() or "auto_on",
+                    tts_mode=str(body.get("tts_mode") or "hybrid").strip() or "hybrid",
+                    src_lang=str(body.get("src_lang") or "auto").strip() or "auto",
+                    tgt_lang=str(body.get("tgt_lang") or "ru").strip() or "ru",
+                    meta={
+                        "label": str(body.get("label") or "Companion Trial").strip() or "Companion Trial",
+                        "prepared_via": "owner_mobile_trial_prep",
+                        "device_id": device_id,
+                    },
+                )
+                if not start_result.get("ok"):
+                    status_code, detail = self._translator_gateway_error_detail(
+                        start_result,
+                        fallback="translator_mobile_trial_start_failed",
+                    )
+                    raise HTTPException(status_code=status_code, detail=detail)
+                session_id = str(start_result.get("session_id") or "").strip()
+                last_gateway_result = {
+                    "ok": True,
+                    "device_id": device_id,
+                    "session_id": session_id,
+                    "result": start_result.get("result") if isinstance(start_result.get("result"), dict) else {},
+                }
+                performed_steps.append("session_created")
+
+            bind_result = await voice_gateway.bind_mobile_device(device_id, session_id=session_id)
+            if not bind_result.get("ok"):
+                status_code, detail = self._translator_mobile_gateway_error_detail(
+                    bind_result,
+                    fallback="translator_mobile_trial_bind_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+            last_gateway_result = bind_result
+            performed_steps.append("device_bound")
+
+            response = await self._translator_mobile_action_response(
+                action="prepare_mobile_trial",
+                gateway_result=last_gateway_result,
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+            )
+            response["performed_steps"] = performed_steps
+            return response
+
+        @self.app.post("/api/translator/mobile/bind")
+        async def translator_mobile_bind(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Привязывает companion-device к активной translator session через owner panel."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_mobile_bind_body_required")
+
+            device_id = str(body.get("device_id") or "").strip().lower()
+            if not device_id:
+                raise HTTPException(status_code=400, detail="device_id_required")
+            session_id, runtime_lite, control_plane = await self._translator_resolve_session_context(
+                requested_session_id=str(body.get("session_id") or "").strip()
+            )
+            result = await voice_gateway.bind_mobile_device(device_id, session_id=session_id)
+            if not result.get("ok"):
+                status_code, detail = self._translator_mobile_gateway_error_detail(
+                    result,
+                    fallback="translator_mobile_bind_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+
+            refreshed_control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            return await self._translator_mobile_action_response(
+                action="bind_mobile_device",
+                gateway_result={
+                    "ok": True,
+                    "device_id": device_id,
+                    "session_id": session_id,
+                    "result": result.get("result") if isinstance(result.get("result"), dict) else {},
+                },
+                runtime_lite=runtime_lite,
+                current_control_plane=refreshed_control_plane,
+            )
+
+        @self.app.post("/api/translator/mobile/remove")
+        async def translator_mobile_remove(
+            request: Request,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Удаляет companion-device из registry через owner panel."""
+            self._assert_write_access(x_krab_web_key, token)
+            voice_gateway = self._translator_gateway_client_or_raise()
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="translator_mobile_remove_body_required")
+
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            mobile_readiness = await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            device_id = str(body.get("device_id") or "").strip().lower() or str(
+                ((mobile_readiness.get("devices") or {}).get("selected_device_id") or "")
+            ).strip().lower()
+            if not device_id:
+                raise HTTPException(status_code=400, detail="device_id_required")
+
+            result = await voice_gateway.delete_mobile_device(device_id)
+            if not result.get("ok"):
+                status_code, detail = self._translator_mobile_gateway_error_detail(
+                    result,
+                    fallback="translator_mobile_remove_failed",
+                )
+                raise HTTPException(status_code=status_code, detail=detail)
+
+            refreshed_control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            return await self._translator_mobile_action_response(
+                action="remove_mobile_device",
+                gateway_result={
+                    "ok": True,
+                    "device_id": device_id,
+                    "session_id": str(((refreshed_control_plane.get("sessions") or {}).get("current_session_id") or "")).strip(),
+                    "result": result.get("result") if isinstance(result.get("result"), dict) else {},
+                },
+                runtime_lite=runtime_lite,
+                current_control_plane=refreshed_control_plane,
+            )
+
         @self.app.get("/api/runtime/handoff")
         async def runtime_handoff():
             """
@@ -5452,6 +7475,11 @@ class WebApp:
                     "telegram_session_state": runtime_lite.get("telegram_session_state"),
                     "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
                     "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
+                    "workspace_attached": bool(
+                        ((runtime_lite.get("workspace_state") or {}) if isinstance(runtime_lite, dict) else {}).get(
+                            "shared_workspace_attached"
+                        )
+                    ),
                     "last_runtime_route": runtime_lite.get("last_runtime_route"),
                     "inbox_summary": operator_workflow.get("summary") or runtime_lite.get("inbox_summary"),
                 },
@@ -5852,6 +7880,7 @@ class WebApp:
             openclaw = router.openclaw_client
             tier_state = openclaw.get_tier_state_export() if getattr(openclaw, "get_tier_state_export", None) else {}
             operator_workflow = inbox_service.get_workflow_snapshot()
+            workspace_state = build_workspace_state_snapshot()
 
             return {
                 "ok": True,
@@ -5869,6 +7898,7 @@ class WebApp:
                     "preflight_cache": {k: {"expires_in": v[0] - time.time(), "error": v[1]} for k, v in getattr(router, "_preflight_cache", {}).items() if v[0] > time.time()}
                 },
                 "operator_workflow": operator_workflow,
+                "workspace_state": workspace_state,
                 "queue_depth": queue_stats.get("active_tasks", 0),
                 "queue_stats": queue_stats,
                 "observability": get_observability_snapshot()
@@ -6265,6 +8295,13 @@ class WebApp:
                 routing_status=routing_status,
             )
             runtime_controls = self._build_openclaw_runtime_controls()
+            auth_recovery = build_auth_recovery_readiness_snapshot(
+                project_root=self._project_root(),
+                status_payload=self._openclaw_models_status_snapshot().get("raw"),
+                auth_profiles_payload=self._load_openclaw_auth_profiles(),
+                runtime_models_payload=self._load_openclaw_runtime_models(),
+                runtime_config_payload=self._load_openclaw_runtime_config(),
+            )
 
             router_usage_summary = {}
             if hasattr(router_obj, "get_usage_summary"):
@@ -6293,6 +8330,7 @@ class WebApp:
                         "provider_effective_detail": str(item.get("provider_effective_detail", "")),
                         "provider_oauth_status": str(item.get("provider_oauth_status", "")),
                         "provider_oauth_remaining_human": str(item.get("provider_oauth_remaining_human", "")),
+                        "provider_auth_recovery": dict(item.get("provider_auth_recovery") or {}),
                         "provider_ui": dict(item.get("provider_ui") or {}),
                         "legacy": bool(item.get("legacy")),
                         "models": [],
@@ -6348,6 +8386,7 @@ class WebApp:
                 "routing_status": routing_status,
                 "runtime_controls": runtime_controls,
                 "parallelism_truth": parallelism_truth,
+                "auth_recovery": auth_recovery,
                 "catalog_guidance": {
                     "primary_flow": "Сначала выбери режим и пресет. Точный слот меняй только в advanced override.",
                     "openai_manual_only": False,

@@ -36,6 +36,11 @@
 - acceptance artifacts и отчёты
 - утверждённые roadmap/master-plan документы
 
+Примечание про ops latest:
+
+- `artifacts/ops/*_latest.json` может быть read-only и принадлежать другой учётке.
+- В этом случае export helper/owner-panel пишет `*_latest_{user}.json` и показывает этот путь в UI.
+
 ## Что нельзя шарить напрямую
 
 Каждая macOS-учётка должна иметь свой отдельный слой для:
