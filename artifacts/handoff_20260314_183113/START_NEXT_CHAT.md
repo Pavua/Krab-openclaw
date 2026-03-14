@@ -73,3 +73,23 @@
 - Не выключать runtime на `pablito`, если он снова нужен; перед стартом здесь его нужно остановить.
 - Для free signing PushKit токен не обязателен; даже без него `trial_ready`/`bound` уже достижимы, а device proof идёт следующим шагом.
 - OAuth не удаляем и не обрезаем — все профили должны остаться.
+
+## Обновление 2026-03-14 19:37: Xcode bootstrap automation
+
+- Создан новый рабочий поток для Xcode free signing без ручного создания проекта в UI.
+- Локальный per-account Xcode project теперь генерируется автоматически в `~/Projects/KrabVoiceiOS-user3`.
+- Добавлены one-click launcher'ы:
+  - `Prepare iPhone Companion Xcode Project.command`
+  - `Check iPhone Companion Simulator Build.command`
+- Генератор использует `xcodegen`, подключает shared skeleton из `../Krab Voice Gateway/ios/KrabVoiceiOS`,
+  пишет локальный `project.yml`, создаёт `KrabVoice.xcodeproj` и проходит simulator build.
+- Simulator smoke подтверждён: `iPhone 17 Pro Max` build = OK.
+- Xcode project открыт автоматически; окно проекта видно в Xcode (`KrabVoice — KrabVoice.xcodeproj`).
+- Ops-артефакт:
+  - `artifacts/ops/iphone_companion_xcode_project_user3_latest.json`
+- Скриншот Xcode bootstrap:
+  - `output/xcode/iphone-companion-xcode-bootstrap-user3-20260314.png`
+
+Текущая ветка: `codex/iphone-companion-xcodegen-bootstrap`
+Предыдущая ветка с runtime/trial repair: `codex/companion-runtime-adaptive-fix`
+

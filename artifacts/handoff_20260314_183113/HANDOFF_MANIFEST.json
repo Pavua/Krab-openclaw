@@ -5,12 +5,13 @@
   "runtime_account": "USER3",
   "git": {
     "remote": "https://github.com/Pavua/Krab-openclaw.git",
-    "branch": "codex/companion-runtime-adaptive-fix"
+    "branch": "codex/iphone-companion-xcodegen-bootstrap"
   },
   "files": [
     "ATTACH_SUMMARY_RU.md",
     "CALL_TRANSLATOR_AUDIT_RU.md",
     "HANDOFF_MANIFEST.json",
+    "IPHONE_COMPANION_XCODE_AUTOMATION_RU.md",
     "IPHONE_COMPANION_XCODE_FREE_SIGNING_RU.md",
     "KRAB_SKILLS_REGISTRY_RU.md",
     "MASTER_PLAN_VNEXT_RU.md",
@@ -24,6 +25,8 @@
     "PARALLEL_DIALOG_PROTOCOL_RU.md",
     "PLAN-Краб+переводчик 12.03.2026.md",
     "START_NEXT_CHAT.md",
+    "iphone-companion-xcode-bootstrap-user3-20260314.png",
+    "iphone_companion_xcode_project_user3_latest.json",
     "krab-owner-panel-2026-03-14.png",
     "krab-owner-panel-companion-attention-2026-03-14.png",
     "krab-owner-panel-companion-registered-2026-03-14.png",
@@ -34,5 +37,5 @@
     "translator_mobile_trial_ready_user3_latest.json",
     "Стартовый промпт на USER3.md"
   ],
-  "updated_at": "2026-03-14T18:08:00.612199+00:00"
+  "updated_at": "2026-03-14T18:39:51.419749+00:00"
 }

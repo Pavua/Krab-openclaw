@@ -52,3 +52,17 @@
 1. Пройти Xcode Free Signing на реальном iPhone и запустить companion через `Krab Voice Gateway/ios/KrabVoiceiOS`.
 2. С устройства подтвердить `Health-check` и доступ к `http://<IP Mac>:8090`.
 3. Зафиксировать first live subtitles/timeline для session `vs_0b93dc247b1d` или новой live-session (скрин + артефакт).
+
+## Дополнение: Xcode automation
+
+- Добавлен автоматический генератор локального Xcode project для iPhone companion:
+  - `scripts/generate_iphone_companion_xcode_project.py`
+  - `scripts/ios_companion_project_lib.py`
+- Добавлены launcher'ы:
+  - `Prepare iPhone Companion Xcode Project.command`
+  - `Check iPhone Companion Simulator Build.command`
+- Генерация идёт в локальную per-account папку `~/Projects/KrabVoiceiOS-user3`, а не в shared repo.
+- Simulator build подтверждён на `iPhone 17 Pro Max`.
+- Свежий artifact: `artifacts/ops/iphone_companion_xcode_project_user3_latest.json`
+- Текущая ветка: `codex/iphone-companion-xcodegen-bootstrap`
+
