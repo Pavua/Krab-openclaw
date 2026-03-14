@@ -15,8 +15,9 @@
 - Translator readiness: `READY`, Voice replies: `ON`.
 - iPhone companion зарегистрирован: `device_id = iphone-dev-1`.
 - Legacy `agents.defaults.thinkingDefault=auto` в `USER3` починен до `adaptive`, поэтому `:18789` снова healthy после controlled restart.
-- Companion сейчас в `BOUND`, session = `vs_0b93dc247b1d`, но `current device binding status = pending` до первого real device connect.
-- Delivery matrix = `TRIAL READY`, live trial preflight = `READY FOR TRIAL`.
+- Companion на `iPhone 15 Pro Max` уже прошёл реальный live trial.
+- Подтверждён рабочий session/audio loop: `vs_f35900861c74`, `stt.partial`, `translation.partial`, `call.closed`.
+- Delivery matrix = `TRIAL READY`, а on-device live proof уже снят и зафиксирован.
 - Push token по-прежнему отсутствует и это ожидаемо для free signing / первого trial.
 
 ## Что исправлено в коде
@@ -48,10 +49,10 @@
 
 ## Следующий фокус
 
-1) Запустить реальный iPhone companion через Xcode Free Signing (free Apple ID).
-2) В приложении проверить `Health-check` и подключение к `http://<IP Mac>:8090`.
-3) На живом устройстве зафиксировать first live subtitles/timeline для session `vs_0b93dc247b1d` или новой trial-session.
-4) После device proof обновить handoff bundle свежим on-device evidence.
+1) Зафиксировать и не потерять текущий on-device/live-audio milestone при возврате в `pablito`.
+2) Заменить synthetic `mobile перевод (...)` на реальный translation pipeline.
+3) Дополировать `Live`-экран iPhone companion под production-качество: safe area, масштаб, финальная компоновка.
+4) После этого повторить live trial уже на финальном переводческом тракте.
 
 ## Что приложить в новый диалог
 
@@ -148,3 +149,19 @@
   - dismiss клавиатуры;
   - консистентный lowercase `device_id`.
 - Simulator build на локальном per-account проекте подтверждён: `BUILD SUCCEEDED`.
+
+## Обновление 2026-03-14 21:58: live audio uplink proof
+
+- Блок `iPhone companion + live trial` фактически доведён до рабочего on-device proof.
+- На реальном `iPhone 15 Pro Max` подтверждены:
+  - `session_id = vs_f35900861c74`;
+  - `Сессия: running`;
+  - `event = stt.partial`;
+  - живой uplink микрофона (`mobile_chunk#... speech=True`);
+  - живые partial updates в `Оригинал` и `Перевод`;
+  - штатная ручная остановка с `event = call.closed`.
+- Текущий `Перевод` пока synthetic/diagnostic (`RU: mobile перевод (...)`), но сам live pipeline уже работает end-to-end.
+- Главный текущий результат: Xcode/signing/network/audio loop больше не блокеры.
+- Актуальный ops-артефакт:
+  - `artifacts/ops/iphone_companion_on_device_status_user3_latest.json`
+

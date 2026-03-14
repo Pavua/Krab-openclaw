@@ -135,3 +135,33 @@ shared-репозиторий остаётся общим, а локальный
 - Проверка:
   - локальный клон `Krab Voice Gateway` собран через `xcodegen + xcodebuild` для `iPhone 17 Pro Max Simulator`;
   - итог: `BUILD SUCCEEDED`.
+
+## Обновление 2026-03-14 21:58: live audio uplink proof
+
+- Fast-follow патч и новый gateway с mobile audio endpoint доведены до реального on-device proof.
+- На `iPhone 15 Pro Max` повторно установлен и запущен обновлённый `KrabVoice`.
+- Подтверждён рабочий live pipeline:
+  - `session_id = vs_f35900861c74`
+  - `status = running`
+  - `event = stt.partial`
+  - `Оригинал = mobile_chunk#... speech=True`
+  - `Перевод = RU: mobile перевод (...)`
+- Пользователь проговорил в микрофон около 20 секунд, после чего сессия была остановлена вручную.
+- После ручной остановки companion корректно показал:
+  - `Сессия остановлена`
+  - `event = call.closed`
+- Это означает, что теперь фактически подтверждены:
+  - `Xcode Free Signing`;
+  - install + trust + launch на устройстве;
+  - LAN-подключение к `Voice Gateway`;
+  - создание live session;
+  - uplink микрофонного аудио;
+  - `stt.partial` и `translation.partial` события;
+  - корректное завершение `call.closed`.
+
+## Что ещё осталось довести
+
+- Текущий `Перевод` пока diagnostic/synthetic (`mobile перевод (...)`), а не финальный production-quality pipeline.
+- UI `Live`-экрана уже стал лучше, но ещё требует аккуратного production polish по safe area и масштабу элементов.
+- Следующий инженерный фокус: заменить synthetic translation на реальный pipeline и дочистить iPhone UI.
+

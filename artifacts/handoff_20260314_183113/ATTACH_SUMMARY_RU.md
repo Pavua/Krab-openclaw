@@ -7,8 +7,8 @@
 
 ## Готовность
 
-- Проект: ~68%.
-- Текущий блок (iPhone companion + live trial): ~58%.
+- Проект: ~84%.
+- Текущий блок (iPhone companion + live trial): 100%.
 
 ## Основные изменения в коде
 
@@ -49,9 +49,9 @@
 
 ## Что дальше
 
-1. Пройти Xcode Free Signing на реальном iPhone и запустить companion через `Krab Voice Gateway/ios/KrabVoiceiOS`.
-2. С устройства подтвердить `Health-check` и доступ к `http://<IP Mac>:8090`.
-3. Зафиксировать first live subtitles/timeline для session `vs_0b93dc247b1d` или новой live-session (скрин + артефакт).
+1. Закрепить live milestone в ветках и handoff для возврата в `pablito` без потерь.
+2. Заменить synthetic `mobile перевод (...)` на реальный translation pipeline.
+3. Дополировать iPhone UI под production-качество и затем повторить live trial уже на финальном переводческом тракте.
 
 ## Дополнение: Xcode automation
 
@@ -75,19 +75,19 @@
   - запускается на устройстве.
 - LAN-подключение к Voice Gateway подтверждено:
   - `http://192.168.0.171:8090`
-- С устройства создана живая session:
-  - `session_id = vs_4ad7901164f1`
-- Device/session truth на gateway:
-  - `device_id = 9add3a18-eb7a-4ca6-8f47-f2e0eecf0cb0`
-  - `active_session = true`
-- Причина, почему пока нет субтитров:
-  - `why.code = no_audio_stream`
-  - то есть uplink аудио ещё не доведён, а не сеть/Xcode/signing.
+- Финальный live proof подтверждён на реальном устройстве:
+  - `session_id = vs_f35900861c74`;
+  - `Сессия: running`;
+  - `event = stt.partial`;
+  - живой микрофонный uplink (`mobile_chunk#... speech=True`);
+  - частичные обновления `Перевод`;
+  - штатная остановка с `event = call.closed`.
+- Это значит, что end-to-end live pipeline уже работает на устройстве, а текущий текст `RU: mobile перевод (...)` пока остаётся synthetic/diagnostic уровнем.
 
 ## Обновлённая готовность
 
-- Проект: ~78%.
-- Текущий блок (iPhone companion + live trial): ~90%.
+- Проект: ~84%.
+- Текущий блок (iPhone companion + live trial): 100%.
 
 
 ## Дополнение: fast-follow UI patch
@@ -102,3 +102,18 @@
   - `xcodegen generate`
   - `xcodebuild -destination "platform=iOS Simulator,name=iPhone 17 Pro Max" build`
   - результат: `BUILD SUCCEEDED`.
+
+## Дополнение: live audio uplink patch
+
+- В той же ветке `codex/iphone-companion-ui-fastfollow` добавлен mobile audio uplink.
+- Ключевой commit в `Krab Voice Gateway`:
+  - `f1e39a4 feat: add iphone companion audio uplink`
+- Что добавлено:
+  - endpoint `POST /v1/mobile/sessions/{session_id}/audio-chunk`;
+  - захват микрофона через `AVAudioEngine`;
+  - отправка audio chunks из iPhone companion в gateway;
+  - публикация `stt.partial` и `translation.partial` для mobile trial.
+- Проверки:
+  - backend tests = `14 passed`;
+  - simulator build = `BUILD SUCCEEDED`;
+  - on-device live trial = успешен.
