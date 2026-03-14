@@ -71,3 +71,67 @@ shared-репозиторий остаётся общим, а локальный
 - На шаге device build Xcode упирается в системную блокировку `The device is passcode protected` (`E800001A`).
 - Это не кодовый баг и не проблема проекта: нужно просто держать iPhone разблокированным во время первой установки из Xcode.
 - Артефакт блокера: `artifacts/ops/iphone_companion_device_build_blocker_user3_latest.json`
+
+## Статус первого on-device прогона
+
+- Tunnel и DDI после reboot iPhone восстановлены: устройство перешло в `connected`, `isUsable = true`.
+- Free-signing build на реальном `iPhone 15 Pro Max` успешно завершён.
+- Приложение установлено на устройство: `com.antigravity.krabvoice.user3.macbook.pro.pablito.local`.
+- Первый launch блокируется системной защитой iOS, пока профиль разработчика не доверен вручную.
+- Что нужно на iPhone: `Настройки -> Основные -> VPN и управление устройством -> Developer App -> Trust`.
+- После trust можно повторно запустить приложение через `devicectl` или Xcode без новой сборки.
+- Артефакт статуса: `artifacts/ops/iphone_companion_on_device_status_user3_latest.json`
+
+## Обновление 2026-03-14 20:08: live session proof
+
+- Приложение на `iPhone 15 Pro Max` не только запускается, но и доходит до создания live session.
+- Подтверждён реальный `session_id`: `vs_4ad7901164f1`.
+- После ручной правки `Gateway URL` на LAN-адрес Mac:
+  - `http://192.168.0.171:8090`
+  companion смог достучаться до Voice Gateway по сети.
+- Проверка на Mac подтверждает оба health-endpoint:
+  - `http://127.0.0.1:8090/health` -> `ok`
+  - `http://192.168.0.171:8090/health` -> `ok`
+- Для этой сессии вручную подтверждена и привязка device/session:
+  - `device_id = 9add3a18-eb7a-4ca6-8f47-f2e0eecf0cb0`
+  - `session_id = vs_4ad7901164f1`
+- Session snapshot на gateway показывает:
+  - `active_session = true`
+  - `status = created`
+  - `timeline_count = 0`
+  - `why.code = no_audio_stream`
+
+## Что это означает
+
+- `Xcode Free Signing` завершён успешно.
+- iPhone companion установлен, доверен и запускается на устройстве.
+- Подключение к Voice Gateway по локальной сети работает.
+- Live session создаётся с телефона и видна на gateway.
+- Текущий фактический блокер сместился с сети/подписи на аудиотракт:
+  в сессию пока не поступает микрофонный поток, поэтому субтитры пустые,
+  а WebSocket закрывается после стартового обмена.
+
+## Fast-follow задачи
+
+- Поднять UX `Live`-экрана на `iPhone 15 Pro Max`:
+  - secondary buttons сейчас уезжают под tab bar;
+  - нужен надёжный dismiss клавиатуры;
+  - экран лучше перевести на `ScrollView` с safe-area отступом.
+- Довести uplink живого аудио:
+  - запрос/проверка разрешения на микрофон;
+  - удержание WS после создания session;
+  - реальная отправка аудиокадров в gateway.
+
+
+## Обновление 2026-03-14 21:28: fast-follow UI patch
+
+- Для iPhone companion подготовлен отдельный fast-follow патч в репозитории `Krab Voice Gateway`.
+- Изменения сделаны в `ios/KrabVoiceiOS/ContentView.swift`.
+- Что улучшено:
+  - `Live`-экран переведён на `ScrollView`, чтобы сервисные кнопки не уезжали под tab bar на `iPhone 15 Pro Max`;
+  - добавлен dismiss клавиатуры по tap/scroll;
+  - URL/API fields теперь настроены под более предсказуемый ввод на iPhone;
+  - `device_id` нормализуется в lowercase консистентно, чтобы регистрация и bind работали с одним и тем же идентификатором.
+- Проверка:
+  - локальный клон `Krab Voice Gateway` собран через `xcodegen + xcodebuild` для `iPhone 17 Pro Max Simulator`;
+  - итог: `BUILD SUCCEEDED`.

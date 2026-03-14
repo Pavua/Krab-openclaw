@@ -93,3 +93,58 @@
 Текущая ветка: `codex/iphone-companion-xcodegen-bootstrap`
 Предыдущая ветка с runtime/trial repair: `codex/companion-runtime-adaptive-fix`
 
+## Обновление 2026-03-14 20:08: on-device milestone подтверждён
+
+- Реальный `iPhone 15 Pro Max` успешно прошёл `Free Signing`, install и first launch.
+- Developer trust на устройстве подтверждён, приложение `KrabVoice` запускается на iPhone.
+- В приложении выставлен `Gateway URL = http://192.168.0.171:8090`.
+- Voice Gateway сейчас доступен и по localhost, и по LAN:
+  - `http://127.0.0.1:8090/health` -> `ok`
+  - `http://192.168.0.171:8090/health` -> `ok`
+- С телефона создана реальная live session:
+  - `session_id = vs_4ad7901164f1`
+  - `event = call.state`
+- Device/session привязка доведена вручную на gateway:
+  - `device_id = 9add3a18-eb7a-4ca6-8f47-f2e0eecf0cb0`
+  - `session_id = vs_4ad7901164f1`
+- Session snapshot truth:
+  - `active_session = true`
+  - `timeline_count = 0`
+  - `why.code = no_audio_stream`
+
+## Текущий честный блокер
+
+- Это уже не проблема Xcode, trust, сети или signing.
+- Текущий блокер: в session пока не приходит живой аудиопоток с iPhone companion.
+- Поэтому субтитры пустые, а WebSocket закрывается после стартового обмена.
+
+## Что делать следующим агентом
+
+1. Обновить/сохранить docs и acceptance artifacts после fast-follow патча.
+2. Починить iPhone UI в `../Krab Voice Gateway/ios/KrabVoiceiOS/ContentView.swift`:
+   - `ScrollView` для `Live`-экрана;
+   - secondary buttons над tab bar;
+   - dismiss клавиатуры.
+3. Затем переходить к audio uplink:
+   - разрешение микрофона;
+   - удержание WS;
+   - доставка аудиокадров в gateway.
+
+## Свежие артефакты
+
+- `artifacts/ops/iphone_companion_on_device_status_user3_latest.json`
+- `output/xcode/iphone-build-succeeded-user3-20260314.png`
+- `output/xcode/iphone-launch-attempt-user3-20260314.png`
+
+
+## Обновление 2026-03-14 21:28: fast-follow UI patch
+
+- Для следующего шага уже подготовлен UI fast-follow патч в отдельной ветке репозитория `Krab Voice Gateway`:
+  - ветка: `codex/iphone-companion-ui-fastfollow`
+  - commit: `55dd0c0`
+- Патч делает `Live`-экран пригоднее для `iPhone 15 Pro Max`:
+  - `ScrollView`;
+  - secondary buttons над tab bar;
+  - dismiss клавиатуры;
+  - консистентный lowercase `device_id`.
+- Simulator build на локальном per-account проекте подтверждён: `BUILD SUCCEEDED`.

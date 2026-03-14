@@ -66,3 +66,39 @@
 - Свежий artifact: `artifacts/ops/iphone_companion_xcode_project_user3_latest.json`
 - Текущая ветка: `codex/iphone-companion-xcodegen-bootstrap`
 
+## Дополнение: on-device proof
+
+- Реальный iPhone companion на `iPhone 15 Pro Max`:
+  - собран через `Xcode Free Signing`;
+  - установлен на устройство;
+  - доверен в `VPN & Device Management`;
+  - запускается на устройстве.
+- LAN-подключение к Voice Gateway подтверждено:
+  - `http://192.168.0.171:8090`
+- С устройства создана живая session:
+  - `session_id = vs_4ad7901164f1`
+- Device/session truth на gateway:
+  - `device_id = 9add3a18-eb7a-4ca6-8f47-f2e0eecf0cb0`
+  - `active_session = true`
+- Причина, почему пока нет субтитров:
+  - `why.code = no_audio_stream`
+  - то есть uplink аудио ещё не доведён, а не сеть/Xcode/signing.
+
+## Обновлённая готовность
+
+- Проект: ~78%.
+- Текущий блок (iPhone companion + live trial): ~90%.
+
+
+## Дополнение: fast-follow UI patch
+
+- В отдельном рабочем клоне `Krab Voice Gateway` создана ветка `codex/iphone-companion-ui-fastfollow`.
+- Патч правит `ios/KrabVoiceiOS/ContentView.swift`:
+  - `ScrollView` для `Live`-экрана;
+  - secondary buttons больше не должны прятаться под tab bar;
+  - dismiss клавиатуры;
+  - консистентный lowercase `device_id`.
+- Сборка патча подтверждена:
+  - `xcodegen generate`
+  - `xcodebuild -destination "platform=iOS Simulator,name=iPhone 17 Pro Max" build`
+  - результат: `BUILD SUCCEEDED`.
