@@ -63,3 +63,11 @@ shared-репозиторий остаётся общим, а локальный
 - имя simulator target;
 - прошёл ли simulator build;
 - был ли проект открыт в Xcode.
+
+## Текущий on-device блокер
+
+- Обнаружен реальный iPhone: `iPhone 15 ProMax P` (`00008130-001C6D0C26F8001C`).
+- Personal Team в Xcode найден автоматически: `Pavel Sergeevich (Personal Team)` / `J4F83MNBD9`.
+- На шаге device build Xcode упирается в системную блокировку `The device is passcode protected` (`E800001A`).
+- Это не кодовый баг и не проблема проекта: нужно просто держать iPhone разблокированным во время первой установки из Xcode.
+- Артефакт блокера: `artifacts/ops/iphone_companion_device_build_blocker_user3_latest.json`

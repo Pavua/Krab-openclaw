@@ -18,6 +18,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import plistlib
 import platform
 import re
 import subprocess
@@ -51,6 +52,8 @@ class GenerationConfig:
     simulator_name: str
     open_xcode: bool
     run_simulator_build: bool
+    development_team: str = ""
+    team_name: str = ""
     app_name: str = APP_NAME
     deployment_target: str = DEPLOYMENT_TARGET
     app_version: str = DEFAULT_APP_VERSION
@@ -66,6 +69,8 @@ class GenerationResult:
     readme_path: str
     bundle_id: str
     simulator_name: str
+    development_team: str
+    team_name: str
     simulator_build_ran: bool
     simulator_build_ok: bool
     opened_in_xcode: bool
@@ -124,10 +129,40 @@ def _yaml_quote(value: str) -> str:
     return f'"{escaped}"'
 
 
+def detect_xcode_personal_team() -> tuple[str, str]:
+    """Пытается найти Personal Team из настроек Xcode текущей учётки."""
+
+    try:
+        completed = subprocess.run(
+            ["defaults", "export", "com.apple.dt.Xcode", "-"],
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0 or not completed.stdout:
+            return "", ""
+        payload = plistlib.loads(completed.stdout)
+        teams = payload.get("IDEProvisioningTeamByIdentifier", {})
+        for team_id, meta in teams.items():
+            entries = meta if isinstance(meta, list) else [meta]
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("isFreeProvisioningTeam") == 1 or entry.get("teamType") == "Personal Team":
+                    return str(entry.get("teamID") or team_id), str(entry.get("teamName") or "")
+    except Exception:
+        return "", ""
+    return "", ""
+
+
 def make_project_spec(config: GenerationConfig) -> str:
     """Генерирует XcodeGen spec для локального iOS App target."""
 
     skeleton_path = str(config.skeleton_dir.resolve())
+    development_team_line = (
+        f"                DEVELOPMENT_TEAM: {_yaml_quote(config.development_team)}\n"
+        if config.development_team
+        else ""
+    )
     return textwrap.dedent(
         f"""
         name: {config.app_name}
@@ -159,7 +194,7 @@ def make_project_spec(config: GenerationConfig) -> str:
                 PRODUCT_NAME: {_yaml_quote(config.app_name)}
                 PRODUCT_BUNDLE_IDENTIFIER: {_yaml_quote(config.bundle_id)}
                 GENERATE_INFOPLIST_FILE: YES
-                INFOPLIST_KEY_CFBundleDisplayName: {_yaml_quote(config.app_name)}
+{development_team_line}                INFOPLIST_KEY_CFBundleDisplayName: {_yaml_quote(config.app_name)}
                 INFOPLIST_KEY_LSRequiresIPhoneOS: YES
                 INFOPLIST_KEY_NSMicrophoneUsageDescription: {_yaml_quote('Нужен доступ к микрофону для перевода звонка.')}
                 INFOPLIST_KEY_NSLocalNetworkUsageDescription: {_yaml_quote('Нужен доступ к локальной сети для подключения к Krab Gateway.')}
@@ -187,12 +222,13 @@ def make_local_readme(config: GenerationConfig) -> str:
         - Подключён SwiftUI skeleton из `{config.skeleton_dir}`.
         - Прописаны `NSMicrophoneUsageDescription` и `NSLocalNetworkUsageDescription`.
         - Bundle ID по умолчанию: `{config.bundle_id}`.
+        - Team для free signing: `{config.team_name or config.development_team or "нужно выбрать вручную"}`.
 
         ## Что осталось в Xcode
 
         1. Открыть `{config.app_name}.xcodeproj`.
         2. В target -> Signing & Capabilities включить `Automatically manage signing`.
-        3. Выбрать `Team = Personal Team` для текущего Apple ID.
+        3. Проверить `Team`: генератор уже подставляет найденный Personal Team, но если Xcode покажет пустое значение — выбрать его вручную.
         4. Подключить реальный iPhone и выбрать его как Run Destination.
         5. На iPhone при необходимости подтвердить `Trust Developer`.
 
@@ -306,6 +342,8 @@ def build_generation_result(
         readme_path=str(readme_path),
         bundle_id=config.bundle_id,
         simulator_name=config.simulator_name,
+        development_team=config.development_team,
+        team_name=config.team_name,
         simulator_build_ran=config.run_simulator_build,
         simulator_build_ok=simulator_build_ok,
         opened_in_xcode=config.open_xcode,
@@ -331,6 +369,7 @@ def load_default_config(
         )
     ).expanduser()
     skeleton_dir = voice_gateway_root / "ios" / "KrabVoiceiOS"
+    development_team, team_name = detect_xcode_personal_team()
     return GenerationConfig(
         repo_root=repo_root,
         voice_gateway_root=voice_gateway_root,
@@ -340,4 +379,6 @@ def load_default_config(
         simulator_name=simulator_name or os.environ.get("KRAB_IOS_SIMULATOR_NAME", "iPhone 17 Pro Max"),
         open_xcode=open_xcode,
         run_simulator_build=run_simulator_build,
+        development_team=development_team,
+        team_name=team_name,
     )
