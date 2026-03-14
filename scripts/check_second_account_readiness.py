@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs"
+ENV_PATH = ROOT / ".env"
 
 
 def _http_json(url: str, *, timeout: float = 2.5) -> dict[str, Any]:
@@ -89,6 +92,116 @@ def _python_candidates() -> list[str]:
     return out
 
 
+def _read_env_file(path: Path) -> dict[str, str]:
+    """Минимальный парсер .env без внешних зависимостей."""
+    if not path.exists():
+        return {}
+    loaded: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if value[:1] == value[-1:] and value[:1] in {'"', "'"}:
+            value = value[1:-1]
+        loaded[key] = os.path.expandvars(os.path.expanduser(value))
+    return loaded
+
+
+def _tool_presence() -> dict[str, bool]:
+    """Сводка наличия базовых CLI-инструментов."""
+    return {
+        "python3": bool(shutil.which("python3")),
+        "node": bool(shutil.which("node")),
+        "npx": bool(shutil.which("npx")),
+        "rg": bool(shutil.which("rg")),
+        "openclaw": bool(shutil.which("openclaw")),
+        "gh": bool(shutil.which("gh")),
+    }
+
+
+def _gh_auth_status() -> dict[str, Any]:
+    """Проверяет, авторизован ли GitHub CLI."""
+    if not shutil.which("gh"):
+        return {"available": False, "authenticated": False, "login": "", "error": "gh_not_installed"}
+
+    status = subprocess.run(
+        ["gh", "auth", "status", "--hostname", "github.com"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    authenticated = status.returncode == 0
+    login = ""
+    if authenticated:
+        login_proc = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if login_proc.returncode == 0:
+            login = (login_proc.stdout or "").strip()
+    return {
+        "available": True,
+        "authenticated": authenticated,
+        "login": login,
+        "error": "" if authenticated else (status.stderr or status.stdout or "").strip(),
+    }
+
+
+def _lmstudio_mcp_status() -> dict[str, Any]:
+    """Читает LM Studio mcp.json и проверяет наличие ключевых серверов."""
+    path = Path.home() / ".lmstudio" / "mcp.json"
+    if not path.exists():
+        return {
+            "exists": False,
+            "path": str(path),
+            "servers": [],
+            "context7_present": False,
+            "github_present": False,
+            "chrome_profile_present": False,
+            "openclaw_browser_present": False,
+            "error": "mcp_json_missing",
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {
+            "exists": True,
+            "path": str(path),
+            "servers": [],
+            "context7_present": False,
+            "github_present": False,
+            "chrome_profile_present": False,
+            "openclaw_browser_present": False,
+            "error": str(exc),
+        }
+
+    servers = payload.get("mcpServers", {}) if isinstance(payload, dict) else {}
+    if not isinstance(servers, dict):
+        servers = {}
+    names = sorted(servers.keys())
+    return {
+        "exists": True,
+        "path": str(path),
+        "servers": names,
+        "context7_present": "context7" in servers,
+        "github_present": "github" in servers,
+        "chrome_profile_present": "chrome-profile" in servers,
+        "openclaw_browser_present": "openclaw-browser" in servers,
+        "error": "",
+    }
+
+
 def build_readiness_report() -> dict[str, Any]:
     """Собирает readiness-report для текущей macOS-учётки."""
     home_dir = Path.home()
@@ -106,6 +219,13 @@ def build_readiness_report() -> dict[str, Any]:
         "multi_account_switchover": DOCS_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md",
         "parallel_dialog_protocol": DOCS_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md",
     }
+    env_loaded = _read_env_file(ENV_PATH)
+    merged_env = dict(env_loaded)
+    merged_env.update(os.environ)
+    context7_key = str(merged_env.get("CONTEXT7_API_KEY", "") or "").strip()
+    tools = _tool_presence()
+    github_cli = _gh_auth_status()
+    lmstudio_mcp = _lmstudio_mcp_status()
     latest_handoff = sorted(ROOT.glob("artifacts/handoff_*"), key=lambda p: p.stat().st_mtime, reverse=True)
     handoff_latest = latest_handoff[0] if latest_handoff else None
 
@@ -115,8 +235,14 @@ def build_readiness_report() -> dict[str, Any]:
 
     docs_missing = [name for name, path in required_docs.items() if not path.exists()]
     recommendations: list[str] = []
+    blockers: list[str] = []
     if docs_missing:
         recommendations.append("В репозитории отсутствуют обязательные docs для перехода в другую учётку.")
+        blockers.append("missing_docs")
+    missing_tools = [name for name, ok in tools.items() if not ok]
+    if missing_tools:
+        recommendations.append(f"Отсутствуют CLI-инструменты: {', '.join(sorted(missing_tools))}.")
+        blockers.append("missing_tools")
     if not openclaw_home.exists():
         recommendations.append("В текущем HOME ещё нет ~/.openclaw; сначала потребуется локальная инициализация runtime и auth.")
     if openclaw_home.exists() and not openclaw_config_path.exists():
@@ -125,6 +251,14 @@ def build_readiness_report() -> dict[str, Any]:
         recommendations.append("Отсутствует models.json текущей учётки; cloud/local routing truth будет неполным до bootstrap/sync.")
     if openclaw_home.exists() and not auth_profiles_path.exists():
         recommendations.append("Отсутствует auth-profiles.json текущей учётки; OAuth/API-key truth ещё не инициализирован.")
+    if not context7_key:
+        recommendations.append("Context7 API ключ не найден; MCP документация будет недоступна.")
+    if not lmstudio_mcp.get("exists"):
+        recommendations.append("LM Studio mcp.json не найден; синхронизируй через Sync LM Studio MCP.command.")
+    if lmstudio_mcp.get("exists") and not lmstudio_mcp.get("context7_present"):
+        recommendations.append("LM Studio mcp.json не содержит context7; проверь Sync LM Studio MCP.command.")
+    if github_cli.get("available") and not github_cli.get("authenticated"):
+        recommendations.append("GitHub CLI не авторизован; запусти Login GitHub Push Auth.command.")
     if not runtime_profile.get("ok"):
         recommendations.append("Endpoint /api/runtime/operator-profile недоступен; если runtime не поднят, это допустимо, но перед работой нужен fresh запуск.")
     if not health_lite.get("ok"):
@@ -141,6 +275,12 @@ def build_readiness_report() -> dict[str, Any]:
             "name": operator_name,
             "home_dir": str(home_dir),
             "python_candidates": _python_candidates(),
+        },
+        "tools": tools,
+        "mcp": {
+            "context7_api_key_present": bool(context7_key),
+            "github_cli": github_cli,
+            "lmstudio_mcp": lmstudio_mcp,
         },
         "project": {
             "root": str(ROOT),
@@ -177,6 +317,7 @@ def build_readiness_report() -> dict[str, Any]:
             "translator_readiness": translator_readiness,
         },
         "ready_for_continue": ready_for_continue,
+        "blocking_items": blockers,
         "recommendations": recommendations
         or [
             "Базовая документация и структура доступны; можно продолжать работу из этой учётки после локальной проверки runtime/auth.",
