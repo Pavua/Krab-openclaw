@@ -1,0 +1,15 @@
+{
+  "captured_at_utc": "2026-03-15T20:28:03+00:00",
+  "account": "USER3",
+  "repo_browser_profile_path": "/Users/Shared/Antigravity_AGENTS/Краб/browser_data",
+  "repo_browser_profile_identity": "Yung Nagato",
+  "repo_browser_profile_roundtrip_report": "/Users/Shared/Antigravity_AGENTS/Краб/artifacts/live_smoke/owner_userbot_roundtrip_20260315_201703.json",
+  "repo_browser_profile_roundtrip_status": "blocked_browser_profile_identity_mismatch",
+  "chrome_default_profile_path": "/Users/USER3/Library/Application Support/Google/Chrome",
+  "chrome_default_telegram_web_state": "login_required_qr",
+  "chrome_default_probe_screenshot": "/Users/Shared/Antigravity_AGENTS/Краб/output/playwright/owner-telegram-profile-default-probe.png",
+  "chrome_default_probe_status": "telegram_web_not_logged_in",
+  "browser_owner_e2e_status": "blocked_missing_owner_telegram_web_session_in_user3",
+  "recommended_fallback": "scripts/live_owner_manual_userbot_roundtrip.py",
+  "notes_ru": "Runtime ACL и owner truth в USER3 уже исправлены, но browser-based owner Telegram Web E2E на этой учётке сейчас блокируется не правами, а отсутствием подходящего owner browser profile: repo browser_data залогинен как Yung Nagato, а стандартный Chrome profile USER3 открывает Telegram Web страницу QR-логина."
+}

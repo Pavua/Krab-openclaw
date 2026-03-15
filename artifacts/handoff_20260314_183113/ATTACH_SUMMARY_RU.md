@@ -181,6 +181,20 @@
 - Live evidence:
   - `artifacts/ops/userbot_runtime_truth_user3_latest.json`
   - `output/playwright/owner-userbot-truth-reasoning-smoke-20260315.png`
+
+## Дополнение: browser owner E2E truth в USER3
+
+- Отдельно подтверждено, что browser-based owner Telegram E2E в `USER3` сейчас блокируется не ACL, а browser profile truth.
+- Что нашли:
+  - repo `browser_data` логинен как `Yung Nagato`, поэтому он не подходит как owner profile;
+  - `USER3` Chrome default profile открывает Telegram Web экран QR-логина и не имеет owner session.
+- Значит live browser-owner roundtrip через `scripts/live_owner_userbot_roundtrip.py` пока не является правдоподобным зелёным smoke на этой учётке.
+- Корректный fallback для `USER3`:
+  - `scripts/live_owner_manual_userbot_roundtrip.py`
+- Truth-артефакты:
+  - `/Users/Shared/Antigravity_AGENTS/Краб/artifacts/live_smoke/owner_userbot_roundtrip_20260315_201703.json`
+  - `/Users/Shared/Antigravity_AGENTS/Краб/artifacts/ops/userbot_owner_browser_profile_user3_latest.json`
+  - `/Users/Shared/Antigravity_AGENTS/Краб/output/playwright/owner-telegram-profile-default-probe.png`
 - Selective test suite:
   - `./venv/bin/python -m pytest tests/unit/test_access_control.py tests/unit/test_userbot_privacy_guards.py tests/unit/test_userbot_voice_flow.py tests/unit/test_capability_registry.py tests/unit/test_capability_registry_web_endpoints.py -q`
   - `45 passed`

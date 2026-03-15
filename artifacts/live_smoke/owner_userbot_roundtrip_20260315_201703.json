@@ -1,0 +1,30 @@
+{
+  "generated_at_utc": "2026-03-15T20:17:03+00:00",
+  "ok": false,
+  "prompt": "Краб, проверка связи. owner-e2e-20260315-201703",
+  "base_url": "http://127.0.0.1:8080",
+  "target_chat": "@yung_nagato",
+  "expected_account_marker": "",
+  "reject_account_markers": [
+    "yung nagato",
+    "yung_nagato"
+  ],
+  "probe_tag": "owner-e2e-20260315-201703",
+  "preflight": {
+    "ok": true,
+    "health_error": null,
+    "inbox_error": null,
+    "telegram_userbot_state": "running",
+    "openclaw_auth_state": "configured",
+    "pending_owner_requests": 0,
+    "recent_replied_requests": 4
+  },
+  "browser_profile_source": "/Users/Shared/Antigravity_AGENTS/Краб/browser_data",
+  "browser_profile_copy": "/var/folders/fm/kqy0348s22b3725qbn90m8fm0000gq/T/krab_owner_roundtrip_n4phs_56/browser_data",
+  "menu_text_excerpt": " Yung NagatoAdd AccountSaved MessagesMy StoriesContactsSettingsMore Search Never miss a message! 🔔Enable notifications to stay updated. All Chats7Shmalala: Итак, atata 🩸, вот что я знаю о тебе Твоя карма: 36 ❤️ Твой уровень адекватности: 79.6% 👾 Сообщ...1.9K@CC 🎳21:07🦀 Proactive Watch Digest - Причина: frontmost_app_changed - Gateway: ON - Primary: openai-codex/gpt...Saved Messages20:",
+  "observed_account_name": "Yung Nagato",
+  "account_check_reason": "browser_profile_identity_mismatch",
+  "failure_reason": "browser_profile_identity_mismatch",
+  "workspace_memory_source": "owner-userbot-e2e",
+  "workspace_memory_written": true
+}

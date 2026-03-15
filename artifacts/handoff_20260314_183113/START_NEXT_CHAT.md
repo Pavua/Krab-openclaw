@@ -242,6 +242,23 @@
   - очищается через `!reasoning clear`
 - Runtime banner после restart теперь показывает truthful owner label:
   - `Owner: 312322764, p0lrd`
+
+## Обновление 2026-03-15 20:28: USER3 owner Telegram Web browser truth
+
+- ACL/runtime truth в `USER3` уже исправлены, но browser-based owner Telegram E2E на этой учётке пока блокируется не правами, а отсутствием корректного owner browser profile.
+- Живой browser smoke показал:
+  - repo profile `/Users/Shared/Antigravity_AGENTS/Краб/browser_data` логинен как `Yung Nagato`, то есть это не owner profile;
+  - отчёт: `/Users/Shared/Antigravity_AGENTS/Краб/artifacts/live_smoke/owner_userbot_roundtrip_20260315_201703.json`
+- Отдельная проверка стандартного Chrome profile `USER3` показала, что Telegram Web там вообще не залогинен:
+  - screenshot: `/Users/Shared/Antigravity_AGENTS/Краб/output/playwright/owner-telegram-profile-default-probe.png`
+  - состояние: `QR login required`
+- Следствие:
+  - жалоба userbot на `недостаточно прав` не подтверждается как текущий ACL blocker;
+  - текущий blocker browser-owner E2E в `USER3` — это именно отсутствие owner Telegram Web session.
+- Правильный fallback для этой учётки:
+  - `scripts/live_owner_manual_userbot_roundtrip.py`
+- Truth-артефакт:
+  - `/Users/Shared/Antigravity_AGENTS/Краб/artifacts/ops/userbot_owner_browser_profile_user3_latest.json`
 - Runtime owner-context в `USER3` дополнительно зафиксирован в:
   - `/Users/USER3/.openclaw/workspace-main-messaging/USER.md`
   - `/Users/USER3/.openclaw/workspace-main-messaging/memory/2026-03-15.md`
