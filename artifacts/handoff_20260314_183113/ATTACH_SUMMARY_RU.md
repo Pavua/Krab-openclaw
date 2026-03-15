@@ -117,3 +117,22 @@
   - backend tests = `14 passed`;
   - simulator build = `BUILD SUCCEEDED`;
   - on-device live trial = успешен.
+
+
+## Дополнение: fallback acceptance на iPhone 14 Pro Max
+
+- Из-за Apple/Xcode `CoreDevice tunnel` проблемы на `iPhone 15 Pro Max` acceptance был безопасно перенесён на `iPhone 14 Pro Max`.
+- На `iPhone 14 Pro Max` подтверждены:
+  - live session creation;
+  - `event = stt.partial`;
+  - отображение русского текста в `Оригинал` прямо на экране устройства.
+- Последняя подтверждённая session:
+  - `vs_a19cf4481acd`
+- `Health-check` на старой on-device сборке работал HTTP-уровнем, но почти не давал видимого UI feedback.
+- Для этого уже сделан follow-up фикс:
+  - новый `gatewayHealthText` в статусной карточке;
+  - resume через `session snapshot` после `Health-check`/`Ре-регистрации`.
+- Фикс сохранён в `Krab Voice Gateway`:
+  - ветка `codex/iphone-companion-ui-fastfollow`
+  - commit `4fe1c87`
+- Simulator build нового фикса зелёный: `BUILD SUCCEEDED`.

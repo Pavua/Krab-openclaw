@@ -165,3 +165,24 @@
 - Актуальный ops-артефакт:
   - `artifacts/ops/iphone_companion_on_device_status_user3_latest.json`
 
+
+
+## Обновление 2026-03-15 05:24: fallback acceptance на iPhone 14 Pro Max
+
+- `iPhone 15 Pro Max` остаётся нестабильным как dev-target: Xcode/CoreDevice периодически падает на tunnel reconnect.
+- Чтобы не блокировать проект, acceptance успешно перенесён на `iPhone 14 Pro Max` (`00008120-001C58983C00C01E`).
+- На `14 Pro Max` подтверждён рабочий live сценарий:
+  - устройство регистрируется;
+  - session создаётся;
+  - `event = stt.partial`;
+  - русский текст виден прямо в UI.
+- Последняя подтверждённая session на `14 Pro Max`:
+  - `vs_a19cf4481acd`
+- Текущий follow-up фикс в iOS-клиенте:
+  - resume через `session snapshot`;
+  - отдельный visible status для `Health-check` (`gatewayHealthText`).
+- Фикс уже в `Krab Voice Gateway`:
+  - ветка `codex/iphone-companion-ui-fastfollow`
+  - commit `4fe1c87`
+- Simulator build для этого фикса: `BUILD SUCCEEDED`.
+- On-device install именно этой свежей сборки на `14 Pro Max` через `devicectl` упёрся в Apple service `com.apple.remote.installcoordination_proxy`, но рабочая сборка на устройстве уже показывает русский live transcript.
