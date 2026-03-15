@@ -35,6 +35,55 @@ class AccessLevel(str, Enum):
     GUEST = "guest"
 
 
+USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
+    {
+        "status",
+        "model",
+        "clear",
+        "config",
+        "set",
+        "role",
+        "voice",
+        "translator",
+        "web",
+        "sysinfo",
+        "panel",
+        "restart",
+        "search",
+        "mac",
+        "watch",
+        "memory",
+        "inbox",
+        "remember",
+        "recall",
+        "ls",
+        "read",
+        "write",
+        "agent",
+        "diagnose",
+        "help",
+        "remind",
+        "reminders",
+        "rm_remind",
+        "cronstatus",
+        "acl",
+        "access",
+        "reasoning",
+    }
+)
+
+
+OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
+    {
+        "set",
+        "restart",
+        "acl",
+        "access",
+        "reasoning",
+    }
+)
+
+
 PARTIAL_ACCESS_COMMANDS: frozenset[str] = frozenset(
     {
         "help",
@@ -113,11 +162,76 @@ class AccessProfile:
         command = normalize_subject(command_name)
         if not command or command not in known_commands:
             return False
-        if self.level in {AccessLevel.OWNER, AccessLevel.FULL}:
+        if self.level == AccessLevel.OWNER:
             return True
+        if self.level == AccessLevel.FULL:
+            return command not in OWNER_ONLY_COMMANDS
         if self.level == AccessLevel.PARTIAL:
             return command in PARTIAL_ACCESS_COMMANDS
         return False
+
+
+def build_command_access_matrix(known_commands: set[str] | frozenset[str] | None = None) -> dict[str, Any]:
+    """
+    Возвращает единый truth-срез командного доступа по ролям.
+
+    Нужен, чтобы userbot, owner UI и policy matrix не расходились в вопросе:
+    какие команды доступны `owner/full/partial/guest`, а какие оставлены только владельцу.
+    """
+
+    commands = {
+        normalize_subject(item)
+        for item in (known_commands or USERBOT_KNOWN_COMMANDS)
+        if normalize_subject(item)
+    }
+    owner_commands = sorted(commands)
+    full_commands = sorted(command for command in commands if command not in OWNER_ONLY_COMMANDS)
+    partial_commands = sorted(command for command in commands if command in PARTIAL_ACCESS_COMMANDS)
+    return {
+        "role_order": [
+            AccessLevel.OWNER.value,
+            AccessLevel.FULL.value,
+            AccessLevel.PARTIAL.value,
+            AccessLevel.GUEST.value,
+        ],
+        "owner_only_commands": sorted(OWNER_ONLY_COMMANDS),
+        "roles": {
+            AccessLevel.OWNER.value: {
+                "commands": owner_commands,
+                "command_count": len(owner_commands),
+                "notes": [
+                    "Owner-контур включает admin/runtime команды и write-операции.",
+                ],
+            },
+            AccessLevel.FULL.value: {
+                "commands": full_commands,
+                "command_count": len(full_commands),
+                "notes": [
+                    "Full не получает owner-only admin-команды `!set`, `!restart`, `!acl`, `!access`.",
+                ],
+            },
+            AccessLevel.PARTIAL.value: {
+                "commands": partial_commands,
+                "command_count": len(partial_commands),
+                "notes": [
+                    "Partial ограничен безопасными командами без runtime/admin мутаций.",
+                ],
+            },
+            AccessLevel.GUEST.value: {
+                "commands": [],
+                "command_count": 0,
+                "notes": [
+                    "Guest работает как обычный чат без служебных Telegram-команд.",
+                ],
+            },
+        },
+        "summary": {
+            "known_commands": len(commands),
+            "owner_only_count": len(OWNER_ONLY_COMMANDS),
+            "full_without_owner_only_count": len(full_commands),
+            "partial_count": len(partial_commands),
+        },
+    }
 
 
 def _load_acl_file(path: Path) -> dict[str, Any]:
@@ -166,6 +280,52 @@ def load_acl_runtime_state(path: Path | None = None) -> dict[str, list[str]]:
         ids, usernames = _extract_acl_subjects(raw_payload.get(level))
         state[level] = sorted(ids | usernames)
     return state
+
+
+def get_effective_owner_subjects(path: Path | None = None) -> list[str]:
+    """
+    Возвращает truthful owner subjects для runtime/UI.
+
+    Почему нужен отдельный helper:
+    - `OWNER_USERNAME` в config может быть историческим fallback и не отражать
+      текущего владельца в multi-account среде;
+    - runtime ACL-файл для userbot является более свежим источником истины;
+    - owner UI и Telegram-команда `!acl status` должны показывать именно тот
+      owner-контур, который реально даёт права сейчас.
+    """
+
+    state = load_acl_runtime_state(path)
+    runtime_owner_items = sorted(
+        {
+            normalize_subject(item)
+            for item in state.get(AccessLevel.OWNER.value, [])
+            if normalize_subject(item)
+        }
+    )
+    if runtime_owner_items:
+        return runtime_owner_items
+
+    fallback_items: set[str] = {
+        normalize_subject(item)
+        for item in list(getattr(config, "OWNER_USER_IDS", []))
+        if normalize_subject(item)
+    }
+    owner_username = normalize_subject(getattr(config, "OWNER_USERNAME", ""))
+    if owner_username:
+        fallback_items.add(owner_username)
+    return sorted(fallback_items)
+
+
+def get_effective_owner_label(path: Path | None = None) -> str:
+    """
+    Возвращает человекочитаемую строку owner-контекста.
+
+    Нужна для UI/команд, которым исторически удобнее работать со строкой, а не
+    со списком субъектов.
+    """
+
+    subjects = get_effective_owner_subjects(path)
+    return ", ".join(subjects) if subjects else "-"
 
 
 def save_acl_runtime_state(state: dict[str, list[str]], path: Path | None = None) -> Path:
@@ -260,12 +420,12 @@ def resolve_access_profile(*, user_id: object, username: object, self_user_id: o
     if normalized_self_id and normalized_user_id and normalized_self_id == normalized_user_id:
         return AccessProfile(level=AccessLevel.OWNER, source="self", matched_subject=normalized_user_id)
 
-    if owner_username and normalized_username and owner_username == normalized_username:
-        return AccessProfile(level=AccessLevel.OWNER, source="config.owner_username", matched_subject=normalized_username)
-
     owner_match = _matches(owner_env_ids | owner_file_ids, owner_env_names | owner_file_names)
     if owner_match:
         return AccessProfile(level=AccessLevel.OWNER, source="owner_acl", matched_subject=owner_match)
+
+    if owner_username and normalized_username and owner_username == normalized_username:
+        return AccessProfile(level=AccessLevel.OWNER, source="config.owner_username", matched_subject=normalized_username)
 
     full_match = _matches(full_env_ids | full_file_ids, full_env_names | full_file_names)
     if full_match:

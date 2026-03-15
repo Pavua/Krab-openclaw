@@ -48,6 +48,9 @@ def test_build_policy_matrix_exposes_role_capabilities_and_guardrails() -> None:
     assert matrix["ok"] is True
     assert matrix["roles"]["owner"]["capabilities"]["browser_control"] is True
     assert matrix["roles"]["partial"]["capabilities"]["browser_control"] is False
+    assert matrix["roles"]["full"]["capabilities"]["acl_admin"] is False
+    assert "acl" not in matrix["roles"]["full"]["commands"]["commands"]
+    assert "acl" in matrix["guardrails"]["owner_only_commands"]
     assert matrix["guardrails"]["web_write_requires_key"] is True
     assert matrix["guardrails"]["current_route_model"] == "google/gemini-3.1-pro-preview"
     assert matrix["summary"]["partial_subjects"] == 2
@@ -136,11 +139,25 @@ def test_build_channel_capability_snapshot_marks_reserve_safe_and_parity_gaps() 
         policy_matrix={
             "role_order": ["owner", "full", "partial", "guest"],
         },
+        workspace_state={
+            "workspace_dir": "/Users/pablito/.openclaw/workspace-main-messaging",
+            "shared_workspace_attached": True,
+            "shared_memory_ready": True,
+            "recent_memory_entries_count": 4,
+        },
     )
 
     assert snapshot["ok"] is True
     assert snapshot["summary"]["reserve_safe"] is True
+    assert snapshot["summary"]["shared_workspace_attached"] is True
+    assert snapshot["summary"]["shared_workspace_dir"].endswith("workspace-main-messaging")
+    assert snapshot["summary"]["shared_memory_recent_entries"] == 4
     assert snapshot["summary"]["primary_transport"] == "telegram_userbot"
+    assert snapshot["shared_workspace"]["shared_memory_ready"] is True
     assert snapshot["channels"][0]["identity"]["operator_id"] == "USER2"
+    assert snapshot["channels"][0]["semantics"]["streaming"] == "buffered_edit_loop"
+    assert snapshot["channels"][0]["semantics"]["reasoning_visibility"] == "owner_optional_separate_trace"
+    assert snapshot["channels"][0]["capabilities"]["shared_workspace_attached"] is True
     assert snapshot["channels"][1]["policy"]["dm_policy"] == "allowlist"
+    assert snapshot["channels"][1]["capabilities"]["shared_workspace_path"].endswith("workspace-main-messaging")
     assert any("parity semantics" in item.lower() for item in snapshot["parity_gaps"])

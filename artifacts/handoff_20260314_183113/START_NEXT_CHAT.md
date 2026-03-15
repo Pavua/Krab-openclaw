@@ -11,7 +11,7 @@
 - Порты живы: `:8080` (owner panel), `:18789` (OpenClaw), `:8090` (Voice Gateway).
 - Voice Gateway поднят через fallback (нет прав на `.gateway.pid` и `gateway.log` в shared repo).
 - Krab Ear поднят через fallback runtime binary, watchdog активен.
-- Owner: `@yung_nagato`.
+- Owner: `312322764, p0lrd` (truth теперь берётся из runtime ACL, а не из legacy fallback).
 - Translator readiness: `READY`, Voice replies: `ON`.
 - iPhone companion зарегистрирован: `device_id = iphone-dev-1`.
 - Legacy `agents.defaults.thinkingDefault=auto` в `USER3` починен до `adaptive`, поэтому `:18789` снова healthy после controlled restart.
@@ -19,6 +19,8 @@
 - Подтверждён рабочий session/audio loop: `vs_f35900861c74`, `stt.partial`, `translation.partial`, `call.closed`.
 - Delivery matrix = `TRIAL READY`, а on-device live proof уже снят и зафиксирован.
 - Push token по-прежнему отсутствует и это ожидаемо для free signing / первого trial.
+- Primary Telegram userbot truthfully помечен как `buffered_edit_loop`, а не как полноценный provider chunk-stream.
+- Hidden reasoning trace больше не должен протекать в основной ответ: он вынесен в отдельный owner-only debug-контур.
 
 ## Что исправлено в коде
 
@@ -46,6 +48,10 @@
   - `artifacts/ops/translator_mobile_trial_ready_user3_latest.json`
 - Артефакт runtime alias-fix (USER3):
   - `artifacts/ops/openclaw_runtime_thinking_alias_fix_user3_latest.json`
+- Артефакт truthful owner/runtime snapshot (USER3):
+  - `artifacts/ops/userbot_runtime_truth_user3_latest.json`
+- Скрин owner panel (ACL / reasoning / streaming truth):
+  - `output/playwright/owner-userbot-truth-reasoning-smoke-20260315.png`
 
 ## Следующий фокус
 
@@ -197,3 +203,48 @@
   - `Привет, проверка связи, завтра отправить договор` -> `Hola, prueba de conexión, mañana enviar contrato`
 - iPhone-клиент для этого шага переустанавливать не нужно: uplift серверный.
 - Оставшийся follow-up: доставить на устройство свежую сборку с явным `gatewayHealthText`, когда Apple install service снова позволит on-device reinstall.
+
+
+## Обновление 2026-03-15 19:12: owner truth / hidden reasoning / truthful streaming
+
+- Runtime owner truth в `USER3` больше не зависит от legacy `config.OWNER_USERNAME`.
+  Теперь owner берётся из runtime ACL:
+  - `312322764`
+  - `p0lrd`
+- Owner panel `Userbot ACL` live-smoke подтверждён:
+  - в UI видно `Owner: 312322764, p0lrd`
+  - `Refresh ACL` больше не возвращает `—` для owner после controlled restart
+- API truth подтверждён:
+  - `GET /api/userbot/acl/status`
+  - `GET /api/capabilities/registry`
+  - `GET /api/channels/capabilities`
+- Primary Telegram userbot теперь честно декларирует streaming semantics как:
+  - `buffered_edit_loop`
+  - а не ложный `confirmed`
+- Hidden reasoning trace вынесен из основного ответа:
+  - reasoning извлекается из `<think>` или plain-text `Thinking Process`
+  - сохраняется отдельно как owner-only trace
+  - читается отдельной командой `!reasoning`
+  - очищается через `!reasoning clear`
+- Runtime banner после restart теперь показывает truthful owner label:
+  - `Owner: 312322764, p0lrd`
+- Runtime owner-context в `USER3` дополнительно зафиксирован в:
+  - `/Users/USER3/.openclaw/workspace-main-messaging/USER.md`
+  - `/Users/USER3/.openclaw/workspace-main-messaging/memory/2026-03-15.md`
+
+### Проверки
+
+- Selective unit suite:
+  - `./venv/bin/python -m pytest tests/unit/test_access_control.py tests/unit/test_userbot_privacy_guards.py tests/unit/test_userbot_voice_flow.py tests/unit/test_capability_registry.py tests/unit/test_capability_registry_web_endpoints.py -q`
+  - результат: `45 passed`
+- Live owner panel smoke:
+  - `http://127.0.0.1:8080/`
+  - DOM показывает `Owner: 312322764, p0lrd`
+- Truth snapshot:
+  - `artifacts/ops/userbot_runtime_truth_user3_latest.json`
+
+### Следующий разумный фокус после этого handoff
+
+1. Доставить свежую iOS-сборку settings-fix на рабочий device (`14 Pro Max`) и закрыть on-device `source_lang / target_lang / Health-check`.
+2. Подтвердить живой `ru -> es` partial translation прямо на устройстве.
+3. Затем вернуться к `iPhone 15 Pro Max` как к отдельному Apple/CoreDevice blocker, а не как к blocker всего проекта.

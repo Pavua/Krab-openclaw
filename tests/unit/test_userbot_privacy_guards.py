@@ -55,6 +55,48 @@ def test_strip_transport_markup_removes_think_and_final_envelope() -> None:
     assert cleaned == "Готовый ответ"
 
 
+def test_strip_transport_markup_removes_plaintext_reasoning_prefix() -> None:
+    raw = (
+        "think\n"
+        "Thinking Process:\n\n"
+        "1. Analyze the user's request\n"
+        "2. Draft the response\n"
+        "Короткий итоговый ответ пользователю."
+    )
+    cleaned = KraabUserbot._strip_transport_markup(raw)
+    assert "Thinking Process" not in cleaned
+    assert "Analyze the user's request" not in cleaned
+    assert cleaned == "Короткий итоговый ответ пользователю."
+
+
+def test_extract_reasoning_trace_returns_think_block_separately() -> None:
+    """`<think>` блок должен сохраняться отдельно для owner-only reasoning trace."""
+    raw = "<think>Сначала проверяю маршрут\nПотом сверяю ACL</think><final>Готовый ответ</final>"
+
+    trace = KraabUserbot._extract_reasoning_trace(raw)
+
+    assert "проверяю маршрут" in trace
+    assert "сверяю ACL" in trace
+    assert "Готовый ответ" not in trace
+
+
+def test_extract_reasoning_trace_returns_plaintext_reasoning_prefix() -> None:
+    """Plain-text reasoning тоже должен быть доступен отдельно, но не в основном ответе."""
+    raw = (
+        "think\n"
+        "Thinking Process:\n"
+        "1. Analyze the user's request\n"
+        "2. Draft the response\n"
+        "Финальный ответ пользователю."
+    )
+
+    trace = KraabUserbot._extract_reasoning_trace(raw)
+
+    assert "Analyze the user's request" in trace
+    assert "Draft the response" in trace
+    assert "Финальный ответ пользователю." not in trace
+
+
 def test_build_runtime_chat_scope_isolated_for_non_owner(monkeypatch) -> None:
     bot = _make_bot_stub()
     monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)

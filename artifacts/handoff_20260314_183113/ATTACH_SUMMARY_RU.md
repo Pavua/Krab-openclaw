@@ -21,6 +21,9 @@
 - Добавлен гайд по `Xcode Free Signing`.
 - Добавлен `.command` helper для открытия iOS skeleton.
 - Runtime-controls и owner UI больше не пишут legacy `thinkingDefault=auto`; теперь он нормализуется в `adaptive`, совместимый с OpenClaw 2026.3.11.
+- Runtime owner truth теперь берётся из runtime ACL, а не из legacy `config.OWNER_USERNAME`.
+- Hidden reasoning trace вынесен из основного ответа в отдельный owner-only debug-контур `!reasoning`.
+- Telegram userbot truthfully декларирует streaming как `buffered_edit_loop`, а не как полноценный provider chunk-stream.
 
 Ветка: `codex/companion-runtime-adaptive-fix`  
 Базовая сохранённая ветка: `codex/onboarding-export-fallback` (synced с origin)  
@@ -46,12 +49,15 @@
 - `:8090` Voice Gateway — OK (fallback start)
 - `Krab Ear` — OK (fallback runtime + watchdog)
 - Trial-ready evidence: `artifacts/ops/translator_mobile_trial_ready_user3_latest.json`
+- ACL/runtime truth evidence: `artifacts/ops/userbot_runtime_truth_user3_latest.json`
 
 ## Что дальше
 
 1. Закрепить live milestone в ветках и handoff для возврата в `pablito` без потерь.
 2. Заменить synthetic `mobile перевод (...)` на реальный translation pipeline.
 3. Дополировать iPhone UI под production-качество и затем повторить live trial уже на финальном переводческом тракте.
+4. Доставить свежую settings-сборку на стабильный iPhone (`14 Pro Max`) и закрыть on-device `source_lang / target_lang / Health-check`.
+5. После этого отдельно вернуться к `iPhone 15 Pro Max` как к Apple/CoreDevice blocker.
 
 ## Дополнение: Xcode automation
 
@@ -146,3 +152,27 @@
   - `Привет, проверка связи, завтра отправить договор`
   - `Hola, prueba de conexión, mañana enviar contrato`
 - Клиентский UI уже умеет показывать эти partial-события; для проверки достаточно выставить `target_lang = es` в работающей on-device сборке.
+
+## Дополнение: owner truth / hidden reasoning / truthful streaming
+
+- Owner truth в `USER3` выровнен:
+  - runtime ACL owner = `312322764`, `p0lrd`
+  - owner panel `Userbot ACL` теперь показывает те же субъекты
+  - runtime banner после restart тоже показывает truthful owner label
+- В `USER3` дополнительно восстановлен runtime owner-context:
+  - `/Users/USER3/.openclaw/workspace-main-messaging/USER.md`
+  - `/Users/USER3/.openclaw/workspace-main-messaging/memory/2026-03-15.md`
+- В userbot введён owner-only debug-контур reasoning:
+  - мысли извлекаются из `<think>` или plain-text `Thinking Process`
+  - в основной ответ они больше не должны попадать
+  - отдельный доступ идёт через `!reasoning`
+  - очистка — `!reasoning clear`
+- Semantics registry теперь truthful:
+  - `telegram_userbot.streaming = buffered_edit_loop`
+  - `telegram_userbot.reasoning_visibility = owner_optional_separate_trace`
+- Live evidence:
+  - `artifacts/ops/userbot_runtime_truth_user3_latest.json`
+  - `output/playwright/owner-userbot-truth-reasoning-smoke-20260315.png`
+- Selective test suite:
+  - `./venv/bin/python -m pytest tests/unit/test_access_control.py tests/unit/test_userbot_privacy_guards.py tests/unit/test_userbot_voice_flow.py tests/unit/test_capability_registry.py tests/unit/test_capability_registry_web_endpoints.py -q`
+  - `45 passed`

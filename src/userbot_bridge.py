@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import textwrap
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,7 +27,13 @@ from pyrogram import Client, enums, filters
 from pyrogram.types import Message
 
 from .config import config
-from .core.access_control import AccessLevel, AccessProfile, resolve_access_profile
+from .core.access_control import (
+    AccessLevel,
+    AccessProfile,
+    OWNER_ONLY_COMMANDS,
+    USERBOT_KNOWN_COMMANDS,
+    resolve_access_profile,
+)
 from .core.capability_registry import resolve_access_mode
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
@@ -37,6 +44,18 @@ from .core.openclaw_workspace import load_workspace_prompt_bundle
 from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
+from .core.translator_runtime_profile import (
+    default_translator_runtime_profile,
+    load_translator_runtime_profile,
+    normalize_translator_runtime_profile,
+    save_translator_runtime_profile,
+)
+from .core.translator_session_state import (
+    apply_translator_session_update,
+    default_translator_session_state,
+    load_translator_session_state,
+    save_translator_session_state,
+)
 from .employee_templates import ROLES, get_role_prompt
 from .integrations.macos_automation import macos_automation
 from .handlers import (
@@ -54,6 +73,7 @@ from .handlers import (
     handle_model,
     handle_panel,
     handle_read,
+    handle_reasoning,
     handle_recall,
     handle_remind,
     handle_reminders,
@@ -65,6 +85,7 @@ from .handlers import (
     handle_set,
     handle_status,
     handle_sysinfo,
+    handle_translator,
     handle_voice,
     handle_watch,
     handle_web,
@@ -155,8 +176,16 @@ class KraabUserbot:
         r"(?i)<\|[^|>]+?\|>|</?tool_response>"
     )
     _think_block_pattern = re.compile(r"(?is)<think>.*?</think>")
+    _think_capture_pattern = re.compile(r"(?is)<think>(.*?)</think>")
     _final_block_pattern = re.compile(r"(?is)<final>(.*?)</final>")
     _think_final_tag_pattern = re.compile(r"(?i)</?(?:think|final)>")
+    _plaintext_reasoning_intro_pattern = re.compile(
+        r"(?i)^(?:think|thinking|thinking process|reasoning|analysis)\s*:?\s*$"
+    )
+    _plaintext_reasoning_step_pattern = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+")
+    _plaintext_reasoning_meta_pattern = re.compile(
+        r"(?i)^(?:step\s*\d+|thinking process|analysis|reasoning|analyze(?: the)? user(?:'s)? request|draft the response)\b"
+    )
     _voice_delivery_modes = {"text+voice", "voice-only"}
     _deferred_intent_pattern = re.compile(
         r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
@@ -184,6 +213,7 @@ class KraabUserbot:
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
         self._chat_processing_locks: dict[str, asyncio.Lock] = {}
+        self._hidden_reasoning_traces: dict[str, dict[str, Any]] = {}
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
@@ -327,15 +357,7 @@ class KraabUserbot:
 
         prefixes = config.TRIGGER_PREFIXES + ["/", "!", "."]
 
-        self._known_commands = {
-            "status", "model", "clear", "config", "set", "role",
-            "voice", "web", "sysinfo", "panel", "restart", "search",
-            "mac", "watch", "memory",
-            "inbox",
-            "remember", "recall", "ls", "read", "write", "agent",
-            "diagnose", "help", "remind", "reminders", "rm_remind", "cronstatus",
-            "acl", "access",
-        }
+        self._known_commands = set(USERBOT_KNOWN_COMMANDS)
 
         def _make_command_filter(command_name: str):
             """Создаёт per-command ACL-фильтр без дублирования правил в декораторах."""
@@ -397,6 +419,10 @@ class KraabUserbot:
         @self.client.on_message(filters.command("voice", prefixes=prefixes) & _make_command_filter("voice"), group=-1)
         async def wrap_voice(c, m):
             await run_cmd(handle_voice, m)
+
+        @self.client.on_message(filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"), group=-1)
+        async def wrap_translator(c, m):
+            await run_cmd(handle_translator, m)
 
         @self.client.on_message(filters.command("web", prefixes=prefixes) & _make_command_filter("web"), group=-1)
         async def wrap_web(c, m):
@@ -472,6 +498,13 @@ class KraabUserbot:
         async def wrap_access(c, m):
             # Alias для тех, кто интуитивно ищет именно access-management.
             await run_cmd(handle_acl, m)
+
+        @self.client.on_message(
+            filters.command("reasoning", prefixes=prefixes) & _make_command_filter("reasoning"),
+            group=-1,
+        )
+        async def wrap_reasoning(c, m):
+            await run_cmd(handle_reasoning, m)
 
         @self.client.on_message(
             filters.command("diagnose", prefixes=prefixes) & _make_command_filter("diagnose"), group=-1
@@ -715,6 +748,8 @@ class KraabUserbot:
             "authorized_user": me_username,
             "authorized_user_id": me_id,
             "voice_profile": self.get_voice_runtime_profile(),
+            "translator_profile": self.get_translator_runtime_profile(),
+            "translator_session": self.get_translator_session_state(),
         }
 
     @classmethod
@@ -808,6 +843,104 @@ class KraabUserbot:
             if persist:
                 config.update_setting("VOICE_REPLY_DELIVERY", self.voice_reply_delivery)
         return self.get_voice_runtime_profile()
+
+    @classmethod
+    def _repo_root(cls) -> Path:
+        """
+        Возвращает корень текущего репозитория Краба.
+
+        Нужен единый helper, чтобы userbot, web API и тесты ссылались на один и тот же
+        repo-level persisted translator profile, а не расходились по рабочим каталогам.
+        """
+        del cls
+        return Path(__file__).resolve().parent.parent
+
+    @classmethod
+    def _translator_runtime_profile_path(cls) -> Path:
+        """Возвращает repo-level путь persisted translator runtime profile."""
+        return cls._repo_root() / "data" / "translator" / "runtime_profile.json"
+
+    def get_translator_runtime_profile(self) -> dict[str, Any]:
+        """
+        Возвращает persisted translator runtime profile с короткой runtime truth-добавкой.
+
+        Это не live session-state переводчика звонков. Здесь лежит именно product/runtime
+        профиль owner-уровня, который используется командами, web-панелью и handoff.
+        """
+        profile = load_translator_runtime_profile(self._translator_runtime_profile_path())
+        voice_profile = self.get_voice_runtime_profile()
+        result = dict(profile)
+        result["quick_phrase_count"] = len(profile.get("quick_phrases") or [])
+        result["voice_foundation_ready"] = bool(voice_profile.get("live_voice_foundation"))
+        result["voice_runtime_enabled"] = bool(voice_profile.get("enabled"))
+        return result
+
+    @classmethod
+    def _translator_session_state_path(cls) -> Path:
+        """Возвращает repo-level путь persisted translator session state."""
+        return cls._repo_root() / "data" / "translator" / "session_state.json"
+
+    def get_translator_session_state(self) -> dict[str, Any]:
+        """
+        Возвращает persisted translator session state с короткой runtime truth-добавкой.
+
+        Это product-level control state, а не финальный source-of-truth live звонка.
+        Но именно он нужен owner-командам и UI до подключения полноценного session feed.
+        """
+        state = load_translator_session_state(self._translator_session_state_path())
+        profile = self.get_translator_runtime_profile()
+        result = dict(state)
+        result["language_pair"] = str(profile.get("language_pair") or "")
+        result["target_device"] = str(profile.get("target_device") or "iphone_companion")
+        return result
+
+    def update_translator_runtime_profile(
+        self,
+        *,
+        persist: bool = True,
+        **changes: Any,
+    ) -> dict[str, Any]:
+        """
+        Обновляет persisted translator runtime profile и возвращает нормализованный срез.
+
+        Почему логика здесь:
+        - Telegram-команда `!translator` и owner web UI должны опираться на одну модель данных;
+        - тесты и runtime-status не должны зависеть от разнородной ad-hoc сериализации.
+        """
+        path = self._translator_runtime_profile_path()
+        current = load_translator_runtime_profile(path)
+        normalized = normalize_translator_runtime_profile(changes, base=current)
+        if persist:
+            save_translator_runtime_profile(path, normalized)
+        return self.get_translator_runtime_profile() if persist else normalized
+
+    def update_translator_session_state(
+        self,
+        *,
+        persist: bool = True,
+        **changes: Any,
+    ) -> dict[str, Any]:
+        """
+        Обновляет persisted translator session state и возвращает нормализованный срез.
+
+        Почему логика здесь:
+        - web UI, userbot-команды и handoff должны видеть один session-control слой;
+        - до live feed Voice Gateway нам нужен честный persisted placeholder, а не ad-hoc state в памяти процесса.
+        """
+        path = self._translator_session_state_path()
+        current = load_translator_session_state(path)
+        normalized = apply_translator_session_update(changes, base=current)
+        if persist:
+            save_translator_session_state(path, normalized)
+        return self.get_translator_session_state() if persist else normalized
+
+    def reset_translator_session_state(self, *, persist: bool = True) -> dict[str, Any]:
+        """Сбрасывает translator session state к каноническому idle-срезу."""
+        state = default_translator_session_state()
+        if persist:
+            save_translator_session_state(self._translator_session_state_path(), state)
+            return self.get_translator_session_state()
+        return state
 
     def _should_send_voice_reply(self) -> bool:
         """Определяет, нужно ли вообще генерировать TTS для текущего ответа."""
@@ -1242,10 +1375,211 @@ class KraabUserbot:
         cleaned = cls._think_final_tag_pattern.sub("", cleaned)
         cleaned = cls._tool_response_block_pattern.sub("", cleaned)
         cleaned = cls._llm_transport_tokens_pattern.sub("", cleaned)
+        cleaned = cls._strip_plaintext_reasoning_prefix(cleaned)
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
         cleaned = re.sub(r"(?mi)^\s*(assistant|user|system)\s*$", "", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
+
+    @classmethod
+    def _split_plaintext_reasoning_and_answer(cls, text: str) -> tuple[str, str]:
+        """
+        Разделяет plain-text reasoning и итоговый ответ, если провайдер прислал
+        мысли без `<think>`.
+
+        Почему нужен отдельный guard:
+        - часть маршрутов может вернуть reasoning в свободном тексте вида
+          `think\\nThinking Process: ...`, не используя transport-теги;
+        - основной пользовательский ответ не должен смешиваться с цепочкой мыслей;
+        - reasoning позже можно вернуть owner-only режимом отдельно, но не внутри
+          обычного ответа.
+        """
+        raw = str(text or "")
+        if not raw.strip():
+            return "", ""
+
+        lines = raw.splitlines()
+        non_empty_indexes = [idx for idx, line in enumerate(lines) if line.strip()]
+        if not non_empty_indexes:
+            return "", raw.strip()
+
+        intro_hits = 0
+        for idx in non_empty_indexes[:3]:
+            stripped = lines[idx].strip()
+            if cls._plaintext_reasoning_intro_pattern.match(stripped):
+                intro_hits += 1
+                continue
+            if idx == non_empty_indexes[0] and stripped.lower().startswith("thinking process:"):
+                intro_hits += 1
+                continue
+        if intro_hits == 0:
+            return "", raw.strip()
+
+        def _is_reasoning_line(candidate: str) -> bool:
+            stripped = candidate.strip()
+            if not stripped:
+                return False
+            if cls._plaintext_reasoning_intro_pattern.match(stripped):
+                return True
+            if cls._plaintext_reasoning_step_pattern.match(stripped):
+                return True
+            if cls._plaintext_reasoning_meta_pattern.match(stripped):
+                return True
+            return False
+
+        last_content_idx: int | None = None
+        for idx in range(len(lines) - 1, -1, -1):
+            if lines[idx].strip():
+                last_content_idx = idx
+                break
+        if last_content_idx is None:
+            return "", ""
+
+        answer_end = last_content_idx
+        answer_start: int | None = None
+        for idx in range(last_content_idx, -1, -1):
+            current = lines[idx]
+            if not current.strip():
+                if answer_start is not None:
+                    break
+                continue
+            if _is_reasoning_line(current):
+                if answer_start is not None:
+                    break
+                continue
+            answer_start = idx
+
+        if answer_start is None:
+            return raw.strip(), ""
+
+        reasoning = "\n".join(lines[:answer_start]).strip()
+        extracted = "\n".join(lines[answer_start : answer_end + 1]).strip()
+        if not reasoning:
+            return "", raw.strip()
+        return reasoning, extracted or raw.strip()
+
+    @classmethod
+    def _strip_plaintext_reasoning_prefix(cls, text: str) -> str:
+        """
+        Убирает plain-text reasoning, если провайдер прислал мысли без `<think>`.
+        """
+        _, answer = cls._split_plaintext_reasoning_and_answer(text)
+        return answer
+
+    @classmethod
+    def _extract_reasoning_trace(cls, text: str) -> str:
+        """
+        Возвращает reasoning trace отдельно от основного ответа.
+
+        Почему нужен отдельный helper:
+        - пользователь попросил не смешивать мысли с финальным ответом;
+        - owner/debug-контур иногда всё же хочет посмотреть reasoning отдельно;
+        - часть провайдеров шлёт мысли внутри `<think>`, часть — plain-text префиксом.
+        """
+        raw = str(text or "")
+        if not raw.strip():
+            return ""
+
+        fragments = [str(match.group(1) or "").strip() for match in cls._think_capture_pattern.finditer(raw)]
+        if not fragments and "<think>" in raw.lower():
+            start = raw.lower().rfind("<think>")
+            partial = raw[start + len("<think>") :]
+            end = partial.lower().find("</think>")
+            if end >= 0:
+                partial = partial[:end]
+            if partial.strip():
+                fragments = [partial.strip()]
+
+        if not fragments:
+            reasoning_prefix, _ = cls._split_plaintext_reasoning_and_answer(raw)
+            if reasoning_prefix.strip():
+                fragments = [reasoning_prefix.strip()]
+
+        if not fragments:
+            return ""
+
+        normalized_lines: list[str] = []
+        for fragment in fragments:
+            cleaned = cls._reply_to_tag_pattern.sub("", fragment)
+            cleaned = cls._tool_response_block_pattern.sub("", cleaned)
+            cleaned = cls._llm_transport_tokens_pattern.sub("", cleaned)
+            cleaned = cls._think_final_tag_pattern.sub("", cleaned)
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+            for line in cleaned.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    if normalized_lines and normalized_lines[-1] != "":
+                        normalized_lines.append("")
+                    continue
+                if cls._plaintext_reasoning_intro_pattern.match(stripped):
+                    continue
+                if stripped.lower().startswith("thinking process:"):
+                    stripped = stripped.split(":", 1)[1].strip()
+                    if not stripped:
+                        continue
+                normalized_lines.append(stripped)
+
+        reasoning = "\n".join(normalized_lines).strip()
+        return reasoning
+
+    def _remember_hidden_reasoning_trace(
+        self,
+        *,
+        chat_id: str,
+        query: str,
+        raw_response: str,
+        final_response: str,
+        access_level: AccessLevel | str | None = None,
+    ) -> None:
+        """
+        Сохраняет reasoning trace отдельно от пользовательского ответа.
+
+        Почему in-memory:
+        - trace нужен как owner-only debug-слой "на сейчас", а не как долговременная память;
+        - не хочется писать потенциально чувствительные рассуждения в обычную память Краба;
+        - при перезапуске runtime trace может честно пропасть без риска для source-of-truth.
+        """
+        level = str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "").strip().lower()
+        if level not in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
+            return
+
+        route_meta = {}
+        if hasattr(openclaw_client, "get_last_runtime_route"):
+            try:
+                route_meta = openclaw_client.get_last_runtime_route() or {}
+            except Exception:
+                route_meta = {}
+
+        trace_text = self._extract_reasoning_trace(raw_response)
+        traces = getattr(self, "_hidden_reasoning_traces", None)
+        if traces is None:
+            traces = {}
+            self._hidden_reasoning_traces = traces
+        traces[str(chat_id or "unknown")] = {
+            "available": bool(trace_text),
+            "query": str(query or "").strip(),
+            "reasoning": trace_text,
+            "answer_preview": textwrap.shorten(str(final_response or "").strip(), width=400, placeholder="..."),
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "transport_mode": "buffered_edit_loop",
+            "route_channel": str(route_meta.get("channel") or "").strip(),
+            "route_model": str(route_meta.get("model") or "").strip(),
+        }
+
+    def get_hidden_reasoning_trace_snapshot(self, chat_id: str | int) -> dict[str, Any]:
+        """Возвращает последний скрытый reasoning trace для конкретного чата."""
+        traces = getattr(self, "_hidden_reasoning_traces", None)
+        if not isinstance(traces, dict):
+            return {}
+        trace = traces.get(str(chat_id or "unknown"))
+        return dict(trace) if isinstance(trace, dict) else {}
+
+    def clear_hidden_reasoning_trace_snapshot(self, chat_id: str | int) -> bool:
+        """Очищает последний reasoning trace для конкретного чата."""
+        traces = getattr(self, "_hidden_reasoning_traces", None)
+        if not isinstance(traces, dict):
+            return False
+        return traces.pop(str(chat_id or "unknown"), None) is not None
 
     @classmethod
     def _extract_live_stream_text(cls, text: str, *, allow_reasoning: bool = False) -> str:
@@ -1638,6 +1972,7 @@ class KraabUserbot:
                     "- Выполнять базовые действия в macOS через `!mac` (clipboard, notifications, apps, Finder/open, Notes, Reminders, Calendar).",
                     "- Управлять браузерным/веб-контуром через `!web` и открывать панель через `!panel`.",
                     "- Управлять voice-профилем ответов через `!voice` (вкл/выкл, скорость, голос, delivery).",
+                    "- Управлять product-профилем переводчика через `!translator` (языки, mode, strategy, call-flags, quick phrases).",
                 ]
             )
         elif access_mode == AccessLevel.PARTIAL.value:
@@ -1713,9 +2048,9 @@ class KraabUserbot:
         if access_mode == AccessLevel.PARTIAL.value:
             return (
                 "🧭 **Команды частичного доступа**\n"
-                "- `!status`\n"
                 "- `!help`\n"
-                "- `!search <запрос>`\n\n"
+                "- `!search <запрос>`\n"
+                "- `!status`\n\n"
                 "🔒 **Что недоступно в этом контуре**\n"
                 "- Управление моделями, памятью, файлами, браузером, панелью и runtime-конфигом.\n"
                 "- Owner/full-команды для диагностики, записи файлов и глобальных изменений."
@@ -1733,7 +2068,7 @@ class KraabUserbot:
             )
 
         core_commands = [
-            "`!status`, `!clear`, `!config`, `!set`, `!restart`, `!help`, `!acl ...`",
+            "`!status`, `!clear`, `!config`, `!help`",
         ]
         model_commands = [
             "`!model`, `!model local`, `!model cloud`, `!model auto`, `!model set <model_id>`, `!model load <name>`, `!model unload`, `!model scan`",
@@ -1742,19 +2077,31 @@ class KraabUserbot:
             "`!search <запрос>`, `!remember <текст>`, `!recall <запрос>`, `!watch status|now`, `!memory recent [source]`, `!inbox [list|status|ack|done|cancel]`, `!role`, `!agent ...`",
         ]
         system_commands = [
-            "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice ...`, `!mac ...`",
+            "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice ...`, `!translator ...`, `!mac ...`",
         ]
         if bool(getattr(config, "SCHEDULER_ENABLED", False)):
             tool_commands.append("`!remind <время> | <текст>`, `!reminders`, `!rm_remind <id>`, `!cronstatus`")
 
-        return (
+        body = (
             "🧭 **Команды, которые реально доступны сейчас**\n"
             "\n**Core**\n- " + "\n- ".join(core_commands)
             + "\n\n**AI / Model**\n- " + "\n- ".join(model_commands)
             + "\n\n**Tools**\n- " + "\n- ".join(tool_commands)
             + "\n\n**System / Dev**\n- " + "\n- ".join(system_commands)
-            + "\n\nЕсли хочешь, я могу следующим сообщением показать короткую шпаргалку **по каждой команде с примерами**."
         )
+        if access_mode == AccessLevel.OWNER.value:
+            body += (
+                "\n\n**Owner-only admin**\n"
+                "- `!set <KEY> <VAL>`\n"
+                "- `!restart`\n"
+                "- `!acl ...` / `!access ...`"
+            )
+        elif OWNER_ONLY_COMMANDS:
+            body += (
+                "\n\n🔒 **Что оставлено только владельцу**\n"
+                "- `!set`, `!restart`, `!acl`, `!access`"
+            )
+        return body + "\n\nЕсли хочешь, я могу следующим сообщением показать короткую шпаргалку **по каждой команде с примерами**."
 
     async def _build_runtime_integrations_status(
         self,
@@ -2703,6 +3050,13 @@ class KraabUserbot:
             if not full_response:
                 full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
         full_response = self._apply_deferred_action_guard(full_response)
+        self._remember_hidden_reasoning_trace(
+            chat_id=chat_id,
+            query=query,
+            raw_response=full_response_raw,
+            final_response=full_response,
+            access_level=access_profile.level,
+        )
 
         # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
         # а не доверяем декларативному тексту самой LLM.

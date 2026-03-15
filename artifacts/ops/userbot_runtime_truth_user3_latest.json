@@ -1,0 +1,863 @@
+{
+  "captured_at": "2026-03-15T18:12:26+00:00",
+  "account": "USER3",
+  "paths": {
+    "runtime_acl": "/Users/USER3/.openclaw/krab_userbot_acl.json",
+    "workspace_user": "/Users/USER3/.openclaw/workspace-main-messaging/USER.md",
+    "workspace_memory": "/Users/USER3/.openclaw/workspace-main-messaging/memory/2026-03-15.md"
+  },
+  "checks": {
+    "acl_status": {
+      "ok": true,
+      "acl": {
+        "path": "/Users/USER3/.openclaw/krab_userbot_acl.json",
+        "owner_username": "312322764, p0lrd",
+        "owner_subjects": [
+          "312322764",
+          "p0lrd"
+        ],
+        "state": {
+          "owner": [
+            "312322764",
+            "p0lrd"
+          ],
+          "full": [],
+          "partial": []
+        },
+        "partial_commands": [
+          "help",
+          "search",
+          "status"
+        ]
+      }
+    },
+    "capabilities_registry": {
+      "ok": true,
+      "collected_at": "2026-03-15T18:12:26+00:00",
+      "operator": {
+        "operator_id": "USER3",
+        "account_id": "83e7da07f5b6",
+        "account_mode": "split_runtime_per_account"
+      },
+      "runtime": {
+        "openclaw_auth_state": "configured",
+        "last_runtime_route": {
+          "timestamp": 1773597405,
+          "channel": "openclaw_cloud",
+          "provider": "openai-codex",
+          "model": "openai-codex/gpt-5.4",
+          "active_tier": "free",
+          "force_cloud": true,
+          "status": "ok",
+          "error_code": null,
+          "route_reason": "openclaw_response_ok",
+          "route_detail": "Ответ получен через OpenClaw API"
+        },
+        "telegram_userbot_state": "running",
+        "scheduler_enabled": true
+      },
+      "policy_matrix": {
+        "ok": true,
+        "collected_at": "2026-03-15T18:12:26+00:00",
+        "operator_id": "USER3",
+        "account_id": "83e7da07f5b6",
+        "role_order": [
+          "owner",
+          "full",
+          "partial",
+          "guest"
+        ],
+        "roles": {
+          "owner": {
+            "label": "OWNER",
+            "trusted": true,
+            "subjects": [
+              "312322764",
+              "p0lrd"
+            ],
+            "capabilities": {
+              "chat": true,
+              "runtime_truth": true,
+              "web_search": true,
+              "memory": true,
+              "inbox": true,
+              "approvals": true,
+              "file_ops": true,
+              "browser_control": true,
+              "macos_control": true,
+              "voice_runtime": true,
+              "model_routing": true,
+              "acl_admin": true,
+              "runtime_mutation": true
+            },
+            "commands": {
+              "commands": [
+                "access",
+                "acl",
+                "agent",
+                "clear",
+                "config",
+                "cronstatus",
+                "diagnose",
+                "help",
+                "inbox",
+                "ls",
+                "mac",
+                "memory",
+                "model",
+                "panel",
+                "read",
+                "reasoning",
+                "recall",
+                "remember",
+                "remind",
+                "reminders",
+                "restart",
+                "rm_remind",
+                "role",
+                "search",
+                "set",
+                "status",
+                "sysinfo",
+                "translator",
+                "voice",
+                "watch",
+                "web",
+                "write"
+              ],
+              "command_count": 32,
+              "notes": [
+                "Owner-контур включает admin/runtime команды и write-операции."
+              ]
+            },
+            "notes": [
+              "Владелец видит и управляет полным runtime/tool-контуром.",
+              "Owner-политика нужна для approval, ACL и рискованных write-операций."
+            ]
+          },
+          "full": {
+            "label": "FULL",
+            "trusted": true,
+            "subjects": [],
+            "capabilities": {
+              "chat": true,
+              "runtime_truth": true,
+              "web_search": true,
+              "memory": true,
+              "inbox": true,
+              "approvals": true,
+              "file_ops": true,
+              "browser_control": true,
+              "macos_control": true,
+              "voice_runtime": true,
+              "model_routing": true,
+              "acl_admin": false,
+              "runtime_mutation": true
+            },
+            "commands": {
+              "commands": [
+                "agent",
+                "clear",
+                "config",
+                "cronstatus",
+                "diagnose",
+                "help",
+                "inbox",
+                "ls",
+                "mac",
+                "memory",
+                "model",
+                "panel",
+                "read",
+                "recall",
+                "remember",
+                "remind",
+                "reminders",
+                "rm_remind",
+                "role",
+                "search",
+                "status",
+                "sysinfo",
+                "translator",
+                "voice",
+                "watch",
+                "web",
+                "write"
+              ],
+              "command_count": 27,
+              "notes": [
+                "Full не получает owner-only admin-команды `!set`, `!restart`, `!acl`, `!access`."
+              ]
+            },
+            "notes": [
+              "Full-контур сейчас следует production truth userbot и раскрывает почти весь tool/runtime слой.",
+              "Этот уровень остаётся доверенным и должен назначаться осознанно."
+            ]
+          },
+          "partial": {
+            "label": "PARTIAL",
+            "trusted": false,
+            "subjects": [],
+            "capabilities": {
+              "chat": true,
+              "runtime_truth": true,
+              "web_search": true,
+              "memory": false,
+              "inbox": false,
+              "approvals": false,
+              "file_ops": false,
+              "browser_control": false,
+              "macos_control": false,
+              "voice_runtime": false,
+              "model_routing": false,
+              "acl_admin": false,
+              "runtime_mutation": false
+            },
+            "commands": {
+              "commands": [
+                "help",
+                "search",
+                "status"
+              ],
+              "command_count": 3,
+              "notes": [
+                "Partial ограничен безопасными командами без runtime/admin мутаций."
+              ]
+            },
+            "notes": [
+              "Частичный доступ ограничен safe-командами и truthful self-check.",
+              "Файлы, браузер, панель, approval и admin-контур здесь закрыты."
+            ]
+          },
+          "guest": {
+            "label": "GUEST",
+            "trusted": false,
+            "subjects": [],
+            "capabilities": {
+              "chat": true,
+              "runtime_truth": false,
+              "web_search": false,
+              "memory": false,
+              "inbox": false,
+              "approvals": false,
+              "file_ops": false,
+              "browser_control": false,
+              "macos_control": false,
+              "voice_runtime": false,
+              "model_routing": false,
+              "acl_admin": false,
+              "runtime_mutation": false
+            },
+            "commands": {
+              "commands": [],
+              "command_count": 0,
+              "notes": [
+                "Guest работает как обычный чат без служебных Telegram-команд."
+              ]
+            },
+            "notes": [
+              "Гостевой контур получает только обычный текстовый assistant-режим.",
+              "Внутренние owner/full инструменты и policy-write действия скрыты."
+            ]
+          }
+        },
+        "guardrails": {
+          "partial_commands": [
+            "help",
+            "search",
+            "status"
+          ],
+          "owner_only_commands": [
+            "access",
+            "acl",
+            "reasoning",
+            "restart",
+            "set"
+          ],
+          "web_write_requires_key": false,
+          "split_runtime_per_account": true,
+          "telegram_userbot_state": "running",
+          "openclaw_auth_state": "configured",
+          "current_route_model": "openai-codex/gpt-5.4",
+          "current_route_channel": "openclaw_cloud"
+        },
+        "summary": {
+          "owner_subjects": 2,
+          "full_subjects": 0,
+          "partial_subjects": 0,
+          "guest_policy": "implicit_default",
+          "owner_only_command_count": 5
+        }
+      },
+      "contours": {
+        "assistant": {
+          "status": "ok",
+          "mode": "web_native",
+          "endpoint": "/api/assistant/query",
+          "task_types": [
+            "chat",
+            "coding",
+            "reasoning",
+            "creative",
+            "moderation",
+            "security",
+            "infra",
+            "review"
+          ],
+          "policy_matrix_endpoint": "/api/policy/matrix"
+        },
+        "telegram_userbot": {
+          "status": "running",
+          "primary_transport": true,
+          "access_roles": [
+            "owner",
+            "full",
+            "partial",
+            "guest"
+          ],
+          "startup_error_code": ""
+        },
+        "ecosystem": {
+          "status": "degraded",
+          "services": {
+            "krab": {
+              "ok": true,
+              "status": "ok",
+              "source": "web_app",
+              "detail": {
+                "mode": "control_plane",
+                "assistant_endpoint": "/api/assistant/query",
+                "assistant_capabilities_endpoint": "/api/assistant/capabilities",
+                "ecosystem_health_endpoint": "/api/ecosystem/health",
+                "ecosystem_capabilities_endpoint": "/api/ecosystem/capabilities",
+                "capability_registry_endpoint": "/api/capabilities/registry",
+                "policy_matrix_endpoint": "/api/policy/matrix"
+              }
+            },
+            "voice_gateway": {
+              "ok": false,
+              "status": "http_404",
+              "latency_ms": 11,
+              "source": "http://127.0.0.1:8090/v1/capabilities",
+              "detail": {
+                "detail": "Not Found"
+              }
+            },
+            "krab_ear": {
+              "ok": true,
+              "status": "ok",
+              "latency_ms": 7,
+              "source": "ipc:/Users/USER3/Library/Application Support/KrabEar/krabear.sock#get_capabilities",
+              "detail": {
+                "stt": {
+                  "offline": true,
+                  "realtime_preview": true,
+                  "silence_guard_enabled": true,
+                  "silence_guard_rms_threshold": 0.002,
+                  "silence_guard_peak_threshold": 0.012,
+                  "silence_guard_active_ratio_threshold": 0.015,
+                  "background_guard_enabled": true,
+                  "background_guard_min_peak": 0.025,
+                  "background_guard_min_rms": 0.004,
+                  "background_guard_uniform_frame_threshold": 0.006,
+                  "background_guard_max_uniform_active_ratio": 0.92
+                },
+                "translation": {
+                  "modes": [
+                    "off",
+                    "ru_to_es",
+                    "es_to_ru",
+                    "en_to_ru",
+                    "auto",
+                    "auto_to_ru",
+                    "bilingual_ru_es"
+                  ],
+                  "styles": [
+                    "neutral",
+                    "chat",
+                    "formal"
+                  ],
+                  "offline_default": true,
+                  "network_mode": "offline_default"
+                },
+                "summarization": {
+                  "available": true,
+                  "modes": [
+                    "summary_short",
+                    "summary_detailed"
+                  ]
+                },
+                "hotkey": {
+                  "profiles": [
+                    "default",
+                    "meeting",
+                    "translation"
+                  ],
+                  "current_profile": "default",
+                  "trigger": "right_option_toggle"
+                },
+                "clipboard": {
+                  "modes": [
+                    "always_copy",
+                    "copy_on_fail",
+                    "never_copy"
+                  ],
+                  "current_mode": "copy_on_fail"
+                },
+                "audio_ducking": {
+                  "enabled": true,
+                  "percent": 50,
+                  "stop_tail_trim_ms": 180
+                },
+                "overlay": {
+                  "opacity_percent": 45
+                },
+                "diarization": {
+                  "import_audio_beta": false,
+                  "realtime": false
+                },
+                "batch_import": {
+                  "drag_drop_queue": true,
+                  "preview_paths": true,
+                  "cancel_after_current": true
+                },
+                "system_audio": {
+                  "capture_translation": true,
+                  "modes": [
+                    "mic",
+                    "system_audio",
+                    "mic_plus_system"
+                  ],
+                  "current_mode": "mic",
+                  "status": "beta"
+                },
+                "call_assist": {
+                  "available": true,
+                  "default_notify": true,
+                  "default_auto_summary": true,
+                  "voice_gateway_url": "http://127.0.0.1:8090",
+                  "notify_modes": [
+                    "auto_on",
+                    "auto_off"
+                  ],
+                  "tts_modes": [
+                    "local",
+                    "cloud",
+                    "hybrid"
+                  ],
+                  "tools": [
+                    "diagnostics",
+                    "summary",
+                    "quick_phrase",
+                    "quick_phrase_library",
+                    "cost_estimate",
+                    "timeline",
+                    "timeline_stats",
+                    "timeline_summary",
+                    "timeline_export",
+                    "timeline_clear",
+                    "timeline_to_history"
+                  ]
+                },
+                "ops": {
+                  "update_channel": "stable",
+                  "channels": [
+                    "stable",
+                    "beta"
+                  ]
+                },
+                "history": {
+                  "text_density": "normal",
+                  "density_modes": [
+                    "normal",
+                    "compact"
+                  ],
+                  "overview": true
+                }
+              }
+            }
+          }
+        },
+        "translator": {
+          "status": "ready",
+          "canonical_backend": "krab_voice_gateway",
+          "foundation_ready": true,
+          "live_voice_ready": true
+        },
+        "system": {
+          "status": "ok",
+          "browser_readiness": "unknown",
+          "scheduler_enabled": true,
+          "voice_delivery": "text+voice",
+          "voice_enabled": true
+        },
+        "channels": {
+          "status": "attention",
+          "summary": {
+            "primary_transport": "telegram_userbot",
+            "reserve_transport": "telegram_reserve_bot",
+            "reserve_safe": false,
+            "shared_workspace_attached": true,
+            "shared_memory_ready": true,
+            "shared_workspace_dir": "/Users/USER3/.openclaw/workspace-main-messaging",
+            "shared_memory_recent_entries": 3,
+            "configured_runtime_channels": 0,
+            "total_channels": 2,
+            "ready_channels": 1
+          },
+          "parity_gaps": [
+            "Reserve Telegram Bot ещё не подтверждён в reserve-safe parity режиме.",
+            "Reserve Telegram Bot пока не подтверждает streaming и полноценный runtime self-check.",
+            "Primary Telegram userbot пока даёт buffered edit-loop, а не полноценный provider chunk-stream.",
+            "Attachment normalization и approval semantics пока richest только в Python userbot."
+          ],
+          "channels": [
+            {
+              "id": "telegram_userbot",
+              "label": "Python Telegram userbot",
+              "kind": "telegram_userbot",
+              "transport_role": "primary",
+              "status": "running",
+              "identity": {
+                "operator_id": "USER3",
+                "account_id": "83e7da07f5b6",
+                "channel_id": "telegram_userbot",
+                "team_id": "owner",
+                "trace_id": "",
+                "approval_scope": "owner"
+              },
+              "semantics": {
+                "streaming": "buffered_edit_loop",
+                "attachments": [
+                  "text",
+                  "photo",
+                  "audio",
+                  "voice"
+                ],
+                "approvals": "owner_inbox_linked",
+                "action_reporting": "confirmed",
+                "runtime_self_check": "confirmed",
+                "reasoning_visibility": "owner_optional_separate_trace"
+              },
+              "capabilities": {
+                "inbound_owner_requests": true,
+                "reply_trace": true,
+                "shared_memory": true,
+                "shared_workspace_attached": true,
+                "shared_workspace_path": "/Users/USER3/.openclaw/workspace-main-messaging",
+                "owner_tools_confirmed": true,
+                "access_roles": [
+                  "owner",
+                  "full",
+                  "partial",
+                  "guest"
+                ]
+              },
+              "notes": [
+                "Это richest contour и основной owner transport текущего runtime.",
+                "Здесь уже подтверждены inbox capture, reply trace и truthful self-check.",
+                "Telegram edit-loop показывает промежуточный draft, но это ещё не нативный provider chunk-stream."
+              ]
+            },
+            {
+              "id": "telegram_reserve_bot",
+              "label": "Reserve Telegram Bot",
+              "kind": "telegram_reserve_bot",
+              "transport_role": "reserve_safe",
+              "status": "attention",
+              "identity": {
+                "operator_id": "USER3",
+                "account_id": "83e7da07f5b6",
+                "channel_id": "telegram_reserve_bot",
+                "team_id": "reserve",
+                "trace_id": "",
+                "approval_scope": "owner"
+              },
+              "semantics": {
+                "streaming": "not_confirmed",
+                "attachments": [
+                  "text"
+                ],
+                "approvals": "not_confirmed",
+                "action_reporting": "text_only",
+                "runtime_self_check": "not_confirmed"
+              },
+              "capabilities": {
+                "inbound_owner_requests": false,
+                "reply_trace": false,
+                "shared_memory": true,
+                "shared_workspace_attached": true,
+                "shared_workspace_path": "/Users/USER3/.openclaw/workspace-main-messaging",
+                "owner_tools_confirmed": false,
+                "reserve_safe": false
+              },
+              "policy": {
+                "enabled": true,
+                "dm_policy": "pairing",
+                "group_policy": "open",
+                "allow_from_count": 0,
+                "group_allow_from_count": 0
+              },
+              "notes": [
+                "Это safe contour для деградации и emergency delivery, а не owner-rich primary transport.",
+                "Memory общая, но owner-инструменты и полный runtime self-check здесь не подтверждаются."
+              ]
+            }
+          ]
+        }
+      },
+      "summary": {
+        "total_contours": 6,
+        "ready_contours": 4,
+        "degraded_contours": 2,
+        "primary_transport": "telegram_userbot",
+        "reserve_transport": "telegram_reserve_bot",
+        "translator_backend": "krab_voice_gateway"
+      },
+      "notes": [
+        "Registry намеренно собирается поверх уже существующих truthful endpoint'ов, а не заменяет их магией.",
+        "Policy matrix фиксирует не только health, но и реальные границы owner/full/partial/guest контуров.",
+        "Этот snapshot рассчитан на owner UI, handoff bundle и будущий capability-aware routing."
+      ]
+    },
+    "channel_capabilities": {
+      "ok": true,
+      "channel_capabilities": {
+        "ok": true,
+        "collected_at": "2026-03-15T18:12:26+00:00",
+        "channels": [
+          {
+            "id": "telegram_userbot",
+            "label": "Python Telegram userbot",
+            "kind": "telegram_userbot",
+            "transport_role": "primary",
+            "status": "running",
+            "identity": {
+              "operator_id": "USER3",
+              "account_id": "83e7da07f5b6",
+              "channel_id": "telegram_userbot",
+              "team_id": "owner",
+              "trace_id": "",
+              "approval_scope": "owner"
+            },
+            "semantics": {
+              "streaming": "buffered_edit_loop",
+              "attachments": [
+                "text",
+                "photo",
+                "audio",
+                "voice"
+              ],
+              "approvals": "owner_inbox_linked",
+              "action_reporting": "confirmed",
+              "runtime_self_check": "confirmed",
+              "reasoning_visibility": "owner_optional_separate_trace"
+            },
+            "capabilities": {
+              "inbound_owner_requests": true,
+              "reply_trace": true,
+              "shared_memory": true,
+              "shared_workspace_attached": true,
+              "shared_workspace_path": "/Users/USER3/.openclaw/workspace-main-messaging",
+              "owner_tools_confirmed": true,
+              "access_roles": [
+                "owner",
+                "full",
+                "partial",
+                "guest"
+              ]
+            },
+            "notes": [
+              "Это richest contour и основной owner transport текущего runtime.",
+              "Здесь уже подтверждены inbox capture, reply trace и truthful self-check.",
+              "Telegram edit-loop показывает промежуточный draft, но это ещё не нативный provider chunk-stream."
+            ]
+          },
+          {
+            "id": "telegram_reserve_bot",
+            "label": "Reserve Telegram Bot",
+            "kind": "telegram_reserve_bot",
+            "transport_role": "reserve_safe",
+            "status": "attention",
+            "identity": {
+              "operator_id": "USER3",
+              "account_id": "83e7da07f5b6",
+              "channel_id": "telegram_reserve_bot",
+              "team_id": "reserve",
+              "trace_id": "",
+              "approval_scope": "owner"
+            },
+            "semantics": {
+              "streaming": "not_confirmed",
+              "attachments": [
+                "text"
+              ],
+              "approvals": "not_confirmed",
+              "action_reporting": "text_only",
+              "runtime_self_check": "not_confirmed"
+            },
+            "capabilities": {
+              "inbound_owner_requests": false,
+              "reply_trace": false,
+              "shared_memory": true,
+              "shared_workspace_attached": true,
+              "shared_workspace_path": "/Users/USER3/.openclaw/workspace-main-messaging",
+              "owner_tools_confirmed": false,
+              "reserve_safe": false
+            },
+            "policy": {
+              "enabled": true,
+              "dm_policy": "pairing",
+              "group_policy": "open",
+              "allow_from_count": 0,
+              "group_allow_from_count": 0
+            },
+            "notes": [
+              "Это safe contour для деградации и emergency delivery, а не owner-rich primary transport.",
+              "Memory общая, но owner-инструменты и полный runtime self-check здесь не подтверждаются."
+            ]
+          }
+        ],
+        "shared_workspace": {
+          "ok": true,
+          "workspace_dir": "/Users/USER3/.openclaw/workspace-main-messaging",
+          "exists": true,
+          "shared_workspace_attached": true,
+          "shared_memory_ready": true,
+          "memory_dir": "/Users/USER3/.openclaw/workspace-main-messaging/memory",
+          "memory_dir_exists": true,
+          "prompt_files": {
+            "SOUL.md": {
+              "path": "/Users/USER3/.openclaw/workspace-main-messaging/SOUL.md",
+              "exists": true
+            },
+            "USER.md": {
+              "path": "/Users/USER3/.openclaw/workspace-main-messaging/USER.md",
+              "exists": true
+            },
+            "TOOLS.md": {
+              "path": "/Users/USER3/.openclaw/workspace-main-messaging/TOOLS.md",
+              "exists": true
+            },
+            "MEMORY.md": {
+              "path": "/Users/USER3/.openclaw/workspace-main-messaging/MEMORY.md",
+              "exists": false
+            }
+          },
+          "prompt_files_present": [
+            "SOUL.md",
+            "USER.md",
+            "TOOLS.md"
+          ],
+          "prompt_files_present_count": 3,
+          "memory_file_count": 2,
+          "recent_memory_entries_count": 3,
+          "recent_memory_entries": [
+            {
+              "date": "2026-03-15",
+              "time": "18:56",
+              "source": "proactive-watch",
+              "author": "",
+              "text": "watch=frontmost_app_changed; gateway=ON; primary=openai-codex/gpt-5.4; route=openai-codex/gpt-5.4; scheduler=0; memory=0; front=Safari"
+            },
+            {
+              "date": "2026-03-15",
+              "time": "18:48",
+              "source": "proactive-watch",
+              "author": "",
+              "text": "watch=route_model_changed; gateway=ON; primary=openai-codex/gpt-5.4; route=openai-codex/gpt-5.4; scheduler=0; memory=0; front=Photos"
+            },
+            {
+              "date": "2026-03-15",
+              "time": "17:48",
+              "source": "proactive-watch",
+              "author": "",
+              "text": "watch=gateway_recovered; gateway=ON; primary=openai-codex/gpt-5.4; route=openai-codex/gpt-5.4; scheduler=0; memory=0; front=Safari"
+            }
+          ],
+          "last_memory_entry": {
+            "date": "2026-03-15",
+            "time": "18:56",
+            "source": "proactive-watch",
+            "author": "",
+            "text": "watch=frontmost_app_changed; gateway=ON; primary=openai-codex/gpt-5.4; route=openai-codex/gpt-5.4; scheduler=0; memory=0; front=Safari"
+          }
+        },
+        "summary": {
+          "primary_transport": "telegram_userbot",
+          "reserve_transport": "telegram_reserve_bot",
+          "reserve_safe": false,
+          "shared_workspace_attached": true,
+          "shared_memory_ready": true,
+          "shared_workspace_dir": "/Users/USER3/.openclaw/workspace-main-messaging",
+          "shared_memory_recent_entries": 3,
+          "configured_runtime_channels": 0,
+          "total_channels": 2,
+          "ready_channels": 1
+        },
+        "parity_gaps": [
+          "Reserve Telegram Bot ещё не подтверждён в reserve-safe parity режиме.",
+          "Reserve Telegram Bot пока не подтверждает streaming и полноценный runtime self-check.",
+          "Primary Telegram userbot пока даёт buffered edit-loop, а не полноценный provider chunk-stream.",
+          "Attachment normalization и approval semantics пока richest только в Python userbot."
+        ]
+      }
+    },
+    "health_lite": {
+      "ok": true,
+      "status": "up",
+      "telegram_session_state": "ready",
+      "telegram_userbot_state": "running",
+      "telegram_userbot_error_code": "",
+      "lmstudio_model_state": "down",
+      "openclaw_auth_state": "configured",
+      "last_runtime_route": {
+        "timestamp": 1773597405,
+        "channel": "openclaw_cloud",
+        "provider": "openai-codex",
+        "model": "openai-codex/gpt-5.4",
+        "active_tier": "free",
+        "force_cloud": true,
+        "status": "ok",
+        "error_code": null,
+        "route_reason": "openclaw_response_ok",
+        "route_detail": "Ответ получен через OpenClaw API"
+      },
+      "scheduler_enabled": true,
+      "inbox_summary": {
+        "state_path": "/Users/USER3/.openclaw/krab_runtime_state/inbox_state.json",
+        "account_id": "83e7da07f5b6",
+        "operator_id": "USER3",
+        "total_items": 6,
+        "open_items": 0,
+        "attention_items": 0,
+        "pending_reminders": 0,
+        "open_escalations": 0,
+        "pending_owner_tasks": 0,
+        "pending_approvals": 0,
+        "pending_owner_requests": 0,
+        "pending_owner_mentions": 0,
+        "latest_open_items": []
+      },
+      "voice_gateway_configured": true
+    }
+  },
+  "summary": {
+    "effective_owner_label": null,
+    "effective_owner_subjects": null,
+    "owner_only_commands": [
+      "access",
+      "acl",
+      "reasoning",
+      "restart",
+      "set"
+    ],
+    "telegram_streaming_semantics": null,
+    "telegram_reasoning_visibility": null,
+    "panel_owner_truth": null,
+    "evidence_screenshot": "/Users/Shared/Antigravity_AGENTS/Краб/output/playwright/owner-userbot-truth-reasoning-smoke-20260315.png",
+    "tests": [
+      "./venv/bin/python -m pytest tests/unit/test_access_control.py tests/unit/test_userbot_privacy_guards.py tests/unit/test_userbot_voice_flow.py tests/unit/test_capability_registry.py tests/unit/test_capability_registry_web_endpoints.py -q"
+    ]
+  }
+}

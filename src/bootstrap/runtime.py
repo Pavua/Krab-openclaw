@@ -11,6 +11,7 @@ import signal
 import structlog
 
 from ..config import config
+from ..core.access_control import get_effective_owner_label
 from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
 from ..userbot_bridge import KraabUserbot
@@ -18,7 +19,35 @@ from ..userbot_bridge import KraabUserbot
 logger = structlog.get_logger(__name__)
 
 
-async def _start_web_panel(*, kraab_userbot: KraabUserbot | None = None) -> object | None:
+def _build_perceptor() -> object | None:
+    """
+    Поднимает локальный Perceptor для voice/STT контура.
+
+    Почему отдельный helper:
+    - userbot и web panel должны видеть один и тот же экземпляр;
+    - если STT-модуль сломан, runtime не должен падать целиком, а должен честно
+      деградировать с warning и без voice-ingress.
+    """
+    try:
+        from ..modules.perceptor import Perceptor
+
+        perceptor = Perceptor(config={})
+        logger.info(
+            "perceptor_ready",
+            whisper_model=str(getattr(perceptor, "whisper_model", "") or ""),
+            stt_isolated_worker=bool(getattr(perceptor, "stt_isolated_worker", False)),
+        )
+        return perceptor
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("perceptor_init_failed", error=str(exc))
+        return None
+
+
+async def _start_web_panel(
+    *,
+    kraab_userbot: KraabUserbot | None = None,
+    perceptor: object | None = None,
+) -> object | None:
     """Starts the web panel on WEB_PORT (default 8080). Returns the WebApp instance or None."""
     try:
         from ..modules.web_app import WebApp
@@ -47,7 +76,7 @@ async def _start_web_panel(*, kraab_userbot: KraabUserbot | None = None) -> obje
             "reaction_engine": None,
             "voice_gateway_client": voice_gateway_client,
             "krab_ear_client": krab_ear_client,
-            "perceptor": None,
+            "perceptor": perceptor,
             "watchdog": None,
             "queue": None,
             "kraab_userbot": kraab_userbot,
@@ -94,7 +123,7 @@ async def run_app() -> None:
     """
     print(f"""
     🦀 KRAB USERBOT STARTED 🦀
-    Owner: {config.OWNER_USERNAME}
+    Owner: {get_effective_owner_label()}
     Mode: {config.LOG_LEVEL}
     RAM Limit: {config.MAX_RAM_GB}GB
     """)
@@ -106,8 +135,9 @@ async def run_app() -> None:
     if not claw_health:
         logger.warning("openclaw_unreachable", url=config.OPENCLAW_URL)
 
-    kraab = KraabUserbot()
-    web_panel = await _start_web_panel(kraab_userbot=kraab)
+    perceptor = _build_perceptor()
+    kraab = KraabUserbot(perceptor=perceptor)
+    web_panel = await _start_web_panel(kraab_userbot=kraab, perceptor=perceptor)
     stop_event = asyncio.Event()
     warmup_task: asyncio.Task | None = None
 

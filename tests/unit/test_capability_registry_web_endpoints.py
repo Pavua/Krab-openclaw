@@ -135,7 +135,10 @@ def test_channel_capabilities_endpoint_returns_primary_and_reserve_truth(monkeyp
     assert snapshot["summary"]["primary_transport"] == "telegram_userbot"
     assert snapshot["summary"]["reserve_transport"] == "telegram_reserve_bot"
     assert snapshot["summary"]["reserve_safe"] is True
-    assert snapshot["channels"][0]["semantics"]["streaming"] == "confirmed"
+    assert snapshot["summary"]["shared_workspace_dir"].endswith("workspace-main-messaging")
+    assert "shared_workspace" in snapshot
+    assert snapshot["channels"][0]["semantics"]["streaming"] == "buffered_edit_loop"
+    assert snapshot["channels"][0]["semantics"]["reasoning_visibility"] == "owner_optional_separate_trace"
     assert snapshot["channels"][1]["semantics"]["runtime_self_check"] == "not_confirmed"
 
 

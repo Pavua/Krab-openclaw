@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .access_control import AccessLevel, PARTIAL_ACCESS_COMMANDS
+from .access_control import AccessLevel, PARTIAL_ACCESS_COMMANDS, build_command_access_matrix
 from .operator_identity import build_identity_envelope
 
 
@@ -51,7 +51,7 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
         "macos_control": True,
         "voice_runtime": True,
         "model_routing": True,
-        "acl_admin": True,
+        "acl_admin": False,
         "runtime_mutation": True,
     },
     AccessLevel.PARTIAL.value: {
@@ -136,6 +136,7 @@ def build_policy_matrix(
     """Строит унифицированную policy matrix для owner UI и runtime handoff."""
     runtime_state = runtime_lite if isinstance(runtime_lite, dict) else {}
     acl_payload = acl_state if isinstance(acl_state, dict) else {}
+    command_access = build_command_access_matrix()
     roles: dict[str, Any] = {}
     for role in (
         AccessLevel.OWNER.value,
@@ -148,6 +149,7 @@ def build_policy_matrix(
             "trusted": role in {AccessLevel.OWNER.value, AccessLevel.FULL.value},
             "subjects": sorted({str(item).strip() for item in acl_payload.get(role, []) if str(item).strip()}),
             "capabilities": dict(_ROLE_CAPABILITIES[role]),
+            "commands": dict((command_access.get("roles") or {}).get(role) or {}),
             "notes": list(_ROLE_NOTES[role]),
         }
 
@@ -168,6 +170,7 @@ def build_policy_matrix(
         "roles": roles,
         "guardrails": {
             "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
+            "owner_only_commands": list(command_access.get("owner_only_commands") or []),
             "web_write_requires_key": bool(web_write_requires_key),
             "split_runtime_per_account": True,
             "telegram_userbot_state": str(
@@ -185,6 +188,7 @@ def build_policy_matrix(
             "full_subjects": len(roles[AccessLevel.FULL.value]["subjects"]),
             "partial_subjects": len(roles[AccessLevel.PARTIAL.value]["subjects"]),
             "guest_policy": "implicit_default",
+            "owner_only_command_count": int((command_access.get("summary") or {}).get("owner_only_count") or 0),
         },
     }
 
@@ -195,12 +199,14 @@ def build_channel_capability_snapshot(
     runtime_lite: dict[str, Any],
     runtime_channels_config: dict[str, Any] | None = None,
     policy_matrix: dict[str, Any] | None = None,
+    workspace_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Строит truthful channel capability snapshot для primary/reserve/runtime каналов."""
     operator_payload = operator_profile if isinstance(operator_profile, dict) else {}
     runtime_state = runtime_lite if isinstance(runtime_lite, dict) else {}
     channels_config = runtime_channels_config if isinstance(runtime_channels_config, dict) else {}
     policy_payload = policy_matrix if isinstance(policy_matrix, dict) else {}
+    workspace_payload = workspace_state if isinstance(workspace_state, dict) else {}
 
     operator_id = str(operator_payload.get("operator_id") or operator_payload.get("operator_name") or "").strip()
     account_id = str(operator_payload.get("account_id") or "").strip()
@@ -244,22 +250,26 @@ def build_channel_capability_snapshot(
                 approval_scope="owner",
             ),
             "semantics": {
-                "streaming": "confirmed",
+                "streaming": "buffered_edit_loop",
                 "attachments": ["text", "photo", "audio", "voice"],
                 "approvals": "owner_inbox_linked",
                 "action_reporting": "confirmed",
                 "runtime_self_check": "confirmed",
+                "reasoning_visibility": "owner_optional_separate_trace",
             },
             "capabilities": {
                 "inbound_owner_requests": True,
                 "reply_trace": True,
                 "shared_memory": True,
+                "shared_workspace_attached": bool(workspace_payload.get("shared_workspace_attached")),
+                "shared_workspace_path": str(workspace_payload.get("workspace_dir") or "").strip(),
                 "owner_tools_confirmed": True,
                 "access_roles": list(policy_payload.get("role_order") or []),
             },
             "notes": [
                 "Это richest contour и основной owner transport текущего runtime.",
                 "Здесь уже подтверждены inbox capture, reply trace и truthful self-check.",
+                "Telegram edit-loop показывает промежуточный draft, но это ещё не нативный provider chunk-stream.",
             ],
         },
         {
@@ -286,6 +296,8 @@ def build_channel_capability_snapshot(
                 "inbound_owner_requests": False,
                 "reply_trace": False,
                 "shared_memory": True,
+                "shared_workspace_attached": bool(workspace_payload.get("shared_workspace_attached")),
+                "shared_workspace_path": str(workspace_payload.get("workspace_dir") or "").strip(),
                 "owner_tools_confirmed": False,
                 "reserve_safe": reserve_safe,
             },
@@ -352,6 +364,7 @@ def build_channel_capability_snapshot(
     if not reserve_safe:
         parity_gaps.append("Reserve Telegram Bot ещё не подтверждён в reserve-safe parity режиме.")
     parity_gaps.append("Reserve Telegram Bot пока не подтверждает streaming и полноценный runtime self-check.")
+    parity_gaps.append("Primary Telegram userbot пока даёт buffered edit-loop, а не полноценный provider chunk-stream.")
     parity_gaps.append("Attachment normalization и approval semantics пока richest только в Python userbot.")
     if extra_runtime_channels:
         parity_gaps.append("Дополнительные runtime channels найдены, но их parity semantics ещё не сведены к общему контракту.")
@@ -366,10 +379,15 @@ def build_channel_capability_snapshot(
         "ok": True,
         "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "channels": channels,
+        "shared_workspace": workspace_payload,
         "summary": {
             "primary_transport": "telegram_userbot",
             "reserve_transport": "telegram_reserve_bot",
             "reserve_safe": reserve_safe,
+            "shared_workspace_attached": bool(workspace_payload.get("shared_workspace_attached")),
+            "shared_memory_ready": bool(workspace_payload.get("shared_memory_ready")),
+            "shared_workspace_dir": str(workspace_payload.get("workspace_dir") or "").strip(),
+            "shared_memory_recent_entries": int(workspace_payload.get("recent_memory_entries_count") or 0),
             "configured_runtime_channels": len(extra_runtime_channels),
             "total_channels": len(channels),
             "ready_channels": ready_channels,
