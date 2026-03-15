@@ -183,3 +183,16 @@ shared-репозиторий остаётся общим, а локальный
   - явный `gatewayHealthText` в статусной карточке;
   - resume через `session snapshot`, чтобы после `Health-check` и `Ре-регистрации` UI подтягивал актуальную server-side сессию.
 - Этот фикс собран в simulator (`BUILD SUCCEEDED`) и сохранён в ветке `codex/iphone-companion-ui-fastfollow` коммитом `4fe1c87`, но его on-device переустановка пока упёрлась в Apple install service по wireless deploy.
+
+
+## Обновление 2026-03-15 05:52: phrase-based ru/es mobile translation uplift
+
+- В `Krab Voice Gateway` улучшен mobile translation layer для live partial-текста.
+- Вместо прежнего префиксного fallback (`ES: ...` / `RU: ...`) gateway теперь применяет phrase-based правила для `ru -> es` и `es -> ru`.
+- Это не финальный NMT/cloud translator, но уже даёт осмысленные partial-переводы без внешних API ключей.
+- Проверка через live HTTP proof на gateway:
+  - proof session: `vs_314de69629f5`
+  - transcript: `Привет, проверка связи, завтра отправить договор`
+  - translation.partial: `Hola, prueba de conexión, mañana enviar contrato`
+- Unit tests для gateway обновлены и проходят (`tests/test_sessions_api.py`).
+- Ветка `Krab Voice Gateway`: `codex/iphone-companion-ui-fastfollow`, commit с этим улучшением — следующий после `4fe1c87`.

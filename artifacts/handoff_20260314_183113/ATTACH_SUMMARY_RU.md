@@ -136,3 +136,13 @@
   - ветка `codex/iphone-companion-ui-fastfollow`
   - commit `4fe1c87`
 - Simulator build нового фикса зелёный: `BUILD SUCCEEDED`.
+
+
+## Дополнение: mobile ru/es translation uplift
+
+- В gateway добавлен phrase-based translation uplift для mobile live partials (`ru -> es`, `es -> ru`).
+- Это заменяет прежний префиксный fallback на более осмысленный текст без внешних API ключей.
+- Live proof через HTTP/gateway:
+  - `Привет, проверка связи, завтра отправить договор`
+  - `Hola, prueba de conexión, mañana enviar contrato`
+- Клиентский UI уже умеет показывать эти partial-события; для проверки достаточно выставить `target_lang = es` в работающей on-device сборке.

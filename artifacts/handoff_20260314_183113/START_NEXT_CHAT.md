@@ -186,3 +186,14 @@
   - commit `4fe1c87`
 - Simulator build для этого фикса: `BUILD SUCCEEDED`.
 - On-device install именно этой свежей сборки на `14 Pro Max` через `devicectl` упёрся в Apple service `com.apple.remote.installcoordination_proxy`, но рабочая сборка на устройстве уже показывает русский live transcript.
+
+
+## Обновление 2026-03-15 05:52: mobile ru/es translation uplift
+
+- В `Krab Voice Gateway` улучшен mobile translation helper: теперь partial-перевод для `ru/es` идёт не через голый echo/prefix, а через phrase-based rules.
+- Это уже даёт осмысленный перевод без внешнего cloud API.
+- Live proof на gateway:
+  - session `vs_314de69629f5`
+  - `Привет, проверка связи, завтра отправить договор` -> `Hola, prueba de conexión, mañana enviar contrato`
+- iPhone-клиент для этого шага переустанавливать не нужно: uplift серверный.
+- Оставшийся follow-up: доставить на устройство свежую сборку с явным `gatewayHealthText`, когда Apple install service снова позволит on-device reinstall.

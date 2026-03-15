@@ -29,5 +29,9 @@
   "translation_mode": "ru_to_ru_validation",
   "live_trial_result": "passed_on_iphone14",
   "known_blocker_secondary_device": "iPhone 15 Pro Max currently hits Xcode/CoreDevice tunnel reconnection bug on iOS 26.4 beta",
-  "pending_fix_not_yet_redeployed": "explicit_healthcheck_feedback"
+  "pending_fix_not_yet_redeployed": "explicit_healthcheck_feedback_on_device",
+  "translation_gateway_phrase_rules": "enabled_ru_es_and_es_ru",
+  "translation_gateway_phrase_rules_verified_at_utc": "2026-03-15T04:52:53+00:00",
+  "translation_gateway_phrase_rules_proof_session": "vs_314de69629f5",
+  "translation_gateway_phrase_rules_example": "Hola, prueba de conexión, mañana enviar contrato"
 }
