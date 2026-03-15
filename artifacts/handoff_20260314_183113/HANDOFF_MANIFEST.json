@@ -8,6 +8,7 @@
     "branch": "codex/iphone-companion-xcodegen-bootstrap"
   },
   "files": [
+    "ATTACH_FOLDER_README_RU.md",
     "ATTACH_SUMMARY_RU.md",
     "CALL_TRANSLATOR_AUDIT_RU.md",
     "HANDOFF_MANIFEST.json",
@@ -19,6 +20,8 @@
     "NEW_CHAT_BOOTSTRAP_PROMPT.md",
     "NEW_CHAT_PROMPT_RU.md",
     "NEXT_CHAT_CHECKPOINT_RU.md",
+    "OPENCLAW_FINOPS_APPLICABILITY_RU.md",
+    "OPENCLAW_FINOPS_SECOND_OPINION_RU.md",
     "OPENCLAW_KRAB_ROADMAP.md",
     "Open iPhone Companion Skeleton.command",
     "PABLITO_RETURN_CHECKLIST_RU.md",
@@ -37,5 +40,5 @@
     "translator_mobile_trial_ready_user3_latest.json",
     "Стартовый промпт на USER3.md"
   ],
-  "updated_at": "2026-03-14T18:39:51.419749+00:00"
+  "updated_at": "2026-03-15T19:31:13.653780+00:00"
 }

@@ -176,3 +176,11 @@
 - Selective test suite:
   - `./venv/bin/python -m pytest tests/unit/test_access_control.py tests/unit/test_userbot_privacy_guards.py tests/unit/test_userbot_voice_flow.py tests/unit/test_capability_registry.py tests/unit/test_capability_registry_web_endpoints.py -q`
   - `45 passed`
+
+
+## Дополнение: FinOps / Deep Research
+
+- В handoff вынесены две прикладные выжимки из отдельных deep research отчётов:
+  - `OPENCLAW_FINOPS_APPLICABILITY_RU.md`
+  - `OPENCLAW_FINOPS_SECOND_OPINION_RU.md`
+- Их лучше обсуждать в новом диалоге уже в режиме планирования, потому что следующий логичный шаг — перевод идей в конкретные routing / cost / local-first изменения, а не просто обзор текста.

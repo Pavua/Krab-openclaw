@@ -248,3 +248,12 @@
 1. Доставить свежую iOS-сборку settings-fix на рабочий device (`14 Pro Max`) и закрыть on-device `source_lang / target_lang / Health-check`.
 2. Подтвердить живой `ru -> es` partial translation прямо на устройстве.
 3. Затем вернуться к `iPhone 15 Pro Max` как к отдельному Apple/CoreDevice blocker, а не как к blocker всего проекта.
+
+
+## Дополнение: Deep Research / FinOps для нового планирования
+
+- В handoff добавлены две прикладные выжимки по оптимизации расходов и routing:
+  - `OPENCLAW_FINOPS_APPLICABILITY_RU.md`
+  - `OPENCLAW_FINOPS_SECOND_OPINION_RU.md`
+- В новом диалоге их лучше разбирать уже в planning-mode и переводить в конкретные route / cost / local-first решения для Krab / OpenClaw.
+- Важный общий вывод из обоих отчётов: экономия должна идти через truthful routing, deterministic/runtime-first paths, compaction/context hygiene и event-driven loops, а не через попытку сделать consumer web-провайдеры production truth.
