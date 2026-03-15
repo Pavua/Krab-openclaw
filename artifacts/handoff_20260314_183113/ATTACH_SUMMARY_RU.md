@@ -206,3 +206,29 @@
   - `OPENCLAW_FINOPS_APPLICABILITY_RU.md`
   - `OPENCLAW_FINOPS_SECOND_OPINION_RU.md`
 - Их лучше обсуждать в новом диалоге уже в режиме планирования, потому что следующий логичный шаг — перевод идей в конкретные routing / cost / local-first изменения, а не просто обзор текста.
+
+## Дополнение: on-device settings truth и follow-up фикс ru/es drift
+
+- На рабочем `iPhone 14 Pro Max` уже подтверждены:
+  - интерактивные `translation_mode / source_lang / target_lang`;
+  - видимый `Health-check` статус `Шлюз доступен ✅`;
+  - живая session с `event = stt.partial`.
+- Реальный session proof после этих переключений:
+  - `vs_dd30cc9c2f46`
+- On-device `ru -> es` перевод уже начал работать, но пока неидеален:
+  - начало partial уходит в испанский;
+  - на длинном mixed transcript дальше появляется `es+ru` drift.
+- На stop/start пользователь также увидел ложную speech error:
+  - `Recognition request was canceled`
+- Оба хвоста уже закрыты новым follow-up патчем в `Krab Voice Gateway`:
+  - явный `source_lang` больше не перебивается эвристикой из-за латинских токенов;
+  - translation helper усилен phrase+word правилами;
+  - expected speech cancellation больше не должна всплывать как ошибка.
+- Патч уже:
+  - протестирован (`17 passed`),
+  - пересобран (`BUILD SUCCEEDED`),
+  - переустановлен на `iPhone 14 Pro Max`.
+- Gateway commit:
+  - `3102c98` — `fix: stabilize mobile ru-es translation and speech cancellation`
+- Следующий остаток перед новым диалогом очень узкий:
+  - короткий on-device re-test уже с этой переустановленной сборкой.

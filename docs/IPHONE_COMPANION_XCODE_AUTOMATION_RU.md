@@ -211,3 +211,37 @@ shared-репозиторий остаётся общим, а локальный
   - translation.partial: `Hola, prueba de conexión, mañana enviar contrato`
 - Unit tests для gateway обновлены и проходят (`tests/test_sessions_api.py`).
 - Ветка `Krab Voice Gateway`: `codex/iphone-companion-ui-fastfollow`, commit с этим улучшением — следующий после `4fe1c87`.
+
+## Обновление 2026-03-15 21:41 UTC: on-device settings truth + ru/es drift triage
+
+- На свежей on-device сборке `iPhone 14 Pro Max` теперь подтверждено уже не только `stt.partial`, но и интерактивность настроек:
+  - `translation_mode = ru_es_duplex` переключается;
+  - `source_lang = ru` переключается;
+  - `target_lang = es` переключается.
+- `Health-check` теперь даёт видимый feedback в статусной карточке:
+  - `Шлюз доступен ✅`.
+- Живой on-device session proof после этого шага:
+  - `session_id = vs_dd30cc9c2f46`
+  - `event = stt.partial`
+- Живой `ru -> es` partial proof на устройстве тоже получен, но пока нестабилен:
+  - начало partial действительно уходит в испанский (`Prueba de conexión ...`),
+  - затем перевод деградирует в смешанный `es+ru` текст,
+  - после stop/start пользователь поймал iOS speech cancellation message:
+    - `Speech ошибка: Recognition request was canceled`.
+- Это уже не проблема сети, `Gateway URL` или picker'ов, а два оставшихся product-level хвоста:
+  - drift в mobile `ru -> es` translation helper на длинных mixed partial;
+  - ложная ошибка отмены распознавания при штатной остановке/перезапуске.
+- Для этого уже собран и установлен follow-up фикс:
+  - gateway translation helper жёстче держит явный `source_lang = ru`, не переопределяя его из-за латинских токенов вроде `health-check`;
+  - phrase+word translation layer расширен для длинных русских partial;
+  - `SpeechRecognitionManager` перестал показывать expected cancellation как пользовательскую ошибку.
+- Проверки follow-up фикса:
+  - `/Users/USER3/Projects/KrabVoiceGateway-user3/tests/test_sessions_api.py` -> `17 passed`;
+  - `xcodebuild -project /Users/USER3/Projects/KrabVoiceiOS-user3-fastfollow/KrabVoice.xcodeproj -scheme KrabVoice -destination 'generic/platform=iOS' build` -> `BUILD SUCCEEDED`;
+  - `devicectl install` на `iPhone 14 Pro Max` -> `App installed`.
+- Ветка `Krab Voice Gateway`: `codex/iphone-companion-ui-fastfollow`, commit:
+  - `3102c98` — `fix: stabilize mobile ru-es translation and speech cancellation`
+- Текущий оставшийся шаг стал очень узким:
+  - открыть уже переустановленную свежую сборку на `iPhone 14 Pro Max`;
+  - повторить короткий `ru -> es` прогон;
+  - подтвердить, что translation drift уменьшился, а `Recognition request was canceled` больше не всплывает как ошибка.

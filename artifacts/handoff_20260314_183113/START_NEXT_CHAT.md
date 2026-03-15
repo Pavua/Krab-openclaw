@@ -288,3 +288,35 @@
   - `OPENCLAW_FINOPS_SECOND_OPINION_RU.md`
 - В новом диалоге их лучше разбирать уже в planning-mode и переводить в конкретные route / cost / local-first решения для Krab / OpenClaw.
 - Важный общий вывод из обоих отчётов: экономия должна идти через truthful routing, deterministic/runtime-first paths, compaction/context hygiene и event-driven loops, а не через попытку сделать consumer web-провайдеры production truth.
+
+## Обновление 2026-03-15 21:41 UTC: on-device settings confirmation + ru/es drift fix delivered
+
+- На `iPhone 14 Pro Max` уже подтверждена реальная on-device интерактивность свежей settings-сборки:
+  - `translation_mode = ru_es_duplex`
+  - `source_lang = ru`
+  - `target_lang = es`
+- `Health-check` теперь визуально подтверждается прямо в статусной карточке:
+  - `Шлюз доступен ✅`
+- Живой session proof после переключения настроек:
+  - `session_id = vs_dd30cc9c2f46`
+  - `event = stt.partial`
+- On-device `ru -> es` proof частично получен:
+  - в начале partial перевод уходит в испанский,
+  - дальше на длинном mixed transcript ещё появляется `es+ru` drift.
+- Пользователь также поймал ложную iOS speech-error на stop/start:
+  - `Recognition request was canceled`
+- Это уже локализовано и закрыто кодом в follow-up патче:
+  - явный `source_lang` теперь не теряется из-за латинских токенов внутри русского partial;
+  - phrase/word translation uplift расширен;
+  - expected cancellation больше не должен показываться как пользовательская ошибка.
+- Follow-up патч уже:
+  - протестирован (`17 passed`);
+  - пересобран (`BUILD SUCCEEDED`);
+  - повторно установлен на `iPhone 14 Pro Max` через `devicectl`.
+- Gateway repo:
+  - ветка `codex/iphone-companion-ui-fastfollow`
+  - commit `3102c98` — `fix: stabilize mobile ru-es translation and speech cancellation`
+- Следующий ручной шаг для нового окна теперь уже очень узкий:
+  - открыть переустановленную app на `14 Pro Max`;
+  - сделать короткий `ru -> es` прогон;
+  - подтвердить, что нет visible cancellation error и что перевод больше не сваливается в русский echo/mix.
