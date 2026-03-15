@@ -142,6 +142,14 @@
   - ветка `codex/iphone-companion-ui-fastfollow`
   - commit `4fe1c87`
 - Simulator build нового фикса зелёный: `BUILD SUCCEEDED`.
+- Свежая settings-сборка затем повторно переустановлена на рабочий `iPhone 14 Pro Max` через wireless `devicectl`.
+- Источник установленной `.app`:
+  - `/Users/USER3/Library/Developer/Xcode/DerivedData/KrabVoice-dmarxbzrqkaskrhgnlpjivptmwnu/Build/Products/Debug-iphoneos/KrabVoice.app`
+- CLI launch этой новой сборки упёрся только в `Locked`, то есть install уже не блокер.
+- Значит следующий практический шаг стал уже узким:
+  - вручную открыть свежую сборку на `14 Pro Max`;
+  - проверить интерактивность `translation_mode / source_lang / target_lang / Health-check`;
+  - затем снять on-device `ru -> es` proof.
 
 
 ## Дополнение: mobile ru/es translation uplift

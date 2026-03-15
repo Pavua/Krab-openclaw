@@ -184,6 +184,21 @@ shared-репозиторий остаётся общим, а локальный
   - resume через `session snapshot`, чтобы после `Health-check` и `Ре-регистрации` UI подтягивал актуальную server-side сессию.
 - Этот фикс собран в simulator (`BUILD SUCCEEDED`) и сохранён в ветке `codex/iphone-companion-ui-fastfollow` коммитом `4fe1c87`, но его on-device переустановка пока упёрлась в Apple install service по wireless deploy.
 
+## Обновление 2026-03-15 20:00: fresh settings-fix build reinstalled on iPhone 14 Pro Max
+
+- После отдельной real-device сборки свежий iOS-клиент с фиксом настроек успешно переустановлен на `iPhone 14 Pro Max` (`00008120-001C58983C00C01E`) по wireless `devicectl`.
+- Переустановлена именно свежая сборка из:
+  - `/Users/USER3/Library/Developer/Xcode/DerivedData/KrabVoice-dmarxbzrqkaskrhgnlpjivptmwnu/Build/Products/Debug-iphoneos/KrabVoice.app`
+- Для этой сборки подтверждено наличие актуального speech-permission:
+  - `NSSpeechRecognitionUsageDescription = Нужен доступ к распознаванию речи для живых субтитров и перевода.`
+- Проверка `devicectl device info apps` показывает на устройстве установленный `KrabVoice 0.2.0` с bundle id:
+  - `com.antigravity.krabvoice.user3.macbook.pro.pablito.local`
+- CLI-запуск этой новой сборки упёрся только в блокировку экрана устройства (`Locked`), а не в install/tunnel-проблему.
+- Значит текущий follow-up уже не про доставку `.app`, а про ручную on-device валидацию:
+  - реагируют ли `translation_mode / source_lang / target_lang`;
+  - появился ли видимый статус у `Health-check`;
+  - закрыт ли баг с недоступными кнопками под плавающим системным таббаром.
+
 
 ## Обновление 2026-03-15 05:52: phrase-based ru/es mobile translation uplift
 

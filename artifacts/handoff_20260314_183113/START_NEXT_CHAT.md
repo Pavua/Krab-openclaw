@@ -193,6 +193,20 @@
 - Simulator build для этого фикса: `BUILD SUCCEEDED`.
 - On-device install именно этой свежей сборки на `14 Pro Max` через `devicectl` упёрся в Apple service `com.apple.remote.installcoordination_proxy`, но рабочая сборка на устройстве уже показывает русский live transcript.
 
+## Обновление 2026-03-15 20:00: fresh settings-fix build delivered to iPhone 14 Pro Max
+
+- Follow-up фикс интерактивности настроек (`@Published + UserDefaults`, `safeAreaInset` для сервисных кнопок, `.menu` picker style) уже не только собран, но и повторно установлен на рабочий `iPhone 14 Pro Max`.
+- Источник установленной `.app`:
+  - `/Users/USER3/Library/Developer/Xcode/DerivedData/KrabVoice-dmarxbzrqkaskrhgnlpjivptmwnu/Build/Products/Debug-iphoneos/KrabVoice.app`
+- Wireless install через `devicectl` снова успешен:
+  - bundle id `com.antigravity.krabvoice.user3.macbook.pro.pablito.local`
+  - version `0.2.0`
+- CLI launch этой новой сборки не завершился только потому, что устройство оказалось заблокировано в момент запуска (`Locked`).
+- Значит текущий оставшийся шаг для нового чата уже узкий и понятный:
+  - вручную открыть эту свежую сборку на `14 Pro Max`;
+  - подтвердить on-device интерактивность `translation_mode / source_lang / target_lang / Health-check`;
+  - затем сразу снять живой `ru -> es` proof.
+
 
 ## Обновление 2026-03-15 05:52: mobile ru/es translation uplift
 
@@ -202,7 +216,7 @@
   - session `vs_314de69629f5`
   - `Привет, проверка связи, завтра отправить договор` -> `Hola, prueba de conexión, mañana enviar contrato`
 - iPhone-клиент для этого шага переустанавливать не нужно: uplift серверный.
-- Оставшийся follow-up: доставить на устройство свежую сборку с явным `gatewayHealthText`, когда Apple install service снова позволит on-device reinstall.
+- Оставшийся follow-up: вручную открыть уже доставленную свежую сборку на `14 Pro Max` и добить on-device verification `source_lang / target_lang / Health-check / ru -> es`.
 
 
 ## Обновление 2026-03-15 19:12: owner truth / hidden reasoning / truthful streaming
