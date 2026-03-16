@@ -129,6 +129,49 @@ def test_deferred_action_guard_noop_when_scheduler_enabled(monkeypatch) -> None:
     assert guarded == text
 
 
+def test_strip_non_actionable_tool_warnings_hides_message_failed_by_default(monkeypatch) -> None:
+    monkeypatch.setattr(userbot_bridge_module.config, "USERBOT_TECH_NOTICES_ENABLED", False, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS",
+        True,
+        raising=False,
+    )
+    raw = "Готово, письма почищены.\n\n⚠️ ✉️ Message failed"
+    cleaned = KraabUserbot._strip_non_actionable_tool_warnings(raw)
+    assert cleaned == "Готово, письма почищены."
+
+
+def test_strip_non_actionable_tool_warnings_keeps_tail_in_debug_mode(monkeypatch) -> None:
+    monkeypatch.setattr(userbot_bridge_module.config, "USERBOT_TECH_NOTICES_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS",
+        True,
+        raising=False,
+    )
+    raw = "Готово, письма почищены.\n\n⚠️ ✉️ Message failed"
+    cleaned = KraabUserbot._strip_non_actionable_tool_warnings(raw)
+    assert cleaned == raw
+
+
+def test_build_technical_notice_reflects_actual_route(monkeypatch) -> None:
+    monkeypatch.setattr(userbot_bridge_module.config, "USERBOT_TECH_NOTICES_ENABLED", True, raising=False)
+    notice = KraabUserbot._build_technical_notice(
+        {
+            "channel": "openclaw_cloud",
+            "model": "qwen-portal/coder-model",
+            "provider": "qwen-portal",
+            "status": "ok",
+        },
+        current_primary="google-gemini-cli/gemini-3-flash-preview",
+    )
+    assert "⚙️ Тех-заметка:" in notice
+    assert "qwen-portal/coder-model" in notice
+    assert "Configured primary" in notice
+    assert "fallback/alternate route" in notice
+
+
 def test_sync_scheduler_runtime_starts_when_enabled_and_connected(monkeypatch) -> None:
     """Scheduler должен запускаться при enabled + активном Telegram-клиенте."""
     bot = _make_bot_stub()

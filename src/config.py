@@ -232,6 +232,21 @@ class Config:
         "STRIP_REPLY_TO_TAGS",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+    # Owner/debug режим технических приписок в ответах userbot.
+    # По умолчанию выключен: обычные чаты не должны видеть шум про маршруты,
+    # доставку и внутренние tool-сбои. Для отладки можно включить и получить
+    # честную runtime-плашку в конце ответа.
+    USERBOT_TECH_NOTICES_ENABLED: bool = os.getenv(
+        "USERBOT_TECH_NOTICES_ENABLED",
+        "0",
+    ).strip().lower() in ("1", "true", "yes")
+    # Подавляет шумные tool-warning хвосты вроде `Message failed`, если это не
+    # основной пользовательский ответ, а побочный сбой внутреннего action-layer.
+    # При включённых tech notices их можно вернуть для отладки.
+    USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS: bool = os.getenv(
+        "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS",
+        "1",
+    ).strip().lower() in ("1", "true", "yes")
     # Фоновые deferred-задачи (cron/reminders) в текущем userbot контуре.
     # По умолчанию включено: reminders должны работать "из коробки" после старта runtime.
     SCHEDULER_ENABLED: bool = os.getenv(
@@ -333,6 +348,10 @@ class Config:
                     cls.NON_OWNER_SAFE_PROMPT = value
                 elif key == "STRIP_REPLY_TO_TAGS":
                     cls.STRIP_REPLY_TO_TAGS = value.strip().lower() in ("1", "true", "yes")
+                elif key == "USERBOT_TECH_NOTICES_ENABLED":
+                    cls.USERBOT_TECH_NOTICES_ENABLED = value.strip().lower() in ("1", "true", "yes")
+                elif key == "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS":
+                    cls.USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS = value.strip().lower() in ("1", "true", "yes")
                 elif key == "SCHEDULER_ENABLED":
                     cls.SCHEDULER_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "DEFERRED_ACTION_GUARD_ENABLED":

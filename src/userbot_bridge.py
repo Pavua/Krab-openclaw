@@ -161,6 +161,9 @@ class KraabUserbot:
     _deferred_intent_pattern = re.compile(
         r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
     )
+    _non_actionable_tool_warning_pattern = re.compile(
+        r"(?i)\bmessage failed\b"
+    )
 
     def __init__(self, *, perceptor: object | None = None):
         """Инициализация юзербота и клиента Pyrogram"""
@@ -1341,6 +1344,68 @@ class KraabUserbot:
         if note in raw:
             return raw
         return f"{raw}\n\n{note}"
+
+    @classmethod
+    def _strip_non_actionable_tool_warnings(cls, text: str) -> str:
+        """
+        Убирает шумные хвосты от внутреннего action/tool-слоя.
+
+        Почему это нужно:
+        - в owner-чате ответ модели может быть нормальным, но OpenClaw затем
+          дописывает в конец строку вроде `Message failed` из побочного инструмента;
+        - такой хвост выглядит как сбой всего Краба, хотя основной ответ уже
+          успешно доставлен в Telegram;
+        - при включённых tech notices этот мусор оставляем, чтобы во время
+          отладки можно было увидеть сырое поведение.
+        """
+        raw = str(text or "").strip()
+        if not raw:
+            return raw
+        if bool(getattr(config, "USERBOT_TECH_NOTICES_ENABLED", False)):
+            return raw
+        if not bool(getattr(config, "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", True)):
+            return raw
+        lines = raw.splitlines()
+        filtered_lines = [
+            line for line in lines
+            if not cls._non_actionable_tool_warning_pattern.search(str(line or "").strip())
+        ]
+        cleaned = "\n".join(filtered_lines)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        return cleaned or raw
+
+    @staticmethod
+    def _build_technical_notice(route: dict | None, *, current_primary: str = "") -> str:
+        """
+        Формирует короткую owner/debug-плашку с фактическим runtime-route.
+
+        Это не заменяет основной ответ модели, а лишь добавляет factual хвост,
+        когда пользователь сознательно включает tech notices.
+        """
+        if not bool(getattr(config, "USERBOT_TECH_NOTICES_ENABLED", False)):
+            return ""
+        route_meta = route if isinstance(route, dict) else {}
+        model = str(route_meta.get("model", "") or "").strip()
+        provider = str(route_meta.get("provider", "") or "").strip()
+        channel = str(route_meta.get("channel", "") or "").strip()
+        status = str(route_meta.get("status", "") or "").strip()
+        if not any((model, provider, channel, status)):
+            return ""
+        lines = ["⚙️ Тех-заметка:"]
+        if channel:
+            lines.append(f"- Канал: `{channel}`")
+        if model:
+            lines.append(f"- Модель: `{model}`")
+        if provider:
+            lines.append(f"- Провайдер: `{provider}`")
+        if status:
+            lines.append(f"- Статус route: `{status}`")
+        primary = str(current_primary or "").strip()
+        if primary:
+            lines.append(f"- Configured primary: `{primary}`")
+            if model and model != primary:
+                lines.append("- Сработал fallback/alternate route относительно configured primary.")
+        return "\n".join(lines)
 
     def _get_clean_text(self, text: str) -> str:
         """Убирает триггер из текста"""
@@ -2777,16 +2842,17 @@ class KraabUserbot:
             if not full_response:
                 full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
         full_response = self._apply_deferred_action_guard(full_response)
+        full_response = self._strip_non_actionable_tool_warnings(full_response)
 
         # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
         # а не доверяем декларативному тексту самой LLM.
+        route_meta = {}
+        if hasattr(openclaw_client, "get_last_runtime_route"):
+            try:
+                route_meta = openclaw_client.get_last_runtime_route() or {}
+            except Exception:
+                route_meta = {}
         if is_allowed_sender and model_status_mode:
-            route_meta = {}
-            if hasattr(openclaw_client, "get_last_runtime_route"):
-                try:
-                    route_meta = openclaw_client.get_last_runtime_route() or {}
-                except Exception:
-                    route_meta = {}
             if route_meta:
                 model_status = self._build_runtime_model_status(
                     route_meta,
@@ -2801,6 +2867,12 @@ class KraabUserbot:
             chat_id=chat_id,
             text=full_response,
         )
+        tech_notice = self._build_technical_notice(
+            route_meta,
+            current_primary=_current_runtime_primary_model(),
+        )
+        if tech_notice and tech_notice not in full_response:
+            full_response = f"{full_response}\n\n{tech_notice}"
 
         delivery_result = await self._deliver_response_parts(
             source_message=message,
