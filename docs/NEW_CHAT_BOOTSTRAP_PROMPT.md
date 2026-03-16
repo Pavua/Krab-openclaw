@@ -1,67 +1,97 @@
 # NEW CHAT BOOTSTRAP PROMPT
 
-Ниже актуальный шаблон для старта нового окна по состоянию на `2026-03-12`.
+Ниже актуальный шаблон для старта нового окна по состоянию на `2026-03-16`.
 
 Работаем в проекте Krab/OpenClaw.  
-Текущая рабочая ветка: `codex/handoff-bundle-polish`.  
-Техническая база этой ветки: `codex/web-runtime-smoke-hardening @ 859cf05`.  
-Текущая ориентировочная готовность большого плана: `~99%`.
+Текущая рабочая ветка: `codex/translator-finish-gate-user3`.  
+Текущая ориентировочная готовность большого плана: `~52%`.
 
 ## Прочитай сначала
 
-1. Если приложен свежий bundle: `artifacts/handoff_<timestamp>/START_NEXT_CHAT.md`
-2. Если приложен свежий bundle: `artifacts/handoff_<timestamp>/ATTACH_SUMMARY_RU.md`
-3. Если работа продолжается на основной учётке: `artifacts/handoff_<timestamp>/PABLITO_RETURN_CHECKLIST.md`
-4. [docs/NEXT_CHAT_CHECKPOINT_RU.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/NEXT_CHAT_CHECKPOINT_RU.md)
-5. [docs/OPENCLAW_KRAB_ROADMAP.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/OPENCLAW_KRAB_ROADMAP.md)
-6. Если приложен свежий bundle: `runtime_snapshot.json`, `HANDOFF_MANIFEST.json`, `known_issues_matrix.md`
+1. [docs/NEXT_CHAT_CHECKPOINT_RU.md](/Users/Shared/Antigravity_AGENTS/Краб/docs/NEXT_CHAT_CHECKPOINT_RU.md)
+2. [docs/OPENCLAW_KRAB_ROADMAP.md](/Users/Shared/Antigravity_AGENTS/Краб/docs/OPENCLAW_KRAB_ROADMAP.md)
+3. `artifacts/ops/translator_finish_gate_user3_latest.json`
+4. `artifacts/ops/pre_release_smoke_latest.json`
+5. `artifacts/ops/r20_merge_gate_latest.json`
+6. Если есть свежий bundle: `artifacts/handoff_<timestamp>/START_NEXT_CHAT.md`
+7. Если есть свежий bundle: `artifacts/handoff_<timestamp>/ATTACH_SUMMARY_RU.md`
+8. Если есть свежий bundle: `runtime_snapshot.json`, `HANDOFF_MANIFEST.json`
 
 ## Что уже считается фактом
 
-1. Runtime primary в OpenClaw уже переведён на `openai-codex/gpt-5.4`.
-2. Owner UI на `:8080` уже показывает truthful runtime/model/browser state, а не заглушки.
-3. Truthful блок параллелизма уже реализован и подтверждён unit + browser smoke на изолированном `:18081`.
-4. Release gate и merge-gate уже доведены до рабочего состояния.
-5. `signal_alert_route` и web-based runtime smoke уже ужесточены под временную учётку `USER2`.
-6. `pre_release_smoke --full --strict-runtime` на `USER2` теперь блокируется только по owner-only шагам, а не по ложным кодовым фейлам.
-7. Git/push на временной учётке уже настроен и ветки восстановления уже лежат в `origin`.
+1. Для проекта есть два разных UI-контура: наша owner panel на `:8080` и официальный dashboard OpenClaw на `:18789`; операционную truth по проекту читаем прежде всего через `:8080`.
+2. Текущая рабочая dev-учётка: `USER3`; `pablito` пока остаётся финальным acceptance/release-контуром.
+3. Runtime на `:8080` жив; текущий live route сейчас идёт через `google-gemini-cli/gemini-3.1-pro-preview`, а `openai-codex/gpt-5.4` зафиксирован внутри `translator_finish_gate_user3_latest.json` как truth конкретного automation-run.
+4. Свежий truthful artifact `translator_finish_gate_user3_latest.json` уже подтверждает автоматическую часть translator gate.
+5. Gateway regression по translator-блоку проходит зелёно: `17 passed`.
+6. iOS companion на `iPhone 14 Pro Max` собирается и ставится; текущий хвост упирается в device unlock/manual retest, а не в build/install.
+7. Memory/amnesia bug уже закрыт на уровне кода и persisted cache:
+   - `src/core/openclaw_workspace.py` читает свежий tail memory-файлов;
+   - `src/openclaw_client.py` санирует старую chat-history/in-memory session;
+   - `Repair Chat Memory Cache.command` вычищает накопленный reasoning-мусор из `history_cache.db`.
+8. Пользователь отдельно сообщал о плавающем scaling-regression в iPhone companion; если он повторится, это нужно считать отдельным acceptance-риском.
+9. `main` не трогаем до подтверждённого воспроизведения ключевых сценариев на `pablito`.
+10. После закрытия translator-блока и финального flush live memory-session оптимально снова включить `Plan Mode` и спланировать следующую фазу уже от свежей truth-base.
 
 ## Что сделать первым
 
 1. Проверить `git status --short --branch` и не трогать чужие незакоммиченные изменения.
-2. Если работа идёт уже на `pablito`, сразу выполнить `Verify Live Parallelism On Pablito.command`.
-3. Прочитать свежие `pre_release_smoke_latest.json` и `r20_merge_gate_latest.json` из bundle.
-4. Снять с roadmap хвост live `:8080` по parallelism только после реального переподтверждения от владельца `pablito`.
-5. Дальше решать, нужен ли ещё строгий owner/reserve Telegram E2E как финальный процентный хвост.
+2. Проверить live truth:
+   - `curl http://127.0.0.1:8080/api/health/lite`
+   - `curl http://127.0.0.1:8080/api/translator/readiness`
+   - `curl http://127.0.0.1:8080/api/openclaw/model-routing/status`
+   - `curl http://127.0.0.1:8080/api/ops/runtime_snapshot`
+3. Прочитать свежие gate artifacts:
+   - `artifacts/ops/translator_finish_gate_user3_latest.json`
+   - `artifacts/ops/pre_release_smoke_latest.json`
+   - `artifacts/ops/r20_merge_gate_latest.json`
+4. Для translator-блока опираться прежде всего на артефакт gate и owner panel `:8080`, а не на пересказ из чата.
+5. `Plan Mode` включать уже после закрытия translator gate и обновления handoff/docs.
 
 ## Ограничения
 
 1. Комментарии и докстринги в коде должны оставаться на русском.
-2. Не дублировать уже существующий функционал OpenClaw, если его можно вызвать или честно отобразить.
-3. Все статусы и проценты в docs должны опираться только на код, тест, smoke или live acceptance.
-4. Merge в `main` только после smoke/e2e и актуального handoff bundle.
+2. Не дублировать уже существующий функционал OpenClaw, если его можно честно вызвать или отобразить.
+3. Не удалять `legacy antigravity`; он intentionally остаётся как отдельный квотный контур.
+4. Все статусы и проценты в docs должны опираться только на код, тест, smoke или live acceptance.
+5. Merge в `main` только после актуального release-gate и свежего handoff bundle.
 
 ## Короткий стартовый промпт
 
 ```text
-Продолжаем Krab/OpenClaw в ветке codex/handoff-bundle-polish.
+Продолжаем Krab/OpenClaw в ветке codex/translator-finish-gate-user3.
 
-Я приложил свежий handoff bundle. Сначала прочитай:
-1) START_NEXT_CHAT.md
-2) ATTACH_SUMMARY_RU.md
-3) PABLITO_RETURN_CHECKLIST.md
-4) NEXT_CHAT_CHECKPOINT_RU.md
-5) OPENCLAW_KRAB_ROADMAP.md
+Сначала прочитай:
+1) NEXT_CHAT_CHECKPOINT_RU.md
+2) OPENCLAW_KRAB_ROADMAP.md
+3) translator_finish_gate_user3_latest.json
+4) если есть свежий bundle: START_NEXT_CHAT.md и ATTACH_SUMMARY_RU.md
 
-Текущее состояние на 2026-03-12:
-- готовность проекта ~99%
-- technical baseline = codex/web-runtime-smoke-hardening @ 859cf05
-- truthful parallelism UI уже реализован и подтверждён unit + изолированным browser smoke
-- release gate зелёный, strict runtime smoke на USER2 блокируется только owner-only шагами
-- последний реальный хвост перед финишем: live verify нового parallelism блока на основном :8080 после restart от владельца pablito
+Текущее состояние на 2026-03-16:
+- готовность проекта ~52%
+- текущая dev-учётка = USER3, `pablito` оставляем финальным acceptance/release-контуром
+- для проекта есть owner panel на :8080 и отдельный официальный dashboard OpenClaw на :18789
+- current live route = google-gemini-cli/gemini-3.1-pro-preview
+- свежий truthful artifact: `artifacts/ops/translator_finish_gate_user3_latest.json`
+- автоматическая часть translator gate уже зелёная:
+  - gateway regression = 17 passed
+  - iOS build/install = ok
+  - launch attempt = locked, то есть хвост сейчас не кодовый
+- внутри этого артефакта route `openai-codex/gpt-5.4` относится к конкретному automation-run, а не к текущему live runtime
+- memory/amnesia fix уже в коде и persisted cache:
+  - `Repair Chat Memory Cache.command` уже вычистил reasoning-мусор из `chat_history:312322764`
+- незакрытый остаток: короткий ручной `ru -> es` retest на iPhone 14 Pro Max после unlock
+- нужно отдельно проверить, что `Recognition request was canceled` больше не всплывает после stop/start
+- для полного closure амнезии нужен финальный flush уже загруженной live session у `pablito` (`!clear` или controlled restart)
+- пользователь отдельно сообщал о плавающем scaling-regression в iPhone companion; если повторится, фиксировать как отдельный UX-блокер acceptance
+- `main` не трогать до подтверждения на `pablito`
+- после closure translator + amnesia хвостов оптимально сразу включить Plan Mode и планировать следующий блок уже без этих хвостов
 
 Первый шаг:
-1) проверить git status и текущую ветку
-2) если работа идёт на pablito — запустить Verify Live Parallelism On Pablito.command
-3) затем продолжить с ближайшего незакрытого пункта roadmap
+1) проверить git status
+2) проверить /api/health/lite, /api/translator/readiness, /api/openclaw/model-routing/status, /api/ops/runtime_snapshot
+3) проверить `artifacts/ops/translator_finish_gate_user3_latest.json`
+4) закрыть ручной translator retest и flush-нуть live memory-session
+5) обновить handoff/docs
+6) потом включить Plan Mode для следующей фазы
 ```

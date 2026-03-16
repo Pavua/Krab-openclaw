@@ -1,7 +1,7 @@
 # OpenClaw Krab Roadmap
 
-Дата актуализации: 2026-03-15
-Ветка реализации: `codex/userbot-runtime-truth-hardening`
+Дата актуализации: 2026-03-16
+Ветка реализации: `codex/translator-finish-gate-user3`
 Текущая ориентировочная готовность большого плана: `~52%`
 
 ## Цель
@@ -222,17 +222,27 @@
   - `status: ready_for_onboarding`
   - preset `subtitles-first` реально заполняет draft-поля и сохраняется после refresh
   - export из owner panel уже пишет `artifacts/ops/translator_mobile_onboarding_latest.json`
+- [x] Translator finish gate на `USER3` получил отдельный truthful automation-layer
+  - `src/core/translator_finish_gate.py` собирает единый snapshot по runtime/gateway/iOS/manual tails
+  - `scripts/check_translator_finish_gate.py` и `Check Translator Finish Gate.command` дают one-click evidence для этого milestone
+  - свежий артефакт `artifacts/ops/translator_finish_gate_user3_latest.json` зафиксировал automation-run с route `openai-codex/gpt-5.4`, gateway regression `17 passed`, iOS build/install = `ok`
+  - автоматическая часть milestone зелёная; незакрытым остаётся только короткий ручной `ru -> es` retest после разблокировки `iPhone 14 Pro Max`
+- [x] Memory/amnesia repair доведён до code + persisted cache truth
+  - `src/core/openclaw_workspace.py` теперь подмешивает tail `memory/<day>.md`, а не шумную "голову" файла
+  - `src/openclaw_client.py` теперь санирует reasoning-мусор не только при записи нового ответа, но и при восстановлении старой chat-history/in-memory session
+  - добавлены repair entrypoints: `scripts/sanitize_history_cache.py` и `Repair Chat Memory Cache.command`
+  - persisted `chat_history:312322764` уже очищен: `bad_count = 0`
+  - unit coverage зелёная: `tests/unit/test_openclaw_workspace_and_memory_bridge.py`, `tests/unit/test_openclaw_client.py`
 
 ## Текущие live блокеры
 
-- [ ] Current live route всё ещё идёт через `google/gemini-3.1-pro-preview`, а не через `openai-codex/gpt-5.4`
-- [ ] `google-gemini-cli` на `USER2` сейчас не имеет устойчивого OAuth-store (`~/.gemini/oauth_creds.json` отсутствует)
-- [ ] `google-antigravity` сохранён, но в штатном runtime snapshot сейчас виден только как legacy/bypass-контур
-- [ ] На `iPhone 14 Pro Max` ещё нужно доставить свежую settings-сборку, чтобы on-device работали `source_lang / target_lang / Health-check`
+- [ ] На `iPhone 14 Pro Max` ещё не закрыт финальный ручной `ru -> es` retest: последний CLI-launch упёрся в `Locked`, а без этого нельзя честно закрыть translator finish gate
+- [ ] Пользователь дополнительно сообщал о плавающем scaling-regression в `iPhone companion`: приложение иногда схлопывалось примерно в половину экрана и мешало ручному retest
 - [ ] `iPhone 15 Pro Max` остаётся нестабильным dev-target из-за Apple/Xcode/CoreDevice tunnel reconnect
-- [ ] Ordinary-call translator track теперь блокируется отсутствием зарегистрированного `iPhone companion`
+- [ ] На основной учётке `pablito` ещё не воспроизведены runtime truth, owner panel и translator acceptance после текущего USER3-цикла
 - [ ] Финальный release gate на целевой учётке `pablito` ещё не перепрогнан после account-local relogin
-- [ ] Для новой третьей macOS-учётки ещё нужен один bootstrap-цикл: tools, `~/.openclaw` baseline, skills и account-local auth/browser state
+- [ ] Живой runtime на `:8080` сейчас идёт через `google-gemini-cli/gemini-3.1-pro-preview`, поэтому docs/handoff должны различать route в translator gate artifact и текущий live route
+- [ ] Для полного closure амнезии нужен финальный flush уже загруженной live session у `pablito`: safest path — одноразовый `!clear` в owner-чате или controlled restart с `pablito`
 
 ## Что считается подтверждением
 
@@ -252,6 +262,8 @@
 - [x] Live runtime: `:8080/api/translator/mobile/trial-prep` безопасно валидирует `device_id` и не мутирует state без явного companion id
 - [x] Live runtime: `:8080/api/translator/delivery-matrix`
 - [x] Live runtime: `:8080/api/translator/live-trial-preflight`
+- [x] Ops artifact: `artifacts/ops/translator_finish_gate_user3_latest.json`
+- [x] One-click helper: `Check Translator Finish Gate.command`
 - [x] Live ecosystem e2e: `scripts/live_ecosystem_e2e.py --require-openclaw --require-ear --require-voice-lifecycle`
 - [x] Owner UI smoke: карточка `Translator Readiness` + refresh button + DOM/API parity
 - [x] Owner UI smoke: session policy / runtime tuning / quick phrases в translator-карточке

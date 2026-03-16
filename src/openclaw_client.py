@@ -60,6 +60,17 @@ EMBEDDED_SESSION_LANE_ERROR_RE = re.compile(
 class OpenClawClient:
     """Клиент OpenClaw Gateway API."""
 
+    _think_block_pattern = re.compile(r"(?is)<think>.*?</think>")
+    _final_block_pattern = re.compile(r"(?is)<final>(.*?)</final>")
+    _think_final_tag_pattern = re.compile(r"(?i)</?(?:think|final)>")
+    _plaintext_reasoning_intro_pattern = re.compile(
+        r"(?i)^(?:think|thinking|thinking process|reasoning|analysis)\s*:?\s*$"
+    )
+    _plaintext_reasoning_step_pattern = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+")
+    _plaintext_reasoning_meta_pattern = re.compile(
+        r"(?i)^(?:step\s*\d+|thinking process|analysis|reasoning|analyze(?: the)? user(?:'s)? request|draft the response)\b"
+    )
+
     def __init__(self):
         self.base_url = config.OPENCLAW_URL.rstrip("/")
         self.token = config.OPENCLAW_TOKEN
@@ -370,6 +381,180 @@ class OpenClawClient:
                     if isinstance(part, dict) and part.get("type") == "text":
                         total += len(part.get("text", ""))
         return total
+
+    @classmethod
+    def _split_plaintext_reasoning_and_answer(cls, text: str) -> tuple[str, str]:
+        """
+        Отделяет plain-text reasoning от финального ответа.
+
+        Почему это нужно:
+        - часть OpenClaw-совместимых маршрутов возвращает не только ответ, но и
+          служебный reasoning в одном `content`;
+        - такой текст нельзя сохранять в chat-history как нормальную assistant-реплику,
+          иначе следующий запрос увидит цепочку мыслей вместо полезного контекста.
+        """
+        raw = str(text or "")
+        if not raw.strip():
+            return "", ""
+
+        lines = raw.splitlines()
+        non_empty_indexes = [idx for idx, line in enumerate(lines) if line.strip()]
+        if not non_empty_indexes:
+            return "", raw.strip()
+
+        intro_hits = 0
+        for idx in non_empty_indexes[:3]:
+            stripped = lines[idx].strip()
+            if cls._plaintext_reasoning_intro_pattern.match(stripped):
+                intro_hits += 1
+                continue
+            if idx == non_empty_indexes[0] and stripped.lower().startswith("thinking process:"):
+                intro_hits += 1
+                continue
+        if intro_hits == 0:
+            return "", raw.strip()
+
+        def _is_reasoning_line(candidate: str) -> bool:
+            stripped = candidate.strip()
+            if not stripped:
+                return False
+            if cls._plaintext_reasoning_intro_pattern.match(stripped):
+                return True
+            if cls._plaintext_reasoning_step_pattern.match(stripped):
+                return True
+            if cls._plaintext_reasoning_meta_pattern.match(stripped):
+                return True
+            return False
+
+        last_content_idx: int | None = None
+        for idx in range(len(lines) - 1, -1, -1):
+            if lines[idx].strip():
+                last_content_idx = idx
+                break
+        if last_content_idx is None:
+            return "", ""
+
+        answer_end = last_content_idx
+        answer_start: int | None = None
+        for idx in range(last_content_idx, -1, -1):
+            current = lines[idx]
+            if not current.strip():
+                if answer_start is not None:
+                    break
+                continue
+            if _is_reasoning_line(current):
+                if answer_start is not None:
+                    break
+                continue
+            answer_start = idx
+
+        if answer_start is None:
+            return raw.strip(), ""
+
+        reasoning = "\n".join(lines[:answer_start]).strip()
+        extracted = "\n".join(lines[answer_start : answer_end + 1]).strip()
+        if not reasoning:
+            return "", raw.strip()
+        return reasoning, extracted or raw.strip()
+
+    @classmethod
+    def _sanitize_assistant_response(cls, text: str) -> str:
+        """
+        Оставляет только пользовательски полезный финальный текст ответа.
+
+        Зачем:
+        - history cache должен хранить тот же смысловой ответ, который видит пользователь;
+        - reasoning-блоки и `<think>/<final>` markup не должны попадать в будущий
+          диалоговый контекст и ломать "память" модели.
+        """
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+
+        final_match = cls._final_block_pattern.search(raw)
+        if final_match:
+            cleaned = str(final_match.group(1) or "")
+        else:
+            cleaned = cls._think_block_pattern.sub("", raw)
+
+        cleaned = cls._think_final_tag_pattern.sub("", cleaned)
+        _, answer = cls._split_plaintext_reasoning_and_answer(cleaned)
+        normalized = answer or cleaned
+        normalized = re.sub(r"[ \t]{2,}", " ", normalized)
+        normalized = re.sub(r"(?mi)^\s*(assistant|user|system)\s*$", "", normalized)
+        normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+        return normalized.strip()
+
+    @classmethod
+    def _sanitize_session_history(
+        cls,
+        messages: List[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], bool]:
+        """
+        Очищает уже сохранённую историю от reasoning-мусора.
+
+        Почему это нужно:
+        - баг с `<think>`/plain-text reasoning уже мог успеть попасть в
+          `history_cache.db` до фикса;
+        - если не санировать старые assistant-реплики, следующий запрос
+          продолжит видеть "мысли модели" как обычный контекст и будет
+          вести себя так, будто у него амнезия.
+        """
+        sanitized: list[dict[str, Any]] = []
+        changed = False
+
+        for message in messages:
+            if not isinstance(message, dict):
+                changed = True
+                continue
+
+            role = str(message.get("role") or "").strip()
+            if not role:
+                changed = True
+                continue
+
+            if role == "assistant" and isinstance(message.get("content"), str):
+                cleaned_content = cls._sanitize_assistant_response(message.get("content") or "")
+                if cleaned_content != str(message.get("content") or "").strip():
+                    changed = True
+                if not cleaned_content:
+                    changed = True
+                    continue
+                if cleaned_content != message.get("content"):
+                    updated_message = dict(message)
+                    updated_message["content"] = cleaned_content
+                    sanitized.append(updated_message)
+                    continue
+
+            sanitized.append(message)
+
+        return sanitized, changed
+
+    def _sanitize_session_and_cache(self, chat_id: str) -> None:
+        """
+        Приводит в порядок in-memory историю и её кэшированную копию.
+
+        Это lazy-repair: как только чат снова оживает, мы переписываем его
+        историю уже в очищенном виде, не требуя ручного `!clear`.
+        """
+        current_messages = self._sessions.get(chat_id)
+        if not isinstance(current_messages, list) or not current_messages:
+            return
+
+        sanitized_messages, changed = self._sanitize_session_history(current_messages)
+        if not changed:
+            return
+
+        self._sessions[chat_id] = sanitized_messages
+        try:
+            history_cache.set(
+                f"chat_history:{chat_id}",
+                json.dumps(sanitized_messages, ensure_ascii=False),
+                ttl=HISTORY_CACHE_TTL,
+            )
+            logger.info("history_cache_sanitized", chat_id=chat_id, messages=len(sanitized_messages))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("history_cache_sanitize_set_failed", chat_id=chat_id, error=str(exc))
 
     def _apply_sliding_window(
         self,
@@ -1656,8 +1841,24 @@ class OpenClawClient:
             cached = history_cache.get(f"chat_history:{chat_id}")
             if cached:
                 try:
-                    self._sessions[chat_id] = json.loads(cached)
+                    restored_messages = json.loads(cached)
+                    sanitized_messages, changed = self._sanitize_session_history(restored_messages)
+                    self._sessions[chat_id] = sanitized_messages
                     logger.info("history_restored_from_cache", chat_id=chat_id, messages=len(self._sessions[chat_id]))
+                    if changed:
+                        try:
+                            history_cache.set(
+                                f"chat_history:{chat_id}",
+                                json.dumps(self._sessions[chat_id], ensure_ascii=False),
+                                ttl=HISTORY_CACHE_TTL,
+                            )
+                            logger.info(
+                                "history_cache_rewritten_after_restore",
+                                chat_id=chat_id,
+                                messages=len(self._sessions[chat_id]),
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("history_cache_restore_rewrite_failed", chat_id=chat_id, error=str(exc))
                 except (json.JSONDecodeError, TypeError):
                     self._sessions[chat_id] = []
             else:
@@ -1667,6 +1868,8 @@ class OpenClawClient:
                 self._sessions[chat_id].append({"role": "system", "content": system_prompt})
             elif system_prompt and self._sessions[chat_id][0].get("role") != "system":
                 self._sessions[chat_id].insert(0, {"role": "system", "content": system_prompt})
+
+        self._sanitize_session_and_cache(chat_id)
 
         if images:
             content_parts = [{"type": "text", "text": message}]
@@ -2117,6 +2320,10 @@ class OpenClawClient:
 
             if not final_response:
                 final_response = "❌ Модель не вернула ответ."
+
+            sanitized_response = self._sanitize_assistant_response(final_response)
+            if sanitized_response:
+                final_response = sanitized_response
 
             if (
                 not self._last_runtime_route

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -125,6 +126,87 @@ async def test_send_message_stream_success_buffered(client: OpenClawClient) -> N
     route = client.get_last_runtime_route()
     assert route.get("channel") == "openclaw_cloud"
     assert route.get("status") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_strips_reasoning_before_history_cache(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    noisy_response = (
+        "think\n"
+        "Thinking Process:\n"
+        "1. Проверю контекст.\n"
+        "2. Сформулирую ответ.\n\n"
+        "🦀 Контекст восстановлен. Продолжаем работу."
+    )
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value=noisy_response)):
+                chunks = []
+                async for chunk in client.send_message_stream("Hi", "chat-reasoning-clean"):
+                    chunks.append(chunk)
+
+    assert "".join(chunks) == "🦀 Контекст восстановлен. Продолжаем работу."
+    assert client._sessions["chat-reasoning-clean"][-1]["content"] == "🦀 Контекст восстановлен. Продолжаем работу."
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_sanitizes_restored_history_cache(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    cached_history = json.dumps(
+        [
+            {"role": "system", "content": "sys"},
+            {
+                "role": "assistant",
+                "content": "think\nThinking Process:\n1. Проверка.\n\n🦀 Уже очищенный смысл.",
+            },
+        ],
+        ensure_ascii=False,
+    )
+
+    with patch("src.openclaw_client.history_cache.get", return_value=cached_history):
+        with patch("src.openclaw_client.history_cache.set") as cache_set:
+            with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+                with patch.object(model_manager, "is_local_model", return_value=False):
+                    with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Новый ответ")):
+                        chunks = []
+                        async for chunk in client.send_message_stream("Hi", "chat-restored-cache"):
+                            chunks.append(chunk)
+
+    assert "".join(chunks) == "Новый ответ"
+    assert client._sessions["chat-restored-cache"][1]["content"] == "🦀 Уже очищенный смысл."
+    persisted_payloads = [call.args[1] for call in cache_set.call_args_list if len(call.args) >= 2]
+    assert persisted_payloads
+    assert all("Thinking Process" not in payload for payload in persisted_payloads)
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_sanitizes_existing_in_memory_session(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    client._sessions["chat-existing-session"] = [
+        {"role": "system", "content": "sys"},
+        {
+            "role": "assistant",
+            "content": "think\nThe model is thinking.\n\n🦀 Сохраняем только это.",
+        },
+    ]
+
+    with patch("src.openclaw_client.history_cache.set") as cache_set:
+        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(model_manager, "is_local_model", return_value=False):
+                with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")):
+                    chunks = []
+                    async for chunk in client.send_message_stream("Hi", "chat-existing-session"):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "OK"
+    assert client._sessions["chat-existing-session"][1]["content"] == "🦀 Сохраняем только это."
+    persisted_payloads = [call.args[1] for call in cache_set.call_args_list if len(call.args) >= 2]
+    assert persisted_payloads
+    assert all("The model is thinking" not in payload for payload in persisted_payloads)
 
 
 @pytest.mark.asyncio

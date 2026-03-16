@@ -40,14 +40,15 @@ ARTIFACTS_DIR = ROOT / "artifacts"
 NOW = datetime.now(timezone.utc)
 STAMP = NOW.strftime("%Y%m%d_%H%M%S")
 BUNDLE_DIR = ARTIFACTS_DIR / f"handoff_{STAMP}"
-PROJECT_READINESS = "~99%"
+PROJECT_READINESS = "~52%"
+DOWNLOADS_MASTER_PLAN = Path("/Users/pablito/Downloads/PLAN-Краб+переводчик 12.03.2026.md")
 RECOVERY_BRANCHES = (
+    "codex/translator-finish-gate-user3",
+    "codex/reserve-roundtrip-e2e",
+    "codex/inbox-transport-trace-propagation",
     "codex/live-8080-parallelism-acceptance",
     "codex/release-gate-checklist",
-    "codex/pablito-live-parallelism-helper",
-    "codex/signal-alert-ssl-hardening",
     "codex/web-runtime-smoke-hardening",
-    "codex/handoff-bundle-polish",
 )
 
 
@@ -295,8 +296,19 @@ def _build_known_issues_matrix(log_text: str) -> tuple[list[dict[str, Any]], str
 
 
 def _copy_if_exists(src: Path, dst: Path) -> None:
-    if src.exists():
-        shutil.copy2(src, dst)
+    """
+    Копирует файл в bundle, если он доступен в текущей учётке.
+
+    Почему так:
+    - часть handoff-источников живёт в account-local директориях вроде `~/Downloads`;
+    - на `USER3` такие пути из `pablito` могут быть недоступны по PermissionError;
+    - exporter не должен падать из-за необязательного файла, если остальной bundle можно собрать честно.
+    """
+    try:
+        if src.exists():
+            shutil.copy2(src, dst)
+    except OSError:
+        return
 
 
 def _latest_file_by_glob(pattern: str) -> Path | None:
@@ -353,6 +365,9 @@ def _collect_acceptance_artifacts(bundle_dir: Path) -> dict[str, Any]:
       и readiness следующего этапа без ручного поиска файлов в artifacts.
     """
     patterns = {
+        "reserve_telegram_roundtrip": "artifacts/live_smoke/reserve_telegram_roundtrip_*.json",
+        "owner_manual_userbot_roundtrip": "artifacts/live_smoke/owner_manual_userbot_roundtrip*.json",
+        "live_channel_smoke": "artifacts/live_smoke/live_channel_smoke*.json",
         "e1e3_acceptance": "artifacts/e1e3_acceptance_*.json",
         "channels_photo_chrome_acceptance": "artifacts/channels_photo_chrome_acceptance_*.json",
         "channels_photo_chrome_smoke": "artifacts/channels_photo_chrome_smoke_*.json",
@@ -465,6 +480,36 @@ def _collect_ops_evidence(bundle_dir: Path) -> dict[str, Any]:
     return records
 
 
+def _collect_runtime_baseline_snapshots(bundle_dir: Path) -> dict[str, Any]:
+    """
+    Копирует в bundle безопасные baseline-снимки runtime-конфига текущей учётки.
+
+    Почему:
+    - на новой macOS-учётке часто не хватает не секретов, а именно baseline-конфига
+      (`openclaw.json`, `models.json`, `agent.json`), и их удобнее приложить сразу.
+    - `auth-profiles.json` намеренно не копируем, чтобы не притворяться готовым auth-state.
+    """
+    openclaw_home = Path.home() / ".openclaw"
+    sources = {
+        "openclaw_config": openclaw_home / "openclaw.json",
+        "agent_config": openclaw_home / "agents" / "main" / "agent" / "agent.json",
+        "models_config": openclaw_home / "agents" / "main" / "agent" / "models.json",
+    }
+    records: dict[str, Any] = {}
+    for key, src in sources.items():
+        dst = bundle_dir / f"{src.name}.snapshot"
+        record = {
+            "source_path": str(src),
+            "bundle_path": None,
+            "found": src.exists(),
+        }
+        if src.exists():
+            shutil.copy2(src, dst)
+            record["bundle_path"] = str(dst)
+        records[key] = record
+    return records
+
+
 def _build_attach_summary_md(
     *,
     runtime_snapshot: dict[str, Any],
@@ -533,17 +578,17 @@ def _build_attach_summary_md(
         f"- `recent_activity`: `{last_activity.get('action', 'n/a')}` by `{last_activity.get('actor', 'n/a')}`",
         "",
         "## Что уже закрыто на USER2",
-        "- truthful блок параллелизма в owner UI реализован и подтверждён unit + browser smoke на изолированном `:18081`",
-        "- release gate и runbook доведены до рабочего состояния; merge-gate зелёный",
-        "- owner-mismatch в strict runtime smoke классифицируется честно как blocked-среда, а не как code failure",
-        "- `signal_alert_route` больше не даёт ложные `CERTIFICATE_VERIFY_FAILED` и умеет truth-fallback через web endpoint",
-        "- `live_channel_smoke` и web-based runtime smoke доведены до полезного verdict на временной учётке",
-        "- attach-ready handoff bundle теперь генерируется вместе с summary, checklist, manifest и zip-архивом",
+        "- shared workspace/state уже отражается в runtime snapshot и capability truth без отдельной амнезии userbot",
+        "- ACL parity уже truthfully разделяет owner/full/partial без ложных owner-команд у `full`",
+        "- owner inbox / escalation / approval flow уже first-class и сохраняет `trace_id` и `source_item_id`",
+        "- persisted operator workflow уже содержит живой owner roundtrip trail и recent replied requests",
+        "- reserve Telegram roundtrip вынесен в отдельный live smoke-контур",
+        "- attach-ready handoff bundle генерируется вместе с summary, checklist, manifest и zip-архивом",
         "",
         "## Реальные хвосты перед абсолютным финишем",
-        "- переподтвердить новый блок параллелизма на живом `:8080` после restart именно от владельца `pablito`",
-        "- при желании закрыть строгий `owner -> userbot -> reply` и полный inbound reserve round-trip как отдельный live E2E этап",
-        "- переподтвердить или перелогинить `google-gemini-cli`, потому что OAuth fallback отмечен как хрупкий",
+        "- вернуть usable auth/runtime state для `openai-codex`, `google-gemini-cli` и при необходимости `google-antigravity`",
+        "- после auth-изменений перепрогнать release gate ещё раз",
+        "- при следующем цикле держать bundle и live evidence свежими",
     ]
 
     if active_issues:
@@ -573,7 +618,13 @@ def _build_attach_summary_md(
             "2. `PABLITO_RETURN_CHECKLIST.md`",
             "3. `NEXT_CHAT_CHECKPOINT_RU.md`",
             "4. `OPENCLAW_KRAB_ROADMAP.md`",
-            "5. `HANDOFF_MANIFEST.json`",
+            "5. `MASTER_PLAN_VNEXT_RU.md`",
+            "6. `CALL_TRANSLATOR_AUDIT_RU.md`",
+            "7. `MULTI_ACCOUNT_SWITCHOVER_RU.md`",
+            "8. `THIRD_ACCOUNT_BOOTSTRAP_RU.md`",
+            "9. `KRAB_SKILLS_REGISTRY_RU.md`",
+            "10. `PARALLEL_DIALOG_PROTOCOL_RU.md`",
+            "11. `HANDOFF_MANIFEST.json`",
             "",
             "## Что уже лежит как evidence",
         ]
@@ -588,6 +639,9 @@ def _build_attach_summary_md(
         if record.get("bundle_path"):
             lines.append(f"- `{Path(str(record['bundle_path'])).name}`")
     for key in (
+        "reserve_telegram_roundtrip",
+        "owner_manual_userbot_roundtrip",
+        "live_channel_smoke",
         "e1e3_acceptance",
         "channels_photo_chrome_acceptance",
         "channels_photo_chrome_smoke",
@@ -595,6 +649,21 @@ def _build_attach_summary_md(
         record = acceptance.get(key) or {}
         if record.get("bundle_path"):
             lines.append(f"- `{Path(str(record['bundle_path'])).name}`")
+    runtime_baseline = runtime_snapshot.get("runtime_baseline_snapshots") or {}
+    snapshot_names = [
+        Path(str((runtime_baseline.get(key) or {}).get("bundle_path"))).name
+        for key in ("openclaw_config", "agent_config", "models_config")
+        if (runtime_baseline.get(key) or {}).get("bundle_path")
+    ]
+    if snapshot_names:
+        lines.extend(
+            [
+                "",
+                "## Baseline snapshots для новой учётки",
+            ]
+        )
+        for name in snapshot_names:
+            lines.append(f"- `{name}`")
     return "\n".join(lines) + "\n"
 
 
@@ -606,11 +675,11 @@ def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any]) -> s
     дополнительной реконструкции команд.
     """
     git = runtime_snapshot.get("git") if isinstance(runtime_snapshot, dict) else {}
-    branch = str((git or {}).get("branch") or "").strip() or "codex/handoff-bundle-polish"
+    branch = str((git or {}).get("branch") or "").strip() or "codex/translator-finish-gate-user3"
     lines = [
         "# PABLITO RETURN CHECKLIST",
         "",
-        "Этот чеклист нужен для возврата на основную учётку `pablito` и закрытия последнего live acceptance-хвоста.",
+        "Этот чеклист нужен для возврата на основную учётку `pablito` и для финального live/gate цикла без потери текущего контекста.",
         "",
         f"- Рабочая ветка для продолжения: `{branch}`",
         f"- Ориентировочная готовность проекта: `{PROJECT_READINESS}`",
@@ -621,22 +690,21 @@ def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any]) -> s
         "git fetch origin",
         f"git switch {branch}",
         "git pull --ff-only",
-        "./Verify\\ Live\\ Parallelism\\ On\\ Pablito.command",
+        "./Release\\ Gate.command",
         "```",
         "",
-        "## Что должен сделать helper",
-        "- остановить старый runtime",
-        "- поднять свежий runtime уже от владельца `pablito`",
+        "## Что должен сделать цикл на `pablito`",
+        "- проверить, что runtime поднят уже от владельца `pablito`",
         "- дождаться `:8080` и `:18789`",
-        "- прочитать `/api/model/catalog`",
-        "- сохранить truth в `artifacts/ops/live_parallelism_truth_latest.json`",
-        "- открыть `http://127.0.0.1:8080`",
+        "- перечитать `/api/health/lite`, `/api/openclaw/model-routing/status`, `/api/ops/runtime_snapshot`",
+        "- при необходимости пройти one-click OAuth login для `openai-codex` / `google-gemini-cli` / `google-antigravity`",
+        "- прогнать свежий release gate и handoff bundle",
         "",
         "## Если нужен ручной режим",
         "```bash",
         "cd /Users/pablito/Antigravity_AGENTS/Краб",
         "./new\\ Stop\\ Krab.command",
-        "nohup ./new\\ start_krab.command > logs/live_parallelism_restart.log 2>&1 &",
+        "nohup ./new\\ start_krab.command > logs/release_gate_restart.log 2>&1 &",
         "python3 - <<'PY'",
         "import json, time, urllib.request",
         "for _ in range(80):",
@@ -647,16 +715,86 @@ def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any]) -> s
         "    except Exception:",
         "        pass",
         "    time.sleep(1.5)",
-        "with urllib.request.urlopen('http://127.0.0.1:8080/api/model/catalog', timeout=10) as r:",
+        "with urllib.request.urlopen('http://127.0.0.1:8080/api/openclaw/model-routing/status', timeout=10) as r:",
         "    payload = json.loads(r.read().decode())",
-        "print(json.dumps(payload.get('catalog', {}).get('parallelism_truth', {}), ensure_ascii=False, indent=2))",
+        "print(json.dumps(payload, ensure_ascii=False, indent=2))",
         "PY",
         "```",
         "",
         "## После live verify",
         "1. Сохранить новый handoff bundle уже на `pablito`, если пойдёшь дальше.",
-        "2. Если live `:8080` подтвердился, снять этот хвост из roadmap/checkpoint.",
-        "3. Дальше решать, нужен ли ещё строгий live E2E owner/reserve Telegram.",
+        "2. Зафиксировать свежие `pre_release_smoke_latest.json` и `r20_merge_gate_latest.json`.",
+        "3. Если auth/runtime state улучшен, обновить roadmap/checkpoint по факту.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _build_third_account_bootstrap_md(*, runtime_snapshot: dict[str, Any]) -> str:
+    """
+    Формирует короткий практический runbook для новой macOS-учётки.
+
+    Нужен, чтобы переход в новый диалог на ещё одной учётке не зависел от памяти
+    и не смешивал shared-repo слой с account-local auth/runtime состоянием.
+    """
+    git = runtime_snapshot.get("git") if isinstance(runtime_snapshot, dict) else {}
+    branch = str((git or {}).get("branch") or "").strip() or "codex/translator-finish-gate-user3"
+    lines = [
+        "# THIRD ACCOUNT BOOTSTRAP",
+        "",
+        "Этот документ нужен для новой macOS-учётки, где уже выполнен вход в Codex,",
+        "но ещё не подняты project-specific tools, skills и account-local runtime/auth контур.",
+        "",
+        f"- Рабочая ветка для продолжения: `{branch}`",
+        f"- Ориентировочная готовность проекта: `{PROJECT_READINESS}`",
+        "",
+        "## Что открыть сразу",
+        "1. `ATTACH_SUMMARY_RU.md`",
+        "2. `START_NEXT_CHAT.md`",
+        "3. `MULTI_ACCOUNT_SWITCHOVER_RU.md`",
+        "4. `THIRD_ACCOUNT_BOOTSTRAP_RU.md`",
+        "5. `KRAB_SKILLS_REGISTRY_RU.md`",
+        "6. `THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md`",
+        "",
+        "## Что должно быть доступно на новой учётке",
+        "- shared repo: `/Users/Shared/Antigravity_AGENTS/Краб`",
+        "- `python3`",
+        "- `node` и `npx`",
+        "- `rg`",
+        "- `Google Chrome`",
+        "",
+        "## Что имеет смысл перенести как baseline",
+        "- `~/.codex/skills`",
+        "- `~/.openclaw/openclaw.json`",
+        "- `~/.openclaw/agents/main/agent/models.json`",
+        "- при необходимости `~/.openclaw/agents/main/agent/agent.json`",
+        "",
+        "## Что нельзя считать подтверждённым после копирования",
+        "- `auth-profiles.json`",
+        "- browser profile / remote debugging / MCP attach",
+        "- `Gemini CLI OAuth` store",
+        "- `OpenAI Codex` local auth state",
+        "- `google-antigravity` bypass/browser flow",
+        "",
+        "## Первый локальный прогон",
+        "```bash",
+        "cd /Users/Shared/Antigravity_AGENTS/Краб",
+        "git fetch origin",
+        f"git switch {branch}",
+        "git pull --ff-only",
+        "./Check\\ New\\ Account\\ Readiness.command",
+        "```",
+        "Helper для первого прогона: `Check New Account Readiness.command`.",
+        "",
+        "## Что прикладывать в новый диалог",
+        "1. Всю свежую папку `artifacts/handoff_<timestamp>` или её zip.",
+        "2. Если исходный стратегический файл не попал в bundle, отдельно приложить `PLAN-Краб+переводчик 12.03.2026.md`.",
+        "3. Отдельно прикладывать roadmap/checkpoint уже не нужно, если bundle свежий и полный.",
+        "4. Для первого сообщения в новом окне можно просто вставить `THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md`.",
+        "",
+        "## Что остаётся только для `pablito`",
+        "- account-local relogin через owner panel",
+        "- финальный `Release Gate.command`",
+        "- финальная acceptance-проверка на основной учётке",
     ]
     return "\n".join(lines) + "\n"
 
@@ -684,8 +822,16 @@ def _build_handoff_manifest(
             "start_next_chat": str(BUNDLE_DIR / "START_NEXT_CHAT.md"),
             "attach_summary": str(BUNDLE_DIR / "ATTACH_SUMMARY_RU.md"),
             "pablito_return_checklist": str(BUNDLE_DIR / "PABLITO_RETURN_CHECKLIST.md"),
+            "third_account_bootstrap": str(BUNDLE_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md"),
+            "third_account_new_chat_prompt": str(BUNDLE_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md"),
             "runtime_snapshot": str(BUNDLE_DIR / "runtime_snapshot.json"),
+            "master_plan": str(BUNDLE_DIR / "MASTER_PLAN_VNEXT_RU.md"),
+            "skills_registry": str(BUNDLE_DIR / "KRAB_SKILLS_REGISTRY_RU.md"),
+            "translator_audit": str(BUNDLE_DIR / "CALL_TRANSLATOR_AUDIT_RU.md"),
+            "multi_account_switchover": str(BUNDLE_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md"),
+            "parallel_dialog_protocol": str(BUNDLE_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md"),
             "manifest": str(BUNDLE_DIR / "HANDOFF_MANIFEST.json"),
+            "downloads_master_plan": str(BUNDLE_DIR / DOWNLOADS_MASTER_PLAN.name),
         },
         "git": runtime_snapshot.get("git") or {},
         "recovery_branches": runtime_snapshot.get("recovery_branches") or [],
@@ -693,13 +839,26 @@ def _build_handoff_manifest(
         "ops_evidence": ops_evidence,
         "known_issues": runtime_snapshot.get("known_issues") or [],
         "operator_workflow": runtime_snapshot.get("operator_workflow") or {},
+        "runtime_baseline_snapshots": runtime_snapshot.get("runtime_baseline_snapshots") or {},
         "bundle_files": sorted(bundle_files),
         "resume_target": {
             "account": "pablito",
             "preferred_branch": str((runtime_snapshot.get("git") or {}).get("branch") or "").strip()
-            or "codex/handoff-bundle-polish",
-            "helper_command": "/Users/pablito/Antigravity_AGENTS/Краб/Verify Live Parallelism On Pablito.command",
-            "live_truth_artifact": "/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/live_parallelism_truth_latest.json",
+            or "codex/translator-finish-gate-user3",
+            "helper_command": "/Users/pablito/Antigravity_AGENTS/Краб/Release Gate.command",
+            "live_truth_artifact": "/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/pre_release_smoke_latest.json",
+        },
+        "other_account_transition": {
+            "strategy": "shared_repo_docs_artifacts__split_runtime_auth_secrets_browser_state_per_account",
+            "readiness_helper": "/Users/pablito/Antigravity_AGENTS/Краб/Check New Account Readiness.command",
+            "required_docs": [
+                "MASTER_PLAN_VNEXT_RU.md",
+                "CALL_TRANSLATOR_AUDIT_RU.md",
+                "MULTI_ACCOUNT_SWITCHOVER_RU.md",
+                "THIRD_ACCOUNT_BOOTSTRAP_RU.md",
+                "KRAB_SKILLS_REGISTRY_RU.md",
+                "PARALLEL_DIALOG_PROTOCOL_RU.md",
+            ],
         },
     }
 
@@ -724,11 +883,21 @@ def _build_start_next_chat_md(
         bundle_dir / "NEXT_CHAT_CHECKPOINT_RU.md",
         bundle_dir / "OPENCLAW_KRAB_ROADMAP.md",
         bundle_dir / "NEW_CHAT_BOOTSTRAP_PROMPT.md",
+        bundle_dir / "MASTER_PLAN_VNEXT_RU.md",
+        bundle_dir / "CALL_TRANSLATOR_AUDIT_RU.md",
+        bundle_dir / "MULTI_ACCOUNT_SWITCHOVER_RU.md",
+        bundle_dir / "THIRD_ACCOUNT_BOOTSTRAP_RU.md",
+        bundle_dir / "KRAB_SKILLS_REGISTRY_RU.md",
+        bundle_dir / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md",
+        bundle_dir / "PARALLEL_DIALOG_PROTOCOL_RU.md",
         bundle_dir / "runtime_snapshot.json",
         bundle_dir / "HANDOFF_MANIFEST.json",
         bundle_dir / "known_issues_matrix.md",
     ]
     optional_files = [
+        acceptance.get("reserve_telegram_roundtrip", {}).get("bundle_path"),
+        acceptance.get("owner_manual_userbot_roundtrip", {}).get("bundle_path"),
+        acceptance.get("live_channel_smoke", {}).get("bundle_path"),
         acceptance.get("e1e3_acceptance", {}).get("bundle_path"),
         acceptance.get("channels_photo_chrome_acceptance", {}).get("bundle_path"),
         acceptance.get("channels_photo_chrome_smoke", {}).get("bundle_path"),
@@ -773,9 +942,13 @@ def _build_start_next_chat_md(
             "## Стартовый prompt для нового чата",
             "1. Сначала прочитай `ATTACH_SUMMARY_RU.md` и `PABLITO_RETURN_CHECKLIST.md`.",
             "2. Затем открой `NEW_CHAT_BOOTSTRAP_PROMPT.md` из этого bundle.",
-            "3. Прочитай `NEXT_CHAT_CHECKPOINT_RU.md` и `OPENCLAW_KRAB_ROADMAP.md`.",
+            "3. Прочитай `NEXT_CHAT_CHECKPOINT_RU.md`, `OPENCLAW_KRAB_ROADMAP.md` и `MASTER_PLAN_VNEXT_RU.md`.",
             "4. Не доверяй старым процентам готовности из архивных handoff-фраз; текущий truth бери только из этого bundle.",
-            "5. Добавь явное требование формата отчёта после каждой итерации:",
+            "5. Если работа идёт в соседней macOS-учётке, сначала прочитай `MULTI_ACCOUNT_SWITCHOVER_RU.md`.",
+            "6. Если работа идёт на совсем новой macOS-учётке, сначала прочитай `THIRD_ACCOUNT_BOOTSTRAP_RU.md`.",
+            "7. Для первого сообщения в новом окне можно просто вставить `THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md`.",
+            "8. Если работа разбивается на несколько диалогов, сначала прочитай `PARALLEL_DIALOG_PROTOCOL_RU.md`.",
+            "9. Добавь явное требование формата отчёта после каждой итерации:",
             "   - что изменено;",
             "   - как проверено;",
             "   - что осталось.",
@@ -783,8 +956,9 @@ def _build_start_next_chat_md(
             "## Короткая проверка после старта нового чата",
             "1. Проверить `git status --short --branch`.",
             "2. Прочитать `runtime_snapshot.json`, `HANDOFF_MANIFEST.json` и `known_issues_matrix.md`.",
-            "3. Если работа продолжается на `pablito`, запустить `Verify Live Parallelism On Pablito.command`.",
-            "4. Продолжить с ближайшего незакрытого пункта roadmap.",
+            "3. Если работа идёт в соседней macOS-учётке, запустить `Check New Account Readiness.command`.",
+            "4. Если работа продолжается на `pablito`, запустить `Release Gate.command` и затем перечитать live endpoints.",
+            "5. Продолжить с ближайшего незакрытого пункта roadmap.",
             "",
         ]
     )
@@ -850,6 +1024,8 @@ def main() -> int:
         },
         "channels": _openclaw_channels_snapshot(),
         "telegram_session": _session_state(),
+        "operator_profile": ((runtime_handoff.get("json") or {}).get("operator_profile") or {}) if isinstance(runtime_handoff.get("json"), dict) else {},
+        "translator_readiness": ((runtime_handoff.get("json") or {}).get("translator_readiness") or {}) if isinstance(runtime_handoff.get("json"), dict) else {},
         "operator_workflow": ((runtime_handoff.get("json") or {}).get("operator_workflow") or {}) if isinstance(runtime_handoff.get("json"), dict) else {},
         "secrets_masked": {
             "openclaw_token": _mask_secret(os.getenv("OPENCLAW_TOKEN", "")),
@@ -858,14 +1034,25 @@ def main() -> int:
             "openai_api_key": _mask_secret(os.getenv("OPENAI_API_KEY", "")),
             "web_api_key": _mask_secret(os.getenv("WEB_API_KEY", "")),
         },
+        "docs": {
+            "master_plan": str(DOCS_DIR / "MASTER_PLAN_VNEXT_RU.md"),
+            "translator_audit": str(DOCS_DIR / "CALL_TRANSLATOR_AUDIT_RU.md"),
+            "multi_account_switchover": str(DOCS_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md"),
+            "third_account_bootstrap": str(DOCS_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md"),
+            "skills_registry": str(DOCS_DIR / "KRAB_SKILLS_REGISTRY_RU.md"),
+            "third_account_new_chat_prompt": str(DOCS_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md"),
+            "parallel_dialog_protocol": str(DOCS_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md"),
+        },
         "known_issues": issues_rows,
         "recovery_branches": _collect_recovery_branches(),
     }
 
     acceptance_artifacts = _collect_acceptance_artifacts(BUNDLE_DIR)
     ops_evidence = _collect_ops_evidence(BUNDLE_DIR)
+    runtime_baseline_snapshots = _collect_runtime_baseline_snapshots(BUNDLE_DIR)
     runtime_snapshot["acceptance_artifacts"] = acceptance_artifacts
     runtime_snapshot["ops_evidence"] = ops_evidence
+    runtime_snapshot["runtime_baseline_snapshots"] = runtime_baseline_snapshots
 
     (BUNDLE_DIR / "runtime_snapshot.json").write_text(
         json.dumps(runtime_snapshot, ensure_ascii=False, indent=2) + "\n",
@@ -878,6 +1065,14 @@ def main() -> int:
     _copy_if_exists(DOCS_DIR / "NEXT_CHAT_CHECKPOINT_RU.md", BUNDLE_DIR / "NEXT_CHAT_CHECKPOINT_RU.md")
     _copy_if_exists(DOCS_DIR / "OPENCLAW_KRAB_ROADMAP.md", BUNDLE_DIR / "OPENCLAW_KRAB_ROADMAP.md")
     _copy_if_exists(DOCS_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md", BUNDLE_DIR / "NEW_CHAT_BOOTSTRAP_PROMPT.md")
+    _copy_if_exists(DOCS_DIR / "MASTER_PLAN_VNEXT_RU.md", BUNDLE_DIR / "MASTER_PLAN_VNEXT_RU.md")
+    _copy_if_exists(DOCS_DIR / "CALL_TRANSLATOR_AUDIT_RU.md", BUNDLE_DIR / "CALL_TRANSLATOR_AUDIT_RU.md")
+    _copy_if_exists(DOCS_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md", BUNDLE_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md")
+    _copy_if_exists(DOCS_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md", BUNDLE_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md")
+    _copy_if_exists(DOCS_DIR / "KRAB_SKILLS_REGISTRY_RU.md", BUNDLE_DIR / "KRAB_SKILLS_REGISTRY_RU.md")
+    _copy_if_exists(DOCS_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md", BUNDLE_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md")
+    _copy_if_exists(DOCS_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md", BUNDLE_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md")
+    _copy_if_exists(DOWNLOADS_MASTER_PLAN, BUNDLE_DIR / DOWNLOADS_MASTER_PLAN.name)
     (BUNDLE_DIR / "ATTACH_SUMMARY_RU.md").write_text(
         _build_attach_summary_md(
             runtime_snapshot=runtime_snapshot,
@@ -888,6 +1083,10 @@ def main() -> int:
     )
     (BUNDLE_DIR / "PABLITO_RETURN_CHECKLIST.md").write_text(
         _build_pablito_return_checklist_md(runtime_snapshot=runtime_snapshot),
+        encoding="utf-8",
+    )
+    (BUNDLE_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md").write_text(
+        _build_third_account_bootstrap_md(runtime_snapshot=runtime_snapshot),
         encoding="utf-8",
     )
     (BUNDLE_DIR / "START_NEXT_CHAT.md").write_text(
@@ -930,6 +1129,7 @@ def main() -> int:
     print(f"known_issues: {BUNDLE_DIR / 'known_issues_matrix.md'}")
     print(f"attach_summary: {BUNDLE_DIR / 'ATTACH_SUMMARY_RU.md'}")
     print(f"pablito_return: {BUNDLE_DIR / 'PABLITO_RETURN_CHECKLIST.md'}")
+    print(f"third_account_bootstrap: {BUNDLE_DIR / 'THIRD_ACCOUNT_BOOTSTRAP_RU.md'}")
     print(f"manifest: {BUNDLE_DIR / 'HANDOFF_MANIFEST.json'}")
     print(f"start_packet: {BUNDLE_DIR / 'START_NEXT_CHAT.md'}")
     return 0

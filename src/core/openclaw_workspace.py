@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from .logger import get_logger
 from ..config import config
@@ -28,6 +29,9 @@ logger = get_logger(__name__)
 
 
 WORKSPACE_PROMPT_FILES: tuple[str, ...] = ("SOUL.md", "USER.md", "TOOLS.md", "MEMORY.md")
+_MEMORY_LINE_PATTERN = re.compile(
+    r"^- (?P<time>\d{2}:\d{2}) \[(?P<source>[^\]:]+)(?::(?P<author>[^\]]+))?\] (?P<text>.+)$"
+)
 
 
 def resolve_main_workspace_dir(workspace_dir: Path | None = None) -> Path:
@@ -38,7 +42,7 @@ def resolve_main_workspace_dir(workspace_dir: Path | None = None) -> Path:
     return Path.home() / ".openclaw" / "workspace-main-messaging"
 
 
-def _read_text(path: Path, *, max_chars: int) -> str:
+def _read_text(path: Path, *, max_chars: int, from_end: bool = False) -> str:
     if not path.exists():
         return ""
     try:
@@ -47,6 +51,12 @@ def _read_text(path: Path, *, max_chars: int) -> str:
         logger.warning("openclaw_workspace_read_failed", path=str(path), error=str(exc))
         return ""
     if max_chars > 0 and len(text) > max_chars:
+        if from_end:
+            tail = text[-max_chars:]
+            newline_idx = tail.find("\n")
+            if newline_idx >= 0:
+                tail = tail[newline_idx + 1 :]
+            return "[...trimmed...]\n" + tail.strip()
         return text[:max_chars].rstrip() + "\n[...trimmed...]"
     return text
 
@@ -76,7 +86,11 @@ def load_workspace_prompt_bundle(
         today = datetime.now().date()
         for offset in range(max(0, int(include_recent_memory_days))):
             day = today - timedelta(days=offset)
-            content = _read_text(memory_dir / f"{day.isoformat()}.md", max_chars=max_chars_per_file)
+            content = _read_text(
+                memory_dir / f"{day.isoformat()}.md",
+                max_chars=max_chars_per_file,
+                from_end=True,
+            )
             if content:
                 sections.append(f"[memory/{day.isoformat()}.md]\n{content}")
 
@@ -174,3 +188,111 @@ def recall_workspace_memory(
     if max_chars > 0 and len(result) > max_chars:
         return result[:max_chars].rstrip() + "\n[...trimmed...]"
     return result
+
+
+def list_workspace_memory_entries(
+    *,
+    workspace_dir: Path | None = None,
+    limit: int = 10,
+    source_filter: str = "",
+) -> list[dict[str, str]]:
+    """
+    Возвращает последние записи из общей markdown-памяти OpenClaw.
+
+    Зачем это нужно:
+    - `!recall` хорош для поиска по словам, но не показывает просто "что было недавно";
+    - proactive watch пишет короткие operational digest в ту же память;
+    - владельцу нужен быстрый просмотр последних записей без ручного чтения md-файлов.
+    """
+    root = resolve_main_workspace_dir(workspace_dir)
+    memory_dir = root / "memory"
+    if not memory_dir.exists():
+        return []
+
+    normalized_source = str(source_filter or "").strip().lower()
+    results: list[dict[str, str]] = []
+    for path in sorted(memory_dir.glob("*.md"), reverse=True):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError as exc:
+            logger.warning("openclaw_workspace_memory_read_failed", path=str(path), error=str(exc))
+            continue
+        for raw_line in reversed(lines):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = _MEMORY_LINE_PATTERN.match(line)
+            if not match:
+                continue
+            source = str(match.group("source") or "").strip()
+            if normalized_source and normalized_source not in source.lower():
+                continue
+            results.append(
+                {
+                    "date": path.stem,
+                    "time": str(match.group("time") or "").strip(),
+                    "source": source,
+                    "author": str(match.group("author") or "").strip(),
+                    "text": str(match.group("text") or "").strip(),
+                }
+            )
+            if len(results) >= max(1, int(limit)):
+                return results
+    return results
+
+
+def build_workspace_state_snapshot(
+    *,
+    workspace_dir: Path | None = None,
+    recent_entries_limit: int = 3,
+) -> dict[str, Any]:
+    """
+    Возвращает machine-readable snapshot общего OpenClaw workspace/state.
+
+    Зачем это нужно:
+    - shared workspace должен быть виден как отдельная runtime-сущность, а не только
+      как декларация `shared_memory=true` в capability registry;
+    - owner UI, handoff bundle и reserve smoke должны видеть один и тот же truthful срез;
+    - это даёт минимальный, но реальный мост между userbot и reserve transport без
+      дублирования второй памяти или второго workspace.
+    """
+    root = resolve_main_workspace_dir(workspace_dir)
+    memory_dir = root / "memory"
+
+    prompt_files: dict[str, dict[str, Any]] = {}
+    prompt_files_present: list[str] = []
+    for filename in WORKSPACE_PROMPT_FILES:
+        path = root / filename
+        exists = path.exists()
+        prompt_files[filename] = {
+            "path": str(path),
+            "exists": exists,
+        }
+        if exists:
+            prompt_files_present.append(filename)
+
+    memory_file_count = 0
+    if memory_dir.exists():
+        memory_file_count = sum(1 for _ in memory_dir.glob("*.md"))
+
+    recent_entries = list_workspace_memory_entries(
+        workspace_dir=root,
+        limit=max(1, int(recent_entries_limit)),
+    )
+
+    return {
+        "ok": True,
+        "workspace_dir": str(root),
+        "exists": root.exists(),
+        "shared_workspace_attached": root.exists() and bool(prompt_files_present),
+        "shared_memory_ready": root.exists(),
+        "memory_dir": str(memory_dir),
+        "memory_dir_exists": memory_dir.exists(),
+        "prompt_files": prompt_files,
+        "prompt_files_present": prompt_files_present,
+        "prompt_files_present_count": len(prompt_files_present),
+        "memory_file_count": memory_file_count,
+        "recent_memory_entries_count": len(recent_entries),
+        "recent_memory_entries": recent_entries,
+        "last_memory_entry": dict(recent_entries[0]) if recent_entries else {},
+    }
