@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -380,3 +381,60 @@ def test_gpt54_canary_promotes_target_when_registry_ready(tmp_path):
     assert payload["ok"] is True
     assert payload["details"]["primary_model"] == "openai-codex/gpt-5.4"
     assert payload["reason"] == "canary_target_ready"
+
+
+def test_production_safe_blocks_provider_with_only_expired_profiles(tmp_path):
+    """Провайдер с одними просроченными OAuth-профилями не должен попадать в safe-chain."""
+
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    auth_profiles_payload = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-antigravity:pavelr7@gmail.com": {
+                "provider": "google-antigravity",
+                "email": "pavelr7@gmail.com",
+                "expires": int((datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp() * 1000),
+            },
+        },
+        "usageStats": {
+            "openai-codex:default": {
+                "failureCounts": {"model_not_found": 2},
+            },
+            "google-antigravity:pavelr7@gmail.com": {},
+        },
+    }
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        auth_profiles_payload=auth_profiles_payload,
+    )
+    payload_openclaw = _base_openclaw_payload()
+    payload_openclaw["agents"]["defaults"]["model"]["primary"] = "openai-codex/gpt-4.5-preview"
+    payload_openclaw["agents"]["defaults"]["model"]["fallbacks"] = [
+        "google-antigravity/gemini-3.1-pro-preview",
+        "google/gemini-2.5-flash",
+    ]
+    openclaw_path.write_text(json.dumps(payload_openclaw, ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "openai-codex/gpt-4.5-preview"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "production-safe",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+    )
+
+    assert payload["ok"] is True
+    assert payload["details"]["primary_model"] == "google/gemini-2.5-flash"
+    provider_health = payload["details"]["special_profile"]["provider_health"]["google-antigravity"]
+    assert provider_health["disabled"] is True
+    assert provider_health["disabled_reason"] == "auth_expired"
+    assert provider_health["healthy_profiles"] == []
+    assert provider_health["expired_profiles"] == [
+        "google-antigravity:pavelr7@gmail.com"
+    ]

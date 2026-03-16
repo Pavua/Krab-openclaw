@@ -258,6 +258,30 @@ def _provider_health(auth_payload: dict[str, Any], provider: str) -> dict[str, A
     disabled_until = 0
     failure_counts: dict[str, int] = {}
     error_count = 0
+    healthy_profiles: list[str] = []
+    expired_profiles: list[str] = []
+    disabled_profiles: list[str] = []
+    usage_by_key = {key: value for key, value in usage_entries}
+    now_ms = time.time() * 1000.0
+
+    for profile_key, profile_payload in profiles:
+        expired = False
+        if isinstance(profile_payload, dict):
+            try:
+                expires_at = float(profile_payload.get("expires", 0) or 0)
+            except (TypeError, ValueError):
+                expires_at = 0.0
+            if expires_at > 0 and expires_at <= now_ms:
+                expired = True
+                expired_profiles.append(profile_key)
+        usage = usage_by_key.get(profile_key)
+        profile_disabled_reason = ""
+        if isinstance(usage, dict):
+            profile_disabled_reason = str(usage.get("disabledReason") or "").strip()
+        if profile_disabled_reason:
+            disabled_profiles.append(profile_key)
+        if not expired and not profile_disabled_reason:
+            healthy_profiles.append(profile_key)
 
     for _, usage in usage_entries:
         reason = str(usage.get("disabledReason") or "").strip()
@@ -273,11 +297,19 @@ def _provider_health(auth_payload: dict[str, Any], provider: str) -> dict[str, A
                     continue
                 failure_counts[name] = failure_counts.get(name, 0) + int(value or 0)
 
-    disabled = bool(disabled_reason)
+    # Если живых auth-профилей не осталось, safe-профиль не должен считать
+    # провайдера рабочим только потому, что disabledReason пустой.
+    exhausted_auth = bool(profiles) and not healthy_profiles and bool(expired_profiles or disabled_profiles)
+    disabled = bool(disabled_reason) or exhausted_auth
+    if disabled and not disabled_reason and expired_profiles:
+        disabled_reason = "auth_expired"
     return {
         "provider": str(provider or "").strip().lower(),
         "has_profile": bool(profiles),
         "profiles": [key for key, _ in profiles],
+        "healthy_profiles": healthy_profiles,
+        "disabled_profiles": disabled_profiles,
+        "expired_profiles": expired_profiles,
         "disabled": disabled,
         "disabled_reason": disabled_reason or "",
         "disabled_until": disabled_until,
