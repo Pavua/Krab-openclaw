@@ -2118,33 +2118,31 @@ class OpenClawClient:
             if not final_response:
                 final_response = "❌ Модель не вернула ответ."
 
-            if (
-                not self._last_runtime_route
-                or self._last_runtime_route.get("status") != "ok"
-                or self._last_runtime_route.get("channel") == "planning"
-            ):
-                resolved_model = self._resolve_gateway_reported_model(
-                    attempt_model,
-                    request_started_at=request_started_at,
+            # Успешный runtime-route должен всегда перетирать старый success-state.
+            # Иначе owner UI может бесконечно держать прошлый fallback как "live_active_model",
+            # даже когда новые ответы уже давно идут через другой primary/provider.
+            resolved_model = self._resolve_gateway_reported_model(
+                attempt_model,
+                request_started_at=request_started_at,
+            )
+            route_channel = (
+                "openclaw_local"
+                if model_manager.is_local_model(resolved_model)
+                else "openclaw_cloud"
+            )
+            route_detail = "Ответ получен через OpenClaw API"
+            if resolved_model and resolved_model != attempt_model:
+                route_detail = (
+                    "Ответ получен через OpenClaw API; "
+                    f"gateway fallback -> {resolved_model}"
                 )
-                route_channel = (
-                    "openclaw_local"
-                    if model_manager.is_local_model(resolved_model)
-                    else "openclaw_cloud"
-                )
-                route_detail = "Ответ получен через OpenClaw API"
-                if resolved_model and resolved_model != attempt_model:
-                    route_detail = (
-                        "Ответ получен через OpenClaw API; "
-                        f"gateway fallback -> {resolved_model}"
-                    )
-                self._set_last_runtime_route(
-                    channel=route_channel,
-                    model=resolved_model,
-                    route_reason="openclaw_response_ok",
-                    route_detail=route_detail,
-                    force_cloud=effective_force_cloud,
-                )
+            self._set_last_runtime_route(
+                channel=route_channel,
+                model=resolved_model,
+                route_reason="openclaw_response_ok",
+                route_detail=route_detail,
+                force_cloud=effective_force_cloud,
+            )
 
             self._finalize_chat_response(chat_id, final_response)
             yield final_response

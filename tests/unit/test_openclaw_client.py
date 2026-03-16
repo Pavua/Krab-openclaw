@@ -153,6 +153,38 @@ async def test_send_message_stream_honors_preferred_cloud_model(client: OpenClaw
 
 
 @pytest.mark.asyncio
+async def test_send_message_stream_success_overwrites_stale_success_route(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    client._set_last_runtime_route(  # noqa: SLF001
+        channel="openclaw_cloud",
+        model="qwen-portal/coder-model",
+        route_reason="openclaw_response_ok",
+        route_detail="Ответ получен через OpenClaw API; gateway fallback -> qwen-portal/coder-model",
+        force_cloud=True,
+    )
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-3.1-pro-preview-customtools")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Свежий ответ")):
+                with patch.object(
+                    client,
+                    "_resolve_gateway_reported_model",
+                    return_value="google/gemini-3.1-pro-preview-customtools",
+                ):
+                    chunks = []
+                    async for chunk in client.send_message_stream("Новый запрос", "chat-fresh-route", force_cloud=True):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "Свежий ответ"
+    route = client.get_last_runtime_route()
+    assert route.get("model") == "google/gemini-3.1-pro-preview-customtools"
+    assert route.get("channel") == "openclaw_cloud"
+    assert route.get("route_reason") == "openclaw_response_ok"
+    assert "qwen-portal/coder-model" not in str(route.get("route_detail") or "")
+
+
+@pytest.mark.asyncio
 async def test_send_message_stream_marks_request_lifecycle(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
