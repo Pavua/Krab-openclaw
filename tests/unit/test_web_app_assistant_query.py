@@ -120,6 +120,34 @@ def test_assistant_query_model_status_uses_authoritative_route():
     assert "local_direct" in data["reply"]
 
 
+def test_assistant_query_mixed_model_question_keeps_main_reply_and_appends_route_note():
+    """
+    Если вопрос о модели встроен в более широкий prompt, основной ответ нельзя
+    заменять шаблонным статусом маршрута.
+    """
+    app = WebApp(
+        deps={
+            "router": _FakeRouter(),
+            "openclaw_client": None,
+            "black_box": None,
+        },
+        host="127.0.0.1",
+        port=18080,
+    )
+    client = TestClient(app.app)
+
+    resp = client.post(
+        "/api/assistant/query",
+        json={"prompt": "Продолжай анализ и заодно скажи, на какой модели ты сейчас работаешь?"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert "Тестовый ответ" in data["reply"]
+    assert "Фактический runtime-маршрут" in data["reply"]
+    assert "nvidia/nemotron-3-nano" in data["reply"]
+
+
 def test_assistant_query_returns_auto_force_mode_when_router_has_none():
     """
     Если force-mode не задан, API должен отдавать `auto`, а не строку `None`.

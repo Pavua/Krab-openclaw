@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from .logger import get_logger
 from ..config import config
@@ -28,6 +29,9 @@ logger = get_logger(__name__)
 
 
 WORKSPACE_PROMPT_FILES: tuple[str, ...] = ("SOUL.md", "USER.md", "TOOLS.md", "MEMORY.md")
+_MEMORY_LINE_PATTERN = re.compile(
+    r"^- (?P<time>\d{2}:\d{2}) \[(?P<source>[^\]:]+)(?::(?P<author>[^\]]+))?\] (?P<text>.+)$"
+)
 
 
 def resolve_main_workspace_dir(workspace_dir: Path | None = None) -> Path:
@@ -174,3 +178,54 @@ def recall_workspace_memory(
     if max_chars > 0 and len(result) > max_chars:
         return result[:max_chars].rstrip() + "\n[...trimmed...]"
     return result
+
+
+def list_workspace_memory_entries(
+    *,
+    workspace_dir: Path | None = None,
+    limit: int = 10,
+    source_filter: str = "",
+) -> list[dict[str, str]]:
+    """
+    Возвращает последние записи из общей markdown-памяти OpenClaw.
+
+    Зачем это нужно:
+    - `!recall` хорош для поиска по словам, но не показывает просто "что было недавно";
+    - proactive watch пишет короткие operational digest в ту же память;
+    - владельцу нужен быстрый просмотр последних записей без ручного чтения md-файлов.
+    """
+    root = resolve_main_workspace_dir(workspace_dir)
+    memory_dir = root / "memory"
+    if not memory_dir.exists():
+        return []
+
+    normalized_source = str(source_filter or "").strip().lower()
+    results: list[dict[str, str]] = []
+    for path in sorted(memory_dir.glob("*.md"), reverse=True):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError as exc:
+            logger.warning("openclaw_workspace_memory_read_failed", path=str(path), error=str(exc))
+            continue
+        for raw_line in reversed(lines):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = _MEMORY_LINE_PATTERN.match(line)
+            if not match:
+                continue
+            source = str(match.group("source") or "").strip()
+            if normalized_source and normalized_source not in source.lower():
+                continue
+            results.append(
+                {
+                    "date": path.stem,
+                    "time": str(match.group("time") or "").strip(),
+                    "source": source,
+                    "author": str(match.group("author") or "").strip(),
+                    "text": str(match.group("text") or "").strip(),
+                }
+            )
+            if len(results) >= max(1, int(limit)):
+                return results
+    return results

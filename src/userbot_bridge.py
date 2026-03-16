@@ -1427,11 +1427,18 @@ class KraabUserbot:
         return decorated
 
     @staticmethod
-    def _looks_like_model_status_question(text: str) -> bool:
-        """Эвристика: пользователь спрашивает, на какой модели сейчас ответ."""
+    def _model_status_request_mode(text: str) -> str:
+        """
+        Определяет, является ли запрос чистым вопросом о модели или лишь упоминает его.
+
+        Возвращает:
+        - `pure`  — запрос в основном про текущую модель/маршрут;
+        - `mixed` — вопрос о модели встроен в более широкий запрос;
+        - ``      — модельный fast-path не нужен.
+        """
         low = str(text or "").strip().lower()
         if not low:
-            return False
+            return ""
         patterns = [
             "на какой модел",
             "какой моделью",
@@ -1440,7 +1447,36 @@ class KraabUserbot:
             "через какую модель",
             "какой модель",
         ]
-        return any(p in low for p in patterns)
+        pattern_hits = [low.find(p) for p in patterns if p in low]
+        if not pattern_hits:
+            return ""
+        first_hit = min(pattern_hits)
+        prefix = low[:first_hit].strip(" ,;:-")
+        prefix_words = re.findall(r"\w+", prefix, flags=re.UNICODE)
+        allowed_prefixes = {
+            "а",
+            "и",
+            "ну",
+            "кстати",
+            "скажи",
+            "подскажи",
+            "слушай",
+        }
+        if prefix_words and not (
+            len(prefix_words) <= 2 and " ".join(prefix_words) in allowed_prefixes
+        ):
+            return "mixed"
+
+        fragments = [item.strip() for item in re.split(r"[.!?\n]+", low) if item.strip()]
+        word_count = len(re.findall(r"\w+", low, flags=re.UNICODE))
+        if len(fragments) == 1 and word_count <= 12:
+            return "pure"
+        return "mixed"
+
+    @classmethod
+    def _looks_like_model_status_question(cls, text: str) -> bool:
+        """Совместимый bool-хелпер для старых call-site'ов."""
+        return bool(cls._model_status_request_mode(text))
 
     @staticmethod
     def _looks_like_capability_status_question(text: str) -> bool:
@@ -1555,7 +1591,7 @@ class KraabUserbot:
         return any(pattern in low for pattern in patterns)
 
     @staticmethod
-    def _build_runtime_model_status(route: dict) -> str:
+    def _build_runtime_model_status(route: dict, *, current_primary: str = "") -> str:
         """Формирует детерминированный статус маршрута по фактическим runtime-метаданным."""
         channel = str(route.get("channel", "unknown"))
         model = str(route.get("model", "unknown"))
@@ -1569,13 +1605,19 @@ class KraabUserbot:
             mode = "openclaw_cloud"
         else:
             mode = channel
-        return (
-            "🧭 Фактический runtime-маршрут:\n"
-            f"- Канал: `{mode}`\n"
-            f"- Модель: `{model}`\n"
-            f"- Провайдер: `{provider}`\n"
-            f"- Cloud tier: `{tier}`"
-        )
+        lines = [
+            "🧭 Фактический runtime-маршрут:",
+            f"- Канал: `{mode}`",
+            f"- Модель: `{model}`",
+            f"- Провайдер: `{provider}`",
+            f"- Cloud tier: `{tier}`",
+        ]
+        primary_hint = str(current_primary or "").strip()
+        if primary_hint:
+            lines.append(f"- Configured primary: `{primary_hint}`")
+            if primary_hint != model:
+                lines.append("- Примечание: последний успешный маршрут сейчас отличается от configured primary.")
+        return "\n".join(lines)
 
     @staticmethod
     def _resolve_runtime_access_mode(
@@ -2431,7 +2473,9 @@ class KraabUserbot:
         else:
             message = await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
 
-        if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
+        model_status_mode = self._model_status_request_mode(query)
+
+        if self._looks_like_runtime_truth_question(query):
             runtime_text = await self._build_runtime_truth_status(
                 is_allowed_sender=is_allowed_sender,
                 access_level=access_profile.level,
@@ -2452,6 +2496,36 @@ class KraabUserbot:
                 response_text=runtime_text,
                 delivery_result=delivery_result,
                 note="runtime_truth_fastpath",
+            )
+            return
+
+        if model_status_mode == "pure":
+            route_meta = {}
+            if hasattr(openclaw_client, "get_last_runtime_route"):
+                try:
+                    route_meta = openclaw_client.get_last_runtime_route() or {}
+                except Exception:
+                    route_meta = {}
+            model_text = self._build_runtime_model_status(
+                route_meta if isinstance(route_meta, dict) else {},
+                current_primary=_current_runtime_primary_model(),
+            )
+            model_text = self._apply_optional_disclosure(
+                chat_id=chat_id,
+                text=model_text,
+            )
+            delivery_result = await self._deliver_response_parts(
+                source_message=message,
+                temp_message=temp_msg,
+                is_self=is_self,
+                query=query,
+                full_response=model_text,
+            )
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=model_text,
+                delivery_result=delivery_result,
+                note="runtime_model_fastpath",
             )
             return
 
@@ -2706,7 +2780,7 @@ class KraabUserbot:
 
         # Если пользователь спрашивает именно о модели, отвечаем по фактическому маршруту,
         # а не доверяем декларативному тексту самой LLM.
-        if is_allowed_sender and self._looks_like_model_status_question(query):
+        if is_allowed_sender and model_status_mode:
             route_meta = {}
             if hasattr(openclaw_client, "get_last_runtime_route"):
                 try:
@@ -2714,7 +2788,14 @@ class KraabUserbot:
                 except Exception:
                     route_meta = {}
             if route_meta:
-                full_response = self._build_runtime_model_status(route_meta)
+                model_status = self._build_runtime_model_status(
+                    route_meta,
+                    current_primary=_current_runtime_primary_model(),
+                )
+                if model_status_mode == "pure":
+                    full_response = model_status
+                else:
+                    full_response = f"{full_response}\n\n---\n{model_status}"
 
         full_response = self._apply_optional_disclosure(
             chat_id=chat_id,

@@ -26,9 +26,12 @@ from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
 from ..core.openclaw_workspace import append_workspace_memory_entry, recall_workspace_memory
+from ..core.openclaw_workspace import list_workspace_memory_entries
+from ..core.proactive_watch import proactive_watch
 from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
 from ..core.swarm import AgentRoom
 from ..employee_templates import ROLES, get_role_prompt, list_roles, save_role
+from ..integrations.macos_automation import macos_automation
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
 from ..model_manager import model_manager
@@ -604,6 +607,148 @@ async def handle_panel(bot: "KraabUserbot", message: Message) -> None:
     await handle_status(bot, message)
 
 
+async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Базовое управление macOS из owner/full-контура.
+
+    Держим здесь только понятные и контролируемые действия:
+    clipboard, уведомления, активные приложения, `open` и Finder reveal.
+    Это даёт реальную пользу уже сейчас и служит фундаментом для следующего
+    этапа с Calendar/Reminders/Notes.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=1)
+    args = raw_args[1].strip() if len(raw_args) > 1 else ""
+
+    if not macos_automation.is_available():
+        await message.reply(
+            "🍎 macOS automation сейчас недоступен.\n"
+            "Нужны `osascript`, `open`, `pbcopy`, `pbpaste` и запуск на macOS."
+        )
+        return
+
+    if not args:
+        await message.reply(
+            "🍎 **macOS control layer**\n\n"
+            "`!mac status` — краткий статус desktop-контура\n"
+            "`!mac clip get` — прочитать clipboard\n"
+            "`!mac clip set <текст>` — записать clipboard\n"
+            "`!mac notify <текст>` — показать системное уведомление\n"
+            "`!mac notify <заголовок> | <текст>` — уведомление с заголовком\n"
+            "`!mac app front` — активное приложение\n"
+            "`!mac app list` — список видимых приложений\n"
+            "`!mac app open <имя>` — открыть приложение\n"
+            "`!mac reminders list` — список напоминаний из macOS Reminders\n"
+            "`!mac reminders add <время> | <текст>` — создать reminder в Reminders\n"
+            "`!mac notes list` — список заметок\n"
+            "`!mac notes add <заголовок> | <текст>` — создать заметку\n"
+            "`!mac calendar list` — список календарей\n"
+            "`!mac calendar events` — ближайшие события\n"
+            "`!mac calendar add <время> | <название>` — создать событие (30 мин)\n"
+            "`!mac open <url|path>` — открыть URL или путь\n"
+            "`!mac finder reveal <path>` — показать файл/папку в Finder"
+        )
+        return
+
+    parts = args.split(maxsplit=2)
+    sub = parts[0].lower()
+
+    if sub == "status":
+        status = await macos_automation.status()
+        lines = [
+            "🍎 **macOS control layer**",
+            f"- Доступность: {'ON' if status.get('available') else 'OFF'}",
+            f"- Активное приложение: `{status.get('frontmost_app') or 'n/a'}`",
+        ]
+        if status.get("frontmost_window"):
+            lines.append(f"- Переднее окно: `{status.get('frontmost_window')}`")
+        running_apps = status.get("running_apps") or []
+        if running_apps:
+            lines.append("- Видимые приложения: " + ", ".join(f"`{item}`" for item in running_apps))
+        lines.append(
+            f"- Clipboard: {int(status.get('clipboard_chars', 0) or 0)} символов"
+        )
+        await message.reply("\n".join(lines))
+        return
+
+    if sub == "clip":
+        if len(parts) < 2:
+            raise UserInputError(user_message="🍎 Формат: `!mac clip get` или `!mac clip set <текст>`")
+        clip_action = parts[1].strip().lower()
+        if clip_action == "get":
+            text = await macos_automation.get_clipboard_text()
+            await message.reply(f"📋 **Clipboard**\n{text if text else '(clipboard пуст)'}")
+            return
+        if clip_action == "set":
+            text = parts[2].strip() if len(parts) > 2 else ""
+            if not text:
+                raise UserInputError(user_message="🍎 Формат: `!mac clip set <текст>`")
+            await macos_automation.set_clipboard_text(text)
+            await message.reply("📋 Clipboard обновлён.")
+            return
+        raise UserInputError(user_message="🍎 Формат: `!mac clip get` или `!mac clip set <текст>`")
+
+    if sub == "notify":
+        payload = args[len("notify"):].strip()
+        if not payload:
+            raise UserInputError(user_message="🍎 Формат: `!mac notify <текст>`")
+        title = "Краб"
+        body = payload
+        if "|" in payload:
+            title_part, body_part = payload.split("|", 1)
+            title = title_part.strip() or "Краб"
+            body = body_part.strip()
+        await macos_automation.show_notification(title=title, message=body)
+        await message.reply("🔔 Уведомление отправлено.")
+        return
+
+    if sub == "app":
+        if len(parts) < 2:
+            raise UserInputError(user_message="🍎 Формат: `!mac app front|list|open <имя>`")
+        app_action = parts[1].strip().lower()
+        if app_action == "front":
+            info = await macos_automation.get_frontmost_app()
+            await message.reply(
+                "🪟 **Переднее приложение**\n"
+                f"- app: `{info.get('app_name') or 'n/a'}`\n"
+                f"- window: `{info.get('window_title') or 'n/a'}`"
+            )
+            return
+        if app_action == "list":
+            apps = await macos_automation.list_running_apps()
+            if not apps:
+                await message.reply("🪟 Не удалось получить список приложений.")
+                return
+            await message.reply("🪟 **Приложения**\n" + "\n".join(f"- `{item}`" for item in apps))
+            return
+        if app_action == "open":
+            app_name = parts[2].strip() if len(parts) > 2 else ""
+            if not app_name:
+                raise UserInputError(user_message="🍎 Формат: `!mac app open <имя>`")
+            opened = await macos_automation.open_app(app_name)
+            await message.reply(f"🪟 Открываю `{opened}`.")
+            return
+        raise UserInputError(user_message="🍎 Формат: `!mac app front|list|open <имя>`")
+
+    if sub == "open":
+        target = args[len("open"):].strip()
+        if not target:
+            raise UserInputError(user_message="🍎 Формат: `!mac open <url|path>`")
+        opened = await macos_automation.open_target(target)
+        await message.reply(f"🌐 Открываю {opened.get('kind')}: `{opened.get('target')}`")
+        return
+
+    if sub == "finder":
+        if len(parts) < 3 or parts[1].strip().lower() != "reveal":
+            raise UserInputError(user_message="🍎 Формат: `!mac finder reveal <path>`")
+        target = parts[2].strip()
+        revealed = await macos_automation.reveal_in_finder(target)
+        await message.reply(f"📁 Показываю в Finder: `{revealed}`")
+        return
+
+    raise UserInputError(user_message="🍎 Неизвестная команда. Напиши `!mac` для справки.")
+
+
 async def handle_restart(bot: "KraabUserbot", message: Message) -> None:
     """Мягкая перезагрузка процесса."""
     await message.reply("🔄 Перезапускаюсь...")
@@ -892,6 +1037,72 @@ async def handle_cronstatus(bot: "KraabUserbot", message: Message) -> None:
         f"- next_due_at: `{status.get('next_due_at') or '-'}`\n"
         f"- storage: `{status.get('storage_path')}`"
     )
+
+
+async def handle_watch(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление proactive watch контуром.
+
+    Команды:
+    - `!watch status` — persisted состояние фонового watch;
+    - `!watch now` — принудительно снять digest и записать его в общую память.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=2)
+    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "status"
+
+    if action == "status":
+        status = proactive_watch.get_status()
+        snapshot = status.get("last_snapshot") or {}
+        route_model = str(snapshot.get("route_model") or snapshot.get("primary_model") or "n/a")
+        await message.reply(
+            "🛰️ **Proactive Watch**\n"
+            f"- enabled: `{status.get('enabled')}`\n"
+            f"- interval_sec: `{status.get('interval_sec')}`\n"
+            f"- alert_cooldown_sec: `{status.get('alert_cooldown_sec')}`\n"
+            f"- last_reason: `{status.get('last_reason') or '-'}`\n"
+            f"- last_digest_ts: `{status.get('last_digest_ts') or '-'}`\n"
+            f"- last_alert_ts: `{status.get('last_alert_ts') or '-'}`\n"
+            f"- last_model: `{route_model}`"
+        )
+        return
+
+    if action == "now":
+        result = await proactive_watch.capture(manual=True, persist_memory=True, notify=False)
+        suffix = "\n- Память: записано в workspace memory" if result.get("wrote_memory") else "\n- Память: запись пропущена"
+        await message.reply(str(result.get("digest") or "watch digest unavailable") + suffix)
+        return
+
+    raise UserInputError(user_message="🛰️ Формат: `!watch status` или `!watch now`")
+
+
+async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Короткий просмотр общей памяти OpenClaw без поиска по словам.
+
+    Пока сознательно ограничиваемся read-only режимом:
+    - `!remember` уже отвечает за запись фактов;
+    - эта команда нужна для последних записей и owner-digest слоёв.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=2)
+    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "recent"
+    source_filter = raw_args[2].strip() if len(raw_args) > 2 else ""
+
+    if action != "recent":
+        raise UserInputError(user_message="🧠 Формат: `!memory recent [source_filter]`")
+
+    rows = list_workspace_memory_entries(limit=8, source_filter=source_filter)
+    if not rows:
+        await message.reply("🧠 В общей памяти пока нет подходящих записей.")
+        return
+    lines = ["🧠 **Последние записи общей памяти**"]
+    for item in rows:
+        author_suffix = f":{item['author']}" if item.get("author") else ""
+        lines.append(
+            f"- `{item['date']} {item['time']}` [{item['source']}{author_suffix}] {item['text']}"
+        )
+    await message.reply("\n".join(lines))
 
 
 async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:

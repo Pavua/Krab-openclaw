@@ -7050,10 +7050,10 @@ class WebApp:
             requested_force_mode_raw = str(payload.get("force_mode", "")).strip().lower()
             requested_force_mode = requested_force_mode_raw if requested_force_mode_raw in {"auto", "local", "cloud"} else ""
 
-            def _is_model_status_question(text: str) -> bool:
+            def _model_status_request_mode(text: str) -> str:
                 low = str(text or "").strip().lower()
                 if not low:
-                    return False
+                    return ""
                 patterns = [
                     "на какой модел",
                     "какой моделью",
@@ -7063,20 +7063,49 @@ class WebApp:
                     "what model",
                     "which model",
                 ]
-                return any(p in low for p in patterns)
+                pattern_hits = [low.find(p) for p in patterns if p in low]
+                if not pattern_hits:
+                    return ""
+                first_hit = min(pattern_hits)
+                prefix = low[:first_hit].strip(" ,;:-")
+                prefix_words = re.findall(r"\w+", prefix, flags=re.UNICODE)
+                allowed_prefixes = {
+                    "а",
+                    "и",
+                    "ну",
+                    "кстати",
+                    "скажи",
+                    "подскажи",
+                    "слушай",
+                }
+                if prefix_words and not (
+                    len(prefix_words) <= 2 and " ".join(prefix_words) in allowed_prefixes
+                ):
+                    return "mixed"
+                fragments = [item.strip() for item in re.split(r"[.!?\n]+", low) if item.strip()]
+                word_count = len(re.findall(r"\w+", low, flags=re.UNICODE))
+                if len(fragments) == 1 and word_count <= 12:
+                    return "pure"
+                return "mixed"
 
-            def _build_model_status_from_route(route: dict[str, object]) -> str:
+            def _build_model_status_from_route(route: dict[str, object], *, current_primary: str = "") -> str:
                 channel = str(route.get("channel", "unknown"))
                 model = str(route.get("model", "unknown"))
                 provider = str(route.get("provider", "unknown"))
                 tier = str(route.get("active_tier", "-"))
-                return (
-                    "🧭 Фактический runtime-маршрут:\n"
-                    f"- Канал: `{channel}`\n"
-                    f"- Модель: `{model}`\n"
-                    f"- Провайдер: `{provider}`\n"
-                    f"- Cloud tier: `{tier}`"
-                )
+                lines = [
+                    "🧭 Фактический runtime-маршрут:",
+                    f"- Канал: `{channel}`",
+                    f"- Модель: `{model}`",
+                    f"- Провайдер: `{provider}`",
+                    f"- Cloud tier: `{tier}`",
+                ]
+                primary_hint = str(current_primary or "").strip()
+                if primary_hint:
+                    lines.append(f"- Configured primary: `{primary_hint}`")
+                    if primary_hint != model:
+                        lines.append("- Примечание: последний успешный маршрут сейчас отличается от configured primary.")
+                return "\n".join(lines)
 
             # Web UX-хелпер: поддержка команд вида `.model ...` и `!model ...`
             # прямо из web-assistant input. Иначе команда уходила в LLM как обычный prompt.
@@ -7166,6 +7195,8 @@ class WebApp:
                     }
                     self._idempotency_set("assistant_query", idem_key, response_payload)
                     return response_payload
+
+            model_status_mode = _model_status_request_mode(prompt)
 
             try:
                 # Если UI передал force_mode, синхронизируем режим до выполнения запроса.
@@ -7283,9 +7314,25 @@ class WebApp:
                 "last_route": last_route,
                 "reply": reply,
             }
-            # Для вопросов о модели отдаём authoritative-ответ из last_route.
-            if _is_model_status_question(prompt) and isinstance(last_route, dict) and last_route.get("model"):
-                response_payload["reply"] = _build_model_status_from_route(last_route)
+            # Для вопросов о модели отдаём truthful route-note, но не даём ему
+            # съедать весь mixed-запрос пользователя.
+            if model_status_mode and isinstance(last_route, dict) and last_route.get("model"):
+                current_primary = ""
+                if hasattr(router, "get_model_info"):
+                    try:
+                        model_info = router.get_model_info() or {}
+                    except Exception:
+                        model_info = {}
+                    if isinstance(model_info, dict):
+                        current_primary = str(model_info.get("current_model", "") or "").strip()
+                model_status = _build_model_status_from_route(
+                    last_route,
+                    current_primary=current_primary,
+                )
+                if model_status_mode == "pure":
+                    response_payload["reply"] = model_status
+                else:
+                    response_payload["reply"] = f"{response_payload['reply']}\n\n---\n{model_status}"
             self._idempotency_set("assistant_query", idem_key, response_payload)
             return response_payload
 

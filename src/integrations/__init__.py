@@ -8,3 +8,14 @@
 - не смешивать orchestration/runtime-логику с HTTP-деталями внешних сервисов.
 """
 
+from .krab_ear_client import KrabEarClient
+from .macos_automation import MacOSAutomationError, MacOSAutomationService, macos_automation
+from .voice_gateway_client import VoiceGatewayClient
+
+__all__ = [
+    "KrabEarClient",
+    "MacOSAutomationError",
+    "MacOSAutomationService",
+    "VoiceGatewayClient",
+    "macos_automation",
+]

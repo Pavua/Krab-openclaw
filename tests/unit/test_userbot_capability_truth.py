@@ -85,6 +85,17 @@ def test_looks_like_runtime_truth_question_detects_full_diagnostics_intent() -> 
     ) is True
 
 
+def test_model_status_request_mode_distinguishes_pure_and_mixed() -> None:
+    """Вопрос о модели внутри большого запроса не должен съедать весь message flow."""
+    assert KraabUserbot._model_status_request_mode("На какой модели ты сейчас работаешь?") == "pure"
+    assert (
+        KraabUserbot._model_status_request_mode(
+            "Продолжай чистку почты и заодно скажи, на какой модели ты сейчас работаешь?"
+        )
+        == "mixed"
+    )
+
+
 def test_build_runtime_capability_status_owner_includes_real_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     """Для доверенного контура summary должен отражать реальные owner-инструменты."""
     bot = _make_bot_stub()
@@ -405,3 +416,99 @@ async def test_process_message_full_diagnostics_question_uses_runtime_truth_fast
     assert "Последний маршрут: `openclaw_cloud`" in delivered_text
     assert "Последняя модель: `openai-codex/gpt-5.4`" in delivered_text
     assert "Cron / heartbeat: scheduler активен, transport живой." in delivered_text
+
+
+@pytest.mark.asyncio
+async def test_process_message_pure_model_question_uses_model_fast_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Чистый вопрос о модели должен отвечаться factual fast-path'ом без LLM."""
+    bot = _make_bot_stub()
+    bot._is_allowed_sender = Mock(return_value=True)
+
+    incoming = SimpleNamespace(
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="На какой модели ты сейчас работаешь?",
+        caption=None,
+        photo=None,
+        voice=None,
+        chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+    )
+
+    send_stream_mock = Mock()
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client,
+        "get_last_runtime_route",
+        lambda: {
+            "channel": "openclaw_cloud",
+            "model": "google/gemini-3.1-pro-preview-customtools",
+            "provider": "google",
+            "active_tier": "free",
+        },
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module,
+        "_current_runtime_primary_model",
+        lambda: "google/gemini-3.1-pro-preview-customtools",
+    )
+
+    await bot._process_message(incoming)
+
+    send_stream_mock.assert_not_called()
+    delivered_text = bot._safe_edit.await_args_list[-1].args[1]
+    assert "Фактический runtime-маршрут" in delivered_text
+    assert "google/gemini-3.1-pro-preview-customtools" in delivered_text
+    assert "Configured primary" in delivered_text
+
+
+@pytest.mark.asyncio
+async def test_process_message_mixed_model_question_keeps_main_reply_and_appends_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Смешанный запрос не должен схлопываться в один шаблонный ответ про модель."""
+    bot = _make_bot_stub()
+    bot._is_allowed_sender = Mock(return_value=True)
+    bot._deliver_response_parts = AsyncMock(return_value={"ok": True, "parts": 1})
+    bot._record_incoming_reply_to_inbox = Mock()
+
+    incoming = SimpleNamespace(
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Продолжай чистку почты и заодно скажи, на какой модели ты сейчас работаешь?",
+        caption=None,
+        photo=None,
+        voice=None,
+        chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+    )
+
+    async def _fake_stream(*args, **kwargs):
+        _ = args, kwargs
+        yield "Основной ответ по чистке почты."
+
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", _fake_stream)
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client,
+        "get_last_runtime_route",
+        lambda: {
+            "channel": "openclaw_cloud",
+            "model": "google/gemini-3.1-pro-preview-customtools",
+            "provider": "google",
+            "active_tier": "free",
+        },
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module,
+        "_current_runtime_primary_model",
+        lambda: "google/gemini-3.1-pro-preview-customtools",
+    )
+
+    await bot._process_message(incoming)
+
+    delivered_text = bot._deliver_response_parts.await_args.kwargs["full_response"]
+    assert "Основной ответ по чистке почты." in delivered_text
+    assert "Фактический runtime-маршрут" in delivered_text
+    assert "google/gemini-3.1-pro-preview-customtools" in delivered_text
