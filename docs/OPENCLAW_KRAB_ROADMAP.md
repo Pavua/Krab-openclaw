@@ -231,6 +231,7 @@
   - `src/core/openclaw_workspace.py` теперь подмешивает tail `memory/<day>.md`, а не шумную "голову" файла
   - `src/openclaw_client.py` теперь санирует reasoning-мусор не только при записи нового ответа, но и при восстановлении старой chat-history/in-memory session
   - добавлены repair entrypoints: `scripts/sanitize_history_cache.py` и `Repair Chat Memory Cache.command`
+  - добавлен owner-only runtime clear-session контур: `POST /api/runtime/chat-session/clear`, `scripts/clear_runtime_chat_session.py`, `Clear Runtime Chat Session.command`
   - persisted `chat_history:312322764` уже очищен: `bad_count = 0`
   - unit coverage зелёная: `tests/unit/test_openclaw_workspace_and_memory_bridge.py`, `tests/unit/test_openclaw_client.py`
 
@@ -243,6 +244,7 @@
 - [ ] Финальный release gate на целевой учётке `pablito` ещё не перепрогнан после account-local relogin
 - [ ] Живой runtime на `:8080` сейчас идёт через `google-gemini-cli/gemini-3.1-pro-preview`, поэтому docs/handoff должны различать route в translator gate artifact и текущий live route
 - [ ] Для полного closure амнезии нужен финальный flush уже загруженной live session у `pablito`: safest path — одноразовый `!clear` в owner-чате или controlled restart с `pablito`
+- [ ] Новый endpoint `/api/runtime/chat-session/clear` уже в коде и тестах, но на текущем живом `:8080` станет доступен только после следующего controlled restart
 
 ## Что считается подтверждением
 

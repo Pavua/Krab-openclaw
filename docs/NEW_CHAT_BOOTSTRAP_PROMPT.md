@@ -28,7 +28,8 @@
 7. Memory/amnesia bug уже закрыт на уровне кода и persisted cache:
    - `src/core/openclaw_workspace.py` читает свежий tail memory-файлов;
    - `src/openclaw_client.py` санирует старую chat-history/in-memory session;
-   - `Repair Chat Memory Cache.command` вычищает накопленный reasoning-мусор из `history_cache.db`.
+   - `Repair Chat Memory Cache.command` вычищает накопленный reasoning-мусор из `history_cache.db`;
+   - `Clear Runtime Chat Session.command` и `POST /api/runtime/chat-session/clear` дают owner-only flush текущей chat-session после следующего restart.
 8. Пользователь отдельно сообщал о плавающем scaling-regression в iPhone companion; если он повторится, это нужно считать отдельным acceptance-риском.
 9. `main` не трогаем до подтверждённого воспроизведения ключевых сценариев на `pablito`.
 10. После закрытия translator-блока и финального flush live memory-session оптимально снова включить `Plan Mode` и спланировать следующую фазу уже от свежей truth-base.

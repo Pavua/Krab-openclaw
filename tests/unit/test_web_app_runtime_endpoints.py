@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from src.config import config
-from src.core.inbox_service import InboxService
+from src.core.inbox_service import InboxService, inbox_service
 from src.modules.web_app import WebApp
 
 
@@ -66,6 +66,9 @@ class _PhotoRouter(_DummyRouter):
 class _FakeOpenClaw:
     """Фейковый OpenClaw клиент для детерминированных тестов runtime endpoint'ов."""
 
+    def __init__(self) -> None:
+        self.cleared_chat_ids: list[str] = []
+
     async def health_check(self) -> bool:
         return True
 
@@ -92,15 +95,464 @@ class _FakeOpenClaw:
     async def switch_cloud_tier(self, tier: str):
         return {"ok": True, "new_tier": tier}
 
+    def clear_session(self, chat_id: str) -> None:
+        self.cleared_chat_ids.append(str(chat_id))
+
 
 class _FakeHealthClient:
     """Фейковый клиент сервиса с `health_check`."""
 
-    def __init__(self, ok: bool = True):
+    def __init__(self, ok: bool = True, *, capabilities_detail: dict | None = None):
         self._ok = ok
+        self._capabilities_detail = capabilities_detail or {
+            "service": "fake-service",
+            "contract_version": "test.v1",
+        }
 
     async def health_check(self) -> bool:
         return self._ok
+
+    async def health_report(self) -> dict:
+        return {
+            "ok": self._ok,
+            "status": "ok" if self._ok else "down",
+            "source": "fake_client_health",
+            "detail": {},
+        }
+
+    async def capabilities_report(self) -> dict:
+        return {
+            "ok": self._ok,
+            "status": "ok" if self._ok else "error",
+            "source": "fake_client",
+            "detail": dict(self._capabilities_detail),
+        }
+
+
+class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
+    """Фейковый Voice Gateway клиент с session/policy методами для translator control-plane."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            ok=True,
+            capabilities_detail={
+                "service": "krab-voice-gateway",
+                "contract_version": "voice-gateway.v1",
+                "session": {
+                    "sources": ["mic", "mobile"],
+                    "translation_modes": ["auto_to_ru", "ru_es_duplex"],
+                    "runtime_tuning": {
+                        "buffering_modes": ["adaptive", "low_latency", "stable"],
+                        "supports_target_latency_ms": True,
+                        "supports_vad_sensitivity": True,
+                    },
+                    "timeline": {"summary": True},
+                },
+                "translation": {
+                    "quick_phrases": True,
+                    "summary": True,
+                },
+                "mobile": {
+                    "session_binding": True,
+                },
+                "api": {
+                    "endpoints": {
+                        "sessions": "/v1/sessions",
+                        "session_runtime": "/v1/sessions/{session_id}/runtime",
+                        "session_diagnostics": "/v1/sessions/{session_id}/diagnostics",
+                        "session_timeline": "/v1/sessions/{session_id}/timeline",
+                        "quick_phrases": "/v1/quick-phrases",
+                    }
+                },
+            },
+        )
+        self._session: dict | None = {
+            "id": "sess-mobile-1",
+            "status": "running",
+            "translation_mode": "ru_es_duplex",
+            "notify_mode": "auto_on",
+            "tts_mode": "hybrid",
+            "source": "mobile",
+            "src_lang": "ru",
+            "tgt_lang": "es",
+            "updated_at": "2026-03-14T05:00:00+00:00",
+            "meta": {"device_bound": True},
+        }
+        self._runtime = {
+            "buffering_mode": "adaptive",
+            "target_latency_ms": 540,
+            "vad_sensitivity": 0.35,
+        }
+        self._last_quick_phrase: dict = {}
+        self._timeline_items = [
+            {"ts": "2026-03-14T05:00:01+00:00", "kind": "transcript.partial", "text": "Hola, escucho."},
+            {"ts": "2026-03-14T05:00:03+00:00", "kind": "translation.partial", "text": "Привет, я слушаю."},
+        ]
+        self._mobile_devices: dict[str, dict] = {
+            "iphone-dev-1": {
+                "device_id": "iphone-dev-1",
+                "platform": "ios",
+                "app_version": "0.1.0",
+                "locale": "ru",
+                "preferred_source_lang": "auto",
+                "preferred_target_lang": "ru",
+                "apns_environment": "development",
+                "notify_default": True,
+                "push_enabled": True,
+                "voip_push_token_masked": "tok...1234",
+                "bound_session_id": "sess-mobile-1",
+                "updated_at": "2026-03-14T05:00:00+00:00",
+            }
+        }
+
+    async def list_sessions(self, *, status: str | None = None, source: str | None = None, limit: int = 20) -> dict:
+        del limit
+        items = []
+        if self._session is not None:
+            session = dict(self._session)
+            if status and str(session.get("status") or "").strip() != str(status).strip():
+                session = {}
+            if source and session and str(session.get("source") or "").strip() != str(source).strip():
+                session = {}
+            if session:
+                items.append(session)
+        return {
+            "ok": True,
+            "count": len(items),
+            "items": items,
+        }
+
+    async def get_diagnostics(self, session_id: str) -> dict:
+        assert self._session is not None
+        assert session_id == self._session["id"]
+        return {
+            "ok": True,
+            "result": {
+                "status": self._session["status"],
+                "pipeline": {"mode": "hybrid"},
+                "runtime": dict(self._runtime),
+            },
+        }
+
+    async def get_diagnostics_why(self, session_id: str) -> dict:
+        assert self._session is not None
+        assert session_id == self._session["id"]
+        return {
+            "ok": True,
+            "result": {
+                "ok": True,
+                "session_id": session_id,
+                "why": ["Перевод активен"],
+            },
+        }
+
+    async def get_timeline_summary(self, session_id: str) -> dict:
+        assert self._session is not None
+        assert session_id == self._session["id"]
+        return {
+            "ok": True,
+            "result": {
+                "ok": True,
+                "session_id": session_id,
+                "summary": "Короткая сводка звонка",
+                "stats": {"count": 4, "translations": 1},
+                "tasks": ["Подтвердить качество субтитров"],
+            },
+        }
+
+    async def list_quick_phrases(
+        self,
+        *,
+        source_lang: str = "ru",
+        target_lang: str = "es",
+        category: str = "all",
+        limit: int = 12,
+    ) -> dict:
+        assert source_lang == "ru"
+        assert target_lang == "es"
+        assert category == "all"
+        assert limit == 6
+        return {
+            "ok": True,
+            "count": 2,
+            "items": [
+                {"id": "greet", "category": "base", "source_text": "Привет", "translated_text": "Hola"},
+                {"id": "slow", "category": "call", "source_text": "Говорите медленнее", "translated_text": "Hable mas despacio"},
+            ],
+        }
+
+    async def start_session(
+        self,
+        *,
+        source: str = "mic",
+        translation_mode: str = "auto_to_ru",
+        notify_mode: str = "auto_on",
+        tts_mode: str = "hybrid",
+        src_lang: str = "auto",
+        tgt_lang: str = "ru",
+        meta: dict | None = None,
+    ) -> dict:
+        self._session = {
+            "id": "sess-owner-2",
+            "status": "created",
+            "translation_mode": translation_mode,
+            "notify_mode": notify_mode,
+            "tts_mode": tts_mode,
+            "source": source,
+            "src_lang": src_lang,
+            "tgt_lang": tgt_lang,
+            "updated_at": "2026-03-14T06:00:00+00:00",
+            "meta": dict(meta or {}),
+        }
+        return {"ok": True, "session_id": self._session["id"], "result": dict(self._session)}
+
+    async def patch_session(self, session_id: str, **patch) -> dict:
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        self._session.update({key: value for key, value in patch.items() if value is not None})
+        self._session["updated_at"] = "2026-03-14T06:05:00+00:00"
+        return {"ok": True, "session_id": session_id, "result": dict(self._session)}
+
+    async def stop_session(self, session_id: str) -> dict:
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        previous = dict(self._session)
+        self._session = None
+        return {"ok": True, "session_id": session_id, "result": {"ok": True, "session": previous}}
+
+    async def tune_runtime(
+        self,
+        session_id: str,
+        *,
+        buffering_mode: str | None = None,
+        target_latency_ms: int | None = None,
+        vad_sensitivity: float | None = None,
+    ) -> dict:
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        if buffering_mode is not None:
+            self._runtime["buffering_mode"] = buffering_mode
+        if target_latency_ms is not None:
+            self._runtime["target_latency_ms"] = int(target_latency_ms)
+        if vad_sensitivity is not None:
+            self._runtime["vad_sensitivity"] = float(vad_sensitivity)
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": {"ok": True, "session_id": session_id, "runtime": dict(self._runtime)},
+        }
+
+    async def send_quick_phrase(
+        self,
+        session_id: str,
+        *,
+        text: str,
+        source_lang: str = "ru",
+        target_lang: str = "es",
+        voice: str = "default",
+        style: str = "neutral",
+    ) -> dict:
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        self._last_quick_phrase = {
+            "source_text": text,
+            "translated_text": "Hable mas despacio",
+            "audio_url": f"/v1/sessions/{session_id}/tts/test.wav",
+            "voice": voice,
+            "style": style,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+        }
+        self._timeline_items.append(
+            {
+                "ts": "2026-03-14T06:06:00+00:00",
+                "kind": "quick_phrase",
+                "text": text,
+            }
+        )
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": {
+                "ok": True,
+                "session_id": session_id,
+                **self._last_quick_phrase,
+            },
+        }
+
+    async def get_timeline(self, session_id: str, *, kind: str = "", contains: str = "", limit: int = 40) -> dict:
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        items = [dict(item) for item in self._timeline_items]
+        if kind:
+            items = [item for item in items if str(item.get("kind") or "") == kind]
+        if contains:
+            items = [item for item in items if contains.lower() in str(item.get("text") or "").lower()]
+        items = items[-limit:]
+        return {"ok": True, "session_id": session_id, "result": {"ok": True, "count": len(items), "items": items}}
+
+    async def get_timeline_stats(self, session_id: str, *, limit: int = 400) -> dict:
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        items = self._timeline_items[-limit:]
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": {
+                "ok": True,
+                "stats": {
+                    "count": len(items),
+                    "translations": len([item for item in items if item.get("kind") == "translation.partial"]),
+                    "quick_phrase": len([item for item in items if item.get("kind") == "quick_phrase"]),
+                },
+            },
+        }
+
+    async def export_timeline(self, session_id: str, *, format: str = "md", kind: str = "", contains: str = "", limit: int = 120) -> dict:
+        del format, kind, contains, limit
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": "# Session Timeline Export: sess-mobile-1\n- quick preview\n",
+        }
+
+    async def build_summary(self, session_id: str, *, max_items: int = 20) -> dict:
+        del max_items
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": {
+                "ok": True,
+                "session_id": session_id,
+                "summary": "Короткая сводка звонка обновлена",
+                "tasks": ["Перезвонить и проверить voice-first path"],
+                "items_used": 3,
+            },
+        }
+
+    async def list_mobile_devices(self, *, platform: str = "ios", limit: int = 20) -> dict:
+        assert platform == "ios"
+        items = [dict(item) for item in self._mobile_devices.values()]
+        items = items[:limit]
+        return {"ok": True, "count": len(items), "items": items}
+
+    async def register_mobile_device(
+        self,
+        *,
+        device_id: str,
+        voip_push_token: str = "",
+        apns_environment: str = "development",
+        app_version: str = "",
+        locale: str = "ru",
+        preferred_source_lang: str = "auto",
+        preferred_target_lang: str = "ru",
+        notify_default: bool = True,
+    ) -> dict:
+        clean_id = str(device_id).strip().lower()
+        self._mobile_devices[clean_id] = {
+            "device_id": clean_id,
+            "platform": "ios",
+            "app_version": app_version or "0.1.0",
+            "locale": locale,
+            "preferred_source_lang": preferred_source_lang,
+            "preferred_target_lang": preferred_target_lang,
+            "apns_environment": apns_environment,
+            "notify_default": bool(notify_default),
+            "push_enabled": bool(voip_push_token),
+            "voip_push_token_masked": "tok...new" if voip_push_token else "",
+            "bound_session_id": "",
+            "updated_at": "2026-03-14T06:10:00+00:00",
+        }
+        return {
+            "ok": True,
+            "device_id": clean_id,
+            "result": {
+                "ok": True,
+                "device": dict(self._mobile_devices[clean_id]),
+            },
+        }
+
+    async def bind_mobile_device(self, device_id: str, *, session_id: str) -> dict:
+        clean_id = str(device_id).strip().lower()
+        if clean_id not in self._mobile_devices:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "device_not_found"}, "device_id": clean_id}
+        if self._session is None or session_id != self._session["id"]:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "device_id": clean_id, "session_id": session_id}
+        self._mobile_devices[clean_id]["bound_session_id"] = session_id
+        self._session.setdefault("meta", {})["device_bound"] = True
+        return {
+            "ok": True,
+            "device_id": clean_id,
+            "session_id": session_id,
+            "result": {
+                "ok": True,
+                "device": dict(self._mobile_devices[clean_id]),
+                "session_id": session_id,
+            },
+        }
+
+    async def delete_mobile_device(self, device_id: str) -> dict:
+        clean_id = str(device_id).strip().lower()
+        if clean_id not in self._mobile_devices:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "device_not_found"}, "device_id": clean_id}
+        device = dict(self._mobile_devices.pop(clean_id))
+        if self._session is not None and str(device.get("bound_session_id") or "").strip() == self._session["id"]:
+            self._session.setdefault("meta", {})["device_bound"] = False
+        return {
+            "ok": True,
+            "device_id": clean_id,
+            "result": {
+                "ok": True,
+                "device": device,
+                "removed": True,
+            },
+        }
+
+    async def get_mobile_session_snapshot(self, device_id: str, *, session_id: str = "", limit: int = 20) -> dict:
+        clean_id = str(device_id).strip().lower()
+        if clean_id not in self._mobile_devices:
+            return {"ok": False, "error": "http_404", "detail": {"detail": "device_not_found"}, "device_id": clean_id}
+        target_session_id = session_id or str(self._mobile_devices[clean_id].get("bound_session_id") or "").strip()
+        if not target_session_id or self._session is None or target_session_id != self._session["id"]:
+            return {
+                "ok": True,
+                "device_id": clean_id,
+                "result": {
+                    "ok": True,
+                    "device": dict(self._mobile_devices[clean_id]),
+                    "active_session": False,
+                    "timeline": [],
+                    "why": {},
+                },
+            }
+        return {
+            "ok": True,
+            "device_id": clean_id,
+            "result": {
+                "ok": True,
+                "device": dict(self._mobile_devices[clean_id]),
+                "active_session": True,
+                "timeline_count": min(limit, len(self._timeline_items)),
+                "timeline": [dict(item) for item in self._timeline_items[:limit]],
+                "why": {"why": ["Companion bound и ready"]},
+            },
+        }
+
+
+class _FakePerceptor:
+    """Минимальный perceptor для truthful STT статусов."""
+
+    def __init__(self, *, stt_isolated_worker: bool = True, whisper_model: str = "mlx-whisper-test") -> None:
+        self.stt_isolated_worker = stt_isolated_worker
+        self.whisper_model = whisper_model
+
+    async def transcribe(self, file_path: str, router=None) -> str:
+        del file_path, router
+        return "тест"
 
 
 class _FakeUserbot:
@@ -119,10 +571,35 @@ class _FakeUserbot:
             "client_connected": client_connected,
             "authorized_user": "pablito",
             "authorized_user_id": 312322764,
+            "voice_profile": {
+                "enabled": False,
+                "delivery": "text+voice",
+                "speed": 1.5,
+                "voice": "ru-RU-DmitryNeural",
+                "input_transcription_ready": True,
+                "output_tts_ready": True,
+                "live_voice_foundation": True,
+            },
         }
 
     def get_runtime_state(self) -> dict:
         return dict(self._payload)
+
+    def get_voice_runtime_profile(self) -> dict:
+        return dict(self._payload["voice_profile"])
+
+    def update_voice_runtime_profile(self, **kwargs) -> dict:
+        profile = dict(self._payload["voice_profile"])
+        if "enabled" in kwargs and kwargs["enabled"] is not None:
+            profile["enabled"] = bool(kwargs["enabled"])
+        if "delivery" in kwargs and kwargs["delivery"] is not None:
+            profile["delivery"] = str(kwargs["delivery"])
+        if "speed" in kwargs and kwargs["speed"] is not None:
+            profile["speed"] = float(kwargs["speed"])
+        if "voice" in kwargs and kwargs["voice"] is not None:
+            profile["voice"] = str(kwargs["voice"])
+        self._payload["voice_profile"] = profile
+        return dict(profile)
 
 
 def _make_client(*, openclaw_client=None) -> TestClient:
@@ -163,7 +640,14 @@ def _make_client_with_router(router, *, openclaw_client=None) -> TestClient:
     return TestClient(app.app)
 
 
-def _make_app(*, openclaw_client=None, kraab_userbot=None) -> WebApp:
+def _make_app(
+    *,
+    openclaw_client=None,
+    kraab_userbot=None,
+    voice_gateway_client=None,
+    krab_ear_client=None,
+    perceptor=None,
+) -> WebApp:
     deps = {
         "router": _DummyRouter(),
         "openclaw_client": openclaw_client or _FakeOpenClaw(),
@@ -172,9 +656,9 @@ def _make_app(*, openclaw_client=None, kraab_userbot=None) -> WebApp:
         "provisioning_service": None,
         "ai_runtime": None,
         "reaction_engine": None,
-        "voice_gateway_client": _FakeHealthClient(ok=True),
-        "krab_ear_client": _FakeHealthClient(ok=True),
-        "perceptor": None,
+        "voice_gateway_client": voice_gateway_client or _FakeHealthClient(ok=True),
+        "krab_ear_client": krab_ear_client or _FakeHealthClient(ok=True),
+        "perceptor": perceptor,
         "watchdog": None,
         "queue": None,
         "kraab_userbot": kraab_userbot,
@@ -202,6 +686,261 @@ def test_health_lite_contains_runtime_fields(monkeypatch):
     assert "last_runtime_route" in data
     assert "scheduler_enabled" in data
     assert "voice_gateway_configured" in data
+
+
+def test_provider_ui_metadata_allows_openai_api_key_fallback() -> None:
+    """UI не должен помечать OpenAI API key как strictly manual-only."""
+    metadata = WebApp._provider_ui_metadata("openai")
+
+    assert metadata["manual_only"] is False
+    assert "controlled fallback" in metadata["repair_detail"]
+
+
+def test_transcriber_status_is_degraded_when_local_stt_ready_but_voice_gateway_down() -> None:
+    """Локальный STT не должен маркироваться как `down`, если Voice Gateway просел отдельно."""
+    deps = {
+        "router": _DummyRouter(),
+        "openclaw_client": _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(ok=False),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": _FakePerceptor(stt_isolated_worker=True, whisper_model="mlx-community/whisper"),
+        "watchdog": None,
+        "queue": None,
+    }
+    client = TestClient(WebApp(deps, port=18080, host="127.0.0.1").app)
+
+    resp = client.get("/api/transcriber/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["status"]
+    assert data["readiness"] == "degraded"
+    assert data["perceptor_ready"] is True
+    assert data["voice_gateway_ok"] is False
+    assert data["krab_ear_ok"] is True
+    assert data["stt_isolated_worker"] is True
+    assert any("Voice Gateway недоступен" in item for item in data["recommendations"])
+
+
+def test_transcriber_status_includes_voice_profile_and_live_flag() -> None:
+    """Voice status должен отражать userbot profile и live readiness."""
+    deps = {
+        "router": _DummyRouter(),
+        "openclaw_client": _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(ok=True),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": _FakePerceptor(stt_isolated_worker=True, whisper_model="mlx-community/whisper"),
+        "watchdog": None,
+        "queue": None,
+        "kraab_userbot": _FakeUserbot(),
+    }
+    client = TestClient(WebApp(deps, port=18080, host="127.0.0.1").app)
+
+    resp = client.get("/api/transcriber/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["status"]
+    assert data["voice_profile"]["enabled"] is False
+    assert data["live_voice_ready"] is False
+    assert any("Voice replies выключены" in item for item in data["recommendations"])
+
+
+def test_voice_runtime_status_returns_userbot_profile() -> None:
+    """Новый voice runtime endpoint должен отдавать текущий профиль userbot."""
+    client = TestClient(_make_app(kraab_userbot=_FakeUserbot()).app)
+
+    resp = client.get("/api/voice/runtime")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["voice"]["delivery"] == "text+voice"
+    assert data["voice"]["voice"] == "ru-RU-DmitryNeural"
+
+
+def test_voice_runtime_update_persists_runtime_profile(monkeypatch) -> None:
+    """Voice runtime update должен менять профиль через owner-only endpoint."""
+    monkeypatch.setattr(
+        WebApp,
+        "_assert_write_access",
+        lambda self, x_krab_web_key, token: None,
+    )
+    fake_userbot = _FakeUserbot()
+    client = TestClient(_make_app(kraab_userbot=fake_userbot).app)
+
+    resp = client.post(
+        "/api/voice/runtime/update",
+        json={
+            "enabled": True,
+            "delivery": "voice-only",
+            "speed": 1.25,
+            "voice": "ru-RU-SvetlanaNeural",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["voice"]["enabled"] is True
+    assert data["voice"]["delivery"] == "voice-only"
+    assert data["voice"]["speed"] == 1.25
+    assert data["voice"]["voice"] == "ru-RU-SvetlanaNeural"
+
+
+def test_openclaw_cron_status_returns_snapshot(monkeypatch) -> None:
+    """Recurring cron status должен прокидывать truthful snapshot из helper-а."""
+
+    async def _fake_snapshot(self, *, include_all: bool = True):
+        assert include_all is True
+        return {
+            "ok": True,
+            "status": {
+                "enabled": True,
+                "store_path": "/tmp/jobs.json",
+                "jobs_total_runtime": 2,
+                "next_wake_at_ms": 1234567890000,
+            },
+            "summary": {"total": 2, "enabled": 1, "disabled": 1, "include_all": True},
+            "jobs": [
+                {
+                    "id": "job-1",
+                    "name": "Каждые 10 минут",
+                    "enabled": True,
+                    "schedule_label": "Каждые 10м",
+                    "payload_kind": "systemEvent",
+                    "payload_text": "Проверка",
+                    "session_target": "main",
+                    "updated_at_ms": 1234567890000,
+                    "last_status": "ok",
+                    "last_error": "",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(WebApp, "_collect_openclaw_cron_snapshot", _fake_snapshot)
+    client = TestClient(_make_app().app)
+
+    resp = client.get("/api/openclaw/cron/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["summary"]["total"] == 2
+    assert data["jobs"][0]["name"] == "Каждые 10 минут"
+
+
+def test_openclaw_cron_create_builds_system_event_command(monkeypatch) -> None:
+    """Создание recurring job должно вызывать нативный `openclaw cron add` с `--every`."""
+    monkeypatch.setattr(WebApp, "_assert_write_access", lambda self, x_krab_web_key, token: None)
+    commands: list[tuple[tuple[str, ...], bool]] = []
+
+    async def _fake_run(self, *args: str, timeout: float = 45.0, expect_json: bool = False):
+        commands.append((tuple(args), expect_json))
+        return {"ok": True, "data": {"id": "job-1", "name": "Каждые 10 минут"}}
+
+    async def _fake_snapshot(self, *, include_all: bool = True):
+        return {
+            "ok": True,
+            "status": {"enabled": True, "store_path": "/tmp/jobs.json", "next_wake_at_ms": None},
+            "summary": {"total": 1, "enabled": 1, "disabled": 0, "include_all": include_all},
+            "jobs": [{"id": "job-1", "name": "Каждые 10 минут", "enabled": True}],
+        }
+
+    monkeypatch.setattr(WebApp, "_run_openclaw_cli", _fake_run)
+    monkeypatch.setattr(WebApp, "_collect_openclaw_cron_snapshot", _fake_snapshot)
+    client = TestClient(_make_app().app)
+
+    resp = client.post(
+        "/api/openclaw/cron/jobs/create",
+        json={
+            "name": "Каждые 10 минут",
+            "every": "10m",
+            "task_kind": "system",
+            "session_target": "main",
+            "wake_mode": "now",
+            "payload_text": "Проверь контур",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert commands
+    create_args, expect_json = commands[0]
+    assert expect_json is True
+    assert create_args[:3] == ("cron", "add", "--json")
+    assert "--every" in create_args
+    assert "--system-event" in create_args
+    assert "10m" in create_args
+
+
+def test_openclaw_cron_toggle_uses_enable_disable_command(monkeypatch) -> None:
+    """Toggle endpoint должен вызывать `enable/disable` и возвращать обновлённый snapshot."""
+    monkeypatch.setattr(WebApp, "_assert_write_access", lambda self, x_krab_web_key, token: None)
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_run(self, *args: str, timeout: float = 45.0, expect_json: bool = False):
+        commands.append(tuple(args))
+        return {"ok": True, "raw": "disabled"}
+
+    async def _fake_snapshot(self, *, include_all: bool = True):
+        return {
+            "ok": True,
+            "status": {"enabled": True, "store_path": "/tmp/jobs.json", "next_wake_at_ms": None},
+            "summary": {"total": 1, "enabled": 0, "disabled": 1, "include_all": include_all},
+            "jobs": [{"id": "job-1", "name": "Каждые 10 минут", "enabled": False}],
+        }
+
+    monkeypatch.setattr(WebApp, "_run_openclaw_cli", _fake_run)
+    monkeypatch.setattr(WebApp, "_collect_openclaw_cron_snapshot", _fake_snapshot)
+    client = TestClient(_make_app().app)
+
+    resp = client.post("/api/openclaw/cron/jobs/toggle", json={"id": "job-1", "enabled": False})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert commands[0] == ("cron", "disable", "job-1")
+    assert data["jobs"][0]["enabled"] is False
+
+
+def test_openclaw_cron_remove_uses_rm_command(monkeypatch) -> None:
+    """Remove endpoint должен вызывать `openclaw cron rm --json`."""
+    monkeypatch.setattr(WebApp, "_assert_write_access", lambda self, x_krab_web_key, token: None)
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_run(self, *args: str, timeout: float = 45.0, expect_json: bool = False):
+        commands.append(tuple(args))
+        return {"ok": True, "data": {"removed": True, "id": "job-1"}}
+
+    async def _fake_snapshot(self, *, include_all: bool = True):
+        return {
+            "ok": True,
+            "status": {"enabled": True, "store_path": "/tmp/jobs.json", "next_wake_at_ms": None},
+            "summary": {"total": 0, "enabled": 0, "disabled": 0, "include_all": include_all},
+            "jobs": [],
+        }
+
+    monkeypatch.setattr(WebApp, "_run_openclaw_cli", _fake_run)
+    monkeypatch.setattr(WebApp, "_collect_openclaw_cron_snapshot", _fake_snapshot)
+    client = TestClient(_make_app().app)
+
+    resp = client.post("/api/openclaw/cron/jobs/remove", json={"id": "job-1"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert commands[0] == ("cron", "rm", "--json", "job-1")
+    assert data["jobs"] == []
 
 
 def test_health_reuses_lite_local_truth_without_router_health_probe(monkeypatch):
@@ -233,6 +972,21 @@ def test_health_reuses_lite_local_truth_without_router_health_probe(monkeypatch)
     data = resp.json()
     assert data["status"] == "ok"
     assert data["checks"]["local_lm"] is True
+
+
+def test_ecosystem_capabilities_returns_control_plane_and_external_contracts() -> None:
+    """`/api/ecosystem/capabilities` должен агрегировать control-plane и внешние capability-report'ы."""
+    client = _make_client()
+
+    resp = client.get("/api/ecosystem/capabilities")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["services"]["krab"]["detail"]["mode"] == "control_plane"
+    assert data["services"]["voice_gateway"]["ok"] is True
+    assert data["services"]["krab_ear"]["ok"] is True
+    assert data["services"]["voice_gateway"]["detail"]["contract_version"] == "test.v1"
 
 
 def test_lmstudio_snapshot_short_cache_reuses_probe_and_invalidates(monkeypatch):
@@ -488,9 +1242,623 @@ def test_runtime_handoff_returns_machine_readable_snapshot(monkeypatch):
     assert "generated_at_utc" in data
     assert "git" in data
     assert "runtime" in data
+    assert "operator_profile" in data
+    assert "translator_readiness" in data
     assert "services" in data
     assert "artifacts" in data
+    assert data["runtime"]["workspace_state"]["workspace_dir"].endswith("workspace-main-messaging")
+    assert "workspace_attached" in data["health_lite"]
+    assert data["operator_profile"]["account_mode"] == "split_runtime_per_account"
+    assert data["translator_readiness"]["canonical_backend"] == "krab_voice_gateway"
     assert data["health_lite"]["last_runtime_route"]["model"] == "nvidia/nemotron-3-nano"
+
+
+def test_runtime_operator_profile_returns_machine_readable_state() -> None:
+    """Профиль учётки должен явно фиксировать split-runtime стратегию и ключевые пути."""
+    client = _make_client()
+
+    resp = client.get("/api/runtime/operator-profile")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    profile = data["profile"]
+    assert profile["account_mode"] == "split_runtime_per_account"
+    assert profile["project_exists"] is True
+    assert profile["openclaw_config_path"].endswith("/.openclaw/openclaw.json")
+    assert profile["owner_chrome_helper_path"].endswith("new Enable Chrome Remote Debugging.command")
+
+
+def test_translator_readiness_aggregates_voice_foundation_truth() -> None:
+    """Translator readiness должен агрегировать Ear/Gateway/userbot truth без фантазий."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/readiness")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["canonical_backend"] == "krab_voice_gateway"
+    assert data["v1_target"] == "iphone_companion"
+    assert data["delivery_paths"]["paid_apple_developer_required"] is False
+    assert data["services"]["voice_gateway"]["ok"] is True
+    assert data["services"]["krab_ear"]["ok"] is True
+    assert data["languages"] == ["es-ru", "es-en", "en-ru", "auto-detect"]
+    assert data["foundation_checks"]["perceptor"]["status"] == "missing"
+    assert data["foundation_checks"]["voice_replies"]["status"] == "disabled"
+    assert data["account_runtime"]["operator_id"]
+    assert data["account_runtime"]["userbot_authorized"] is True
+    assert data["account_runtime"]["voice_gateway_configured"] is True
+    assert data["product_surface"]["owner_panel_endpoint"] == "/api/translator/readiness"
+    assert data["product_surface"]["control_plane_endpoint"] == "/api/translator/control-plane"
+    assert data["active_session"]["status"] == "not_reported"
+
+
+def test_translator_readiness_reports_active_session_if_gateway_exposes_it() -> None:
+    """Translator readiness должен подтягивать active session только из capabilities truth gateway."""
+    deps = {
+        "router": _DummyRouter(),
+        "openclaw_client": _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(
+            ok=True,
+            capabilities_detail={
+                "service": "krab-voice-gateway",
+                "contract_version": "voice-gateway.v1",
+                "active_session": {
+                    "status": "active",
+                    "session_id": "sess-42",
+                    "label": "Ordinary Call Demo",
+                    "timeline_status": "available",
+                    "diagnostics_status": "available",
+                    "device_binding_status": "bound",
+                },
+            },
+        ),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": _FakePerceptor(),
+        "watchdog": None,
+        "queue": None,
+        "kraab_userbot": _FakeUserbot(),
+    }
+    client = TestClient(WebApp(deps, port=18080, host="127.0.0.1").app)
+
+    resp = client.get("/api/translator/readiness")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["foundation_ready"] is True
+    assert data["active_session"]["status"] == "active"
+    assert data["active_session"]["session_id"] == "sess-42"
+    assert data["active_session"]["timeline_status"] == "available"
+    assert data["foundation_checks"]["perceptor"]["status"] == "ready"
+
+
+def test_translator_control_plane_aggregates_session_policy_truth() -> None:
+    """Control-plane endpoint должен подтягивать active session, policy и quick phrases через Gateway client."""
+    deps = {
+        "router": _DummyRouter(),
+        "openclaw_client": _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeVoiceGatewayControlPlaneClient(),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": _FakePerceptor(),
+        "watchdog": None,
+        "queue": None,
+        "kraab_userbot": _FakeUserbot(),
+    }
+    client = TestClient(WebApp(deps, port=18080, host="127.0.0.1").app)
+
+    resp = client.get("/api/translator/control-plane")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["gateway_contract"]["contract_version"] == "voice-gateway.v1"
+    assert data["sessions"]["active_count"] == 1
+    assert data["sessions"]["current_session_id"] == "sess-mobile-1"
+    assert data["current_session"]["device_binding_status"] == "bound"
+    assert data["runtime_policy"]["translation_mode"] == "ru_es_duplex"
+    assert data["runtime_policy"]["bilingual_mode"] is True
+    assert data["runtime_policy"]["language_pair"] == "ru-es"
+    assert data["quick_phrases"]["status"] == "ready"
+    assert data["quick_phrases"]["items"][0]["translated_text"] == "Hola"
+    assert data["links"]["translator_control_plane_endpoint"] == "/api/translator/control-plane"
+    assert data["operator_actions"]["start_available"] is True
+    assert data["operator_actions"]["pause_available"] is True
+    assert data["operator_actions"]["draft_defaults"]["buffering_mode"] == "adaptive"
+
+
+def test_translator_session_start_and_policy_update_return_fresh_snapshots() -> None:
+    """Write-endpoints translator session должны возвращать обновлённый truthful snapshot."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    start_resp = client.post(
+        "/api/translator/session/start",
+        json={
+            "source": "mic",
+            "translation_mode": "auto_to_ru",
+            "notify_mode": "auto_off",
+            "tts_mode": "cloud",
+            "src_lang": "en",
+            "tgt_lang": "ru",
+            "label": "Owner Session",
+        },
+    )
+
+    assert start_resp.status_code == 200
+    start_data = start_resp.json()
+    assert start_data["action"] == "start_session"
+    assert start_data["session_id"] == "sess-owner-2"
+    assert start_data["control_plane"]["sessions"]["current_session_id"] == "sess-owner-2"
+    assert start_data["control_plane"]["runtime_policy"]["language_pair"] == "en-ru"
+    assert start_data["control_plane"]["operator_actions"]["resume_available"] is True
+
+    policy_resp = client.post(
+        "/api/translator/session/policy",
+        json={
+            "translation_mode": "ru_es_duplex",
+            "src_lang": "ru",
+            "tgt_lang": "es",
+            "notify_mode": "auto_on",
+        },
+    )
+
+    assert policy_resp.status_code == 200
+    policy_data = policy_resp.json()
+    assert policy_data["action"] == "update_session_policy"
+    assert policy_data["control_plane"]["runtime_policy"]["translation_mode"] == "ru_es_duplex"
+    assert policy_data["control_plane"]["runtime_policy"]["language_pair"] == "ru-es"
+
+
+def test_translator_session_lifecycle_actions_update_control_plane() -> None:
+    """Pause/resume/stop должны менять session truth внутри control-plane."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    pause_resp = client.post("/api/translator/session/action", json={"action": "pause"})
+    assert pause_resp.status_code == 200
+    pause_data = pause_resp.json()
+    assert pause_data["action"] == "pause_session"
+    assert pause_data["control_plane"]["current_session"]["status"] == "paused"
+    assert pause_data["control_plane"]["operator_actions"]["resume_available"] is True
+
+    resume_resp = client.post("/api/translator/session/action", json={"action": "resume"})
+    assert resume_resp.status_code == 200
+    resume_data = resume_resp.json()
+    assert resume_data["control_plane"]["current_session"]["status"] == "running"
+    assert resume_data["control_plane"]["operator_actions"]["pause_available"] is True
+
+    stop_resp = client.post("/api/translator/session/action", json={"action": "stop"})
+    assert stop_resp.status_code == 200
+    stop_data = stop_resp.json()
+    assert stop_data["action"] == "stop_session"
+    assert stop_data["control_plane"]["sessions"]["count"] == 0
+    assert stop_data["control_plane"]["operator_actions"]["stop_available"] is False
+
+
+def test_translator_runtime_tune_and_quick_phrase_flow() -> None:
+    """Runtime tuning и quick phrase должны идти через backend без прямого Gateway-call из UI."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    tune_resp = client.post(
+        "/api/translator/session/runtime-tune",
+        json={
+            "buffering_mode": "low_latency",
+            "target_latency_ms": 320,
+            "vad_sensitivity": 0.55,
+        },
+    )
+    assert tune_resp.status_code == 200
+    tune_data = tune_resp.json()
+    assert tune_data["action"] == "runtime_tune_session"
+    assert tune_data["gateway_result"]["runtime"]["buffering_mode"] == "low_latency"
+    assert tune_data["gateway_result"]["runtime"]["target_latency_ms"] == 320
+    assert tune_data["gateway_result"]["runtime"]["vad_sensitivity"] == 0.55
+
+    quick_phrase_resp = client.post(
+        "/api/translator/session/quick-phrase",
+        json={
+            "text": "Говорите медленнее",
+            "source_lang": "ru",
+            "target_lang": "es",
+        },
+    )
+    assert quick_phrase_resp.status_code == 200
+    quick_phrase_data = quick_phrase_resp.json()
+    assert quick_phrase_data["action"] == "quick_phrase_session"
+    assert quick_phrase_data["gateway_result"]["translated_text"] == "Hable mas despacio"
+
+
+def test_translator_session_inspector_aggregates_why_timeline_and_escalation(monkeypatch, tmp_path) -> None:
+    """Session inspector должен собирать why-report, timeline digest и escalation context."""
+    monkeypatch.setattr(inbox_service, "state_path", tmp_path / "inbox_state.json")
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/session-inspector")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["status"] == "ready"
+    assert data["why_report"]["status"] == "ready"
+    assert data["why_report"]["items"][0] == "Перевод активен"
+    assert data["timeline"]["summary"] == "Короткая сводка звонка"
+    assert data["timeline"]["tasks"][0] == "Подтвердить качество субтитров"
+    assert data["timeline"]["recent_items"][0]["kind"] == "transcript.partial"
+    assert data["escalation"]["can_escalate"] is True
+
+
+def test_translator_session_summary_and_escalation_endpoints(monkeypatch, tmp_path) -> None:
+    """Summary rebuild и escalation должны возвращать свежий translator snapshot и inbox effect."""
+    monkeypatch.setattr(inbox_service, "state_path", tmp_path / "inbox_state.json")
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    summary_resp = client.post("/api/translator/session/summary", json={"max_items": 12})
+    assert summary_resp.status_code == 200
+    summary_data = summary_resp.json()
+    assert summary_data["action"] == "build_session_summary"
+    assert summary_data["gateway_result"]["summary"] == "Короткая сводка звонка обновлена"
+    assert summary_data["session_inspector"]["actions"]["escalate_available"] is True
+
+    escalate_resp = client.post("/api/translator/session/escalate", json={})
+    assert escalate_resp.status_code == 200
+    escalate_data = escalate_resp.json()
+    assert escalate_data["action"] == "escalate_session"
+    assert escalate_data["inbox_result"]["kind"] == "owner_task"
+    assert escalate_data["inbox_result"]["source"] == "translator-ui"
+    assert escalate_data["inbox_summary"]["pending_owner_tasks"] == 1
+
+
+def test_translator_mobile_readiness_aggregates_companion_registry() -> None:
+    """Mobile readiness должен агрегировать iPhone companion registry и selected snapshot."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/mobile-readiness")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["status"] == "bound"
+    assert data["summary"]["registered_devices"] == 1
+    assert data["summary"]["bound_devices"] == 1
+    assert data["devices"]["selected_device_id"] == "iphone-dev-1"
+    assert data["selected_device_snapshot"]["active_session"] is True
+    assert data["selected_device_snapshot"]["why_items"][0] == "Companion bound и ready"
+
+
+def test_translator_delivery_matrix_aggregates_product_tracks() -> None:
+    """Delivery matrix должен честно собирать ordinary/internet call tracks поверх readiness/control/mobile."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/delivery-matrix")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["primary_delivery_path"] == "iphone_companion"
+    assert data["ordinary_calls"]["status"] == "trial_ready"
+    assert data["ordinary_calls"]["ready_for_trial"] is True
+    assert data["ordinary_calls"]["selected_device_id"] == "iphone-dev-1"
+    assert data["internet_calls"]["status"] == "design_ready"
+    assert data["links"]["translator_mobile_readiness_endpoint"] == "/api/translator/mobile-readiness"
+
+
+def test_translator_delivery_matrix_truthfully_degrades_when_gateway_is_down() -> None:
+    """Delivery matrix не должен притворяться готовым, если Gateway сейчас недоступен."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    gateway._ok = False
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/delivery-matrix")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "blocked"
+    assert data["ordinary_calls"]["status"] == "blocked"
+    assert "Krab Voice Gateway" in data["ordinary_calls"]["blockers"][0]
+    assert data["internet_calls"]["status"] == "blocked"
+
+
+def test_translator_live_trial_preflight_aggregates_helpers_and_checklist() -> None:
+    """Live trial preflight должен собирать helper paths, сервисы и checklist в один snapshot."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/live-trial-preflight")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ready_for_trial"
+    assert data["helpers"]["start_full_ecosystem"]["path"].endswith("Start Full Ecosystem.command")
+    assert data["translator"]["ordinary_calls_status"] == "trial_ready"
+    assert data["actions"]["next_step"]
+
+
+def test_translator_mobile_register_and_bind_endpoints_return_fresh_snapshots() -> None:
+    """Register/bind companion endpoints должны возвращать обновлённый mobile readiness snapshot."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    gateway._mobile_devices = {}
+    gateway._session = {
+        "id": "sess-mobile-1",
+        "status": "running",
+        "translation_mode": "ru_es_duplex",
+        "notify_mode": "auto_on",
+        "tts_mode": "hybrid",
+        "source": "mobile",
+        "src_lang": "ru",
+        "tgt_lang": "es",
+        "updated_at": "2026-03-14T05:00:00+00:00",
+        "meta": {"device_bound": False},
+    }
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    register_resp = client.post(
+        "/api/translator/mobile/register",
+        json={
+            "device_id": "iphone-dev-2",
+            "voip_push_token": "token-123",
+            "app_version": "0.2.0",
+            "locale": "es",
+            "preferred_source_lang": "auto",
+            "preferred_target_lang": "es",
+        },
+    )
+    assert register_resp.status_code == 200
+    register_data = register_resp.json()
+    assert register_data["action"] == "register_mobile_device"
+    assert register_data["mobile_readiness"]["summary"]["registered_devices"] == 1
+    assert register_data["mobile_readiness"]["actions"]["bind_available"] is True
+    assert register_data["delivery_matrix"]["ordinary_calls"]["status"] == "device_ready"
+    assert register_data["live_trial_preflight"]["status"] in {"session_pending", "companion_pending"}
+
+    bind_resp = client.post(
+        "/api/translator/mobile/bind",
+        json={"device_id": "iphone-dev-2"},
+    )
+    assert bind_resp.status_code == 200
+    bind_data = bind_resp.json()
+    assert bind_data["action"] == "bind_mobile_device"
+    assert bind_data["session_id"] == "sess-mobile-1"
+    assert bind_data["mobile_readiness"]["status"] == "bound"
+    assert bind_data["mobile_readiness"]["summary"]["bound_devices"] == 1
+    assert bind_data["delivery_matrix"]["ordinary_calls"]["status"] == "trial_ready"
+    assert bind_data["live_trial_preflight"]["status"] == "ready_for_trial"
+
+
+def test_translator_mobile_trial_prep_creates_session_and_binds_device() -> None:
+    """Trial prep должен уметь за один вызов зарегистрировать device, создать session и привязать companion."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    gateway._mobile_devices = {}
+    gateway._session = None
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.post(
+        "/api/translator/mobile/trial-prep",
+        json={
+            "device_id": "iphone-dev-trial",
+            "app_version": "0.3.0",
+            "locale": "es",
+            "preferred_source_lang": "ru",
+            "preferred_target_lang": "es",
+            "translation_mode": "ru_es_duplex",
+            "label": "Companion Trial",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "prepare_mobile_trial"
+    assert data["device_id"] == "iphone-dev-trial"
+    assert data["session_id"] == "sess-owner-2"
+    assert data["performed_steps"] == ["device_registered", "session_created", "device_bound"]
+    assert data["control_plane"]["current_session"]["source"] == "mobile"
+    assert data["mobile_readiness"]["status"] == "bound"
+    assert data["delivery_matrix"]["ordinary_calls"]["status"] == "trial_ready"
+    assert data["live_trial_preflight"]["status"] == "ready_for_trial"
+
+
+def test_translator_mobile_trial_prep_requires_device_before_side_effects() -> None:
+    """Trial prep не должен создавать session, если owner не указал device id и registry пустой."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    gateway._mobile_devices = {}
+    gateway._session = None
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.post("/api/translator/mobile/trial-prep", json={})
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "device_id_required_for_trial_prep"
+    assert gateway._session is None
+    assert gateway._mobile_devices == {}
+
+
+def test_translator_mobile_remove_endpoint_cleans_registry_snapshot() -> None:
+    """Удаление companion должно возвращать обновлённый mobile snapshot без устройства."""
+    gateway = _FakeVoiceGatewayControlPlaneClient()
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=gateway,
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.post(
+        "/api/translator/mobile/remove",
+        json={"device_id": "iphone-dev-1"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "remove_mobile_device"
+    assert data["device_id"] == "iphone-dev-1"
+    assert data["mobile_readiness"]["summary"]["registered_devices"] == 0
+    assert data["mobile_readiness"]["status"] == "not_configured"
+    assert data["delivery_matrix"]["ordinary_calls"]["status"] == "blocked"
+
+
+def test_translator_mobile_onboarding_snapshot_aggregates_profiles_and_packet() -> None:
+    """Onboarding packet должен собирать install tracks, trial profiles и preview payload."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/mobile/onboarding")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["status"] == "trial_ready"
+    assert data["summary"]["mobile_status"] == "bound"
+    assert data["install_tracks"][0]["id"] == "xcode_free_signing"
+    profile_map = {item["id"]: item for item in data["trial_profiles"]}
+    assert profile_map["subtitles_first"]["status"] == "ready"
+    assert profile_map["voice_first_guarded"]["status"] == "blocked"
+    assert profile_map["ru_es_duplex"]["status"] == "ready"
+    assert data["packet_preview"]["recommended_trial_profile"] == "subtitles_first"
+    assert data["packet_preview"]["trial_prep_payload"]["source"] == "mobile"
+    assert data["helpers"]["build_packet"]["path"].endswith("Build Translator Mobile Onboarding Packet.command")
+
+
+def test_translator_mobile_onboarding_export_writes_ops_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Export endpoint должен писать onboarding packet в latest/versioned ops artifacts."""
+    project_root = tmp_path / "Krab"
+    (project_root / "artifacts" / "ops").mkdir(parents=True)
+    monkeypatch.setattr(WebApp, "_project_root", staticmethod(lambda: project_root))
+    monkeypatch.setattr(
+        WebApp,
+        "_collect_runtime_lite_snapshot",
+        lambda self: asyncio.sleep(0, result={
+            "telegram_session_state": "ready",
+            "voice_gateway_configured": True,
+        }),
+    )
+
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.post("/api/translator/mobile/onboarding/export", json={})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["action"] == "export_mobile_onboarding_packet"
+    latest_path = Path(data["artifacts"]["latest_path"])
+    versioned_path = Path(data["artifacts"]["versioned_path"])
+    assert latest_path.exists() is True
+    assert versioned_path.exists() is True
+    payload = json.loads(latest_path.read_text(encoding="utf-8"))
+    assert payload["status"] in {"ready_for_onboarding", "trial_ready"}
+    assert payload["packet_preview"]["recommended_trial_profile"] == "subtitles_first"
 
 
 def test_runtime_recover_requires_web_api_key(monkeypatch):
@@ -695,6 +2063,9 @@ def test_model_catalog_cloud_presets_expose_full_runtime_registry_and_provider_s
 
     runtime_payload = {
         "providers": {
+            "github-copilot": {
+                "models": []
+            },
             "openai-codex": {
                 "models": [
                     {"id": "gpt-4.5-preview", "name": "ChatGPT 4.5 Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
@@ -740,6 +2111,9 @@ def test_model_catalog_cloud_presets_expose_full_runtime_registry_and_provider_s
     full_catalog = {
         "count": 5,
         "providers": {
+            "github-copilot": [
+                {"key": "github-copilot/gpt-5.4", "name": "GPT-5.4", "contextWindow": 400000, "maxTokens": 16384, "available": True, "tags": []},
+            ],
             "openai-codex": [
                 {"key": "openai-codex/gpt-4.5-preview", "name": "ChatGPT 4.5 Preview", "contextWindow": 128000, "maxTokens": 16384, "available": True, "tags": ["configured"]},
                 {"key": "openai-codex/gpt-5.4", "name": "GPT-5.4", "contextWindow": 272000, "maxTokens": 16384, "available": True, "tags": []},
@@ -820,7 +2194,9 @@ def test_model_catalog_cloud_presets_expose_full_runtime_registry_and_provider_s
     assert "google-gemini-cli/gemini-2.5-pro" in inventory_ids
     assert "google-gemini-cli/gemini-2.5-pro" not in cloud_ids
     assert "openai/gpt-5-codex" not in cloud_ids
+    assert "github-copilot/gpt-5.4" not in inventory_ids
     provider_groups = {item["provider"]: item for item in data["cloud_provider_groups"]}
+    assert "github-copilot" not in provider_groups
     assert provider_groups["openai-codex"]["provider_readiness_label"] == "Scope fail"
     assert provider_groups["google-gemini-cli"]["provider_readiness_label"] == "OAuth OK"
     assert provider_groups["google-gemini-cli"]["configured_model_count"] == 1
@@ -911,6 +2287,10 @@ def test_build_openclaw_runtime_controls_reads_context_and_thinking(monkeypatch)
                 },
                 "contextTokens": 200000,
                 "thinkingDefault": "medium",
+                "maxConcurrent": 4,
+                "subagents": {
+                    "maxConcurrent": 8,
+                },
                 "models": {
                     "openai-codex/gpt-5.4": {"params": {"thinking": "high"}},
                     "lmstudio/local": {"params": {"thinking": "off"}},
@@ -930,11 +2310,16 @@ def test_build_openclaw_runtime_controls_reads_context_and_thinking(monkeypatch)
     assert payload["fallbacks"] == ["google/gemini-2.5-flash", "lmstudio/local"]
     assert payload["context_tokens"] == 200000
     assert payload["thinking_default"] == "medium"
+    assert payload["execution_preset"] == "parallel"
+    assert payload["main_max_concurrent"] == 4
+    assert payload["subagent_max_concurrent"] == 8
+    assert payload["max_fallback_slots"] == 8
     chain_items = {item["model_id"]: item for item in payload["chain_items"]}
     assert chain_items["openai-codex/gpt-5.4"]["explicit_thinking"] == "high"
     assert chain_items["openai-codex/gpt-5.4"]["effective_thinking"] == "high"
     assert chain_items["google/gemini-2.5-flash"]["effective_thinking"] == "medium"
     assert chain_items["lmstudio/local"]["explicit_thinking"] == "off"
+
 
 
 def test_build_openclaw_parallelism_truth_reads_queue_caps(monkeypatch):
@@ -1026,6 +2411,195 @@ def test_model_provider_action_launches_known_helper(monkeypatch, tmp_path: Path
     assert str(launched["path"]).endswith("Login Gemini CLI OAuth.command")
 
 
+def test_model_provider_action_launches_openai_codex_helper(monkeypatch, tmp_path: Path):
+    """Owner UI должен уметь запускать one-click relogin helper для OpenAI Codex OAuth."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    helper_path = tmp_path / "Login OpenAI Codex OAuth.command"
+    helper_path.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    helper_path.chmod(0o755)
+
+    launched: dict[str, object] = {}
+
+    def _fake_launch(self, target_path: Path):
+        launched["path"] = str(target_path)
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "error": "",
+            "launched": True,
+            "path": str(target_path),
+        }
+
+    monkeypatch.setattr(
+        WebApp,
+        "_provider_repair_helper_path",
+        classmethod(lambda cls, provider_name: helper_path if provider_name == "openai-codex" else None),
+    )
+    monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
+
+    class _Router:
+        models = {"chat": "openai-codex/gpt-5.4"}
+        force_mode = "auto"
+
+        async def list_local_models_verbose(self):
+            return []
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "idle",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
+    monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
+
+    client = _make_client_with_router(_Router())
+    response = client.post(
+        "/api/model/provider-action",
+        headers={"X-Krab-Web-Key": "secret"},
+        json={"provider": "openai-codex", "action": "repair_oauth"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["provider"] == "openai-codex"
+    assert data["action"] == "repair_oauth"
+    assert str(launched["path"]).endswith("Login OpenAI Codex OAuth.command")
+
+
+def test_model_provider_action_launches_qwen_portal_helper(monkeypatch, tmp_path: Path):
+    """Owner UI должен уметь запускать one-click relogin helper для Qwen Portal OAuth."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    helper_path = tmp_path / "Login Qwen Portal OAuth.command"
+    helper_path.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    helper_path.chmod(0o755)
+
+    launched: dict[str, object] = {}
+
+    def _fake_launch(self, target_path: Path):
+        launched["path"] = str(target_path)
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "error": "",
+            "launched": True,
+            "path": str(target_path),
+        }
+
+    monkeypatch.setattr(
+        WebApp,
+        "_provider_repair_helper_path",
+        classmethod(lambda cls, provider_name: helper_path if provider_name == "qwen-portal" else None),
+    )
+    monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
+
+    class _Router:
+        models = {"chat": "qwen-portal/coder-model"}
+        force_mode = "auto"
+
+        async def list_local_models_verbose(self):
+            return []
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "idle",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
+    monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
+
+    client = _make_client_with_router(_Router())
+    response = client.post(
+        "/api/model/provider-action",
+        headers={"X-Krab-Web-Key": "secret"},
+        json={"provider": "qwen-portal", "action": "repair_oauth"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["provider"] == "qwen-portal"
+    assert data["action"] == "repair_oauth"
+    assert str(launched["path"]).endswith("Login Qwen Portal OAuth.command")
+
+
+def test_model_provider_action_launches_google_antigravity_helper(monkeypatch, tmp_path: Path):
+    """Legacy Antigravity тоже должен иметь честный one-click relogin helper, если plugin жив."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    helper_path = tmp_path / "Login Google Antigravity OAuth.command"
+    helper_path.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    helper_path.chmod(0o755)
+
+    launched: dict[str, object] = {}
+
+    def _fake_launch(self, target_path: Path):
+        launched["path"] = str(target_path)
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "error": "",
+            "launched": True,
+            "path": str(target_path),
+        }
+
+    monkeypatch.setattr(
+        WebApp,
+        "_provider_repair_helper_path",
+        classmethod(lambda cls, provider_name: helper_path if provider_name == "google-antigravity" else None),
+    )
+    monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
+
+    class _Router:
+        models = {"chat": "google-antigravity/gemini-3.1-pro-high"}
+        force_mode = "auto"
+
+        async def list_local_models_verbose(self):
+            return []
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "idle",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
+    monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
+
+    client = _make_client_with_router(_Router())
+    response = client.post(
+        "/api/model/provider-action",
+        headers={"X-Krab-Web-Key": "secret"},
+        json={"provider": "google-antigravity", "action": "repair_oauth"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["provider"] == "google-antigravity"
+    assert data["action"] == "repair_oauth"
+    assert str(launched["path"]).endswith("Login Google Antigravity OAuth.command")
+
+
 def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, tmp_path: Path):
     """`/api/model/apply` должен обновлять глобальную chain и runtime knobs в live OpenClaw config."""
     monkeypatch.setenv("WEB_API_KEY", "secret")
@@ -1047,7 +2621,8 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
                         },
                         "contextTokens": 128000,
                         "thinkingDefault": "off",
-                        "subagents": {"model": "google/gemini-2.5-flash"},
+                        "maxConcurrent": 4,
+                        "subagents": {"maxConcurrent": 8, "model": "google/gemini-2.5-flash"},
                     },
                     "list": [
                         {"id": "main", "model": "google/gemini-2.5-flash"},
@@ -1137,6 +2712,9 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
             ],
             "context_tokens": 200000,
             "thinking_default": "high",
+            "execution_preset": "sequential",
+            "main_max_concurrent": 7,
+            "subagent_max_concurrent": 13,
             "slot_thinking": {
                 "openai-codex/gpt-5.4": "high",
                 "google/gemini-2.5-flash": "medium",
@@ -1160,6 +2738,8 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
     assert defaults["model"]["fallbacks"] == ["google/gemini-2.5-flash", "lmstudio/local"]
     assert defaults["contextTokens"] == 200000
     assert defaults["thinkingDefault"] == "high"
+    assert defaults["maxConcurrent"] == 1
+    assert defaults["subagents"]["maxConcurrent"] == 1
     assert defaults["subagents"]["model"] == "openai-codex/gpt-5.4"
     assert defaults["models"]["openai-codex/gpt-5.4"]["params"]["thinking"] == "high"
     assert defaults["models"]["google/gemini-2.5-flash"]["params"]["thinking"] == "medium"
@@ -1168,10 +2748,14 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
 
     agent_payload = json.loads(agent_path.read_text(encoding="utf-8"))
     assert agent_payload["model"] == "openai-codex/gpt-5.4"
+    assert data["result"]["runtime"]["execution_preset"] == "sequential"
+    assert data["result"]["runtime"]["main_max_concurrent"] == 1
+    assert data["result"]["runtime"]["subagent_max_concurrent"] == 1
 
 
-def test_openclaw_model_routing_status_reports_broken_primary_and_legacy_google_fallback(monkeypatch):
-    """Routing status должен честно отражать сломанный primary и legacy Google fallback."""
+
+def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antigravity_fallback(monkeypatch):
+    """Routing status должен честно отражать сломанный primary и disabled Antigravity fallback."""
 
     runtime_config = {
         "agents": {
@@ -1228,9 +2812,150 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_legacy_google_
     assert data["target_primary_candidate"] == "openai-codex/gpt-5.4"
     assert data["target_primary_in_runtime"] is False
     assert data["temporary_primary_recommendation"] == "google/gemini-2.5-flash"
-    assert data["google_antigravity_legacy_removed"] is True
+    assert data["google_antigravity"]["readiness_label"] == "Disabled"
+    assert data["google_antigravity_legacy_removed"] is False
     assert any("model_not_found" in item for item in data["warnings"])
-    assert any("legacy" in item.lower() or "удал" in item.lower() for item in data["warnings"])
+    assert any("disabled" in item.lower() for item in data["warnings"])
+
+
+def test_openclaw_model_routing_status_prefers_live_antigravity_profile_over_disabled_legacy_profile(monkeypatch):
+    """Живой Antigravity-профиль не должен блокироваться старым disabled legacy-профилем."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-4.5-preview",
+                    "fallbacks": [
+                        "google-antigravity/claude-opus-4-5-thinking",
+                        "google/gemini-2.5-flash",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {
+                "models": [{"id": "gpt-4.5-preview"}]
+            },
+            "google-antigravity": {
+                "models": [{"id": "claude-opus-4-5-thinking"}]
+            },
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-antigravity:vscode-free": {"provider": "google-antigravity"},
+            "google-antigravity:pavelr7@gmail.com": {
+                "provider": "google-antigravity",
+                "email": "pavelr7@gmail.com",
+                "expires": int((time.time() + 3600.0) * 1000.0),
+            },
+        },
+        "usageStats": {
+            "openai-codex:default": {
+                "failureCounts": {"model_not_found": 2},
+                "cooldownUntil": int((time.time() + 60.0) * 1000.0),
+            },
+            "google-antigravity:vscode-free": {"disabledReason": "auth_permanent"},
+            "google-antigravity:pavelr7@gmail.com": {},
+        },
+    }
+    status_snapshot = {
+        "providers": {
+            "google-antigravity": {
+                "oauth_status": "ok",
+                "oauth_remaining_ms": 45 * 60 * 1000,
+                "oauth_remaining_human": "45m",
+            }
+        }
+    }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot))
+    monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4")
+
+    client = _make_client_with_router(_DummyRouter())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["routing"]
+    assert data["temporary_primary_recommendation"] == "google-antigravity/claude-opus-4-5-thinking"
+    assert data["google_antigravity"]["readiness_label"] == "OAuth OK"
+    assert data["google_antigravity"]["healthy_profiles"] == ["google-antigravity:pavelr7@gmail.com"]
+    assert data["google_antigravity_legacy_removed"] is False
+    assert any("дополнительный fallback" in item.lower() for item in data["warnings"])
+
+
+def test_openclaw_model_routing_status_normalizes_antigravity_oauth_status_when_live_profile_exists(monkeypatch):
+    """Живой Antigravity-профиль должен нормализовать stale `expired` snapshot до `ok`."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-5.4",
+                    "fallbacks": [
+                        "google-antigravity/gemini-3.1-pro-high",
+                        "google/gemini-3.1-pro-preview",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {"models": [{"id": "gpt-5.4"}]},
+            "google-antigravity": {"models": [{"id": "gemini-3.1-pro-high"}]},
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-antigravity:vscode-free": {"provider": "google-antigravity"},
+            "google-antigravity:pavelr7@gmail.com": {
+                "provider": "google-antigravity",
+                "email": "pavelr7@gmail.com",
+                "expires": int((time.time() + 3600.0) * 1000.0),
+            },
+        },
+        "usageStats": {
+            "google-antigravity:vscode-free": {"disabledReason": "auth_permanent"},
+            "google-antigravity:pavelr7@gmail.com": {},
+        },
+    }
+    status_snapshot = {
+        "providers": {
+            "google-antigravity": {
+                "oauth_status": "expired",
+                "oauth_remaining_ms": 39 * 60 * 1000,
+                "oauth_remaining_human": "39м",
+            }
+        }
+    }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot))
+
+    client = _make_client_with_router(_DummyRouter())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["routing"]["google_antigravity"]
+    assert data["healthy_profiles"] == ["google-antigravity:pavelr7@gmail.com"]
+    assert data["oauth_status"] == "ok"
+    assert data["oauth_remaining_human"] == "39м"
+    assert data["readiness_label"] == "OAuth OK"
 
 
 def test_openclaw_model_routing_status_skips_expired_google_gemini_cli_fallback(monkeypatch):
@@ -1290,7 +3015,7 @@ def test_openclaw_model_routing_status_skips_expired_google_gemini_cli_fallback(
     data = resp.json()["routing"]
     assert data["current_primary_broken"] is True
     assert data["temporary_primary_recommendation"] == "google/gemini-3.1-pro-preview"
-    assert data["google_gemini_cli"]["cooldown_active"] is True
+    assert data["google_gemini_cli"]["cooldown_active"] is False
     assert data["google_gemini_cli"]["expired_profiles"] == [
         {"profile": "google-gemini-cli:default", "reason": "expired"}
     ]
@@ -1325,7 +3050,6 @@ def test_openclaw_model_routing_status_clears_broken_flag_when_live_primary_veri
         },
         "usageStats": {
             "openai-codex:default": {
-                "failureCounts": {"model_not_found": 3},
                 "cooldownUntil": int((time.time() + 60.0) * 1000.0),
             },
         },
@@ -1343,7 +3067,11 @@ def test_openclaw_model_routing_status_clears_broken_flag_when_live_primary_veri
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
     monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
     monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
-    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(
+        WebApp,
+        "_runtime_signal_failed_providers",
+        classmethod(lambda cls: {"openai-codex": "runtime_missing_scope_model_request"}),
+    )
     monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
 
     client = _make_client_with_router(_DummyRouter(), openclaw_client=_PrimaryVerifiedOpenClaw())
@@ -1354,7 +3082,220 @@ def test_openclaw_model_routing_status_clears_broken_flag_when_live_primary_veri
     assert data["current_primary_broken"] is False
     assert data["temporary_primary_recommendation"] == "openai-codex/gpt-5.4"
     assert data["live_primary_verified"] is True
+    assert data["openai_codex"]["signal_fail_code"] == ""
+    assert data["openai_codex"]["readiness"] == "ready"
+    assert data["openai_codex"]["readiness_label"] == "Live OK"
+    assert data["openai_codex"]["historical_signal_fail_code"] == "runtime_missing_scope_model_request"
+    assert data["openai_codex"]["historical_readiness_label"] == "Scope fail"
     assert not any("openai primary падает" in item.lower() for item in data["warnings"])
+    assert not any("openai primary блокируется по oauth scopes" in item.lower() for item in data["warnings"])
+
+
+def test_model_catalog_prefers_live_verified_primary_truth_for_openai_codex(monkeypatch):
+    """Cloud catalog не должен показывать stale Scope fail, если live primary уже подтверждён."""
+
+    class _TruthRouter(_DummyRouter):
+        def __init__(self) -> None:
+            self.is_local_available = False
+            self.active_local_model = ""
+            self.local_engine = "lm_studio"
+            self.lm_studio_url = "http://127.0.0.1:1234"
+            self.models = {"chat": "openai-codex/gpt-5.4"}
+            self.force_mode = None
+
+        async def list_local_models_verbose(self):
+            return []
+
+    class _PrimaryVerifiedOpenClaw(_FakeOpenClaw):
+        def get_last_runtime_route(self):
+            return {
+                "channel": "openclaw_cloud",
+                "provider": "openai-codex",
+                "model": "openai-codex/gpt-5.4",
+                "status": "ok",
+                "route_reason": "openclaw_response_ok",
+                "route_detail": "Ответ получен через OpenClaw API",
+            }
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "idle",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    runtime_payload = {
+        "providers": {
+            "openai-codex": {
+                "models": [
+                    {
+                        "id": "gpt-5.4",
+                        "name": "ChatGPT 4.5 Preview",
+                        "reasoning": True,
+                        "contextWindow": 128000,
+                        "maxTokens": 16384,
+                    }
+                ]
+            }
+        }
+    }
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-5.4",
+                    "fallbacks": [],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+                "models": {
+                    "openai-codex/gpt-5.4": {
+                        "params": {"thinking": "off"},
+                    }
+                },
+            }
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+        },
+        "usageStats": {
+            "openai-codex:default": {
+                "failureCounts": {"model_not_found": 3},
+                "cooldownUntil": int((time.time() + 60.0) * 1000.0),
+            },
+        },
+    }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_payload))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp,
+        "_runtime_signal_failed_providers",
+        classmethod(lambda cls: {"openai-codex": "runtime_missing_scope_model_request"}),
+    )
+    monkeypatch.setattr(WebApp, "_openclaw_models_full_catalog", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+
+    client = _make_client_with_router(_TruthRouter(), openclaw_client=_PrimaryVerifiedOpenClaw())
+
+    resp = client.get("/api/model/catalog")
+
+    assert resp.status_code == 200
+    data = resp.json()["catalog"]
+    provider_groups = {item["provider"]: item for item in data["cloud_provider_groups"]}
+    inventory = {item["id"]: item for item in data["cloud_inventory"]}
+    assert data["routing_status"]["live_primary_verified"] is True
+    assert data["routing_status"]["openai_codex"]["readiness_label"] == "Live OK"
+    assert provider_groups["openai-codex"]["provider_readiness"] == "ready"
+    assert provider_groups["openai-codex"]["provider_readiness_label"] == "Live OK"
+    assert "Последний live route подтвердил configured primary" in provider_groups["openai-codex"]["provider_detail"]
+    assert inventory["openai-codex/gpt-5.4"]["provider_readiness_label"] == "Live OK"
+
+
+def test_model_catalog_includes_auth_recovery_snapshot(monkeypatch):
+    """`/api/model/catalog` должен отдавать read-only auth recovery summary и встраивать его в provider groups."""
+
+    runtime_payload = {
+        "providers": {
+            "openai-codex": {"models": [{"id": "gpt-5.4"}]},
+        }
+    }
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "google/gemini-3.1-pro-preview",
+                    "fallbacks": [],
+                }
+            }
+        }
+    }
+    auth_profiles = {"profiles": {}, "usageStats": {}}
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_payload))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_full_catalog", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_status_snapshot",
+        classmethod(
+            lambda cls: {
+                "raw": {
+                    "defaultModel": "google/gemini-3.1-pro-preview",
+                    "resolvedDefault": "google/gemini-3.1-pro-preview",
+                    "allowed": [
+                        "google/gemini-3.1-pro-preview",
+                        "openai-codex/gpt-5.4",
+                    ],
+                    "fallbacks": [],
+                    "auth": {
+                        "providers": [
+                            {"provider": "google", "effective": {"kind": "env"}, "profiles": {"count": 0}},
+                        ],
+                        "oauth": {
+                            "providers": [
+                                {"provider": "openai-codex", "status": "missing", "profiles": []},
+                            ]
+                        },
+                    },
+                },
+                "providers": {},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "src.modules.web_app.build_auth_recovery_readiness_snapshot",
+        lambda **kwargs: {
+            "summary": {
+                "recovery_stage": "attention",
+                "recovery_stage_label": "Runtime жив, но recovery на этой учётке неполный",
+                "runtime_label": "Текущий runtime жив: primary `google/gemini-3.1-pro-preview` подтверждён через `env`.",
+                "next_step": "Для `OpenAI Codex` можно сразу жать кнопку релогина в web panel.",
+                "panel_hint": "Кнопки быстрого релогина уже доступны на карточках провайдеров в owner panel.",
+            },
+            "providers": [
+                {
+                    "provider": "openai-codex",
+                    "label": "OpenAI Codex",
+                    "state_label": "OAuth не подтверждён",
+                    "detail_short": "Codex OAuth на этой учётке не подтверждён.",
+                    "severity": "warn",
+                    "usage_role": "allowed",
+                    "helper_available": True,
+                    "recommended_action_label": "Запустить one-click helper из панели",
+                }
+            ],
+            "providers_by_name": {
+                "openai-codex": {
+                    "provider": "openai-codex",
+                    "label": "OpenAI Codex",
+                    "state_label": "OAuth не подтверждён",
+                    "detail_short": "Codex OAuth на этой учётке не подтверждён.",
+                    "severity": "warn",
+                    "usage_role": "allowed",
+                    "helper_available": True,
+                    "recommended_action_label": "Запустить one-click helper из панели",
+                }
+            },
+        },
+    )
+
+    client = _make_client_with_router(_DummyRouter())
+    resp = client.get("/api/model/catalog")
+
+    assert resp.status_code == 200
+    data = resp.json()["catalog"]
+    provider_groups = {item["provider"]: item for item in data["cloud_provider_groups"]}
+    assert data["auth_recovery"]["summary"]["recovery_stage"] == "attention"
+    assert provider_groups["openai-codex"]["provider_auth_recovery"]["state_label"] == "OAuth не подтверждён"
+    assert provider_groups["openai-codex"]["provider_ui"]["auth_recovery"]["detail_short"] == "Codex OAuth на этой учётке не подтверждён."
 
 
 def test_openclaw_model_routing_status_marks_live_fallback_as_active(monkeypatch):
@@ -2135,7 +4076,7 @@ def test_browser_mcp_readiness_distinguishes_dedicated_debug_browser_from_owner_
 
     assert browser["state"] == "debug_attached"
     assert browser["readiness"] == "attention"
-    assert browser["stage_label"] == "Подключён Debug browser"
+    assert browser["stage_label"] == "Активен Debug browser"
     assert browser["runtime"]["active_contour"] == "debug_browser"
     assert browser["runtime"]["active_contour_label"] == "Debug browser"
     assert browser["runtime"]["owner_attach_confirmed"] is False
@@ -2149,8 +4090,8 @@ def test_browser_access_paths_include_relay_and_chrome_devtools():
     browser = {
         "readiness": "attention",
         "state": "tab_not_connected",
-        "summary": "Dedicated debug browser жив, но owner Chrome ещё не attach-нут.",
-        "next_step": "Открой вкладку в debug browser или переключись на attach к обычному Chrome.",
+        "summary": "Сейчас активен отдельный OpenClaw Debug browser. Это не обычный Chrome владельца и не его профиль/расширения.",
+        "next_step": "Открой вкладку в отдельном debug browser или используй `Открыть Мой Chrome`, если нужен обычный профиль.",
         "runtime": {
             "running": True,
             "active_contour": "debug_browser",
@@ -2770,10 +4711,18 @@ def test_userbot_acl_status_returns_runtime_acl_state(
     """`/api/userbot/acl/status` должен отдавать owner, runtime state и partial-команды."""
     acl_path = tmp_path / "krab_userbot_acl.json"
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
-    monkeypatch.setattr(config, "OWNER_USERNAME", "@pablito", raising=False)
+    monkeypatch.setattr(config, "OWNER_USERNAME", "@yung_nagato", raising=False)
     monkeypatch.setattr(
         "src.modules.web_app.load_acl_runtime_state",
         lambda: {"owner": ["pablito"], "full": ["trusted"], "partial": ["reader"]},
+    )
+    monkeypatch.setattr(
+        "src.modules.web_app.get_effective_owner_label",
+        lambda: "pablito",
+    )
+    monkeypatch.setattr(
+        "src.modules.web_app.get_effective_owner_subjects",
+        lambda: ["pablito"],
     )
 
     client = _make_client()
@@ -2783,7 +4732,8 @@ def test_userbot_acl_status_returns_runtime_acl_state(
     data = resp.json()
     assert data["ok"] is True
     assert data["acl"]["path"] == str(acl_path)
-    assert data["acl"]["owner_username"] == "@pablito"
+    assert data["acl"]["owner_username"] == "pablito"
+    assert data["acl"]["owner_subjects"] == ["pablito"]
     assert data["acl"]["state"]["full"] == ["trusted"]
     assert data["acl"]["state"]["partial"] == ["reader"]
     assert data["acl"]["partial_commands"] == ["help", "search", "status"]
@@ -3021,3 +4971,55 @@ def test_userbot_acl_update_rejects_invalid_action(monkeypatch: pytest.MonkeyPat
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "acl_update_invalid_action"
+
+
+def test_runtime_chat_session_clear_requires_web_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`/api/runtime/chat-session/clear` должен требовать WEB_API_KEY при включённой защите."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    client = _make_client()
+
+    resp = client.post(
+        "/api/runtime/chat-session/clear",
+        json={"chat_id": "312322764"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "forbidden: invalid WEB_API_KEY"
+
+
+def test_runtime_chat_session_clear_calls_openclaw_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Owner runtime endpoint должен чистить chat-session через общий openclaw_client."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    fake_openclaw = _FakeOpenClaw()
+    client = TestClient(_make_app(openclaw_client=fake_openclaw).app)
+
+    resp = client.post(
+        "/api/runtime/chat-session/clear",
+        json={"chat_id": "312322764", "note": "flush amnesia tail"},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["action"] == "clear_chat_session"
+    assert data["chat_id"] == "312322764"
+    assert data["note"] == "flush amnesia tail"
+    assert fake_openclaw.cleared_chat_ids == ["312322764"]
+    assert data["runtime_after"]["telegram_session_state"] == "ready"
+    assert data["runtime_after"]["last_runtime_route"]["status"] == "ok"
+
+
+def test_runtime_chat_session_clear_requires_chat_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Endpoint должен честно валидировать пустой chat_id."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    client = _make_client()
+
+    resp = client.post(
+        "/api/runtime/chat-session/clear",
+        json={"chat_id": "   "},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "chat_id_required"

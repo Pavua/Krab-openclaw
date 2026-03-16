@@ -33,12 +33,14 @@
   - [src/core/openclaw_workspace.py](/Users/Shared/Antigravity_AGENTS/Краб/src/core/openclaw_workspace.py) теперь подмешивает хвост daily memory-файлов, а не их шумную "голову"
   - [src/openclaw_client.py](/Users/Shared/Antigravity_AGENTS/Краб/src/openclaw_client.py) теперь санирует старую chat-history/in-memory session от `think / Thinking Process`
   - добавлены repair entrypoints: [scripts/sanitize_history_cache.py](/Users/Shared/Antigravity_AGENTS/Краб/scripts/sanitize_history_cache.py) и [Repair Chat Memory Cache.command](/Users/Shared/Antigravity_AGENTS/Краб/Repair%20Chat%20Memory%20Cache.command)
+  - добавлен owner-only session-clear контур: [scripts/clear_runtime_chat_session.py](/Users/Shared/Antigravity_AGENTS/Краб/scripts/clear_runtime_chat_session.py), [Clear Runtime Chat Session.command](/Users/Shared/Antigravity_AGENTS/Краб/Clear%20Runtime%20Chat%20Session.command), `POST /api/runtime/chat-session/clear`
   - persisted `chat_history:312322764` уже очищен: `bad_count = 0`
 - Что реально осталось:
   - разблокировать `iPhone 14 Pro Max` и сделать короткий ручной `ru -> es` retest;
   - подтвердить, что `Recognition request was canceled` больше не всплывает после `stop/start`;
   - если во время retest снова проявится reported UX-хвост со scaling в приложении iPhone companion, зафиксировать это отдельно как регресс ручного acceptance;
-  - для финального closure амнезии flush-нуть уже загруженную live session у `pablito`: safest path — один `!clear` в owner-чате или controlled restart на основной учётке.
+  - для финального closure амнезии flush-нуть уже загруженную live session у `pablito`: safest path — один `!clear` в owner-чате или controlled restart на основной учётке;
+  - новый endpoint `/api/runtime/chat-session/clear` уже в коде, но на текущем живом `:8080` потребует следующего controlled restart.
 - После закрытия этого блока оптимально снова включить `Plan Mode` и уже на свежей truth-base расписать следующие фазы: `routing/auth/quota truth`, безопасный `FinOps`, и следующие roadmap-слои.
 
 ## Что уже подтверждено

@@ -32,6 +32,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from src.config import config  # noqa: E402
 from src.core.access_control import (  # noqa: E402
     PARTIAL_ACCESS_COMMANDS,
+    get_effective_owner_label,
+    get_effective_owner_subjects,
     load_acl_runtime_state,
     update_acl_subject,
 )
@@ -7651,6 +7653,46 @@ class WebApp:
                 "cloud_runtime": cloud_runtime,
             }
 
+        @self.app.post("/api/runtime/chat-session/clear")
+        async def runtime_chat_session_clear(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Очищает runtime chat-session по chat_id через owner-only web endpoint.
+
+            Зачем это нужно:
+            - `!clear` в Telegram полезен, но требует ручного сообщения из owner-чата;
+            - для recover/handoff/ops нам нужен тот же эффект из owner panel/CLI без похода в Telegram;
+            - endpoint чистит и in-memory историю, и persisted `history_cache.db` через общий
+              `openclaw_client.clear_session`, не дублируя логику в web-слое.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            data = payload or {}
+            chat_id = str(data.get("chat_id") or "").strip()
+            if not chat_id:
+                raise HTTPException(status_code=400, detail="chat_id_required")
+
+            openclaw = self.deps.get("openclaw_client")
+            if not openclaw or not hasattr(openclaw, "clear_session"):
+                raise HTTPException(status_code=503, detail="chat_session_clear_not_supported")
+
+            note = str(data.get("note") or "").strip()
+            try:
+                openclaw.clear_session(chat_id)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"chat_session_clear_failed: {exc}") from exc
+
+            runtime_after = await self._collect_runtime_lite_snapshot()
+            return {
+                "ok": True,
+                "action": "clear_chat_session",
+                "chat_id": chat_id,
+                "note": note,
+                "runtime_after": runtime_after,
+            }
+
         @self.app.get("/api/openclaw/channels/status")
         async def openclaw_channels_status():
             """
@@ -8486,7 +8528,8 @@ class WebApp:
                 "ok": True,
                 "acl": {
                     "path": str(config.USERBOT_ACL_FILE),
-                    "owner_username": str(getattr(config, "OWNER_USERNAME", "") or ""),
+                    "owner_username": get_effective_owner_label(),
+                    "owner_subjects": get_effective_owner_subjects(),
                     "state": load_acl_runtime_state(),
                     "partial_commands": sorted(PARTIAL_ACCESS_COMMANDS),
                 },
