@@ -2655,7 +2655,7 @@ class KraabUserbot:
                     has_photo=bool(images),
                 )
                 full_response = (
-                    "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
+                    "❌ Модель отвечает слишком долго. Я не дождался стабильного ответа от runtime. Попробуй ещё раз чуть позже."
                 )
                 try:
                     await stream.aclose()

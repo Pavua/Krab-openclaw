@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from src.core.cloud_key_probe import CloudProbeResult
@@ -313,6 +314,31 @@ async def test_openclaw_completion_once_estimates_usage_when_response_has_no_usa
 
 
 @pytest.mark.asyncio
+async def test_openclaw_completion_once_passes_attempt_timeout_to_http_client(client: OpenClawClient) -> None:
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": "timeout-aware",
+                }
+            }
+        ]
+    }
+    client._http_client.post.return_value = response
+
+    result = await client._openclaw_completion_once(  # noqa: SLF001
+        model_id="google/gemini-2.5-flash",
+        messages_to_send=[{"role": "user", "content": "ping"}],
+        attempt_timeout_sec=12.5,
+    )
+
+    assert result == "timeout-aware"
+    assert client._http_client.post.call_args.kwargs["timeout"] == 12.5
+
+
+@pytest.mark.asyncio
 async def test_local_empty_stream_retry_uses_compact_retry_context(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
@@ -343,6 +369,32 @@ async def test_local_empty_stream_retry_uses_compact_retry_context(client: OpenC
     retry_messages = completion.await_args_list[1].kwargs["messages_to_send"]
     assert client._messages_size(retry_messages) <= 650
     assert any("[...TRUNCATED MIDDLE...]" in str(item.get("content")) for item in retry_messages)
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_retries_next_cloud_after_transport_timeout(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    completion = AsyncMock(
+        side_effect=[
+            httpx.ReadTimeout("first cloud attempt stalled"),
+            "Ответ со второго облачного кандидата",
+        ]
+    )
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google-gemini-cli/gemini-3.1-pro-preview")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="openai/gpt-4o-mini")) as pick_retry:
+                with patch.object(client, "_openclaw_completion_once", new=completion):
+                    chunks = []
+                    async for chunk in client.send_message_stream("Проверь fallback", "chat-cloud-timeout"):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "Ответ со второго облачного кандидата"
+    assert pick_retry.await_count == 1
+    assert completion.await_count == 2
+    assert completion.await_args_list[0].kwargs["model_id"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert completion.await_args_list[1].kwargs["model_id"] == "openai/gpt-4o-mini"
 
 
 @pytest.mark.asyncio

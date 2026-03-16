@@ -93,6 +93,19 @@ class Config:
     OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC: float = float(
         os.getenv("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "540")
     )
+    # Внутренний таймаут одного cloud-attempt внутри OpenClawClient.
+    # Почему он нужен отдельно от first_chunk timeout userbot:
+    # - userbot ждёт итог всего recovery-цикла, а не одного провайдера;
+    # - если отдельный cloud-кандидат подвисает слишком долго, runtime должен
+    #   успеть признать его failed и перейти к следующему fallback;
+    # - значение держим заметно ниже first_chunk timeout, чтобы не срываться
+    #   в userbot-level "модель отвечает слишком долго" раньше времени.
+    OPENCLAW_COMPLETION_ATTEMPT_TIMEOUT_SEC: float = float(
+        os.getenv("OPENCLAW_COMPLETION_ATTEMPT_TIMEOUT_SEC", "90")
+    )
+    OPENCLAW_PHOTO_COMPLETION_ATTEMPT_TIMEOUT_SEC: float = float(
+        os.getenv("OPENCLAW_PHOTO_COMPLETION_ATTEMPT_TIMEOUT_SEC", "150")
+    )
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
     USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(
@@ -311,6 +324,10 @@ class Config:
                     cls.OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC = float(value)
                 elif key == "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC":
                     cls.OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC = float(value)
+                elif key == "OPENCLAW_COMPLETION_ATTEMPT_TIMEOUT_SEC":
+                    cls.OPENCLAW_COMPLETION_ATTEMPT_TIMEOUT_SEC = float(value)
+                elif key == "OPENCLAW_PHOTO_COMPLETION_ATTEMPT_TIMEOUT_SEC":
+                    cls.OPENCLAW_PHOTO_COMPLETION_ATTEMPT_TIMEOUT_SEC = float(value)
                 elif key == "USERBOT_MAX_OUTPUT_TOKENS":
                     cls.USERBOT_MAX_OUTPUT_TOKENS = int(value)
                 elif key == "USERBOT_PHOTO_MAX_OUTPUT_TOKENS":
