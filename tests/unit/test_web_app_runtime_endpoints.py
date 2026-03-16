@@ -1081,6 +1081,10 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
         classmethod(lambda cls: {"profiles": {}, "usageStats": {}}),
     )
     monkeypatch.setattr(
+        "src.modules.web_app.build_auth_recovery_readiness_snapshot",
+        lambda **kwargs: {"providers": [], "providers_by_name": {}},
+    )
+    monkeypatch.setattr(
         WebApp,
         "_build_runtime_cloud_presets",
         classmethod(
@@ -1123,7 +1127,8 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
             self.force_mode = "auto"
             self.local_engine = "lm_studio"
 
-    client = _make_client_with_router(_Router())
+    router = _Router()
+    client = _make_client_with_router(router)
 
     resp = client.post(
         "/api/model/apply",
@@ -1151,8 +1156,10 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
     assert data["ok"] is True
     assert data["result"]["runtime"]["primary"] == "openai-codex/gpt-5.4"
     assert data["result"]["runtime"]["fallbacks"] == ["google/gemini-2.5-flash", "lmstudio/local"]
+    assert data["catalog"]["cloud_slots"]["chat"] == "openai-codex/gpt-5.4"
     assert Path(data["result"]["runtime"]["backup_openclaw_json"]).exists()
     assert Path(data["result"]["runtime"]["backup_agent_json"]).exists()
+    assert router.models["chat"] == "openai-codex/gpt-5.4"
 
     openclaw_payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     defaults = openclaw_payload["agents"]["defaults"]

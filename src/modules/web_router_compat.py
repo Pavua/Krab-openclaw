@@ -146,6 +146,22 @@ class WebRouterCompat:
             "lm_studio_url": config.LM_STUDIO_URL,
         }
 
+    def sync_runtime_chain(self, *, primary: str, fallbacks: list[str] | None = None) -> None:
+        """
+        Синхронизирует in-memory cloud slot'ы с только что применённой runtime chain.
+
+        Почему это важно:
+        - `set_runtime_chain` пишет истину в `~/.openclaw/openclaw.json`;
+        - compat-router держит собственный `self.models`, из которого web-панель
+          собирает `catalog.cloud_slots`;
+        - без мгновенной синхронизации UI ещё какое-то время показывает старый
+          primary, пока не произойдёт hot reload или пересоздание роутера.
+        """
+        resolved_primary = str(primary or "").strip()
+        if not resolved_primary:
+            return
+        self.models["chat"] = resolved_primary
+
     # --- Local model management (delegates to ModelManager) ---
 
     async def load_local_model(self, model_name: str) -> bool:

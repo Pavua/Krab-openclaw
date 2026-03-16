@@ -6622,6 +6622,22 @@ class WebApp:
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+                # Сразу выравниваем compat-router с только что записанной runtime truth.
+                # Иначе owner UI до следующего hot reload продолжает жить по старому
+                # `router.models["chat"]` и врёт о текущем primary.
+                if hasattr(router, "sync_runtime_chain"):
+                    try:
+                        router.sync_runtime_chain(
+                            primary=str(applied.get("primary") or ""),
+                            fallbacks=list(applied.get("fallbacks") or []),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif hasattr(router, "models") and isinstance(getattr(router, "models"), dict):
+                    primary_model = str(applied.get("primary") or "").strip()
+                    if primary_model:
+                        router.models["chat"] = primary_model
+
                 self._runtime_lite_cache = None
                 result_payload = {
                     "runtime": applied,
