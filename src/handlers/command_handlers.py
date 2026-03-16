@@ -25,6 +25,7 @@ from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
+from ..core.openclaw_runtime_models import get_runtime_primary_model
 from ..core.openclaw_workspace import append_workspace_memory_entry, recall_workspace_memory
 from ..core.openclaw_workspace import list_workspace_memory_entries
 from ..core.proactive_watch import proactive_watch
@@ -230,15 +231,34 @@ async def handle_status(bot: "KraabUserbot", message: Message) -> None:
     ram = model_manager.get_ram_usage()
     is_ok = await openclaw_client.health_check()
     bar = "▓" * int(ram["percent"] / 10) + "░" * (10 - int(ram["percent"] / 10))
+    route_meta = {}
+    if hasattr(openclaw_client, "get_last_runtime_route"):
+        try:
+            route_meta = openclaw_client.get_last_runtime_route() or {}
+        except Exception:
+            route_meta = {}
+    live_model = str(route_meta.get("model", "") or "").strip()
+    live_provider = str(route_meta.get("provider", "") or "").strip()
+    live_channel = str(route_meta.get("channel", "") or "").strip()
+    configured_primary = str(get_runtime_primary_model() or "").strip()
+    status_model = live_model or configured_primary or str(config.MODEL or "").strip() or "unknown"
     text = f"""
 🦀 **Системный статус Краба**
 ---------------------------
 📡 **Gateway (OpenClaw):** {"✅ Online" if is_ok else "❌ Offline"}
-🧠 **Модель:** `{config.MODEL}`
+🧠 **Модель:** `{status_model}`
 🎭 **Роль:** `{bot.current_role}`
 🎙️ **Голос:** `{"ВКЛ" if bot.voice_mode else "ВЫКЛ"}`
 💻 **RAM:** [{bar}] {ram["percent"]}%
 """
+    if configured_primary:
+        text += f"⚙️ **Configured primary:** `{configured_primary}`\n"
+    if live_provider:
+        text += f"🛰️ **Провайдер:** `{live_provider}`\n"
+    if live_channel:
+        text += f"🧭 **Канал route:** `{live_channel}`\n"
+    if configured_primary and live_model and configured_primary != live_model:
+        text += "ℹ️ **Примечание:** последний успешный route сейчас отличается от configured primary.\n"
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(text)
     else:
