@@ -389,6 +389,7 @@ def test_production_safe_blocks_provider_with_only_expired_profiles(tmp_path):
     openclaw_path = tmp_path / "openclaw.json"
     agent_path = tmp_path / "agent.json"
     state_path = tmp_path / "state.json"
+    recent_ts = datetime.now(timezone.utc).isoformat()
     auth_profiles_payload = {
         "profiles": {
             "openai-codex:default": {"provider": "openai-codex"},
@@ -408,6 +409,7 @@ def test_production_safe_blocks_provider_with_only_expired_profiles(tmp_path):
     models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
         tmp_path,
         auth_profiles_payload=auth_profiles_payload,
+        gateway_log_text=f'{recent_ts} [model-fallback] Model "openai-codex/gpt-4.5-preview" not found.\n',
     )
     payload_openclaw = _base_openclaw_payload()
     payload_openclaw["agents"]["defaults"]["model"]["primary"] = "openai-codex/gpt-4.5-preview"
