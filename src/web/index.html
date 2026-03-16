@@ -368,6 +368,25 @@
           <p class="card-meta" id="recommended_meta" style="line-height: 1.5;"></p>
         </div>
 
+        <div class="card state-container"
+          style="background: linear-gradient(145deg, rgba(10, 16, 30, 0.95), rgba(9, 17, 34, 0.88)); padding: 20px; border-color: rgba(34, 197, 94, 0.28);">
+          <h3 class="card-title" style="display:flex; align-items:center; justify-content:space-between; gap: 10px;">
+            <span>Runtime Truth (Live)</span>
+            <span id="runtimeTruthBadge" class="badge">—</span>
+          </h3>
+          <p class="card-value text-info break-word" id="runtimeTruthModel"
+            style="font-size: 1.2rem; margin-bottom: 8px; color: var(--text-main); text-shadow: none;">
+            —
+          </p>
+          <div class="card-meta" id="runtimeTruthMeta" style="line-height: 1.55; color: var(--text-main); white-space: pre-line;">
+            —
+          </div>
+          <div class="card-meta" id="runtimeTruthUsage"
+            style="margin-top: 10px; line-height: 1.45; color: var(--text-muted); white-space: pre-line;">
+            —
+          </div>
+        </div>
+
         <div class="card state-container" style="padding: 20px;">
           <details>
             <summary class="card-title"
@@ -2065,6 +2084,76 @@
       return `${String(item?.name || item?.actual_model_id || rawModelId).trim()} (${providerLabel} • ${authLabel} • ${String(item?.actual_model_id || rawModelId).trim()})`;
     }
 
+    function renderRuntimeTruthCard({ routingPayload, usagePayload, stats, catalog }) {
+      const routing = routingPayload?.routing && typeof routingPayload.routing === "object"
+        ? routingPayload.routing
+        : {};
+      const router = stats?.router && typeof stats.router === "object"
+        ? stats.router
+        : {};
+      const lastRoute = router?.last_route && typeof router.last_route === "object"
+        ? router.last_route
+        : {};
+      const usage = usagePayload?.usage && typeof usagePayload.usage === "object"
+        ? usagePayload.usage
+        : {};
+
+      const configuredPrimary = String(routing?.current_primary || "").trim();
+      const liveActiveModel = String(routing?.live_active_model || "").trim();
+      const activeModel = liveActiveModel || configuredPrimary || String(router?.current_model || "").trim() || "—";
+      const activeProvider = String(routing?.live_active_provider || lastRoute?.provider || "—").trim() || "—";
+      const routeReason = String(routing?.live_active_route_reason || lastRoute?.route_reason || "—").trim() || "—";
+      const routeDetail = String(routing?.live_active_route_detail || lastRoute?.route_detail || "—").trim() || "—";
+      const fallbacks = Array.isArray(routing?.current_fallbacks) ? routing.current_fallbacks.filter(Boolean) : [];
+      const warnings = Array.isArray(routing?.warnings) ? routing.warnings.filter(Boolean) : [];
+      const lastErrorCode = String(lastRoute?.error_code || "").trim();
+      const lastErrorSummary = String(lastRoute?.route_detail || lastRoute?.route_reason || "").trim();
+      const lastError = lastErrorCode || lastErrorSummary
+        ? `${lastErrorCode || "runtime_error"}${lastErrorSummary ? ` • ${lastErrorSummary}` : ""}`
+        : "—";
+      const inputTokens = Number(usage?.input_tokens || 0);
+      const outputTokens = Number(usage?.output_tokens || 0);
+      const totalTokens = Number(usage?.total_tokens || 0);
+
+      let badgeClass = "warn";
+      let badgeText = "NO LIVE PROOF";
+      if (routing?.live_primary_verified) {
+        badgeClass = "ok";
+        badgeText = "LIVE OK";
+      } else if (routing?.live_fallback_active) {
+        badgeClass = "warn";
+        badgeText = "FALLBACK LIVE";
+      } else if (lastRoute?.status === "error") {
+        badgeClass = "bad";
+        badgeText = "LAST ERROR";
+      }
+
+      const badgeNode = document.getElementById("runtimeTruthBadge");
+      if (badgeNode) {
+        badgeNode.className = `badge ${badgeClass}`;
+        badgeNode.textContent = badgeText;
+      }
+      setText("runtimeTruthModel", activeModel);
+
+      const metaLines = [
+        `Configured primary: ${describeModelForChain(configuredPrimary, catalog)}`,
+        `Live active: ${activeModel} • provider=${activeProvider}`,
+        `Route reason: ${routeReason}`,
+        `Route detail: ${routeDetail}`,
+        `Fallbacks: ${fallbacks.length ? fallbacks.map((item) => describeModelForChain(item, catalog)).join(" • ") : "—"}`,
+        `Last error: ${lastError}`,
+        `Warnings: ${warnings.length ? warnings.join(" • ") : "—"}`,
+      ];
+      setText("runtimeTruthMeta", metaLines.join("\n"));
+
+      const usageLines = [
+        `Usage: input=${inputTokens} • output=${outputTokens} • total=${totalTokens}`,
+        `Stats snapshot current_model: ${String(router?.current_model || "—").trim() || "—"}`,
+        "Эта карточка показывает live/runtime truth, а не только рекомендованный маршрут.",
+      ];
+      setText("runtimeTruthUsage", usageLines.join("\n"));
+    }
+
     function renderModelRoutingChain(catalog) {
       const routing = catalog?.routing_status && typeof catalog.routing_status === "object"
         ? catalog.routing_status
@@ -3133,6 +3222,7 @@ ${channelsText}`;
             recommend,
             feedbackPayload,
             usagePayload,
+            routingPayload,
             alertsPayload,
             timelinePayload,
             queuePayload,
@@ -3145,6 +3235,7 @@ ${channelsText}`;
             fetchJson("/api/model/recommend?profile=chat"),
             fetchJson("/api/model/feedback?profile=chat&top=1"),
             fetchJson("/api/ops/usage"),
+            fetchJson("/api/openclaw/model-routing/status").catch(() => ({ ok: false, routing: {} })),
             fetchJson("/api/ops/alerts"),
             fetchJson("/api/timeline?limit=50"),
             fetchJson("/api/queue").catch(() => ({ ok: false, queue: {} })),
@@ -3169,6 +3260,7 @@ ${channelsText}`;
           const lastRoute = router.last_route || {};
           const cloudKeys = router.cloud_keys || {};
           const cloudTier = router.cloud_tier || {};
+          const routingTruth = routingPayload?.routing || {};
 
           setText("bb_total", String(bb.total ?? bb.total_messages ?? 0));
           setText("rag_total", String(rag.count ?? 0));
@@ -3395,14 +3487,23 @@ ${channelsText}`;
           if (bestFeedback) {
             setText(
               "recommended_meta",
-              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count})`,
+              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"} • Quality: ${bestFeedback.avg_score}/5 (n=${bestFeedback.count}) • Это recommendation, не last-used route.`,
             );
           } else {
             setText(
               "recommended_meta",
-              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"}`,
+              `Профиль: ${recommend.profile || "chat"} • Канал: ${recommend.channel || "auto"} • Это recommendation, не last-used route.`,
             );
           }
+
+          renderRuntimeTruthCard({
+            routingPayload,
+            usagePayload,
+            stats,
+            catalog: modelCatalogState && typeof modelCatalogState === "object"
+              ? modelCatalogState
+              : { cloud_inventory: [] },
+          });
 
           const usage = usagePayload.usage || {};
           const totals = usage.totals || {};
