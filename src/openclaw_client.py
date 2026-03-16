@@ -1580,6 +1580,21 @@ class OpenClawClient:
             return bool(str(os.getenv("OPENAI_API_KEY", "") or "").strip())
         return True
 
+    @staticmethod
+    def _semantic_from_transport_exception(exc: Exception) -> dict[str, str]:
+        """
+        Приводит транспортные ошибки к семантическому коду recovery-цепочки.
+
+        Зачем это нужно:
+        - раньше timeout/connect/provider error уходили мимо основного retry-цикла;
+        - из-за этого cloud fallback-цепочка обрывалась на первом же сбое;
+        - теперь такие ошибки превращаются в те же semantic-codes, что и
+          обычные "битые" ответы, и попадают в общий recovery policy.
+        """
+        if isinstance(exc, httpx.TimeoutException):
+            return {"code": "provider_timeout", "message": str(exc)}
+        return {"code": "transport_error", "message": str(exc)}
+
     async def _pick_cloud_retry_model(
         self,
         *,
@@ -2068,6 +2083,9 @@ class OpenClawClient:
                 except (ProviderAuthError, ProviderError) as exc:
                     semantic = self._semantic_from_provider_exception(exc)
                     final_response = ""
+                except (httpx.TimeoutException, httpx.ConnectError, httpx.RequestError, httpx.HTTPError, OSError, ValueError, KeyError) as exc:
+                    semantic = self._semantic_from_transport_exception(exc)
+                    final_response = ""
 
                 if semantic and semantic["code"] in {"lm_empty_stream", "lm_model_crash"} and not tried_semantic_retry:
                     tried_semantic_retry = True
@@ -2129,7 +2147,7 @@ class OpenClawClient:
                 # если облачный ответ пустой/битый/таймаутный — пробуем другой cloud-кандидат,
                 # не переключаясь в local.
                 if (
-                    semantic["code"] in {"lm_empty_stream", "lm_malformed_response", "provider_timeout", "provider_error"}
+                    semantic["code"] in {"lm_empty_stream", "lm_malformed_response", "provider_timeout", "provider_error", "transport_error"}
                     and not tried_cloud_quality_recovery
                     and not model_manager.is_local_model(attempt_model)
                 ):
@@ -2314,7 +2332,7 @@ class OpenClawClient:
                 elif code == "vision_addon_missing":
                     user_text = "❌ Локальная модель не поддерживает обработку фото в текущей конфигурации. Переключи vision-модель или попробуй !model cloud."
                 else:
-                    user_text = "❌ Облачный сервис временно недоступен. Попробуй позже или !model local."
+                    user_text = "❌ Облачный сервис временно недоступен. Попробуй позже."
                 yield user_text
                 return
 
@@ -2375,7 +2393,7 @@ class OpenClawClient:
             if code in LEGACY_AUTH_CODES:
                 yield "❌ Облачный ключ не прошёл авторизацию. Проверь ключ/токен."
             else:
-                yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
+                yield "❌ Облачный сервис временно недоступен. Попробуй позже."
         except httpx.TimeoutException as exc:
             logger.error("openclaw_stream_timeout", error=str(exc))
             self._set_last_runtime_route(
@@ -2387,7 +2405,7 @@ class OpenClawClient:
                 error_code="provider_timeout",
                 force_cloud=effective_force_cloud,
             )
-            yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
+            yield "❌ Облачный сервис временно недоступен. Попробуй позже."
         except (httpx.ConnectError, httpx.RequestError) as exc:
             logger.error("openclaw_stream_connect_error", error=str(exc))
             self._set_last_runtime_route(
@@ -2399,11 +2417,11 @@ class OpenClawClient:
                 error_code="transport_error",
                 force_cloud=effective_force_cloud,
             )
-            yield "❌ Провайдер временно недоступен. Попробуй позже или переключись на !model local."
+            yield "❌ Облачный сервис временно недоступен. Попробуй позже."
         except (httpx.HTTPError, OSError, ValueError, KeyError) as exc:
             logger.error("openclaw_stream_error", error=str(exc))
             if effective_force_cloud:
-                yield "❌ Облачный сервис временно недоступен. Попробуй позже или переключись на !model local."
+                yield "❌ Облачный сервис временно недоступен. Попробуй позже."
                 return
             if self._local_recovery_enabled(force_cloud=effective_force_cloud, has_photo=has_photo):
                 lm_text = await self._direct_lm_fallback(
@@ -2432,7 +2450,7 @@ class OpenClawClient:
                 error_code="transport_error",
                 force_cloud=effective_force_cloud,
             )
-            yield "❌ Ошибка облака. Попробуй позже или переключись на локальную модель: !model local."
+            yield "❌ Облачный сервис временно недоступен. Попробуй позже."
         finally:
             if request_marked and hasattr(model_manager, "mark_request_finished"):
                 try:

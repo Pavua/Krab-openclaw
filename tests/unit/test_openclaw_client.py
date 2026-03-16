@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from src.core.cloud_key_probe import CloudProbeResult
@@ -696,8 +697,65 @@ async def test_provider_timeout_does_not_use_local_recovery_when_disabled(client
 
     text = "".join(chunks).lower()
     assert "облачный сервис" in text
+    assert "!model local" not in text
     to_local.assert_not_awaited()
     direct_local.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_timeout_exception_retries_to_next_cloud_candidate(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(
+                client,
+                "_pick_cloud_retry_model",
+                new=AsyncMock(return_value="google/gemini-pro-latest"),
+            ) as pick_cloud:
+                with patch.object(
+                    client,
+                    "_openclaw_completion_once",
+                    new=AsyncMock(side_effect=[httpx.TimeoutException("timeout"), "Cloud backup OK"]),
+                ) as completion:
+                    chunks = []
+                    async for chunk in client.send_message_stream("Hi", "chat-cloud-timeout-retry"):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud backup OK"
+    pick_cloud.assert_awaited_once()
+    assert completion.await_count == 2
+    assert completion.await_args_list[1].kwargs["model_id"] == "google/gemini-pro-latest"
+    route = client.get_last_runtime_route()
+    assert route.get("status") == "ok"
+    assert route.get("model") == "google/gemini-pro-latest"
+
+
+@pytest.mark.asyncio
+async def test_provider_error_retries_to_next_cloud_candidate(client: OpenClawClient) -> None:
+    from src.model_manager import model_manager
+
+    provider_error = ProviderError(message="upstream overloaded", user_message="provider down")
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(
+                client,
+                "_pick_cloud_retry_model",
+                new=AsyncMock(return_value="google-antigravity/gemini-3.1-pro-preview"),
+            ) as pick_cloud:
+                with patch.object(
+                    client,
+                    "_openclaw_completion_once",
+                    new=AsyncMock(side_effect=[provider_error, "Cloud antigravity OK"]),
+                ) as completion:
+                    chunks = []
+                    async for chunk in client.send_message_stream("Hi", "chat-cloud-provider-retry"):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud antigravity OK"
+    pick_cloud.assert_awaited_once()
+    assert completion.await_count == 2
+    assert completion.await_args_list[1].kwargs["model_id"] == "google-antigravity/gemini-3.1-pro-preview"
 
 
 @pytest.mark.asyncio
