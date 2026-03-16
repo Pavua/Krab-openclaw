@@ -65,6 +65,7 @@ from .handlers import (
     handle_set,
     handle_status,
     handle_sysinfo,
+    handle_tech,
     handle_voice,
     handle_watch,
     handle_web,
@@ -332,7 +333,7 @@ class KraabUserbot:
 
         self._known_commands = {
             "status", "model", "clear", "config", "set", "role",
-            "voice", "web", "sysinfo", "panel", "restart", "search",
+            "voice", "tech", "web", "sysinfo", "panel", "restart", "search",
             "mac", "watch", "memory",
             "inbox",
             "remember", "recall", "ls", "read", "write", "agent",
@@ -400,6 +401,10 @@ class KraabUserbot:
         @self.client.on_message(filters.command("voice", prefixes=prefixes) & _make_command_filter("voice"), group=-1)
         async def wrap_voice(c, m):
             await run_cmd(handle_voice, m)
+
+        @self.client.on_message(filters.command("tech", prefixes=prefixes) & _make_command_filter("tech"), group=-1)
+        async def wrap_tech(c, m):
+            await run_cmd(handle_tech, m)
 
         @self.client.on_message(filters.command("web", prefixes=prefixes) & _make_command_filter("web"), group=-1)
         async def wrap_web(c, m):

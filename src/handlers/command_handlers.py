@@ -558,6 +558,74 @@ async def handle_voice(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(f"🎙️ Голосовой режим: `{'ВКЛ' if bot.voice_mode else 'ВЫКЛ'}`")
 
 
+async def handle_tech(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управляет owner/debug техническими хвостами в ответах userbot.
+
+    Режимы:
+    - `!tech` / `!tech status` — показать текущие флаги;
+    - `!tech on` — включить factual тех-заметки, но оставить UX чистым;
+    - `!tech off` / `!tech clean` — вернуть обычный чистый режим;
+    - `!tech verbose` — включить тех-заметки и не скрывать сырой tool-шум.
+    """
+    access_profile = bot._get_access_profile(message.from_user) if message.from_user else None
+    if not access_profile or access_profile.level is not AccessLevel.OWNER:
+        raise UserInputError(user_message="🛠️ `!tech` доступна только владельцу.")
+
+    raw_args = str(message.text or "").split(maxsplit=2)
+    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "status"
+
+    if action == "status":
+        notices_enabled = bool(getattr(config, "USERBOT_TECH_NOTICES_ENABLED", False))
+        suppress_noise = bool(getattr(config, "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", True))
+        effective_mode = "verbose" if notices_enabled and not suppress_noise else (
+            "on" if notices_enabled else "clean"
+        )
+        await message.reply(
+            "🛠️ **Tech notices**\n"
+            f"- mode: `{effective_mode}`\n"
+            f"- notices_enabled: `{notices_enabled}`\n"
+            f"- suppress_non_actionable_tool_warnings: `{suppress_noise}`\n\n"
+            "Команды:\n"
+            "`!tech on` — включить factual тех-заметки\n"
+            "`!tech off` / `!tech clean` — убрать тех-хвосты\n"
+            "`!tech verbose` — показать тех-заметки и не скрывать сырой tool-шум"
+        )
+        return
+
+    if action == "on":
+        config.update_setting("USERBOT_TECH_NOTICES_ENABLED", "1")
+        config.update_setting("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", "1")
+        await message.reply(
+            "🛠️ Tech notices включены.\n"
+            "- В конце ответов будет factual тех-плашка о route/model/provider.\n"
+            "- Шумные хвосты вроде `Message failed` останутся скрыты."
+        )
+        return
+
+    if action in {"off", "clean"}:
+        config.update_setting("USERBOT_TECH_NOTICES_ENABLED", "0")
+        config.update_setting("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", "1")
+        await message.reply(
+            "🛠️ Tech notices выключены.\n"
+            "- Ответы снова чистые, без тех-плашек.\n"
+            "- Шумные tool-хвосты продолжат скрываться."
+        )
+        return
+
+    if action == "verbose":
+        config.update_setting("USERBOT_TECH_NOTICES_ENABLED", "1")
+        config.update_setting("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", "0")
+        await message.reply(
+            "🛠️ Verbose debug включён.\n"
+            "- Тех-плашки добавляются в ответы.\n"
+            "- Сырой tool-шум тоже сохраняется для отладки."
+        )
+        return
+
+    raise UserInputError(user_message="🛠️ Формат: `!tech status|on|off|clean|verbose`")
+
+
 async def handle_web(bot: "KraabUserbot", message: Message) -> None:
     """Автоматизация браузера."""
     from ..web_session import web_manager
@@ -890,6 +958,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!agent swarm <тема>` — роевой раунд (аналитик/критик/интегратор)
 `!agent swarm loop [N] <тема>` — несколько роевых раундов (итеративная доработка)
 `!voice` — голосовой режим
+`!tech status|on|off|clean|verbose` — owner/debug тех-заметки в ответах
 `!web` — управление браузером
 `!panel` — панель управления (soon)
 """
