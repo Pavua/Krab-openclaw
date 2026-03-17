@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -245,9 +246,10 @@ def test_production_safe_skips_broken_primary_and_disabled_provider(tmp_path):
     openclaw_path = tmp_path / "openclaw.json"
     agent_path = tmp_path / "agent.json"
     state_path = tmp_path / "state.json"
+    recent_ts = datetime.now(timezone.utc).isoformat()
     models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
         tmp_path,
-        gateway_log_text='2026-03-10 [model-fallback] Model "openai-codex/gpt-4.5-preview" not found.\n',
+        gateway_log_text=f'{recent_ts} [model-fallback] Model "openai-codex/gpt-4.5-preview" not found.\n',
     )
     openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
     agent_path.write_text(json.dumps({"id": "main", "model": "openai-codex/gpt-4.5-preview"}, ensure_ascii=False), encoding="utf-8")
@@ -267,6 +269,114 @@ def test_production_safe_skips_broken_primary_and_disabled_provider(tmp_path):
     assert payload["status"] == "OK"
     assert payload["details"]["primary_model"] == "google/gemini-2.5-flash"
     assert "google-antigravity/gemini-3.1-pro-preview" not in payload["details"]["fallbacks"]
+
+
+def test_production_safe_keeps_antigravity_with_live_profile_beside_disabled_legacy(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    recent_ts = datetime.now(timezone.utc).isoformat()
+    auth_profiles_payload = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-antigravity:vscode-free": {"provider": "google-antigravity"},
+            "google-antigravity:pavelr7@gmail.com": {
+                "provider": "google-antigravity",
+                "email": "pavelr7@gmail.com",
+                "expires": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp() * 1000),
+            },
+        },
+        "usageStats": {
+            "google-antigravity:vscode-free": {
+                "disabledReason": "auth_permanent",
+                "failureCounts": {"auth_permanent": 2},
+            },
+            "google-antigravity:pavelr7@gmail.com": {},
+            "openai-codex:default": {
+                "failureCounts": {"model_not_found": 2},
+            },
+        },
+    }
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        auth_profiles_payload=auth_profiles_payload,
+        gateway_log_text=f'{recent_ts} [model-fallback] Model "openai-codex/gpt-4.5-preview" not found.\n',
+    )
+    payload_openclaw = _base_openclaw_payload()
+    payload_openclaw["agents"]["defaults"]["model"]["primary"] = "openai-codex/gpt-4.5-preview"
+    payload_openclaw["agents"]["defaults"]["model"]["fallbacks"] = [
+        "google-antigravity/gemini-3.1-pro-preview",
+        "google/gemini-2.5-flash",
+    ]
+    openclaw_path.write_text(json.dumps(payload_openclaw, ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "openai-codex/gpt-4.5-preview"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "production-safe",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "OK"
+    assert payload["details"]["primary_model"] == "google-antigravity/gemini-3.1-pro-preview"
+    provider_health = payload["details"]["special_profile"]["provider_health"]["google-antigravity"]
+    assert provider_health["disabled"] is False
+    assert provider_health["healthy_profiles"] == [
+        "google-antigravity:pavelr7@gmail.com"
+    ]
+
+
+def test_gpt54_canary_ignores_stale_broken_model_and_auth_log_entries(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    runtime_models_payload = _base_runtime_models_payload()
+    runtime_models_payload["providers"]["openai-codex"]["models"].append({"id": "gpt-5.4"})
+    auth_profiles_payload = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+        },
+        "usageStats": {},
+    }
+    gateway_log_text = (
+        f'{stale_ts} [diagnostic] lane task error: '
+        'lane=session:agent:main:openai:abc123 durationMs=547 '
+        'error="FailoverError: HTTP 401: You have insufficient permissions for this operation. '
+        'Missing scopes: model.request."\n'
+        f'{stale_ts} [model-fallback] Model "openai-codex/gpt-5.4" not found.\n'
+    )
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        runtime_models_payload=runtime_models_payload,
+        auth_profiles_payload=auth_profiles_payload,
+        gateway_log_text=gateway_log_text,
+    )
+    openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "gpt54-canary",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+        env_overrides={"OPENCLAW_TARGET_PRIMARY_MODEL": "openai-codex/gpt-5.4"},
+    )
+
+    assert payload["ok"] is True
+    assert payload["details"]["primary_model"] == "openai-codex/gpt-5.4"
+    assert payload["details"]["broken_models"] == []
+    assert payload["details"]["runtime_auth_failed_providers"] == {}
 
 
 def test_production_safe_skips_runtime_auth_failed_provider(tmp_path):
@@ -379,4 +489,93 @@ def test_gpt54_canary_promotes_target_when_registry_ready(tmp_path):
 
     assert payload["ok"] is True
     assert payload["details"]["primary_model"] == "openai-codex/gpt-5.4"
-    assert payload["reason"] == "canary_target_ready"
+
+
+def test_gpt54_canary_blocks_on_recent_runtime_scope_failure(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    runtime_models_payload = _base_runtime_models_payload()
+    runtime_models_payload["providers"]["openai-codex"]["models"].append({"id": "gpt-5.4"})
+    runtime_models_payload["providers"]["google-gemini-cli"] = {
+        "models": [
+            {"id": "gemini-3.1-pro-preview"},
+        ]
+    }
+    recent_ts = datetime.now(timezone.utc).isoformat()
+    auth_profiles_payload = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+            "google-gemini-cli:default": {"provider": "google-gemini-cli"},
+        },
+        "usageStats": {},
+    }
+    gateway_log_text = (
+        f'{recent_ts} [diagnostic] lane task error: '
+        'lane=session:agent:main:openai:abc123 durationMs=547 '
+        'error="FailoverError: HTTP 401: You have insufficient permissions for this operation. '
+        'Missing scopes: model.request."\n'
+    )
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        runtime_models_payload=runtime_models_payload,
+        auth_profiles_payload=auth_profiles_payload,
+        gateway_log_text=gateway_log_text,
+    )
+    openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "gpt54-canary",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+        env_overrides={"OPENCLAW_TARGET_PRIMARY_MODEL": "openai-codex/gpt-5.4"},
+    )
+
+    assert payload["ok"] is False
+    assert payload["status"] == "BLOCKED"
+    assert payload["reason"] == "target_provider_disabled"
+    assert payload["details"]["runtime_auth_failed_providers"] == {
+        "openai-codex": "runtime_missing_scope_model_request"
+    }
+
+
+def test_openai_safe_promotes_openai_provider_model(tmp_path):
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    state_path = tmp_path / "state.json"
+    runtime_models_payload = _base_runtime_models_payload()
+    auth_profiles_payload = {
+        "profiles": {
+            "openai-codex:default": {"provider": "openai-codex"},
+        },
+        "usageStats": {},
+    }
+    models_path, auth_profiles_path, gateway_log_path = _write_runtime_sidecars(
+        tmp_path,
+        runtime_models_payload=runtime_models_payload,
+        auth_profiles_payload=auth_profiles_payload,
+    )
+    openclaw_path.write_text(json.dumps(_base_openclaw_payload(), ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False), encoding="utf-8")
+
+    payload = _run_script(
+        "--dry-run",
+        "--profile", "openai-safe",
+        "--openclaw-json", str(openclaw_path),
+        "--agent-json", str(agent_path),
+        "--state-json", str(state_path),
+        "--models-json", str(models_path),
+        "--auth-profiles-json", str(auth_profiles_path),
+        "--gateway-log", str(gateway_log_path),
+    )
+
+    assert payload["ok"] is True
+    assert payload["status"] == "OK"
+    assert payload["reason"] == "openai_safe_ready"
+    assert payload["details"]["primary_model"] == "openai/gpt-4o-mini"

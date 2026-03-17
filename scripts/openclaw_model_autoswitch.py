@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,8 +30,20 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.core.openclaw_runtime_signal_truth import (
+    DEFAULT_GATEWAY_SIGNAL_LOOKBACK_SEC,
+    broken_models_from_signal_log,
+    discover_gateway_signal_log,
+    runtime_auth_failed_providers_from_signal_log,
+)
+
 
 DEFAULT_TARGET_PRIMARY_MODEL = "openai-codex/gpt-5.4"
+DEFAULT_OPENAI_SAFE_MODEL = "openai/gpt-4o-mini"
 DEFAULT_SAFE_CLOUD_MODELS = (
     "google/gemini-2.5-flash",
 )
@@ -258,6 +271,30 @@ def _provider_health(auth_payload: dict[str, Any], provider: str) -> dict[str, A
     disabled_until = 0
     failure_counts: dict[str, int] = {}
     error_count = 0
+    healthy_profiles: list[str] = []
+    expired_profiles: list[str] = []
+    disabled_profiles: list[str] = []
+    usage_by_key = {key: value for key, value in usage_entries}
+    now_ms = time.time() * 1000.0
+
+    for profile_key, profile_payload in profiles:
+        expired = False
+        if isinstance(profile_payload, dict):
+            try:
+                expires_at = float(profile_payload.get("expires", 0) or 0)
+            except (TypeError, ValueError):
+                expires_at = 0.0
+            if expires_at > 0 and expires_at <= now_ms:
+                expired = True
+                expired_profiles.append(profile_key)
+        usage = usage_by_key.get(profile_key)
+        profile_disabled_reason = ""
+        if isinstance(usage, dict):
+            profile_disabled_reason = str(usage.get("disabledReason") or "").strip()
+        if profile_disabled_reason:
+            disabled_profiles.append(profile_key)
+        if not expired and not profile_disabled_reason:
+            healthy_profiles.append(profile_key)
 
     for _, usage in usage_entries:
         reason = str(usage.get("disabledReason") or "").strip()
@@ -273,37 +310,42 @@ def _provider_health(auth_payload: dict[str, Any], provider: str) -> dict[str, A
                     continue
                 failure_counts[name] = failure_counts.get(name, 0) + int(value or 0)
 
-    disabled = bool(disabled_reason)
+    disabled = bool(disabled_reason) and not healthy_profiles
     return {
         "provider": str(provider or "").strip().lower(),
         "has_profile": bool(profiles),
         "profiles": [key for key, _ in profiles],
+        "healthy_profiles": healthy_profiles,
+        "disabled_profiles": disabled_profiles,
+        "expired_profiles": expired_profiles,
         "disabled": disabled,
-        "disabled_reason": disabled_reason or "",
+        "disabled_reason": disabled_reason if disabled else "",
         "disabled_until": disabled_until,
         "failure_counts": failure_counts,
         "error_count": error_count,
     }
 
 
+def _recent_gateway_log_lines(
+    gateway_log_path: Path,
+    *,
+    max_age_sec: int = DEFAULT_GATEWAY_SIGNAL_LOOKBACK_SEC,
+    now_epoch: float | None = None,
+) -> list[str]:
+    from src.core.openclaw_runtime_signal_truth import recent_gateway_log_lines
+
+    return recent_gateway_log_lines(
+        gateway_log_path,
+        max_age_sec=max_age_sec,
+        now_epoch=now_epoch,
+    )
+
+
 def _broken_models_from_gateway_log(gateway_log_path: Path) -> list[str]:
     """
     Извлекает модели, которые runtime уже пометил как `not found`.
     """
-    if not gateway_log_path.exists():
-        return []
-    try:
-        lines = gateway_log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except Exception:
-        return []
-
-    out: list[str] = []
-    for line in lines[-400:]:
-        for candidate in re.findall(r'Model "([^"]+)" not found', line):
-            out.append(str(candidate).strip())
-        for candidate in re.findall(r"model `([^`]+)` does not exist", line, flags=re.IGNORECASE):
-            out.append(str(candidate).strip())
-    return _unique_non_empty(out)
+    return broken_models_from_signal_log(gateway_log_path)
 
 
 def _is_model_broken(model_key: str, broken_models: list[str]) -> bool:
@@ -319,25 +361,7 @@ def _runtime_auth_failed_providers(gateway_log_path: Path) -> dict[str, str]:
     - но боевой primary может быть "формально существующим" и всё равно стабильно
       умирать на `401 Missing scopes: model.request`, тратя время на каждый failover.
     """
-    if not gateway_log_path.exists():
-        return {}
-    try:
-        lines = gateway_log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except Exception:
-        return {}
-
-    disabled: dict[str, str] = {}
-    for line in lines[-400:]:
-        raw = str(line or "").strip()
-        if not raw:
-            continue
-        lowered = raw.lower()
-        if not all(marker in lowered for marker in RUNTIME_AUTH_SCOPE_MARKERS):
-            continue
-        for hint, provider in RUNTIME_AUTH_PROVIDER_HINTS.items():
-            if hint in lowered:
-                disabled[str(provider or "").strip()] = "runtime_missing_scope_model_request"
-    return disabled
+    return runtime_auth_failed_providers_from_signal_log(gateway_log_path)
 
 
 def _safe_cloud_candidates(
@@ -397,16 +421,19 @@ def _plan_special_profile(
     runtime_auth_failed_providers: dict[str, str],
     target_primary: str,
 ) -> dict[str, Any] | None:
-    if requested_profile not in {"production-safe", "gpt54-canary"}:
+    if requested_profile not in {"production-safe", "gpt54-canary", "openai-safe"}:
         return None
 
+    safe_target_primary = (
+        DEFAULT_OPENAI_SAFE_MODEL if requested_profile == "openai-safe" else target_primary
+    )
     safe_cloud_models = _safe_cloud_candidates(
         openclaw_payload=openclaw_payload,
         registry_models=registry_models,
         auth_payload=auth_payload,
         broken_models=broken_models,
         runtime_auth_failed_providers=runtime_auth_failed_providers,
-        target_primary=target_primary if requested_profile == "gpt54-canary" else "",
+        target_primary=safe_target_primary if requested_profile in {"gpt54-canary", "openai-safe"} else "",
     )
 
     provider_health = {
@@ -419,8 +446,9 @@ def _plan_special_profile(
         health["disabled_reason"] = str(reason or "runtime_auth_failed")
         provider_health[provider] = health
 
-    if requested_profile == "gpt54-canary":
-        if not _registry_contains_model(target_primary, registry_models):
+    if requested_profile in {"gpt54-canary", "openai-safe"}:
+        selected_target_primary = safe_target_primary
+        if not _registry_contains_model(selected_target_primary, registry_models):
             return {
                 "ok": False,
                 "status": "BLOCKED",
@@ -429,13 +457,13 @@ def _plan_special_profile(
                 "fallbacks": [],
                 "changed": {},
                 "details": {
-                    "target_primary_candidate": target_primary,
+                    "target_primary_candidate": selected_target_primary,
                     "registry_models": registry_models,
                     "provider_health": provider_health,
                     "broken_models": broken_models,
                 },
             }
-        target_provider = _provider_from_model(target_primary)
+        target_provider = _provider_from_model(selected_target_primary)
         target_provider_health = provider_health.get(target_provider, {})
         if target_provider_health.get("disabled"):
             return {
@@ -446,12 +474,12 @@ def _plan_special_profile(
                 "fallbacks": [],
                 "changed": {},
                 "details": {
-                    "target_primary_candidate": target_primary,
+                    "target_primary_candidate": selected_target_primary,
                     "provider_health": provider_health,
                     "broken_models": broken_models,
                 },
             }
-        if _is_model_broken(target_primary, broken_models):
+        if _is_model_broken(selected_target_primary, broken_models):
             return {
                 "ok": False,
                 "status": "BLOCKED",
@@ -460,22 +488,23 @@ def _plan_special_profile(
                 "fallbacks": [],
                 "changed": {},
                 "details": {
-                    "target_primary_candidate": target_primary,
+                    "target_primary_candidate": selected_target_primary,
                     "provider_health": provider_health,
                     "broken_models": broken_models,
                 },
             }
 
-        remaining_cloud = [item for item in safe_cloud_models if not _model_matches(item, target_primary)]
+        remaining_cloud = [item for item in safe_cloud_models if not _model_matches(item, selected_target_primary)]
+        ready_reason = "canary_target_ready" if requested_profile == "gpt54-canary" else "openai_safe_ready"
         return {
             "ok": True,
             "status": "READY",
-            "reason": "canary_target_ready",
-            "primary": target_primary,
+            "reason": ready_reason,
+            "primary": selected_target_primary,
             "fallbacks": _unique_non_empty([*remaining_cloud, local_model]),
             "changed": {},
             "details": {
-                "target_primary_candidate": target_primary,
+                "target_primary_candidate": selected_target_primary,
                 "provider_health": provider_health,
                 "broken_models": broken_models,
                 "registry_models": registry_models,
@@ -554,7 +583,7 @@ def _detect_current_profile(openclaw_payload: dict[str, Any]) -> str:
 
 def _resolve_requested_profile(requested: str, current: str) -> str:
     raw = str(requested or "").strip().lower()
-    if raw in {"local-first", "cloud-first", "production-safe", "gpt54-canary"}:
+    if raw in {"local-first", "cloud-first", "production-safe", "gpt54-canary", "openai-safe"}:
         return raw
     if raw == "toggle":
         return "cloud-first" if current == "local-first" else "local-first"
@@ -652,10 +681,11 @@ def main() -> int:
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="OpenClaw model autoswitch (local/cloud profiles)")
+    default_gateway_log = Path.home() / ".openclaw" / "logs" / "gateway.err.log"
     parser.add_argument("--dry-run", action="store_true", help="Только диагностика, без записи файлов")
     parser.add_argument(
         "--profile",
-        choices=("local-first", "cloud-first", "production-safe", "gpt54-canary", "toggle", "current", "auto"),
+        choices=("local-first", "cloud-first", "production-safe", "gpt54-canary", "openai-safe", "toggle", "current", "auto"),
         default="local-first",
         help="Профиль маршрутизации для OpenClaw main-agent.",
     )
@@ -664,7 +694,7 @@ def main() -> int:
     parser.add_argument("--state-json", default=str(Path.home() / ".openclaw" / "krab_autoswitch_state.json"))
     parser.add_argument("--models-json", default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"))
     parser.add_argument("--auth-profiles-json", default=str(Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"))
-    parser.add_argument("--gateway-log", default=str(Path.home() / ".openclaw" / "logs" / "gateway.err.log"))
+    parser.add_argument("--gateway-log", default=str(default_gateway_log))
     parser.add_argument("--local-model", default="", help="Принудительный local model key, например lmstudio/zai-org/glm-4.6v-flash")
     parser.add_argument("--cloud-model", default="", help="Принудительный cloud model key, например google/gemini-2.5-flash")
     args = parser.parse_args()
@@ -674,7 +704,15 @@ def main() -> int:
     state_path = Path(args.state_json).expanduser()
     models_path = Path(args.models_json).expanduser()
     auth_profiles_path = Path(args.auth_profiles_json).expanduser()
-    gateway_log_path = Path(args.gateway_log).expanduser()
+    requested_gateway_log_path = Path(args.gateway_log).expanduser()
+    gateway_log_path = (
+        discover_gateway_signal_log(
+            preferred_path=requested_gateway_log_path,
+            repo_root=PROJECT_ROOT,
+        )
+        if requested_gateway_log_path == default_gateway_log
+        else requested_gateway_log_path
+    )
 
     openclaw_payload = _read_json(openclaw_path)
     agent_payload = _read_json(agent_path)
@@ -798,6 +836,7 @@ def main() -> int:
             "runtime_registry_source": str(models_path),
             "auth_profiles_source": str(auth_profiles_path),
             "gateway_log_source": str(gateway_log_path),
+            "gateway_log_requested_source": str(requested_gateway_log_path),
             "runtime_registry_models": registry_models,
             "runtime_registry_count": len(registry_models),
             "broken_models": broken_models,
