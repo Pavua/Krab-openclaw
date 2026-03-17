@@ -1,6 +1,6 @@
 # OpenClaw Krab Roadmap
 
-Дата актуализации: 2026-03-16
+Дата актуализации: 2026-03-17
 Ветка реализации: `codex/translator-finish-gate-user3`
 Текущая ориентировочная готовность большого плана: `~52%`
 
@@ -298,11 +298,50 @@
 - [x] Свежий ops artifact `live_ecosystem_e2e_20260314_054155Z.json`
 - [x] Свежий handoff bundle на текущем truth
 
+### Этап 7. Provider maximization / cost optimization / circuit breaker
+
+**Принцип:** все доступные подписки (ChatGPT Plus, Google AI Pro, Claude Pro) задействованы через OAuth или API. Неофициальные пути допускаются с circuit breaker защитой.
+
+#### 7.1 Провайдерная матрица (target state)
+
+| Tier | Провайдер | Статус | Источник | Роль |
+| ---- | --------- | ------ | -------- | ---- |
+| 1 | openai-codex | Healthy ✓ | ChatGPT Plus OAuth | Primary: код, генерация |
+| 2 | google-gemini-cli | Healthy ✓ | Google AI Pro OAuth | Cloud fallback, общие задачи |
+| 3 | qwen-portal | Healthy ✓ | OAuth | Альтернативный cloud |
+| 4 | google-antigravity | RE-ENABLE | Google AI Pro OAuth | Дополнительный канал (legacy, риск бана) |
+| 5 | anthropic-claude | NEW | Claude Pro / API | Верификатор, сложные задачи |
+| 6 | LM Studio / 32B | Available | Локальный M4 Max | Дешёвый executor, tool-calling |
+| 7 | openai API | Опционально | Pay-per-token | Резерв при исчерпании лимитов |
+| 8 | google API | Опционально | Pay-per-token | Резерв / batch задачи |
+
+#### 7.2 Задачи по провайдерам
+
+- [ ] `google-antigravity`: снять permanent disable, восстановить OAuth, health monitoring + auto-disable при 429/ban
+- [ ] `anthropic-claude`: настроить через OpenAI-compatible proxy (API-ключ) или исследовать OAuth
+- [ ] Circuit breaker для всех неофициальных провайдеров: 3+ ошибки за 5 мин → auto-disable на 30 мин
+- [ ] Приоритет маршрутизации: подписочные OAuth → локальные → API (pay-per-token)
+- [ ] LM Studio tier: настроить 32B-класс модели на M4 Max для tool-calling и дешёвых задач
+
+#### 7.3 Cost optimization
+
+- [ ] Context hygiene + compaction — главный рычаг экономии токенов
+- [ ] Event-driven inbox вместо heartbeat polling
+- [ ] Локальный executor tier через LM Studio для рутинных задач
+- [ ] Timeout chain circuit breaker между tier'ами провайдеров
+
+#### 7.4 Консолидация веток
+
+- [ ] Аудит 46+ веток: merge P1 фиксы, закрыть superseded, консолидация untracked в `feat/phase-next`
+
+---
+
 ## Что осталось до 100%
 
 1. Добить всё, что не привязано к домашней директории `pablito`, включая shared-sync, truthful docs и on-device translator settings.
 2. На `pablito` пройти account-local relogin через owner panel и только потом переподтвердить merge-ready тем же release-gate циклом.
 3. После стабилизации translator/product layers вернуться к большим фазам master plan: `Internet Call Translation`, `Swarm v2`, `Trading Lab`, `Product Teams`, `Controlled Real Autonomy`.
+4. Реализовать Этап 7: provider maximization, circuit breaker, cost optimization.
 
 ## Merge gate
 
