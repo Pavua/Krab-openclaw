@@ -543,6 +543,71 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
         }
 
 
+class _FakeVoiceGatewayFreshSessionClient(_FakeVoiceGatewayControlPlaneClient):
+    """Фейк для проверки выбора самой свежей active session."""
+
+    async def list_sessions(self, *, status: str | None = None, source: str | None = None, limit: int = 20) -> dict:
+        del limit
+        items = [
+            {
+                "id": "sess-older-running",
+                "status": "running",
+                "translation_mode": "ru_es_duplex",
+                "notify_mode": "auto_on",
+                "tts_mode": "hybrid",
+                "source": "mobile",
+                "src_lang": "ru",
+                "tgt_lang": "es",
+                "updated_at": "2026-03-14T04:30:00+00:00",
+                "meta": {"device_bound": False},
+            },
+            dict(self._session or {}),
+        ]
+        filtered: list[dict[str, object]] = []
+        for session in items:
+            if status and str(session.get("status") or "").strip() != str(status).strip():
+                continue
+            if source and str(session.get("source") or "").strip() != str(source).strip():
+                continue
+            filtered.append(session)
+        return {"ok": True, "count": len(filtered), "items": filtered}
+
+
+class _FakeVoiceGatewayNonRuEsQuickPhraseClient(_FakeVoiceGatewayControlPlaneClient):
+    """Фейк для проверки сохранения реальной non-RU/ES языковой пары."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        assert self._session is not None
+        self._session["src_lang"] = "en"
+        self._session["tgt_lang"] = "ru"
+
+    async def list_quick_phrases(
+        self,
+        *,
+        source_lang: str = "ru",
+        target_lang: str = "es",
+        category: str = "all",
+        limit: int = 12,
+    ) -> dict:
+        assert source_lang == "en"
+        assert target_lang == "ru"
+        assert category == "all"
+        assert limit == 6
+        return {
+            "ok": True,
+            "count": 1,
+            "items": [
+                {
+                    "id": "repeat",
+                    "category": "base",
+                    "source_text": "Repeat please",
+                    "translated_text": "Повторите, пожалуйста",
+                }
+            ],
+        }
+
+
 class _FakePerceptor:
     """Минимальный perceptor для truthful STT статусов."""
 
@@ -1379,6 +1444,44 @@ def test_translator_control_plane_aggregates_session_policy_truth() -> None:
     assert data["operator_actions"]["start_available"] is True
     assert data["operator_actions"]["pause_available"] is True
     assert data["operator_actions"]["draft_defaults"]["buffering_mode"] == "adaptive"
+
+
+def test_translator_control_plane_prefers_newest_active_session() -> None:
+    """При равном статусе control-plane должен выбирать самую свежую active session."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayFreshSessionClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/control-plane")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sessions"]["current_session_id"] == "sess-mobile-1"
+    assert data["current_session"]["id"] == "sess-mobile-1"
+
+
+def test_translator_control_plane_preserves_non_ru_es_quick_phrase_pair() -> None:
+    """Quick phrases должны использовать языковую пару активной сессии, а не жёсткий ru/es fallback."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayNonRuEsQuickPhraseClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/control-plane")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["runtime_policy"]["language_pair"] == "en-ru"
+    assert data["quick_phrases"]["items"][0]["translated_text"] == "Повторите, пожалуйста"
 
 
 def test_translator_session_start_and_policy_update_return_fresh_snapshots() -> None:

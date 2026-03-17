@@ -3122,9 +3122,18 @@ class WebApp:
                 if isinstance(item, dict)
             ]
 
-        def _session_priority(item: dict[str, Any]) -> tuple[int, str]:
+        def _session_updated_sort_key(item: dict[str, Any]) -> float:
+            updated_at = str(item.get("updated_at") or item.get("created_at") or "").strip()
+            if not updated_at:
+                return 0.0
+            try:
+                normalized = updated_at.replace("Z", "+00:00")
+                return datetime.fromisoformat(normalized).timestamp()
+            except ValueError:
+                return 0.0
+
+        def _session_priority(item: dict[str, Any]) -> tuple[int, float]:
             status = str(item.get("status") or "").strip().lower()
-            updated_at = str(item.get("updated_at") or item.get("created_at") or "")
             order = {
                 "running": 0,
                 "paused": 1,
@@ -3132,7 +3141,7 @@ class WebApp:
                 "failed": 3,
                 "stopped": 4,
             }
-            return (order.get(status, 9), updated_at)
+            return (order.get(status, 9), -_session_updated_sort_key(item))
 
         session_items = sorted(session_items_raw, key=_session_priority)
         current_session = session_items[0] if session_items else {}
@@ -3155,10 +3164,13 @@ class WebApp:
             )
             diagnostics_payload, diagnostics_why_payload, timeline_summary_payload = await asyncio.gather(*diagnostics_tasks)
 
-        quick_phrase_source_lang = current_source_lang if current_source_lang in {"ru", "es"} else "ru"
-        quick_phrase_target_lang = current_target_lang if current_target_lang in {"ru", "es"} else "es"
+        quick_phrase_source_lang = current_source_lang if current_source_lang not in {"", "auto"} else "ru"
+        quick_phrase_target_lang = current_target_lang or "es"
         if quick_phrase_source_lang == quick_phrase_target_lang:
-            quick_phrase_target_lang = "es" if quick_phrase_source_lang == "ru" else "ru"
+            if quick_phrase_source_lang == "ru":
+                quick_phrase_target_lang = "es"
+            elif quick_phrase_source_lang == "es":
+                quick_phrase_target_lang = "ru"
 
         if voice_gateway and hasattr(voice_gateway, "list_quick_phrases"):
             try:
