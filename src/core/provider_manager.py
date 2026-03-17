@@ -23,9 +23,9 @@ import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from .logger import get_logger
+from .provider_circuit_breaker import circuit_breaker
 
 logger = get_logger(__name__)
 
@@ -288,7 +288,7 @@ class ProviderManager:
                     pass
             self._state.fallback.max_attempts = int(fb.get("max_attempts", 3))
             self._state.fallback.lm_studio_as_last_resort = bool(fb.get("lm_studio_as_last_resort", False))
-            
+
             # Загрузка квот
             quotas_data = data.get("quotas", {})
             for pt_val, q_data in quotas_data.items():
@@ -343,6 +343,8 @@ class ProviderManager:
         auth_file = os.path.expanduser("~/.openclaw/agents/main/agent/auth-profiles.json")
 
         if provider == ProviderType.GEMINI_OAUTH:
+            if circuit_breaker.is_tripped("google-antigravity"):
+                return False
             if not os.path.exists(auth_file):
                 return False
             try:
@@ -356,6 +358,8 @@ class ProviderManager:
                 return False
 
         if provider == ProviderType.OPENAI_OAUTH:
+            if circuit_breaker.is_tripped("openai-codex"):
+                return False
             if not os.path.exists(auth_file):
                 return False
             try:
@@ -555,7 +559,7 @@ class ProviderManager:
             f"  {'✅' if p in available else '❌'} {PROVIDER_DISPLAY_NAMES.get(p, p.value)}"
             for p in ProviderType if p != ProviderType.AUTO
         )
-        
+
         quota = self._state.quotas.get(provider, QuotaInfo())
         quota_str = f"{quota.used_tokens} / {quota.limit_tokens or '∞'}"
         if quota.limit_tokens > 0:

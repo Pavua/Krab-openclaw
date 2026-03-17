@@ -33,6 +33,7 @@ from .core.cloud_key_probe import (
     probe_gemini_key,
 )
 from .core.exceptions import ProviderAuthError, ProviderError
+from .core.provider_circuit_breaker import circuit_breaker
 from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.lm_studio_health import is_lm_studio_available
 from .core.logger import get_logger
@@ -1422,11 +1423,13 @@ class OpenClawClient:
                 if allow_auth_retry and self._refresh_gateway_token_from_runtime():
                     retry_after_token_refresh = True
                 else:
+                    circuit_breaker.record_failure(model_id, "auth")
                     raise ProviderAuthError(
                         message=f"status={response.status_code} body={body_str[:500]}",
                         user_message="Ошибка авторизации API",
                     )
             elif response.status_code == 429:
+                circuit_breaker.record_failure(model_id, "quota")
                 raise RouterQuotaError(
                     user_message="Квота исчерпана. Попробуй позже или переключись на локальную модель (!model local).",
                     details={"status": 429},
@@ -2093,6 +2096,7 @@ class OpenClawClient:
 
                 if not semantic:
                     last_semantic = None
+                    circuit_breaker.record_success(attempt_model)
                     break
 
                 last_semantic = semantic
@@ -2359,6 +2363,9 @@ class OpenClawClient:
         except RouterError:
             raise
         except (ProviderError, ProviderAuthError) as exc:
+            _cb_kind = "auth" if isinstance(exc, ProviderAuthError) else ""
+            if _cb_kind:
+                circuit_breaker.record_failure(attempt_model or selected_model, _cb_kind)
             semantic = self._semantic_from_provider_exception(exc)
             code = semantic["code"]
             self._cloud_tier_state["last_error_code"] = code
