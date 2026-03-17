@@ -575,6 +575,37 @@ async def handle_tech(bot: "KraabUserbot", message: Message) -> None:
     raw_args = str(message.text or "").split(maxsplit=2)
     action = raw_args[1].strip().lower() if len(raw_args) > 1 else "status"
 
+    def _bool_to_env(value: bool) -> str:
+        return "1" if value else "0"
+
+    def _apply_tech_flags(*, notices_enabled_value: bool, suppress_noise_value: bool) -> bool:
+        """
+        Сохраняет связанные debug-флаги без partial drift между runtime и `.env`.
+
+        Если вторая запись падает, откатываем уже применённую первую, чтобы owner
+        не получил ложный success-ответ при полурабочем состоянии.
+        """
+        previous_values = {
+            "USERBOT_TECH_NOTICES_ENABLED": _bool_to_env(
+                bool(getattr(config, "USERBOT_TECH_NOTICES_ENABLED", False))
+            ),
+            "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS": _bool_to_env(
+                bool(getattr(config, "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", True))
+            ),
+        }
+        target_values = [
+            ("USERBOT_TECH_NOTICES_ENABLED", _bool_to_env(notices_enabled_value)),
+            ("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", _bool_to_env(suppress_noise_value)),
+        ]
+        applied_keys: list[str] = []
+        for key, value in target_values:
+            if not config.update_setting(key, value):
+                for applied_key in reversed(applied_keys):
+                    config.update_setting(applied_key, previous_values[applied_key])
+                return False
+            applied_keys.append(key)
+        return True
+
     if action == "status":
         notices_enabled = bool(getattr(config, "USERBOT_TECH_NOTICES_ENABLED", False))
         suppress_noise = bool(getattr(config, "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", True))
@@ -594,8 +625,13 @@ async def handle_tech(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if action == "on":
-        config.update_setting("USERBOT_TECH_NOTICES_ENABLED", "1")
-        config.update_setting("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", "1")
+        if not _apply_tech_flags(notices_enabled_value=True, suppress_noise_value=True):
+            await message.reply(
+                "❌ Не удалось включить tech notices без drift.\n"
+                "- Изменения откатил.\n"
+                "- Проверь доступность записи в `.env` и попробуй ещё раз."
+            )
+            return
         await message.reply(
             "🛠️ Tech notices включены.\n"
             "- В конце ответов будет factual тех-плашка о route/model/provider.\n"
@@ -604,8 +640,13 @@ async def handle_tech(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if action in {"off", "clean"}:
-        config.update_setting("USERBOT_TECH_NOTICES_ENABLED", "0")
-        config.update_setting("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", "1")
+        if not _apply_tech_flags(notices_enabled_value=False, suppress_noise_value=True):
+            await message.reply(
+                "❌ Не удалось выключить tech notices без drift.\n"
+                "- Изменения откатил.\n"
+                "- Проверь доступность записи в `.env` и попробуй ещё раз."
+            )
+            return
         await message.reply(
             "🛠️ Tech notices выключены.\n"
             "- Ответы снова чистые, без тех-плашек.\n"
@@ -614,8 +655,13 @@ async def handle_tech(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if action == "verbose":
-        config.update_setting("USERBOT_TECH_NOTICES_ENABLED", "1")
-        config.update_setting("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", "0")
+        if not _apply_tech_flags(notices_enabled_value=True, suppress_noise_value=False):
+            await message.reply(
+                "❌ Не удалось включить verbose debug без drift.\n"
+                "- Изменения откатил.\n"
+                "- Проверь доступность записи в `.env` и попробуй ещё раз."
+            )
+            return
         await message.reply(
             "🛠️ Verbose debug включён.\n"
             "- Тех-плашки добавляются в ответы.\n"

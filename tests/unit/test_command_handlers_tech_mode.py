@@ -78,6 +78,43 @@ async def test_handle_tech_verbose_updates_runtime_flags(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_handle_tech_on_rolls_back_when_second_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Частичный сбой persistence не должен оставлять owner в ложном success-состоянии."""
+    message = SimpleNamespace(
+        text="!tech on",
+        from_user=SimpleNamespace(id=1, username="owner"),
+        reply=AsyncMock(),
+    )
+    bot = _make_bot(level=AccessLevel.OWNER)
+    monkeypatch.setattr(command_handlers_module.config, "USERBOT_TECH_NOTICES_ENABLED", False, raising=False)
+    monkeypatch.setattr(
+        command_handlers_module.config,
+        "USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS",
+        True,
+        raising=False,
+    )
+
+    applied: list[tuple[str, str]] = []
+    planned_results = iter([True, False, True])
+
+    def _fake_update(key: str, value: str) -> bool:
+        applied.append((key, value))
+        return next(planned_results)
+
+    monkeypatch.setattr(command_handlers_module.config, "update_setting", _fake_update, raising=False)
+
+    await handle_tech(bot, message)
+
+    assert applied == [
+        ("USERBOT_TECH_NOTICES_ENABLED", "1"),
+        ("USERBOT_SUPPRESS_NON_ACTIONABLE_TOOL_WARNINGS", "1"),
+        ("USERBOT_TECH_NOTICES_ENABLED", "0"),
+    ]
+    message.reply.assert_awaited_once()
+    assert "не удалось включить tech notices" in message.reply.await_args.args[0].lower()
+
+
+@pytest.mark.asyncio
 async def test_handle_tech_rejects_non_owner() -> None:
     """Команда debug-notices не должна быть доступна не-owner контуру."""
     message = SimpleNamespace(
