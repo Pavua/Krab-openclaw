@@ -46,9 +46,9 @@ class Config:
     GEMINI_API_KEY_FREE: Optional[str] = os.getenv("GEMINI_API_KEY_FREE")
     GEMINI_API_KEY_PAID: Optional[str] = os.getenv("GEMINI_API_KEY_PAID")
     GEMINI_API_KEY: Optional[str] = (
-        os.getenv("GEMINI_API_KEY_FREE")
-        or os.getenv("GEMINI_API_KEY_PAID")
+        os.getenv("GEMINI_API_KEY_PAID")   # платный ключ приоритетнее
         or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GEMINI_API_KEY_FREE")
     )
     GEMINI_MODELS: list[str] = [
         "google/gemini-2.5-flash",
