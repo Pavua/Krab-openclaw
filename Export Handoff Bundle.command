@@ -12,8 +12,8 @@ else
   PYTHON_BIN="python3"
 fi
 
-"$PYTHON_BIN" scripts/export_handoff_bundle.py
-EXIT_CODE=$?
+EXIT_CODE=0
+"$PYTHON_BIN" scripts/export_handoff_bundle.py || EXIT_CODE=$?
 
 echo ""
 echo "Готово. Код выхода: $EXIT_CODE"

@@ -21,7 +21,7 @@ check_url() {
   local body
   if body="$(curl -sS -m 2 "$url" 2>/dev/null)"; then
     echo "✅ $name: $url"
-    echo "   $body" | sed -e 's/^/   /'
+    echo "$body" | sed -e 's/^/   /'
   else
     echo "❌ $name: $url (недоступен)"
   fi

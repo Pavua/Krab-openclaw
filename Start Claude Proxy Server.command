@@ -5,8 +5,8 @@
 
 set -uo pipefail
 
-REPO_DIR="/Users/pablito/Antigravity_AGENTS/Краб"
-VENV="$REPO_DIR/../Краб/.venv_krab"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV="$REPO_DIR/.venv_krab"
 
 if [[ ! -d "$VENV" ]]; then
   VENV="/Users/Shared/Antigravity_AGENTS/Краб/.venv_krab"
