@@ -4,7 +4,10 @@
 
 set -euo pipefail
 
-GW_DIR="/Users/pablito/Antigravity_AGENTS/Krab Voice Gateway"
+# Определяем каталог Voice Gateway относительно этого скрипта,
+# либо берём из переменной окружения — работает для любого macOS-аккаунта.
+_LAUNCHER_DIR="$( cd "$( dirname "$0" )" && pwd )"
+GW_DIR="${KRAB_VOICE_GATEWAY_DIR:-"$( dirname "$_LAUNCHER_DIR" )/Krab Voice Gateway"}"
 
 if [ ! -d "$GW_DIR" ]; then
     echo "❌ Voice Gateway не найден: $GW_DIR"
