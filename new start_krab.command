@@ -273,6 +273,13 @@ cleanup_gateway_if_owned() {
 cleanup_on_exit() {
     cleanup_gateway_if_owned
     release_launcher_lock
+    # Останавливаем watchdog, если он был запущен этим launcher
+    local wpid
+    WATCHDOG_PID_FILE="${RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}/watchdog.pid"
+    wpid="$(cat "$WATCHDOG_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$wpid" ] && kill -0 "$wpid" >/dev/null 2>&1; then
+        kill "$wpid" >/dev/null 2>&1 || true
+    fi
 }
 
 trap cleanup_on_exit EXIT INT TERM
@@ -590,6 +597,31 @@ if [ -n "$OPENCLAW_BIN" ] && is_gateway_listening; then
         echo "ℹ️ OpenClaw Browser Relay: автозапуск отключён. Для eager-start выставь OPENCLAW_BROWSER_AUTOSTART=1"
     fi
 fi
+
+# === Telegram Session Watchdog ===
+# Мониторит /api/health/lite и перезапускает userbot при деградации сессии.
+WATCHDOG_PID_FILE="$RUNTIME_STATE_DIR/watchdog.pid"
+
+stop_old_watchdog() {
+    if [ -f "$WATCHDOG_PID_FILE" ]; then
+        local wpid
+        wpid="$(cat "$WATCHDOG_PID_FILE" 2>/dev/null || true)"
+        if is_pid_alive "$wpid"; then
+            kill "$wpid" >/dev/null 2>&1 || true
+        fi
+        rm -f "$WATCHDOG_PID_FILE"
+    fi
+}
+
+start_watchdog() {
+    stop_old_watchdog
+    nohup "$KRAB_PYTHON_BIN" "$DIR/scripts/telegram_session_watchdog.py" >> /tmp/krab_session_watchdog.log 2>&1 &
+    local wpid=$!
+    write_runtime_state_file "$WATCHDOG_PID_FILE" "$wpid" || true
+    echo "👁️ Session Watchdog PID: $wpid (log: /tmp/krab_session_watchdog.log)"
+}
+
+start_watchdog
 
 # === Запуск бота с авто-рестартом ===
 while true; do
