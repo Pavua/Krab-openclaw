@@ -20,6 +20,11 @@ logs/
 *.pid
 *.tar.gz
 
+# Runtime locks & owner files
+.krab_launcher.lock
+.openclaw.owner
+data/locks/
+
 # Sessions & Local Data
 *.session
 *.session-journal
