@@ -75,7 +75,7 @@ class OpenClawClient:
         self.base_url = config.OPENCLAW_URL.rstrip("/")
         self.token = config.OPENCLAW_TOKEN
         self._http_client = httpx.AsyncClient(
-            timeout=300.0,
+            timeout=90.0,
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
@@ -1409,10 +1409,20 @@ class OpenClawClient:
         retry_after_token_refresh = False
 
         # Используем обычный POST (не streaming), чтобы получить единый JSON-ответ
-        response = await self._http_client.post(
-            f"{self.base_url}/v1/chat/completions",
-            json=payload,
-        )
+        try:
+            response = await self._http_client.post(
+                f"{self.base_url}/v1/chat/completions",
+                json=payload,
+            )
+        except httpx.TimeoutException as exc:
+            # Пробрасываем как ProviderError(retryable=True), чтобы fallback-loop
+            # (for attempt in range(4)) поймал его через except (ProviderAuthError, ProviderError)
+            # и попробовал следующую модель в цепочке.
+            raise ProviderError(
+                message=f"timeout waiting for {model_id}: {exc}",
+                user_message="Таймаут провайдера",
+                retryable=True,
+            )
         logger.info("openclaw_response_status", status=response.status_code, model=model_id)
 
         if response.status_code != 200:
