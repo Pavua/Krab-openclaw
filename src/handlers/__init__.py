@@ -2,6 +2,8 @@
 from .command_handlers import (
     handle_acl,
     handle_agent,
+    handle_audio_message,
+    handle_browser,
     handle_clear,
     handle_config,
     handle_diagnose,
@@ -36,6 +38,8 @@ from .command_handlers import (
 __all__ = [
     "handle_acl",
     "handle_agent",
+    "handle_audio_message",
+    "handle_browser",
     "handle_clear",
     "handle_config",
     "handle_diagnose",

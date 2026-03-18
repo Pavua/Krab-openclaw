@@ -5947,6 +5947,51 @@ class WebApp:
                 "voice_gateway_configured": runtime.get("voice_gateway_configured"),
             }
 
+        # ── Browser Bridge API ──────────────────────────────────────────────
+        from ..integrations.browser_bridge import browser_bridge as _browser_bridge
+
+        @self.app.get("/api/browser/status")
+        async def browser_status():
+            attached = await _browser_bridge.is_attached()
+            tabs = await _browser_bridge.list_tabs() if attached else []
+            active_url = tabs[-1]["url"] if tabs else None
+            return {"ok": True, "attached": attached, "tab_count": len(tabs), "active_url": active_url}
+
+        @self.app.get("/api/browser/tabs")
+        async def browser_tabs():
+            tabs = await _browser_bridge.list_tabs()
+            return tabs
+
+        @self.app.post("/api/browser/navigate")
+        async def browser_navigate(body: dict = Body(...)):
+            url = str(body.get("url") or "").strip()
+            if not url:
+                raise HTTPException(status_code=400, detail="url required")
+            current_url = await _browser_bridge.navigate(url)
+            return {"ok": True, "current_url": current_url}
+
+        @self.app.post("/api/browser/screenshot")
+        async def browser_screenshot():
+            data = await _browser_bridge.screenshot_base64()
+            if data is None:
+                return {"ok": False, "error": "screenshot_failed"}
+            return {"ok": True, "data": data}
+
+        @self.app.post("/api/browser/read")
+        async def browser_read():
+            text = await _browser_bridge.get_page_text()
+            return {"ok": True, "text": text}
+
+        @self.app.post("/api/browser/js")
+        async def browser_js(body: dict = Body(...)):
+            code = str(body.get("code") or "").strip()
+            if not code:
+                raise HTTPException(status_code=400, detail="code required")
+            result = await _browser_bridge.execute_js(code)
+            return {"ok": True, "result": result}
+
+        # ────────────────────────────────────────────────────────────────────
+
         @self.app.get("/api/transcriber/status")
         async def transcriber_status():
             """

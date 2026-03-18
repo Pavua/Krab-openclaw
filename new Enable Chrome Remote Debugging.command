@@ -1,30 +1,25 @@
 #!/bin/zsh
-
-# Этот .command-файл открывает системную страницу Chrome, где включается
-# Remote Debugging для подключения Chrome DevTools MCP к вашему обычному профилю.
-# Это безопаснее, чем каждый раз вспоминать внутренний chrome:// URL вручную.
+# Запускает Google Chrome с Remote Debugging Port 9222 для подключения Краба через CDP.
+# Использует отдельный user-data-dir, чтобы не мешать основному профилю.
 
 set -euo pipefail
 
-URL="chrome://inspect/#remote-debugging"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-echo "🌐 Открываю Chrome на странице Remote Debugging..."
-
-if [ -d "/Applications/Google Chrome.app" ]; then
-  open -a "/Applications/Google Chrome.app" "$URL"
-else
-  open -a "Google Chrome" "$URL"
+if [ ! -x "$CHROME" ]; then
+    echo "❌ Google Chrome не найден по пути: $CHROME"
+    echo "Установи Chrome или обнови путь в этом скрипте."
+    read -r "?Нажмите Enter для закрытия..."
+    exit 1
 fi
 
-cat <<'EOF'
+echo "🌐 Запускаю Chrome с remote debugging port 9222..."
+echo "📂 User data dir: $DIR/browser_data"
 
-Что нужно сделать дальше:
-1. Включить Remote Debugging на открывшейся странице Chrome.
-2. Оставить Chrome запущенным в вашем обычном профиле.
-3. Перезапустить Codex или открыть новое окно Codex, чтобы MCP перечитал конфиг.
-
-После этого Chrome DevTools MCP сможет подключаться к вашему обычному браузеру.
-EOF
-
-echo
-read -r "?Нажмите Enter, чтобы закрыть окно..."
+exec "$CHROME" \
+    --remote-debugging-port=9222 \
+    --user-data-dir="$DIR/browser_data" \
+    --no-first-run \
+    --no-default-browser-check \
+    "about:blank"

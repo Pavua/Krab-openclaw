@@ -1897,3 +1897,120 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
         f"- Новый статус: `{target_status}`"
         + (f"\n- Note: {note}" if note else "")
     )
+
+
+async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление Chrome через CDP.
+
+    !browser status       — статус подключения
+    !browser tabs         — список вкладок
+    !browser open <url>   — навигация
+    !browser read         — текст текущей страницы
+    !browser shot         — скриншот (фото в Telegram)
+    !browser js <code>    — выполнить JS
+    """
+    from ..integrations.browser_bridge import browser_bridge
+
+    args = str(message.text or "").split(maxsplit=2)
+    sub = str(args[1] if len(args) > 1 else "status").strip().lower()
+
+    if sub == "status":
+        attached = await browser_bridge.is_attached()
+        if not attached:
+            await message.reply(
+                "🌐 Браузер: **отключён**\n"
+                "Запусти `new Enable Chrome Remote Debugging.command` для подключения."
+            )
+            return
+        tabs = await browser_bridge.list_tabs()
+        active = tabs[-1] if tabs else None
+        active_info = f"\n🔗 Активная: {active['url']}" if active else ""
+        await message.reply(f"🌐 Браузер: **подключён** ({len(tabs)} вкладок){active_info}")
+        return
+
+    if sub == "tabs":
+        tabs = await browser_bridge.list_tabs()
+        if not tabs:
+            await message.reply("🌐 Вкладок не найдено (браузер отключён или пуст).")
+            return
+        lines = [f"{i + 1}. {t.get('title') or t.get('url')}\n   {t['url']}" for i, t in enumerate(tabs)]
+        await message.reply("🌐 Вкладки:\n" + "\n".join(lines))
+        return
+
+    if sub == "open":
+        url = str(args[2] if len(args) > 2 else "").strip()
+        if not url:
+            raise UserInputError(user_message="❌ Укажи URL: `!browser open <url>`")
+        final_url = await browser_bridge.navigate(url)
+        await message.reply(f"✅ Переход: {final_url}")
+        return
+
+    if sub == "read":
+        text = await browser_bridge.get_page_text()
+        if not text:
+            await message.reply("❌ Не удалось получить текст страницы.")
+            return
+        await message.reply(f"📄 Страница (до 2000 символов):\n```\n{text[:2000]}\n```")
+        return
+
+    if sub == "shot":
+        data = await browser_bridge.screenshot()
+        if data is None:
+            await message.reply("❌ Не удалось сделать скриншот.")
+            return
+        import io
+        await message.reply_photo(io.BytesIO(data))
+        return
+
+    if sub == "js":
+        code = str(args[2] if len(args) > 2 else "").strip()
+        if not code:
+            raise UserInputError(user_message="❌ Укажи код: `!browser js <code>`")
+        result = await browser_bridge.execute_js(code)
+        await message.reply(f"✅ Результат:\n```\n{str(result)[:1000]}\n```")
+        return
+
+    raise UserInputError(
+        user_message=(
+            "🌐 Команды браузера:\n"
+            "`!browser status` — статус\n"
+            "`!browser tabs` — список вкладок\n"
+            "`!browser open <url>` — навигация\n"
+            "`!browser read` — текст страницы\n"
+            "`!browser shot` — скриншот\n"
+            "`!browser js <code>` — выполнить JS"
+        )
+    )
+
+
+async def handle_audio_message(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Обработка входящих голосовых/аудио сообщений Telegram.
+
+    Скачивает аудио, транскрибирует через perceptor, обрабатывает как текстовый запрос.
+    """
+    from ..modules.perceptor import perceptor
+
+    try:
+        audio_bytes = await message.download(in_memory=True)
+        if audio_bytes is None:
+            await message.reply("❌ Не удалось скачать аудио.")
+            return
+
+        transcript = await perceptor.transcribe_audio(bytes(audio_bytes))
+        if not transcript:
+            await message.reply("❌ Не удалось распознать речь.")
+            return
+
+        await message.reply(f"_{transcript}_")
+
+        # Обрабатываем транскрипт как обычный текстовый запрос через bot
+        fake_text = transcript
+        response = await bot.process_text_query(fake_text, message)
+        if response:
+            await message.reply(response)
+
+    except Exception as exc:
+        logger.error("handle_audio_message_error", error=str(exc))
+        await message.reply(f"❌ Ошибка обработки аудио: {str(exc)[:200]}")

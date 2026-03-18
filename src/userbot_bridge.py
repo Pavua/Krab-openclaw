@@ -61,6 +61,8 @@ from .integrations.macos_automation import macos_automation
 from .handlers import (
     handle_agent,
     handle_acl,
+    handle_audio_message,
+    handle_browser,
     handle_clear,
     handle_config,
     handle_cronstatus,
@@ -531,6 +533,15 @@ class KraabUserbot:
         @self.client.on_message(filters.command("cronstatus", prefixes=prefixes) & _make_command_filter("cronstatus"), group=-1)
         async def wrap_cronstatus(c, m):
             await run_cmd(handle_cronstatus, m)
+
+        @self.client.on_message(filters.command("browser", prefixes=prefixes) & _make_command_filter("browser"), group=-1)
+        async def wrap_browser(c, m):
+            await run_cmd(handle_browser, m)
+
+        # Обработка голосовых/аудио сообщений
+        @self.client.on_message((filters.voice | filters.audio) & ~filters.bot, group=-1)
+        async def wrap_audio(c, m):
+            await run_cmd(handle_audio_message, m)
 
         # Обработка обычных сообщений и медиа
         @self.client.on_message((filters.text | filters.photo | filters.voice | filters.audio) & ~filters.bot, group=0)
