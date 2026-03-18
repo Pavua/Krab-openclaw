@@ -1,60 +1,112 @@
-# Checkpoint 18.03.2026 — Krab/OpenClaw
+# Checkpoint 18.03.2026 (финальный) — Krab/OpenClaw
 
-**Общий % проекта: ~62%**
-
----
-
-## Что сделано в этой сессии
-
-### Routing стабилизация
-- ✅ Fallback цепочка перестроена:
-  ```
-  google/gemini-3.1-pro-preview (primary)
-  → openai-codex/gpt-5.1-codex-mini  (#1)
-  → qwen-portal/coder-model           (#2)
-  → google-gemini-cli/gemini-3-flash-preview (#3)
-  → openai-codex/gpt-5.3-codex       (#4)
-  → claude-proxy/claude-sonnet-4-6   (#5, локальный)
-  ```
-- ✅ `thinkingDefault = adaptive` включён
-- ✅ Claude-proxy работает на порту 17191
-
-### CLI инструменты
-- ✅ `codex` CLI установлен (v0.115.0)
-- ✅ `~/.local/bin` добавлен в PATH (cursor agent)
-- ✅ `alias claude="claude --dangerously-skip-permissions"` в ~/.zshrc
-- ✅ Claude Code: v2.1.77 (актуальная версия)
-
-### Git
-- ✅ Ветка: `fix/routing-qwen-thinking` создана и запушена
-- ✅ Commit: `cc24231` (docs cleanup)
+**Общий % проекта: ~68%** (был 62%)
 
 ---
 
-## Что осталось (следующий чат)
+## Что сделано в этой сессии (18.03)
 
-### Срочно
-1. **Qwen Portal OAuth** — токен expires in 0m постоянно, нужна диагностика
-   - Симптом: `openclaw models status` всегда показывает `expires in 0m`
-   - Возможная причина: timezone/clock drift в расчёте TTL
+### 1. Qwen Portal OAuth ✅
+- **Симптом:** `expires in 0m` → refresh token был мёртв
+- **Решение:** Создан `Login Qwen Portal OAuth.command` → кнопка в панели 8080 запускает OAuth
+- **Результат:** Авторизован, `expires in 6h`
+- **Диагностика:** `expires in 0m` = отображение 0 для отрицательного TTL (протухший токен)
 
-2. **LM Studio chat модели** — в провайдере только embedding модель
-   - Нужно добавить 8 chat моделей в `~/.openclaw/agents/main/agent/models.json`
-   - Модели на внешнем SSD, JIT loading (30-120 сек первый запрос)
+### 2. LM Studio chat модели ✅
+- Добавлено 8 chat моделей в `~/.openclaw/openclaw.json → agents.defaults.models`
+- Итого: 35 configured models (было 27), 12 LM Studio моделей
+- **Важно:** регистрировать модели нужно в `openclaw.json → agents.defaults.models`, а НЕ в `models.json`
+- Добавленные модели:
+  ```
+  lmstudio/qwen3.5-9b-mlx@8bit (thinking: off)
+  lmstudio/qwen3.5-27b-mlx@8bit (thinking: off)
+  lmstudio/qwen2.5-coder-7b-instruct-mlx
+  lmstudio/mistralai/devstral-small-2-2512
+  lmstudio/deepseek/deepseek-r1-0528-qwen3-8b (reasoning)
+  lmstudio/microsoft/phi-4-reasoning-plus (reasoning)
+  lmstudio/google/gemma-3n-e4b
+  lmstudio/mistralai/mistral-small-3.2
+  ```
 
-3. **e2e тест** через `web.telegram.org` в Chrome
-   - У пользователя открыта сессия userbot в Chrome
-   - Проверить: отправить сообщение → Краб отвечает корректно
+### 3. auth_recovery_readiness.py восстановлен ✅
+- Файл был удалён (остался только .pyc), восстановлен из git: `1d62b4b`
+- Кнопки релогина в панели 8080 теперь полностью рабочие
 
-### Среднесрочно
-4. **Browser для OpenClaw** — дать Крабу доступ к Chrome через DevTools protocol
-5. **Translator finish gate** — ru→es retest на iPhone 14 Pro Max (manual step)
-6. **pablito owner panel** — воспроизвести runtime truth на main аккаунте
+### 4. OAuth re-login helpers созданы ✅
+```
+Login Qwen Portal OAuth.command     ← НОВЫЙ
+Login OpenAI Codex OAuth.command    ← НОВЫЙ
+Login Google Antigravity OAuth.command ← НОВЫЙ
+Login Gemini CLI OAuth.command      ← был раньше
+```
+- Все доступны из панели 8080 → кнопка "Перелогинить ..."
+- API endpoint: `POST /api/model/provider-action { provider, action: "repair_oauth" }`
 
-### Архитектурные улучшения
-7. **Multi-agent setup** — разделить ответственности между агентами, дать каждому свой Telegram аккаунт
-8. **Parallel mode** для OpenClaw (обсудить: Sequential 1/1 vs Parallel 4/8)
-9. **Codex CLI интеграция** — добавить в coding-agent skill как опцию
+### 5. E2E тест подтверждён ✅
+- **Метод:** @p0lrd написал @yung_nagato "ну как ты?" с мобильного Telegram
+- **Результат:** Краб ответил развёрнутым статусом через Gemini 3.1 Pro Preview
+- **Браузерный e2e:** ограничение — Chrome-сессия залогинена как @yung_nagato (userbot)
+  - Для автоматизации нужна сессия @p0lrd в Chrome
+  - Функционально тест прошёл ✅
+
+### 6. Git
+- Ветка: `fix/routing-qwen-thinking`
+- Коммит: `0a4cf09` — fix: restore auth_recovery_readiness and add OAuth re-login helpers
+- Запушено в remote ✅
+
+---
+
+## Текущее состояние routing chain
+```
+google/gemini-3.1-pro-preview (primary, via GEMINI_API_KEY) ← РАБОТАЕТ
+→ openai-codex/gpt-5.1-codex-mini  (#1, expires in 6d)     ← РАБОТАЕТ
+→ qwen-portal/coder-model           (#2, expires in 6h)     ← ВОССТАНОВЛЕН
+→ google-gemini-cli/gemini-3-flash-preview (#3, expires 0m) ← нужен refresh
+→ openai-codex/gpt-5.3-codex       (#4)
+→ claude-proxy/claude-sonnet-4-6   (#5, локальный)
+```
+
+---
+
+## Что осталось до 100%
+
+### Срочно / Следующий чат
+1. **Браузерный e2e** (опционально) — залогинить Chrome отдельной вкладкой как @p0lrd
+   - Модель: Sonnet 4.6, обычный режим
+2. **google-gemini-cli refresh** — `expires in 0m`, может auto-refresh через gemini CLI sync
+   - Запуск: `Login Gemini CLI OAuth.command` или `scripts/sync_gemini_cli_oauth.py`
+
+### Среднесрочно (Этап 1-2 роадмапа)
+3. **Translator finish gate** — ru→es retest на iPhone 14 Pro Max (ручной шаг, manual-only)
+4. **Channel stability** — DM-policy правила, pairing-спам, session overrides
+5. **Telegram session watchdog** — 5-10 перезапусков без ручного логина
+
+### Более долгосрочно (Этап 3-5)
+6. **Browser для Краба** — Chrome DevTools protocol (давать Крабу доступ к вкладкам)
+   - Модель: Opus 4.6, **Plan Mode** (архитектурный)
+7. **Voice Gateway + Krab Ear** — как обязательные сервисы экосистемы
+8. **pablito owner panel** — воспроизвести runtime truth на main аккаунте
+9. **Multi-agent setup** — разделить ответственности, отдельный Telegram аккаунт каждому агенту
+   - Модель: Opus 4.6, **Plan Mode** (архитектурный)
+10. **!model scan** с размером модели и корректным выбором
+11. **Dashboard/Browser relay** — стабилизация Chrome Relay порта
+
+### Архитектурные (Этап 6)
+12. **Parallel mode** — Sequential 1/1 vs Parallel 4/8 (обсудить)
+13. **Codex CLI** — добавить в coding-agent skill как опцию
+
+---
+
+## Рекомендации по модели/режиму
+
+| Задача | Модель | Режим |
+|--------|--------|-------|
+| Читать/анализировать файлы | Haiku | обычный |
+| Мелкий фикс, хелпер | Sonnet 4.6 | обычный |
+| Сложная фича, рефактор | Sonnet 4.6 | **Plan Mode** |
+| Параллельные независимые задачи | Sonnet 4.6 | **agent dispatching** |
+| Архитектура (multi-agent, browser) | Opus 4.6 | **Plan Mode** |
+| Когда /compact или новый чат | — | контекст > 80% заполнен |
 
 ---
 
@@ -63,8 +115,8 @@
 | Что | Путь |
 |-----|------|
 | Runtime конфиг | `~/.openclaw/openclaw.json` |
-| Agent конфиг | `~/.openclaw/agents/main/agent/agent.json` |
-| Models конфиг | `~/.openclaw/agents/main/agent/models.json` |
+| Models catalog | `~/.openclaw/openclaw.json → agents.defaults.models` |
+| Models spec | `~/.openclaw/agents/main/agent/models.json` |
 | Auth profiles | `~/.openclaw/agents/main/agent/auth-profiles.json` |
 | Claude proxy config | `~/.openclaw/claude_proxy_config.json` |
 | Claude proxy скрипт | `scripts/claude_proxy_server.py` |
@@ -77,18 +129,25 @@
 ## Диагностика при проблемах
 
 ```bash
-# Проверить routing
-openclaw models fallbacks list
-openclaw models status | grep -E "Default|Fallback|auth"
+# Статус routing
+openclaw models status | grep -E "Default|Fallback|expires"
+
+# Qwen auth (если истёк снова)
+# → Кнопка в панели 8080 → "Перелогинить Qwen Portal"
+# или двойной клик: "Login Qwen Portal OAuth.command"
+
+# Gemini CLI auth refresh
+scripts/sync_gemini_cli_oauth.py
 
 # Логи gateway
 tail -30 /tmp/openclaw_gateway.log | grep -E "error|fallback|rate|expired"
 
-# Проверить claude-proxy
+# Claude proxy
 curl -s http://localhost:17191/health
 
-# Qwen auth (если истёк)
-openclaw models auth login --provider qwen-portal
+# Добавить новые LM Studio модели:
+# ~/.openclaw/openclaw.json → agents.defaults.models → добавить запись
+# "lmstudio/model-id": {"params": {"thinking": "off"}}
 ```
 
 ---
@@ -100,4 +159,6 @@ openclaw models auth login --provider qwen-portal
 - Main: мержить только 100% готовый код
 - Язык общения: **русский**
 - Reporting: писать общий % проекта и % текущего блока
-- Действия: `alias claude="claude --dangerously-skip-permissions"` уже настроен
+- Всегда рекомендовать модель/режим под задачу
+- НЕ слать SIGHUP openclaw — использовать `openclaw gateway` для перезапуска
+- `alias claude="claude --dangerously-skip-permissions"` уже настроен
