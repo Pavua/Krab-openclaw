@@ -75,7 +75,10 @@ class OpenClawClient:
         self.base_url = config.OPENCLAW_URL.rstrip("/")
         self.token = config.OPENCLAW_TOKEN
         self._http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
+            # connect/write/pool — короткие, чтобы быстро падать на недоступный сервер.
+            # read=None — без ограничения: OpenClaw сам управляет внутренней цепочкой
+            # провайдеров и fallback-ретраями; любой read-timeout обрывал бы эту цепочку.
+            timeout=httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0),
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
