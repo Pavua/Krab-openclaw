@@ -2525,21 +2525,6 @@
         });
       }
 
-      const localModels = Array.isArray(catalog?.local_models)
-        ? catalog.local_models
-        : [];
-      for (const item of localModels) {
-        const modelId = String(item?.id || "").trim();
-        if (!modelId) continue;
-        const loadedSuffix = item?.loaded ? " • loaded" : "";
-        const sizeSuffix = item?.size_human ? ` • ${item.size_human}` : "";
-        pushItem({
-          value: modelId,
-          label: `${modelId}${loadedSuffix}${sizeSuffix}`,
-          group: "Локальные модели",
-        });
-      }
-
       const chainItems = Array.isArray(catalog?.runtime_controls?.chain_items)
         ? catalog.runtime_controls.chain_items
         : [];
@@ -2862,6 +2847,7 @@
         const modelId = String(document.getElementById(`runtimeChainModelSelect_fallback_${index + 1}`)?.value || "").trim();
         const thinkingValue = String(document.getElementById(`runtimeChainThinkingSelect_fallback_${index + 1}`)?.value || thinkingDefault).trim().toLowerCase() || thinkingDefault;
         if (!modelId) continue;
+        if (!modelId.includes("/")) continue;
         fallbacks.push(modelId);
         slotThinking[modelId] = thinkingValue;
       }

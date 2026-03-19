@@ -88,12 +88,15 @@ def main() -> int:
 
     target_tier = ""
     target_key = ""
-    if _is_aistudio(free_key):
-        target_tier = "free"
-        target_key = free_key
-    elif _is_aistudio(paid_key):
+    # Платный ключ должен выигрывать у бесплатного автоматически:
+    # иначе любой sync может тихо откатить runtime обратно на free-tier,
+    # даже если owner уже осознанно держит billing-enabled проект как основной.
+    if _is_aistudio(paid_key):
         target_tier = "paid"
         target_key = paid_key
+    elif _is_aistudio(free_key):
+        target_tier = "free"
+        target_key = free_key
 
     if not target_key:
         print(

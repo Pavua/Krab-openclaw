@@ -208,7 +208,7 @@ def choose_target_key(*, free_key: str, paid_key: str, tier: str) -> tuple[str, 
 
     Логика:
     - tier=free/paid: строгий выбор.
-    - tier=auto: free, иначе paid.
+    - tier=auto: paid, иначе free.
     """
     free = str(free_key or "").strip()
     paid = str(paid_key or "").strip()
@@ -219,10 +219,10 @@ def choose_target_key(*, free_key: str, paid_key: str, tier: str) -> tuple[str, 
     if requested == "paid":
         return ("paid", paid) if is_ai_studio_key(paid) else ("", "")
 
-    if is_ai_studio_key(free):
-        return "free", free
     if is_ai_studio_key(paid):
         return "paid", paid
+    if is_ai_studio_key(free):
+        return "free", free
     return "", ""
 
 

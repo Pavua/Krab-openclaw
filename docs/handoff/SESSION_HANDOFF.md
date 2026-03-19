@@ -1,5 +1,38 @@
 # Session Handoff — Краб 19.03.2026
 
+## Addendum 16:47 — paid Gemini truth и cache-fix owner panel
+
+- Канонический project progress теперь привязан к master-plan, а не к локальному
+  operational-срезу. Источник зафиксирован в
+  [docs/handoff/MASTER_PLAN_SOURCE_OF_TRUTH.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/MASTER_PLAN_SOURCE_OF_TRUTH.md).
+- Платный Google API ключ подтверждён в live-окружении:
+  - `.env`: `GEMINI_API_KEY = GEMINI_API_KEY_PAID = AIzaSyAifJ_0...vSNy3A`
+  - `.env`: `GEMINI_API_KEY_FREE = AIzaSyA07LwN...LhPUKY`
+  - `.env`: `GOOGLE_API_KEY = AIzaSyAifJ_0...vSNy3A`
+  - direct probe `https://generativelanguage.googleapis.com/v1beta/models`
+    через текущий `GEMINI_API_KEY` вернул `HTTP 200`.
+- Runtime provider `google/` в
+  `~/.openclaw/agents/main/agent/models.json` использует не literal-ключ, а
+  placeholder `apiKey = GEMINI_API_KEY`, то есть реальное разрешение идёт
+  через env и сейчас попадает именно в paid key.
+- Исправлен источник путаницы с owner panel `:8080`:
+  проблема была не только в backend-валидации, а в stale cached HTML уже
+  открытой вкладки. После hard refresh/нового URL вкладка больше не держит старую
+  версию редактора глобальной цепочки.
+- На root и CSS owner panel добавлены anti-cache заголовки:
+  - `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`
+  - `Pragma: no-cache`
+  - `Expires: 0`
+- Browser acceptance после restart и fresh URL подтверждает:
+  - глобальный editor цепочки OpenClaw отдаёт только cloud-провайдеры;
+  - local LM Studio модели остаются только в отдельном селекторе
+    `Модель для этого запуска (облако + local)`, где они и должны быть;
+  - сохранение глобальной цепочки больше не ловит
+    `runtime_invalid_fallback_model`.
+- `codex-cli` оформлен как отдельный provider truth/recovery контур:
+  owner panel теперь показывает `CLI OK / CLI login missing / CLI missing` и
+  имеет отдельную helper-кнопку `Login Codex CLI.command`.
+
 ## Addendum 03:38 — свежая operational truth
 
 - Controlled restart выполнен успешно через launcher.
@@ -94,12 +127,19 @@ Operational verdict:
 - `python3 -m py_compile src/userbot_bridge.py src/handlers/command_handlers.py src/config.py`
 - `pytest tests/unit/test_userbot_stream_timeouts.py tests/unit/test_userbot_buffered_stream_flow.py tests/unit/test_userbot_message_batching.py tests/unit/test_command_handlers_status.py tests/unit/test_openclaw_client.py -q`
   → `59 passed`
+- `pytest tests/unit/test_openclaw_runtime_repair.py::test_choose_target_key_prefers_paid_in_auto tests/unit/test_web_app_runtime_endpoints.py::test_provider_ui_metadata_exposes_codex_cli_helper tests/unit/test_web_app_runtime_endpoints.py::test_model_provider_action_launches_codex_cli_helper tests/unit/test_web_app_runtime_endpoints.py::test_runtime_provider_state_marks_codex_cli_as_ready_when_cli_logged_in tests/unit/test_web_app_runtime_endpoints.py::test_owner_panel_root_disables_browser_cache tests/unit/test_web_app_runtime_endpoints.py::test_owner_panel_css_disables_browser_cache -q`
+  → `6 passed`
 - live smoke через `openclaw_client.send_message_stream(...)`
   → ответ: `Краб на связи.`
 - `curl http://127.0.0.1:8080/api/health/lite`
   → `last_runtime_route.model = codex-cli/gpt-5.4`
 - owner panel `:8080`
   → блок `Рекомендовано (Routing)` показывает `codex-cli/gpt-5.4`
+- direct Google API probe через текущий рабочий env-ключ
+  → `HTTP 200`, использован ключ `AIzaSyAifJ_0...vSNy3A`
+- fresh browser acceptance `http://127.0.0.1:8080/?fresh=...`
+  → global chain editor сохраняет `codex-cli/gpt-5.4` + cloud fallbacks без
+    `runtime_invalid_fallback_model`
 
 ## Что было сделано в этой сессии
 

@@ -40,6 +40,14 @@ GEMINI_API_KEY_ENV_KEYS = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
 CORE_OAUTH_PROVIDERS = {"openai-codex"}
 
 PROVIDER_SPECS: dict[str, dict[str, Any]] = {
+    "codex-cli": {
+        "label": "Codex CLI",
+        "expected_auth": "cli",
+        "priority": 15,
+        "legacy": False,
+        "helper_name": "Login Codex CLI.command",
+        "requires_plugin": False,
+    },
     "google-gemini-cli": {
         "label": "Gemini CLI OAuth",
         "expected_auth": "oauth",
@@ -271,6 +279,42 @@ def _gemini_cli_api_key_hint() -> dict[str, Any]:
     }
 
 
+def _codex_cli_hint() -> dict[str, Any]:
+    """Проверяет, установлен ли локальный Codex CLI и подтверждён ли login."""
+    codex_bin = shutil.which("codex") or ""
+    if not codex_bin:
+        return {
+            "cli_binary_present": False,
+            "cli_binary_path": "",
+            "login_ready": False,
+            "status_text": "",
+        }
+
+    try:
+        completed = subprocess.run(
+            [codex_bin, "login", "status"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except Exception as exc:
+        return {
+            "cli_binary_present": True,
+            "cli_binary_path": str(codex_bin),
+            "login_ready": False,
+            "status_text": f"status_probe_failed:{exc}",
+        }
+
+    status_text = str(completed.stdout or completed.stderr or "").strip()
+    return {
+        "cli_binary_present": True,
+        "cli_binary_path": str(codex_bin),
+        "login_ready": completed.returncode == 0,
+        "status_text": status_text,
+    }
+
+
 def _provider_usage_flags(
     provider_name: str,
     *,
@@ -465,6 +509,13 @@ def _provider_detail(
         )
         return ("Нет ни auth-profile, ни локального Gemini store.", detail)
 
+    if provider_name == "codex-cli":
+        detail = (
+            f"{label} не подтверждён {role_human}: локальный Codex CLI либо не установлен, "
+            f"либо ещё не прошёл `codex login` на этой macOS-учётке.{helper_hint}"
+        )
+        return ("Codex CLI login на этой учётке не подтверждён.", detail)
+
     if provider_name == "openai-codex":
         detail = (
             f"{label} не подтверждён {role_human}: OAuth-профиль для `openai-codex` отсутствует. "
@@ -529,11 +580,25 @@ def _provider_recovery_entry(
         remaining_human = f"{hours}ч {minutes}м" if hours else f"{minutes}м"
     external_store_present = normalized == "google-gemini-cli" and _path_exists_safe(GEMINI_STORE_PATH)
     gemini_cli_hint = _gemini_cli_api_key_hint() if normalized == "google-gemini-cli" else {}
+    codex_cli_hint = _codex_cli_hint() if normalized == "codex-cli" else {}
 
     oauth_ready = oauth_status == "ok" or (local_counts["profile_count"] > 0 and effective_kind in {"oauth", "token"})
     state = "missing"
     severity = "warn"
     state_label = "OAuth не подтверждён"
+    if normalized == "codex-cli":
+        if bool(codex_cli_hint.get("login_ready")):
+            state = "ready"
+            severity = "ok"
+            state_label = "CLI OK"
+        elif bool(codex_cli_hint.get("cli_binary_present")):
+            state = "missing"
+            severity = "bad" if usage["role"] in {"primary", "fallback"} else "warn"
+            state_label = "CLI login missing"
+        else:
+            state = "missing"
+            severity = "bad" if usage["role"] in {"primary", "fallback"} else "warn"
+            state_label = "CLI missing"
     if oauth_ready:
         state = "ready"
         severity = "ok"
@@ -569,6 +634,8 @@ def _provider_recovery_entry(
     recommended_action_label = ""
     if helper_available:
         recommended_action_label = "Запустить one-click helper из панели"
+    elif normalized == "codex-cli" and bool(codex_cli_hint.get("cli_binary_present")):
+        recommended_action_label = "Запустить Codex CLI login helper"
     elif normalized == "google-gemini-cli" and external_store_present:
         recommended_action_label = "Синхронизировать Gemini store в OpenClaw"
 
@@ -606,6 +673,10 @@ def _provider_recovery_entry(
         "cli_binary_path": str(gemini_cli_hint.get("cli_binary_path") or ""),
         "cli_api_key_present": bool(gemini_cli_hint.get("api_key_env_present")),
         "cli_api_key_env_name": str(gemini_cli_hint.get("api_key_env_name") or ""),
+        "codex_cli_binary_present": bool(codex_cli_hint.get("cli_binary_present")),
+        "codex_cli_binary_path": str(codex_cli_hint.get("cli_binary_path") or ""),
+        "codex_cli_login_ready": bool(codex_cli_hint.get("login_ready")),
+        "codex_cli_status_text": str(codex_cli_hint.get("status_text") or ""),
     }
 
 

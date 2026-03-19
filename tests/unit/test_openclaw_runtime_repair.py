@@ -46,14 +46,14 @@ from scripts.openclaw_runtime_repair import (
 )
 
 
-def test_choose_target_key_prefers_free_in_auto() -> None:
+def test_choose_target_key_prefers_paid_in_auto() -> None:
     tier, key = choose_target_key(
         free_key="AIzaFREE1234567890123456789012345",
         paid_key="AIzaPAID1234567890123456789012345",
         tier="auto",
     )
-    assert tier == "free"
-    assert key.startswith("AIzaFREE")
+    assert tier == "paid"
+    assert key.startswith("AIzaPAID")
 
 
 def test_choose_target_key_paid_when_free_invalid() -> None:

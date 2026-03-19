@@ -14,6 +14,7 @@ import mimetypes
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -542,6 +543,18 @@ class WebApp:
                     ),
                 }
             )
+        elif normalized == "codex-cli":
+            base.update(
+                {
+                    "repair_available": bool(helper_path and helper_path.exists()),
+                    "repair_label": "Починить Codex CLI",
+                    "repair_action": "repair_oauth",
+                    "repair_detail": (
+                        "Откроет локальный helper для `codex login --device-auth` "
+                        "и покажет текущий статус CLI-сессии."
+                    ),
+                }
+            )
         return base
 
     @classmethod
@@ -924,6 +937,29 @@ class WebApp:
         auth_mode = str(provider_payload.get("auth", "") or "").strip().lower()
         api_key_configured = bool(str(provider_payload.get("apiKey", "") or "").strip())
         effective_kind = str(status_meta.get("effective_kind", "") or "").strip().lower()
+        cli_status_text = ""
+        codex_cli_present = False
+        codex_cli_logged_in = False
+        if normalized_provider == "codex-cli":
+            codex_bin = shutil.which("codex") or ""
+            codex_cli_present = bool(codex_bin)
+            if codex_cli_present:
+                try:
+                    completed = subprocess.run(
+                        [codex_bin, "login", "status"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=10,
+                    )
+                    cli_status_text = str(completed.stdout or completed.stderr or "").strip()
+                    codex_cli_logged_in = completed.returncode == 0
+                except Exception as exc:  # noqa: BLE001
+                    cli_status_text = f"codex_cli_status_failed:{exc}"
+            if not auth_mode:
+                auth_mode = "cli"
+            if not effective_kind and codex_cli_present:
+                effective_kind = "cli"
         if not auth_mode and profile_names:
             auth_mode = "oauth"
         elif not auth_mode and api_key_configured:
@@ -952,7 +988,20 @@ class WebApp:
         readiness_label = "Configured"
         detail = "Провайдер готов к выбору."
 
-        if signal_fail_code == "runtime_missing_scope_model_request":
+        if normalized_provider == "codex-cli":
+            if not codex_cli_present:
+                readiness = "blocked"
+                readiness_label = "CLI missing"
+                detail = "Локальный `codex` binary не найден в PATH текущей macOS-учётки."
+            elif codex_cli_logged_in:
+                readiness = "ready"
+                readiness_label = "CLI OK"
+                detail = cli_status_text or "Codex CLI найден и login status подтверждён."
+            else:
+                readiness = "attention"
+                readiness_label = "CLI login"
+                detail = cli_status_text or "Codex CLI найден, но login status ещё не подтверждён."
+        elif signal_fail_code == "runtime_missing_scope_model_request":
             readiness = "blocked"
             readiness_label = "Scope fail"
             observed_scopes = [
@@ -1043,7 +1092,7 @@ class WebApp:
             "detail": detail,
             "legacy": legacy,
             "effective_kind": effective_kind,
-            "effective_detail": str(status_meta.get("effective_detail", "") or "").strip(),
+            "effective_detail": cli_status_text or str(status_meta.get("effective_detail", "") or "").strip(),
             "oauth_status": oauth_status,
             "oauth_remaining_ms": oauth_remaining_ms,
             "oauth_remaining_human": oauth_remaining_human,
@@ -5868,11 +5917,27 @@ class WebApp:
         }
 
     def _setup_routes(self):
+        def _no_store_headers() -> dict[str, str]:
+            """
+            Отключает браузерный кеш для owner-панели.
+
+            Это критично для инцидентного режима: после правок фронта и рестартов
+            владелец должен видеть живую версию панели, а не старую HTML-копию из кеша.
+            """
+            return {
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+
         @self.app.get("/", response_class=HTMLResponse)
         async def index():
             if self._index_path.exists():
-                return FileResponse(self._index_path)
-            return HTMLResponse("<h1>Krab Web Panel</h1><p>index.html не найден</p>")
+                return FileResponse(self._index_path, headers=_no_store_headers())
+            return HTMLResponse(
+                "<h1>Krab Web Panel</h1><p>index.html не найден</p>",
+                headers=_no_store_headers(),
+            )
 
         @self.app.get("/nano_theme.css")
         @self.app.get("/prototypes/nano/nano_theme.css")
@@ -5884,7 +5949,11 @@ class WebApp:
             через локальный HTTP, и при старых ссылках после обновлений.
             """
             if self._nano_theme_path.exists():
-                return FileResponse(self._nano_theme_path, media_type="text/css")
+                return FileResponse(
+                    self._nano_theme_path,
+                    media_type="text/css",
+                    headers=_no_store_headers(),
+                )
             raise HTTPException(status_code=404, detail="nano_theme_css_not_found")
 
         @self.app.get("/api/stats")

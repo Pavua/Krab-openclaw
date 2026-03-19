@@ -1,5 +1,46 @@
 # Статус провайдеров — Краб (актуально на 19.03.2026)
 
+## Addendum 16:47 — что подтвердили после утреннего регресса
+
+### Gemini REST API: используется именно платный ключ
+
+- `.env` сейчас содержит три разных переменных:
+  - `GEMINI_API_KEY_PAID = AIzaSyAifJ_0...vSNy3A`
+  - `GEMINI_API_KEY_FREE = AIzaSyA07LwN...LhPUKY`
+  - `GEMINI_API_KEY = AIzaSyAifJ_0...vSNy3A`
+- `GOOGLE_API_KEY` также указывает на `AIzaSyAifJ_0...vSNy3A`.
+- Provider `google/` в `~/.openclaw/agents/main/agent/models.json` использует
+  placeholder `apiKey = GEMINI_API_KEY`, а не literal secret.
+- Direct probe `GET https://generativelanguage.googleapis.com/v1beta/models`
+  с текущим `GEMINI_API_KEY` вернул `HTTP 200`.
+
+Вывод: в текущем live-контуре REST-доступ к Gemini идёт через paid key, а не через
+free-проект.
+
+### Owner panel `:8080`: почему раньше казалось, что цепочка не сохраняется
+
+- Корень проблемы был составной:
+  1. stale cached HTML в уже открытой вкладке;
+  2. старые локальные значения могли приезжать в payload сохранения и ломать
+     валидацию fallback-цепочки.
+- Теперь на `GET /` и `GET /nano_theme.css` выставлены anti-cache заголовки:
+  - `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`
+  - `Pragma: no-cache`
+  - `Expires: 0`
+- Fresh browser acceptance подтвердил:
+  - в глобальном редакторе цепочки `runtimeChainModelSelect_*` нет локальных
+    model ids;
+  - `codex-cli/gpt-5.4` и cloud fallback-цепочка сохраняются успешно;
+  - local модели остаются только в отдельном селекторе разового запуска
+    `Модель для этого запуска (облако + local)`, что является нормой.
+
+### codex-cli provider truth
+
+- `codex-cli` теперь оформлен как отдельный provider в owner panel и recovery:
+  - статус показывает `CLI OK / CLI login missing / CLI missing`;
+  - доступна helper-кнопка `Login Codex CLI.command`;
+  - панель больше не притворяется, что это обычный OAuth provider.
+
 ## Addendum 03:52 — текущая truth после restart
 
 ### Runtime-конфиг сейчас
@@ -80,6 +121,8 @@ Fallback 3: qwen-portal/coder-model
 
 **Статус**: 💤 не в active chain  
 **Ключ**: `GOOGLE_API_KEY = GEMINI_API_KEY_PAID`  
+**Факт live-проверки**: direct REST probe сейчас отвечает `HTTP 200` с ключом
+`AIzaSyAifJ_0...vSNy3A`
 **Почему не используем автоматически**:
 - пользовательский приоритет сейчас на утилизацию уже оплаченных подписок `OpenAI Plus` и `Google AI Pro`;
 - этот путь раньше уходил в `rate_limit`;

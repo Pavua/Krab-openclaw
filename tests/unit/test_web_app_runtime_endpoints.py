@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -769,6 +770,15 @@ def test_provider_ui_metadata_allows_openai_api_key_fallback() -> None:
 
     assert metadata["manual_only"] is False
     assert "controlled fallback" in metadata["repair_detail"]
+
+
+def test_provider_ui_metadata_exposes_codex_cli_helper() -> None:
+    """Codex CLI должен отображаться как отдельный repair-путь, а не как unknown stub."""
+    metadata = WebApp._provider_ui_metadata("codex-cli")
+
+    assert metadata["manual_only"] is False
+    assert metadata["repair_action"] == "repair_oauth"
+    assert "Codex CLI" in metadata["repair_label"]
 
 
 def test_transcriber_status_is_degraded_when_local_stt_ready_but_voice_gateway_down() -> None:
@@ -2585,6 +2595,93 @@ def test_model_provider_action_launches_openai_codex_helper(monkeypatch, tmp_pat
     assert data["provider"] == "openai-codex"
     assert data["action"] == "repair_oauth"
     assert str(launched["path"]).endswith("Login OpenAI Codex OAuth.command")
+
+
+def test_model_provider_action_launches_codex_cli_helper(monkeypatch, tmp_path: Path):
+    """Owner UI должен уметь запускать one-click helper для локального Codex CLI."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+
+    helper_path = tmp_path / "Login Codex CLI.command"
+    helper_path.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    helper_path.chmod(0o755)
+
+    launched: dict[str, object] = {}
+
+    def _fake_launch(self, target_path: Path):
+        launched["path"] = str(target_path)
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "error": "",
+            "launched": True,
+            "path": str(target_path),
+        }
+
+    monkeypatch.setattr(
+        WebApp,
+        "_provider_repair_helper_path",
+        classmethod(lambda cls, provider_name: helper_path if provider_name == "codex-cli" else None),
+    )
+    monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
+
+    class _Router:
+        models = {"chat": "codex-cli/gpt-5.4"}
+        force_mode = "auto"
+
+        async def list_local_models_verbose(self):
+            return []
+
+    async def _fake_lm_snapshot(self, *args, **kwargs):
+        return {
+            "state": "idle",
+            "base_url": "http://127.0.0.1:1234",
+            "loaded_count": 0,
+            "loaded_models": [],
+            "error": "",
+        }
+
+    monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
+    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
+    monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
+
+    client = _make_client_with_router(_Router())
+    response = client.post(
+        "/api/model/provider-action",
+        headers={"X-Krab-Web-Key": "secret"},
+        json={"provider": "codex-cli", "action": "repair_oauth"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["provider"] == "codex-cli"
+    assert data["action"] == "repair_oauth"
+    assert str(launched["path"]).endswith("Login Codex CLI.command")
+
+
+def test_runtime_provider_state_marks_codex_cli_as_ready_when_cli_logged_in(monkeypatch):
+    """Codex CLI не должен проваливаться в `Unavailable`, если локальный CLI уже залогинен."""
+    monkeypatch.setattr("src.modules.web_app.shutil.which", lambda name: "/opt/homebrew/bin/codex" if name == "codex" else "")
+
+    def _fake_run(cmd, capture_output, text, check, timeout):
+        assert cmd == ["/opt/homebrew/bin/codex", "login", "status"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="Logged in using ChatGPT\n", stderr="")
+
+    monkeypatch.setattr("src.modules.web_app.subprocess.run", _fake_run)
+
+    state = WebApp._runtime_provider_state(
+        "codex-cli",
+        runtime_models={"providers": {}},
+        auth_profiles={"profiles": {}, "usageStats": {}},
+        runtime_signal_failures={},
+        status_snapshot={"providers": {}},
+    )
+
+    assert state["auth_mode"] == "cli"
+    assert state["readiness"] == "ready"
+    assert state["readiness_label"] == "CLI OK"
+    assert "Logged in using ChatGPT" in state["detail"]
 
 
 def test_model_provider_action_launches_qwen_portal_helper(monkeypatch, tmp_path: Path):
@@ -5206,3 +5303,27 @@ def test_runtime_chat_session_clear_requires_chat_id(monkeypatch: pytest.MonkeyP
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "chat_id_required"
+
+
+def test_owner_panel_root_disables_browser_cache() -> None:
+    """Корневая HTML-панель должна запрещать кеш, чтобы не оживали старые JS-версии."""
+    client = _make_client()
+
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert resp.headers["pragma"] == "no-cache"
+    assert resp.headers["expires"] == "0"
+
+
+def test_owner_panel_css_disables_browser_cache() -> None:
+    """CSS панели тоже должен приходить без кеша, чтобы UI не смешивал старые темы с новым HTML."""
+    client = _make_client()
+
+    resp = client.get("/nano_theme.css")
+
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert resp.headers["pragma"] == "no-cache"
+    assert resp.headers["expires"] == "0"
