@@ -26,6 +26,7 @@ from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
+from ..core.openclaw_runtime_models import get_runtime_primary_model
 from ..core.openclaw_workspace import append_workspace_memory_entry, recall_workspace_memory
 from ..core.openclaw_workspace import list_workspace_memory_entries
 from ..core.proactive_watch import proactive_watch
@@ -363,16 +364,35 @@ async def handle_status(bot: "KraabUserbot", message: Message) -> None:
     """Статус системы и ресурсов."""
     ram = model_manager.get_ram_usage()
     is_ok = await openclaw_client.health_check()
+    route_meta = {}
+    if hasattr(openclaw_client, "get_last_runtime_route"):
+        try:
+            route_meta = openclaw_client.get_last_runtime_route() or {}
+        except Exception:
+            route_meta = {}
+    actual_model = str(route_meta.get("model") or "").strip()
+    actual_channel = str(route_meta.get("channel") or "").strip()
+    route_status = str(route_meta.get("status") or "").strip()
+    route_error = str(route_meta.get("error_code") or "").strip()
+    declared_primary = str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "").strip()
+    effective_model = actual_model or declared_primary or "unknown"
     bar = "▓" * int(ram["percent"] / 10) + "░" * (10 - int(ram["percent"] / 10))
     text = f"""
 🦀 **Системный статус Краба**
 ---------------------------
 📡 **Gateway (OpenClaw):** {"✅ Online" if is_ok else "❌ Offline"}
-🧠 **Модель:** `{config.MODEL}`
+🧠 **Фактическая модель:** `{effective_model}`
 🎭 **Роль:** `{bot.current_role}`
 🎙️ **Голос:** `{"ВКЛ" if bot.voice_mode else "ВЫКЛ"}`
 💻 **RAM:** [{bar}] {ram["percent"]}%
 """
+    if declared_primary and declared_primary != effective_model:
+        text += f"🧭 **Primary runtime:** `{declared_primary}`\n"
+    if actual_channel:
+        text += f"🛣️ **Маршрут:** `{actual_channel}`\n"
+    if route_status and (route_status != "ok" or route_error):
+        suffix = f" / `{route_error}`" if route_error else ""
+        text += f"⚠️ **Route status:** `{route_status}`{suffix}\n"
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(text)
     else:

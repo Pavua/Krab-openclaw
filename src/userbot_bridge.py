@@ -144,6 +144,56 @@ def _resolve_openclaw_stream_timeouts(*, has_photo: bool) -> tuple[float, float]
     return first_chunk_timeout_sec, chunk_timeout_sec
 
 
+def _resolve_openclaw_buffered_response_timeout(
+    *,
+    has_photo: bool,
+    first_chunk_timeout_sec: float,
+) -> float:
+    """
+    Возвращает верхнюю границу ожидания buffered-ответа OpenClaw.
+
+    Почему нужен отдельный hard-timeout:
+    - в текущем контуре `send_message_stream()` буферизует `stream=False` ответ,
+      поэтому первый Telegram chunk приходит только после полного completion;
+    - soft-timeout первого чанка полезен как сигнал "ответ идёт слишком долго",
+      но не должен рубить ещё живую fallback-цепочку OpenClaw раньше gateway timeout;
+    - даём разумный запас сверх первого ожидания, чтобы не зависать бесконечно.
+    """
+    default_total_timeout_sec = 780.0 if has_photo else 660.0
+    return max(default_total_timeout_sec, float(first_chunk_timeout_sec or 0.0) + 60.0)
+
+
+def _build_openclaw_slow_wait_notice(*, route_model: str) -> str:
+    """
+    Формирует честное уведомление о долгом buffered-ожидании.
+
+    Сообщение намеренно объясняет, что запрос ещё жив, а userbot не завис навсегда.
+    """
+    route_line = ""
+    normalized_model = str(route_model or "").strip()
+    if normalized_model:
+        route_line = f"\nТекущий маршрут: `{normalized_model}`."
+    return (
+        "⏳ Ответ собирается дольше обычного. Продолжаю ждать fallback-цепочку OpenClaw,"
+        " не дублируй сообщение." + route_line
+    )
+
+
+def _message_unix_ts(message: Message | Any) -> float | None:
+    """
+    Возвращает unix-timestamp сообщения, если дата доступна.
+
+    Helper живёт на module-level, чтобы его было удобно использовать и в runtime,
+    и в unit-тестах без тяжёлой инициализации класса.
+    """
+    value = getattr(message, "date", None)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return float(value.timestamp())
+    return None
+
+
 class KraabUserbot:
     """
     Класс KraabUserbot.
@@ -215,6 +265,7 @@ class KraabUserbot:
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
         self._chat_processing_locks: dict[str, asyncio.Lock] = {}
+        self._batched_followup_message_ids: dict[str, dict[str, float]] = {}
         self._hidden_reasoning_traces: dict[str, dict[str, Any]] = {}
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
@@ -2690,6 +2741,220 @@ class KraabUserbot:
             locks[chat_key] = lock
         return lock
 
+    def _remember_batched_followup_message_ids(
+        self,
+        *,
+        chat_id: str,
+        message_ids: list[str],
+    ) -> None:
+        """
+        Запоминает message-id, уже поглощённые более ранним batch-запросом.
+
+        Это защищает от двойной обработки: follower handlers всё равно дойдут до
+        per-chat lock, но после этого должны тихо завершиться.
+        """
+        chat_key = str(chat_id or "").strip() or "unknown"
+        rows = getattr(self, "_batched_followup_message_ids", None)
+        if rows is None:
+            rows = {}
+            self._batched_followup_message_ids = rows
+        bucket = rows.setdefault(chat_key, {})
+        now = time.monotonic()
+        for message_id in message_ids:
+            normalized = str(message_id or "").strip()
+            if normalized:
+                bucket[normalized] = now
+
+    def _consume_batched_followup_message_id(self, *, chat_id: str, message_id: str) -> bool:
+        """
+        Возвращает True, если сообщение уже было включено в предыдущий batch.
+
+        Храним id недолго: этого достаточно, чтобы отфильтровать уже стоящие в
+        очереди handler-вызовы и не раздувать состояние бесконечно.
+        """
+        chat_key = str(chat_id or "").strip() or "unknown"
+        normalized_id = str(message_id or "").strip()
+        if not normalized_id:
+            return False
+        rows = getattr(self, "_batched_followup_message_ids", None) or {}
+        bucket = rows.get(chat_key)
+        if not bucket:
+            return False
+        now = time.monotonic()
+        ttl_sec = 600.0
+        expired = [mid for mid, saved_at in bucket.items() if now - float(saved_at or 0.0) > ttl_sec]
+        for expired_id in expired:
+            bucket.pop(expired_id, None)
+        if not bucket:
+            rows.pop(chat_key, None)
+            return False
+        matched = normalized_id in bucket
+        if matched:
+            bucket.pop(normalized_id, None)
+        if not bucket:
+            rows.pop(chat_key, None)
+        return matched
+
+    @staticmethod
+    def _extract_message_text(message: Message | Any) -> str:
+        """Возвращает текст или подпись сообщения единым способом."""
+        return str(getattr(message, "text", None) or getattr(message, "caption", None) or "")
+
+    @staticmethod
+    def _is_command_like_text(text: str) -> bool:
+        """Определяет служебные команды, которые нельзя склеивать с обычным текстом."""
+        normalized = str(text or "").lstrip()
+        return normalized[:1] in {"!", "/", "."}
+
+    def _is_private_text_batch_candidate(
+        self,
+        *,
+        message: Message | Any,
+        sender_id: int,
+    ) -> bool:
+        """
+        Решает, можно ли включать сообщение в private text-burst batch.
+
+        Склеиваем только plain-text сообщения того же отправителя:
+        команды, фото и аудио должны идти отдельным путём, иначе потеряем
+        ожидаемую семантику и управляемость.
+        """
+        message_sender_id = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+        if sender_id and message_sender_id != sender_id:
+            return False
+        if getattr(message, "photo", None) or self._message_has_audio(message):
+            return False
+        text = self._get_clean_text(self._extract_message_text(message))
+        if not text:
+            return False
+        return not self._is_command_like_text(text)
+
+    async def _coalesce_private_text_burst(
+        self,
+        *,
+        message: Message,
+        user: Any,
+        query: str,
+    ) -> tuple[Message, str]:
+        """
+        Склеивает короткую пачку private-сообщений одного отправителя в один query.
+
+        Зачем это нужно:
+        - после `!clear` пользователь часто заново передаёт контекст несколькими
+          Telegram-сообщениями из-за лимита длины;
+        - без склейки каждое сообщение уходит отдельным AI-запросом и вся очередь
+          начинает жить своей жизнью;
+        - выбираем последнюю user-message как anchor для ответа, чтобы в клиенте
+          это выглядело естественно.
+        """
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return message, normalized_query
+        chat_type = getattr(getattr(message, "chat", None), "type", None)
+        if chat_type != enums.ChatType.PRIVATE:
+            return message, normalized_query
+        if self._is_command_like_text(normalized_query):
+            return message, normalized_query
+        history_reader = getattr(self.client, "get_chat_history", None)
+        if not callable(history_reader):
+            return message, normalized_query
+
+        batch_window_sec = float(getattr(config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 1.4) or 0.0)
+        if batch_window_sec <= 0:
+            return message, normalized_query
+        await asyncio.sleep(max(0.0, batch_window_sec))
+
+        max_messages = max(1, int(getattr(config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6) or 6))
+        max_chars = max(1, int(getattr(config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000) or 12000))
+        history_limit = max(12, max_messages * 4)
+        history_rows: list[Message] = []
+        async for row in history_reader(message.chat.id, limit=history_limit):
+            history_rows.append(row)
+
+        current_message_id = int(getattr(message, "id", 0) or 0)
+        sender_id = int(getattr(user, "id", 0) or 0)
+        if current_message_id <= 0 or sender_id <= 0:
+            return message, normalized_query
+
+        ordered_rows = sorted(
+            (
+                row
+                for row in history_rows
+                if int(getattr(row, "id", 0) or 0) >= current_message_id
+            ),
+            key=lambda row: int(getattr(row, "id", 0) or 0),
+        )
+        if not ordered_rows:
+            return message, normalized_query
+
+        base_ts = _message_unix_ts(message)
+        max_gap_sec = max(batch_window_sec + 1.0, 3.0)
+        max_span_sec = max(batch_window_sec + 4.0, 6.0)
+        combined_messages: list[Message] = []
+        combined_parts: list[str] = []
+        total_chars = 0
+        current_found = False
+        previous_ts = base_ts
+
+        for row in ordered_rows:
+            row_id = int(getattr(row, "id", 0) or 0)
+            if not current_found:
+                if row_id != current_message_id:
+                    continue
+                current_found = True
+            elif len(combined_messages) >= max_messages:
+                break
+            elif not self._is_private_text_batch_candidate(message=row, sender_id=sender_id):
+                break
+
+            clean_text = normalized_query if row_id == current_message_id else self._get_clean_text(self._extract_message_text(row))
+            if not clean_text:
+                if row_id == current_message_id:
+                    return message, normalized_query
+                break
+
+            row_ts = _message_unix_ts(row)
+            if combined_messages:
+                if row_ts is not None and previous_ts is not None and (row_ts - previous_ts) > max_gap_sec:
+                    break
+                if row_ts is not None and base_ts is not None and (row_ts - base_ts) > max_span_sec:
+                    break
+
+            projected_chars = total_chars + len(clean_text) + (2 if combined_parts else 0)
+            if projected_chars > max_chars:
+                break
+
+            combined_messages.append(row if row_id != current_message_id else message)
+            combined_parts.append(clean_text)
+            total_chars = projected_chars
+            previous_ts = row_ts if row_ts is not None else previous_ts
+
+        if len(combined_messages) <= 1:
+            return message, normalized_query
+
+        absorbed_ids = [
+            str(getattr(row, "id", "") or "").strip()
+            for row in combined_messages[1:]
+            if str(getattr(row, "id", "") or "").strip()
+        ]
+        if absorbed_ids:
+            self._remember_batched_followup_message_ids(
+                chat_id=str(getattr(getattr(message, "chat", None), "id", "") or ""),
+                message_ids=absorbed_ids,
+            )
+
+        combined_query = "\n\n".join(part for part in combined_parts if part).strip()
+        anchor_message = combined_messages[-1]
+        logger.info(
+            "private_text_burst_coalesced",
+            chat_id=str(getattr(getattr(message, "chat", None), "id", "") or ""),
+            anchor_message_id=str(getattr(anchor_message, "id", "") or ""),
+            absorbed_message_ids=absorbed_ids,
+            messages_count=len(combined_messages),
+            total_chars=len(combined_query),
+        )
+        return anchor_message, combined_query
+
     async def _process_message_serialized(
         self,
         *,
@@ -2747,6 +3012,13 @@ class KraabUserbot:
             if not query:
                 await message.reply(voice_error or "❌ Не удалось распознать голосовое сообщение.")
                 return
+        elif query and not message.photo and not has_audio_message:
+            message, query = await self._coalesce_private_text_burst(
+                message=message,
+                user=user,
+                query=query,
+            )
+            text = query
         if not query and not message.photo and not has_audio_message and not is_reply_to_me:
             return
 
@@ -2963,6 +3235,10 @@ class KraabUserbot:
         first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
             has_photo=bool(images)
         )
+        buffered_response_timeout_sec = _resolve_openclaw_buffered_response_timeout(
+            has_photo=bool(images),
+            first_chunk_timeout_sec=first_chunk_timeout_sec,
+        )
         max_output_tokens = int(
             getattr(
                 config,
@@ -2994,17 +3270,114 @@ class KraabUserbot:
         )
         stream_iter = stream.__aiter__()
         received_any_chunk = False
+        started_wait_at = time.monotonic()
+        slow_first_chunk_notice_sent = False
+        next_chunk_task = asyncio.create_task(stream_iter.__anext__())
 
         while True:
-            wait_timeout = chunk_timeout_sec if received_any_chunk else first_chunk_timeout_sec
+            if received_any_chunk:
+                wait_timeout = chunk_timeout_sec
+            elif slow_first_chunk_notice_sent:
+                # После первого soft-timeout продолжаем ждать тем же коротким ритмом,
+                # не обнуляя живой buffered-запрос и не возвращаясь к исходному окну.
+                wait_timeout = chunk_timeout_sec
+            else:
+                wait_timeout = first_chunk_timeout_sec
+            elapsed_wait_sec = time.monotonic() - started_wait_at
+            remaining_total_timeout_sec = max(0.0, buffered_response_timeout_sec - elapsed_wait_sec)
+            if not received_any_chunk:
+                if remaining_total_timeout_sec <= 0.0:
+                    logger.error(
+                        "openclaw_buffered_response_timeout",
+                        chat_id=chat_id,
+                        elapsed_sec=round(elapsed_wait_sec, 3),
+                        hard_timeout_sec=buffered_response_timeout_sec,
+                        has_photo=bool(images),
+                    )
+                    route_meta = {}
+                    if hasattr(openclaw_client, "get_last_runtime_route"):
+                        try:
+                            route_meta = openclaw_client.get_last_runtime_route() or {}
+                        except Exception:
+                            route_meta = {}
+                    route_model = str(
+                        route_meta.get("model")
+                        or _current_runtime_primary_model()
+                        or getattr(config, "MODEL", "")
+                        or ""
+                    ).strip()
+                    if hasattr(openclaw_client, "_set_last_runtime_route"):
+                        try:
+                            openclaw_client._set_last_runtime_route(  # noqa: SLF001
+                                channel="error",
+                                model=route_model or "unknown",
+                                route_reason="userbot_buffered_wait_timeout",
+                                route_detail="Userbot дождался buffered OpenClaw дольше допустимого окна",
+                                status="error",
+                                error_code="first_chunk_timeout",
+                                force_cloud=force_cloud,
+                            )
+                        except Exception:
+                            pass
+                    full_response = (
+                        "❌ OpenClaw слишком долго собирает первый ответ. "
+                        "Похоже, цепочка fallback зависла или все cloud-кандидаты перегружены. "
+                        "Попробуй `!model local` или повтори запрос позже."
+                    )
+                    if next_chunk_task and not next_chunk_task.done():
+                        next_chunk_task.cancel()
+                        try:
+                            await next_chunk_task
+                        except (asyncio.CancelledError, StopAsyncIteration):
+                            pass
+                        except Exception:
+                            pass
+                    try:
+                        await stream.aclose()
+                    except Exception:
+                        pass
+                    break
+                wait_timeout = min(wait_timeout, remaining_total_timeout_sec)
             try:
-                chunk = await asyncio.wait_for(
-                    stream_iter.__anext__(),
-                    timeout=wait_timeout,
-                )
+                done, _ = await asyncio.wait({next_chunk_task}, timeout=wait_timeout)
+                if not done:
+                    raise asyncio.TimeoutError
+                chunk = next_chunk_task.result()
             except StopAsyncIteration:
                 break
             except asyncio.TimeoutError:
+                if not received_any_chunk and not slow_first_chunk_notice_sent:
+                    slow_first_chunk_notice_sent = True
+                    route_meta = {}
+                    if hasattr(openclaw_client, "get_last_runtime_route"):
+                        try:
+                            route_meta = openclaw_client.get_last_runtime_route() or {}
+                        except Exception:
+                            route_meta = {}
+                    route_model = str(
+                        route_meta.get("model")
+                        or _current_runtime_primary_model()
+                        or getattr(config, "MODEL", "")
+                        or ""
+                    ).strip()
+                    logger.warning(
+                        "openclaw_first_chunk_slow_waiting_more",
+                        chat_id=chat_id,
+                        elapsed_sec=round(time.monotonic() - started_wait_at, 3),
+                        soft_timeout_sec=first_chunk_timeout_sec,
+                        hard_timeout_sec=buffered_response_timeout_sec,
+                        route_model=route_model,
+                        has_photo=bool(images),
+                    )
+                    slow_notice = _build_openclaw_slow_wait_notice(route_model=route_model)
+                    try:
+                        if is_self:
+                            message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
+                        else:
+                            temp_msg = await self._safe_edit(temp_msg, slow_notice)
+                    except Exception:
+                        pass
+                    continue
                 logger.error(
                     "openclaw_stream_chunk_timeout",
                     chat_id=chat_id,
@@ -3015,6 +3388,14 @@ class KraabUserbot:
                 full_response = (
                     "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
                 )
+                if next_chunk_task and not next_chunk_task.done():
+                    next_chunk_task.cancel()
+                    try:
+                        await next_chunk_task
+                    except (asyncio.CancelledError, StopAsyncIteration):
+                        pass
+                    except Exception:
+                        pass
                 try:
                     await stream.aclose()
                 except Exception:
@@ -3046,6 +3427,7 @@ class KraabUserbot:
                         temp_msg = await self._safe_edit(temp_msg, display)
                 except Exception:
                     pass
+            next_chunk_task = asyncio.create_task(stream_iter.__anext__())
 
         if not full_response:
             full_response = self._extract_live_stream_text(full_response_raw, allow_reasoning=False)
@@ -3127,6 +3509,17 @@ class KraabUserbot:
                 )
             chat_id = str(message.chat.id)
             async with self._get_chat_processing_lock(chat_id):
+                if self._consume_batched_followup_message_id(
+                    chat_id=chat_id,
+                    message_id=str(getattr(message, "id", "") or ""),
+                ):
+                    logger.info(
+                        "skip_batched_followup_message",
+                        chat_id=chat_id,
+                        message_id=str(getattr(message, "id", "") or ""),
+                        user=getattr(user, "username", None),
+                    )
+                    return
                 await self._process_message_serialized(
                     message=message,
                     user=user,

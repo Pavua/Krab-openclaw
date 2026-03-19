@@ -12,14 +12,21 @@ CLAUDE.md                          ← архитектура проекта
 
 > Продолжаем работу с Краб (Telegram userbot). Ветка `fix/routing-qwen-thinking`.
 >
-> Главная проблема: GPT-5.4 через Copilot OAuth даёт 401 "Missing scopes: model.request"
-> после 1-2 сообщений. Все остальные провайдеры (Gemini 3.1 Pro, Qwen) упираются в
-> rate limit при thinking=high.
+> На момент handoff live runtime уже стабилизирован:
+> primary = `google-gemini-cli/gemini-3-flash-preview`,
+> `:8080/api/health/lite` и owner panel показывают тот же route,
+> warmup и live smoke проходят.
 >
-> Что уже исправлено: httpx.TimeoutException теперь триггерит fallback, таймаут 600s,
-> GOOGLE_API_KEY = GEMINI_API_KEY_PAID в start_krab.command, qwen перед gemini-cli-flash.
+> Что уже исправлено:
+> 1. userbot больше не обрывает buffered OpenClaw по ложному first-chunk timeout;
+> 2. `!status` теперь truthful по runtime route;
+> 3. несколько private-сообщений подряд склеиваются в один запрос;
+> 4. устранён drift `agents.defaults.model.primary` vs `agents.list[0].model`.
 >
-> Что нужно сделать дальше: [список из SESSION_HANDOFF.md]
+> Что остаётся:
+> 1. закоммитить текущие repo-правки;
+> 2. при желании отдельно чинить OAuth для `gpt-5.4`;
+> 3. вручную проверить один Telegram round-trip с recap из 2-3 сообщений подряд.
 
 ## Команды для диагностики (запустить в начале сессии)
 
@@ -33,6 +40,10 @@ tail -50 /Users/pablito/Antigravity_AGENTS/Краб/openclaw.log | grep -E "erro
 # Статус ветки
 cd /Users/pablito/Antigravity_AGENTS/Краб && git log --oneline -5
 
-# Проверить GOOGLE_API_KEY (должен быть платный)
-echo "GOOGLE_API_KEY начинается с: ${GOOGLE_API_KEY:0:10}..."
+# Проверить фактический route после warmup
+curl -s http://127.0.0.1:8080/api/health/lite | python3 - <<'PY'
+import json,sys
+data=json.load(sys.stdin)
+print(json.dumps(data.get("last_runtime_route", {}), ensure_ascii=False, indent=2))
+PY
 ```

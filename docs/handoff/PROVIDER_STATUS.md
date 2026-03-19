@@ -3,52 +3,53 @@
 ## Конфигурация OpenClaw (`~/.openclaw/openclaw.json`)
 
 ```
-Primary:    openai-codex/gpt-5.4
-Fallback 1: google/gemini-3.1-pro-preview    (thinking=high)
-Fallback 2: qwen-portal/coder-model           (thinking=high)
-Fallback 3: google-gemini-cli/gemini-3-flash-preview (thinking=xhigh)
+Primary:    google-gemini-cli/gemini-3-flash-preview
+Fallback 1: google/gemini-3.1-pro-preview
+Fallback 2: qwen-portal/coder-model
+Fallback 3: openai-codex/gpt-5.4
 ```
 
 ## Диагностика провайдеров
 
-### openai-codex (GitHub Copilot OAuth)
+### google-gemini-cli/gemini-3-flash-preview
 
-**Статус**: ❌ Падает с 401 после 1-2 успешных сообщений
-**Ошибка**: `HTTP 401: Missing scopes: model.request`
-**Причина**: Copilot OAuth-токен не включает `model.request` scope. Это не квота — это уровень подписки.
-**Как проверить**: `openclaw auth openai-codex` — посмотреть какие scopes в токене
-**Возможные решения**:
-1. Перелогиниться: `openclaw auth openai-codex --force`
-2. Проверить план GitHub Copilot (нужен Copilot Enterprise или Business с API access)
-3. Временно убрать из primary, поставить Gemini
+**Статус**: ✅ текущий рабочий primary  
+**Проверено**:
+- warmup OpenClaw проходит успешно;
+- live smoke вернул `Краб на связи.`;
+- owner panel `:8080` показывает этот же маршрут как рекомендованный.
+**Ограничение**: на очень длинных контекстах still needs observation, но после
+private message batching риск существенно ниже, чем раньше.
 
 ### google/gemini-3.1-pro-preview (REST API)
 
-**Статус**: ⚠️ Работает, но rate_limit при thinking=high
+**Статус**: ⚠️ fallback-only, уходит в `rate_limit`
 **Ключ**: `GOOGLE_API_KEY` = `GEMINI_API_KEY_PAID` (исправлено в 03.2026)
 **Предупреждение в логах**: `Both GOOGLE_API_KEY and GEMINI_API_KEY are set. Using GOOGLE_API_KEY.` — это нормально после исправления
-**Проблема**: `thinking=high` → OpenClaw делает 4 ретрая быстро → исчерпывает RPM
-**Рекомендация**: Выставить `thinking=off` для этого провайдера в fallback режиме
+**Проблема**: провайдер быстро отвечает `rate_limit`, поэтому держим его только резервом
+**Текущее значение thinking**: `off`
 
 ### qwen-portal/coder-model
 
-**Статус**: ⚠️ Работает, но rate_limit через ~4 минуты
+**Статус**: ⚠️ fallback-only, уходит в `rate_limit`
 **Аутентификация**: OAuth через `qwen-portal` profile
-**Проблема**: RPM лимит portal'а низкий + `thinking=high` увеличивает потребление
-**Рекомендация**: `thinking=low` или `thinking=off`
+**Проблема**: portal RPM лимит остаётся низким даже при `thinking=off`
 
-### google-gemini-cli/gemini-3-flash-preview
+### openai-codex/gpt-5.4
 
-**Статус**: ⚠️ Работает на малых запросах, **зависает** на больших контекстах
-**Аутентификация**: CLI OAuth `~/.gemini/` (независимо от API key)
-**Проблема**: При контексте 50+ сообщений (~31KB) зависает без ответа
-**Позиция**: Поставлен ПОСЛЕДНИМ в fallback после правки 03.2026 (был на 2-м месте)
+**Статус**: ❌ нерабочий резерв  
+**Ошибка**: `HTTP 401: Missing scopes: model.request`
+**Причина**: Copilot OAuth-токен не включает `model.request` scope. Это не квота.
+**Рекомендация**: не возвращать его в primary до отдельного auth-fix.
 
-## Рекомендуемые изменения thinking для стабильной работы
+### google-antigravity/*
 
-В `~/.openclaw/openclaw.json` выставить:
-```json
-"google/gemini-3.1-pro-preview": {"params": {"thinking": "off"}},
-"qwen-portal/coder-model": {"params": {"thinking": "off"}}
-```
-И перезапустить OpenClaw gateway. Thinking включать вручную через `!thinking on` когда действительно нужно.
+**Статус**: ⛔ исключён из live-цепочки  
+**Причина**: в текущем окружении нет usable-квоты, поэтому в runtime его не трогаем.
+
+## Что реально исправлено в этой сессии
+
+- userbot больше не рвёт buffered cloud-ответ слишком рано;
+- `!status` теперь показывает фактический route, а не stale model из конфига;
+- несколько быстрых private-сообщений одного отправителя склеиваются в один запрос;
+- runtime truth синхронизирован: gateway, health-lite и owner panel смотрят на один primary.

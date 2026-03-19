@@ -98,6 +98,20 @@ class Config:
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(
         os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420")
     )
+    # Debounce-окно для склейки нескольких private-сообщений подряд в один запрос.
+    # Почему это нужно:
+    # - Telegram режет длинный recap на несколько сообщений;
+    # - без короткого окна склейки userbot отправляет в LLM несколько отдельных задач;
+    # - это усиливает очередь, даёт ложное ощущение "зависания" и плодит таймауты.
+    TELEGRAM_MESSAGE_BATCH_WINDOW_SEC: float = float(
+        os.getenv("TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", "1.4")
+    )
+    TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES: int = int(
+        os.getenv("TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", "6")
+    )
+    TELEGRAM_MESSAGE_BATCH_MAX_CHARS: int = int(
+        os.getenv("TELEGRAM_MESSAGE_BATCH_MAX_CHARS", "12000")
+    )
     # Фото-path userbot по умолчанию всегда уводим в cloud.
     # Почему так:
     # - внешние чаты важнее держать предсказуемыми, чем экспериментировать с локальным VL;

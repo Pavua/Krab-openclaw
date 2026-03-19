@@ -80,3 +80,21 @@ def test_resolve_stream_timeouts_applies_min_bounds(monkeypatch) -> None:
     assert chunk == 15.0
     assert first >= 30.0
     assert first >= chunk
+
+
+def test_resolve_buffered_response_timeout_defaults_text() -> None:
+    total = userbot_bridge_module._resolve_openclaw_buffered_response_timeout(
+        has_photo=False,
+        first_chunk_timeout_sec=420.0,
+    )
+    assert total >= 660.0
+    assert total > 420.0
+
+
+def test_resolve_buffered_response_timeout_defaults_photo() -> None:
+    total = userbot_bridge_module._resolve_openclaw_buffered_response_timeout(
+        has_photo=True,
+        first_chunk_timeout_sec=540.0,
+    )
+    assert total >= 780.0
+    assert total > 540.0
