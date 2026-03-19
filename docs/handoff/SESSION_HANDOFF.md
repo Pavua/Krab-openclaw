@@ -1,5 +1,24 @@
 # Session Handoff — Краб 19.03.2026
 
+## Addendum 22:20 — синхронизация agent-facing инструкций
+
+- Прочитаны и приведены к одной truthful-схеме repo-level файлы:
+  - [CLAUDE.md](/Users/pablito/Antigravity_AGENTS/Краб/CLAUDE.md)
+  - [GEMINI.md](/Users/pablito/Antigravity_AGENTS/Краб/GEMINI.md)
+- Оба файла теперь явно фиксируют:
+  - что истина по runtime живёт в `~/.openclaw/*`, а не в старых repo-note;
+  - что project progress считается по
+    [MASTER_PLAN_SOURCE_OF_TRUTH.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/MASTER_PLAN_SOURCE_OF_TRUTH.md);
+  - что `Telegram userbot`, owner panel `:8080` и native dashboard `:18789`
+    имеют разную operational роль и не равны по полномочиям;
+  - что текущий live primary — `codex-cli/gpt-5.4`, а `openai-codex/gpt-5.4`
+    нельзя считать надёжным primary-маршрутом;
+  - что Google API truth надо проверять по paid-key/runtime probe, а не по
+    устным воспоминаниям.
+- Важный эффект: следующий Claude/Gemini-сеанс теперь должен намного реже
+  уезжать в устаревшую картину "LM Studio или Gemini fallback" и реже путать
+  web/dash/userbot права между собой.
+
 ## Addendum 16:47 — paid Gemini truth и cache-fix owner panel
 
 - Канонический project progress теперь привязан к master-plan, а не к локальному

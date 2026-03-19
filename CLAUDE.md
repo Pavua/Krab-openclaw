@@ -1,111 +1,169 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Этот файл даёт краткий, но truthful-контекст для Claude Code при работе
+с репозиторием `/Users/pablito/Antigravity_AGENTS/Краб`.
 
-## What this is
+Он не заменяет runtime-source-of-truth. Если этот файл расходится с живым
+runtime OpenClaw, верить нужно runtime.
 
-Краб (Krab) is a production Telegram userbot (MTProto, not Bot API) that routes messages to AI backends. It runs as the owner's personal Telegram account, not a bot token. The AI routing chain is: OpenClaw Gateway (port 18789) → LM Studio (local) or Gemini (cloud fallback).
+## Что читать первым
 
-## Commands
+Перед любыми выводами о проекте сначала прочитай:
+
+1. `/Users/pablito/Antigravity_AGENTS/Краб/AGENTS.md`
+2. `/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/MASTER_PLAN_SOURCE_OF_TRUTH.md`
+3. `/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/SESSION_HANDOFF.md`
+4. Runtime truth:
+   - `~/.openclaw/openclaw.json`
+   - `~/.openclaw/agents/main/agent/models.json`
+   - `~/.openclaw/agents/main/agent/auth-profiles.json`
+   - `~/.openclaw/workspace-main-messaging/*`
+
+Без этого нельзя честно утверждать:
+
+- какая модель сейчас primary;
+- какая fallback-цепочка реально жива;
+- есть ли у канала owner-права;
+- какой % проекта считать актуальным.
+
+## Что это за проект
+
+Краб — это не просто Telegram-бот. Это персональный Telegram userbot владельца
+на MTProto, связанный с OpenClaw Gateway, owner-панелью на `:8080`,
+нативным dashboard OpenClaw на `:18789`, голосовым и browser-контуром, плюс
+локальными и облачными AI-провайдерами.
+
+Важно различать три разных контура:
+
+- **Telegram userbot** — боевой канал доставки и owner-взаимодействия.
+- **Owner panel `http://127.0.0.1:8080`** — операционная панель Краба.
+- **Native OpenClaw dashboard `http://127.0.0.1:18789`** — нативный chat/control
+  интерфейс OpenClaw.
+
+Это **не один и тот же уровень полномочий**.
+
+## Что считать истиной по правам и каналам
+
+### Telegram userbot
+
+Это самый привилегированный практический канал. Через него доступны:
+
+- реальные входящие и исходящие owner-сообщения;
+- userbot-команды;
+- transport-поведение, близкое к боевому сценарию;
+- ACL и routing в том виде, как они важны пользователю.
+
+### Owner panel `:8080`
+
+Это truth-oriented web-панель Краба для:
+
+- health/runtime статуса;
+- routing/autoswitch;
+- ACL и provider readiness;
+- owner-oriented ops-диагностики.
+
+Но это **не замена userbot** и не доказательство, что transport в Telegram
+работает так же.
+
+### Native OpenClaw dashboard `:18789`
+
+Это нативный dashboard/чат самого OpenClaw.
+
+Он полезен для:
+
+- проверки tool activity;
+- проверки chat runtime;
+- быстрой диагностики provider/tool chain;
+- наблюдения за тем, что агент реально вызывает инструменты.
+
+Но у него **не гарантированно те же права и интеграции**, что у Telegram userbot.
+Если нужно доказать поведение боевого контура, проверяй Telegram отдельно.
+
+## Текущая truthful operational картина
+
+Актуальный baseline на `19.03.2026` нужно сверять по
+`docs/handoff/SESSION_HANDOFF.md`, но на момент синхронизации этого файла
+картина такая:
+
+- live primary: `codex-cli/gpt-5.4`
+- cloud safety fallback: `google-gemini-cli/gemini-3-flash-preview`
+- `openai-codex/gpt-5.4` оставлять только как нестабильный fallback
+- `qwen-portal/coder-model` допустим как поздний резерв, но там возможен
+  `rate_limit`
+- `google-antigravity/*` не считать live-источником: этот контур сейчас
+  намеренно исключён из рабочей цепочки
+
+### Что важно про провайдеров
+
+- `codex-cli/gpt-5.4` сейчас основной путь, если нужен маршрут через подписку
+  OpenAI Plus.
+- `openai-codex/gpt-5.4` нельзя считать надёжным production-primary:
+  он умеет отвечать, но на серии запросов деградирует по latency и route stability.
+- Google REST API должен использовать **платный** ключ, а не free-key.
+  Truth по этому вопросу проверяй через `.env`, runtime config и live probe,
+  а не по старым заметкам.
+
+## Ключевые правила работы в этом репозитории
+
+- Не дублируй нативный функционал OpenClaw, если он уже существует в runtime
+  или CLI.
+- Repo-level документация не должна притворяться боевой памятью Краба.
+- После правок в routing/runtime/UI обновляй handoff-доки, иначе следующий агент
+  начнёт работать по устаревшей картине.
+- Проценты готовности считать по master-plan из
+  `/Users/USER3/PLAN-Краб+переводчик 12.03.2026.md`,
+  а не по локальному инциденту.
+
+## Команды и запуск
+
+### Канонические macOS launchers
+
+- `/Users/pablito/Antigravity_AGENTS/new start_krab.command`
+- `/Users/pablito/Antigravity_AGENTS/new Stop Krab.command`
+- `/Users/pablito/Antigravity_AGENTS/Краб/Restart Krab.command`
+- `/Users/pablito/Antigravity_AGENTS/Краб/Start Voice Gateway.command`
+
+### Полезные локальные команды
 
 ```bash
-# Run the bot (requires .env with Telegram credentials)
 python -m src.main
-
-# Run all tests
 pytest tests/
-
-# Run a single test file
-pytest tests/unit/test_access_control.py
-
-# Run a single test
-pytest tests/unit/test_access_control.py::test_owner_can_do_everything -v
-
-# Lint
+pytest tests/unit/test_openclaw_client.py -q
 ruff check src/
-
-# Format
 ruff format src/
 ```
 
-**macOS launchers** (double-click in Finder):
-- `new start_krab.command` — canonical launcher with auto-restart, OpenClaw gateway management, watchdog
-- `new Stop Krab.command` — graceful shutdown via stop-flag
-- `Start Voice Gateway.command` — starts the Voice Gateway (separate repo at `../Krab Voice Gateway/`)
+## Что проверять после изменений
 
-**Test config** (`pyproject.toml`): `asyncio_mode = "auto"`, `addopts = "-v --tb=short"`. All tests are async-friendly via `pytest-asyncio`.
+Минимальный truthful набор:
 
-## Architecture
+1. unit-тесты по изменённому контуру;
+2. `http://127.0.0.1:8080/api/health/lite`;
+3. owner panel `:8080`;
+4. native dashboard `:18789`, если менялся chat/tool/runtime слой;
+5. Telegram owner roundtrip, если менялся userbot/transport/progress UX.
 
-### Entry point and lifecycle
+Если проблема касается model routing, дополнительно проверь:
 
-`src/main.py` → `src/bootstrap/runtime.py` manages the full lifecycle: health checks, creating `KraabUserbot` + web panel, signal handling, graceful shutdown.
+- `http://127.0.0.1:8080/api/openclaw/model-routing/status`
+- live route в `api/health/lite`
+- фактический runtime config в `~/.openclaw/*`
 
-### Message flow
+## Что сейчас считается незакрытым
 
-```
-Telegram message
-  → src/userbot_bridge.py (KraabUserbot, Pyrogram)
-      → _make_command_filter() — ACL check before handler runs
-      → src/handlers/command_handlers.py — specific command (group=-1, runs before default)
-      → default handler: src/openclaw_client.py → OpenClaw Gateway (SSE stream)
-          fallback: src/model_manager.py → LM Studio or Gemini
-```
+Не называй эти блоки «решёнными», пока нет свежего acceptance:
 
-Commands are registered in `userbot_bridge.py` with `filters.command("name", prefixes=prefixes)` at `group=-1` so they fire before the catch-all AI handler. The `prefixes` variable comes from `Config.TRIGGER_PREFIXES` (default: `!`, `/`, `,`, `@`).
+- true token streaming/partial delivery в Telegram;
+- полная предсказуемость fallback-переходов при долгом first response;
+- отдельное чистое `advanced`-окружение для `Krab Ear` под
+  `torch + torchaudio + pyannote`;
+- полное выравнивание dashboard/tool UX и Telegram progress UX.
 
-### Key modules
+## Что делать, если картина расходится
 
-| Module | Role |
-|--------|------|
-| `src/config.py` | All config — one `Config` class, env vars with fallback chains |
-| `src/userbot_bridge.py` | `KraabUserbot` Pyrogram client — command registration, ACL enforcement, session management |
-| `src/openclaw_client.py` | OpenClaw Gateway client — SSE streaming, semantic guards, fallback |
-| `src/model_manager.py` | LM Studio + Gemini routing, auto-unload idle models |
-| `src/handlers/command_handlers.py` | All `!command` handlers (one function per command) |
-| `src/modules/web_app.py` | FastAPI dashboard on port 8080 — control panel, health endpoint `/api/health/lite` |
-| `src/core/access_control.py` | ACL — `AccessLevel.OWNER/FULL/PARTIAL/GUEST`, `OWNER_ONLY_COMMANDS` set |
-| `src/core/scheduler.py` | Reminder scheduler (cron-like, persisted) |
-| `src/core/inbox_service.py` | Multi-chat inbox state machine |
-| `src/integrations/macos_automation.py` | macOS AppleScript automation via `osascript` |
-| `src/integrations/browser_bridge.py` | Playwright CDP bridge to existing Chrome at `localhost:9222` |
-| `src/modules/perceptor.py` | STT via Voice Gateway `/stt` endpoint |
+Если этот файл, handoff, owner panel и runtime показывают разное:
 
-### Configuration critical details
-
-`Config.GEMINI_API_KEY` resolution order: `GEMINI_API_KEY_PAID` → `GEMINI_API_KEY` → `GEMINI_API_KEY_FREE`. Use the paid key to avoid RPM-throttle silent timeouts that look like provider failures but aren't 429s.
-
-`TELEGRAM_ALLOW_INTERACTIVE_LOGIN` defaults to `0`. Interactive Telegram re-login must be done via `telegram_relogin.command`, not through the regular startup path.
-
-OpenClaw Gateway config at `~/.openclaw/openclaw.json` is only read at gateway startup — changes require a gateway restart (not just a Краб restart).
-
-### ACL system
-
-Every command handler checks ACL before executing. The flow: `_make_command_filter(cmd_name)` → checks if `cmd_name in OWNER_ONLY_COMMANDS` → if owner message, allow; else check `AccessLevel`. Adding a new owner-only command requires adding it to `OWNER_ONLY_COMMANDS` in `src/core/access_control.py`.
-
-### Adding a new command
-
-1. Add handler function `async def handle_foo(bot, message)` to `src/handlers/command_handlers.py`
-2. Export it from `src/handlers/__init__.py`
-3. Register in `userbot_bridge.py` `_setup_routes()`: `@self.client.on_message(filters.command("foo", prefixes=prefixes) & _make_command_filter("foo"), group=-1)`
-4. If owner-only, add `"foo"` to `OWNER_ONLY_COMMANDS` in `src/core/access_control.py`
-
-### Translator stack
-
-`src/core/translator_runtime_profile.py` — persisted settings (language pair, mode, voice strategy). `src/core/translator_session_state.py` — per-session state. Both are JSON-backed via `data/translator/`. The `KraabUserbot.update_translator_runtime_profile(**changes, persist=True)` method is the canonical write path.
-
-### Testing patterns
-
-Tests mock external services (Telegram, LM Studio, OpenClaw). Key fixtures in `tests/unit/conftest.py`. The `tests/unit/test_userbot_startup.py` is the closest thing to an integration smoke test without live Telegram credentials.
-
-### Runtime state files
-
-Lock files, PID files, and stop-flags live in `~/.openclaw/krab_runtime_state/` (not in the repo). The repo root has `data/` for persisted app state (translator profiles, scheduler reminders, sessions).
-
-## Conventions
-
-- All comments, docstrings, and log messages are in Russian (Cyrillic).
-- Logging uses `structlog` with keyword arguments: `logger.info("event_name", key=value)`. No f-string interpolation in log calls.
-- Exceptions: `KrabError` hierarchy in `src/core/exceptions.py`. `UserInputError` for user-facing validation (renders as Telegram reply). `ProviderError` for AI backend failures.
-- `from __future__ import annotations` at top of every module (Python 3.11+ deferred evaluation).
-- Async throughout — no blocking I/O in handlers. Use `asyncio.create_subprocess_exec` not `subprocess.run` for shell commands.
+1. сначала верь `~/.openclaw/*`;
+2. затем верь live endpoints (`:8080/api/...`);
+3. затем обновляй docs;
+4. и только потом делай выводы о регрессии.
