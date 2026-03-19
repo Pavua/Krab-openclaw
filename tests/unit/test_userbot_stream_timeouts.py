@@ -129,3 +129,27 @@ def test_resolve_progress_notice_schedule_respects_overrides(monkeypatch) -> Non
     )
     assert initial == 12.0
     assert repeat == 33.0
+
+
+def test_build_openclaw_progress_wait_notice_reflects_current_attempt() -> None:
+    notice = userbot_bridge_module._build_openclaw_progress_wait_notice(
+        route_model="google-gemini-cli/gemini-3-flash-preview",
+        attempt=2,
+        elapsed_sec=335.0,
+        notice_index=3,
+    )
+    assert "Текущий маршрут" in notice
+    assert "google-gemini-cli/gemini-3-flash-preview" in notice
+    assert "попытка `2`" in notice
+    assert "fallback активен" in notice
+    assert "Стартовый маршрут" not in notice
+
+
+def test_build_openclaw_slow_wait_notice_uses_route_line() -> None:
+    notice = userbot_bridge_module._build_openclaw_slow_wait_notice(
+        route_model="codex-cli/gpt-5.4",
+        attempt=2,
+    )
+    assert "Текущий маршрут" in notice
+    assert "codex-cli/gpt-5.4" in notice
+    assert "попытка `2`" in notice

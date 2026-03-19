@@ -195,6 +195,7 @@ def _resolve_openclaw_progress_notice_schedule(
 def _build_openclaw_progress_wait_notice(
     *,
     route_model: str,
+    attempt: int | None,
     elapsed_sec: float,
     notice_index: int,
 ) -> str:
@@ -203,10 +204,10 @@ def _build_openclaw_progress_wait_notice(
 
     Текст намеренно честный: не обещает скорый ответ, а объясняет стадию работы.
     """
-    route_line = ""
-    normalized_model = str(route_model or "").strip()
-    if normalized_model:
-        route_line = f"\nСтартовый маршрут: `{normalized_model}`."
+    route_line = _build_openclaw_route_notice_line(
+        route_model=route_model,
+        attempt=attempt,
+    )
     elapsed_label = max(1, int(round(float(elapsed_sec or 0.0))))
     if notice_index <= 1:
         lead = "🛠️ Запрос в работе: контекст собран, жду первый ответ от модели."
@@ -214,24 +215,48 @@ def _build_openclaw_progress_wait_notice(
         lead = "🛠️ Запрос всё ещё в работе: первый ответ пока не пришёл, но маршрут жив."
     return (
         f"{lead}\nПрошло: ~{elapsed_label} сек. Не дублируй сообщение."
+        "\nЕсли маршрут превысит свой budget ожидания, Краб автоматически перейдёт к следующему fallback."
         f"{route_line}"
     )
 
 
-def _build_openclaw_slow_wait_notice(*, route_model: str) -> str:
+def _build_openclaw_slow_wait_notice(*, route_model: str, attempt: int | None) -> str:
     """
     Формирует честное уведомление о долгом buffered-ожидании.
 
     Сообщение намеренно объясняет, что запрос ещё жив, а userbot не завис навсегда.
     """
-    route_line = ""
-    normalized_model = str(route_model or "").strip()
-    if normalized_model:
-        route_line = f"\nТекущий маршрут: `{normalized_model}`."
+    route_line = _build_openclaw_route_notice_line(
+        route_model=route_model,
+        attempt=attempt,
+    )
     return (
         "⏳ Ответ собирается дольше обычного. Продолжаю ждать fallback-цепочку OpenClaw,"
         " не дублируй сообщение." + route_line
     )
+
+
+def _build_openclaw_route_notice_line(*, route_model: str, attempt: int | None) -> str:
+    """
+    Формирует truthful-строку о текущем маршруте buffered-запроса.
+
+    Почему это отдельно:
+    - Telegram notice должен показывать не только стартовую модель, но и
+      фактическую текущую попытку fallback-цепочки;
+    - одна и та же логика нужна и для ранних progress-notice, и для slow-wait notice.
+    """
+    normalized_model = str(route_model or "").strip()
+    normalized_attempt = int(attempt or 0) or None
+    parts: list[str] = []
+    if normalized_model:
+        parts.append(f"Текущий маршрут: `{normalized_model}`")
+    if normalized_attempt:
+        parts.append(f"попытка `{normalized_attempt}`")
+        if normalized_attempt > 1:
+            parts.append("fallback активен")
+    if not parts:
+        return ""
+    return "\n" + " · ".join(parts) + "."
 
 
 def _message_unix_ts(message: Message | Any) -> float | None:
@@ -3443,6 +3468,7 @@ class KraabUserbot:
                             or getattr(config, "MODEL", "")
                             or ""
                         ).strip()
+                        route_attempt = int(route_meta.get("attempt") or 0) or None
                         logger.warning(
                             "openclaw_first_chunk_slow_waiting_more",
                             chat_id=chat_id,
@@ -3450,9 +3476,13 @@ class KraabUserbot:
                             soft_timeout_sec=first_chunk_timeout_sec,
                             hard_timeout_sec=buffered_response_timeout_sec,
                             route_model=route_model,
+                            route_attempt=route_attempt,
                             has_photo=bool(images),
                         )
-                        slow_notice = _build_openclaw_slow_wait_notice(route_model=route_model)
+                        slow_notice = _build_openclaw_slow_wait_notice(
+                            route_model=route_model,
+                            attempt=route_attempt,
+                        )
                         try:
                             if is_self:
                                 message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
@@ -3475,6 +3505,7 @@ class KraabUserbot:
                             or getattr(config, "MODEL", "")
                             or ""
                         ).strip()
+                        route_attempt = int(route_meta.get("attempt") or 0) or None
                         progress_notice_count += 1
                         logger.info(
                             "openclaw_first_chunk_progress_notice",
@@ -3482,10 +3513,12 @@ class KraabUserbot:
                             elapsed_sec=round(elapsed_wait_sec, 3),
                             notice_index=progress_notice_count,
                             route_model=route_model,
+                            route_attempt=route_attempt,
                             has_photo=bool(images),
                         )
                         progress_notice = _build_openclaw_progress_wait_notice(
                             route_model=route_model,
+                            attempt=route_attempt,
                             elapsed_sec=elapsed_wait_sec,
                             notice_index=progress_notice_count,
                         )

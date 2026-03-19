@@ -1,5 +1,51 @@
 # Session Handoff — Краб 19.03.2026
 
+## Addendum 00:05 — low-quota checkpoint и truthful fallback evidence
+
+- Последняя локальная правка в `src/userbot_bridge.py` сделала progress-notice
+  честнее:
+  - вместо старого текста `Стартовый маршрут` Telegram теперь получает строку
+    вида `Текущий маршрут: ... · попытка 2 · fallback активен`;
+  - тот же truthful route-line теперь используется и в slow-wait notice.
+- Для этого добавлен helper `_build_openclaw_route_notice_line(...)` и
+  unit-покрытие в `tests/unit/test_userbot_stream_timeouts.py`.
+- Проверка после правки:
+  - `python3 -m py_compile src/userbot_bridge.py`
+  - `pytest -q tests/unit/test_userbot_stream_timeouts.py`
+    → `11 passed`
+  - ранее целевой набор regressions для userbot/OpenClaw уже проходил:
+    `64 passed`
+
+### Что показала живая runtime truth прямо перед checkpoint
+
+- `curl http://127.0.0.1:8080/api/health/lite`
+  показал:
+  - `provider = google-gemini-cli`
+  - `model = google-gemini-cli/gemini-3-flash-preview`
+  - `status = pending`
+  - `attempt = 2`
+- Это означает, что live-route действительно уже ушёл на fallback, а не просто
+  "залип" в UI.
+
+### Что подтвердил tail `openclaw.log`
+
+- Для реального owner-запроса цепочка деградировала так:
+  1. `codex-cli/gpt-5.4` → `candidate_failed`, причина `rate_limit`
+  2. `google-gemini-cli/gemini-3-flash-preview` → `embedded run timeout`
+  3. `openai-codex/gpt-5.4` → `401 missing scopes: model.request`
+  4. `qwen-portal/coder-model` → OAuth refresh token expired
+- То есть current incident picture честная и воспроизводимая:
+  fallback не сломан как механизм, но часть кандидатов operationally деградирует
+  по разным причинам.
+
+### Вывод checkpoint
+
+- Текущий Telegram notice теперь лучше объясняет, что происходит под капотом,
+  но true token-streaming ещё не внедрён.
+- Для следующего чата уже можно опираться не на догадку "Краб молчит", а на
+  зафиксированный факт: route/attempt и причины падения кандидатов уже видны в
+  runtime truth и в handoff.
+
 ## Addendum 22:20 — синхронизация agent-facing инструкций
 
 - Прочитаны и приведены к одной truthful-схеме repo-level файлы:
