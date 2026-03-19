@@ -75,7 +75,7 @@ class OpenClawClient:
         self.base_url = config.OPENCLAW_URL.rstrip("/")
         self.token = config.OPENCLAW_TOKEN
         self._http_client = httpx.AsyncClient(
-            timeout=180.0,
+            timeout=httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
