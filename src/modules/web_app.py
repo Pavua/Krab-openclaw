@@ -39,6 +39,7 @@ from src.core.access_control import (  # noqa: E402
 )
 from src.core.auth_recovery_readiness import (  # noqa: E402
     build_auth_recovery_readiness_snapshot,
+    provider_oauth_scope_truth,
     provider_repair_helper_path,
 )
 from src.core.capability_registry import (  # noqa: E402
@@ -856,6 +857,10 @@ class WebApp:
         if not isinstance(status_providers, dict):
             status_providers = {}
         status_meta = status_providers.get(normalized_provider) if isinstance(status_providers.get(normalized_provider), dict) else {}
+        scope_truth = provider_oauth_scope_truth(
+            normalized_provider,
+            auth_profiles if isinstance(auth_profiles, dict) else {},
+        )
 
         profile_names = [
             profile_name
@@ -950,7 +955,16 @@ class WebApp:
         if signal_fail_code == "runtime_missing_scope_model_request":
             readiness = "blocked"
             readiness_label = "Scope fail"
-            detail = "Runtime фиксирует `Missing scopes: model.request`; OAuth-модели видны, но как primary сейчас неработоспособны."
+            observed_scopes = [
+                str(item or "").strip()
+                for item in (scope_truth.get("scopes") or [])
+                if str(item or "").strip()
+            ]
+            scopes_label = ", ".join(observed_scopes) if observed_scopes else "не раскрыты"
+            detail = (
+                "Runtime фиксирует `Missing scopes: model.request`; OAuth-модели видны, "
+                f"но как primary сейчас неработоспособны. Локальные scopes: `{scopes_label}`."
+            )
         elif not healthy_profiles and disabled_profiles:
             readiness = "blocked"
             readiness_label = "Disabled"
@@ -1033,6 +1047,9 @@ class WebApp:
             "oauth_status": oauth_status,
             "oauth_remaining_ms": oauth_remaining_ms,
             "oauth_remaining_human": oauth_remaining_human,
+            "observed_scopes": list(scope_truth.get("scopes") or []),
+            "scope_truth_available": bool(scope_truth.get("scope_truth_available")),
+            "has_model_request_scope": bool(scope_truth.get("has_model_request")),
             "quota_state": str(quota_truth.get("quota_state", "unknown") or "unknown"),
             "quota_label": str(quota_truth.get("quota_label", "") or ""),
         }

@@ -23,6 +23,7 @@ Read-only диагностика auth/runtime recovery для текущей mac
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -334,6 +335,60 @@ def _provider_profile_counts(provider_name: str, auth_profiles_payload: dict[str
     }
 
 
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    """Декодирует payload JWT без валидации подписи для read-only scope-диагностики."""
+    raw = str(token or "").strip()
+    if raw.count(".") < 2:
+        return {}
+    try:
+        payload = raw.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8"))
+        parsed = json.loads(decoded.decode("utf-8"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_scope_values(raw: Any) -> set[str]:
+    """Приводит scope-представление к множеству строковых значений."""
+    if isinstance(raw, str):
+        return {item for item in raw.replace(",", " ").split() if item}
+    if isinstance(raw, (list, tuple, set)):
+        return {
+            str(item or "").strip()
+            for item in raw
+            if str(item or "").strip()
+        }
+    return set()
+
+
+def provider_oauth_scope_truth(provider_name: str, auth_profiles_payload: dict[str, Any]) -> dict[str, Any]:
+    """Возвращает truthful срез scopes из локальных OAuth-профилей провайдера."""
+    normalized = str(provider_name or "").strip().lower()
+    scopes: set[str] = set()
+    matched_profiles: list[str] = []
+    for key, payload in _iter_profile_entries(auth_profiles_payload):
+        provider = str(payload.get("provider", "") or "").strip().lower()
+        if provider != normalized and not key.startswith(f"{normalized}:"):
+            continue
+        matched_profiles.append(str(key or "").strip())
+        scopes.update(_normalize_scope_values(payload.get("scope")))
+        scopes.update(_normalize_scope_values(payload.get("scopes")))
+        for token_key in ("access", "accessToken", "token"):
+            token_payload = _decode_jwt_payload(str(payload.get(token_key, "") or "").strip())
+            scopes.update(_normalize_scope_values(token_payload.get("scope")))
+            scopes.update(_normalize_scope_values(token_payload.get("scp")))
+
+    ordered_scopes = sorted(scopes)
+    return {
+        "profiles": matched_profiles,
+        "scopes": ordered_scopes,
+        "scope_truth_available": bool(matched_profiles),
+        "has_model_request": "model.request" in scopes,
+    }
+
+
 def _provider_detail(
     provider_name: str,
     *,
@@ -453,6 +508,7 @@ def _provider_recovery_entry(
     provider_plugin_available = (normalized in CORE_OAUTH_PROVIDERS) or (normalized in loaded_plugin_providers) or not requires_plugin
     helper_available = bool(helper_path and _path_exists_safe(helper_path) and provider_plugin_available)
     local_counts = _provider_profile_counts(normalized, auth_profiles_payload)
+    scope_truth = provider_oauth_scope_truth(normalized, auth_profiles_payload)
     usage = _provider_usage_flags(
         normalized,
         status_payload=status_payload,
@@ -532,6 +588,9 @@ def _provider_recovery_entry(
         "effective_detail": effective_detail,
         "oauth_status": oauth_status or "missing",
         "oauth_remaining_human": remaining_human,
+        "observed_scopes": list(scope_truth.get("scopes") or []),
+        "scope_truth_available": bool(scope_truth.get("scope_truth_available")),
+        "has_model_request_scope": bool(scope_truth.get("has_model_request")),
         "profile_count": int(local_counts["profile_count"]),
         "usage_stats_count": int(local_counts["usage_count"]),
         "allowed_models": list(usage.get("allowed_models") or []),

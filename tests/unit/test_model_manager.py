@@ -263,9 +263,11 @@ async def test_get_best_model_photo_falls_back_to_cloud_when_no_local_vision_is_
 
 
 def test_is_local_model_treats_openai_codex_as_cloud(manager: ModelManager) -> None:
-    """OpenAI/Codex runtime IDs не должны маскироваться под локальные LM Studio модели."""
+    """OpenAI/Codex и CLI backend IDs не должны маскироваться под локальные LM Studio модели."""
     assert manager.is_local_model("openai-codex/gpt-5.4") is False
     assert manager.is_local_model("openai/gpt-4o-mini") is False
+    assert manager.is_local_model("codex-cli/gpt-5.4") is False
+    assert manager.is_local_model("claude-cli/opus-4.6") is False
     assert manager.is_local_model("google-antigravity/gemini-3.1-pro-preview") is False
     assert manager.is_local_model("google-gemini-cli/gemini-3.1-pro-preview") is False
     assert manager.is_local_model("qwen-portal/coder-model") is False

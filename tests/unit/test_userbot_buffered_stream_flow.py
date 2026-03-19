@@ -119,6 +119,11 @@ async def test_text_route_waits_past_first_chunk_soft_timeout(monkeypatch: pytes
     )
     monkeypatch.setattr(
         userbot_bridge_module,
+        "_resolve_openclaw_progress_notice_schedule",
+        lambda **kwargs: (0.01, 0.05),
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module,
         "_build_openclaw_slow_wait_notice",
         lambda **kwargs: "SLOW_NOTICE",
     )

@@ -13,20 +13,23 @@ CLAUDE.md                          ← архитектура проекта
 > Продолжаем работу с Краб (Telegram userbot). Ветка `fix/routing-qwen-thinking`.
 >
 > На момент handoff live runtime уже стабилизирован:
-> primary = `google-gemini-cli/gemini-3-flash-preview`,
+> primary = `codex-cli/gpt-5.4`,
+> fallback chain = `google-gemini-cli/gemini-3-flash-preview` -> `openai-codex/gpt-5.4` -> `qwen-portal/coder-model`,
 > `:8080/api/health/lite` и owner panel показывают тот же route,
-> warmup и live smoke проходят.
+> warmup проходит, а Codex CLI переживает restart без выпадения из runtime truth.
 >
 > Что уже исправлено:
 > 1. userbot больше не обрывает buffered OpenClaw по ложному first-chunk timeout;
 > 2. `!status` теперь truthful по runtime route;
 > 3. несколько private-сообщений подряд склеиваются в один запрос;
-> 4. устранён drift `agents.defaults.model.primary` vs `agents.list[0].model`.
+> 4. устранён drift `agents.defaults.model.primary` vs `agents.list[0].model`;
+> 5. `codex-cli/*` больше не путается с локальным LM Studio путём;
+> 6. userbot начал отправлять ранние тех-уведомления, что запрос жив и модель всё ещё думает.
 >
 > Что остаётся:
 > 1. закоммитить текущие repo-правки;
-> 2. при желании отдельно чинить OAuth для `gpt-5.4`;
-> 3. вручную проверить один Telegram round-trip с recap из 2-3 сообщений подряд.
+> 2. вручную проверить живой Telegram round-trip на пачке из 2-3 сообщений подряд;
+> 3. отдельно решить, оставляем ли `openai-codex/gpt-5.4` в fallback chain после дальнейших наблюдений.
 
 ## Команды для диагностики (запустить в начале сессии)
 

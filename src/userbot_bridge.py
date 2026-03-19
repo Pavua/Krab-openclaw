@@ -163,6 +163,61 @@ def _resolve_openclaw_buffered_response_timeout(
     return max(default_total_timeout_sec, float(first_chunk_timeout_sec or 0.0) + 60.0)
 
 
+def _resolve_openclaw_progress_notice_schedule(
+    *,
+    has_photo: bool,
+    first_chunk_timeout_sec: float,
+) -> tuple[float, float]:
+    """
+    Возвращает (initial_sec, repeat_sec) для ранних тех-уведомлений userbot.
+
+    Почему это вынесено отдельно:
+    - hard/soft-timeout отвечают за устойчивость транспорта;
+    - progress-notice отвечает за UX ожидания и не должен зависеть от 7-минутного окна.
+    """
+    if has_photo:
+        initial_key = "OPENCLAW_PHOTO_PROGRESS_NOTICE_INITIAL_SEC"
+        repeat_key = "OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC"
+        default_initial_sec = 30.0
+        default_repeat_sec = 60.0
+    else:
+        initial_key = "OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC"
+        repeat_key = "OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC"
+        default_initial_sec = 20.0
+        default_repeat_sec = 45.0
+    initial_sec = float(getattr(config, initial_key, default_initial_sec))
+    repeat_sec = float(getattr(config, repeat_key, default_repeat_sec))
+    initial_sec = max(5.0, min(float(first_chunk_timeout_sec or 0.0), initial_sec))
+    repeat_sec = max(15.0, repeat_sec)
+    return initial_sec, repeat_sec
+
+
+def _build_openclaw_progress_wait_notice(
+    *,
+    route_model: str,
+    elapsed_sec: float,
+    notice_index: int,
+) -> str:
+    """
+    Формирует раннее тех-уведомление о том, что buffered-запрос всё ещё жив.
+
+    Текст намеренно честный: не обещает скорый ответ, а объясняет стадию работы.
+    """
+    route_line = ""
+    normalized_model = str(route_model or "").strip()
+    if normalized_model:
+        route_line = f"\nСтартовый маршрут: `{normalized_model}`."
+    elapsed_label = max(1, int(round(float(elapsed_sec or 0.0))))
+    if notice_index <= 1:
+        lead = "🛠️ Запрос в работе: контекст собран, жду первый ответ от модели."
+    else:
+        lead = "🛠️ Запрос всё ещё в работе: первый ответ пока не пришёл, но маршрут жив."
+    return (
+        f"{lead}\nПрошло: ~{elapsed_label} сек. Не дублируй сообщение."
+        f"{route_line}"
+    )
+
+
 def _build_openclaw_slow_wait_notice(*, route_model: str) -> str:
     """
     Формирует честное уведомление о долгом buffered-ожидании.
@@ -3057,9 +3112,14 @@ class KraabUserbot:
 
         temp_msg = message
         if not is_self:
-            temp_msg = await message.reply("🦀 ...")
+            temp_msg = await message.reply(
+                "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут..."
+            )
         else:
-            message = await self._safe_edit(message, f"🦀 {query}\n\n⏳ *Думаю...*")
+            message = await self._safe_edit(
+                message,
+                f"🦀 {query}\n\n🛠️ Собираю контекст и запускаю маршрут...",
+            )
 
         if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
             runtime_text = await self._build_runtime_truth_status(
@@ -3239,6 +3299,12 @@ class KraabUserbot:
             has_photo=bool(images),
             first_chunk_timeout_sec=first_chunk_timeout_sec,
         )
+        progress_notice_initial_sec, progress_notice_repeat_sec = (
+            _resolve_openclaw_progress_notice_schedule(
+                has_photo=bool(images),
+                first_chunk_timeout_sec=first_chunk_timeout_sec,
+            )
+        )
         max_output_tokens = int(
             getattr(
                 config,
@@ -3272,6 +3338,11 @@ class KraabUserbot:
         received_any_chunk = False
         started_wait_at = time.monotonic()
         slow_first_chunk_notice_sent = False
+        progress_notice_count = 0
+        next_progress_notice_sec = float(progress_notice_initial_sec)
+        startup_route_model = str(
+            _current_runtime_primary_model() or getattr(config, "MODEL", "") or ""
+        ).strip()
         next_chunk_task = asyncio.create_task(stream_iter.__anext__())
 
         while True:
@@ -3337,6 +3408,16 @@ class KraabUserbot:
                     except Exception:
                         pass
                     break
+                if not slow_first_chunk_notice_sent:
+                    wait_timeout = min(
+                        wait_timeout,
+                        max(0.0, first_chunk_timeout_sec - elapsed_wait_sec),
+                    )
+                if next_progress_notice_sec > 0.0:
+                    wait_timeout = min(
+                        wait_timeout,
+                        max(0.0, next_progress_notice_sec - elapsed_wait_sec),
+                    )
                 wait_timeout = min(wait_timeout, remaining_total_timeout_sec)
             try:
                 done, _ = await asyncio.wait({next_chunk_task}, timeout=wait_timeout)
@@ -3346,38 +3427,77 @@ class KraabUserbot:
             except StopAsyncIteration:
                 break
             except asyncio.TimeoutError:
+                elapsed_wait_sec = time.monotonic() - started_wait_at
                 if not received_any_chunk and not slow_first_chunk_notice_sent:
-                    slow_first_chunk_notice_sent = True
-                    route_meta = {}
-                    if hasattr(openclaw_client, "get_last_runtime_route"):
+                    if elapsed_wait_sec >= float(first_chunk_timeout_sec) - 1e-6:
+                        slow_first_chunk_notice_sent = True
+                        route_meta = {}
+                        if hasattr(openclaw_client, "get_last_runtime_route"):
+                            try:
+                                route_meta = openclaw_client.get_last_runtime_route() or {}
+                            except Exception:
+                                route_meta = {}
+                        route_model = str(
+                            route_meta.get("model")
+                            or startup_route_model
+                            or getattr(config, "MODEL", "")
+                            or ""
+                        ).strip()
+                        logger.warning(
+                            "openclaw_first_chunk_slow_waiting_more",
+                            chat_id=chat_id,
+                            elapsed_sec=round(elapsed_wait_sec, 3),
+                            soft_timeout_sec=first_chunk_timeout_sec,
+                            hard_timeout_sec=buffered_response_timeout_sec,
+                            route_model=route_model,
+                            has_photo=bool(images),
+                        )
+                        slow_notice = _build_openclaw_slow_wait_notice(route_model=route_model)
                         try:
-                            route_meta = openclaw_client.get_last_runtime_route() or {}
+                            if is_self:
+                                message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
+                            else:
+                                temp_msg = await self._safe_edit(temp_msg, slow_notice)
                         except Exception:
-                            route_meta = {}
-                    route_model = str(
-                        route_meta.get("model")
-                        or _current_runtime_primary_model()
-                        or getattr(config, "MODEL", "")
-                        or ""
-                    ).strip()
-                    logger.warning(
-                        "openclaw_first_chunk_slow_waiting_more",
-                        chat_id=chat_id,
-                        elapsed_sec=round(time.monotonic() - started_wait_at, 3),
-                        soft_timeout_sec=first_chunk_timeout_sec,
-                        hard_timeout_sec=buffered_response_timeout_sec,
-                        route_model=route_model,
-                        has_photo=bool(images),
-                    )
-                    slow_notice = _build_openclaw_slow_wait_notice(route_model=route_model)
-                    try:
-                        if is_self:
-                            message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
-                        else:
-                            temp_msg = await self._safe_edit(temp_msg, slow_notice)
-                    except Exception:
-                        pass
-                    continue
+                            pass
+                        continue
+                if not received_any_chunk and next_progress_notice_sec > 0.0:
+                    if elapsed_wait_sec >= next_progress_notice_sec - 1e-6:
+                        route_meta = {}
+                        if hasattr(openclaw_client, "get_last_runtime_route"):
+                            try:
+                                route_meta = openclaw_client.get_last_runtime_route() or {}
+                            except Exception:
+                                route_meta = {}
+                        route_model = str(
+                            route_meta.get("model")
+                            or startup_route_model
+                            or getattr(config, "MODEL", "")
+                            or ""
+                        ).strip()
+                        progress_notice_count += 1
+                        logger.info(
+                            "openclaw_first_chunk_progress_notice",
+                            chat_id=chat_id,
+                            elapsed_sec=round(elapsed_wait_sec, 3),
+                            notice_index=progress_notice_count,
+                            route_model=route_model,
+                            has_photo=bool(images),
+                        )
+                        progress_notice = _build_openclaw_progress_wait_notice(
+                            route_model=route_model,
+                            elapsed_sec=elapsed_wait_sec,
+                            notice_index=progress_notice_count,
+                        )
+                        try:
+                            if is_self:
+                                message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
+                            else:
+                                temp_msg = await self._safe_edit(temp_msg, progress_notice)
+                        except Exception:
+                            pass
+                        next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
+                        continue
                 logger.error(
                     "openclaw_stream_chunk_timeout",
                     chat_id=chat_id,

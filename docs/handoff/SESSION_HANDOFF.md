@@ -1,5 +1,72 @@
 # Session Handoff — Краб 19.03.2026
 
+## Addendum 03:38 — свежая operational truth
+
+- Controlled restart выполнен успешно через launcher.
+- Текущий live primary после restart: `codex-cli/gpt-5.4`.
+- `curl http://127.0.0.1:8080/api/health/lite`
+  показывает `last_runtime_route.provider = codex-cli`,
+  `last_runtime_route.model = codex-cli/gpt-5.4`.
+- `curl http://127.0.0.1:8080/api/openclaw/model-routing/status`
+  показывает:
+  - `current_primary = codex-cli/gpt-5.4`
+  - `current_fallbacks = google-gemini-cli/gemini-3-flash-preview -> openai-codex/gpt-5.4 -> qwen-portal/coder-model`
+  - `live_active_model = codex-cli/gpt-5.4`
+
+## Addendum 03:52 — UX ожидания и owner panel truth
+
+- В `userbot_bridge` добавлены ранние тех-уведомления до hard-timeout:
+  userbot заранее сообщает, что запрос жив, контекст собран и модель всё ещё думает.
+- Controlled restart после этой правки прошёл успешно.
+- `curl http://127.0.0.1:8080/api/health/lite`
+  после restart показывает `last_runtime_route.model = codex-cli/gpt-5.4`.
+- Owner panel `http://127.0.0.1:8080` после `Sync Data`
+  показывает `Рекомендовано (Routing) = codex-cli/gpt-5.4`
+  и ту же глобальную цепочку, что и runtime.
+
+### Что изменилось по сравнению с предыдущим handoff
+
+- `openai-codex/gpt-5.4` больше нельзя описывать как "полностью мёртвый":
+  одиночные live-probe сейчас проходят через OpenClaw API.
+- Но `openai-codex/gpt-5.4` всё равно непригоден как production primary:
+  на серии запросов в одном chat-scope он слишком быстро деградирует по latency.
+- `codex-cli/gpt-5.4` переживает restart и держит `200 OK` стабильнее,
+  поэтому был повышен до primary.
+
+### Свежие live-замеры Codex-маршрутов
+
+- `openai-codex/gpt-5.4`, одиночный live-probe:
+  `200 OK`
+- `openai-codex/gpt-5.4`, stateful серия:
+  быстрый первый ответ, затем резкая деградация latency уже на следующих запросах
+- `codex-cli/gpt-5.4`, post-restart stateful серия в одном chat-scope:
+  `2.54s -> 7.46s -> 61.0s -> 60.7s`, все 4 ответа `200 OK`
+- `codex-cli/gpt-5.4`, post-restart stateless серия с новым chat_id каждый раз:
+  `1.25s -> 28.23s -> 62.46s -> 57.71s`, все 4 ответа `200 OK`
+
+### Ключевой вывод addendum
+
+Проблема больше не выглядит чисто session-history багом Краба:
+даже stateless серия через `codex-cli` показывает плавающий QoS.
+Operational verdict:
+
+- `openai-codex/gpt-5.4` не использовать как primary;
+- `codex-cli/gpt-5.4` использовать как рабочий Codex-primary, если приоритет —
+  именно доступ к Codex;
+- для скорости ответа держать живым fallback на `google-gemini-cli/gemini-3-flash-preview`.
+
+### Расследование: гипотеза про выгоду OpenAI
+
+Это не доказанный факт, а отдельная инженерная гипотеза.
+На текущем evidence можно честно утверждать только следующее:
+
+- consumer-friendly путь `openai-codex` плохо ведёт себя как агентный backend;
+- у OpenAI может быть product/business мотивация не делать такой путь
+  полноценной бесплатной заменой first-party tooling;
+- прямого доказательства умысла у нас нет и, вероятно, не будет;
+- для инженерного решения этого и не требуется: operationally путь уже признан
+  ненадёжным как primary.
+
 ## Ветка
 `fix/routing-qwen-thinking` (не смёрджена в main)
 
@@ -18,7 +85,7 @@
   уже был изменён, но `agents.list[0].model` продолжал указывать на
   `openai-codex/gpt-5.4`, поэтому UI и userbot думали одно, а gateway реально
   стартовал с другого.
-- Текущий честный primary runtime: `google-gemini-cli/gemini-3-flash-preview`.
+- Текущий честный primary runtime: `codex-cli/gpt-5.4`.
 - `google-antigravity/*` намеренно не участвует в маршрутизации: для него сейчас
   нет usable-квоты, и в live-контур его не возвращали.
 
@@ -30,9 +97,9 @@
 - live smoke через `openclaw_client.send_message_stream(...)`
   → ответ: `Краб на связи.`
 - `curl http://127.0.0.1:8080/api/health/lite`
-  → `last_runtime_route.model = google-gemini-cli/gemini-3-flash-preview`
+  → `last_runtime_route.model = codex-cli/gpt-5.4`
 - owner panel `:8080`
-  → блок `Рекомендовано (Routing)` показывает `google-gemini-cli/gemini-3-flash-preview`
+  → блок `Рекомендовано (Routing)` показывает `codex-cli/gpt-5.4`
 
 ## Что было сделано в этой сессии
 
@@ -50,13 +117,14 @@
 - `~/.openclaw/openclaw.json` и `~/.openclaw/agents/main/agent/agent.json` выровнены:
   `main agent`, `subagents` и declarative primary теперь смотрят на один и тот же
   runtime-model, без скрытого старта с `gpt-5.4`
-- Текущий live primary выставлен на `google-gemini-cli/gemini-3-flash-preview`,
-  fallback-цепочка: `google/gemini-3.1-pro-preview` → `qwen-portal/coder-model` → `openai-codex/gpt-5.4`
+- Текущий live primary выставлен на `codex-cli/gpt-5.4`,
+  fallback-цепочка: `google-gemini-cli/gemini-3-flash-preview` → `openai-codex/gpt-5.4` → `qwen-portal/coder-model`
 
 ### ✅ Исправлено в репо (ещё не закоммичено в этой ветке)
 
 - `src/userbot_bridge.py`
   - soft/hard логика buffered timeout для OpenClaw;
+  - ранние тех-уведомления, что запрос жив и модель всё ещё думает;
   - явное notice-сообщение при долгом ожидании первой части;
   - private message batching для пачки сообщений после `!clear`;
   - skip для follower-handlers уже поглощённых batched-сообщений.
@@ -73,10 +141,10 @@
 
 | Провайдер | Конфиг | Статус | Проблема |
 |-----------|--------|--------|----------|
-| `google-gemini-cli/gemini-3-flash-preview` | primary, thinking=off | ✅ проходит warmup и live smoke | На текущем наборе провайдеров это первый реально рабочий и честно подтверждённый primary |
-| `google/gemini-3.1-pro-preview` | fallback#1, thinking=off | ⚠️ rate_limit | REST-провайдер отвечает, но уходит в rate-limit до ответа на основном маршруте |
-| `qwen-portal/coder-model` | fallback#2, thinking=off | ⚠️ rate_limit | Portal остаётся резервом, но быстро упирается в лимиты |
-| `openai-codex/gpt-5.4` | fallback#3 | ❌ 401 | **HTTP 401 Missing scopes: `model.request`** — проблема OAuth scope/плана, не квоты |
+| `codex-cli/gpt-5.4` | primary | ✅ warmup и restart проходят, route truthful в API/UI | Главная проблема сейчас не падение, а плавающая latency |
+| `google-gemini-cli/gemini-3-flash-preview` | fallback#1 | ✅ живой и быстрый safety-net | Уже не primary, а резервный маршрут по подписке |
+| `openai-codex/gpt-5.4` | fallback#2 | ⚠️ path живой, но нестабильный | Исторически ловит таймауты в реальном чате и быстро деградирует по latency |
+| `qwen-portal/coder-model` | fallback#3 | ⚠️ rate_limit | Portal остаётся резервом, но быстро упирается в лимиты |
 | `google-antigravity/*` | вне цепочки | ⛔ не используется | Намеренно исключён из live runtime: нет usable-квоты |
 
 ### Ключевой вывод по инциденту
@@ -86,17 +154,20 @@
    буферизует `stream=False` completion и отдаёт кусок только в конце;
 2. после `!clear` длинный recap из нескольких Telegram-сообщений превращался в
    очередь отдельных AI-задач;
-3. runtime truth drift: один слой думал, что primary уже Gemini, а сам gateway
-   реально стартовал с `gpt-5.4`.
+3. runtime truth drift: один слой думал одно о primary/fallback, а сам gateway
+   реально стартовал с другой конфигурацией.
 
 Сейчас эта тройка закрыта: timeout-логика исправлена, batching добавлен, source-of-truth
 по runtime выровнен.
 
 ### Ключевой вывод по GPT-5.4
 
-Это по-прежнему не вопрос квот. Логи OpenClaw: `HTTP 401: Missing scopes: model.request`.
-Copilot OAuth-токен не имеет нужного API scope. Пока это не исправлено, `gpt-5.4`
-не должен быть primary ни в одном live-профиле.
+`GPT-5.4` сейчас разделяется на два разных operational пути:
+
+- `codex-cli/gpt-5.4` годится как текущий live primary, если нужен максимум от подписки `OpenAI Plus`;
+- `openai-codex/gpt-5.4` не стоит использовать как primary, потому что именно этот OAuth-path ведёт себя нестабильно в реальном чате.
+
+То есть главный вывод сейчас уже не про "жёсткий 401", а про **надёжность конкретного маршрута**.
 
 ---
 
@@ -107,7 +178,7 @@ Copilot OAuth-токен не имеет нужного API scope. Пока эт
 ### Высокий приоритет (нужно в текущей ветке)
 - [ ] **Закоммитить текущие repo-фиксы**: buffered timeout, truthful `!status`, message batching
 - [ ] **Почистить owner inbox**: в `api/health/lite` висят 2 старых open owner_request item'а, которые больше не должны путать операционную картину
-- [ ] **Починить GPT-5.4 OAuth**: попробовать `openclaw auth openai-codex` — перелогиниться и проверить scope `model.request`
+- [ ] **Решить судьбу `openai-codex/gpt-5.4`**: оставить как fallback-only или совсем убрать из live-цепочки после новых наблюдений
 - [ ] **Смёрджить ветку** `fix/routing-qwen-thinking` в main
 
 ### Средний приоритет (следующая сессия)

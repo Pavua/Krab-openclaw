@@ -1,46 +1,89 @@
 # Статус провайдеров — Краб (актуально на 19.03.2026)
 
+## Addendum 03:52 — текущая truth после restart
+
+### Runtime-конфиг сейчас
+
+```
+Primary:    codex-cli/gpt-5.4
+Fallback 1: google-gemini-cli/gemini-3-flash-preview
+Fallback 2: openai-codex/gpt-5.4
+Fallback 3: qwen-portal/coder-model
+```
+
+### Короткий operational verdict
+
+| Маршрут | Что подтверждено | Расследование / гипотеза |
+|--------|-------------------|---------------------------|
+| `codex-cli/gpt-5.4` | ✅ переживает restart, warmup и серии запросов; пока не падал, но latency плавает от ~1s до ~60s | Похоже на QoS/очередь выше нашего кода, а не на локальный session-history баг |
+| `google-gemini-cli/gemini-3-flash-preview` | ✅ usable как быстрый fallback по подписке Google AI Pro | Нужен как safety-net, если Codex-маршруты снова уходят в плавающий QoS |
+| `openai-codex/gpt-5.4` | ⚠️ одиночные запросы проходят, но именно этот путь исторически ловил таймауты в реальном чате и быстро деградирует по latency | Отдельная гипотеза: consumer-friendly OAuth-path хуже подходит для агентного use-case |
+| `qwen-portal/coder-model` | ⚠️ fallback-only, резервный слот | Держим только как последний OAuth-резерв, не как желательный daily path |
+
+### Что важно не перепутать
+
+- `openai-codex` больше нельзя описывать как "абсолютно мёртвый": сейчас он живой, но плохой как primary.
+- `codex-cli` лучше не описывать как "быстрый": он сейчас рабочий, но неровный по времени ответа.
+- `google/gemini-3.1-pro-preview` сейчас исключён из автоматической live-цепочки не потому, что сломан ключ, а потому что путь через платный API нежелателен по стоимости и раньше упирался в `rate_limit`.
+- Investigational колонку про возможную выгоду OpenAI держим как гипотезу, не как доказанный факт.
+
 ## Конфигурация OpenClaw (`~/.openclaw/openclaw.json`)
 
 ```
-Primary:    google-gemini-cli/gemini-3-flash-preview
-Fallback 1: google/gemini-3.1-pro-preview
-Fallback 2: qwen-portal/coder-model
-Fallback 3: openai-codex/gpt-5.4
+Primary:    codex-cli/gpt-5.4
+Fallback 1: google-gemini-cli/gemini-3-flash-preview
+Fallback 2: openai-codex/gpt-5.4
+Fallback 3: qwen-portal/coder-model
 ```
 
 ## Диагностика провайдеров
 
+### codex-cli/gpt-5.4
+
+**Статус**: ✅ текущий live primary  
+**Проверено**:
+- controlled restart проходит успешно;
+- warmup OpenClaw отвечает `200 OK`;
+- `:8080/api/health/lite` показывает `last_runtime_route.provider = codex-cli`;
+- owner panel `:8080` после `Sync Data` показывает `Рекомендовано (Routing) = codex-cli/gpt-5.4`.
+**Ограничение**: latency нестабильна; даже stateless-серия может гулять от секунд до минуты.
+
 ### google-gemini-cli/gemini-3-flash-preview
 
-**Статус**: ✅ текущий рабочий primary  
+**Статус**: ✅ быстрый fallback по подписке  
 **Проверено**:
-- warmup OpenClaw проходит успешно;
-- live smoke вернул `Краб на связи.`;
-- owner panel `:8080` показывает этот же маршрут как рекомендованный.
-**Ограничение**: на очень длинных контекстах still needs observation, но после
-private message batching риск существенно ниже, чем раньше.
-
-### google/gemini-3.1-pro-preview (REST API)
-
-**Статус**: ⚠️ fallback-only, уходит в `rate_limit`
-**Ключ**: `GOOGLE_API_KEY` = `GEMINI_API_KEY_PAID` (исправлено в 03.2026)
-**Предупреждение в логах**: `Both GOOGLE_API_KEY and GEMINI_API_KEY are set. Using GOOGLE_API_KEY.` — это нормально после исправления
-**Проблема**: провайдер быстро отвечает `rate_limit`, поэтому держим его только резервом
-**Текущее значение thinking**: `off`
-
-### qwen-portal/coder-model
-
-**Статус**: ⚠️ fallback-only, уходит в `rate_limit`
-**Аутентификация**: OAuth через `qwen-portal` profile
-**Проблема**: portal RPM лимит остаётся низким даже при `thinking=off`
+- OAuth-профиль живой;
+- маршрут виден в runtime inventory и остаётся в честной fallback-цепочке;
+- пригоден как safety-net при деградации Codex-маршрутов.
+**Ограничение**: это уже не primary, а резерв для скорости и предсказуемости.
 
 ### openai-codex/gpt-5.4
 
-**Статус**: ❌ нерабочий резерв  
-**Ошибка**: `HTTP 401: Missing scopes: model.request`
-**Причина**: Copilot OAuth-токен не включает `model.request` scope. Это не квота.
-**Рекомендация**: не возвращать его в primary до отдельного auth-fix.
+**Статус**: ⚠️ нестабильный fallback  
+**Проверено**:
+- текущий OAuth-профиль читается как валидный;
+- одиночные live-probe могут проходить через OpenClaw API;
+- routing status показывает `OAuth OK`, но при этом локально видимые scopes ограничены `openid/profile/email/offline_access`.
+**Проблема**:
+- в реальном чате путь исторически ловил таймауты;
+- на сериях запросов быстро деградирует по latency;
+- одного факта `OAuth OK` недостаточно, чтобы считать путь production-stable.
+**Рекомендация**: держать только fallback-слотом и наблюдать дальше.
+
+### qwen-portal/coder-model
+
+**Статус**: ⚠️ резервный fallback  
+**Аутентификация**: OAuth через `qwen-portal` profile  
+**Проблема**: portal RPM лимит остаётся низким даже при `thinking=off`.
+
+### google/gemini-3.1-pro-preview (REST API)
+
+**Статус**: 💤 не в active chain  
+**Ключ**: `GOOGLE_API_KEY = GEMINI_API_KEY_PAID`  
+**Почему не используем автоматически**:
+- пользовательский приоритет сейчас на утилизацию уже оплаченных подписок `OpenAI Plus` и `Google AI Pro`;
+- этот путь раньше уходил в `rate_limit`;
+- это отдельный платный API-контур, который не нужен как default fallback при текущей стратегии.
 
 ### google-antigravity/*
 
@@ -50,6 +93,7 @@ private message batching риск существенно ниже, чем ран
 ## Что реально исправлено в этой сессии
 
 - userbot больше не рвёт buffered cloud-ответ слишком рано;
+- userbot начал заранее отправлять тех-уведомления, что запрос жив и модель всё ещё думает;
 - `!status` теперь показывает фактический route, а не stale model из конфига;
 - несколько быстрых private-сообщений одного отправителя склеиваются в один запрос;
 - runtime truth синхронизирован: gateway, health-lite и owner panel смотрят на один primary.

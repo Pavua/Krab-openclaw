@@ -98,3 +98,34 @@ def test_resolve_buffered_response_timeout_defaults_photo() -> None:
     )
     assert total >= 780.0
     assert total > 540.0
+
+
+def test_resolve_progress_notice_schedule_defaults_text() -> None:
+    initial, repeat = userbot_bridge_module._resolve_openclaw_progress_notice_schedule(
+        has_photo=False,
+        first_chunk_timeout_sec=420.0,
+    )
+    assert initial >= 5.0
+    assert initial <= 420.0
+    assert repeat >= 15.0
+
+
+def test_resolve_progress_notice_schedule_respects_overrides(monkeypatch) -> None:
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC",
+        12.0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC",
+        33.0,
+        raising=False,
+    )
+    initial, repeat = userbot_bridge_module._resolve_openclaw_progress_notice_schedule(
+        has_photo=False,
+        first_chunk_timeout_sec=420.0,
+    )
+    assert initial == 12.0
+    assert repeat == 33.0

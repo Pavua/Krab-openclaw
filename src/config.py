@@ -93,6 +93,22 @@ class Config:
     OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC: float = float(
         os.getenv("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "540")
     )
+    # Ранние тех-уведомления до hard-timeout.
+    # Зачем:
+    # - пользователь должен понимать, что запрос жив и модель действительно думает;
+    # - эти уведомления не обрывают stream, а только редактируют временное сообщение.
+    OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC: float = float(
+        os.getenv("OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC", "20")
+    )
+    OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC: float = float(
+        os.getenv("OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC", "45")
+    )
+    OPENCLAW_PHOTO_PROGRESS_NOTICE_INITIAL_SEC: float = float(
+        os.getenv("OPENCLAW_PHOTO_PROGRESS_NOTICE_INITIAL_SEC", "30")
+    )
+    OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC: float = float(
+        os.getenv("OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC", "60")
+    )
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
     USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(
@@ -325,6 +341,14 @@ class Config:
                     cls.OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC = float(value)
                 elif key == "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC":
                     cls.OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC = float(value)
+                elif key == "OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC":
+                    cls.OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC = float(value)
+                elif key == "OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC":
+                    cls.OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC = float(value)
+                elif key == "OPENCLAW_PHOTO_PROGRESS_NOTICE_INITIAL_SEC":
+                    cls.OPENCLAW_PHOTO_PROGRESS_NOTICE_INITIAL_SEC = float(value)
+                elif key == "OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC":
+                    cls.OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC = float(value)
                 elif key == "USERBOT_MAX_OUTPUT_TOKENS":
                     cls.USERBOT_MAX_OUTPUT_TOKENS = int(value)
                 elif key == "USERBOT_PHOTO_MAX_OUTPUT_TOKENS":

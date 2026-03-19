@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import base64
 import asyncio
 import json
 import time
@@ -97,6 +98,15 @@ class _FakeOpenClaw:
 
     def clear_session(self, chat_id: str) -> None:
         self.cleared_chat_ids.append(str(chat_id))
+
+
+def _build_fake_jwt(payload: dict) -> str:
+    """Собирает минимальный JWT для тестов scope-диагностики."""
+    header = base64.urlsafe_b64encode(
+        json.dumps({"alg": "none", "typ": "JWT"}).encode("utf-8")
+    ).decode("utf-8").rstrip("=")
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
+    return f"{header}.{body}.signature"
 
 
 class _FakeHealthClient:
@@ -3059,6 +3069,76 @@ def test_openclaw_model_routing_status_normalizes_antigravity_oauth_status_when_
     assert data["oauth_status"] == "ok"
     assert data["oauth_remaining_human"] == "39м"
     assert data["readiness_label"] == "OAuth OK"
+
+
+def test_openclaw_model_routing_status_exposes_observed_openai_codex_scopes(monkeypatch):
+    """Endpoint должен показывать наблюдаемые scopes профиля, не делая жёсткий verdict без live-fail."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "google-gemini-cli/gemini-3-flash-preview",
+                    "fallbacks": [
+                        "openai-codex/gpt-5.4",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {
+                "auth": "oauth",
+                "models": [{"id": "gpt-5.4"}],
+            },
+            "google-gemini-cli": {"models": [{"id": "gemini-3-flash-preview"}]},
+        }
+    }
+    auth_profiles = {
+        "profiles": {
+            "openai-codex:default": {
+                "provider": "openai-codex",
+                "access": _build_fake_jwt(
+                    {"scope": ["openid", "profile", "email", "offline_access"]}
+                ),
+                "expires": int((time.time() + 3600.0) * 1000.0),
+            },
+        },
+        "usageStats": {
+            "openai-codex:default": {},
+        },
+    }
+    status_snapshot = {
+        "providers": {
+            "openai-codex": {
+                "provider": "openai-codex",
+                "effective_kind": "profiles",
+                "oauth_status": "ok",
+                "oauth_remaining_ms": 3600 * 1000,
+                "oauth_remaining_human": "1ч 0м",
+            }
+        }
+    }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot))
+
+    client = _make_client_with_router(_DummyRouter())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    provider_state = resp.json()["routing"]["openai_codex"]
+    assert provider_state["signal_fail_code"] == ""
+    assert provider_state["readiness"] == "ready"
+    assert provider_state["readiness_label"] == "OAuth OK"
+    assert provider_state["has_model_request_scope"] is False
+    assert provider_state["observed_scopes"] == ["email", "offline_access", "openid", "profile"]
+    assert "OAuth-профиль найден" in provider_state["detail"]
 
 
 def test_openclaw_model_routing_status_skips_expired_google_gemini_cli_fallback(monkeypatch):

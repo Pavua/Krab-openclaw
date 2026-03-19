@@ -380,9 +380,15 @@ class ModelManager:
             "lmstudio/",
             "local/",
         )
+        cli_backend_prefixes = (
+            "codex-cli/",
+            "claude-cli/",
+        )
 
         if model_id_lower.startswith(local_provider_prefixes):
             return ModelType.LOCAL_MLX
+        if model_id_lower.startswith(cli_backend_prefixes):
+            return ModelType.CLI_BACKEND
 
         if model_id_lower.startswith("openai/") or model_id_lower.startswith("openai-codex/"):
             return ModelType.CLOUD_OPENROUTER
