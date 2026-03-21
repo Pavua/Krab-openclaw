@@ -110,7 +110,9 @@ def test_full_profile_cannot_execute_owner_only_commands(monkeypatch: pytest.Mon
     profile = resolve_access_profile(user_id=55, username="trusted", self_user_id=777)
 
     assert profile.level == AccessLevel.FULL
-    assert OWNER_ONLY_COMMANDS == {"access", "acl", "reasoning", "restart", "set"}
+    assert {"access", "acl", "reasoning", "restart", "set"}.issubset(OWNER_ONLY_COMMANDS)
+    # CLI runner commands are owner-only (run external processes on the machine)
+    assert {"codex", "gemini", "claude_cli"}.issubset(OWNER_ONLY_COMMANDS)
     assert profile.can_execute_command("status", set(USERBOT_KNOWN_COMMANDS)) is True
     assert profile.can_execute_command("acl", set(USERBOT_KNOWN_COMMANDS)) is False
     assert profile.can_execute_command("reasoning", set(USERBOT_KNOWN_COMMANDS)) is False
@@ -120,7 +122,7 @@ def test_full_profile_cannot_execute_owner_only_commands(monkeypatch: pytest.Mon
 def test_build_command_access_matrix_marks_owner_only_and_partial_counts() -> None:
     matrix = build_command_access_matrix()
 
-    assert matrix["summary"]["owner_only_count"] == 5
+    assert matrix["summary"]["owner_only_count"] == len(OWNER_ONLY_COMMANDS)
     assert matrix["roles"]["owner"]["command_count"] == len(USERBOT_KNOWN_COMMANDS)
     assert "acl" in matrix["roles"]["owner"]["commands"]
     assert "reasoning" in matrix["roles"]["owner"]["commands"]
