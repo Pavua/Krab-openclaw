@@ -134,5 +134,119 @@ class BrowserBridge:
             return None
         return base64.b64encode(data).decode()
 
+    async def inject_text(self, selector: str, text: str, *, clear_first: bool = True) -> bool:
+        """
+        Вставляет текст в элемент по CSS-селектору.
+
+        Пробует fill() → затем JS-inject как fallback.
+        Возвращает True при успехе.
+        """
+        try:
+            page = await self._active_page()
+            locator = page.locator(selector).first
+            await locator.wait_for(state="visible", timeout=8_000)
+            if clear_first:
+                await locator.clear()
+            await locator.fill(text)
+            return True
+        except Exception as exc:
+            logger.warning("browser_inject_text_failed", selector=selector, error=str(exc))
+            # Fallback: JS clipboard-style inject для contenteditable
+            try:
+                page = await self._active_page()
+                await page.evaluate(
+                    """([sel, txt]) => {
+                        const el = document.querySelector(sel);
+                        if (!el) return false;
+                        el.focus();
+                        el.textContent = txt;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        return true;
+                    }""",
+                    [selector, text],
+                )
+                return True
+            except Exception:
+                return False
+
+    async def click_element(self, selector: str, *, timeout: float = 5_000) -> bool:
+        """Кликает на элемент по CSS-селектору. Возвращает True при успехе."""
+        try:
+            page = await self._active_page()
+            locator = page.locator(selector).first
+            await locator.wait_for(state="visible", timeout=timeout)
+            await locator.click()
+            return True
+        except Exception as exc:
+            logger.warning("browser_click_element_failed", selector=selector, error=str(exc))
+            return False
+
+    async def wait_for_stable_text(
+        self,
+        selector: str,
+        *,
+        stable_ms: float = 2000.0,
+        poll_ms: float = 500.0,
+        max_wait_ms: float = 120_000.0,
+    ) -> str:
+        """
+        Ждёт пока текст в selector стабилизируется (не меняется stable_ms мс).
+
+        Используется для определения конца генерации ответа AI.
+        Возвращает итоговый текст.
+        """
+        import time
+        page = await self._active_page()
+        last_text = ""
+        last_change_time = time.monotonic()
+        start_time = time.monotonic()
+        poll_sec = poll_ms / 1000.0
+        stable_sec = stable_ms / 1000.0
+        max_sec = max_wait_ms / 1000.0
+
+        while True:
+            elapsed = time.monotonic() - start_time
+            if elapsed > max_sec:
+                logger.warning("browser_wait_stable_text_timeout", selector=selector, elapsed=elapsed)
+                break
+            await asyncio.sleep(poll_sec)
+            try:
+                current_text = await page.inner_text(selector)
+            except Exception:
+                current_text = last_text
+
+            if current_text != last_text:
+                last_text = current_text
+                last_change_time = time.monotonic()
+            elif last_text and (time.monotonic() - last_change_time) >= stable_sec:
+                break
+
+        return last_text.strip()
+
+    async def find_tab_by_url_fragment(self, fragment: str):
+        """Возвращает страницу (Page), URL которой содержит fragment."""
+        try:
+            browser = await self._get_browser()
+            for ctx in browser.contexts:
+                for page in ctx.pages:
+                    if fragment in page.url:
+                        return page
+        except Exception:
+            pass
+        return None
+
+    async def get_or_open_tab(self, url: str, url_fragment: str):
+        """Возвращает существующую вкладку по fragment или открывает новую с url."""
+        existing = await self.find_tab_by_url_fragment(url_fragment)
+        if existing is not None:
+            await existing.bring_to_front()
+            return existing
+        browser = await self._get_browser()
+        contexts = browser.contexts
+        ctx = contexts[0] if contexts else await browser.new_context()
+        page = await ctx.new_page()
+        await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+        return page
+
 
 browser_bridge = BrowserBridge()
