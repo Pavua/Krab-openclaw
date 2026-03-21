@@ -69,6 +69,10 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "acl",
         "access",
         "reasoning",
+        # CLI runner команды (Приоритет 3)
+        "codex",
+        "gemini",
+        "claude_cli",
     }
 )
 
@@ -80,6 +84,10 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "acl",
         "access",
         "reasoning",
+        # CLI runner — запускают внешние процессы на машине, только владелец
+        "codex",
+        "gemini",
+        "claude_cli",
     }
 )
 

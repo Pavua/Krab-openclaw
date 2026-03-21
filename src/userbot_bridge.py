@@ -63,7 +63,10 @@ from .handlers import (
     handle_acl,
     handle_audio_message,
     handle_browser,
+    handle_claude_cli,
     handle_clear,
+    handle_codex,
+    handle_gemini_cli,
     handle_config,
     handle_cronstatus,
     handle_diagnose,
@@ -622,6 +625,21 @@ class KraabUserbot:
         @self.client.on_message(filters.command("agent", prefixes=prefixes) & _make_command_filter("agent"), group=-1)
         async def wrap_agent(c, m):
             await run_cmd(handle_agent, m)
+
+        # CLI runner команды
+        @self.client.on_message(filters.command("codex", prefixes=prefixes) & _make_command_filter("codex"), group=-1)
+        async def wrap_codex(c, m):
+            await run_cmd(handle_codex, m)
+
+        @self.client.on_message(filters.command("gemini", prefixes=prefixes) & _make_command_filter("gemini"), group=-1)
+        async def wrap_gemini_cli(c, m):
+            await run_cmd(handle_gemini_cli, m)
+
+        @self.client.on_message(
+            filters.command("claude_cli", prefixes=prefixes) & _make_command_filter("claude_cli"), group=-1
+        )
+        async def wrap_claude_cli(c, m):
+            await run_cmd(handle_claude_cli, m)
 
         @self.client.on_message(filters.command("acl", prefixes=prefixes) & _make_command_filter("acl"), group=-1)
         async def wrap_acl(c, m):
