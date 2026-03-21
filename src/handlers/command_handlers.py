@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -2001,6 +2003,115 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
             "`!browser shot` — скриншот\n"
             "`!browser js <code>` — выполнить JS"
         )
+    )
+
+
+async def _cli_keepalive(
+    status_msg: Message,
+    tool: str,
+    started_at: float,
+    *,
+    interval: float = 20.0,
+    stop_event: asyncio.Event,
+) -> None:
+    """Фоновая задача: обновляет сообщение с прогрессом пока CLI работает."""
+    step = 0
+    spinners = ["⏳", "⏳⏳", "⏳⏳⏳"]
+    try:
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(stop_event.wait()),
+                    timeout=interval,
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+            elapsed = int(time.monotonic() - started_at)
+            mins, secs = divmod(elapsed, 60)
+            time_str = f"{mins}м {secs}с" if mins else f"{secs}с"
+            indicator = spinners[step % len(spinners)]
+            try:
+                await status_msg.edit(f"{indicator} `{tool}` работает... {time_str}")
+            except Exception:
+                pass
+            step += 1
+    except asyncio.CancelledError:
+        pass
+
+
+async def _run_cli_with_progress(
+    bot: "KraabUserbot",
+    message: Message,
+    tool: str,
+    prompt: str,
+    *,
+    timeout: float = 120.0,
+    tool_label: str | None = None,
+) -> None:
+    """Общая реализация для handle_codex/handle_gemini/handle_claude."""
+    from ..integrations.cli_runner import run_cli
+
+    if not prompt:
+        raise UserInputError(
+            user_message=(
+                f"🤖 Использование: `!{tool} <запрос>`\n"
+                f"Пример: `!{tool} напиши hello world на Python`"
+            )
+        )
+
+    label = tool_label or tool
+    status_msg = await message.reply(f"⏳ Запускаю `{label}`...")
+    started_at = time.monotonic()
+    stop_event = asyncio.Event()
+    keepalive = asyncio.create_task(
+        _cli_keepalive(status_msg, label, started_at, stop_event=stop_event)
+    )
+    try:
+        result = await run_cli(tool, prompt, timeout=timeout)
+    finally:
+        stop_event.set()
+        keepalive.cancel()
+        try:
+            await keepalive
+        except asyncio.CancelledError:
+            pass
+
+    elapsed = int(time.monotonic() - started_at)
+    output = result.output or "(нет вывода)"
+    header = f"🤖 **{label}** (`{elapsed}с`)"
+    if result.exit_code != 0 and not result.timed_out:
+        header += f" — код {result.exit_code}"
+
+    full_text = f"{header}\n\n{output}"
+    chunks = _split_text_for_telegram(full_text)
+    await status_msg.edit(chunks[0])
+    for part in chunks[1:]:
+        await message.reply(part)
+
+
+async def handle_codex(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить codex-cli с запросом. Использование: !codex <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_CODEX_TIMEOUT_SEC", 120.0))
+    await _run_cli_with_progress(bot, message, "codex", prompt, timeout=timeout)
+
+
+async def handle_gemini_cli(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить gemini-cli с запросом. Использование: !gemini <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_GEMINI_TIMEOUT_SEC", 120.0))
+    await _run_cli_with_progress(
+        bot, message, "gemini", prompt, timeout=timeout, tool_label="gemini-cli"
+    )
+
+
+async def handle_claude_cli(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить claude code CLI с запросом. Использование: !claude_cli <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_CLAUDE_TIMEOUT_SEC", 120.0))
+    await _run_cli_with_progress(
+        bot, message, "claude", prompt, timeout=timeout, tool_label="claude-code"
     )
 
 
