@@ -1925,12 +1925,13 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
     """
     Управление Chrome через CDP.
 
-    !browser status       — статус подключения
-    !browser tabs         — список вкладок
-    !browser open <url>   — навигация
-    !browser read         — текст текущей страницы
-    !browser shot         — скриншот (фото в Telegram)
-    !browser js <code>    — выполнить JS
+    !browser status              — статус подключения
+    !browser tabs                — список вкладок
+    !browser open <url>          — навигация
+    !browser read                — текст текущей страницы
+    !browser shot                — скриншот (фото в Telegram)
+    !browser js <code>           — выполнить JS
+    !browser ai [gemini|chatgpt] <prompt> — запрос через браузерный AI
     """
     from ..integrations.browser_bridge import browser_bridge
 
@@ -1993,6 +1994,41 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"✅ Результат:\n```\n{str(result)[:1000]}\n```")
         return
 
+    if sub == "ai":
+        from ..integrations.browser_ai_provider import browser_ai_provider
+
+        # Разбираем: !browser ai [gemini|chatgpt] <prompt>
+        rest_parts = str(message.text or "").split(maxsplit=3)
+        service = "gemini"
+        prompt = ""
+        if len(rest_parts) >= 3:
+            maybe_service = rest_parts[2].lower()
+            if maybe_service in ("gemini", "chatgpt"):
+                service = maybe_service
+                prompt = rest_parts[3] if len(rest_parts) > 3 else ""
+            else:
+                prompt = " ".join(rest_parts[2:])
+        if not prompt:
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи запрос: `!browser ai <prompt>` или\n"
+                    "`!browser ai gemini <prompt>` / `!browser ai chatgpt <prompt>`"
+                )
+            )
+
+        status_msg = await message.reply(f"🌐 Отправляю в {service}... ⏳")
+        response = await browser_ai_provider.chat(prompt, service=service)  # type: ignore[arg-type]
+
+        if response.startswith("[ERROR]"):
+            await status_msg.edit(f"❌ {response}")
+        else:
+            # Обрезаем до разумного лимита
+            preview = response[:3500]
+            if len(response) > 3500:
+                preview += "\n\n_[ответ обрезан]_"
+            await status_msg.edit(f"🌐 **{service}**:\n\n{preview}")
+        return
+
     raise UserInputError(
         user_message=(
             "🌐 Команды браузера:\n"
@@ -2001,7 +2037,8 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
             "`!browser open <url>` — навигация\n"
             "`!browser read` — текст страницы\n"
             "`!browser shot` — скриншот\n"
-            "`!browser js <code>` — выполнить JS"
+            "`!browser js <code>` — выполнить JS\n"
+            "`!browser ai [gemini|chatgpt] <prompt>` — запрос через браузерный AI"
         )
     )
 
