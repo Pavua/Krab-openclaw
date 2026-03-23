@@ -64,8 +64,28 @@
   - `curl http://127.0.0.1:8090/health` вернул `{"ok":true,...}`;
   - созданы:
     - `~/.openclaw/krab_runtime_state/voice_gateway/.venv_krab_voice_gateway`
-    - `~/.openclaw/krab_runtime_state/voice_gateway/gateway.log`
-    - `~/.openclaw/krab_runtime_state/voice_gateway/gateway.pid`
+  - `~/.openclaw/krab_runtime_state/voice_gateway/gateway.log`
+  - `~/.openclaw/krab_runtime_state/voice_gateway/gateway.pid`
+
+### 5. Repo-level one-click entrypoints снова рабочие
+
+- Проблема:
+  - `start_krab.command` и `Stop Krab.command` внутри репо жёстко ссылались на
+    `new ...`-скрипты в самом репо, которых там не было;
+  - `Start Full Ecosystem.command` тоже вызывал отсутствующий `new start_krab.command`;
+  - `Stop Full Ecosystem.command` вызывал отсутствующий `new Stop Krab.command`;
+  - `Start Voice Gateway.command` был неисполняемым (`chmod` drift).
+- Исправление:
+  - repo-level wrapper-ы теперь сначала ищут repo-local `new ...`, затем sibling launcher уровнем выше;
+  - `Start Full Ecosystem.command` делегирует в `start_krab.command`;
+  - `Stop Full Ecosystem.command` делегирует в `Stop Krab.command`;
+  - `Start Voice Gateway.command` снова executable.
+- Проверка:
+  - `bash -n` для всех обновлённых `.command` — OK;
+  - `Start Voice Gateway.command` поднимает `:8090` и проходит health-check;
+  - `start_krab.command` живым запуском дошёл до `kraab_running`;
+  - `Stop Krab.command` корректно завершил userbot/proxy/voice;
+  - `Start Full Ecosystem.command` + `Stop Full Ecosystem.command` прошли end-to-end цикл без missing-file ошибок.
 
 ## Что нужно перенести обратно на `pablito`
 
@@ -95,10 +115,11 @@
 ## Рекомендации на следующий шаг
 
 1. Перенести launcher hardening из `USER3` обратно в `/Users/pablito/Antigravity_AGENTS/new start_krab.command`.
-2. Решить, нужен ли такой же fallback для `new Stop Krab.command`, если хотим мягко останавливать per-account Voice Gateway.
-3. После возврата на `pablito` прогнать короткий smoke:
+2. При желании перенести те же wrapper-fix'ы и в shared/pablito repo-level `.command`, если там ещё есть старые ссылки на отсутствующие `new ...`.
+3. Решить, нужен ли такой же fallback для `new Stop Krab.command`, если хотим мягко останавливать per-account Voice Gateway.
+4. После возврата на `pablito` прогнать короткий smoke:
    - `:8090/health`
    - `:18789/health`
    - owner panel `:8080`
    - import/boot `KraabUserbot`
-4. После smoke обновить roadmap/handoff уже с единым вердиктом по `pablito` и `USER3`.
+5. После smoke обновить roadmap/handoff уже с единым вердиктом по `pablito` и `USER3`.

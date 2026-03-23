@@ -112,10 +112,10 @@ if [ -f "$EAR_WATCHDOG_PID" ]; then
   rm -f "$EAR_WATCHDOG_PID"
 fi
 
-if [ -x "$DIR/new Stop Krab.command" ]; then
-  "$DIR/new Stop Krab.command" || true
+if [ -x "$DIR/Stop Krab.command" ]; then
+  "$DIR/Stop Krab.command" || true
 else
-  echo "⚠️ Не найден new Stop Krab.command"
+  echo "⚠️ Не найден Stop Krab.command"
 fi
 
 stop_pid_file_process "$VOICE_FALLBACK_PID" "Voice Gateway per-account runtime"

@@ -85,4 +85,4 @@ if [ ! -f "$EAR_WATCHDOG_PID" ]; then
 fi
 
 echo "🦀 Перехожу к запуску Krab/OpenClaw..."
-exec "$DIR/new start_krab.command"
+exec "$DIR/start_krab.command"
