@@ -4,6 +4,8 @@
 
 - Собран короткий truthful audit:
   [AUDIT_STATUS_2026-03-23_RU.md](/Users/USER3/Antigravity_AGENTS/Краб/docs/handoff/AUDIT_STATUS_2026-03-23_RU.md)
+- Добавлен единый playbook для переключения между `pablito`, `USER2` и `USER3`:
+  [ACCOUNT_SWITCH_PLAYBOOK_RU.md](/Users/USER3/Antigravity_AGENTS/Краб/docs/handoff/ACCOUNT_SWITCH_PLAYBOOK_RU.md)
 - Что уже подтверждено текущим code/test/runtime evidence:
   - `#4 OOM / Whisper`
   - `#5 Gateway self-healing`
