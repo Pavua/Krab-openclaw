@@ -12,7 +12,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 AG_ROOT="$(cd "$DIR/.." && pwd)"
 
 VOICE_DIR="${KRAB_VOICE_GATEWAY_DIR:-$AG_ROOT/Krab Voice Gateway}"
-VOICE_START="$VOICE_DIR/scripts/start_gateway.command"
+VOICE_START="$DIR/Start Voice Gateway.command"
 
 EAR_DIR="${KRAB_EAR_DIR:-$AG_ROOT/Krab Ear}"
 EAR_START="$EAR_DIR/scripts/start_agent.command"

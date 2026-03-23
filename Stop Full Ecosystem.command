@@ -11,10 +11,11 @@ set -euo pipefail
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 AG_ROOT="$(cd "$DIR/.." && pwd)"
 LOG_DIR="$DIR/logs"
+RUNTIME_STATE_DIR="${KRAB_RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}"
 
 VOICE_DIR="${KRAB_VOICE_GATEWAY_DIR:-$AG_ROOT/Krab Voice Gateway}"
 VOICE_STOP="$VOICE_DIR/scripts/stop_gateway.command"
-VOICE_FALLBACK_PID="$LOG_DIR/voice_gateway_fallback.pid"
+VOICE_FALLBACK_PID="$RUNTIME_STATE_DIR/voice_gateway/gateway.pid"
 VOICE_PORT="${KRAB_VOICE_PORT:-8090}"
 CURRENT_USER="$(id -un)"
 
@@ -117,6 +118,8 @@ else
   echo "⚠️ Не найден new Stop Krab.command"
 fi
 
+stop_pid_file_process "$VOICE_FALLBACK_PID" "Voice Gateway per-account runtime"
+
 if voice_gateway_owned_by_current_user; then
   if [ -x "$VOICE_STOP" ]; then
     echo "🎙️ Останавливаю Krab Voice Gateway..."
@@ -124,8 +127,6 @@ if voice_gateway_owned_by_current_user; then
   else
     echo "⚠️ Не найден stop скрипт Voice Gateway: $VOICE_STOP"
   fi
-
-  stop_pid_file_process "$VOICE_FALLBACK_PID" "Voice Gateway fallback"
 
   VOICE_PIDS="$(voice_listener_pids | awk 'NF { print $1 }' | awk '!seen[$1]++')"
   if [ -n "$VOICE_PIDS" ]; then
