@@ -1,3 +1,145 @@
+# Session Handoff — Краб 23.03.2026
+
+## Addendum 23.03.2026 — audit status после multi-account smoke и USER3 fixes
+
+- Собран короткий truthful audit:
+  [AUDIT_STATUS_2026-03-23_RU.md](/Users/USER3/Antigravity_AGENTS/Краб/docs/handoff/AUDIT_STATUS_2026-03-23_RU.md)
+- Что уже подтверждено текущим code/test/runtime evidence:
+  - `#4 OOM / Whisper`
+  - `#5 Gateway self-healing`
+  - `#9 Vision / photo route`
+  - `#14 OpenClaw update`
+  - `#15 Burst coalescing`
+  - фикс startup-crash `handle_shop`
+- Что честно оставлено как `partial`, а не ложно помечено как done:
+  - `#6 Telegram timeouts`
+  - `#7 long-request transparency`
+  - `#10 Mercadona`
+  - multi-account `Voice Gateway` launcher path
+
+### Что именно добавлено в USER3-контуре
+
+- `src.handlers` снова экспортирует `handle_shop`, поэтому импорт
+  `src.userbot_bridge` больше не падает на старте.
+- `telegram_session_watchdog.py` пишет лог не в общий `/tmp`, а в per-account
+  `~/.openclaw/krab_runtime_state`, что убирает permission-conflict между
+  macOS-учётками.
+- launcher больше не даёт ложный `OpenClaw gateway не стартовал`, когда
+  LaunchAgent-гateway уже жив:
+  добавлен TCP fallback для listener-check и readiness-loop `wait_gateway_ready`.
+- `Krab Voice Gateway` на другой учётке сейчас надёжнее трактовать как
+  per-account fallback service: штатный `start_gateway.command` упирается в права
+  на shared/pablito path, но fallback в `~/.openclaw/krab_runtime_state/voice_gateway`
+  реально поднимается и проходит `/health`.
+
+### Что проверено в этой итерации
+
+- `pytest tests/unit/test_handlers_exports.py tests/unit/test_telegram_session_watchdog.py -q`
+  → `7 passed`
+- `pytest tests/unit/test_userbot_photo_flow.py tests/unit/test_userbot_stream_timeouts.py -q`
+  → `14 passed`
+- owner panel `:8080` поднималась и открывалась в браузере;
+- OpenClaw gateway `:18789` после launcher-fix больше не trigger-ит лишний
+  restart через `launchctl kickstart`;
+- Voice Gateway `:8090` сейчас жив в USER3 runtime-state fallback-контуре.
+
+# Session Handoff — Краб 22.03.2026
+
+## Addendum 22.03.2026 — Стабилизация провайдеров, таймауты, tool-call уведомления
+
+### Диагностика (выявлено)
+
+- **Корневая причина таймаутов в Telegram**: fallback-цепочка была 100% Google (4/4 слота).
+  При rate limit от tool calls каскадно падали все fallback'и → hard timeout 660 сек.
+- **codex-cli** (`/opt/homebrew/bin/codex` v0.115.0) установлен и авторизован, но НЕ был
+  в fallback-цепочке `openclaw.json agents.defaults.model.fallbacks`.
+- **Платный API ключ** подтверждён: `GEMINI_API_KEY=AIzaSyAifJ_...` (paid), но rate limit
+  RPM/TPM всё равно срабатывает при интенсивных tool calls.
+- **Thinking settings** в веб-панели сбрасывались при сохранении: модели, не переданные
+  в `slot_thinking`, получали `thinking_default` вместо сохранения текущего значения.
+
+### Что изменено
+
+1. **Диверсификация fallback-цепочки** (`~/.openclaw/openclaw.json`):
+   - Было: `google-gemini-cli/gemini-3-flash-preview` → `google/gemini-flash-latest` → `qwen-portal/coder-model` → `google-gemini-cli/gemini-3.1-pro-preview`
+   - Стало: `codex-cli/gpt-5.4` → `google-gemini-cli/gemini-3-flash-preview` → `openai/gpt-4o-mini` → `qwen-portal/coder-model`
+   - Принцип: чередование провайдеров Google→OpenAI→Google→OpenAI→Qwen
+
+2. **Увеличение таймаутов** (`src/userbot_bridge.py`):
+   - Soft timeout (первый чанк): 420→600 сек (текст), 540→720 (фото)
+   - Hard timeout (полная отмена): 660→900 сек (текст), 780→1020 (фото)
+
+3. **Tool-call уведомления** (`src/openclaw_client.py` + `src/userbot_bridge.py`):
+   - OpenClawClient теперь трекает `_active_tool_calls` с name/status
+   - Progress notice в Telegram показывает какие инструменты выполняются
+   - Вместо "жду первый ответ" — "агент использует инструменты: 🔧 search_web, ✅ read_file"
+
+4. **Фикс thinking settings** (`src/modules/web_app.py`):
+   - При сохранении цепочки модели, не переданные в `slot_thinking`, теперь сохраняют
+     своё текущее значение thinking из конфига (а не сбрасываются к `thinking_default`).
+
+### Что НЕ сделано / требует проверки
+
+- **Перезапуск Краба** — изменения в `userbot_bridge.py`, `openclaw_client.py`, `web_app.py`
+  требуют перезапуска Krab для вступления в силу.
+- **Перезапуск OpenClaw gateway** — изменения в `openclaw.json` (fallback-цепочка) требуют
+  `openclaw gateway stop && openclaw gateway start`.
+- **google-gemini-cli OAuth** — токен может быть просрочен, нужна проверка/обновление.
+- **claude-proxy** (`:17191`) — не работает, нужна отдельная диагностика.
+
+### Operational статус на 22.03.2026
+
+- Изменения сделаны в рабочих файлах, НЕ применены (Краб не перезапущен)
+- `openclaw.json` обновлён на диске — OpenClaw подхватит при следующем рестарте gateway
+- codex-cli: авторизован, готов к использованию (`has_model_request_scope` нужно проверить)
+
+---
+
+# Session Handoff — Краб 21.03.2026
+
+## Addendum 21.03.2026 — CLI оркестрация + BrowserAIProvider (crazy-noyce → fix/routing)
+
+### Что реализовано и применено к main repo
+
+**CLI runner (Приоритет 3) — ГОТОВО:**
+- `src/integrations/cli_runner.py` — async subprocess runner с keepalive,
+  SIGTERM→SIGKILL, timeout, stdout+stderr capture
+- Команды `!codex`, `!gemini`, `!claude_cli` в Telegram (owner-only)
+- Keepalive прогресс: "⏳ codex работает... 30с" каждые 20 сек
+- ACL: добавлены в `OWNER_ONLY_COMMANDS` (запускают внешние процессы)
+- Коммит: `f77ded1` → cherry-picked в `fix/routing-qwen-thinking` как `45eca10`
+
+**BrowserAIProvider (Приоритет 2) — РЕАЛИЗОВАНО (требует e2e-теста):**
+- `src/integrations/browser_ai_provider.py` — BrowserAIProvider.chat(prompt, service)
+  - `service="gemini"`: auto-переключение на Pro-модель через JS-eval (best-effort),
+    defensive CSS-селекторы с multiple fallbacks, wait_for_stable_text polling
+  - `service="chatgpt"`: fallback-цепочка селекторов, Cloudflare-детект
+- `src/integrations/browser_bridge.py` — расширен методами:
+  inject_text, click_element, wait_for_stable_text, find_tab_by_url_fragment, get_or_open_tab
+- Команда `!browser ai [gemini|chatgpt] <prompt>` — добавлена в handle_browser
+- Коммит: `d0d3770` → cherry-picked в `fix/routing-qwen-thinking` как `a2bc444`
+
+### Что ещё НЕ сделано (следующая сессия)
+
+- **E2E тест в Telegram**: перезапустить Krab и проверить `!codex hello world`,
+  `!browser ai gemini что такое TCP/IP`
+- **Роутинг browser-gemini / browser-chatgpt**: регистрация в model_manager.py
+  как резервный провайдер (автоматический fallback при исчерпании API-квот)
+- **test_userbot_capability_truth.py::test_build_runtime_commands_status_owner_includes_live_command_groups**
+  — предсуществующий баг (не наш), тест ожидает owner-level вывод для
+  `is_allowed_sender=True` без `access_level="owner"`, но `resolve_access_mode`
+  возвращает FULL. Не трогать без явного задания.
+
+### Operational статус на 21.03.2026
+
+- Ветка `fix/routing-qwen-thinking` в main repo содержит оба cherry-pick
+- `pytest tests/unit/test_access_control.py` → 11 passed
+- `pytest tests/unit/ --ignore=tests/unit/test_phase5.py` → 493 passed, 7 failed
+  (все 7 — предсуществующие, не связаны с нашими изменениями)
+- Krab требует перезапуска чтобы подхватить новые CLI команды
+
+---
+
 # Session Handoff — Краб 19.03.2026
 
 ## Addendum 00:05 — low-quota checkpoint и truthful fallback evidence
