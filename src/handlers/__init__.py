@@ -1,4 +1,10 @@
-# Telegram command handlers (Фаза 4.4: вынос из userbot_bridge)
+"""
+Единая точка импорта Telegram-обработчиков команд.
+
+Нужна для того, чтобы `userbot_bridge` импортировал обработчики через один
+пакетный интерфейс и не зависел от деталей разбиения `command_handlers.py`.
+"""
+
 from .command_handlers import (
     handle_acl,
     handle_agent,
@@ -27,6 +33,7 @@ from .command_handlers import (
     handle_rm_remind,
     handle_search,
     handle_set,
+    handle_shop,
     handle_status,
     handle_cronstatus,
     handle_sysinfo,
@@ -66,6 +73,7 @@ __all__ = [
     "handle_rm_remind",
     "handle_search",
     "handle_set",
+    "handle_shop",
     "handle_status",
     "handle_cronstatus",
     "handle_sysinfo",
