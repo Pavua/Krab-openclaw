@@ -53,6 +53,11 @@
   Repo-level launcher resolution уже исправлен, но внешний launcher/handoff path
   на стороне `pablito` всё ещё надо окончательно синхронизировать, чтобы весь
   стек одинаково поднимался и из repo, и из внешнего `new start_krab.command`.
+  При этом на `USER3` уже подтверждён рабочий полный цикл repo launcher'ов:
+  `Start Full Ecosystem.command` -> `kraab_running` -> зелёный
+  `scripts/r20_merge_gate.py` -> `Stop Full Ecosystem.command` без stale
+  `Voice Gateway` PID. Открытым остаётся именно cross-account sync для
+  внешнего `pablito` launcher-layer, а не сам repo-level flow.
 
 ## Still Open
 
@@ -83,6 +88,16 @@
 - `./Start Voice Gateway.command`
   → на `USER3` поднял gateway из `/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway`
   и прошёл `:8090/health`.
+- полный live-cycle в pushable `USER3`-ветке:
+  `Start Full Ecosystem.command` -> `kraab_running` ->
+  `./venv/bin/python scripts/r20_merge_gate.py` (`ok: true`) ->
+  `Stop Full Ecosystem.command`;
+- после full stop:
+  `curl http://127.0.0.1:8080/api/health/lite` и
+  `curl http://127.0.0.1:8090/health` давали `connection refused`,
+  а per-account Voice Gateway PID-файл отсутствовал;
+- regression `tests/unit/test_web_app_runtime_endpoints.py::test_browser_start_endpoint_returns_updated_readiness`
+  закрыт: `owner_chrome` снова собирается в `/api/openclaw/browser/start`.
 
 ## Для следующего doc pass
 

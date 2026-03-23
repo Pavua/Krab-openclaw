@@ -49,6 +49,14 @@
   `searchbox` → `search-results`, а DOM fallback возвращает реальные товары и цены.
 - `./Start Voice Gateway.command` в USER3-контуре уже резолвит
   `/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway` и проходит health-check.
+- Дополнительно подтверждён полный launcher-cycle в pushable `USER3`-ветке:
+  `Start Full Ecosystem.command` -> `kraab_running` ->
+  `./venv/bin/python scripts/r20_merge_gate.py` (`ok: true`) ->
+  `Stop Full Ecosystem.command`, после чего `:8080` и `:8090` не слушают и
+  stale Voice Gateway PID не остаётся.
+- В той же итерации исправлен regression в `src/modules/web_app.py`:
+  `/api/openclaw/browser/start` снова возвращает truthful payload и не падает
+  на `NameError: owner_chrome`.
 
 # Session Handoff — Краб 22.03.2026
 
