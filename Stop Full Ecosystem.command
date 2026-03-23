@@ -136,6 +136,24 @@ bootout_launch_agent() {
   launchctl remove "${label}" >/dev/null 2>&1 || true
 }
 
+resolve_krab_stop_launcher() {
+  # Stop path тоже должен уметь жить вне текущего repo:
+  # в helper-контурах канонический `new Stop Krab.command` часто лежит рядом
+  # с аккаунтным Antigravity-каталогом, а не в рабочем tree.
+  local candidate
+  for candidate in \
+    "$DIR/new Stop Krab.command" \
+    "/Users/$CURRENT_USER/Antigravity_AGENTS/new Stop Krab.command" \
+    "$DIR/Stop Krab.command"
+  do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 echo "🛑 Остановка полной экосистемы Krab..."
 
 if [ -f "$EAR_WATCHDOG_PID" ]; then
@@ -147,10 +165,11 @@ if [ -f "$EAR_WATCHDOG_PID" ]; then
   rm -f "$EAR_WATCHDOG_PID"
 fi
 
-if [ -x "$DIR/Stop Krab.command" ]; then
-  "$DIR/Stop Krab.command" || true
+KRAB_STOP_LAUNCHER="$(resolve_krab_stop_launcher || true)"
+if [ -n "${KRAB_STOP_LAUNCHER:-}" ]; then
+  "$KRAB_STOP_LAUNCHER" || true
 else
-  echo "⚠️ Не найден Stop Krab.command"
+  echo "⚠️ Не найден launcher остановки Krab/OpenClaw"
 fi
 
 stop_pid_file_process "$VOICE_FALLBACK_PID" "Voice Gateway per-account runtime"

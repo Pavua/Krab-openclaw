@@ -7,6 +7,7 @@ Web App Module (Phase 15+).
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import io
 import json
@@ -75,12 +76,18 @@ from src.core.observability import (  # noqa: E402
     timeline,
 )
 from src.core.operator_identity import current_account_id, current_operator_id  # noqa: E402
+from src.core.runtime_policy import current_runtime_mode, provider_runtime_policy  # noqa: E402
+from src.core.shared_worktree_permissions import (  # noqa: E402
+    normalize_shared_worktree_permissions,
+    sample_non_writable_shared_items,
+)
 from src.core.translator_mobile_onboarding import (  # noqa: E402
     build_translator_mobile_onboarding_packet,
 )
 from src.core.translator_live_trial_preflight import (  # noqa: E402
     build_translator_live_trial_preflight,
 )
+from src.core.voice_gateway_control_plane import VoiceGatewayControlPlane  # noqa: E402
 
 logger = structlog.get_logger("WebApp")
 
@@ -110,6 +117,9 @@ class WebApp:
         # частыми из UI/watchdog, но не должны каждый раз заново собирать local truth.
         self._runtime_lite_cache: tuple[float, dict[str, Any]] | None = None
         self._runtime_lite_lock = asyncio.Lock()
+        # Catalog моделей может собираться заметно дольше health/status endpoints,
+        # поэтому write-path панели использует отдельный короткий cache.
+        self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
         self._setup_routes()
 
     def _public_base_url(self) -> str:
@@ -282,21 +292,60 @@ class WebApp:
         return value
 
     @classmethod
-    def _chrome_remote_debugging_helper_path(cls) -> Path:
-        """Путь к существующему macOS helper для owner Chrome attach."""
+    def _debug_chrome_remote_debugging_helper_path(cls) -> Path:
+        """Путь к существующему macOS helper для отдельного debug Chrome."""
         return cls._project_root() / "new Enable Chrome Remote Debugging.command"
+
+    @classmethod
+    def _owner_chrome_remote_debugging_helper_path(cls) -> Path:
+        """Путь к macOS helper для обычного Chrome владельца."""
+        return cls._project_root() / "new Open Owner Chrome Remote Debugging.command"
+
+    @staticmethod
+    def _owner_chrome_remote_debugging_log_path() -> Path:
+        """Лог helper для ordinary Chrome attach."""
+        return Path("/tmp/krab-owner-chrome-remote-debugging.log")
+
+    @classmethod
+    def _inspect_owner_chrome_remote_debugging_log(cls) -> dict[str, Any]:
+        """
+        Пытается извлечь явную причину провала ordinary Chrome attach из helper-лога.
+
+        Зачем:
+        - Chrome 146+ может честно отклонять remote debugging для default profile;
+        - без этого owner UI выглядит так, будто нужен ещё один relaunch/approve,
+          хотя проблема уже подтверждена политикой самого Chrome.
+        """
+        path = cls._owner_chrome_remote_debugging_log_path()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return {"status": "missing", "path": str(path), "detail": ""}
+
+        lower = text.lower()
+        if "non-default data directory" in lower:
+            return {
+                "status": "chrome_policy_blocked",
+                "path": str(path),
+                "detail": (
+                    "Chrome отклонил remote debugging для default profile: "
+                    "требуется non-default data directory."
+                ),
+            }
+        return {"status": "ok", "path": str(path), "detail": ""}
 
     @classmethod
     def _launch_owner_chrome_remote_debugging(cls) -> dict[str, Any]:
         """
-        Открывает owner Chrome flow через существующий проектный helper.
+        Открывает путь подготовки обычного Chrome владельца для attach.
 
         Почему так:
-        - в репозитории уже есть `.command` с понятной инструкцией для пользователя;
-        - owner UI должен запускать тот же сценарий, а не дублировать новый launcher;
+        - owner UI должен готовить именно обычный Chrome владельца, а не отдельный
+          debug profile;
+        - `.command` даёт one-click путь для macOS без ручного копирования команд;
         - если helper отсутствует, деградируем в прямое открытие `chrome://inspect`.
         """
-        helper_path = cls._chrome_remote_debugging_helper_path()
+        helper_path = cls._owner_chrome_remote_debugging_helper_path()
         inspect_url = "chrome://inspect/#remote-debugging"
 
         try:
@@ -311,7 +360,10 @@ class WebApp:
                     "launcher": "command",
                     "helper_path": str(helper_path),
                     "opened_url": inspect_url,
-                    "next_step": "В обычном Chrome включи Remote Debugging и оставь профиль открытым.",
+                    "next_step": (
+                        "Helper попробует перезапустить обычный Chrome владельца с Remote Debugging на порту 9222. "
+                        "Если Chrome 146+ отклонит default profile, owner UI покажет это как policy block."
+                    ),
                 }
 
             chrome_app = "/Applications/Google Chrome.app"
@@ -326,7 +378,7 @@ class WebApp:
                 "launcher": "direct_open",
                 "helper_path": str(helper_path),
                 "opened_url": inspect_url,
-                "next_step": "В обычном Chrome включи Remote Debugging и затем обнови Browser / MCP Readiness.",
+                "next_step": "Открой обычный Chrome с Remote Debugging на порту 9222 и затем обнови Browser / MCP Readiness.",
             }
         except OSError as exc:
             return {
@@ -378,6 +430,7 @@ class WebApp:
         """Человекочитаемый label провайдера для model catalog."""
         normalized = str(provider_name or "").strip().lower()
         labels = {
+            "codex-cli": "Codex CLI",
             "google": "Google",
             "google-antigravity": "Google OAuth (legacy)",
             "google-gemini-cli": "Gemini CLI OAuth",
@@ -394,6 +447,7 @@ class WebApp:
         """Стабильный порядок провайдеров для owner UI."""
         normalized = str(provider_name or "").strip().lower()
         order = {
+            "codex-cli": 5,
             "google-gemini-cli": 10,
             "google": 20,
             "qwen-portal": 30,
@@ -547,7 +601,7 @@ class WebApp:
             base.update(
                 {
                     "repair_available": bool(helper_path and helper_path.exists()),
-                    "repair_label": "Починить Codex CLI",
+                    "repair_label": "Перелогинить Codex CLI",
                     "repair_action": "repair_oauth",
                     "repair_detail": (
                         "Откроет локальный helper для `codex login --device-auth` "
@@ -704,6 +758,58 @@ class WebApp:
             "quota_state": "unknown",
             "quota_label": "Провайдер не публикует остаток квоты",
         }
+
+    @classmethod
+    def _build_codex_cli_synthetic_catalog(
+        cls,
+        full_catalog_providers: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Строит synthetic inventory для `codex-cli`, если OpenClaw не публикует его напрямую.
+
+        Почему это нужно:
+        - локальный `codex login status` может быть подтверждён;
+        - owner хочет выбирать модели именно через `codex-cli/...`;
+        - OpenClaw runtime пока может знать только текущий `codex-cli/gpt-5.4`,
+          хотя официальный OpenAI catalog уже раскрывает остальные доступные модели.
+        """
+        providers = full_catalog_providers if isinstance(full_catalog_providers, dict) else {}
+        synthetic_items: list[dict[str, Any]] = []
+        seen_tails: set[str] = set()
+        for source_provider in ("openai-codex", "openai"):
+            models = providers.get(source_provider)
+            if not isinstance(models, list):
+                continue
+            for model in models:
+                if not isinstance(model, dict):
+                    continue
+                raw_key = str(model.get("key", "") or "").strip()
+                if "/" not in raw_key:
+                    continue
+                model_tail = raw_key.split("/", 1)[1].strip()
+                if not model_tail or model_tail in seen_tails:
+                    continue
+                seen_tails.add(model_tail)
+                cloned = dict(model)
+                cloned["key"] = f"codex-cli/{model_tail}"
+                raw_tags = [
+                    str(tag or "").strip()
+                    for tag in (model.get("tags") or [])
+                    if str(tag or "").strip()
+                ]
+                filtered_tags = [tag for tag in raw_tags if tag.lower() not in {"configured", "default"}]
+                filtered_tags.append("synthetic")
+                cloned["tags"] = filtered_tags
+                synthetic_items.append(cloned)
+
+        synthetic_items.sort(
+            key=lambda item: (
+                0 if str(item.get("key", "")).strip().endswith("/gpt-5.4") else 1,
+                0 if "codex" in str(item.get("key", "")).strip().lower() else 1,
+                str(item.get("name") or item.get("key") or "").lower(),
+            )
+        )
+        return synthetic_items
 
     @classmethod
     def _build_openclaw_parallelism_truth(
@@ -975,6 +1081,8 @@ class WebApp:
         oauth_remaining_human = str(status_meta.get("oauth_remaining_human", "") or "").strip()
         oauth_expected = auth_mode == "oauth"
         quota_truth = cls._quota_state_from_failure_counts(failure_counts)
+        helper_path = provider_repair_helper_path(cls._project_root(), normalized_provider)
+        helper_available = bool(helper_path and helper_path.exists())
 
         if oauth_expected and healthy_profiles:
             if not isinstance(oauth_remaining_ms, int) and healthy_oauth_remaining_ms is not None:
@@ -1074,6 +1182,17 @@ class WebApp:
             else:
                 detail = f"Legacy OAuth-провайдер подключён вручную; {detail[0].lower() + detail[1:]}" if detail else "Legacy OAuth-провайдер подключён вручную."
 
+        runtime_policy = provider_runtime_policy(
+            normalized_provider,
+            readiness=readiness,
+            auth_mode=auth_mode,
+            oauth_status=oauth_status,
+            helper_available=helper_available,
+            legacy=legacy,
+            cli_login_ready=codex_cli_logged_in,
+            quota_state=str(quota_truth.get("quota_state") or "unknown"),
+        )
+
         return {
             "provider": normalized_provider,
             "configured": bool(runtime_model_ids or profile_names),
@@ -1101,6 +1220,9 @@ class WebApp:
             "has_model_request_scope": bool(scope_truth.get("has_model_request")),
             "quota_state": str(quota_truth.get("quota_state", "unknown") or "unknown"),
             "quota_label": str(quota_truth.get("quota_label", "") or ""),
+            "helper_path": str(helper_path) if helper_path else "",
+            "helper_available": helper_available,
+            **runtime_policy,
         }
 
     def _launch_local_app(self, target_path: Path) -> dict[str, Any]:
@@ -1473,7 +1595,13 @@ class WebApp:
             if not isinstance(params, dict):
                 params = {}
                 model_payload["params"] = params
-            next_thinking = normalized_slot_thinking.get(model_id, thinking_default)
+            # Если slot_thinking не содержит эту модель, сохраняем текущее значение
+            # из конфига (а не сбрасываем на thinking_default).
+            existing_thinking = str(params.get("thinking") or "").strip().lower()
+            next_thinking = normalized_slot_thinking.get(
+                model_id,
+                existing_thinking if existing_thinking else thinking_default,
+            )
             prev_model_thinking = str(params.get("thinking") or "")
             if prev_model_thinking != next_thinking:
                 params["thinking"] = next_thinking
@@ -1563,7 +1691,7 @@ class WebApp:
         if isinstance(full_catalog_providers, dict):
             for provider_name in full_catalog_providers.keys():
                 normalized = str(provider_name or "").strip()
-                if normalized and normalized.lower() not in {"lmstudio", "local"} and normalized in provider_names:
+                if normalized and normalized.lower() not in {"lmstudio", "local"}:
                     provider_names.add(normalized)
 
         items_by_id: dict[str, dict[str, Any]] = {}
@@ -1601,6 +1729,12 @@ class WebApp:
                 # пустой stub провайдера без auth и без реально доступных моделей.
                 continue
             full_catalog_models = full_catalog_providers.get(normalized_provider) if isinstance(full_catalog_providers, dict) else []
+            if normalized_provider == "codex-cli" and not isinstance(full_catalog_models, list):
+                full_catalog_models = []
+            if normalized_provider == "codex-cli" and not full_catalog_models:
+                # OpenClaw пока не всегда публикует отдельный catalog для codex-cli,
+                # поэтому даём owner-панели синтетический список на базе OpenAI/OpenAI Codex.
+                full_catalog_models = cls._build_codex_cli_synthetic_catalog(full_catalog_providers)
             if isinstance(full_catalog_models, list):
                 for model in full_catalog_models:
                     if not isinstance(model, dict):
@@ -1619,12 +1753,22 @@ class WebApp:
                         for tag in (model.get("tags") or [])
                         if str(tag or "").strip()
                     ]
+                    lowered_tags = {tag.lower() for tag in tags}
                     configured_runtime = bool(
                         canonical_id in configured_model_ids
                         or canonical_id in active_chain
                         or selected_slots
-                        or "configured" in {tag.lower() for tag in tags}
+                        or "configured" in lowered_tags
                     )
+                    if (
+                        not configured_runtime
+                        and normalized_provider == "codex-cli"
+                        and "synthetic" in lowered_tags
+                        and str(provider_state.get("readiness") or "").strip().lower() in {"ready", "attention"}
+                    ):
+                        # Для codex-cli runtime-каталог может быть пустым, но если CLI уже живой,
+                        # synthetic OpenAI-derived модели должны быть доступны к выбору из панели.
+                        configured_runtime = True
                     items_by_id[canonical_id] = {
                         "id": canonical_id,
                         "provider": normalized_provider,
@@ -1639,6 +1783,13 @@ class WebApp:
                         "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
                         "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
                         "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_runtime_mode": str(provider_state.get("runtime_mode") or ""),
+                        "provider_primary_policy": str(provider_state.get("primary_policy") or ""),
+                        "provider_fallback_policy": str(provider_state.get("fallback_policy") or ""),
+                        "provider_release_safe": bool(provider_state.get("release_safe")),
+                        "provider_login_state": str(provider_state.get("login_state") or ""),
+                        "provider_cost_tier": str(provider_state.get("cost_tier") or ""),
+                        "provider_stability_score": float(provider_state.get("stability_score") or 0.0),
                         "provider_auth_recovery": dict(provider_auth_recovery or {}),
                         "provider_ui": dict(provider_ui),
                         "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
@@ -1690,6 +1841,13 @@ class WebApp:
                         "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
                         "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
                         "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_runtime_mode": str(provider_state.get("runtime_mode") or ""),
+                        "provider_primary_policy": str(provider_state.get("primary_policy") or ""),
+                        "provider_fallback_policy": str(provider_state.get("fallback_policy") or ""),
+                        "provider_release_safe": bool(provider_state.get("release_safe")),
+                        "provider_login_state": str(provider_state.get("login_state") or ""),
+                        "provider_cost_tier": str(provider_state.get("cost_tier") or ""),
+                        "provider_stability_score": float(provider_state.get("stability_score") or 0.0),
                         "provider_auth_recovery": dict(provider_auth_recovery or {}),
                         "provider_ui": dict(provider_ui),
                         "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
@@ -1842,6 +2000,7 @@ class WebApp:
 
         chat_model = _pick(
             str(current_slots.get("chat", "") or ""),
+            "codex-cli/gpt-5.4",
             "openai-codex/gpt-5.4",
             "google-gemini-cli/gemini-3.1-pro-preview",
             "google/gemini-3.1-pro-preview",
@@ -1850,6 +2009,7 @@ class WebApp:
         )
         thinking_model = _pick(
             str(current_slots.get("thinking", "") or ""),
+            "codex-cli/gpt-5.4",
             "openai-codex/gpt-5.4",
             "google-gemini-cli/gemini-3.1-pro-preview",
             "google/gemini-3.1-pro-preview",
@@ -1858,6 +2018,7 @@ class WebApp:
         )
         pro_model = _pick(
             str(current_slots.get("pro", "") or ""),
+            "codex-cli/gpt-5.4",
             "openai-codex/gpt-5.4",
             "google-gemini-cli/gemini-3.1-pro-preview",
             "google/gemini-3.1-pro-preview",
@@ -1866,6 +2027,7 @@ class WebApp:
         )
         coding_model = _pick(
             str(current_slots.get("coding", "") or ""),
+            "codex-cli/gpt-5.4",
             "openai-codex/gpt-5.4",
             "qwen-portal/coder-model",
             "google-gemini-cli/gemini-3.1-pro-preview",
@@ -1944,6 +2106,13 @@ class WebApp:
             runtime_signal_failures=signal_failures,
             status_snapshot=status_snapshot,
         )
+        codex_cli = cls._runtime_provider_state(
+            "codex-cli",
+            runtime_models=runtime_models,
+            auth_profiles=auth_profiles,
+            runtime_signal_failures=signal_failures,
+            status_snapshot=status_snapshot,
+        )
         google_gemini_cli = cls._runtime_provider_state(
             "google-gemini-cli",
             runtime_models=runtime_models,
@@ -1959,16 +2128,29 @@ class WebApp:
             status_snapshot=status_snapshot,
         )
 
-        target_primary = str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4") or "").strip()
-        target_in_runtime = target_primary in set(openai_codex["runtime_models"])
-        current_primary_broken = (
-            current_primary.startswith("openai-codex/")
-            and (
-                str(openai_codex.get("signal_fail_code") or "") == "runtime_missing_scope_model_request"
-                or (
-                    int(openai_codex["failure_counts"].get("model_not_found", 0) or 0) > 0
-                    and bool(openai_codex.get("cooldown_active"))
+        target_primary = str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4") or "").strip()
+        target_provider = str(target_primary.split("/", 1)[0] if "/" in target_primary else "").strip().lower()
+        target_provider_state = {
+            "openai-codex": openai_codex,
+            "codex-cli": codex_cli,
+            "google-gemini-cli": google_gemini_cli,
+            "google-antigravity": google_antigravity,
+        }.get(target_provider, {})
+        target_in_runtime = target_primary in set(target_provider_state.get("runtime_models") or [])
+        current_primary_broken = bool(
+            (
+                current_primary.startswith("openai-codex/")
+                and (
+                    str(openai_codex.get("signal_fail_code") or "") == "runtime_missing_scope_model_request"
+                    or (
+                        int(openai_codex["failure_counts"].get("model_not_found", 0) or 0) > 0
+                        and bool(openai_codex.get("cooldown_active"))
+                    )
                 )
+            )
+            or (
+                current_primary.startswith("codex-cli/")
+                and str(codex_cli.get("readiness") or "").strip().lower() not in {"ready"}
             )
         )
         google_gemini_cli_unavailable = bool(
@@ -1982,10 +2164,12 @@ class WebApp:
         antigravity_legacy_removed = not antigravity_runtime_available
 
         warnings: list[str] = []
+        if current_primary.startswith("codex-cli/") and str(codex_cli.get("readiness") or "").strip().lower() not in {"ready"}:
+            warnings.append("Текущий Codex CLI primary не подтверждён на этой macOS-учётке и требует relogin/helper.")
         if current_primary_broken:
             if str(openai_codex.get("signal_fail_code") or "") == "runtime_missing_scope_model_request":
                 warnings.append("Текущий OpenAI primary блокируется по OAuth scopes (`model.request`) и не годится как production primary.")
-            else:
+            elif current_primary.startswith("openai-codex/"):
                 warnings.append("Текущий OpenAI primary падает с model_not_found и не годится как production primary.")
         if google_gemini_cli_unavailable:
             warnings.append(
@@ -2018,6 +2202,10 @@ class WebApp:
                         candidate.startswith("google-gemini-cli/")
                         and google_gemini_cli_unavailable
                     )
+                    and not (
+                        candidate.startswith("codex-cli/")
+                        and str(codex_cli.get("readiness") or "").strip().lower() not in {"ready"}
+                    )
                 ),
                 "",
             )
@@ -2029,6 +2217,7 @@ class WebApp:
             "target_primary_in_runtime": target_in_runtime,
             "current_primary_broken": current_primary_broken,
             "temporary_primary_recommendation": temporary_primary,
+            "codex_cli": codex_cli,
             "openai_codex": openai_codex,
             "google_gemini_cli": google_gemini_cli,
             "google_antigravity": google_antigravity,
@@ -2371,6 +2560,11 @@ class WebApp:
         return cloned
 
     @staticmethod
+    def _clone_jsonish_payload(payload: Any) -> Any:
+        """Возвращает глубокую копию JSON-подобного payload для cache/fallback ответов."""
+        return copy.deepcopy(payload)
+
+    @staticmethod
     def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
         """Читает float из env с безопасным clamp и без размазывания try/except по коду."""
         raw = str(os.getenv(name, str(default)) or str(default)).strip()
@@ -2379,6 +2573,93 @@ class WebApp:
         except Exception:
             value = float(default)
         return max(float(min_value), min(float(value), float(max_value)))
+
+    def _model_catalog_cache_ttl_sec(self) -> float:
+        """TTL короткого cache каталога owner UI."""
+        return self._float_env(
+            "KRAB_WEB_MODEL_CATALOG_CACHE_TTL_SEC",
+            45.0,
+            min_value=5.0,
+            max_value=300.0,
+        )
+
+    def _model_apply_catalog_timeout_sec(self) -> float:
+        """Сколько ждём post-apply catalog refresh до graceful fallback."""
+        return self._float_env(
+            "KRAB_WEB_MODEL_APPLY_CATALOG_TIMEOUT_SEC",
+            4.0,
+            min_value=0.2,
+            max_value=30.0,
+        )
+
+    def _store_model_catalog_cache(self, payload: dict[str, Any]) -> None:
+        """Запоминает свежий catalog snapshot для быстрых повторных запросов UI."""
+        if not isinstance(payload, dict):
+            return
+        self._model_catalog_cache = (
+            time.time(),
+            self._clone_jsonish_payload(payload),
+        )
+
+    def _get_model_catalog_cache(self) -> dict[str, Any] | None:
+        """Возвращает свежий catalog cache, если TTL ещё не истёк."""
+        cached = self._model_catalog_cache
+        if cached is None:
+            return None
+        cached_ts, cached_payload = cached
+        if time.time() - cached_ts > self._model_catalog_cache_ttl_sec():
+            return None
+        if not isinstance(cached_payload, dict):
+            return None
+        return self._clone_jsonish_payload(cached_payload)
+
+    def _build_model_catalog_fallback(
+        self,
+        *,
+        runtime_controls: dict[str, Any] | None = None,
+        routing_status: dict[str, Any] | None = None,
+        degraded_reason: str = "catalog_refresh_degraded",
+    ) -> dict[str, Any]:
+        """
+        Собирает облегчённый catalog, если полный refresh после write-операции затянулся.
+
+        Главная цель этого fallback:
+        - не скрывать успешную запись runtime-chain за медленной пересборкой каталога;
+        - сохранить для UI последнюю известную inventory truth из cache;
+        - поверх cache обязательно наложить уже записанные runtime_controls/routing_status.
+        """
+        catalog = self._get_model_catalog_cache() or {
+            "force_mode": "auto",
+            "slots": ["chat", "thinking", "pro", "coding"],
+            "cloud_slots": {},
+            "local_engine": "",
+            "local_available": False,
+            "local_active_model": "",
+            "local_models": [],
+            "local_models_error": "",
+            "cloud_presets": [],
+            "cloud_inventory": [],
+            "cloud_provider_groups": [],
+            "aliases": [],
+            "quick_presets": [],
+            "runtime_model_count": 0,
+            "cloud_inventory_count": 0,
+            "runtime_registry_source": "cache_fallback",
+            "router_usage": {},
+            "parallelism_truth": self._build_openclaw_parallelism_truth(),
+            "auth_recovery": {"summary": {}, "providers": []},
+            "catalog_guidance": {
+                "primary_flow": "Каталог временно взят из cache; chain/thinking truth уже обновлены.",
+                "openai_manual_only": False,
+            },
+        }
+        if isinstance(runtime_controls, dict):
+            catalog["runtime_controls"] = self._clone_jsonish_payload(runtime_controls)
+        if isinstance(routing_status, dict):
+            catalog["routing_status"] = self._clone_jsonish_payload(routing_status)
+        catalog["catalog_refresh_degraded"] = True
+        catalog["catalog_refresh_reason"] = str(degraded_reason or "catalog_refresh_degraded")
+        return catalog
 
     @classmethod
     def _lmstudio_snapshot_ttl_sec(cls) -> float:
@@ -2542,6 +2823,90 @@ class WebApp:
                 "error": f"script_run_error:{exc}",
             }
 
+    def _run_project_python_script(
+        self,
+        script_path: Path,
+        *,
+        timeout_seconds: int = 90,
+        args: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Неинтерактивно запускает repo-level Python entrypoint для web write-endpoint'ов.
+
+        Почему это отдельно от `.command`:
+        - Finder-friendly launcher'ы часто заканчиваются `read -p`;
+        - такой хвост безопасен для человека, но ломает HTTP recovery-flow;
+        - owner panel должна вызывать ту же логику без интерактивной паузы.
+        """
+        target = Path(script_path).resolve()
+        if not target.exists() or not target.is_file():
+            return {
+                "ok": False,
+                "exit_code": 127,
+                "stdout_tail": "",
+                "error": f"script_not_found:{target}",
+            }
+
+        project_root = self._project_root()
+        python_candidates = [
+            project_root / ".venv" / "bin" / "python",
+            project_root / "venv" / "bin" / "python",
+        ]
+        python_bin = next((path for path in python_candidates if path.exists() and path.is_file()), None)
+        if python_bin is None:
+            python_bin = Path(sys.executable)
+
+        cmd = [str(python_bin), str(target)] + [str(item) for item in (args or [])]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=int(max(5, timeout_seconds)),
+            )
+            merged = "\n".join(
+                item for item in [(proc.stdout or "").strip(), (proc.stderr or "").strip()] if item
+            )
+            return {
+                "ok": proc.returncode == 0,
+                "exit_code": int(proc.returncode),
+                "stdout_tail": self._tail_text(merged, max_chars=2000),
+                "error": "",
+                "python_bin": str(python_bin),
+                "script_path": str(target),
+            }
+        except subprocess.TimeoutExpired as exc:
+            timeout_tail = self._tail_text(
+                "\n".join(
+                    item
+                    for item in [
+                        (exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")),
+                        (exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")),
+                    ]
+                    if item
+                ),
+                max_chars=2000,
+            )
+            return {
+                "ok": False,
+                "exit_code": 124,
+                "stdout_tail": timeout_tail,
+                "error": "script_timeout",
+                "python_bin": str(python_bin),
+                "script_path": str(target),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "exit_code": 1,
+                "stdout_tail": "",
+                "error": f"script_run_error:{exc}",
+                "python_bin": str(python_bin),
+                "script_path": str(target),
+            }
+
     def _latest_path_by_glob(self, pattern: str) -> Path | None:
         """Возвращает самый свежий путь по glob-паттерну внутри проекта."""
         root = self._project_root()
@@ -2605,6 +2970,94 @@ class WebApp:
                 return Path(raw).expanduser()
         return Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
 
+    @staticmethod
+    def _canonical_shared_root() -> Path:
+        """Канонический shared repo path для multi-account режима."""
+        return Path("/Users/Shared/Antigravity_AGENTS/Краб")
+
+    @staticmethod
+    def _active_shared_root() -> Path:
+        """Fast-path shared worktree для соседней macOS-учётки."""
+        return Path("/Users/Shared/Antigravity_AGENTS/Краб-active")
+
+    @staticmethod
+    def _paths_match(left: Path | str, right: Path | str) -> bool:
+        """Сравнивает пути по каноническому абсолютному виду без лишних исключений."""
+        try:
+            left_path = Path(left).expanduser().resolve()
+        except OSError:
+            left_path = Path(left).expanduser()
+        try:
+            right_path = Path(right).expanduser().resolve()
+        except OSError:
+            right_path = Path(right).expanduser()
+        return str(left_path) == str(right_path)
+
+    def _workspace_alignment_snapshot(self) -> dict[str, Any]:
+        """Фиксирует, совпадает ли текущий project root с каноническим shared worktree."""
+        project_root = self._project_root()
+        canonical_shared_root = self._canonical_shared_root()
+        active_shared_root = self._active_shared_root()
+        active_exists = active_shared_root.exists()
+        canonical_exists = canonical_shared_root.exists()
+        matches_active = active_exists and self._paths_match(project_root, active_shared_root)
+        matches_canonical = canonical_exists and self._paths_match(project_root, canonical_shared_root)
+
+        if active_exists:
+            recommended_root = active_shared_root
+            recommended_reason = "fast_path_active_shared"
+        elif canonical_exists:
+            recommended_root = canonical_shared_root
+            recommended_reason = "canonical_shared_repo"
+        else:
+            recommended_root = project_root
+            recommended_reason = "current_local_root"
+
+        if matches_active:
+            status = "ready"
+            summary = "Текущий project root уже совпадает с `Краб-active`."
+        elif matches_canonical:
+            status = "attention" if active_exists else "ready"
+            summary = (
+                "Работа идёт из канонического shared repo; это допустимо, но fast-path уже опубликован в `Краб-active`."
+                if active_exists
+                else "Работа идёт из канонического shared repo."
+            )
+        else:
+            status = "attention" if active_exists or canonical_exists else "local_only"
+            summary = (
+                "Текущий project root не совпадает с рекомендованным shared-root; для соседней учётки safer default — `Краб-active`."
+                if active_exists or canonical_exists
+                else "Shared roots сейчас недоступны; продолжаем из текущего локального project root."
+            )
+
+        return {
+            "status": status,
+            "current_project_root": str(project_root),
+            "canonical_shared_root": str(canonical_shared_root),
+            "canonical_shared_root_exists": canonical_exists,
+            "active_shared_root": str(active_shared_root),
+            "active_shared_root_exists": active_exists,
+            "project_root_matches_active_shared": matches_active,
+            "project_root_matches_canonical_shared": matches_canonical,
+            "recommended_project_root": str(recommended_root),
+            "recommended_reason": recommended_reason,
+            "summary": summary,
+        }
+
+    def _active_shared_permission_health_snapshot(self) -> dict[str, Any]:
+        """Показывает, есть ли в `Краб-active` owner-only хвосты для текущей учётки."""
+        active_shared_root = self._active_shared_root()
+        health = sample_non_writable_shared_items(active_shared_root)
+        return {
+            "active_shared_root": str(active_shared_root),
+            "active_shared_root_exists": active_shared_root.exists(),
+            "non_writable_count": int(health.get("non_writable_count") or 0),
+            "samples": list(health.get("samples") or []),
+            "checked_entries": int(health.get("checked_entries") or 0),
+            "status": "attention" if int(health.get("non_writable_count") or 0) > 0 else "ready",
+        }
+
     def _runtime_operator_profile(self) -> dict[str, Any]:
         """
         Возвращает machine-readable профиль текущей учётки/runtime.
@@ -2620,6 +3073,9 @@ class WebApp:
         browser_state_root = self._default_browser_state_root()
         project_root = self._project_root()
         fingerprint = current_account_id()
+        runtime_mode = current_runtime_mode()
+        workspace_alignment = self._workspace_alignment_snapshot()
+        active_shared_permission_health = self._active_shared_permission_health_snapshot()
 
         return {
             "ok": True,
@@ -2628,6 +3084,8 @@ class WebApp:
             "operator_name": operator_name,
             "account_id": fingerprint,
             "account_mode": "split_runtime_per_account",
+            "runtime_mode": runtime_mode,
+            "release_safe_mode": runtime_mode == "release-safe-runtime",
             "home_dir": str(home_dir),
             "project_root": str(project_root),
             "project_exists": project_root.exists(),
@@ -2642,12 +3100,16 @@ class WebApp:
             "userbot_acl_file": str(getattr(config, "USERBOT_ACL_FILE", "")),
             "browser_state_root": str(browser_state_root),
             "browser_state_root_exists": browser_state_root.exists(),
-            "owner_chrome_helper_path": str(self._chrome_remote_debugging_helper_path()),
+            "owner_chrome_helper_path": str(self._owner_chrome_remote_debugging_helper_path()),
+            "debug_chrome_helper_path": str(self._debug_chrome_remote_debugging_helper_path()),
             "web_public_base_url": self._public_base_url(),
+            "workspace_alignment": workspace_alignment,
+            "active_shared_permission_health": active_shared_permission_health,
             "notes": [
                 "Канонический режим для нескольких macOS-учёток: shared repo/docs/artifacts, но split runtime/auth/secrets/browser state.",
                 "Если запускаешь проект из соседней учётки, truth нужно проверять по этой карточке, а не по старому handoff на другой HOME.",
                 "Параллельные диалоги допустимы, но один mutating implementation dialog на активный runtime-контур остаётся safer default.",
+                "Runtime mode должен быть явным: personal-runtime, release-safe-runtime или lab-runtime.",
             ],
         }
 
@@ -3025,6 +3487,7 @@ class WebApp:
             str(active_session_payload.get("status") or "").strip()
             or ("not_reported" if voice_gateway_caps.get("ok") else "gateway_unavailable")
         )
+        active_shared_permission_health = self._active_shared_permission_health_snapshot()
         active_session = {
             "status": active_session_status,
             "session_id": str(
@@ -3075,11 +3538,14 @@ class WebApp:
                 "daily_use": "altstore_or_sidestore",
                 "paid_apple_developer_required": False,
             },
+            "active_shared_permission_health": active_shared_permission_health,
             "account_runtime": {
                 "status": "ready" if account_runtime_ready else "attention",
                 "operator_id": str(operator_profile.get("operator_id") or "").strip(),
                 "account_id": str(operator_profile.get("account_id") or "").strip(),
                 "account_mode": str(operator_profile.get("account_mode") or "").strip(),
+                "runtime_mode": str(operator_profile.get("runtime_mode") or current_runtime_mode()).strip(),
+                "release_safe_mode": bool(operator_profile.get("release_safe_mode")),
                 "userbot_authorized": bool(telegram_userbot_state.get("client_connected")),
                 "userbot_authorized_user": str(telegram_userbot_state.get("authorized_user") or "").strip(),
                 "shared_workspace_attached": bool(workspace_state.get("shared_workspace_attached")),
@@ -4638,6 +5104,33 @@ class WebApp:
             return "unauthorized"
         return "configured"
 
+    @staticmethod
+    def _overlay_tier_state_on_last_runtime_route(
+        last_runtime_route: dict[str, Any],
+        tier_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Подтягивает truthful `active_tier` в lightweight route snapshot.
+
+        Это нужно, чтобы `health_lite` и `runtime_handoff` не показывали stale
+        `free`, если truthful probe уже синхронизировал active tier в runtime state.
+        """
+        route = dict(last_runtime_route or {})
+        tier_payload = dict(tier_state or {})
+        channel = str(route.get("channel") or "").strip().lower()
+        provider = str(route.get("provider") or "").strip().lower()
+        active_tier = str(tier_payload.get("active_tier") or "").strip().lower()
+
+        if channel != "openclaw_cloud":
+            return route
+        if provider not in {"google", "google-gemini-cli"}:
+            return route
+        if active_tier not in {"free", "paid"}:
+            return route
+
+        route["active_tier"] = active_tier
+        return route
+
     async def _build_runtime_lite_snapshot_uncached(self) -> dict[str, Any]:
         """Собирает легковесный runtime-срез для `/api/health/lite` без cache."""
         openclaw = self.deps.get("openclaw_client")
@@ -4655,6 +5148,10 @@ class WebApp:
                 tier_state = dict(openclaw.get_tier_state_export() or {})
             except Exception:
                 tier_state = {}
+        last_runtime_route = self._overlay_tier_state_on_last_runtime_route(
+            last_runtime_route,
+            tier_state,
+        )
         if kraab_userbot and hasattr(kraab_userbot, "get_runtime_state"):
             try:
                 telegram_userbot_state = dict(kraab_userbot.get_runtime_state() or {})
@@ -4671,8 +5168,12 @@ class WebApp:
             tier_state=tier_state,
         )
         workspace_state = build_workspace_state_snapshot()
+        operator_profile = self._runtime_operator_profile()
 
         return {
+            "runtime_mode": str(operator_profile.get("runtime_mode") or current_runtime_mode()),
+            "operator_id": str(operator_profile.get("operator_id") or ""),
+            "account_id": str(operator_profile.get("account_id") or ""),
             "telegram_session_state": telegram_session.get("state", "unknown"),
             "telegram_session": telegram_session,
             "lmstudio_model_state": lmstudio.get("state", "unknown"),
@@ -5099,13 +5600,17 @@ class WebApp:
         tabs_error = ""
 
         for attempt in range(safe_attempts):
-            status_payload, status_error = await self._run_openclaw_cli_json(
-                ["browser", "--json", "status"],
-                timeout_sec=12.0,
-            )
-            tabs_payload, tabs_error = await self._run_openclaw_cli_json(
-                ["browser", "--json", "tabs"],
-                timeout_sec=12.0,
+            # Снимаем `status` и `tabs` параллельно, чтобы readiness не копил
+            # лишние последовательные таймауты на каждом settle-цикле.
+            (status_payload, status_error), (tabs_payload, tabs_error) = await asyncio.gather(
+                self._run_openclaw_cli_json(
+                    ["browser", "--json", "status"],
+                    timeout_sec=8.0,
+                ),
+                self._run_openclaw_cli_json(
+                    ["browser", "--json", "tabs"],
+                    timeout_sec=8.0,
+                ),
             )
 
             tabs = tabs_payload.get("tabs") if isinstance(tabs_payload, dict) else []
@@ -5218,8 +5723,9 @@ class WebApp:
         Почему это важно:
         - `running=true` и `tabs>0` сами по себе не говорят, attach-нут ли мы
           к обычному Chrome владельца или крутим отдельный debug profile;
-        - handoff требует правдивого разделения `Мой Chrome` и `Debug browser`,
-          чтобы UI не выдавал dedicated relay за owner attach.
+        - handoff требует правдивого разделения attach к обычному Chrome владельца
+          и отдельного `Debug browser`, чтобы UI не выдавал dedicated relay за
+          owner attach.
         """
         raw_attach_only = browser_status.get("attachOnly")
         attach_only = raw_attach_only if isinstance(raw_attach_only, bool) else None
@@ -5239,7 +5745,7 @@ class WebApp:
         active_contour_label = "Не определён"
         if attach_only is True:
             active_contour = "my_chrome"
-            active_contour_label = "Мой Chrome"
+            active_contour_label = "Обычный Chrome владельца"
         elif is_dedicated_profile:
             active_contour = "debug_browser"
             active_contour_label = "Debug browser"
@@ -5278,6 +5784,8 @@ class WebApp:
         auth_required = bool(smoke.get("browser_auth_required"))
         tab_attached = bool(smoke.get("tab_attached"))
         browser_http_state = str(smoke.get("browser_http_state") or "unavailable")
+        smoke_detail = str(smoke.get("detail") or "")
+        scope_limited = "missing scope: operator.read" in smoke_detail.lower()
         tabs_count = len(tabs)
         contour = WebApp._infer_browser_runtime_contour(browser_status)
         active_contour = str(contour.get("active_contour") or "unknown")
@@ -5312,14 +5820,14 @@ class WebApp:
             )
             warnings.append("Сейчас активен dedicated debug browser, а не обычный Chrome владельца.")
             next_step = (
-                "Если нужен именно обычный Chrome владельца, нажми `Открыть Мой Chrome`, "
-                "включи Remote Debugging и затем обнови статус."
+                "Если нужен attach к обычному Chrome владельца, включи его отдельно "
+                "с Remote Debugging. Эта кнопка owner UI открывает только Debug Chrome."
             )
         elif attached_by_runtime:
             state = "attached"
             readiness = "ready"
             if owner_attach_confirmed:
-                stage_label = "Мой Chrome подключён"
+                stage_label = "Обычный Chrome владельца подключён"
                 summary = "Owner browser attach подтверждён."
                 next_step = "Контур владельца готов: можно выполнять browser/MCP сценарии."
             else:
@@ -5333,8 +5841,8 @@ class WebApp:
                 stage_label = "Нужна авторизация Debug browser"
                 warnings.append("Dedicated debug browser отвечает, но требует авторизацию/attach.")
                 next_step = (
-                    "Авторизуй отдельный debug browser или используй кнопку `Открыть Мой Chrome` "
-                    "для перехода в обычный профиль."
+                    "Авторизуй отдельный debug browser. Для обычного Chrome владельца "
+                    "используй отдельный attach-path с Remote Debugging."
                 )
             else:
                 stage_label = "Нужна авторизация relay"
@@ -5346,15 +5854,29 @@ class WebApp:
             stage_label = "Не удалось прочитать вкладки"
             blockers.append(tabs_error)
             next_step = "Проверь `openclaw browser tabs --json`."
+        elif relay_reachable and browser_http_state == "authorized" and scope_limited and tabs_count == 0:
+            state = "relay_scope_limited"
+            readiness = "attention"
+            if active_contour == "debug_browser":
+                stage_label = "Debug browser c ограниченным probe"
+                warnings.append("Relay уже авторизован, но gateway probe ограничен scope `operator.read`.")
+                next_step = (
+                    "Если нужен точный staged status вкладок, выдай scope `operator.read` "
+                    "или подключи обычный Chrome владельца отдельным attach-path."
+                )
+            else:
+                stage_label = "Relay авторизован, но probe ограничен"
+                warnings.append("HTTP relay авторизован, но CLI probe ограничен scope `operator.read`.")
+                next_step = "Выдай gateway scope `operator.read` или проверь отдельный attach к обычному Chrome владельца."
         elif relay_reachable and tabs_count == 0:
             state = "tab_not_connected"
             readiness = "attention"
             if active_contour == "debug_browser":
                 stage_label = "Debug browser без вкладки"
-                warnings.append("Dedicated debug browser жив, но owner Chrome ещё не attach-нут.")
+                warnings.append("Dedicated debug browser жив, но обычный Chrome владельца ещё не attach-нут.")
                 next_step = (
-                    "Открой вкладку в отдельном debug browser или используй `Открыть Мой Chrome`, "
-                    "если нужен обычный профиль."
+                    "Открой вкладку в отдельном debug browser или подними отдельный attach "
+                    "к обычному Chrome владельца, если нужен его профиль."
                 )
             else:
                 stage_label = "Нет подключённой вкладки"
@@ -5442,8 +5964,110 @@ class WebApp:
             return "llm"
         return "integrations"
 
+    async def _probe_owner_chrome_devtools(self, url: str = "https://example.com") -> dict[str, Any]:
+        """
+        Проверяет ordinary Chrome path через локальный BrowserBridge/CDP.
+
+        Почему это отдельный probe:
+        - owner path не должен вечно жить в `manual_setup_required`, если CDP уже
+          реально поднят и умеет делать действие;
+        - для пользователя важно различать "helper только открыт" и
+          "обычный Chrome уже usable для DevTools/MCP сценариев".
+        """
+        from ..integrations.browser_bridge import browser_bridge as _browser_bridge
+
+        try:
+            attached = await _browser_bridge.is_attached()
+        except Exception as exc:
+            return {
+                "readiness": "blocked",
+                "state": "bridge_error",
+                "detail": f"Chrome DevTools bridge недоступен: {exc}",
+                "next_step": "Проверь обычный Chrome, Remote Debugging на порту 9222 и повтори probe.",
+                "attached": False,
+                "confirmed": False,
+                "tab_count": 0,
+                "action_probe": {
+                    "ok": False,
+                    "state": "bridge_error",
+                    "detail": str(exc),
+                },
+            }
+
+        tabs = await _browser_bridge.list_tabs() if attached else []
+        tab_count = len(tabs)
+        if not attached:
+            helper_log = self._inspect_owner_chrome_remote_debugging_log()
+            if str(helper_log.get("status") or "") == "chrome_policy_blocked":
+                return {
+                    "readiness": "blocked",
+                    "state": "chrome_policy_blocked",
+                    "detail": str(helper_log.get("detail") or "Chrome policy blocks default-profile remote debugging."),
+                    "next_step": (
+                        "Для Chrome 146+ ordinary attach к default profile недоступен. "
+                        "Используй OpenClaw Debug browser или отдельный non-default Chrome data dir."
+                    ),
+                    "attached": False,
+                    "confirmed": False,
+                    "tab_count": 0,
+                    "log_path": str(helper_log.get("path") or ""),
+                    "action_probe": {
+                        "ok": False,
+                        "state": "chrome_policy_blocked",
+                        "detail": str(helper_log.get("detail") or ""),
+                    },
+                }
+            return {
+                "readiness": "attention",
+                "state": "manual_setup_required",
+                "detail": "Обычный Chrome ещё не attach-нут по CDP на порту 9222.",
+                "next_step": "Запусти helper для обычного Chrome, дождись relaunch и затем обнови Browser / MCP Readiness.",
+                "attached": False,
+                "confirmed": False,
+                "tab_count": 0,
+                "action_probe": {
+                    "ok": False,
+                    "state": "not_attached",
+                    "detail": "browser_bridge_not_attached",
+                },
+            }
+
+        action_probe = await _browser_bridge.action_probe(url)
+        if bool(action_probe.get("ok")):
+            final_url = str(action_probe.get("final_url") or url)
+            title = str(action_probe.get("title") or "").strip()
+            detail = f"Chrome DevTools action probe выполнен: {final_url}"
+            if title:
+                detail += f" ({title})"
+            return {
+                "readiness": "ready",
+                "state": "action_probe_ok",
+                "detail": detail,
+                "next_step": "Обычный Chrome владельца готов для DevTools/MCP сценариев.",
+                "attached": True,
+                "confirmed": True,
+                "tab_count": tab_count,
+                "action_probe": action_probe,
+            }
+
+        return {
+            "readiness": "attention",
+            "state": str(action_probe.get("state") or "action_probe_failed"),
+            "detail": str(action_probe.get("detail") or "Chrome attach есть, но action probe не завершился."),
+            "next_step": "Повтори helper для обычного Chrome и затем обнови Browser / MCP Readiness.",
+            "attached": True,
+            "confirmed": False,
+            "tab_count": tab_count,
+            "action_probe": action_probe,
+        }
+
     @classmethod
-    def _build_mcp_readiness_snapshot(cls, browser: dict[str, Any]) -> dict[str, Any]:
+    def _build_mcp_readiness_snapshot(
+        cls,
+        browser: dict[str, Any],
+        *,
+        owner_chrome: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Собирает MCP readiness поверх managed registry и LM Studio sync-state."""
         registry = get_managed_mcp_servers()
         required_names = {"filesystem", "memory", "openclaw-browser"}
@@ -5468,6 +6092,8 @@ class WebApp:
             state = "ready_to_launch"
             readiness = "ready"
             detail = "Конфигурация готова к запуску."
+            attached = False
+            confirmed = False
 
             if missing_env:
                 state = "missing_env"
@@ -5477,6 +6103,14 @@ class WebApp:
                 state = str(browser.get("state") or "unknown")
                 readiness = str(browser.get("readiness") or "attention")
                 detail = str(browser.get("summary") or browser.get("next_step") or "Browser relay state unknown.")
+            elif name == "chrome-profile" and owner_chrome:
+                state = str(owner_chrome.get("state") or "unknown")
+                readiness = str(owner_chrome.get("readiness") or "attention")
+                detail = str(owner_chrome.get("detail") or "Chrome DevTools probe unavailable.")
+                attached = bool(owner_chrome.get("attached"))
+                confirmed = bool(owner_chrome.get("confirmed"))
+                if owner_chrome.get("next_step"):
+                    manual_setup = [str(owner_chrome.get("next_step"))]
             elif manual_setup:
                 state = "manual_setup_required"
                 readiness = "attention"
@@ -5493,7 +6127,11 @@ class WebApp:
                 "missing_env": missing_env,
                 "manual_setup": manual_setup,
                 "detail": detail,
+                "attached": attached,
+                "confirmed": confirmed,
             }
+            if owner_chrome and name == "chrome-profile":
+                item["action_probe"] = dict(owner_chrome.get("action_probe") or {})
             servers.append(item)
 
             if readiness == "ready":
@@ -5528,7 +6166,7 @@ class WebApp:
 
         detail = "Managed MCP registry синхронизирован и готов."
         if readiness == "blocked":
-            detail = "Есть блокирующие проблемы в обязательных MCP-серверах для owner browser контура."
+            detail = "Есть блокирующие проблемы в обязательных MCP-серверах для browser-контура владельца."
         elif readiness == "attention":
             detail = "Базовый MCP-контур собран, но ещё есть drift/setup-шаги."
 
@@ -5557,7 +6195,7 @@ class WebApp:
 
         Нам важно явно показать пользователю:
         - что уже работает через OpenClaw relay / расширение;
-        - что даёт более полный DevTools-путь через обычный Chrome.
+        - что даёт более полный DevTools-путь через обычный Chrome владельца.
         """
         runtime = browser.get("runtime") if isinstance(browser, dict) else {}
         runtime = runtime if isinstance(runtime, dict) else {}
@@ -5572,7 +6210,7 @@ class WebApp:
         if active_contour == "debug_browser":
             relay_detail = "Active contour: Debug browser (отдельное окно OpenClaw). " + summary
         elif active_contour == "my_chrome":
-            relay_detail = "Active contour: Мой Chrome. " + summary
+            relay_detail = "Active contour: Обычный Chrome владельца. " + summary
 
         servers = mcp.get("servers") if isinstance(mcp, dict) else []
         if not isinstance(servers, list):
@@ -5589,6 +6227,13 @@ class WebApp:
             if chrome_manual_setup
             else chrome_profile.get("detail") or "Путь Chrome DevTools пока не подтверждён."
         )
+        devtools_attached = bool(chrome_profile.get("attached"))
+        devtools_confirmed = bool(chrome_profile.get("confirmed"))
+        devtools_active_label = "Не подтверждён"
+        if devtools_confirmed:
+            devtools_active_label = "Обычный Chrome владельца"
+        elif devtools_attached:
+            devtools_active_label = "Attach есть, probe не завершён"
 
         return [
             {
@@ -5608,12 +6253,12 @@ class WebApp:
                 "kind": "chrome_devtools",
                 "readiness": str(chrome_profile.get("readiness") or "attention"),
                 "state": str(chrome_profile.get("state") or "unknown"),
-                "active": bool(runtime.get("owner_attach_confirmed")),
-                "active_label": "Мой Chrome" if bool(runtime.get("owner_attach_confirmed")) else "Не подтверждён",
+                "active": devtools_attached,
+                "active_label": devtools_active_label,
                 "detail": str(chrome_profile.get("detail") or "Обычный Chrome профиль пока не подтверждён."),
                 "next_step": chrome_next_step,
                 "preferred_for": "Полный owner-контур поверх обычного Chrome профиля владельца.",
-                "confirmed": bool(runtime.get("owner_attach_confirmed")),
+                "confirmed": devtools_confirmed,
             },
         ]
 
@@ -5765,11 +6410,13 @@ class WebApp:
             return 503, "translator_gateway_unavailable"
         return 503, detail
 
-    def _translator_gateway_client_or_raise(self) -> Any:
-        """Возвращает Voice Gateway клиент или бросает 503, если translator backend не подключён."""
+    def _translator_gateway_client_or_raise(self) -> VoiceGatewayControlPlane:
+        """Возвращает Voice Gateway control-plane или бросает 503 при неполном контракте."""
         client = self.deps.get("voice_gateway_client")
         if client is None:
             raise HTTPException(status_code=503, detail="translator_gateway_not_available")
+        if not isinstance(client, VoiceGatewayControlPlane):
+            raise HTTPException(status_code=503, detail="translator_gateway_control_plane_incomplete")
         return client
 
     @staticmethod
@@ -6036,16 +6683,24 @@ class WebApp:
         # ── Browser Bridge API ──────────────────────────────────────────────
         from ..integrations.browser_bridge import browser_bridge as _browser_bridge
 
+        browser_bridge_timeout_sec = 8.0
+
         @self.app.get("/api/browser/status")
         async def browser_status():
-            attached = await _browser_bridge.is_attached()
-            tabs = await _browser_bridge.list_tabs() if attached else []
+            try:
+                attached = await asyncio.wait_for(_browser_bridge.is_attached(), timeout=browser_bridge_timeout_sec)
+                tabs = await asyncio.wait_for(_browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec) if attached else []
+            except Exception as exc:
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "attached": False, "tab_count": 0, "active_url": None}
             active_url = tabs[-1]["url"] if tabs else None
             return {"ok": True, "attached": attached, "tab_count": len(tabs), "active_url": active_url}
 
         @self.app.get("/api/browser/tabs")
         async def browser_tabs():
-            tabs = await _browser_bridge.list_tabs()
+            try:
+                tabs = await asyncio.wait_for(_browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec)
+            except Exception as exc:
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "tabs": []}
             return tabs
 
         @self.app.post("/api/browser/navigate")
@@ -6053,19 +6708,28 @@ class WebApp:
             url = str(body.get("url") or "").strip()
             if not url:
                 raise HTTPException(status_code=400, detail="url required")
-            current_url = await _browser_bridge.navigate(url)
+            try:
+                current_url = await asyncio.wait_for(_browser_bridge.navigate(url), timeout=browser_bridge_timeout_sec)
+            except Exception as exc:
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
             return {"ok": True, "current_url": current_url}
 
         @self.app.post("/api/browser/screenshot")
         async def browser_screenshot():
-            data = await _browser_bridge.screenshot_base64()
+            try:
+                data = await asyncio.wait_for(_browser_bridge.screenshot_base64(), timeout=browser_bridge_timeout_sec)
+            except Exception as exc:
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
             if data is None:
                 return {"ok": False, "error": "screenshot_failed"}
             return {"ok": True, "data": data}
 
         @self.app.post("/api/browser/read")
         async def browser_read():
-            text = await _browser_bridge.get_page_text()
+            try:
+                text = await asyncio.wait_for(_browser_bridge.get_page_text(), timeout=browser_bridge_timeout_sec)
+            except Exception as exc:
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "text": ""}
             return {"ok": True, "text": text}
 
         @self.app.post("/api/browser/js")
@@ -6073,7 +6737,10 @@ class WebApp:
             code = str(body.get("code") or "").strip()
             if not code:
                 raise HTTPException(status_code=400, detail="code required")
-            result = await _browser_bridge.execute_js(code)
+            try:
+                result = await asyncio.wait_for(_browser_bridge.execute_js(code), timeout=browser_bridge_timeout_sec)
+            except Exception as exc:
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
             return {"ok": True, "result": result}
 
         # ────────────────────────────────────────────────────────────────────
@@ -6777,6 +7444,22 @@ class WebApp:
             return {
                 "ok": True,
                 "profile": self._runtime_operator_profile(),
+            }
+
+        @self.app.post("/api/runtime/repair-active-shared-permissions")
+        async def runtime_repair_active_shared_permissions(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Нормализует group-write права в `Краб-active` через owner web-key."""
+            self._assert_write_access(x_krab_web_key, token)
+            active_shared_root = self._active_shared_root()
+            repair_summary = normalize_shared_worktree_permissions(active_shared_root)
+            permission_health = self._active_shared_permission_health_snapshot()
+            return {
+                "ok": bool(repair_summary.get("ok")),
+                "repair": repair_summary,
+                "active_shared_permission_health": permission_health,
             }
 
         @self.app.get("/api/capabilities/registry")
@@ -7597,6 +8280,10 @@ class WebApp:
                 try:
                     cloud_report = await asyncio.wait_for(openclaw.get_cloud_runtime_check(), timeout=18.0)
                     cloud_runtime = {"available": True, "report": cloud_report}
+                    # После cloud-probe `openclaw_client` может обновить tier/auth truth.
+                    # Переснимаем lightweight runtime, чтобы handoff не уносил stale
+                    # `configured/free` сразу после restart, когда probe уже увидел real state.
+                    runtime_lite = await self._collect_runtime_lite_snapshot(force_refresh=True)
                 except asyncio.TimeoutError:
                     cloud_runtime = {"available": False, "error": "timeout"}
                 except Exception as exc:
@@ -7671,6 +8358,61 @@ class WebApp:
                 },
             }
 
+        @self.app.post("/api/krab/restart_userbot")
+        async def restart_userbot(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Перезапускает только Telegram userbot без полного runtime switchover.
+
+            Зачем нужен отдельный endpoint:
+            - legacy watchdog уже умеет дёргать именно этот маршрут;
+            - перезапуск userbot легче и безопаснее, чем полный restart всего Krab;
+            - это закрывает split-state, когда web panel жива, но transport userbot деградировал.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            kraab_userbot = self.deps.get("kraab_userbot")
+            if not kraab_userbot or not hasattr(kraab_userbot, "start") or not hasattr(kraab_userbot, "stop"):
+                return {
+                    "ok": False,
+                    "error": "userbot_restart_unavailable",
+                    "detail": "kraab_userbot не поддерживает start/stop для restart endpoint",
+                }
+
+            before_state = {}
+            if hasattr(kraab_userbot, "get_runtime_state"):
+                try:
+                    before_state = dict(kraab_userbot.get_runtime_state() or {})
+                except Exception:
+                    before_state = {}
+
+            try:
+                await kraab_userbot.stop()
+                await kraab_userbot.start()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("runtime_restart_userbot_failed", error=str(exc))
+                return {
+                    "ok": False,
+                    "error": "restart_failed",
+                    "detail": str(exc),
+                    "before": before_state,
+                }
+
+            after_state = {}
+            if hasattr(kraab_userbot, "get_runtime_state"):
+                try:
+                    after_state = dict(kraab_userbot.get_runtime_state() or {})
+                except Exception:
+                    after_state = {}
+
+            return {
+                "ok": True,
+                "action": "restart_userbot",
+                "before": before_state,
+                "after": after_state,
+            }
+
         @self.app.post("/api/runtime/recover")
         async def runtime_recover(
             payload: dict = Body(default_factory=dict),
@@ -7709,8 +8451,8 @@ class WebApp:
             steps: list[dict[str, Any]] = []
 
             if run_repair:
-                repair_result = self._run_local_script(
-                    self._project_root() / "openclaw_runtime_repair.command",
+                repair_result = self._run_project_python_script(
+                    self._project_root() / "scripts" / "openclaw_runtime_repair.py",
                     timeout_seconds=120,
                 )
                 steps.append(
@@ -7726,8 +8468,8 @@ class WebApp:
                 steps.append({"step": "openclaw_runtime_repair", "ok": True, "skipped": True})
 
             if run_sync:
-                sync_result = self._run_local_script(
-                    self._project_root() / "sync_openclaw_models.command",
+                sync_result = self._run_project_python_script(
+                    self._project_root() / "scripts" / "sync_openclaw_models.py",
                     timeout_seconds=120,
                 )
                 steps.append(
@@ -8553,7 +9295,7 @@ class WebApp:
             ]
             parallelism_truth = self._build_openclaw_parallelism_truth()
 
-            return {
+            payload = {
                 "force_mode": force_mode,
                 "slots": slot_list,
                 "cloud_slots": cloud_slots,
@@ -8580,11 +9322,17 @@ class WebApp:
                     "openai_manual_only": False,
                 },
             }
+            self._store_model_catalog_cache(payload)
+            return payload
 
         @self.app.get("/api/model/catalog")
-        async def model_catalog():
+        async def model_catalog(force_refresh: bool = Query(default=False)):
             """Каталог моделей/режимов для web-панели с кнопочным управлением."""
             router = self.deps["router"]
+            if not force_refresh:
+                cached_catalog = self._get_model_catalog_cache()
+                if cached_catalog is not None:
+                    return {"ok": True, "catalog": cached_catalog, "cached": True}
             return {"ok": True, "catalog": await _build_model_catalog(router)}
 
         @self.app.post("/api/model/provider-action")
@@ -8742,6 +9490,8 @@ class WebApp:
 
             result_payload: dict[str, object] = {}
             message_text = "✅ Изменения применены."
+            post_apply_runtime_controls: dict[str, Any] | None = None
+            post_apply_routing_status: dict[str, Any] | None = None
 
             if action == "set_mode":
                 mode = str(payload.get("mode", "auto")).strip().lower() or "auto"
@@ -8851,10 +9601,12 @@ class WebApp:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
                 self._runtime_lite_cache = None
+                post_apply_routing_status = self._build_openclaw_model_routing_status()
+                post_apply_runtime_controls = self._build_openclaw_runtime_controls()
                 result_payload = {
                     "runtime": applied,
-                    "routing_status": self._build_openclaw_model_routing_status(),
-                    "runtime_controls": self._build_openclaw_runtime_controls(),
+                    "routing_status": post_apply_routing_status,
+                    "runtime_controls": post_apply_runtime_controls,
                 }
                 backup_hint = ""
                 if applied.get("backup_openclaw_json"):
@@ -8870,12 +9622,48 @@ class WebApp:
             if black_box and hasattr(black_box, "log_event"):
                 black_box.log_event("web_model_apply", f"action={action} result={message_text}")
 
+            catalog_refresh = {
+                "degraded": False,
+                "reason": "",
+                "detail": "",
+            }
+            try:
+                catalog_payload = await asyncio.wait_for(
+                    _build_model_catalog(router),
+                    timeout=self._model_apply_catalog_timeout_sec(),
+                )
+            except asyncio.TimeoutError:
+                catalog_payload = self._build_model_catalog_fallback(
+                    runtime_controls=post_apply_runtime_controls,
+                    routing_status=post_apply_routing_status,
+                    degraded_reason="catalog_refresh_timeout",
+                )
+                self._store_model_catalog_cache(catalog_payload)
+                catalog_refresh = {
+                    "degraded": True,
+                    "reason": "catalog_refresh_timeout",
+                    "detail": "Runtime уже записан, но полный refresh каталога занял слишком много времени; UI временно использует cache.",
+                }
+            except Exception as exc:  # noqa: BLE001
+                catalog_payload = self._build_model_catalog_fallback(
+                    runtime_controls=post_apply_runtime_controls,
+                    routing_status=post_apply_routing_status,
+                    degraded_reason="catalog_refresh_failed",
+                )
+                self._store_model_catalog_cache(catalog_payload)
+                catalog_refresh = {
+                    "degraded": True,
+                    "reason": "catalog_refresh_failed",
+                    "detail": f"Runtime уже записан, но post-apply refresh каталога завершился ошибкой: {exc}",
+                }
+
             return {
                 "ok": True,
                 "action": action,
                 "message": message_text,
                 "result": result_payload,
-                "catalog": await _build_model_catalog(router),
+                "catalog": catalog_payload,
+                "catalog_refresh": catalog_refresh,
             }
 
         @self.app.get("/api/model/feedback")
@@ -9576,7 +10364,12 @@ class WebApp:
                     "detail": start_error,
                 }
 
-            smoke_report = await self._collect_openclaw_browser_smoke_report("https://example.com")
+            # После старта хотим вернуть тот же truthful payload, что и readiness-endpoint:
+            # relay-smoke и owner Chrome probe независимы и могут собираться параллельно.
+            smoke_report, owner_chrome = await asyncio.gather(
+                self._collect_openclaw_browser_smoke_report("https://example.com"),
+                self._probe_owner_chrome_devtools("https://example.com"),
+            )
             smoke = dict(smoke_report.get("browser_smoke", {}) or {})
             browser_status, browser_status_error, tabs_payload, tabs_error = (
                 await self._collect_stable_browser_cli_runtime(
@@ -9604,6 +10397,7 @@ class WebApp:
                     "tabs": tabs_payload,
                     "tabs_error": tabs_error,
                     "browser_smoke": smoke_report,
+                    "owner_chrome": owner_chrome,
                 },
             }
 
@@ -9612,14 +10406,19 @@ class WebApp:
             token: str = Query(default=""),
             x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
         ):
-            """Открывает owner Chrome на странице Remote Debugging через существующий helper."""
+            """Открывает helper для relaunch обычного Chrome владельца с Remote Debugging."""
             self._assert_write_access(x_krab_web_key, token)
             return self._launch_owner_chrome_remote_debugging()
 
         @self.app.get("/api/openclaw/browser-mcp-readiness")
         async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
-            """Агрегированный staged readiness для owner browser-контура и managed MCP."""
-            smoke_report = await self._collect_openclaw_browser_smoke_report(url)
+            """Агрегированный staged readiness для browser-контура владельца и managed MCP."""
+            # Важный UX-момент: ordinary Chrome probe и relay-smoke не зависят друг от
+            # друга напрямую, поэтому нет смысла ждать их строго последовательно.
+            smoke_report, owner_chrome = await asyncio.gather(
+                self._collect_openclaw_browser_smoke_report(url),
+                self._probe_owner_chrome_devtools(url),
+            )
             smoke = dict(smoke_report.get("browser_smoke", {}) or {})
             browser_status, browser_status_error, tabs_payload, tabs_error = (
                 await self._collect_stable_browser_cli_runtime(
@@ -9636,7 +10435,7 @@ class WebApp:
                 browser_status_error=browser_status_error,
                 tabs_error=tabs_error,
             )
-            mcp = self._build_mcp_readiness_snapshot(browser)
+            mcp = self._build_mcp_readiness_snapshot(browser, owner_chrome=owner_chrome)
             browser["paths"] = self._build_browser_access_paths(browser, mcp)
 
             overall = "ready"
@@ -9663,6 +10462,7 @@ class WebApp:
                     "tabs": tabs_payload,
                     "tabs_error": tabs_error,
                     "browser_smoke": smoke_report,
+                    "owner_chrome": owner_chrome,
                 },
             }
 
@@ -9785,6 +10585,10 @@ class WebApp:
                 report = await openclaw.get_cloud_runtime_check()
             except Exception as exc:
                 return {"available": False, "error": "cloud_runtime_check_failed", "detail": str(exc)}
+            # После truthful runtime-check tier-state может измениться с stale `free`
+            # на фактический `paid`, поэтому lightweight runtime snapshot нужно
+            # пересобрать заново, а не держать старый TTL-cache.
+            self._runtime_lite_cache = None
             return {"available": True, "report": report}
 
         @self.app.post("/api/openclaw/cloud/switch-tier")
@@ -9806,6 +10610,7 @@ class WebApp:
                 return {"ok": False, "error": "invalid_tier", "detail": "Допустимо: free|paid"}
             try:
                 result = await openclaw.switch_cloud_tier(tier)
+                self._runtime_lite_cache = None
                 return {"ok": bool(result.get("ok")), "result": result}
             except Exception as exc:
                 return {"ok": False, "error": "switch_cloud_tier_failed", "detail": str(exc)}

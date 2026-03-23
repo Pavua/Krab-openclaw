@@ -10,6 +10,7 @@ set -euo pipefail
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 AG_ROOT="$(cd "$DIR/.." && pwd)"
+CURRENT_USER="$(id -un)"
 
 resolve_voice_gateway_dir() {
   # Экосистема должна поднимать тот же Voice Gateway path, что и standalone
@@ -64,6 +65,24 @@ fi
 
 mkdir -p "$DIR/logs"
 EAR_LOG="$DIR/logs/krab_ear_start.log"
+
+resolve_krab_start_launcher() {
+  # Shared/user-specific контур может держать канонический launcher
+  # вне текущего repo, поэтому не жёстко привязываемся к `new start_krab.command`.
+  local candidate
+  for candidate in \
+    "$DIR/new start_krab.command" \
+    "/Users/$CURRENT_USER/Antigravity_AGENTS/new start_krab.command" \
+    "$DIR/start_krab.command" \
+    "$DIR/Krab.command"
+  do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
 echo "🧩 Запуск полной экосистемы Krab..."
 echo "📂 Krab dir: $DIR"
@@ -121,4 +140,10 @@ if [ ! -f "$EAR_WATCHDOG_PID" ]; then
 fi
 
 echo "🦀 Перехожу к запуску Krab/OpenClaw..."
-exec "$DIR/start_krab.command"
+KRAB_START_LAUNCHER="$(resolve_krab_start_launcher || true)"
+if [ -z "${KRAB_START_LAUNCHER:-}" ]; then
+  echo "❌ Не найден launcher Krab/OpenClaw ни в repo, ни в аккаунтном каталоге."
+  exit 1
+fi
+echo "🚀 Launcher: $KRAB_START_LAUNCHER"
+exec "$KRAB_START_LAUNCHER"

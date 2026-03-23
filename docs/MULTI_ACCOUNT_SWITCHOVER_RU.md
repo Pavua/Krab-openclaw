@@ -78,6 +78,27 @@
 
 1. На текущей учётке перед переходом запустить `Prepare Next Account Session.command`.
 2. На другой учётке открыть `/Users/Shared/Antigravity_AGENTS/Краб-active`, если нужен быстрый coding loop без legacy shared drift.
+
+## Подтверждённый launcher baseline 2026-03-24
+
+После live-проверки на `USER3` принимается следующий truth:
+
+- `Start Full Ecosystem.command` не должен жёстко зависеть от локального
+  `new start_krab.command` внутри repo;
+- если такого файла нет, launcher обязан уметь перейти на
+  `/Users/$USER/Antigravity_AGENTS/new start_krab.command`;
+- `Stop Full Ecosystem.command` обязан так же находить account-level
+  `new Stop Krab.command`, а не только repo-level wrapper;
+- `Voice Gateway` runtime state должен жить в `~/.openclaw/krab_runtime_state/voice_gateway`,
+  чтобы helper-учётка не упиралась в права на shared Voice Gateway repo.
+
+Это проверено циклом:
+
+1. `Start Full Ecosystem.command`
+2. достижение `kraab_running`
+3. `./venv/bin/python scripts/r20_merge_gate.py` -> `ok: true`
+4. `Stop Full Ecosystem.command`
+5. проверка, что `:8080` и `:8090` больше не слушают
 3. Запустить `Check New Account Readiness.command`.
 4. Если есть сомнение по ветке/HEAD или правам записи в shared path, отдельно запустить `Check Shared Repo Drift.command`.
 5. Если нужно разобрать старый drift между `pablito` и legacy shared repo, запустить `Prepare Shared Repo Switchover.command` и прочитать `artifacts/ops/shared_repo_switchover_latest.md`.
