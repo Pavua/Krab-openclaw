@@ -140,3 +140,77 @@ async def test_text_route_waits_past_first_chunk_soft_timeout(monkeypatch: pytes
     assert delivered_text == "Готовый buffered-ответ"
     edited_texts = [call.args[1] for call in bot._safe_edit.await_args_list]
     assert any("SLOW_NOTICE" in text for text in edited_texts)
+
+
+@pytest.mark.asyncio
+async def test_text_route_emits_tool_progress_notice_before_regular_progress_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool-progress notice должен появиться раньше длинного generic progress schedule."""
+    bot = _make_buffered_bot_stub()
+    incoming = SimpleNamespace(
+        id=11,
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Открой страницу и проверь цену",
+        caption=None,
+        photo=None,
+        voice=None,
+        audio=None,
+        chat=SimpleNamespace(id=124, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=124), text="", caption="")),
+    )
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL,
+        source="unit-test",
+        matched_subject="tester",
+    )
+
+    async def _fake_stream(**kwargs):
+        _ = kwargs
+        await asyncio.sleep(0.03)
+        yield "Готово"
+
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", _fake_stream)
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client,
+        "get_last_runtime_route",
+        lambda: {"model": "openai-codex/gpt-5.4", "channel": "planning", "status": "ok"},
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client,
+        "get_active_tool_calls_summary",
+        lambda: "🔧 Выполняется: browser\nИнструментов: 0/1",
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module,
+        "_resolve_openclaw_stream_timeouts",
+        lambda **kwargs: (0.05, 0.05),
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module,
+        "_resolve_openclaw_buffered_response_timeout",
+        lambda **kwargs: 0.20,
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module,
+        "_resolve_openclaw_progress_notice_schedule",
+        lambda **kwargs: (10.0, 30.0),
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "OPENCLAW_TOOL_PROGRESS_POLL_SEC",
+        0.01,
+        raising=False,
+    )
+
+    await bot._process_message_serialized(
+        message=incoming,
+        user=incoming.from_user,
+        access_profile=access_profile,
+        is_allowed_sender=True,
+        chat_id=str(incoming.chat.id),
+    )
+
+    edited_texts = [call.args[1] for call in bot._safe_edit.await_args_list]
+    assert any("Выполняется: browser" in text for text in edited_texts)

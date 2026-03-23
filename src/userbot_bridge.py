@@ -88,6 +88,7 @@ from .handlers import (
     handle_rm_remind,
     handle_search,
     handle_set,
+    handle_shop,
     handle_status,
     handle_sysinfo,
     handle_translator,
@@ -126,7 +127,7 @@ def _resolve_openclaw_stream_timeouts(*, has_photo: bool) -> tuple[float, float]
     - после старта стрима интервалы между чанками обычно заметно меньше.
     """
     chunk_timeout_sec = float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0))
-    default_first = 540.0 if has_photo else 420.0
+    default_first = 720.0 if has_photo else 600.0
     # Для фото-разбора допускаем отдельный override первого чанка:
     # vision-модели/большие контексты стабильно дольше выходят на первый токен.
     if has_photo:
@@ -162,7 +163,7 @@ def _resolve_openclaw_buffered_response_timeout(
       но не должен рубить ещё живую fallback-цепочку OpenClaw раньше gateway timeout;
     - даём разумный запас сверх первого ожидания, чтобы не зависать бесконечно.
     """
-    default_total_timeout_sec = 780.0 if has_photo else 660.0
+    default_total_timeout_sec = 1020.0 if has_photo else 900.0
     return max(default_total_timeout_sec, float(first_chunk_timeout_sec or 0.0) + 60.0)
 
 
@@ -201,26 +202,36 @@ def _build_openclaw_progress_wait_notice(
     attempt: int | None,
     elapsed_sec: float,
     notice_index: int,
+    tool_calls_summary: str = "",
 ) -> str:
     """
     Формирует раннее тех-уведомление о том, что buffered-запрос всё ещё жив.
 
     Текст намеренно честный: не обещает скорый ответ, а объясняет стадию работы.
+    Если OpenClaw использует инструменты, показывает их статус.
     """
     route_line = _build_openclaw_route_notice_line(
         route_model=route_model,
         attempt=attempt,
     )
     elapsed_label = max(1, int(round(float(elapsed_sec or 0.0))))
-    if notice_index <= 1:
+    if tool_calls_summary:
+        if "🔧 Выполняется:" in tool_calls_summary:
+            lead = "🛠️ Запрос в работе: вызываю инструмент и жду результат."
+        else:
+            lead = "🛠️ Запрос в работе: инструменты уже отработали, собираю итоговый ответ."
+    elif notice_index <= 1:
         lead = "🛠️ Запрос в работе: контекст собран, жду первый ответ от модели."
     else:
         lead = "🛠️ Запрос всё ещё в работе: первый ответ пока не пришёл, но маршрут жив."
-    return (
+    result = (
         f"{lead}\nПрошло: ~{elapsed_label} сек. Не дублируй сообщение."
         "\nЕсли маршрут превысит свой budget ожидания, Краб автоматически перейдёт к следующему fallback."
         f"{route_line}"
     )
+    if tool_calls_summary:
+        result += f"\n\n{tool_calls_summary}"
+    return result
 
 
 def _build_openclaw_slow_wait_notice(*, route_model: str, attempt: int | None) -> str:
@@ -599,6 +610,10 @@ class KraabUserbot:
         @self.client.on_message(filters.command("search", prefixes=prefixes) & _make_command_filter("search"), group=-1)
         async def wrap_search(c, m):
             await run_cmd(handle_search, m)
+
+        @self.client.on_message(filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1)
+        async def wrap_shop(c, m):
+            await run_cmd(handle_shop, m)
 
         @self.client.on_message(
             filters.command("remember", prefixes=prefixes) & _make_command_filter("remember"), group=-1
@@ -3053,6 +3068,19 @@ class KraabUserbot:
         )
         return anchor_message, combined_query
 
+    @staticmethod
+    async def _keep_typing_alive(client: Any, chat_id: int, action: Any, stop_event: asyncio.Event) -> None:
+        """Фоновая корутина: повторяет send_chat_action каждые 4 секунды, пока не установлен stop_event."""
+        while not stop_event.is_set():
+            try:
+                await client.send_chat_action(chat_id, action)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=4.0)
+            except asyncio.TimeoutError:
+                pass
+
     async def _process_message_serialized(
         self,
         *,
@@ -3143,14 +3171,19 @@ class KraabUserbot:
             has_audio=bool(has_audio_message),
         )
         action = enums.ChatAction.RECORD_AUDIO if self._should_send_voice_reply() else enums.ChatAction.TYPING
-        await self.client.send_chat_action(message.chat.id, action)
-
+        _typing_stop_event = asyncio.Event()
+        _typing_task = asyncio.create_task(
+            self._keep_typing_alive(self.client, message.chat.id, action, _typing_stop_event)
+        )
         # Переключение ролей
         if has_trigger and any(p in text.lower() for p in ["стань", "будь", "как"]):
             for role in ROLES:
                 if role in text.lower():
                     self.current_role = role
                     await message.reply(f"🎭 **Режим изменен:** `{role}`. Слушаю.")
+                    _typing_stop_event.set()
+                    _typing_task.cancel()
+                    await asyncio.gather(_typing_task, return_exceptions=True)
                     return
 
         temp_msg = message
@@ -3186,6 +3219,9 @@ class KraabUserbot:
                 delivery_result=delivery_result,
                 note="runtime_truth_fastpath",
             )
+            _typing_stop_event.set()
+            _typing_task.cancel()
+            await asyncio.gather(_typing_task, return_exceptions=True)
             return
 
         if self._looks_like_capability_status_question(query):
@@ -3210,6 +3246,9 @@ class KraabUserbot:
                 delivery_result=delivery_result,
                 note="capability_truth_fastpath",
             )
+            _typing_stop_event.set()
+            _typing_task.cancel()
+            await asyncio.gather(_typing_task, return_exceptions=True)
             return
 
         if self._looks_like_commands_question(query):
@@ -3234,6 +3273,9 @@ class KraabUserbot:
                 delivery_result=delivery_result,
                 note="commands_truth_fastpath",
             )
+            _typing_stop_event.set()
+            _typing_task.cancel()
+            await asyncio.gather(_typing_task, return_exceptions=True)
             return
 
         if self._looks_like_integrations_question(query):
@@ -3258,6 +3300,9 @@ class KraabUserbot:
                 delivery_result=delivery_result,
                 note="integrations_truth_fastpath",
             )
+            _typing_stop_event.set()
+            _typing_task.cancel()
+            await asyncio.gather(_typing_task, return_exceptions=True)
             return
 
         # VISION: Обработка фото
@@ -3318,6 +3363,9 @@ class KraabUserbot:
                 delivery_result=delivery_result,
                 note="photo_route_error",
             )
+            _typing_stop_event.set()
+            _typing_task.cancel()
+            await asyncio.gather(_typing_task, return_exceptions=True)
             return
 
         full_response = ""
@@ -3383,6 +3431,13 @@ class KraabUserbot:
         slow_first_chunk_notice_sent = False
         progress_notice_count = 0
         next_progress_notice_sec = float(progress_notice_initial_sec)
+        tool_progress_poll_sec = float(
+            getattr(config, "OPENCLAW_TOOL_PROGRESS_POLL_SEC", 4.0) or 4.0
+        )
+        tool_progress_poll_sec = max(0.01, tool_progress_poll_sec)
+        next_tool_progress_sec = tool_progress_poll_sec
+        last_tool_summary = ""
+        last_progress_notice_text = ""
         startup_route_model = str(
             _current_runtime_primary_model() or getattr(config, "MODEL", "") or ""
         ).strip()
@@ -3461,6 +3516,11 @@ class KraabUserbot:
                         wait_timeout,
                         max(0.0, next_progress_notice_sec - elapsed_wait_sec),
                     )
+                if next_tool_progress_sec > 0.0:
+                    wait_timeout = min(
+                        wait_timeout,
+                        max(0.0, next_tool_progress_sec - elapsed_wait_sec),
+                    )
                 wait_timeout = min(wait_timeout, remaining_total_timeout_sec)
             try:
                 done, _ = await asyncio.wait({next_chunk_task}, timeout=wait_timeout)
@@ -3471,6 +3531,56 @@ class KraabUserbot:
                 break
             except asyncio.TimeoutError:
                 elapsed_wait_sec = time.monotonic() - started_wait_at
+                tool_summary = ""
+                if hasattr(openclaw_client, "get_active_tool_calls_summary"):
+                    try:
+                        tool_summary = openclaw_client.get_active_tool_calls_summary()
+                    except Exception:
+                        tool_summary = ""
+                if (
+                    not received_any_chunk
+                    and tool_summary
+                    and elapsed_wait_sec >= next_tool_progress_sec - 1e-6
+                ):
+                    route_meta = {}
+                    if hasattr(openclaw_client, "get_last_runtime_route"):
+                        try:
+                            route_meta = openclaw_client.get_last_runtime_route() or {}
+                        except Exception:
+                            route_meta = {}
+                    route_model = str(
+                        route_meta.get("model")
+                        or startup_route_model
+                        or getattr(config, "MODEL", "")
+                        or ""
+                    ).strip()
+                    route_attempt = int(route_meta.get("attempt") or 0) or None
+                    progress_notice = _build_openclaw_progress_wait_notice(
+                        route_model=route_model,
+                        attempt=route_attempt,
+                        elapsed_sec=elapsed_wait_sec,
+                        notice_index=max(1, progress_notice_count),
+                        tool_calls_summary=tool_summary,
+                    )
+                    if progress_notice != last_progress_notice_text or tool_summary != last_tool_summary:
+                        try:
+                            if is_self:
+                                message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
+                            else:
+                                temp_msg = await self._safe_edit(temp_msg, progress_notice)
+                            last_progress_notice_text = progress_notice
+                            last_tool_summary = tool_summary
+                        except Exception as exc:
+                            logger.warning(
+                                "openclaw_tool_progress_notice_delivery_failed",
+                                chat_id=chat_id,
+                                route_model=route_model,
+                                route_attempt=route_attempt,
+                                error=str(exc),
+                                has_photo=bool(images),
+                            )
+                    next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
+                    continue
                 if not received_any_chunk and not slow_first_chunk_notice_sent:
                     if elapsed_wait_sec >= float(first_chunk_timeout_sec) - 1e-6:
                         slow_first_chunk_notice_sent = True
@@ -3506,8 +3616,15 @@ class KraabUserbot:
                                 message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
                             else:
                                 temp_msg = await self._safe_edit(temp_msg, slow_notice)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning(
+                                "openclaw_slow_notice_delivery_failed",
+                                chat_id=chat_id,
+                                route_model=route_model,
+                                route_attempt=route_attempt,
+                                error=str(exc),
+                                has_photo=bool(images),
+                            )
                         continue
                 if not received_any_chunk and next_progress_notice_sec > 0.0:
                     if elapsed_wait_sec >= next_progress_notice_sec - 1e-6:
@@ -3539,15 +3656,27 @@ class KraabUserbot:
                             attempt=route_attempt,
                             elapsed_sec=elapsed_wait_sec,
                             notice_index=progress_notice_count,
+                            tool_calls_summary=tool_summary,
                         )
                         try:
                             if is_self:
                                 message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
                             else:
                                 temp_msg = await self._safe_edit(temp_msg, progress_notice)
-                        except Exception:
-                            pass
+                            last_progress_notice_text = progress_notice
+                            last_tool_summary = tool_summary
+                        except Exception as exc:
+                            logger.warning(
+                                "openclaw_progress_notice_delivery_failed",
+                                chat_id=chat_id,
+                                route_model=route_model,
+                                route_attempt=route_attempt,
+                                notice_index=progress_notice_count,
+                                error=str(exc),
+                                has_photo=bool(images),
+                            )
                         next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
+                        next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
                         continue
                 logger.error(
                     "openclaw_stream_chunk_timeout",
@@ -3596,8 +3725,13 @@ class KraabUserbot:
                         message = await self._safe_edit(message, f"🦀 {query}\n\n{display}")
                     else:
                         temp_msg = await self._safe_edit(temp_msg, display)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "openclaw_stream_edit_delivery_failed",
+                        chat_id=chat_id,
+                        error=str(exc),
+                        has_photo=bool(images),
+                    )
             next_chunk_task = asyncio.create_task(stream_iter.__anext__())
 
         if not full_response:
@@ -3663,6 +3797,10 @@ class KraabUserbot:
                 await self.client.send_voice(message.chat.id, voice_path)
                 if os.path.exists(voice_path):
                     os.remove(voice_path)
+
+        _typing_stop_event.set()
+        _typing_task.cancel()
+        await asyncio.gather(_typing_task, return_exceptions=True)
 
     async def _process_message(self, message: Message):
         """Главный обработчик входящих сообщений"""

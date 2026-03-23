@@ -145,6 +145,30 @@ def test_build_openclaw_progress_wait_notice_reflects_current_attempt() -> None:
     assert "Стартовый маршрут" not in notice
 
 
+def test_build_openclaw_progress_wait_notice_mentions_running_tool() -> None:
+    notice = userbot_bridge_module._build_openclaw_progress_wait_notice(
+        route_model="openai-codex/gpt-5.4",
+        attempt=1,
+        elapsed_sec=18.0,
+        notice_index=1,
+        tool_calls_summary="🔧 Выполняется: browser\nИнструментов: 0/1",
+    )
+    assert "вызываю инструмент" in notice
+    assert "Выполняется: browser" in notice
+
+
+def test_build_openclaw_progress_wait_notice_mentions_tool_wrap_up() -> None:
+    notice = userbot_bridge_module._build_openclaw_progress_wait_notice(
+        route_model="openai-codex/gpt-5.4",
+        attempt=1,
+        elapsed_sec=22.0,
+        notice_index=2,
+        tool_calls_summary="✅ Готово: browser\nИнструментов: 1/1",
+    )
+    assert "собираю итоговый ответ" in notice
+    assert "Готово: browser" in notice
+
+
 def test_build_openclaw_slow_wait_notice_uses_route_line() -> None:
     notice = userbot_bridge_module._build_openclaw_slow_wait_notice(
         route_model="codex-cli/gpt-5.4",
