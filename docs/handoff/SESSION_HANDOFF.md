@@ -14,7 +14,6 @@
 - Что честно оставлено как `partial`, а не ложно помечено как done:
   - `#6 Telegram timeouts`
   - `#7 long-request transparency`
-  - `#10 Mercadona`
   - multi-account `Voice Gateway` launcher path
 
 ### Что именно добавлено в USER3-контуре
@@ -42,6 +41,9 @@
 - OpenClaw gateway `:18789` после launcher-fix больше не trigger-ит лишний
   restart через `launchctl kickstart`;
 - Voice Gateway `:8090` сейчас жив в USER3 runtime-state fallback-контуре.
+- `Mercadona !shop` больше не зависит от устаревшего `/search?query=`:
+  live flow теперь идёт через home → cookies → `Escape` для entry-modal →
+  `searchbox` → `search-results`, а DOM fallback возвращает реальные товары и цены.
 
 # Session Handoff — Краб 22.03.2026
 

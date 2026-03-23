@@ -25,6 +25,11 @@
 - `handle_shop` startup crash: подтверждено.
   `src.handlers` снова экспортирует `handle_shop`, regression:
   `tests/unit/test_handlers_exports.py`.
+- `#10 Mercadona`: подтверждено по живому web-flow.
+  Старый вход через `/search?query=` устарел, но `src/skills/mercadona.py`
+  теперь идёт через домашнюю страницу, закрывает entry-modal, запускает поиск
+  через штатный `searchbox` и читает `search-results` из DOM как truthful
+  fallback. Live smoke по `leche` вернул реальные товары и цены.
 
 ## Partial
 
@@ -36,9 +41,6 @@
   Постоянный `typing` подтверждён (`_keep_typing_alive(...)`), но промежуточные
   owner-visible tool-status сообщения уровня `Вызываю инструмент...` /
   `Читаю скриншот...` пока не подтверждены как законченный UX-слой.
-- `#10 Mercadona`: частично.
-  Команда `!shop` и `src/skills/mercadona.py` есть, антибот/XHR логика добавлена,
-  но acceptance и отдельного тестового покрытия для самого поиска пока нет.
 - `Voice Gateway` на другой учётке: частично.
   Штатный launcher упирается в права на `pablito/shared` path, но per-account
   fallback уже реально поднимает gateway из
@@ -60,10 +62,14 @@
   → `7 passed`
 - `./venv/bin/python -m pytest tests/unit/test_userbot_photo_flow.py tests/unit/test_userbot_stream_timeouts.py -q`
   → `14 passed`
+- `./venv/bin/python -m pytest tests/unit/test_mercadona.py -q`
+  → `7 passed`
 - прямой импорт `from src.userbot_bridge import KraabUserbot`
   ранее проходил в USER3-контуре;
 - recent live smoke поднимал owner panel `:8080`, OpenClaw gateway `:18789` и
   per-account Voice Gateway fallback `:8090`.
+- live smoke `search_mercadona('leche', max_results=5)`
+  вернул 5 реальных позиций с ценами через новый `search-results` flow.
 
 ## Для следующего doc pass
 

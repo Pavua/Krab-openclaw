@@ -95,6 +95,25 @@ def test_format_results_renders_compact_telegram_text() -> None:
     assert "Leche sin lactosa" in rendered
 
 
+def test_normalize_dom_product_card_prefers_aria_payload() -> None:
+    """DOM-карточка search-results должна превращаться в нормализованный товар."""
+    product = mercadona_module._normalize_dom_product_card(
+        {
+            "text": "Leche semidesnatada Hacendado 6 briks x 1 L 5,28 € /pack",
+            "aria": "Leche semidesnatada Hacendado, 6 briks x 1 Litro, 5,28€ por Pack",
+        }
+    )
+
+    assert product == {
+        "name": "Leche semidesnatada Hacendado — 6 briks x 1 Litro",
+        "price": "5,28",
+        "unit": "pack",
+        "reference_price": "",
+        "reference_unit": "",
+        "thumbnail": "",
+    }
+
+
 @pytest.mark.asyncio
 async def test_handle_shop_replies_with_skill_result(monkeypatch: pytest.MonkeyPatch) -> None:
     """`!shop` должен отредактировать временное сообщение результатом поиска."""

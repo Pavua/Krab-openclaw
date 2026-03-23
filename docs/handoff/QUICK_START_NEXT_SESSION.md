@@ -44,7 +44,7 @@ GEMINI.md                          ← truthful-контекст для Gemini/G
 > 11. на другой учётке `Voice Gateway` уже может подниматься через per-account fallback.
 >
 > Что остаётся:
-> 1. закрыть `partial`-пункты из `AUDIT_STATUS_2026-03-23_RU.md`: `#6`, `#7`, `#10`;
+> 1. закрыть `partial`-пункты из `AUDIT_STATUS_2026-03-23_RU.md`: `#6`, `#7`;
 > 2. перенести launcher-hardening обратно в `pablito` launcher;
 > 3. решить, считать ли multi-account `Voice Gateway` отдельным shared-active сервисом, а не ссылкой на `pablito` path.
 >
