@@ -13,7 +13,42 @@ AG_ROOT="$(cd "$DIR/.." && pwd)"
 LOG_DIR="$DIR/logs"
 RUNTIME_STATE_DIR="${KRAB_RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}"
 
-VOICE_DIR="${KRAB_VOICE_GATEWAY_DIR:-$AG_ROOT/Krab Voice Gateway}"
+resolve_voice_gateway_dir() {
+  # Stop-скрипт должен смотреть в тот же resolved path, что и start-скрипты.
+  local current_user
+  current_user="$(id -un)"
+  local candidates=()
+
+  if [ -n "${KRAB_VOICE_GATEWAY_DIR:-}" ]; then
+    candidates+=("$KRAB_VOICE_GATEWAY_DIR")
+  fi
+
+  if [ "$current_user" = "pablito" ]; then
+    candidates+=(
+      "$AG_ROOT/Krab Voice Gateway"
+      "/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway"
+    )
+  else
+    candidates+=(
+      "/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway"
+      "$AG_ROOT/Krab Voice Gateway"
+      "/Users/pablito/Antigravity_AGENTS/Krab Voice Gateway"
+    )
+  fi
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    [ -n "$candidate" ] || continue
+    if [ -d "$candidate" ] && [ -f "$candidate/requirements.txt" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "${KRAB_VOICE_GATEWAY_DIR:-$AG_ROOT/Krab Voice Gateway}"
+}
+
+VOICE_DIR="$(resolve_voice_gateway_dir)"
 VOICE_STOP="$VOICE_DIR/scripts/stop_gateway.command"
 VOICE_FALLBACK_PID="$RUNTIME_STATE_DIR/voice_gateway/gateway.pid"
 VOICE_PORT="${KRAB_VOICE_PORT:-8090}"

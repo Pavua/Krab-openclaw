@@ -9,16 +9,53 @@ set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 AG_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-GW_DIR="${KRAB_VOICE_GATEWAY_DIR:-$AG_ROOT/Krab Voice Gateway}"
 RUNTIME_STATE_DIR="${KRAB_RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}"
 VOICE_RUNTIME_DIR="$RUNTIME_STATE_DIR/voice_gateway"
 VENV_DIR="$VOICE_RUNTIME_DIR/.venv_krab_voice_gateway"
-REQ_FILE="$GW_DIR/requirements.txt"
 STAMP_FILE="$VENV_DIR/.requirements.sha256"
 LOG_FILE="$VOICE_RUNTIME_DIR/gateway.log"
 PID_FILE="$VOICE_RUNTIME_DIR/gateway.pid"
 HOST="${KRAB_VOICE_HOST:-127.0.0.1}"
 PORT="${KRAB_VOICE_PORT:-8090}"
+
+resolve_voice_gateway_dir() {
+  # Для вспомогательных учёток (`USER2`, `USER3`) безопаснее предпочитать
+  # shared-копию Voice Gateway, а не symlink в `pablito` tree.
+  local current_user
+  current_user="$(id -un)"
+  local candidates=()
+
+  if [ -n "${KRAB_VOICE_GATEWAY_DIR:-}" ]; then
+    candidates+=("$KRAB_VOICE_GATEWAY_DIR")
+  fi
+
+  if [ "$current_user" = "pablito" ]; then
+    candidates+=(
+      "$AG_ROOT/Krab Voice Gateway"
+      "/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway"
+    )
+  else
+    candidates+=(
+      "/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway"
+      "$AG_ROOT/Krab Voice Gateway"
+      "/Users/pablito/Antigravity_AGENTS/Krab Voice Gateway"
+    )
+  fi
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    [ -n "$candidate" ] || continue
+    if [ -d "$candidate" ] && [ -f "$candidate/requirements.txt" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+GW_DIR="$(resolve_voice_gateway_dir || true)"
+REQ_FILE="${GW_DIR:-}/requirements.txt"
 
 probe_health() {
   python3 - <<'PY'

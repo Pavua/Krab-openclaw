@@ -11,7 +11,43 @@ set -euo pipefail
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 AG_ROOT="$(cd "$DIR/.." && pwd)"
 
-VOICE_DIR="${KRAB_VOICE_GATEWAY_DIR:-$AG_ROOT/Krab Voice Gateway}"
+resolve_voice_gateway_dir() {
+  # Экосистема должна поднимать тот же Voice Gateway path, что и standalone
+  # launcher, иначе на USER2/USER3 снова появится drift в сторону `pablito`.
+  local current_user
+  current_user="$(id -un)"
+  local candidates=()
+
+  if [ -n "${KRAB_VOICE_GATEWAY_DIR:-}" ]; then
+    candidates+=("$KRAB_VOICE_GATEWAY_DIR")
+  fi
+
+  if [ "$current_user" = "pablito" ]; then
+    candidates+=(
+      "$AG_ROOT/Krab Voice Gateway"
+      "/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway"
+    )
+  else
+    candidates+=(
+      "/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway"
+      "$AG_ROOT/Krab Voice Gateway"
+      "/Users/pablito/Antigravity_AGENTS/Krab Voice Gateway"
+    )
+  fi
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    [ -n "$candidate" ] || continue
+    if [ -d "$candidate" ] && [ -f "$candidate/requirements.txt" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "${KRAB_VOICE_GATEWAY_DIR:-$AG_ROOT/Krab Voice Gateway}"
+}
+
+VOICE_DIR="$(resolve_voice_gateway_dir)"
 VOICE_START="$DIR/Start Voice Gateway.command"
 
 EAR_DIR="${KRAB_EAR_DIR:-$AG_ROOT/Krab Ear}"

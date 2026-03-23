@@ -30,6 +30,11 @@
   теперь идёт через домашнюю страницу, закрывает entry-modal, запускает поиск
   через штатный `searchbox` и читает `search-results` из DOM как truthful
   fallback. Live smoke по `leche` вернул реальные товары и цены.
+- repo-level `Voice Gateway` launcher resolution: подтверждено.
+  `Start Voice Gateway.command`, `Start Full Ecosystem.command` и
+  `Stop Full Ecosystem.command` на вспомогательных учётках теперь предпочитают
+  shared-копию `/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway`, а не
+  symlink/путь из `pablito` tree по умолчанию.
 
 ## Partial
 
@@ -42,9 +47,9 @@
   owner-visible tool-status сообщения уровня `Вызываю инструмент...` /
   `Читаю скриншот...` пока не подтверждены как законченный UX-слой.
 - `Voice Gateway` на другой учётке: частично.
-  Штатный launcher упирается в права на `pablito/shared` path, но per-account
-  fallback уже реально поднимает gateway из
-  `~/.openclaw/krab_runtime_state/voice_gateway`.
+  Repo-level launcher resolution уже исправлен, но внешний launcher/handoff path
+  на стороне `pablito` всё ещё надо окончательно синхронизировать, чтобы весь
+  стек одинаково поднимался и из repo, и из внешнего `new start_krab.command`.
 
 ## Still Open
 
@@ -70,6 +75,9 @@
   per-account Voice Gateway fallback `:8090`.
 - live smoke `search_mercadona('leche', max_results=5)`
   вернул 5 реальных позиций с ценами через новый `search-results` flow.
+- `./Start Voice Gateway.command`
+  → на `USER3` поднял gateway из `/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway`
+  и прошёл `:8090/health`.
 
 ## Для следующего doc pass
 

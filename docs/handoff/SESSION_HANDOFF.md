@@ -30,6 +30,9 @@
   per-account fallback service: штатный `start_gateway.command` упирается в права
   на shared/pablito path, но fallback в `~/.openclaw/krab_runtime_state/voice_gateway`
   реально поднимается и проходит `/health`.
+- Repo-level launcher'ы `Start Voice Gateway.command`,
+  `Start Full Ecosystem.command` и `Stop Full Ecosystem.command` теперь на
+  `USER2/USER3` предпочитают shared Voice Gateway path, а не `pablito`-symlink.
 
 ### Что проверено в этой итерации
 
@@ -44,6 +47,8 @@
 - `Mercadona !shop` больше не зависит от устаревшего `/search?query=`:
   live flow теперь идёт через home → cookies → `Escape` для entry-modal →
   `searchbox` → `search-results`, а DOM fallback возвращает реальные товары и цены.
+- `./Start Voice Gateway.command` в USER3-контуре уже резолвит
+  `/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway` и проходит health-check.
 
 # Session Handoff — Краб 22.03.2026
 
