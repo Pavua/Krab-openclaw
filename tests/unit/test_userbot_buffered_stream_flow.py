@@ -281,3 +281,60 @@ async def test_deliver_response_parts_prefers_send_message_for_background() -> N
     assert result["delivery_mode"] == "send_message"
     bot.client.send_message.assert_awaited_once_with(555, "Готовый ответ")
     temp_message.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_message_serialized_defers_long_text_route_to_background(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Длинный текстовый путь должен быстро уходить в background-task и не держать caller await-ом."""
+    bot = _make_buffered_bot_stub()
+    incoming = SimpleNamespace(
+        id=12,
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Сделай долгую задачу",
+        caption=None,
+        photo=None,
+        voice=None,
+        audio=None,
+        chat=SimpleNamespace(id=125, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=125), id=901, text="", caption="", delete=AsyncMock())),
+    )
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL,
+        source="unit-test",
+        matched_subject="tester",
+    )
+    background_started = asyncio.Event()
+    background_release = asyncio.Event()
+
+    async def _fake_run_llm_request_flow(**kwargs):
+        _ = kwargs
+        background_started.set()
+        await background_release.wait()
+
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_LLM_HANDOFF",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(bot, "_run_llm_request_flow", _fake_run_llm_request_flow)
+    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
+
+    await bot._process_message_serialized(
+        message=incoming,
+        user=incoming.from_user,
+        access_profile=access_profile,
+        is_allowed_sender=True,
+        chat_id=str(incoming.chat.id),
+    )
+
+    task = bot._get_active_chat_background_task(str(incoming.chat.id))
+    assert task is not None
+    await asyncio.wait_for(background_started.wait(), timeout=0.2)
+    bot._mark_incoming_item_background_started.assert_called_once()
+
+    background_release.set()
+    await asyncio.wait_for(task, timeout=0.2)
