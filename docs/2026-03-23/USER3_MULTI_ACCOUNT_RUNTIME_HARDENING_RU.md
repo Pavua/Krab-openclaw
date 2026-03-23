@@ -87,6 +87,28 @@
   - `Stop Krab.command` корректно завершил userbot/proxy/voice;
   - `Start Full Ecosystem.command` + `Stop Full Ecosystem.command` прошли end-to-end цикл без missing-file ошибок.
 
+### 6. Добавлен практический macOS Permission Audit
+
+- Проблема: существующий `check_permissions.command` был слишком слабым и не давал truthful-среза
+  по текущей macOS-учётке, TCC и Gatekeeper.
+- Исправление:
+  - добавлен `scripts/check_macos_permissions.py`;
+  - `check_permissions.command` переведён на этот Python-аудит;
+  - добавлены unit-тесты `tests/unit/test_check_macos_permissions.py`.
+- Что проверяет новый аудит:
+  - читаемость защищённых путей (`Messages`, `Safari`, `TCC.db`) как proxy для Full Disk Access;
+  - TCC-строки по `Full Disk Access`, `Accessibility`, `Screen Recording`, `Apple Events`;
+  - automation-доступ к `System Events`;
+  - `spctl --status` и quarantine-хвосты на ключевых launcher-файлах.
+- Проверка:
+  - `pytest tests/unit/test_check_macos_permissions.py -q` — OK;
+  - `check_permissions.command` живым запуском в `USER3` показал:
+    - protected path probes `3/3 readable`;
+    - `TCC.db readable = True`;
+    - `System Events automation = True`;
+    - `Gatekeeper = assessments enabled`;
+    - quarantine-хвостов на launcher-файлах нет.
+
 ## Что нужно перенести обратно на `pablito`
 
 ### Обязательно
@@ -117,9 +139,10 @@
 1. Перенести launcher hardening из `USER3` обратно в `/Users/pablito/Antigravity_AGENTS/new start_krab.command`.
 2. При желании перенести те же wrapper-fix'ы и в shared/pablito repo-level `.command`, если там ещё есть старые ссылки на отсутствующие `new ...`.
 3. Решить, нужен ли такой же fallback для `new Stop Krab.command`, если хотим мягко останавливать per-account Voice Gateway.
-4. После возврата на `pablito` прогнать короткий smoke:
+4. Перенести `check_permissions.command` / `scripts/check_macos_permissions.py` в тот контур, который считаем каноническим для macOS readiness-аудита.
+5. После возврата на `pablito` прогнать короткий smoke:
    - `:8090/health`
    - `:18789/health`
    - owner panel `:8080`
    - import/boot `KraabUserbot`
-5. После smoke обновить roadmap/handoff уже с единым вердиктом по `pablito` и `USER3`.
+6. После smoke обновить roadmap/handoff уже с единым вердиктом по `pablito` и `USER3`.
