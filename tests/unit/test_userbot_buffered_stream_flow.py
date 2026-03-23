@@ -29,6 +29,7 @@ def _make_buffered_bot_stub() -> KraabUserbot:
     bot.current_role = "default"
     bot.voice_mode = False
     bot._known_commands = set()
+    bot._chat_background_tasks = {}
     bot._disclosure_sent_for_chat_ids = set()
 
     bot._message_has_audio = Mock(return_value=False)
@@ -127,6 +128,12 @@ async def test_text_route_waits_past_first_chunk_soft_timeout(monkeypatch: pytes
         "_build_openclaw_slow_wait_notice",
         lambda **kwargs: "SLOW_NOTICE",
     )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_LLM_HANDOFF",
+        False,
+        raising=False,
+    )
 
     await bot._process_message_serialized(
         message=incoming,
@@ -203,6 +210,12 @@ async def test_text_route_emits_tool_progress_notice_before_regular_progress_sch
         0.01,
         raising=False,
     )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_LLM_HANDOFF",
+        False,
+        raising=False,
+    )
 
     await bot._process_message_serialized(
         message=incoming,
@@ -214,3 +227,57 @@ async def test_text_route_emits_tool_progress_notice_before_regular_progress_sch
 
     edited_texts = [call.args[1] for call in bot._safe_edit.await_args_list]
     assert any("Выполняется: browser" in text for text in edited_texts)
+
+
+@pytest.mark.asyncio
+async def test_mark_incoming_item_background_started_updates_inbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Background handoff должен переводить persisted owner item в `acked`."""
+    bot = _make_buffered_bot_stub()
+    captured: dict[str, object] = {}
+
+    def _fake_set_status_by_dedupe(dedupe_key: str, **kwargs):
+        captured["dedupe_key"] = dedupe_key
+        captured["kwargs"] = kwargs
+        return {"ok": True}
+
+    monkeypatch.setattr(userbot_bridge_module.inbox_service, "set_status_by_dedupe", _fake_set_status_by_dedupe)
+
+    result = bot._mark_incoming_item_background_started(
+        incoming_item_result={
+            "ok": True,
+            "item": {
+                "metadata": {
+                    "chat_id": "123",
+                    "message_id": "456",
+                }
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert captured["dedupe_key"] == "incoming:123:456"
+    assert captured["kwargs"]["status"] == "acked"
+
+
+@pytest.mark.asyncio
+async def test_deliver_response_parts_prefers_send_message_for_background() -> None:
+    """Deferred-path должен отправлять финальный ответ отдельным сообщением."""
+    bot = _make_buffered_bot_stub()
+    bot._deliver_response_parts = KraabUserbot._deliver_response_parts.__get__(bot, KraabUserbot)
+    sent_message = SimpleNamespace(id=999)
+    bot.client.send_message = AsyncMock(return_value=sent_message)
+    source_message = SimpleNamespace(chat=SimpleNamespace(id=555), reply=AsyncMock())
+    temp_message = SimpleNamespace(id=444, delete=AsyncMock())
+
+    result = await bot._deliver_response_parts(
+        source_message=source_message,
+        temp_message=temp_message,
+        is_self=False,
+        query="Привет",
+        full_response="Готовый ответ",
+        prefer_send_message_for_background=True,
+    )
+
+    assert result["delivery_mode"] == "send_message"
+    bot.client.send_message.assert_awaited_once_with(555, "Готовый ответ")
+    temp_message.delete.assert_awaited_once()
