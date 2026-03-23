@@ -335,6 +335,9 @@ async def test_process_message_serialized_defers_long_text_route_to_background(
     assert task is not None
     await asyncio.wait_for(background_started.wait(), timeout=0.2)
     bot._mark_incoming_item_background_started.assert_called_once()
+    edited_texts = [call.args[1] for call in bot._safe_edit.await_args_list]
+    assert any("в фоне" in text.lower() for text in edited_texts)
+    assert any("отдельным сообщением" in text.lower() for text in edited_texts)
 
     background_release.set()
     await asyncio.wait_for(task, timeout=0.2)

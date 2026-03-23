@@ -46,6 +46,9 @@
   Постоянный `typing` подтверждён (`_keep_typing_alive(...)`), но промежуточные
   owner-visible tool-status сообщения уровня `Вызываю инструмент...` /
   `Читаю скриншот...` пока не подтверждены как законченный UX-слой.
+  При этом background handoff уже стал честнее: перед release lock пользователь
+  получает явный notice, что запрос продолжает выполняться в фоне и финальный
+  ответ придёт отдельным сообщением.
 - `Voice Gateway` на другой учётке: частично.
   Repo-level launcher resolution уже исправлен, но внешний launcher/handoff path
   на стороне `pablito` всё ещё надо окончательно синхронизировать, чтобы весь
@@ -69,6 +72,8 @@
   → `14 passed`
 - `./venv/bin/python -m pytest tests/unit/test_mercadona.py -q`
   → `7 passed`
+- `./venv/bin/python -m pytest tests/unit/test_userbot_buffered_stream_flow.py tests/unit/test_userbot_stream_timeouts.py -q`
+  → `18 passed`
 - прямой импорт `from src.userbot_bridge import KraabUserbot`
   ранее проходил в USER3-контуре;
 - recent live smoke поднимал owner panel `:8080`, OpenClaw gateway `:18789` и

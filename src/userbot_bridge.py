@@ -3135,6 +3135,21 @@ class KraabUserbot:
             return task
         return None
 
+    @staticmethod
+    def _build_background_handoff_notice(query: str) -> str:
+        """
+        Возвращает честный текст для момента, когда длинный запрос уходит в фон.
+
+        Это не «готовый ответ», а явное подтверждение, что Краб принял задачу,
+        отпустил lock чата и продолжит обработку в background-режиме.
+        """
+        safe_query = str(query or "").strip() or "запрос"
+        return (
+            f"🦀 Принял запрос: `{safe_query}`\n\n"
+            "⏳ Задача продолжает выполняться в фоне. "
+            "Финальный ответ пришлю отдельным сообщением, как только обработка завершится."
+        )
+
     async def _run_llm_request_flow(
         self,
         *,
@@ -3924,6 +3939,11 @@ class KraabUserbot:
             return
 
         if should_defer_background:
+            try:
+                handoff_notice = self._build_background_handoff_notice(query)
+                await self._safe_edit(temp_msg, handoff_notice)
+            except Exception:
+                pass
             self._mark_incoming_item_background_started(
                 incoming_item_result=incoming_item_result,
                 note="background_processing_started",
