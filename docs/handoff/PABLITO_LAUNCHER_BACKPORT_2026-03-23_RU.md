@@ -79,6 +79,19 @@
 - `Voice Gateway` реально поднимается через per-account fallback;
 - `Krab` снова доходит до `kraab_running`.
 
+## Что уже синхронизировано обратно в `pablito`
+
+- Во внешние launcher-файлы
+  `/Users/pablito/Antigravity_AGENTS/new start_krab.command` и
+  `/Users/pablito/Antigravity_AGENTS/new Stop Krab.command`
+  уже перенесён helper `resolve_voice_gateway_dir()`.
+- Это означает, что при возврате на `pablito` launcher больше не должен по
+  умолчанию резолвить Voice Gateway в чужой вспомогательный symlink-path:
+  теперь у `pablito` приоритет остаётся за локальной копией, а у `USER2/USER3`
+  — за shared-копией.
+- Синтаксис обоих внешних launcher-файлов после этой синхронизации проверен
+  через `bash -n`.
+
 ## Что не переносить бездумно
 
 - account-local runtime-state файлы;
