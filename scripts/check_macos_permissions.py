@@ -21,6 +21,7 @@ check_macos_permissions.py — аудит macOS-разрешений и Gatekeep
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import subprocess
@@ -31,6 +32,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ARTIFACT_DIR = ROOT / "artifacts" / "ops"
 DEFAULT_TCC_DB = Path.home() / "Library" / "Application Support" / "com.apple.TCC" / "TCC.db"
 DEFAULT_PROTECTED_PATHS = (
     Path.home() / "Library" / "Messages" / "chat.db",
@@ -235,6 +237,68 @@ def _probe_gatekeeper() -> dict[str, Any]:
     }
 
 
+def _build_readiness_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """Сводит сырой аудит к практическому verdict'у для handoff и multi-account проверок."""
+    protected_paths = report.get("protected_paths") or []
+    readable_paths = [item for item in protected_paths if item.get("readable")]
+    quarantine = (report.get("gatekeeper") or {}).get("quarantine") or []
+    quarantined_paths = [item for item in quarantine if item.get("quarantined")]
+    tcc_summary = (report.get("tcc") or {}).get("summary") or []
+
+    system_events_ok = bool((report.get("system_events") or {}).get("ok"))
+    tcc_db_accessible = bool(report.get("tcc_db_accessible"))
+    protected_paths_ready = len(readable_paths) >= max(1, len(protected_paths))
+    any_tcc_matches = any(int(item.get("matched_rows_count") or 0) > 0 for item in tcc_summary)
+    quarantine_clear = not quarantined_paths
+
+    return {
+        "protected_paths_ready": protected_paths_ready,
+        "tcc_db_accessible": tcc_db_accessible,
+        "system_events_ok": system_events_ok,
+        "quarantine_clear": quarantine_clear,
+        "matched_tcc_entries_detected": any_tcc_matches,
+        "overall_ready": protected_paths_ready and tcc_db_accessible and system_events_ok and quarantine_clear,
+        "blocked_reasons": [
+            reason
+            for reason, condition in (
+                ("protected_paths_unreadable", protected_paths_ready),
+                ("tcc_db_unavailable", tcc_db_accessible),
+                ("system_events_not_authorized", system_events_ok),
+                ("launcher_quarantine_detected", quarantine_clear),
+            )
+            if not condition
+        ],
+    }
+
+
+def _default_artifact_paths(user: str) -> tuple[Path, Path]:
+    """Возвращает пару путей: timestamped evidence и latest-ссылка для текущей учётки."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+    safe_user = user.lower() or "unknown"
+    timestamped = DEFAULT_ARTIFACT_DIR / f"macos_permission_audit_{safe_user}_{stamp}.json"
+    latest = DEFAULT_ARTIFACT_DIR / f"macos_permission_audit_{safe_user}_latest.json"
+    return timestamped, latest
+
+
+def _write_artifact(report: dict[str, Any], output_path: Path | None = None) -> list[str]:
+    """Пишет JSON-артефакт на диск и возвращает список сохранённых путей."""
+    DEFAULT_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    written_paths: list[str] = []
+
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(payload, encoding="utf-8")
+        written_paths.append(str(output_path))
+        return written_paths
+
+    timestamped, latest = _default_artifact_paths(str(report.get("user") or ""))
+    for path in (timestamped, latest):
+        path.write_text(payload, encoding="utf-8")
+        written_paths.append(str(path))
+    return written_paths
+
+
 def build_report() -> dict[str, Any]:
     """Собирает итоговый аудит macOS permission/Gatekeeper readiness."""
     protected_paths = [_probe_path_readability(path) for path in DEFAULT_PROTECTED_PATHS]
@@ -246,6 +310,7 @@ def build_report() -> dict[str, Any]:
 
     return {
         "ok": True,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "user": os.getenv("USER") or "",
         "home": str(Path.home()),
         "repo_root": str(ROOT),
@@ -269,6 +334,7 @@ def _status_emoji(ok: bool) -> str:
 def _print_human_report(report: dict[str, Any]) -> None:
     """Печатает короткий, но actionable отчёт для терминала."""
     print("🔐 macOS Permission Audit for Krab")
+    print(f"🕒 Generated UTC: {report.get('generated_at_utc')}")
     print(f"👤 User: {report.get('user')}")
     print(f"🏠 Home: {report.get('home')}")
     print(f"📂 Repo: {report.get('repo_root')}")
@@ -316,6 +382,20 @@ def _print_human_report(report: dict[str, Any]) -> None:
         if item.get("value"):
             print(f"    ↳ {item.get('value')}")
 
+    readiness = report.get("readiness") or {}
+    print("")
+    print(f"{_status_emoji(bool(readiness.get('overall_ready')))} Practical readiness: {readiness.get('overall_ready')}")
+    print(
+        "  "
+        f"protected_paths_ready={readiness.get('protected_paths_ready')} "
+        f"tcc_db_accessible={readiness.get('tcc_db_accessible')} "
+        f"system_events_ok={readiness.get('system_events_ok')} "
+        f"quarantine_clear={readiness.get('quarantine_clear')}"
+    )
+    blocked_reasons = readiness.get("blocked_reasons") or []
+    if blocked_reasons:
+        print(f"  ↳ blocked_reasons={', '.join(str(item) for item in blocked_reasons)}")
+
     print("")
     print("Подсказки:")
     print("- Если `TCC.db readable = False`, сначала выдай Full Disk Access приложению, из которого запускаешь Codex/Terminal.")
@@ -327,13 +407,25 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(description="Проверка macOS permission/Gatekeeper readiness для Краба.")
     parser.add_argument("--json", action="store_true", dest="as_json", help="Печатать отчёт в JSON.")
+    parser.add_argument(
+        "--write-artifact",
+        action="store_true",
+        help="Сохранить JSON-артефакт в artifacts/ops или в путь из --output.",
+    )
+    parser.add_argument("--output", type=Path, help="Явный путь для JSON-артефакта.")
     args = parser.parse_args(argv)
 
     report = build_report()
+    report["readiness"] = _build_readiness_summary(report)
+    if args.write_artifact or args.output is not None:
+        written_paths = _write_artifact(report, args.output)
+        report["artifact_paths"] = written_paths
     if args.as_json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         _print_human_report(report)
+        for path in report.get("artifact_paths") or []:
+            print(f"💾 Artifact: {path}")
     return 0
 
 

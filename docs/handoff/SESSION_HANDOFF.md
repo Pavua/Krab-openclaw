@@ -7,6 +7,7 @@
 - Что уже подтверждено текущим code/test/runtime evidence:
   - `#4 OOM / Whisper`
   - `#5 Gateway self-healing`
+  - `#2 macOS Permission Audit`
   - `#9 Vision / photo route`
   - `#14 OpenClaw update`
   - `#15 Burst coalescing`
@@ -57,6 +58,12 @@
 - В той же итерации исправлен regression в `src/modules/web_app.py`:
   `/api/openclaw/browser/start` снова возвращает truthful payload и не падает
   на `NameError: owner_chrome`.
+- `check_permissions.command` теперь не только печатает терминальный verdict,
+  но и сохраняет attach-ready evidence в `artifacts/ops`:
+  `macos_permission_audit_<user>_latest.json` + timestamped JSON.
+- Живой audit в `USER3` показал `Practical readiness: True`,
+  quarantine `0` и сохранил
+  `artifacts/ops/macos_permission_audit_user3_latest.json`.
 
 # Session Handoff — Краб 22.03.2026
 

@@ -23,4 +23,4 @@ if [ -z "${PYTHON_BIN:-}" ]; then
 fi
 
 echo "🔍 Запускаю macOS Permission Audit..."
-"$PYTHON_BIN" "$DIR/scripts/check_macos_permissions.py"
+"$PYTHON_BIN" "$DIR/scripts/check_macos_permissions.py" --write-artifact

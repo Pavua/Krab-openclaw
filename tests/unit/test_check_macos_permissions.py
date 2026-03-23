@@ -65,3 +65,56 @@ def test_probe_path_readability_reads_existing_file(tmp_path: Path) -> None:
     assert result["exists"] is True
     assert result["readable"] is True
     assert result["error"] == ""
+
+
+def test_build_readiness_summary_reports_blockers() -> None:
+    module = _load_module()
+    report = {
+        "protected_paths": [{"readable": False}],
+        "tcc_db_accessible": False,
+        "tcc": {"summary": []},
+        "system_events": {"ok": False},
+        "gatekeeper": {"quarantine": [{"quarantined": True}]},
+    }
+
+    result = module._build_readiness_summary(report)
+
+    assert result["overall_ready"] is False
+    assert result["blocked_reasons"] == [
+        "protected_paths_unreadable",
+        "tcc_db_unavailable",
+        "system_events_not_authorized",
+        "launcher_quarantine_detected",
+    ]
+
+
+def test_build_readiness_summary_reports_ready_when_probes_are_green() -> None:
+    module = _load_module()
+    report = {
+        "protected_paths": [{"readable": True}, {"readable": True}],
+        "tcc_db_accessible": True,
+        "tcc": {"summary": [{"matched_rows_count": 1}]},
+        "system_events": {"ok": True},
+        "gatekeeper": {"quarantine": [{"quarantined": False}]},
+    }
+
+    result = module._build_readiness_summary(report)
+
+    assert result["overall_ready"] is True
+    assert result["blocked_reasons"] == []
+    assert result["matched_tcc_entries_detected"] is True
+
+
+def test_write_artifact_writes_explicit_output(tmp_path: Path) -> None:
+    module = _load_module()
+    output_path = tmp_path / "permission_audit.json"
+    report = {
+        "user": "USER3",
+        "readiness": {"overall_ready": True},
+    }
+
+    written_paths = module._write_artifact(report, output_path)
+
+    assert written_paths == [str(output_path)]
+    assert output_path.exists()
+    assert '"overall_ready": true' in output_path.read_text(encoding="utf-8")

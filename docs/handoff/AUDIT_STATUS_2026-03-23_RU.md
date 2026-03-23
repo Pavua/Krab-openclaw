@@ -62,7 +62,6 @@
 ## Still Open
 
 - `#1 Swarm / product teams`
-- `#2 macOS Permission Audit`
 - `#3 HomePod integration`
 - `#8 Telegram transport voice/document`
 - `#11 Inbox folder`
@@ -88,6 +87,12 @@
 - `./Start Voice Gateway.command`
   → на `USER3` поднял gateway из `/Users/Shared/Antigravity_AGENTS/Krab Voice Gateway`
   и прошёл `:8090/health`.
+- `./venv/bin/python -m pytest tests/unit/test_check_macos_permissions.py -q`
+  → `6 passed`
+- `./check_permissions.command`
+  → practical readiness `True`, quarantine `0`, живые evidence-файлы:
+  `artifacts/ops/macos_permission_audit_user3_latest.json`
+  и timestamped `artifacts/ops/macos_permission_audit_user3_20260323_232954Z.json`
 - полный live-cycle в pushable `USER3`-ветке:
   `Start Full Ecosystem.command` -> `kraab_running` ->
   `./venv/bin/python scripts/r20_merge_gate.py` (`ok: true`) ->
