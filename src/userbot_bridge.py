@@ -219,27 +219,77 @@ def _build_openclaw_progress_wait_notice(
     """
     Формирует раннее тех-уведомление о том, что buffered-запрос всё ещё жив.
 
-    Текст намеренно честный: не обещает скорый ответ, а объясняет стадию работы.
-    Если OpenClaw использует инструменты, показывает их статус.
+    Текст честный: показывает текущий инструмент и стадию работы.
+    Эмодзи выбирается по типу активного инструмента для быстрого визуального понимания.
     """
     route_line = _build_openclaw_route_notice_line(
         route_model=route_model,
         attempt=attempt,
     )
-    elapsed_label = max(1, int(round(float(elapsed_sec or 0.0))))
-    if tool_calls_summary:
-        if "🔧 Выполняется:" in tool_calls_summary:
-            lead = "🛠️ Запрос в работе: вызываю инструмент и жду результат."
-        else:
-            lead = "🛠️ Запрос в работе: инструменты уже отработали, собираю итоговый ответ."
-    elif notice_index <= 1:
-        lead = "🛠️ Запрос в работе: контекст собран, жду первый ответ от модели."
+    elapsed_f = float(elapsed_sec or 0.0)
+    # Форматируем время: секунды до 60 сек, потом — минуты
+    if elapsed_f < 60:
+        elapsed_label = f"~{max(1, int(round(elapsed_f)))} сек"
     else:
-        lead = "🛠️ Запрос всё ещё в работе: первый ответ пока не пришёл, но маршрут жив."
+        mins = int(elapsed_f // 60)
+        secs = int(elapsed_f % 60)
+        elapsed_label = f"~{mins} мин {secs:02d} сек"
+
+    # Определяем эмодзи и описание по типу активного инструмента
+    TOOL_EMOJIS: dict[str, str] = {
+        "search": "🔍",
+        "web": "🌐",
+        "browser": "🌐",
+        "file": "📁",
+        "read": "📖",
+        "write": "✏️",
+        "code": "💻",
+        "python": "🐍",
+        "bash": "⚙️",
+        "shell": "⚙️",
+        "memory": "🧠",
+        "recall": "🧠",
+        "screenshot": "📸",
+        "vision": "👁️",
+        "telegram": "📱",
+        "mcp": "🔌",
+        "api": "🔗",
+        "fetch": "📡",
+        "http": "📡",
+        "think": "💭",
+        "reason": "💭",
+        "plan": "📋",
+    }
+
+    tool_emoji = "🛠️"
+    tool_name_display = ""
+    if tool_calls_summary:
+        summary_lower = tool_calls_summary.lower()
+        for key, emoji in TOOL_EMOJIS.items():
+            if key in summary_lower:
+                tool_emoji = emoji
+                break
+        # Пытаемся извлечь имя инструмента из summary
+        import re
+        m = re.search(r"(?:выполняется|вызываю|running)[:\s]+([^\n,;]{1,40})", tool_calls_summary, re.I)
+        if m:
+            tool_name_display = m.group(1).strip()
+
+    if tool_calls_summary and "🔧 Выполняется:" in tool_calls_summary:
+        if tool_name_display:
+            lead = f"{tool_emoji} Использую инструмент: **{tool_name_display}**"
+        else:
+            lead = f"{tool_emoji} Вызов инструмента — жду результат."
+    elif tool_calls_summary:
+        lead = f"✅ Инструменты отработали — {tool_emoji} собираю итоговый ответ."
+    elif notice_index <= 1:
+        lead = "🧩 Запрос принят, собираю контекст и жду первый ответ модели."
+    else:
+        lead = f"⏳ Запрос всё ещё в работе ({elapsed_label}). Маршрут жив, не дублируй."
+
     result = (
-        f"{lead}\nПрошло: ~{elapsed_label} сек. Не дублируй сообщение."
-        "\nЕсли маршрут превысит свой budget ожидания, Краб автоматически перейдёт к следующему fallback."
-        f"{route_line}"
+        f"{lead}\n"
+        f"⏱ Прошло: {elapsed_label}" + route_line
     )
     if tool_calls_summary:
         result += f"\n\n{tool_calls_summary}"
@@ -825,6 +875,43 @@ class KraabUserbot:
             session_name=config.TELEGRAM_SESSION_NAME,
             next_action="run_telegram_relogin_command",
         )
+
+    async def _auto_export_handoff_snapshot(self, *, reason: str) -> dict[str, Any]:
+        """
+        Auto-export handoff snapshot before shutdown or session change (Phase 2.2).
+        
+        Never raises — if export fails, logs warning and returns exported=False.
+        """
+        import urllib.request
+        from datetime import datetime, timezone
+        
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        artifacts_dir = config.BASE_DIR / "artifacts"
+        dest = artifacts_dir / f"auto_handoff_{timestamp}.json"
+        
+        try:
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            handoff_url = "http://127.0.0.1:8080/api/runtime/handoff"
+            req = urllib.request.Request(handoff_url, method="GET")
+            with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+                raw = resp.read()
+            data = json.loads(raw)
+            dest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            logger.info(
+                "auto_handoff_export_success",
+                reason=reason,
+                path=str(dest),
+                size_bytes=len(raw),
+            )
+            return {"exported": True, "path": str(dest), "error": None, "reason": reason}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "auto_handoff_export_failed",
+                reason=reason,
+                error=str(exc),
+                non_fatal=True,
+            )
+            return {"exported": False, "path": str(dest), "error": str(exc), "reason": reason}
 
     def _ensure_maintenance_started(self) -> None:
         """Запускает maintenance-задачу model_manager, если она еще не активна."""
@@ -1413,10 +1500,33 @@ class KraabUserbot:
         return False
 
     async def _safe_maintenance(self):
-        """Безопасный запуск maintenance"""
+        """Безопасный запуск maintenance с периодическим handoff export (Phase 2.2)"""
         try:
             logger.info("maintenance_task_start")
-            await model_manager.start_maintenance()
+            
+            # Периодический handoff export (каждые 4 часа)
+            last_export_time = time.time()
+            export_interval_sec = 4 * 3600  # 4 hours
+            
+            while True:
+                # Запускаем model_manager maintenance
+                try:
+                    await model_manager.start_maintenance()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("model_manager_maintenance_error", error=str(exc))
+                
+                # Проверяем нужен ли периодический экспорт
+                current_time = time.time()
+                if current_time - last_export_time >= export_interval_sec:
+                    try:
+                        await self._auto_export_handoff_snapshot(reason="periodic_maintenance")
+                        last_export_time = current_time
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("periodic_handoff_export_failed", error=str(exc))
+                
+                # Ждем перед следующей итерацией
+                await asyncio.sleep(300)  # 5 минут между проверками
+                
         except asyncio.CancelledError:
             logger.info("maintenance_task_cancelled")
         except Exception as e:
@@ -1425,6 +1535,13 @@ class KraabUserbot:
     async def stop(self):
         """Остановка юзербота"""
         self._set_startup_state(state="stopping")
+        
+        # Auto-export handoff snapshot before shutdown (Phase 2.2)
+        try:
+            await self._auto_export_handoff_snapshot(reason="userbot_stop")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("auto_handoff_export_failed", error=str(exc), non_fatal=True)
+        
         if krab_scheduler.is_started:
             try:
                 krab_scheduler.stop()
@@ -2046,13 +2163,10 @@ class KraabUserbot:
     @staticmethod
     def _looks_like_runtime_truth_question(text: str) -> bool:
         """
-        Эвристика: пользователь просит реальный runtime/self-check, а не общую болтовню.
-
-        Почему это отдельный fast-path:
-        - такие вопросы особенно вредно отдавать на свободную генерацию;
-        - пользователю нужен фактический статус транспорта/модели/интеграций;
-        - это экономит токены и снижает ложные claims про cron, браузер и интернет.
+        Отключено по просьбе пользователя (все вопросы уходят в LLM).
         """
+        return False
+        
         low = str(text or "").strip().lower()
         if not low:
             return False
