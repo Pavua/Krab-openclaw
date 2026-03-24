@@ -2767,6 +2767,109 @@ class KraabUserbot:
             except Exception:
                 pass
 
+    # Расширения, которые обрабатываем как plain-text (встраиваем содержимое в запрос).
+    _TEXT_EXTENSIONS: frozenset[str] = frozenset({
+        ".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yaml", ".yml",
+        ".toml", ".ini", ".cfg", ".sh", ".bash", ".zsh", ".log", ".csv", ".xml",
+        ".html", ".css", ".scss", ".sql", ".rs", ".go", ".java", ".kt", ".swift",
+        ".c", ".cpp", ".h", ".hpp", ".rb", ".php", ".env", ".conf",
+    })
+    # Максимальный размер файла и инлайн-вставки.
+    _DOC_MAX_BYTES: int = 5 * 1024 * 1024   # 5 MB — не скачиваем больше
+    _DOC_INLINE_BYTES: int = 80 * 1024       # 80 KB — встраиваем содержимое текстом
+
+    async def _process_document_message(
+        self,
+        *,
+        message: "Message",
+        query: str,
+        temp_msg: Any,
+        is_self: bool,
+    ) -> str | None:
+        """
+        Скачивает документ из Telegram и обогащает query его содержимым.
+
+        Возвращает обновлённый query или None, если нужно прервать обработку.
+        Текстовые файлы <= _DOC_INLINE_BYTES вставляются inline; более крупные
+        и бинарные — сохраняются в tmp и передаются путём (MCP filesystem может прочесть).
+        """
+        doc = getattr(message, "document", None)
+        if not doc:
+            return query
+
+        file_name: str = str(getattr(doc, "file_name", None) or "document").strip() or "document"
+        mime_type: str = str(getattr(doc, "mime_type", None) or "").strip()
+        file_size: int = int(getattr(doc, "file_size", 0) or 0)
+
+        if file_size > self._DOC_MAX_BYTES:
+            size_kb = file_size // 1024
+            limit_kb = self._DOC_MAX_BYTES // 1024
+            err = f"❌ Файл слишком большой ({size_kb} KB). Максимум {limit_kb} KB."
+            if is_self:
+                await self._safe_edit(message, f"🦀 {query or file_name}\n\n{err}")
+            else:
+                await self._safe_edit(temp_msg, err)
+            return None
+
+        notice = f"📎 *Загружаю файл {file_name}...*"
+        if is_self:
+            await self._safe_edit(message, f"🦀 {query or file_name}\n\n{notice}")
+        else:
+            await self._safe_edit(temp_msg, notice)
+
+        doc_dir = Path(getattr(config, "DOCUMENT_DOWNLOAD_DIR", "/tmp/krab_docs"))
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        ts_ms = int(time.time() * 1000)
+        msg_id = int(getattr(message, "id", 0) or 0)
+        safe_name = "".join(c for c in file_name if c.isalnum() or c in "._-")[:64] or "doc"
+        doc_path = doc_dir / f"doc_{ts_ms}_{msg_id}_{safe_name}"
+
+        download_timeout = float(getattr(config, "DOCUMENT_DOWNLOAD_TIMEOUT_SEC", 45.0))
+        try:
+            downloaded = await asyncio.wait_for(
+                self.client.download_media(message, file_name=str(doc_path)),
+                timeout=max(5.0, download_timeout),
+            )
+        except asyncio.TimeoutError:
+            err = "❌ Таймаут загрузки файла. Попробуй отправить его ещё раз."
+            if is_self:
+                await self._safe_edit(message, f"🦀 {query or file_name}\n\n{err}")
+            else:
+                await self._safe_edit(temp_msg, err)
+            return None
+        except Exception as exc:
+            logger.error("document_download_failed", file_name=file_name, error=str(exc))
+            err = "❌ Не удалось загрузить файл. Попробуй отправить его ещё раз."
+            if is_self:
+                await self._safe_edit(message, f"🦀 {query or file_name}\n\n{err}")
+            else:
+                await self._safe_edit(temp_msg, err)
+            return None
+
+        if not downloaded:
+            err = "❌ Файл не удалось скачать. Попробуй снова."
+            if is_self:
+                await self._safe_edit(message, f"🦀 {query or file_name}\n\n{err}")
+            else:
+                await self._safe_edit(temp_msg, err)
+            return None
+
+        _, ext = os.path.splitext(file_name.lower())
+        is_text = ext in self._TEXT_EXTENSIONS or mime_type.startswith("text/")
+        actual_size = doc_path.stat().st_size if doc_path.exists() else 0
+
+        if is_text and actual_size <= self._DOC_INLINE_BYTES:
+            try:
+                content = doc_path.read_text(encoding="utf-8", errors="replace")
+                doc_context = f"[Файл: {file_name}]\n```\n{content}\n```"
+            except Exception as exc:
+                logger.warning("document_read_failed", file_name=file_name, error=str(exc))
+                doc_context = f"[Файл сохранён: {doc_path}] (mime: {mime_type or 'unknown'}, размер: {actual_size} байт)"
+        else:
+            doc_context = f"[Файл сохранён: {doc_path}] (mime: {mime_type or 'unknown'}, размер: {actual_size} байт)"
+
+        return f"{doc_context}\n\n{query}".strip() if query else doc_context
+
     def _apply_optional_disclosure(self, *, chat_id: str, text: str) -> str:
         """
         Опционально добавляет дисклеймер в первый ответ для конкретного чата.
@@ -3631,7 +3734,8 @@ class KraabUserbot:
                     await message.reply(self._build_command_access_denied_text(cmd_word, access_profile))
                 return
 
-        if not text and not message.photo and not has_audio_message:
+        has_document = bool(getattr(message, "document", None))
+        if not text and not message.photo and not has_audio_message and not has_document:
             return
 
         runtime_chat_id = self._build_runtime_chat_scope_id(
@@ -3675,7 +3779,7 @@ class KraabUserbot:
                 query=query,
             )
             text = query
-        if not query and not message.photo and not has_audio_message and not is_reply_to_me:
+        if not query and not message.photo and not has_audio_message and not is_reply_to_me and not has_document:
             return
 
         incoming_item_result: dict[str, Any] | None = None
@@ -3898,6 +4002,15 @@ class KraabUserbot:
             await asyncio.gather(_typing_task, return_exceptions=True)
             return
 
+        # DOCUMENT: Скачиваем и встраиваем содержимое файла в запрос
+        if has_document:
+            query = await self._process_document_message(message=message, query=query, temp_msg=temp_msg, is_self=is_self)
+            if query is None:
+                _typing_stop_event.set()
+                _typing_task.cancel()
+                await asyncio.gather(_typing_task, return_exceptions=True)
+                return
+
         system_prompt = self._build_system_prompt_for_sender(
             is_allowed_sender=is_allowed_sender,
             access_level=access_profile.level,
@@ -3924,6 +4037,7 @@ class KraabUserbot:
             and not bool(images)
             and not bool(has_audio_message)
             and not bool(message.photo)
+            and not has_document
         )
         if should_defer_background and self._get_active_chat_background_task(chat_id):
             await self._run_llm_request_flow(
