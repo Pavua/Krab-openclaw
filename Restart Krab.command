@@ -3,14 +3,12 @@
 # Назначение: legacy-restart, сведённый к канонической паре `new Stop` -> `new start`.
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+ROOT_DIR="$(cd "$DIR/.." && pwd)"
 cd "$DIR"
 
 echo "🔄 Restarting Krab..."
-"$DIR/new Stop Krab.command"
+"$ROOT_DIR/new Stop Krab.command"
 sleep 2
-osascript -e "tell application \"Terminal\"
-    activate
-    do script \"cd '$DIR' && printf '\\\033]2;🦀 KRAB USERBOT\\\007' && ./new\\ start_krab.command\"
-end tell"
+open -a Terminal "$ROOT_DIR/new start_krab.command"
 echo "✅ Restart command sent."
 sleep 1

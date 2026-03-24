@@ -37,7 +37,7 @@ class TestPhase5:
         client = OpenClawClient()
         client._http_client = MagicMock()
         client._http_client.stream = MagicMock()
-        
+
         # Mock async iterable для aiter_lines — обязательно async generator
         async def _empty_aiter():
             return
@@ -46,10 +46,19 @@ class TestPhase5:
         mock_response = AsyncMock()
         mock_response.status_code = 200
         mock_response.aiter_lines = _empty_aiter
-        
+
         cm = AsyncMock()
         cm.__aenter__.return_value = mock_response
         client._http_client.stream.return_value = cm
+
+        # Mock buffered POST — send_message_stream теперь использует _openclaw_completion_once
+        mock_post_response = MagicMock()
+        mock_post_response.status_code = 200
+        mock_post_response.json.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}]
+        }
+        mock_post_response.text = '{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+        client._http_client.post = AsyncMock(return_value=mock_post_response)
 
         # Mock model_manager: покрываем все async-методы, вызываемые send_message_stream
         mock_mm = MagicMock()
@@ -69,15 +78,18 @@ class TestPhase5:
             async for _ in gen:
                 pass
         
-        # Verify payload construction
-        call_args = client._http_client.stream.call_args
+        # Verify payload construction — теперь используется .post (buffered), не .stream
+        call_args = client._http_client.post.call_args
         assert call_args is not None
-        
+
         payload = call_args[1]['json']
-        last_msg = payload['messages'][-1]
-        
-        assert last_msg['role'] == "user"
-        assert isinstance(last_msg['content'], list)
-        assert last_msg['content'][0] == {"type": "text", "text": "Look at this"}
-        assert last_msg['content'][1] == {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,base64string"}}
+        # Ищем user-сообщение с vision-контентом среди всех messages (история может расти)
+        vision_msg = next(
+            (m for m in payload['messages']
+             if m.get('role') == 'user' and isinstance(m.get('content'), list)),
+            None,
+        )
+        assert vision_msg is not None, f"Не найдено user-сообщение с vision в payload: {payload['messages']}"
+        assert {"type": "text", "text": "Look at this"} in vision_msg['content']
+        assert {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,base64string"}} in vision_msg['content']
 

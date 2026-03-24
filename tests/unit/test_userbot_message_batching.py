@@ -121,6 +121,8 @@ async def test_private_text_burst_coalesces_followup_messages(monkeypatch: pytes
     monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False)
     monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False)
     monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False)
+    # Отключаем background handoff для синхронного теста
+    monkeypatch.setattr(userbot_bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
 
     access_profile = AccessProfile(
         level=AccessLevel.FULL,

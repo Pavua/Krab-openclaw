@@ -40,8 +40,15 @@ ARTIFACTS_DIR = ROOT / "artifacts"
 NOW = datetime.now(timezone.utc)
 STAMP = NOW.strftime("%Y%m%d_%H%M%S")
 BUNDLE_DIR = ARTIFACTS_DIR / f"handoff_{STAMP}"
-PROJECT_READINESS = "~52%"
-DOWNLOADS_MASTER_PLAN = Path("/Users/pablito/Downloads/PLAN-Краб+переводчик 12.03.2026.md")
+PROJECT_READINESS = "~31%"
+CANONICAL_SHARED_ROOT = Path("/Users/Shared/Antigravity_AGENTS/Краб")
+DOWNLOADS_MASTER_PLAN = DOCS_DIR / "PLAN-Краб+переводчик 12.03.2026.md"
+REPO_LEVEL_DOCS = (
+    ROOT / "README.md",
+    ROOT / "AGENTS.md",
+    ROOT / "CLAUDE.md",
+    ROOT / "GEMINI.md",
+)
 RECOVERY_BRANCHES = (
     "codex/translator-finish-gate-user3",
     "codex/reserve-roundtrip-e2e",
@@ -432,6 +439,21 @@ def _ops_artifact_summary(payload: dict[str, Any], *, artifact_name: str) -> dic
         summary["required_failed"] = int(payload.get("required_failed") or 0)
         summary["advisory_failed"] = int(payload.get("advisory_failed") or 0)
         summary["checks_total"] = len(payload.get("checks") or [])
+    elif artifact_name == "shared_repo_switchover_latest":
+        recommendation = payload.get("recommendation") if isinstance(payload.get("recommendation"), dict) else {}
+        overlap_counts = ((payload.get("overlap_analysis") or {}).get("counts") or {}) if isinstance(payload.get("overlap_analysis"), dict) else {}
+        summary["strategy_code"] = str(recommendation.get("strategy_code") or "")
+        summary["readiness"] = str(recommendation.get("readiness") or "")
+        summary["overlap_count"] = int(recommendation.get("overlap_count") or 0)
+        summary["current_only_count"] = int(recommendation.get("current_only_count") or 0)
+        summary["shared_only_count"] = int(recommendation.get("shared_only_count") or 0)
+        summary["identical_overlap_count"] = int(overlap_counts.get("identical") or 0)
+        summary["divergent_text_count"] = int(overlap_counts.get("divergent_text") or 0)
+    elif artifact_name == "active_shared_worktree_latest":
+        summary["active_shared_root"] = str(payload.get("active_shared_root") or "")
+        summary["branch"] = str(payload.get("branch") or "")
+        summary["head"] = str(payload.get("head") or "")
+        summary["source_root"] = str(payload.get("source_root") or "")
     return summary
 
 
@@ -447,6 +469,16 @@ def _collect_ops_evidence(bundle_dir: Path) -> dict[str, Any]:
     files = {
         "pre_release_smoke_latest": ROOT / "artifacts" / "ops" / "pre_release_smoke_latest.json",
         "r20_merge_gate_latest": ROOT / "artifacts" / "ops" / "r20_merge_gate_latest.json",
+        "shared_repo_switchover_latest": ROOT / "artifacts" / "ops" / "shared_repo_switchover_latest.json",
+        "shared_repo_switchover_latest_md": ROOT / "artifacts" / "ops" / "shared_repo_switchover_latest.md",
+        "shared_repo_merge_order_latest_md": ROOT / "artifacts" / "ops" / "shared_repo_merge_order_latest.md",
+        "pablito_wip_latest_patch": ROOT / "artifacts" / "ops" / "pablito_wip_latest.patch",
+        "active_shared_worktree_latest": ROOT / "artifacts" / "ops" / "active_shared_worktree_latest.json",
+        "active_shared_worktree_latest_md": ROOT / "artifacts" / "ops" / "active_shared_worktree_latest.md",
+        "runtime_switch_assistant_latest": ROOT / "artifacts" / "ops" / "runtime_switch_assistant_latest.json",
+        "runtime_switch_assistant_latest_md": ROOT / "artifacts" / "ops" / "runtime_switch_assistant_latest.md",
+        "prepare_next_account_session_latest": ROOT / "artifacts" / "ops" / "prepare_next_account_session_latest.json",
+        "prepare_next_account_session_latest_md": ROOT / "artifacts" / "ops" / "prepare_next_account_session_latest.md",
         "latest_browser_snapshot": _latest_file_by_glob(".playwright-cli/page-*.yml"),
         "latest_browser_screenshot": _latest_file_by_glob(".playwright-cli/page-*.png"),
     }
@@ -526,6 +558,16 @@ def _build_attach_summary_md(
     git = runtime_snapshot.get("git") if isinstance(runtime_snapshot, dict) else {}
     branch = str((git or {}).get("branch") or "").strip() or "unknown"
     head = str((git or {}).get("head") or "").strip() or "unknown"
+    shared_repo = runtime_snapshot.get("shared_repo") if isinstance(runtime_snapshot, dict) else {}
+    shared_repo = shared_repo if isinstance(shared_repo, dict) else {}
+    active_shared = runtime_snapshot.get("active_shared_worktree") if isinstance(runtime_snapshot, dict) else {}
+    active_shared = active_shared if isinstance(active_shared, dict) else {}
+    shared_branch = str(shared_repo.get("branch") or "").strip()
+    shared_head = str(shared_repo.get("head") or "").strip()
+    active_shared_root = str(active_shared.get("path") or "").strip() or "/Users/Shared/Antigravity_AGENTS/Краб-active"
+    active_shared_branch = str(active_shared.get("branch") or "").strip()
+    active_shared_head = str(active_shared.get("head") or "").strip()
+    active_shared_match = bool(active_shared.get("matches_current_repo"))
     health_lite = (
         (((runtime_snapshot.get("health") or {}).get("web_lite") or {}).get("json"))
         if isinstance(runtime_snapshot, dict)
@@ -558,7 +600,17 @@ def _build_attach_summary_md(
         f"- Сгенерировано (UTC): `{NOW.isoformat()}`",
         f"- Текущая ветка: `{branch}`",
         f"- HEAD: `{head}`",
+        f"- Shared repo: `{CANONICAL_SHARED_ROOT}`",
         f"- Ориентировочная готовность проекта: `{PROJECT_READINESS}`",
+        "",
+        "## Состояние shared repo",
+        f"- `shared_branch`: `{shared_branch or 'unknown'}`",
+        f"- `shared_head`: `{shared_head or 'unknown'}`",
+        f"- `drift_vs_current_repo`: `{'yes' if shared_branch != branch or shared_head != head else 'no'}`",
+        f"- `active_shared_root`: `{active_shared_root}`",
+        f"- `active_shared_branch`: `{active_shared_branch or 'unknown'}`",
+        f"- `active_shared_head`: `{active_shared_head or 'unknown'}`",
+        f"- `active_shared_matches_current_repo`: `{'yes' if active_shared_match else 'no'}`",
         "",
         "## Текущее живое состояние",
         f"- `telegram_userbot_state`: `{health_lite.get('telegram_userbot_state', 'unknown')}`",
@@ -621,10 +673,11 @@ def _build_attach_summary_md(
             "5. `MASTER_PLAN_VNEXT_RU.md`",
             "6. `CALL_TRANSLATOR_AUDIT_RU.md`",
             "7. `MULTI_ACCOUNT_SWITCHOVER_RU.md`",
-            "8. `THIRD_ACCOUNT_BOOTSTRAP_RU.md`",
-            "9. `KRAB_SKILLS_REGISTRY_RU.md`",
-            "10. `PARALLEL_DIALOG_PROTOCOL_RU.md`",
-            "11. `HANDOFF_MANIFEST.json`",
+            "8. `SHARED_REPO_STRATEGY_RU.md`",
+            "9. `THIRD_ACCOUNT_BOOTSTRAP_RU.md`",
+            "10. `KRAB_SKILLS_REGISTRY_RU.md`",
+            "11. `PARALLEL_DIALOG_PROTOCOL_RU.md`",
+            "12. `HANDOFF_MANIFEST.json`",
             "",
             "## Что уже лежит как evidence",
         ]
@@ -632,6 +685,9 @@ def _build_attach_summary_md(
     for key in (
         "pre_release_smoke_latest",
         "r20_merge_gate_latest",
+        "active_shared_worktree_latest",
+        "runtime_switch_assistant_latest",
+        "prepare_next_account_session_latest",
         "latest_browser_snapshot",
         "latest_browser_screenshot",
     ):
@@ -686,7 +742,7 @@ def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any]) -> s
         "",
         "## Самый короткий путь",
         "```bash",
-        "cd /Users/pablito/Antigravity_AGENTS/Краб",
+        f"cd {CANONICAL_SHARED_ROOT}",
         "git fetch origin",
         f"git switch {branch}",
         "git pull --ff-only",
@@ -702,7 +758,7 @@ def _build_pablito_return_checklist_md(*, runtime_snapshot: dict[str, Any]) -> s
         "",
         "## Если нужен ручной режим",
         "```bash",
-        "cd /Users/pablito/Antigravity_AGENTS/Краб",
+        f"cd {CANONICAL_SHARED_ROOT}",
         "./new\\ Stop\\ Krab.command",
         "nohup ./new\\ start_krab.command > logs/release_gate_restart.log 2>&1 &",
         "python3 - <<'PY'",
@@ -756,7 +812,7 @@ def _build_third_account_bootstrap_md(*, runtime_snapshot: dict[str, Any]) -> st
         "6. `THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md`",
         "",
         "## Что должно быть доступно на новой учётке",
-        "- shared repo: `/Users/Shared/Antigravity_AGENTS/Краб`",
+        f"- shared repo: `{CANONICAL_SHARED_ROOT}`",
         "- `python3`",
         "- `node` и `npx`",
         "- `rg`",
@@ -777,7 +833,7 @@ def _build_third_account_bootstrap_md(*, runtime_snapshot: dict[str, Any]) -> st
         "",
         "## Первый локальный прогон",
         "```bash",
-        "cd /Users/Shared/Antigravity_AGENTS/Краб",
+        f"cd {CANONICAL_SHARED_ROOT}",
         "git fetch origin",
         f"git switch {branch}",
         "git pull --ff-only",
@@ -813,26 +869,46 @@ def _build_handoff_manifest(
         if path.is_file()
     }
     bundle_files.add("HANDOFF_MANIFEST.json")
+    entrypoints = {
+        "start_next_chat": str(BUNDLE_DIR / "START_NEXT_CHAT.md"),
+        "attach_summary": str(BUNDLE_DIR / "ATTACH_SUMMARY_RU.md"),
+        "pablito_return_checklist": str(BUNDLE_DIR / "PABLITO_RETURN_CHECKLIST.md"),
+        "third_account_bootstrap": str(BUNDLE_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md"),
+        "third_account_new_chat_prompt": str(BUNDLE_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md"),
+        "runtime_snapshot": str(BUNDLE_DIR / "runtime_snapshot.json"),
+        "master_plan": str(BUNDLE_DIR / "MASTER_PLAN_VNEXT_RU.md"),
+        "skills_registry": str(BUNDLE_DIR / "KRAB_SKILLS_REGISTRY_RU.md"),
+        "translator_audit": str(BUNDLE_DIR / "CALL_TRANSLATOR_AUDIT_RU.md"),
+        "multi_account_switchover": str(BUNDLE_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md"),
+        "shared_repo_strategy": str(BUNDLE_DIR / "SHARED_REPO_STRATEGY_RU.md"),
+        "parallel_dialog_protocol": str(BUNDLE_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md"),
+        "repo_readme": str(BUNDLE_DIR / "README.md"),
+        "repo_agents": str(BUNDLE_DIR / "AGENTS.md"),
+        "repo_claude": str(BUNDLE_DIR / "CLAUDE.md"),
+        "repo_gemini": str(BUNDLE_DIR / "GEMINI.md"),
+        "manifest": str(BUNDLE_DIR / "HANDOFF_MANIFEST.json"),
+        "downloads_master_plan": str(BUNDLE_DIR / DOWNLOADS_MASTER_PLAN.name),
+    }
     return {
         "generated_at_utc": NOW.isoformat(),
         "project_readiness": PROJECT_READINESS,
         "bundle_dir": str(BUNDLE_DIR),
         "bundle_zip": str(bundle_zip_path),
-        "entrypoints": {
-            "start_next_chat": str(BUNDLE_DIR / "START_NEXT_CHAT.md"),
-            "attach_summary": str(BUNDLE_DIR / "ATTACH_SUMMARY_RU.md"),
-            "pablito_return_checklist": str(BUNDLE_DIR / "PABLITO_RETURN_CHECKLIST.md"),
-            "third_account_bootstrap": str(BUNDLE_DIR / "THIRD_ACCOUNT_BOOTSTRAP_RU.md"),
-            "third_account_new_chat_prompt": str(BUNDLE_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md"),
-            "runtime_snapshot": str(BUNDLE_DIR / "runtime_snapshot.json"),
-            "master_plan": str(BUNDLE_DIR / "MASTER_PLAN_VNEXT_RU.md"),
-            "skills_registry": str(BUNDLE_DIR / "KRAB_SKILLS_REGISTRY_RU.md"),
-            "translator_audit": str(BUNDLE_DIR / "CALL_TRANSLATOR_AUDIT_RU.md"),
-            "multi_account_switchover": str(BUNDLE_DIR / "MULTI_ACCOUNT_SWITCHOVER_RU.md"),
-            "parallel_dialog_protocol": str(BUNDLE_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md"),
-            "manifest": str(BUNDLE_DIR / "HANDOFF_MANIFEST.json"),
-            "downloads_master_plan": str(BUNDLE_DIR / DOWNLOADS_MASTER_PLAN.name),
-        },
+        "entrypoints": entrypoints,
+        "key_docs": [
+            entrypoints["attach_summary"],
+            entrypoints["start_next_chat"],
+            entrypoints["runtime_snapshot"],
+            entrypoints["master_plan"],
+            entrypoints["translator_audit"],
+            entrypoints["multi_account_switchover"],
+            entrypoints["shared_repo_strategy"],
+            entrypoints["third_account_bootstrap"],
+            entrypoints["skills_registry"],
+            entrypoints["parallel_dialog_protocol"],
+            entrypoints["repo_readme"],
+            entrypoints["repo_agents"],
+        ],
         "git": runtime_snapshot.get("git") or {},
         "recovery_branches": runtime_snapshot.get("recovery_branches") or [],
         "acceptance_artifacts": acceptance,
@@ -845,16 +921,17 @@ def _build_handoff_manifest(
             "account": "pablito",
             "preferred_branch": str((runtime_snapshot.get("git") or {}).get("branch") or "").strip()
             or "codex/translator-finish-gate-user3",
-            "helper_command": "/Users/pablito/Antigravity_AGENTS/Краб/Release Gate.command",
-            "live_truth_artifact": "/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/pre_release_smoke_latest.json",
+            "helper_command": str(CANONICAL_SHARED_ROOT / "Release Gate.command"),
+            "live_truth_artifact": str(CANONICAL_SHARED_ROOT / "artifacts" / "ops" / "pre_release_smoke_latest.json"),
         },
         "other_account_transition": {
             "strategy": "shared_repo_docs_artifacts__split_runtime_auth_secrets_browser_state_per_account",
-            "readiness_helper": "/Users/pablito/Antigravity_AGENTS/Краб/Check New Account Readiness.command",
+            "readiness_helper": str(CANONICAL_SHARED_ROOT / "Check New Account Readiness.command"),
             "required_docs": [
                 "MASTER_PLAN_VNEXT_RU.md",
                 "CALL_TRANSLATOR_AUDIT_RU.md",
                 "MULTI_ACCOUNT_SWITCHOVER_RU.md",
+                "SHARED_REPO_STRATEGY_RU.md",
                 "THIRD_ACCOUNT_BOOTSTRAP_RU.md",
                 "KRAB_SKILLS_REGISTRY_RU.md",
                 "PARALLEL_DIALOG_PROTOCOL_RU.md",
@@ -882,10 +959,13 @@ def _build_start_next_chat_md(
         bundle_dir / "PABLITO_RETURN_CHECKLIST.md",
         bundle_dir / "NEXT_CHAT_CHECKPOINT_RU.md",
         bundle_dir / "OPENCLAW_KRAB_ROADMAP.md",
+        bundle_dir / "README.md",
+        bundle_dir / "AGENTS.md",
         bundle_dir / "NEW_CHAT_BOOTSTRAP_PROMPT.md",
         bundle_dir / "MASTER_PLAN_VNEXT_RU.md",
         bundle_dir / "CALL_TRANSLATOR_AUDIT_RU.md",
         bundle_dir / "MULTI_ACCOUNT_SWITCHOVER_RU.md",
+        bundle_dir / "SHARED_REPO_STRATEGY_RU.md",
         bundle_dir / "THIRD_ACCOUNT_BOOTSTRAP_RU.md",
         bundle_dir / "KRAB_SKILLS_REGISTRY_RU.md",
         bundle_dir / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md",
@@ -945,10 +1025,11 @@ def _build_start_next_chat_md(
             "3. Прочитай `NEXT_CHAT_CHECKPOINT_RU.md`, `OPENCLAW_KRAB_ROADMAP.md` и `MASTER_PLAN_VNEXT_RU.md`.",
             "4. Не доверяй старым процентам готовности из архивных handoff-фраз; текущий truth бери только из этого bundle.",
             "5. Если работа идёт в соседней macOS-учётке, сначала прочитай `MULTI_ACCOUNT_SWITCHOVER_RU.md`.",
-            "6. Если работа идёт на совсем новой macOS-учётке, сначала прочитай `THIRD_ACCOUNT_BOOTSTRAP_RU.md`.",
-            "7. Для первого сообщения в новом окне можно просто вставить `THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md`.",
-            "8. Если работа разбивается на несколько диалогов, сначала прочитай `PARALLEL_DIALOG_PROTOCOL_RU.md`.",
-            "9. Добавь явное требование формата отчёта после каждой итерации:",
+            "6. Затем прочитай `SHARED_REPO_STRATEGY_RU.md`, чтобы не спутать legacy shared repo и `Краб-active`.",
+            "7. Если работа идёт на совсем новой macOS-учётке, сначала прочитай `THIRD_ACCOUNT_BOOTSTRAP_RU.md`.",
+            "8. Для первого сообщения в новом окне можно просто вставить `THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md`.",
+            "9. Если работа разбивается на несколько диалогов, сначала прочитай `PARALLEL_DIALOG_PROTOCOL_RU.md`.",
+            "10. Добавь явное требование формата отчёта после каждой итерации:",
             "   - что изменено;",
             "   - как проверено;",
             "   - что осталось.",
@@ -971,6 +1052,9 @@ def main() -> int:
     git_branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
     git_status = _run(["git", "status", "--short", "--branch"])
     git_head = _run(["git", "rev-parse", "HEAD"])
+    shared_git_branch = _run(["git", "-C", str(CANONICAL_SHARED_ROOT), "rev-parse", "--abbrev-ref", "HEAD"])
+    shared_git_head = _run(["git", "-C", str(CANONICAL_SHARED_ROOT), "rev-parse", "HEAD"])
+    shared_git_status = _run(["git", "-C", str(CANONICAL_SHARED_ROOT), "status", "--short", "--branch"])
 
     web_lite = _http_json("http://127.0.0.1:8080/api/health/lite")
     web_full = _http_json("http://127.0.0.1:8080/api/health")
@@ -1005,6 +1089,13 @@ def main() -> int:
             "head": git_head.get("stdout", ""),
             "status_short": git_status.get("stdout", ""),
         },
+        "shared_repo": {
+            "path": str(CANONICAL_SHARED_ROOT),
+            "branch": shared_git_branch.get("stdout", ""),
+            "head": shared_git_head.get("stdout", ""),
+            "status_short": shared_git_status.get("stdout", ""),
+        },
+        "active_shared_worktree": _read_json_file(ROOT / "artifacts" / "ops" / "active_shared_worktree_latest.json"),
         "health": {
             "web_lite": web_lite,
             "web_full": web_full,
@@ -1042,6 +1133,7 @@ def main() -> int:
             "skills_registry": str(DOCS_DIR / "KRAB_SKILLS_REGISTRY_RU.md"),
             "third_account_new_chat_prompt": str(DOCS_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md"),
             "parallel_dialog_protocol": str(DOCS_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md"),
+            "shared_repo_strategy": str(DOCS_DIR / "SHARED_REPO_STRATEGY_RU.md"),
         },
         "known_issues": issues_rows,
         "recovery_branches": _collect_recovery_branches(),
@@ -1072,7 +1164,10 @@ def main() -> int:
     _copy_if_exists(DOCS_DIR / "KRAB_SKILLS_REGISTRY_RU.md", BUNDLE_DIR / "KRAB_SKILLS_REGISTRY_RU.md")
     _copy_if_exists(DOCS_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md", BUNDLE_DIR / "THIRD_ACCOUNT_NEW_CHAT_PROMPT_RU.md")
     _copy_if_exists(DOCS_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md", BUNDLE_DIR / "PARALLEL_DIALOG_PROTOCOL_RU.md")
+    _copy_if_exists(DOCS_DIR / "SHARED_REPO_STRATEGY_RU.md", BUNDLE_DIR / "SHARED_REPO_STRATEGY_RU.md")
     _copy_if_exists(DOWNLOADS_MASTER_PLAN, BUNDLE_DIR / DOWNLOADS_MASTER_PLAN.name)
+    for repo_doc in REPO_LEVEL_DOCS:
+        _copy_if_exists(repo_doc, BUNDLE_DIR / repo_doc.name)
     (BUNDLE_DIR / "ATTACH_SUMMARY_RU.md").write_text(
         _build_attach_summary_md(
             runtime_snapshot=runtime_snapshot,

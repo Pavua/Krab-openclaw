@@ -67,6 +67,7 @@ from .handlers import (
     handle_clear,
     handle_codex,
     handle_gemini_cli,
+    handle_opencode,
     handle_config,
     handle_cronstatus,
     handle_diagnose,
@@ -656,6 +657,12 @@ class KraabUserbot:
         )
         async def wrap_claude_cli(c, m):
             await run_cmd(handle_claude_cli, m)
+
+        @self.client.on_message(
+            filters.command("opencode", prefixes=prefixes) & _make_command_filter("opencode"), group=-1
+        )
+        async def wrap_opencode(c, m):
+            await run_cmd(handle_opencode, m)
 
         @self.client.on_message(filters.command("acl", prefixes=prefixes) & _make_command_filter("acl"), group=-1)
         async def wrap_acl(c, m):

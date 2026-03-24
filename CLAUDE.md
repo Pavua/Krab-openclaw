@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Этот файл даёт краткий, но truthful-контекст для Claude Code при работе
-с репозиторием `/Users/pablito/Antigravity_AGENTS/Краб`.
+с репозиторием Krab.
 
 Он не заменяет runtime-source-of-truth. Если этот файл расходится с живым
 runtime OpenClaw, верить нужно runtime.
@@ -11,9 +11,10 @@ runtime OpenClaw, верить нужно runtime.
 Перед любыми выводами о проекте сначала прочитай:
 
 1. `/Users/pablito/Antigravity_AGENTS/Краб/AGENTS.md`
-2. `/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/MASTER_PLAN_SOURCE_OF_TRUTH.md`
-3. `/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/SESSION_HANDOFF.md`
-4. Runtime truth:
+2. `/Users/pablito/Antigravity_AGENTS/Краб/docs/MASTER_PLAN_VNEXT_RU.md`
+3. `/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/MASTER_PLAN_SOURCE_OF_TRUTH.md`
+4. `/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/SESSION_HANDOFF.md`
+5. Runtime truth:
    - `~/.openclaw/openclaw.json`
    - `~/.openclaw/agents/main/agent/models.json`
    - `~/.openclaw/agents/main/agent/auth-profiles.json`
@@ -110,9 +111,18 @@ runtime OpenClaw, верить нужно runtime.
 - Repo-level документация не должна притворяться боевой памятью Краба.
 - После правок в routing/runtime/UI обновляй handoff-доки, иначе следующий агент
   начнёт работать по устаревшей картине.
-- Проценты готовности считать по master-plan из
-  `/Users/USER3/PLAN-Краб+переводчик 12.03.2026.md`,
+- Проценты готовности считать по
+  `/Users/pablito/Antigravity_AGENTS/Краб/docs/MASTER_PLAN_VNEXT_RU.md`,
   а не по локальному инциденту.
+- Канонический shared repo path для multi-account работы:
+  `/Users/Shared/Antigravity_AGENTS/Краб`
+- Практический fast-path, пока legacy shared repo не reconciled:
+  `/Users/Shared/Antigravity_AGENTS/Краб-active`
+- Runtime/auth/browser state при multi-account всегда per-account.
+- Правила владения shared path, прав записи и reclaim/freeze брать из
+  `/Users/pablito/Antigravity_AGENTS/Краб/docs/MULTI_ACCOUNT_SWITCHOVER_RU.md`.
+- Перед уходом на другую учётку сначала запускать
+  `/Users/pablito/Antigravity_AGENTS/Краб/Prepare Next Account Session.command`.
 
 ## Команды и запуск
 
@@ -167,3 +177,48 @@ ruff format src/
 2. затем верь live endpoints (`:8080/api/...`);
 3. затем обновляй docs;
 4. и только потом делай выводы о регрессии.
+
+## MCP Telegram Server
+
+**Файлы:**
+```
+mcp-servers/telegram/telegram_bridge.py   ← Pyrogram singleton, без MCP-зависимостей
+mcp-servers/telegram/server.py            ← FastMCP + 10 инструментов + CLI argparse
+```
+
+**Запуск:**
+```bash
+# stdio (Claude Desktop, Codex, Cursor)
+python mcp-servers/telegram/server.py --transport stdio
+
+# SSE (web-клиенты, отладка)
+python mcp-servers/telegram/server.py --transport sse --port 8000 --host 127.0.0.1
+```
+
+**Инструменты (10 штук):**
+
+| Инструмент | Описание |
+|---|---|
+| `telegram_get_dialogs` | Список последних диалогов |
+| `telegram_get_chat_history` | История сообщений чата |
+| `telegram_send_message` | Отправить текстовое сообщение |
+| `telegram_download_media` | Скачать медиафайл по message_id |
+| `telegram_transcribe_voice` | Транскрипция голосового → KrabEar IPC, fallback mlx-whisper |
+| `telegram_search` | Глобальный поиск по всем чатам |
+| `telegram_edit_message` | Редактировать отправленное сообщение |
+| `krab_status` | GET /api/health/lite — статус OpenClaw gateway |
+| `krab_tail_logs` | Хвост openclaw.log (n строк) |
+| `krab_restart_gateway` | Перезапуск gateway через openclaw CLI |
+
+**Транскрипция (приоритет):**
+1. KrabEar IPC (`~/Library/Application Support/KrabEar/krabear.sock`) — Metal GPU, whisper-large-v3-turbo уже тёплый
+2. Fallback: `mlx_whisper.transcribe()` напрямую — если KrabEar не запущен
+
+**Сессия:** хранится как `{TELEGRAM_SESSION_NAME}_mcp` в `~/.krab_mcp_sessions/`
+— не конфликтует с боевым сеансом основного Краба.
+
+**Регистрация в реестре:** запись `"telegram"` в `src/core/mcp_registry.py`
+— `risk="high"`, используется venv Python из `.venv/bin/python`.
+
+**Claude Desktop:** конфиг в `~/Library/Application Support/Claude/claude_desktop_config.json`
+— сервер `"krab-telegram"` + 6 managed серверов через `scripts/run_managed_mcp_server.py`.

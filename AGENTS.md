@@ -27,6 +27,13 @@
 ## Правила работы
 
 - Не дублировать нативный функционал OpenClaw, если он уже есть в runtime или CLI
+- Канонический execution plan живёт в `docs/MASTER_PLAN_VNEXT_RU.md`
+- Проценты и baseline брать только из `docs/handoff/MASTER_PLAN_SOURCE_OF_TRUTH.md`
+- Для multi-account использовать shared repo `/Users/Shared/Antigravity_AGENTS/Краб`, но не шарить runtime/auth/browser state
+- Пока legacy shared repo не reconciled, fastest safe path для другой учётки — `/Users/Shared/Antigravity_AGENTS/Краб-active`
+- Протокол владения, прав и switchover для людей и агентов живёт в `docs/MULTI_ACCOUNT_SWITCHOVER_RU.md`
+- Стратегия работы с drift между `pablito` и shared repo живёт в `docs/SHARED_REPO_STRATEGY_RU.md`
+- Перед передачей работы на другую учётку предпочитать `Prepare Next Account Session.command`
 - Все изменения делать через отдельные ветки `codex/...`
 - Merge в `main` разрешён только после тестов и smoke-проверки
 - Для каждого крупного этапа обновлять roadmap-документ со статусом и проверками

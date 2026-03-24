@@ -39,6 +39,7 @@ _TOOL_FLAGS: dict[str, list[str]] = {
     "codex": ["-q"],         # quiet: без интерактивного UI
     "gemini": ["-p"],        # -p prompt: non-interactive режим
     "claude": ["-p"],        # claude -p: non-interactive с одним запросом
+    "opencode": ["--print"], # opencode --print: non-interactive вывод
     "cursor": ["--repl"],    # cursor repl-режим
 }
 

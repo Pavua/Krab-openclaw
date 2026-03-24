@@ -25,6 +25,7 @@ from scripts.openclaw_runtime_repair import (
     repair_output_sanitizer_plugin_config,
     repair_agent_model_overrides,
     repair_channel_health_monitor,
+    repair_codex_cli_backend,
     repair_compaction_memory_flush,
     repair_external_reasoning_defaults,
     repair_group_policy_allowlist,
@@ -173,6 +174,44 @@ def test_sync_openclaw_json_updates_lmstudio_token_when_present(tmp_path: Path) 
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["models"]["providers"]["google"]["apiKey"] == "AIzaNEW1234567890123456789012345"
     assert payload["models"]["providers"]["lmstudio"]["apiKey"] == "lm-real-token"
+
+
+def test_repair_codex_cli_backend_sets_jsonl_resume_contract(tmp_path: Path) -> None:
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "cliBackends": {
+                            "codex-cli": {
+                                "command": "/opt/homebrew/bin/codex",
+                                "resumeArgs": ["exec", "resume", "{sessionId}"],
+                                "resumeOutput": "text",
+                            }
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = repair_codex_cli_backend(openclaw_path)
+
+    assert report["changed"] is True
+    payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
+    codex_cli = payload["agents"]["defaults"]["cliBackends"]["codex-cli"]
+    assert codex_cli["resumeArgs"] == [
+        "exec",
+        "resume",
+        "{sessionId}",
+        "--json",
+        "--skip-git-repo-check",
+    ]
+    assert codex_cli["resumeOutput"] == "jsonl"
+    assert codex_cli["output"] == "jsonl"
 
 
 def test_sync_models_json_keeps_existing_lmstudio_token_when_env_missing(tmp_path: Path) -> None:
@@ -655,6 +694,11 @@ def test_should_restart_gateway_when_bootstrap_or_group_policy_changed() -> None
 def test_should_restart_gateway_when_telegram_token_synced() -> None:
     steps = {
         "sync_telegram_channel_token": {"changed": True},
+    }
+    assert should_restart_gateway(steps) is True
+
+    steps = {
+        "repair_codex_cli_backend": {"changed": True},
     }
     assert should_restart_gateway(steps) is True
 

@@ -5,6 +5,9 @@
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
+PYTHON_BIN="$DIR/venv/bin/python"
+HELPER_SCRIPT="$DIR/scripts/codex_cli_device_login.py"
+
 echo "=== Codex CLI Login ==="
 echo ""
 
@@ -19,9 +22,16 @@ fi
 echo "Текущий статус:"
 codex login status || true
 echo ""
-echo "Запускаю device-auth login для Codex CLI..."
-codex login --device-auth
-LOGIN_CODE=$?
+echo "Запускаю улучшенный device-auth helper для Codex CLI..."
+if [ -x "$PYTHON_BIN" ] && [ -f "$HELPER_SCRIPT" ]; then
+  "$PYTHON_BIN" "$HELPER_SCRIPT"
+  LOGIN_CODE=$?
+else
+  echo "⚠️ Не найден venv/python helper, переключаюсь на сырой режим."
+  echo "Открой вручную: https://auth.openai.com/codex/device"
+  codex login --device-auth
+  LOGIN_CODE=$?
+fi
 
 echo ""
 if [ "$LOGIN_CODE" -eq 0 ]; then

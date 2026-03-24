@@ -730,7 +730,7 @@
             </div>
             <div
               style="display:flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
-              <span class="card-meta" style="margin: 0;">Мой Chrome:</span>
+              <span class="card-meta" style="margin: 0;">Debug Chrome:</span>
               <span id="ocBrowserOwnerAttach" class="badge warn">—</span>
             </div>
             <div
@@ -758,7 +758,7 @@
           </div>
           <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <button id="ocBrowserStartBtn">Запустить Debug browser</button>
-            <button id="ocBrowserOwnerBtn">Открыть Мой Chrome</button>
+            <button id="ocBrowserOwnerBtn">Открыть обычный Chrome</button>
           </div>
           <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 6px;">
             <span id="ocBrowserStartMeta" class="card-meta">—</span>
@@ -1154,6 +1154,18 @@
                 <span class="card-meta" style="margin: 0;">Workspace:</span>
                 <span id="ocTranslatorWorkspaceBadge" class="badge">—</span>
               </div>
+            </div>
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border-card); padding-bottom: 8px;">
+              <span class="card-meta" style="margin: 0;">Shared write:</span>
+              <span id="ocTranslatorSharedWriteBadge" class="badge">—</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span id="ocTranslatorSharedWriteValue" class="card-value"
+                style="font-size: 0.82rem; text-align: left; color: var(--text-main); white-space: normal;">—</span>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button id="ocTranslatorRepairSharedWriteBtn" style="flex: 1;">Repair shared write</button>
             </div>
           </div>
           <div class="form-grid" style="margin-bottom: 12px;">
@@ -3040,7 +3052,7 @@
       }
       showToast(String(payload?.message || "Provider helper запущен"), "success");
       setTimeout(() => {
-        loadModelCatalog(false).catch(() => {});
+        loadModelCatalog(false, true).catch(() => {});
       }, 1200);
       return payload;
     }
@@ -3287,9 +3299,10 @@
       setText("modelProviderActionMeta", "One-click repair доступен прямо на карточках провайдеров, где для этого есть helper.");
     }
 
-    async function loadModelCatalog(showStatus = true) {
+    async function loadModelCatalog(showStatus = true, forceRefresh = false) {
       try {
-        const payload = await fetchJson("/api/model/catalog");
+        const catalogUrl = forceRefresh ? "/api/model/catalog?force_refresh=true" : "/api/model/catalog";
+        const payload = await fetchJson(catalogUrl);
         if (!payload?.ok) {
           throw new Error(payload?.error || "model_catalog_failed");
         }
@@ -3380,6 +3393,13 @@
         syncModelControls(payload.catalog || {});
         if (preservingRuntimeDraft) {
           showToast('Global context/thinking/queue оставлены как draft. Для записи в runtime нажми "Сохранить глобальную цепочку, thinking и очередь".', "warn");
+        }
+        if (payload?.catalog_refresh?.degraded) {
+          const degradedDetail = String(payload?.catalog_refresh?.detail || "").trim();
+          showToast(
+            degradedDetail || "Runtime уже записан, но полный refresh каталога временно деградировал; панель использует cache.",
+            "warn",
+          );
         }
         if (payload.message) {
           document.getElementById("assistantOutput").textContent = String(
@@ -4539,6 +4559,7 @@ ${channelsText}`;
     document.getElementById("ocVoiceSaveBtn").addEventListener("click", withBtnState("ocVoiceSaveBtn", "Saving...", saveVoiceRuntimeStatus));
     document.getElementById("ocVoiceRefreshBtn").addEventListener("click", withBtnState("ocVoiceRefreshBtn", "Loading...", () => loadVoiceRuntimeStatus(true)));
     document.getElementById("ocTranslatorRefreshBtn").addEventListener("click", withBtnState("ocTranslatorRefreshBtn", "Loading...", () => loadTranslatorReadinessStatus(true)));
+    document.getElementById("ocTranslatorRepairSharedWriteBtn").addEventListener("click", withBtnState("ocTranslatorRepairSharedWriteBtn", "Repairing...", repairTranslatorSharedWrite));
     document.getElementById("ocTranslatorStartBtn").addEventListener("click", withBtnState("ocTranslatorStartBtn", "Creating...", startTranslatorSession));
     document.getElementById("ocTranslatorPolicyBtn").addEventListener("click", withBtnState("ocTranslatorPolicyBtn", "Applying...", updateTranslatorSessionPolicy));
     document.getElementById("ocTranslatorPauseBtn").addEventListener("click", withBtnState("ocTranslatorPauseBtn", "Pausing...", () => runTranslatorSessionAction("pause")));
@@ -4849,13 +4870,13 @@ ${channelsText}`;
 
     document.getElementById("ocBrowserOwnerBtn").addEventListener("click", withBtnState("ocBrowserOwnerBtn", "Открываю...", async () => {
       try {
-        setText("ocBrowserOwnerMeta", "Открываю helper для обычного Chrome...");
+        setText("ocBrowserOwnerMeta", "Открываю обычный Chrome для Remote Debugging...");
         const payload = await postJson("/api/openclaw/browser/open-owner-chrome", {});
         const launcher = String(payload.launcher || "unknown");
-        const nextStep = String(payload.next_step || "Проверь owner Chrome и обнови статус.");
+        const nextStep = String(payload.next_step || "Проверь обычный Chrome и обнови статус.");
         const helperPath = String(payload.helper_path || "");
         const helperTail = helperPath ? ` (${helperPath.split("/").pop()})` : "";
-        setText("ocBrowserOwnerMeta", `Мой Chrome: ${launcher}${helperTail}. ${nextStep}`);
+        setText("ocBrowserOwnerMeta", `Owner Chrome: ${launcher}${helperTail}. ${nextStep}`);
         showToast("Открыл helper для обычного Chrome", "success");
         await loadOpenclawStatus(false);
       } catch (e) {
@@ -5160,11 +5181,11 @@ ${channelsText}`;
           }
           if (ownerMeta) {
             if (ownerAttachConfirmed) {
-              ownerMeta.textContent = "Обычный Chrome владельца уже подтверждён.";
+              ownerMeta.textContent = "Attach к обычному Chrome владельца уже подтверждён.";
             } else if (devtoolsPathReadiness === "attention") {
-              ownerMeta.textContent = "Откроет ваш обычный Chrome на странице Remote Debugging через существующий .command helper.";
+              ownerMeta.textContent = "Эта кнопка откроет обычный Chrome владельца на странице Remote Debugging.";
             } else {
-              ownerMeta.textContent = "Подготовь обычный Chrome владельца для attach и затем обнови статус.";
+              ownerMeta.textContent = "Подготовь attach к обычному Chrome владельца отдельно и затем обнови статус.";
             }
           }
         } else {
@@ -5219,7 +5240,7 @@ ${channelsText}`;
             ownerBtn.disabled = false;
           }
           if (ownerMeta) {
-            ownerMeta.textContent = "Не удалось получить owner Chrome readiness.";
+            ownerMeta.textContent = "Не удалось получить readiness для обычного Chrome владельца.";
           }
         }
 
@@ -5559,8 +5580,18 @@ ${channelsText}`;
       const liveBadge = document.getElementById("ocTranslatorLiveBadge");
       const userbotBadge = document.getElementById("ocTranslatorUserbotBadge");
       const workspaceBadge = document.getElementById("ocTranslatorWorkspaceBadge");
+      const sharedWriteBadge = document.getElementById("ocTranslatorSharedWriteBadge");
       const ordinaryBadge = document.getElementById("ocTranslatorOrdinaryBadge");
       const internetBadge = document.getElementById("ocTranslatorInternetBadge");
+      const permissionHealth = data.active_shared_permission_health && typeof data.active_shared_permission_health === "object"
+        ? data.active_shared_permission_health
+        : {};
+      const formatSharedPermissionSample = (item) => {
+        if (!item) return "";
+        if (typeof item === "string") return item.trim();
+        if (typeof item !== "object") return String(item).trim();
+        return String(item.relative_path || item.path || item.kind || "").trim();
+      };
 
       if (readinessBadge) {
         const status = String(data.readiness || "unknown");
@@ -5586,6 +5617,13 @@ ${channelsText}`;
         const status = account.shared_workspace_attached ? "attached" : "missing";
         workspaceBadge.className = `badge ${translatorBadgeClass(status)}`;
         workspaceBadge.textContent = account.shared_workspace_attached ? "ATTACHED" : "MISSING";
+      }
+      if (sharedWriteBadge) {
+        const status = String(permissionHealth.status || "unknown");
+        sharedWriteBadge.className = `badge ${translatorBadgeClass(status)}`;
+        sharedWriteBadge.textContent = permissionHealth.non_writable_count > 0
+          ? `${Number(permissionHealth.non_writable_count || 0)} BLOCKED`
+          : (status === "ready" ? "GROUP-WRITE" : translatorBadgeText(status));
       }
       if (ordinaryBadge) {
         const status = String(ordinary.status || "unknown");
@@ -5615,6 +5653,14 @@ ${channelsText}`;
       setText("ocTranslatorOrdinaryPath", String(ordinary.path || "—"));
       setText("ocTranslatorInternetPath", String(internet.path || "—"));
       setText("ocTranslatorLanguagesValue", languages.length ? languages.join(", ") : "—");
+      const permissionSamples = (Array.isArray(permissionHealth.samples) ? permissionHealth.samples : [])
+        .map((item) => formatSharedPermissionSample(item))
+        .filter(Boolean);
+      const nonWritableCount = Number(permissionHealth.non_writable_count || 0);
+      const permissionSummary = nonWritableCount > 0
+        ? `Найдены owner-only хвосты: ${nonWritableCount}. Repair: Repair Active Shared Worktree Permissions.command${permissionSamples.length ? ` · примеры: ${permissionSamples.slice(0, 2).join(", ")}` : ""}`
+        : "Shared worktree доступен на запись для текущей учётки.";
+      setText("ocTranslatorSharedWriteValue", permissionSummary);
       setText(
         "ocTranslatorActiveSessionValue",
         activeSessionTail ? `${activeSessionLabel} · ${activeSessionTail}` : activeSessionLabel,
@@ -5623,7 +5669,12 @@ ${channelsText}`;
       renderTranslatorFoundationChecks(data.foundation_checks || {});
 
       const recommendationsRoot = document.getElementById("ocTranslatorRecommendations");
-      const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
+      const recommendations = Array.isArray(data.recommendations) ? [...data.recommendations] : [];
+      if (nonWritableCount > 0) {
+        recommendations.unshift(
+          `В active shared worktree есть owner-only хвосты (${nonWritableCount}); при необходимости запусти Repair Active Shared Worktree Permissions.command.`,
+        );
+      }
       if (recommendationsRoot) {
         if (!recommendations.length) {
           recommendationsRoot.innerHTML = '<span class="card-meta">Рекомендаций нет.</span>';
@@ -6432,6 +6483,31 @@ ${channelsText}`;
         setText("ocTranslatorMeta", metaParts.join(" · ") || "Translator readiness обновлён");
       } catch (error) {
         setText("ocTranslatorMeta", `Translator readiness error: ${error.message}`);
+      }
+    }
+
+    async function repairTranslatorSharedWrite() {
+      try {
+        setText("ocTranslatorMeta", "Нормализую права active shared worktree...");
+        const payload = await postJson("/api/runtime/repair-active-shared-permissions", {});
+        const repair = payload && typeof payload.repair === "object" ? payload.repair : {};
+        const changedCount = Number(repair.changed_count || 0);
+        const skippedCount = Number(repair.skipped_foreign_owner_count || 0);
+        const errorCount = Number(repair.error_count || 0);
+        const summaryParts = [
+          `changed ${changedCount}`,
+          skippedCount > 0 ? `foreign-owner ${skippedCount}` : "",
+          errorCount > 0 ? `errors ${errorCount}` : "",
+        ].filter(Boolean);
+        await loadTranslatorReadinessStatus(false);
+        setText(
+          "ocTranslatorMeta",
+          summaryParts.length
+            ? `Shared worktree repair: ${summaryParts.join(" · ")}`
+            : "Shared worktree repair завершён",
+        );
+      } catch (error) {
+        setText("ocTranslatorMeta", `Shared worktree repair error: ${error.message}`);
       }
     }
 

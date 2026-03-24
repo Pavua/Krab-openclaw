@@ -129,7 +129,7 @@ def test_build_runtime_commands_status_owner_includes_live_command_groups() -> N
     """Owner-summary должен показывать реальные группы доступных команд."""
     bot = _make_bot_stub()
 
-    text = bot._build_runtime_commands_status(is_allowed_sender=True)
+    text = bot._build_runtime_commands_status(is_allowed_sender=True, access_level="owner")
 
     assert "Команды, которые реально доступны сейчас" in text
     assert "`!model local`" in text

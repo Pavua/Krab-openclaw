@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from src.core.cloud_key_probe import CloudProbeResult
@@ -48,6 +49,11 @@ def client() -> OpenClawClient:
         mock_config.LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS = 2
         mock_config.LM_STUDIO_NATIVE_OUTPUT_CAP_MARGIN = 8
         mock_config.LOCAL_FALLBACK_ENABLED = True
+        mock_config.OPENCLAW_BUFFERED_READ_TIMEOUT_SEC = None
+        mock_config.OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC = 240
+        mock_config.OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC = 240
+        mock_config.OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC = 240
+        mock_config.OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC = 540
         mock_config.HISTORY_WINDOW_MESSAGES = 20
         mock_config.HISTORY_WINDOW_MAX_CHARS = None
         mock_config.RETRY_HISTORY_WINDOW_MESSAGES = 8
@@ -232,6 +238,78 @@ async def test_send_message_stream_honors_preferred_cloud_model(client: OpenClaw
     route = client.get_last_runtime_route()
     assert route.get("model") == "google-gemini-cli/gemini-3.1-pro-preview"
     assert route.get("channel") == "openclaw_cloud"
+
+
+def test_resolve_buffered_read_timeout_uses_provider_specific_budgets(client: OpenClawClient) -> None:
+    """Для зависающих buffered cloud-маршрутов должен включаться отдельный budget ожидания."""
+    with patch("src.openclaw_client.config.OPENCLAW_BUFFERED_READ_TIMEOUT_SEC", None):
+        with patch("src.openclaw_client.config.OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", 210.0):
+            with patch("src.openclaw_client.config.OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", 195.0):
+                with patch("src.openclaw_client.config.OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC", 180.0):
+                    assert client._resolve_buffered_read_timeout_sec(model_id="codex-cli/gpt-5.4") == 210.0  # noqa: SLF001
+                    assert client._resolve_buffered_read_timeout_sec(model_id="google-gemini-cli/gemini-3.1-pro-preview") == 195.0  # noqa: SLF001
+                    assert client._resolve_buffered_read_timeout_sec(model_id="openai-codex/gpt-5.4") == 180.0  # noqa: SLF001
+                    assert client._resolve_buffered_read_timeout_sec(model_id="google/gemini-3.1-pro-preview") is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_openclaw_completion_once_passes_request_timeout_for_google_gemini_cli(client: OpenClawClient) -> None:
+    """Buffered-запрос к google-gemini-cli должен иметь отдельный request-level read-timeout."""
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"choices": [{"message": {"content": "OK"}}]}
+    client._http_client.post.return_value = response
+
+    with patch("src.openclaw_client.config.OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", 205.0):
+        text = await client._openclaw_completion_once(
+            model_id="google-gemini-cli/gemini-3.1-pro-preview",
+            messages_to_send=[{"role": "user", "content": "ping"}],
+        )
+
+    assert text == "OK"
+    timeout_arg = client._http_client.post.await_args.kwargs["timeout"]
+    assert isinstance(timeout_arg, httpx.Timeout)
+    assert timeout_arg.read == 205.0
+
+
+@pytest.mark.asyncio
+async def test_openclaw_completion_once_passes_request_timeout_for_codex_cli(client: OpenClawClient) -> None:
+    """Buffered-запрос к codex-cli должен иметь отдельный request-level read-timeout."""
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"choices": [{"message": {"content": "OK"}}]}
+    client._http_client.post.return_value = response
+
+    with patch("src.openclaw_client.config.OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", 222.0):
+        text = await client._openclaw_completion_once(
+            model_id="codex-cli/gpt-5.4",
+            messages_to_send=[{"role": "user", "content": "ping"}],
+        )
+
+    assert text == "OK"
+    timeout_arg = client._http_client.post.await_args.kwargs["timeout"]
+    assert isinstance(timeout_arg, httpx.Timeout)
+    assert timeout_arg.read == 222.0
+
+
+@pytest.mark.asyncio
+async def test_openclaw_completion_once_keeps_request_timeout_unbounded_for_other_provider_by_default(
+    client: OpenClawClient,
+) -> None:
+    """Если общий budget не задан, не навязываем read-timeout всем остальным провайдерам."""
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"choices": [{"message": {"content": "OK"}}]}
+    client._http_client.post.return_value = response
+
+    with patch("src.openclaw_client.config.OPENCLAW_BUFFERED_READ_TIMEOUT_SEC", None):
+        text = await client._openclaw_completion_once(
+            model_id="google/gemini-3.1-pro-preview",
+            messages_to_send=[{"role": "user", "content": "ping"}],
+        )
+
+    assert text == "OK"
+    assert client._http_client.post.await_args.kwargs["timeout"] is None
 
 
 @pytest.mark.asyncio
@@ -701,47 +779,263 @@ async def test_provider_timeout_does_not_use_local_recovery_when_disabled(client
 
 
 @pytest.mark.asyncio
+async def test_cloud_retry_updates_runtime_route_to_current_attempt(client: OpenClawClient) -> None:
+    """
+    Во время cloud->cloud recovery runtime-route должен показывать текущий
+    fallback-кандидат, а не застывший стартовый маршрут.
+    """
+    from src.model_manager import model_manager
+
+    seen_routes: list[dict[str, object]] = []
+
+    async def _fake_completion(*, model_id, **kwargs):
+        _ = kwargs
+        route = client.get_last_runtime_route()
+        seen_routes.append(
+            {
+                "model_id": model_id,
+                "route_model": route.get("model"),
+                "route_status": route.get("status"),
+                "route_attempt": route.get("attempt"),
+            }
+        )
+        if model_id == "codex-cli/gpt-5.4":
+            return "provider timeout"
+        return "Cloud retry OK"
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="codex-cli/gpt-5.4")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(
+                client,
+                "_pick_cloud_retry_model",
+                new=AsyncMock(return_value="google-gemini-cli/gemini-3-flash-preview"),
+            ):
+                with patch.object(client, "_openclaw_completion_once", new=_fake_completion):
+                    chunks = []
+                    async for chunk in client.send_message_stream("Hi", "chat-cloud-retry-route"):
+                        chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud retry OK"
+    assert seen_routes[0] == {
+        "model_id": "codex-cli/gpt-5.4",
+        "route_model": "codex-cli/gpt-5.4",
+        "route_status": "pending",
+        "route_attempt": 1,
+    }
+    assert seen_routes[1] == {
+        "model_id": "google-gemini-cli/gemini-3-flash-preview",
+        "route_model": "google-gemini-cli/gemini-3-flash-preview",
+        "route_status": "pending",
+        "route_attempt": 2,
+    }
+    route = client.get_last_runtime_route()
+    assert route.get("status") == "ok"
+    assert route.get("model") == "google-gemini-cli/gemini-3-flash-preview"
+
+
+@pytest.mark.asyncio
 async def test_tier_export_contains_required_fields(client: OpenClawClient) -> None:
-    export = client.get_tier_state_export()
+    with patch("src.openclaw_client.get_openclaw_cli_runtime_status", return_value={"can_reload": True, "error": ""}):
+        export = client.get_tier_state_export()
     assert "active_tier" in export
     assert "last_error_code" in export
     assert "tiers_configured" in export
+    assert export["secrets_reload_runtime"]["can_reload"] is True
 
 
 @pytest.mark.asyncio
 async def test_cloud_runtime_check_updates_tier_state_from_probe(client: OpenClawClient) -> None:
-    with patch(
-        "src.openclaw_client.probe_gemini_key",
-        new=AsyncMock(
-            side_effect=[
-                CloudProbeResult(
-                    provider_status="ok",
-                    key_source="env:GEMINI_API_KEY_FREE",
-                    key_tier="free",
-                    semantic_error_code="ok",
-                    recovery_action="none",
-                    http_status=200,
-                    detail="",
-                ),
-                CloudProbeResult(
-                    provider_status="auth",
-                    key_source="env:GEMINI_API_KEY_PAID",
-                    key_tier="paid",
-                    semantic_error_code="auth_invalid",
-                    recovery_action="switch_provider_or_key",
-                    http_status=401,
-                    detail="unauthorized",
-                ),
-            ]
-        ),
-    ):
-        report = await client.get_cloud_runtime_check()
+    with patch("src.openclaw_client.get_openclaw_cli_runtime_status", return_value={"can_reload": True, "error": ""}):
+        with patch(
+            "src.openclaw_client.probe_gemini_key",
+            new=AsyncMock(
+                side_effect=[
+                    CloudProbeResult(
+                        provider_status="ok",
+                        key_source="env:GEMINI_API_KEY_FREE",
+                        key_tier="free",
+                        semantic_error_code="ok",
+                        recovery_action="none",
+                        http_status=200,
+                        detail="",
+                    ),
+                    CloudProbeResult(
+                        provider_status="auth",
+                        key_source="env:GEMINI_API_KEY_PAID",
+                        key_tier="paid",
+                        semantic_error_code="auth_invalid",
+                        recovery_action="switch_provider_or_key",
+                        http_status=401,
+                        detail="unauthorized",
+                    ),
+                ]
+            ),
+        ):
+            report = await client.get_cloud_runtime_check()
 
     assert report["ok"] is True
+    assert report["secrets_reload_runtime"]["can_reload"] is True
     state = client.get_tier_state_export()
     assert state["last_provider_status"] == "ok"
     assert state["last_error_code"] is None
     assert state["last_probe_at"] is not None
+
+
+def test_runtime_google_key_state_detects_placeholder(client: OpenClawClient) -> None:
+    with patch("src.openclaw_client.get_google_api_key_from_models", return_value="GEMINI_API_KEY"):
+        state = client._runtime_google_key_state()  # noqa: SLF001
+
+    assert state["state"] == "placeholder"
+    assert state["tier"] == ""
+    assert state["masked"].startswith("GEMI")
+
+
+def test_effective_runtime_google_key_state_resolves_paid_placeholder_from_env(client: OpenClawClient) -> None:
+    client.gemini_tiers["paid"] = "AIzaPAID1234567890123456789012345"
+    client.gemini_tiers["free"] = "AIzaFREE1234567890123456789012345"
+    with patch("src.openclaw_client.get_google_api_key_from_models", return_value="GEMINI_API_KEY"):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "AIzaPAID1234567890123456789012345"}, clear=False):
+            state = client._effective_runtime_google_key_state()  # noqa: SLF001
+
+    assert state["state"] == "paid"
+    assert state["tier"] == "paid"
+    assert state["raw_state"] == "placeholder"
+    assert state["raw_reference"] == "GEMINI_API_KEY"
+    assert state["resolved_from_env"] is True
+    assert state["resolved_env_name"] == "GEMINI_API_KEY"
+
+
+@pytest.mark.asyncio
+async def test_cloud_runtime_check_syncs_active_tier_from_models_json(client: OpenClawClient) -> None:
+    client.active_tier = "free"
+    client._cloud_tier_state["active_tier"] = "free"
+    client._set_last_runtime_route(  # noqa: SLF001
+        channel="openclaw_cloud",
+        model="google-gemini-cli/gemini-3.1-pro-preview",
+        route_reason="warmup_completed",
+        route_detail="warmup route",
+        force_cloud=True,
+    )
+    client.gemini_tiers["free"] = "AIzaFREE1234567890123456789012345"
+    client.gemini_tiers["paid"] = "AIzaPAID1234567890123456789012345"
+
+    with patch(
+        "src.openclaw_client.get_google_api_key_from_models",
+        return_value="AIzaPAID1234567890123456789012345",
+    ):
+        with patch(
+            "src.openclaw_client.get_openclaw_cli_runtime_status",
+            return_value={"can_reload": False, "error": "cli_not_executable", "cli_path": "/opt/homebrew/bin/openclaw"},
+        ):
+            with patch(
+                "src.openclaw_client.probe_gemini_key",
+                new=AsyncMock(
+                    side_effect=[
+                        CloudProbeResult(
+                            provider_status="ok",
+                            key_source="env:GEMINI_API_KEY_FREE",
+                            key_tier="free",
+                            semantic_error_code="ok",
+                            recovery_action="none",
+                            http_status=200,
+                            detail="",
+                        ),
+                        CloudProbeResult(
+                            provider_status="ok",
+                            key_source="env:GEMINI_API_KEY_PAID",
+                            key_tier="paid",
+                            semantic_error_code="ok",
+                            recovery_action="none",
+                            http_status=200,
+                            detail="",
+                        ),
+                    ]
+                ),
+            ):
+                report = await client.get_cloud_runtime_check()
+
+    assert report["active_tier"] == "paid"
+    assert report["current_google_key_state"] == "paid"
+    assert report["current_google_key_tier"] == "paid"
+    assert report["secrets_reload_runtime"]["error"] == "cli_not_executable"
+    assert client.get_tier_state_export()["active_tier"] == "paid"
+    assert client.get_last_runtime_route()["active_tier"] == "paid"
+
+
+@pytest.mark.asyncio
+async def test_cloud_runtime_check_reports_effective_paid_key_when_models_json_keeps_placeholder(client: OpenClawClient) -> None:
+    client.active_tier = "free"
+    client._cloud_tier_state["active_tier"] = "free"
+    client._set_last_runtime_route(  # noqa: SLF001
+        channel="openclaw_cloud",
+        model="google-gemini-cli/gemini-3.1-pro-preview",
+        route_reason="warmup_completed",
+        route_detail="warmup route",
+        force_cloud=True,
+    )
+    client.gemini_tiers["free"] = "AIzaFREE1234567890123456789012345"
+    client.gemini_tiers["paid"] = "AIzaPAID1234567890123456789012345"
+
+    with patch("src.openclaw_client.get_google_api_key_from_models", return_value="GEMINI_API_KEY"):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "AIzaPAID1234567890123456789012345"}, clear=False):
+            with patch(
+                "src.openclaw_client.get_openclaw_cli_runtime_status",
+                return_value={"can_reload": True, "error": "", "cli_path": "/opt/homebrew/bin/openclaw"},
+            ):
+                with patch(
+                    "src.openclaw_client.probe_gemini_key",
+                    new=AsyncMock(
+                        side_effect=[
+                            CloudProbeResult(
+                                provider_status="ok",
+                                key_source="env:GEMINI_API_KEY_FREE",
+                                key_tier="free",
+                                semantic_error_code="ok",
+                                recovery_action="none",
+                                http_status=200,
+                                detail="",
+                            ),
+                            CloudProbeResult(
+                                provider_status="ok",
+                                key_source="env:GEMINI_API_KEY_PAID",
+                                key_tier="paid",
+                                semantic_error_code="ok",
+                                recovery_action="none",
+                                http_status=200,
+                                detail="",
+                            ),
+                        ]
+                    ),
+                ):
+                    report = await client.get_cloud_runtime_check()
+
+    assert report["active_tier"] == "paid"
+    assert report["current_google_key_state"] == "paid"
+    assert report["current_google_key_tier"] == "paid"
+    assert report["current_google_key_raw_state"] == "placeholder"
+    assert report["current_google_key_reference"] == "GEMINI_API_KEY"
+    assert report["current_google_key_resolved_from_env"] is True
+    assert client.get_last_runtime_route()["active_tier"] == "paid"
+
+
+@pytest.mark.asyncio
+async def test_switch_cloud_tier_syncs_last_runtime_route_active_tier(client: OpenClawClient) -> None:
+    client._set_last_runtime_route(  # noqa: SLF001
+        channel="openclaw_cloud",
+        model="google-gemini-cli/gemini-3.1-pro-preview",
+        route_reason="openclaw_response_ok",
+        route_detail="Ответ получен через OpenClaw API",
+        force_cloud=True,
+    )
+    client.gemini_tiers["paid"] = "AIzaPAID1234567890123456789012345"
+
+    with patch.object(client, "_set_google_key_in_models", return_value=True):
+        with patch("src.openclaw_client.is_ai_studio_key", return_value=True):
+            with patch("src.openclaw_client.reload_openclaw_secrets", new=AsyncMock(return_value={"ok": True})):
+                result = await client.switch_cloud_tier("paid")
+
+    assert result["ok"] is True
+    assert client.get_last_runtime_route()["active_tier"] == "paid"
 
 
 def test_detect_semantic_error_model_crash(client: OpenClawClient) -> None:

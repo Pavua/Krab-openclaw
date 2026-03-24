@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -30,6 +31,8 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 DOCS_DIR = ROOT / "docs"
 ENV_PATH = ROOT / ".env"
+CANONICAL_SHARED_ROOT = Path("/Users/Shared/Antigravity_AGENTS/Краб")
+ACTIVE_SHARED_ROOT = Path("/Users/Shared/Antigravity_AGENTS/Краб-active")
 
 
 def _http_json(url: str, *, timeout: float = 2.5) -> dict[str, Any]:
@@ -125,6 +128,113 @@ def _tool_presence() -> dict[str, bool]:
         "rg": bool(shutil.which("rg")),
         "openclaw": bool(shutil.which("openclaw")),
         "gh": bool(shutil.which("gh")),
+    }
+
+
+def _git_stdout(args: list[str], *, cwd: Path) -> str:
+    """Возвращает stdout git-команды или пустую строку."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except Exception:
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def _write_access_probe(path: Path) -> dict[str, Any]:
+    """Проверяет, можно ли безопасно писать в shared path текущей учёткой."""
+    exists = path.exists()
+    writable = bool(os.access(path, os.W_OK)) if exists else False
+    mode = ""
+    owner_uid: int | None = None
+    group_gid: int | None = None
+    if exists:
+        try:
+            stats = path.stat()
+            mode = stat.filemode(stats.st_mode)
+            owner_uid = stats.st_uid
+            group_gid = stats.st_gid
+        except OSError:
+            mode = ""
+    return {
+        "path": str(path),
+        "exists": exists,
+        "writable": writable,
+        "mode": mode,
+        "owner_uid": owner_uid,
+        "group_gid": group_gid,
+    }
+
+
+def _shared_repo_status() -> dict[str, Any]:
+    """Собирает статус канонического shared repo и его drift относительно текущей копии."""
+    exists = CANONICAL_SHARED_ROOT.exists()
+    git_dir_exists = (CANONICAL_SHARED_ROOT / ".git").exists()
+    branch = _git_stdout(["rev-parse", "--abbrev-ref", "HEAD"], cwd=CANONICAL_SHARED_ROOT) if git_dir_exists else ""
+    head = _git_stdout(["rev-parse", "HEAD"], cwd=CANONICAL_SHARED_ROOT) if git_dir_exists else ""
+    status_short = _git_stdout(["status", "--short", "--branch"], cwd=CANONICAL_SHARED_ROOT) if git_dir_exists else ""
+    current_branch = _git_stdout(["rev-parse", "--abbrev-ref", "HEAD"], cwd=ROOT)
+    current_head = _git_stdout(["rev-parse", "HEAD"], cwd=ROOT)
+    return {
+        "path": str(CANONICAL_SHARED_ROOT),
+        "exists": exists,
+        "git_dir_exists": git_dir_exists,
+        "branch": branch,
+        "head": head,
+        "status_short": status_short,
+        "current_branch": current_branch,
+        "current_head": current_head,
+        "drift_vs_current_repo": bool(branch and head and (branch != current_branch or head != current_head)),
+        "write_access": {
+            "repo_root": _write_access_probe(CANONICAL_SHARED_ROOT),
+            "docs_dir": _write_access_probe(CANONICAL_SHARED_ROOT / "docs"),
+            "artifacts_dir": _write_access_probe(CANONICAL_SHARED_ROOT / "artifacts"),
+        },
+    }
+
+
+def _active_shared_worktree_status() -> dict[str, Any]:
+    """Собирает truthful статус fast-path shared worktree `Краб-active`."""
+    exists = ACTIVE_SHARED_ROOT.exists()
+    git_dir_exists = (ACTIVE_SHARED_ROOT / ".git").exists()
+    marker_path = ACTIVE_SHARED_ROOT / "ACTIVE_SHARED_WORKTREE.json"
+    marker_payload: dict[str, Any] = {}
+    if marker_path.exists():
+        try:
+            marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            marker_payload = {}
+    branch = _git_stdout(["rev-parse", "--abbrev-ref", "HEAD"], cwd=ACTIVE_SHARED_ROOT) if git_dir_exists else ""
+    head = _git_stdout(["rev-parse", "HEAD"], cwd=ACTIVE_SHARED_ROOT) if git_dir_exists else ""
+    status_short = _git_stdout(["status", "--short", "--branch"], cwd=ACTIVE_SHARED_ROOT) if git_dir_exists else ""
+    current_branch = _git_stdout(["rev-parse", "--abbrev-ref", "HEAD"], cwd=ROOT)
+    current_head = _git_stdout(["rev-parse", "HEAD"], cwd=ROOT)
+    return {
+        "path": str(ACTIVE_SHARED_ROOT),
+        "exists": exists,
+        "git_dir_exists": git_dir_exists,
+        "marker_path": str(marker_path),
+        "marker_exists": marker_path.exists(),
+        "marker_payload": marker_payload,
+        "branch": branch,
+        "head": head,
+        "status_short": status_short,
+        "current_branch": current_branch,
+        "current_head": current_head,
+        "matches_current_repo": bool(branch and head and branch == current_branch and head == current_head),
+        "write_access": {
+            "repo_root": _write_access_probe(ACTIVE_SHARED_ROOT),
+            "docs_dir": _write_access_probe(ACTIVE_SHARED_ROOT / "docs"),
+            "artifacts_dir": _write_access_probe(ACTIVE_SHARED_ROOT / "artifacts"),
+        },
     }
 
 
@@ -226,6 +336,8 @@ def build_readiness_report() -> dict[str, Any]:
     tools = _tool_presence()
     github_cli = _gh_auth_status()
     lmstudio_mcp = _lmstudio_mcp_status()
+    shared_repo = _shared_repo_status()
+    active_shared_worktree = _active_shared_worktree_status()
     latest_handoff = sorted(ROOT.glob("artifacts/handoff_*"), key=lambda p: p.stat().st_mtime, reverse=True)
     handoff_latest = latest_handoff[0] if latest_handoff else None
 
@@ -263,6 +375,36 @@ def build_readiness_report() -> dict[str, Any]:
         recommendations.append("Endpoint /api/runtime/operator-profile недоступен; если runtime не поднят, это допустимо, но перед работой нужен fresh запуск.")
     if not health_lite.get("ok"):
         recommendations.append("Owner web panel :8080 сейчас не отвечает; перед live-работой нужно поднять runtime в этой учётке.")
+    active_fast_path_ready = bool(active_shared_worktree.get("matches_current_repo"))
+    if not shared_repo.get("exists"):
+        if active_fast_path_ready:
+            recommendations.append("Канонический shared repo отсутствует, но `Краб-active` уже совпадает с текущим WIP и годится как fast-path.")
+        else:
+            recommendations.append("Канонический shared repo отсутствует; multi-account режим будет непредсказуемым до восстановления /Users/Shared/Antigravity_AGENTS/Краб или публикации `Краб-active`.")
+            blockers.append("shared_repo_missing")
+    elif shared_repo.get("drift_vs_current_repo"):
+        if active_fast_path_ready:
+            recommendations.append("Legacy shared repo расходится с текущей копией, но `Краб-active` уже опубликован и совпадает с текущим WIP.")
+        else:
+            recommendations.append("Shared repo расходится с текущей рабочей копией; перед новым coding/live циклом синхронизируй branch и HEAD осознанно или опубликуй `Краб-active`.")
+            blockers.append("shared_repo_drift")
+    shared_writes = shared_repo.get("write_access") if isinstance(shared_repo.get("write_access"), dict) else {}
+    for key in ("repo_root", "docs_dir", "artifacts_dir"):
+        probe = shared_writes.get(key) if isinstance(shared_writes.get(key), dict) else {}
+        if probe.get("exists") and not probe.get("writable"):
+            recommendations.append(f"Нет записи в shared path `{probe.get('path')}`; другая учётка не сможет безопасно обновлять repo/docs/artifacts.")
+            blockers.append(f"{key}_not_writable")
+    active_shared_writes = (
+        active_shared_worktree.get("write_access")
+        if isinstance(active_shared_worktree.get("write_access"), dict)
+        else {}
+    )
+    for key in ("repo_root", "docs_dir", "artifacts_dir"):
+        probe = active_shared_writes.get(key) if isinstance(active_shared_writes.get(key), dict) else {}
+        if probe.get("exists") and not probe.get("writable"):
+            recommendations.append(
+                f"Fast-path `{probe.get('path')}` опубликован, но текущая учётка не может в него писать; проверь права именно на этот shared path."
+            )
 
     ready_for_continue = not docs_missing and ROOT.exists()
 
@@ -288,6 +430,8 @@ def build_readiness_report() -> dict[str, Any]:
             "writable": bool(os.access(ROOT, os.W_OK)),
             "latest_handoff_bundle": str(handoff_latest) if handoff_latest else None,
         },
+        "shared_repo": shared_repo,
+        "active_shared_worktree": active_shared_worktree,
         "runtime_paths": {
             "openclaw_home": str(openclaw_home),
             "openclaw_home_exists": openclaw_home.exists(),

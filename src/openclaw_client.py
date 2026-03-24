@@ -36,7 +36,10 @@ from .core.exceptions import ProviderAuthError, ProviderError
 from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.lm_studio_health import is_lm_studio_available
 from .core.logger import get_logger
-from .core.openclaw_secrets_runtime import reload_openclaw_secrets
+from .core.openclaw_secrets_runtime import (
+    get_openclaw_cli_runtime_status,
+    reload_openclaw_secrets,
+)
 from .core.openclaw_runtime_models import (
     get_runtime_fallback_models,
     get_runtime_primary_model,
@@ -115,6 +118,24 @@ class OpenClawClient:
         }
         # Последний фактически использованный маршрут ответа (источник истины для web/UI).
         self._last_runtime_route: dict[str, Any] = {}
+        # Трекинг активных tool calls для отображения в Telegram progress notices.
+        self._active_tool_calls: list[dict[str, Any]] = []
+
+    def get_active_tool_calls_summary(self) -> str:
+        """Возвращает краткую сводку активных/завершённых tool calls для Telegram notices."""
+        if not self._active_tool_calls:
+            return ""
+        running = [tc["name"] for tc in self._active_tool_calls if tc.get("status") == "running"]
+        done = [tc["name"] for tc in self._active_tool_calls if tc.get("status") == "done"]
+        parts: list[str] = []
+        if running:
+            parts.append(f"🔧 Выполняется: {', '.join(running)}")
+        if done:
+            parts.append(f"✅ Готово: {', '.join(done)}")
+        total = len(self._active_tool_calls)
+        if total > 0:
+            parts.append(f"Инструментов: {len(done)}/{total}")
+        return "\n".join(parts)
 
     @staticmethod
     def _provider_from_model(model_id: str) -> str:
@@ -123,6 +144,72 @@ class OpenClawClient:
         if "/" in raw:
             return raw.split("/", 1)[0]
         return "unknown"
+
+    def _resolve_buffered_read_timeout_sec(
+        self,
+        *,
+        model_id: str,
+        has_photo: bool = False,
+    ) -> float | None:
+        """
+        Возвращает budget ожидания для buffered cloud-completion.
+
+        Почему нужен отдельный budget:
+        - `stream=False` даёт корректный контент, но скрывает стадию "модель уже думает";
+        - часть cloud-провайдеров умеет держать HTTP-запрос очень долго и потом вернуть 200;
+        - пока запрос не упал transport-ошибкой, fallback-цепочка не стартует.
+
+        Здесь мы задаём не глобальный hard-timeout userbot, а именно потолок ожидания
+        одного cloud-route до принудительного перехода к следующему кандидату.
+        """
+        normalized_model = str(model_id or "").strip()
+        provider = self._provider_from_model(normalized_model)
+
+        timeout_sec: float | None = getattr(
+            config,
+            "OPENCLAW_BUFFERED_READ_TIMEOUT_SEC",
+            None,
+        )
+        if provider == "codex-cli":
+            timeout_sec = float(
+                getattr(
+                    config,
+                    "OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC",
+                    240.0,
+                )
+                or 240.0
+            )
+        elif provider == "google-gemini-cli":
+            timeout_sec = float(
+                getattr(
+                    config,
+                    "OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC",
+                    240.0,
+                )
+                or 240.0
+            )
+        elif provider == "openai-codex":
+            timeout_sec = float(
+                getattr(
+                    config,
+                    "OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC",
+                    240.0,
+                )
+                or 240.0
+            )
+
+        if timeout_sec is None:
+            return None
+
+        timeout_sec = float(timeout_sec)
+        if has_photo:
+            # Фото-маршруты по определению медленнее; не даём им умереть слишком рано.
+            photo_soft_timeout_sec = float(
+                getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0) or 540.0
+            )
+            timeout_sec = max(timeout_sec, photo_soft_timeout_sec)
+
+        return timeout_sec if timeout_sec > 0 else None
 
     @staticmethod
     def _local_recovery_enabled(*, force_cloud: bool, has_photo: bool = False) -> bool:
@@ -154,6 +241,7 @@ class OpenClawClient:
         status: str = "ok",
         error_code: str | None = None,
         force_cloud: bool = False,
+        attempt: int | None = None,
     ) -> None:
         """Фиксирует последний runtime-маршрут запроса без секретов."""
         self._last_runtime_route = {
@@ -168,10 +256,35 @@ class OpenClawClient:
             "route_reason": route_reason,
             "route_detail": route_detail,
         }
+        if attempt is not None and int(attempt) > 0:
+            self._last_runtime_route["attempt"] = int(attempt)
 
     def get_last_runtime_route(self) -> dict[str, Any]:
         """Возвращает snapshot последнего фактического маршрута."""
         return dict(self._last_runtime_route)
+
+    def _sync_last_runtime_route_active_tier(self) -> None:
+        """
+        Подтягивает `active_tier` в последнем cloud-route к текущей truthful tier-state.
+
+        Почему это нужно:
+        - `last_runtime_route` часто фиксируется на warmup ещё до runtime-check/probe;
+        - после truthful probe active tier может измениться с stale `free` на реальный `paid`;
+        - owner UI и `health_lite` не должны спорить с `cloud_runtime` только из-за порядка вызовов.
+        """
+        if not self._last_runtime_route:
+            return
+
+        channel = str(self._last_runtime_route.get("channel") or "").strip().lower()
+        provider = str(self._last_runtime_route.get("provider") or "").strip().lower()
+        if channel != "openclaw_cloud":
+            return
+        if provider not in {"google", "google-gemini-cli"}:
+            return
+
+        self._last_runtime_route["active_tier"] = str(
+            self._cloud_tier_state.get("active_tier", self.active_tier) or self.active_tier
+        )
 
     def _refresh_gateway_token_from_runtime(self) -> bool:
         """
@@ -675,6 +788,152 @@ class OpenClawClient:
         # Фолбэк по умолчанию — free
         return "free"
 
+    def _runtime_google_key_state(self) -> dict[str, Any]:
+        """
+        Классифицирует фактический `providers.google.apiKey` в OpenClaw `models.json`.
+
+        Зачем:
+        - `active_tier` сам по себе не объясняет, почему runtime оказался в `free`;
+        - в `models.json` может лежать не реальный AI Studio ключ, а placeholder
+          вроде `GEMINI_API_KEY`, из-за чего tier по умолчанию выглядит как правда;
+        - owner UI должен видеть drift между env-ключами и runtime key-path.
+        """
+        current_key = str(get_google_api_key_from_models(self._models_path) or "").strip()
+        free_key = str(self.gemini_tiers.get("free") or "").strip()
+        paid_key = str(self.gemini_tiers.get("paid") or "").strip()
+
+        if not current_key:
+            return {
+                "state": "missing",
+                "tier": "",
+                "source": "models_json",
+                "masked": "",
+                "matches_free": False,
+                "matches_paid": False,
+            }
+        if paid_key and current_key == paid_key:
+            return {
+                "state": "paid",
+                "tier": "paid",
+                "source": "models_json",
+                "masked": mask_secret(current_key),
+                "matches_free": False,
+                "matches_paid": True,
+            }
+        if free_key and current_key == free_key:
+            return {
+                "state": "free",
+                "tier": "free",
+                "source": "models_json",
+                "masked": mask_secret(current_key),
+                "matches_free": True,
+                "matches_paid": False,
+            }
+        if not is_ai_studio_key(current_key):
+            return {
+                "state": "placeholder",
+                "tier": "",
+                "source": "models_json",
+                "masked": mask_secret(current_key),
+                "matches_free": False,
+                "matches_paid": False,
+            }
+        return {
+            "state": "custom",
+            "tier": "",
+            "source": "models_json",
+            "masked": mask_secret(current_key),
+            "matches_free": False,
+            "matches_paid": False,
+        }
+
+    def _effective_runtime_google_key_state(self) -> dict[str, Any]:
+        """
+        Возвращает effective state для runtime Google key с учётом env-placeholder.
+
+        Почему это нужно:
+        - OpenClaw может хранить в `models.json` не literal key, а ссылку вроде
+          `GEMINI_API_KEY` или `GOOGLE_API_KEY`;
+        - raw `placeholder` при этом не означает, что live runtime работает на
+          free-tier или вообще без ключа;
+        - owner UI должен видеть разницу между `raw_ref` и фактически
+          разрешённым runtime-ключом.
+        """
+        raw_state = self._runtime_google_key_state()
+        raw_value = str(get_google_api_key_from_models(self._models_path) or "").strip()
+        if str(raw_state.get("state") or "") != "placeholder":
+            return {
+                **raw_state,
+                "raw_state": str(raw_state.get("state") or ""),
+                "raw_masked": str(raw_state.get("masked") or ""),
+                "raw_reference": raw_value,
+                "resolved_from_env": False,
+            }
+
+        env_name = raw_value.strip()
+        resolved_value = str(os.getenv(env_name, "") or "").strip() if env_name else ""
+        free_key = str(self.gemini_tiers.get("free") or "").strip()
+        paid_key = str(self.gemini_tiers.get("paid") or "").strip()
+        if not resolved_value:
+            return {
+                **raw_state,
+                "raw_state": "placeholder",
+                "raw_masked": str(raw_state.get("masked") or ""),
+                "raw_reference": env_name,
+                "resolved_from_env": False,
+                "resolved_env_name": env_name,
+            }
+        if paid_key and resolved_value == paid_key:
+            return {
+                "state": "paid",
+                "tier": "paid",
+                "source": f"models_json_placeholder:{env_name}",
+                "masked": mask_secret(resolved_value),
+                "matches_free": False,
+                "matches_paid": True,
+                "raw_state": "placeholder",
+                "raw_masked": str(raw_state.get("masked") or ""),
+                "raw_reference": env_name,
+                "resolved_from_env": True,
+                "resolved_env_name": env_name,
+            }
+        if free_key and resolved_value == free_key:
+            return {
+                "state": "free",
+                "tier": "free",
+                "source": f"models_json_placeholder:{env_name}",
+                "masked": mask_secret(resolved_value),
+                "matches_free": True,
+                "matches_paid": False,
+                "raw_state": "placeholder",
+                "raw_masked": str(raw_state.get("masked") or ""),
+                "raw_reference": env_name,
+                "resolved_from_env": True,
+                "resolved_env_name": env_name,
+            }
+        if is_ai_studio_key(resolved_value):
+            return {
+                "state": "custom",
+                "tier": "",
+                "source": f"models_json_placeholder:{env_name}",
+                "masked": mask_secret(resolved_value),
+                "matches_free": False,
+                "matches_paid": False,
+                "raw_state": "placeholder",
+                "raw_masked": str(raw_state.get("masked") or ""),
+                "raw_reference": env_name,
+                "resolved_from_env": True,
+                "resolved_env_name": env_name,
+            }
+        return {
+            **raw_state,
+            "raw_state": "placeholder",
+            "raw_masked": str(raw_state.get("masked") or ""),
+            "raw_reference": env_name,
+            "resolved_from_env": False,
+            "resolved_env_name": env_name,
+        }
+
     def _read_models_json(self) -> dict[str, Any]:
         if not self._models_path.exists():
             return {"providers": {}}
@@ -963,6 +1222,7 @@ class OpenClawClient:
         previous = self.active_tier
         self.active_tier = target_tier
         self._cloud_tier_state["active_tier"] = target_tier
+        self._sync_last_runtime_route_active_tier()
         self._cloud_tier_state["switches"] = int(self._cloud_tier_state.get("switches", 0)) + 1
         self._cloud_tier_state["last_switch_at"] = int(time.time())
         self._cloud_tier_state["last_recovery_action"] = f"switch_to_{target_tier}"
@@ -1383,6 +1643,7 @@ class OpenClawClient:
         model_id: str,
         messages_to_send: list[dict[str, Any]],
         max_output_tokens: int | None = None,
+        has_photo: bool = False,
         allow_auth_retry: bool = True,
     ) -> str:
         """Один запрос к OpenClaw (stream=false) с буферизацией ответа.
@@ -1410,12 +1671,31 @@ class OpenClawClient:
         full_response = ""
         usage_snapshot: dict[str, int] | None = None
         retry_after_token_refresh = False
+        request_timeout: httpx.Timeout | None = None
+        read_timeout_sec = self._resolve_buffered_read_timeout_sec(
+            model_id=model_id,
+            has_photo=has_photo,
+        )
+        if read_timeout_sec is not None:
+            request_timeout = httpx.Timeout(
+                connect=30.0,
+                read=read_timeout_sec,
+                write=30.0,
+                pool=30.0,
+            )
+            logger.info(
+                "openclaw_buffered_timeout_budget",
+                model=model_id,
+                read_timeout_sec=read_timeout_sec,
+                has_photo=bool(has_photo),
+            )
 
         # Используем обычный POST (не streaming), чтобы получить единый JSON-ответ
         try:
             response = await self._http_client.post(
                 f"{self.base_url}/v1/chat/completions",
                 json=payload,
+                timeout=request_timeout,
             )
         except httpx.TimeoutException as exc:
             # Пробрасываем как ProviderError(retryable=True), чтобы fallback-loop
@@ -1466,6 +1746,7 @@ class OpenClawClient:
                 model_id=model_id,
                 messages_to_send=messages_to_send,
                 max_output_tokens=max_output_tokens,
+                has_photo=has_photo,
                 allow_auth_retry=False,
             )
 
@@ -1489,7 +1770,7 @@ class OpenClawClient:
             logger.info("openclaw_tool_calls_detected", count=len(tool_calls))
             # Добавляем сообщение ассистента с tool_calls в историю для этого запроса
             messages_to_send.append(message_obj)
-            
+
             for tc in tool_calls:
                 tc_id = tc.get("id")
                 func = tc.get("function") or {}
@@ -1499,10 +1780,15 @@ class OpenClawClient:
                     args = json.loads(func.get("arguments", "{}"))
                 except Exception:
                     args = {}
-                
+
+                # Трекинг для Telegram progress notices
+                tool_entry = {"name": func_name, "status": "running", "started_at": time.monotonic()}
+                self._active_tool_calls.append(tool_entry)
+
                 logger.info("executing_mcp_tool", name=func_name, args=args)
                 tool_result = await mcp_manager.call_tool_unified(func_name, args)
-                
+                tool_entry["status"] = "done"
+
                 # Добавляем результат выполнения инструмента
                 messages_to_send.append({
                     "role": "tool",
@@ -1516,6 +1802,7 @@ class OpenClawClient:
                 model_id=model_id,
                 messages_to_send=messages_to_send,
                 max_output_tokens=max_output_tokens,
+                has_photo=has_photo,
                 allow_auth_retry=allow_auth_retry
             )
 
@@ -1821,6 +2108,18 @@ class OpenClawClient:
         finally:
             self.clear_session(probe_chat_id)
 
+        # После cold start warmup может первым зафиксировать cloud-route ещё до
+        # truthful runtime-check. Для Gemini подтягиваем effective tier из
+        # runtime-моделей сразу здесь, чтобы стартовый route/log не залипал на
+        # stale `free`, если фактически уже используется paid key.
+        if force_cloud_probe:
+            current_key_state = self._effective_runtime_google_key_state()
+            current_key_tier = str(current_key_state.get("tier") or "").strip().lower()
+            if current_key_tier in {"free", "paid"} and current_key_tier != str(self.active_tier or "").strip().lower():
+                self.active_tier = current_key_tier
+                self._cloud_tier_state["active_tier"] = current_key_tier
+            self._sync_last_runtime_route_active_tier()
+
         route = self.get_last_runtime_route()
         return {
             "ok": str(route.get("status") or "").strip().lower() == "ok",
@@ -1850,6 +2149,7 @@ class OpenClawClient:
         4) fallback на локальную модель,
         5) прямой LM Studio fallback (если force_cloud=False).
         """
+        self._active_tool_calls.clear()
         if chat_id not in self._sessions:
             cached = history_cache.get(f"chat_history:{chat_id}")
             if cached:
@@ -2070,12 +2370,27 @@ class OpenClawClient:
 
             for attempt in range(4):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
+                route_channel = (
+                    "openclaw_local"
+                    if model_manager.is_local_model(attempt_model)
+                    else "openclaw_cloud"
+                )
+                self._set_last_runtime_route(
+                    channel=route_channel,
+                    model=attempt_model,
+                    route_reason="attempt_started",
+                    route_detail="Запущена текущая попытка маршрута OpenClaw",
+                    status="pending",
+                    force_cloud=effective_force_cloud,
+                    attempt=attempt + 1,
+                )
                 semantic: dict[str, str] | None = None
                 try:
                     final_response = await self._openclaw_completion_once(
                         model_id=attempt_model,
                         messages_to_send=messages_to_send,
                         max_output_tokens=max_output_tokens,
+                        has_photo=has_photo,
                     )
                     semantic = self._detect_semantic_error(final_response)
                 except (ProviderAuthError, ProviderError) as exc:
@@ -2097,6 +2412,7 @@ class OpenClawClient:
                             model_id=attempt_model,
                             messages_to_send=retry_messages,
                             max_output_tokens=max_output_tokens,
+                            has_photo=has_photo,
                         )
                         semantic = self._detect_semantic_error(final_response)
                         messages_to_send = retry_messages
@@ -2530,6 +2846,16 @@ class OpenClawClient:
 
     async def get_cloud_runtime_check(self) -> dict[str, Any]:
         """Расширенный runtime-check для web-панели."""
+        current_key_state = self._effective_runtime_google_key_state()
+        secrets_reload_runtime = get_openclaw_cli_runtime_status()
+        current_key_tier = str(current_key_state.get("tier") or "").strip().lower()
+        if current_key_tier in {"free", "paid"} and current_key_tier != str(self.active_tier or "").strip().lower():
+            # Синхронизируем active_tier с фактическим ключом из models.json,
+            # чтобы runtime-check не застревал в stale default `free`.
+            self.active_tier = current_key_tier
+            self._cloud_tier_state["active_tier"] = current_key_tier
+        self._sync_last_runtime_route_active_tier()
+
         free_probe = await probe_gemini_key(
             self.gemini_tiers.get("free"),
             key_source="env:GEMINI_API_KEY_FREE",
@@ -2569,12 +2895,21 @@ class OpenClawClient:
             "provider": "google",
             "free": free_probe.to_dict(),
             "paid": paid_probe.to_dict(),
-            "current_google_key_masked": mask_secret(get_google_api_key_from_models(self._models_path)),
+            "current_google_key_masked": str(current_key_state.get("masked") or ""),
+            "current_google_key_state": str(current_key_state.get("state") or "unknown"),
+            "current_google_key_tier": str(current_key_state.get("tier") or ""),
+            "current_google_key_raw_state": str(current_key_state.get("raw_state") or ""),
+            "current_google_key_raw_masked": str(current_key_state.get("raw_masked") or ""),
+            "current_google_key_reference": str(current_key_state.get("raw_reference") or ""),
+            "current_google_key_resolved_from_env": bool(current_key_state.get("resolved_from_env")),
+            "current_google_key_resolved_env_name": str(current_key_state.get("resolved_env_name") or ""),
+            "secrets_reload_runtime": secrets_reload_runtime,
             "tier_state": self.get_tier_state_export(),
         }
 
     def get_tier_state_export(self) -> dict[str, Any]:
         """Экспорт внутреннего состояния cloud tier без секретов."""
+        secrets_reload_runtime = get_openclaw_cli_runtime_status()
         return {
             "active_tier": self._cloud_tier_state.get("active_tier", self.active_tier),
             "switches": int(self._cloud_tier_state.get("switches", 0)),
@@ -2588,6 +2923,7 @@ class OpenClawClient:
                 "free": bool(self.gemini_tiers.get("free")),
                 "paid": bool(self.gemini_tiers.get("paid")),
             },
+            "secrets_reload_runtime": secrets_reload_runtime,
         }
 
     async def reset_cloud_tier(self) -> dict[str, Any]:

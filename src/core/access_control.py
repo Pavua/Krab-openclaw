@@ -88,6 +88,7 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "codex",
         "gemini",
         "claude_cli",
+        "opencode",
     }
 )
 

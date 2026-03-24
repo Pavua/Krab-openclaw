@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from .runtime_policy import provider_runtime_policy
+
 AUTH_PROFILES_PATH = Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json"
 RUNTIME_MODELS_PATH = Path.home() / ".openclaw" / "agents" / "main" / "agent" / "models.json"
 RUNTIME_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
@@ -599,7 +601,9 @@ def _provider_recovery_entry(
             state = "missing"
             severity = "bad" if usage["role"] in {"primary", "fallback"} else "warn"
             state_label = "CLI missing"
-    if oauth_ready:
+    if normalized == "codex-cli" and state == "ready":
+        pass
+    elif oauth_ready:
         state = "ready"
         severity = "ok"
         state_label = "OAuth OK"
@@ -639,6 +643,16 @@ def _provider_recovery_entry(
     elif normalized == "google-gemini-cli" and external_store_present:
         recommended_action_label = "Синхронизировать Gemini store в OpenClaw"
 
+    runtime_policy = provider_runtime_policy(
+        normalized,
+        readiness="ready" if severity == "ok" else ("attention" if severity == "warn" else "blocked"),
+        auth_mode=str(spec.get("expected_auth") or "oauth"),
+        oauth_status=oauth_status,
+        helper_available=helper_available,
+        legacy=bool(spec.get("legacy")),
+        cli_login_ready=bool(codex_cli_hint.get("login_ready")),
+    )
+
     return {
         "provider": normalized,
         "label": str(spec.get("label") or normalized),
@@ -677,6 +691,7 @@ def _provider_recovery_entry(
         "codex_cli_binary_path": str(codex_cli_hint.get("cli_binary_path") or ""),
         "codex_cli_login_ready": bool(codex_cli_hint.get("login_ready")),
         "codex_cli_status_text": str(codex_cli_hint.get("status_text") or ""),
+        **runtime_policy,
     }
 
 

@@ -1,7 +1,7 @@
 {
-  "generated_at_utc": "2026-03-11T05:10:00.164543+00:00",
+  "generated_at_utc": "2026-03-19T20:40:57.530617+00:00",
   "base_url": "http://127.0.0.1:8080",
-  "ok": true,
+  "ok": false,
   "endpoints": {
     "health_lite": {
       "ok": true,
@@ -13,22 +13,2313 @@
         "telegram_session_state": "ready",
         "telegram_userbot_state": "running",
         "telegram_userbot_error_code": "",
-        "lmstudio_model_state": "idle",
+        "lmstudio_model_state": "loaded",
         "openclaw_auth_state": "configured",
         "last_runtime_route": {
-          "timestamp": 1773204693,
-          "channel": "openclaw_cloud",
-          "provider": "openai-codex",
-          "model": "openai-codex/gpt-5.4",
+          "timestamp": 1773952566,
+          "channel": "error",
+          "provider": "codex-cli",
+          "model": "codex-cli/gpt-5.4",
           "active_tier": "free",
           "force_cloud": true,
-          "status": "ok",
-          "error_code": null,
-          "route_reason": "openclaw_response_ok",
-          "route_detail": "Ответ получен через OpenClaw API"
+          "status": "error",
+          "error_code": "first_chunk_timeout",
+          "route_reason": "userbot_buffered_wait_timeout",
+          "route_detail": "Userbot дождался buffered OpenClaw дольше допустимого окна"
         },
         "scheduler_enabled": true,
+        "inbox_summary": {
+          "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
+          "account_id": "149902cc257e",
+          "operator_id": "pablito",
+          "total_items": 124,
+          "open_items": 2,
+          "attention_items": 0,
+          "pending_reminders": 0,
+          "open_escalations": 0,
+          "pending_owner_tasks": 0,
+          "pending_approvals": 0,
+          "pending_owner_requests": 2,
+          "pending_owner_mentions": 0,
+          "latest_open_items": [
+            {
+              "item_id": "65517a55a011",
+              "dedupe_key": "incoming:312322764:10897",
+              "kind": "owner_request",
+              "source": "telegram-userbot",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "body": "Чат: `312322764`\nСообщение: `10897`\nОт: `@p0lrd`\nТекст: Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (to-do lists).\n - Brief summaries.\n - Meeting minutes.\n - Sentiment analysis (was the call tense or relaxed?).\n3. Audio Enhancement (Noise Reduction): Integrate something like DeepFilterNet or RNNoise before feeding audio to Whisper. This cleans up street noise, keyboard typing, and wind, drastically reducing Whisper hallucinations.\n4. Keyword & Glossary Boosting: Add a custom dictionary/glossary feature (e.g., specific project names, names of friends, technical jargon like \"MLX\", \"Obsidian\", \"OpenClaw\") so Whisper stops misspelling niche terms.\n5. Watchdog / Auto-Ingest: A background daemon that watches a specific folder (e.g., ~/Audio To Transcribe or directly hooks into Apple Voice Memos/Notes). As soon as a new audio file appears, it silently processes it and drops the Markdown in Obsidian without manual triggers.\n\nLet's formulate these suggestions in a concise, technical, and engaging way (using 🦀, markdown, short paragraphs).\n\nDrafting the response:\n🦀 Пока скрипт переваривает аудио, давай накидаем roadmap для Krab Ear. Учитывая мощь твоего M4 Max, мы можем сделать из него не просто \"переводчик голоса в текст\", а полноценного аналитического агента.\n\nВот 5 крутых идей для апгрейда:\n\n1. LLM-постпроцессинг (Авто-Саммари и Задачи)\nСвяжем Krab Ear с твоим LM Studio. Как только Whisper выдал полотно текста, оно тут же летит в локальную модель (например, Llama 3 8B), которая сама формирует:\n- Краткую выжимку (о чем говорили).\n- Action items (кто что обещал сделать).\n- Готовый Markdown для Obsidian (текст + метаданные).\n\n2. Real-time транскрибация (Стриминг)\nMLX Whisper умеет работать в потоке. Можно сделать так, чтобы Krab Ear слушал системный звук (например, во время Google Meet или Zoom) и писал субтитры прямо в консоль или текстовый файл в реальном времени.\n\n3. Пре-фильтрация шума (DeepFilterNet)\nWhisper часто галлюцинирует, если на фоне шум машин, ветер или стук клавиатуры. Если перед транскрибацией прогонять аудио через легкую нейросеть DeepFilterNet, качество распознавания взлетит до небес, а галлюцинации пропадут.\n\n4. Watchdog (Папка-шпион)\n[19/03/2026 01:05] OG P Cod/id BCI inside: [Часть 2/2]\nНапишем фоновый демон, который будет следить за папкой (например, ~/Downloads/To_Transcribe или прямо за диктофоном). Скинул туда файл — Krab Ear сам проснулся, обработал, положил результат в Obsidian и прислал пуш-уведомление, что всё готово.\n\n5. Кастомный словарь (Glossary / Prompt injection)\nWhisper часто коверкает специфичные термины, имена друзей или названия проектов. Добавим конфиг glossary.json, который будет динамически подшиваться в системный промпт, чтобы модель всегда правильно писала имена (например, \"Дашуля\", \"OpenClaw\", \"MLX\").\n\nЧто из этого звучит вкуснее всего? Можем закинуть эти фичи в беклог и начать пилить их по одной.🦀 Пока скрипт переваривает тестовое аудио, давай накидаем roadmap для Krab Ear. \n\nУчитывая огромный запас мощности твоего M4 Max, мы можем сделать из него не просто \"расшифровщик диктофона\", а полноценного автономного аналитика.\n\nВот 5 архитектурных идей, как прокачать движок:\n\n1. LLM-постпроцессинг (Интеграция с LM Studio)\nЗачем читать длинные простыни диалогов? Свяжем выход из Whisper с твоими локальными моделями. Как только транскрипт готов, Krab Ear тихо скармливает его в LLM, и та генерирует:\n- Короткое саммари (суть звонка в 3-х предложениях).\n- Action Items (кто, что и когда пообещал сделать).\n- Индексы и теги для Obsidian.\nКонтекст: reply_to_me",
+              "created_at_utc": "2026-03-19T01:16:30+00:00",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "identity": {
+                "operator_id": "pablito",
+                "account_id": "149902cc257e",
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:f697ed89d309",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10897",
+                "chat_type": "private",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "is_reply_to_me": true,
+                "has_trigger": false,
+                "has_photo": false,
+                "has_audio": false,
+                "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (",
+                "workflow_events": [
+                  {
+                    "ts_utc": "2026-03-19T01:16:30+00:00",
+                    "action": "created",
+                    "actor": "telegram-userbot",
+                    "status": "open"
+                  }
+                ]
+              }
+            },
+            {
+              "item_id": "0c72d27c92fa",
+              "dedupe_key": "incoming:312322764:10848",
+              "kind": "owner_request",
+              "source": "telegram-userbot",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "body": "Чат: `312322764`\nСообщение: `10848`\nОт: `@p0lrd`\nТекст: Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+              "created_at_utc": "2026-03-19T00:17:49+00:00",
+              "updated_at_utc": "2026-03-19T00:17:49+00:00",
+              "identity": {
+                "operator_id": "pablito",
+                "account_id": "149902cc257e",
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:a299c28356e5",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10848",
+                "chat_type": "private",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "is_reply_to_me": false,
+                "has_trigger": false,
+                "has_photo": false,
+                "has_audio": false,
+                "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                "workflow_events": [
+                  {
+                    "ts_utc": "2026-03-19T00:17:49+00:00",
+                    "action": "created",
+                    "actor": "telegram-userbot",
+                    "status": "open"
+                  }
+                ]
+              }
+            }
+          ]
+        },
         "voice_gateway_configured": true
+      }
+    },
+    "inbox_status": {
+      "ok": true,
+      "status_code": 200,
+      "error": null,
+      "payload": {
+        "ok": true,
+        "summary": {
+          "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
+          "account_id": "149902cc257e",
+          "operator_id": "pablito",
+          "total_items": 124,
+          "open_items": 2,
+          "attention_items": 0,
+          "pending_reminders": 0,
+          "open_escalations": 0,
+          "pending_owner_tasks": 0,
+          "pending_approvals": 0,
+          "pending_owner_requests": 2,
+          "pending_owner_mentions": 0,
+          "latest_open_items": [
+            {
+              "item_id": "65517a55a011",
+              "dedupe_key": "incoming:312322764:10897",
+              "kind": "owner_request",
+              "source": "telegram-userbot",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "body": "Чат: `312322764`\nСообщение: `10897`\nОт: `@p0lrd`\nТекст: Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (to-do lists).\n - Brief summaries.\n - Meeting minutes.\n - Sentiment analysis (was the call tense or relaxed?).\n3. Audio Enhancement (Noise Reduction): Integrate something like DeepFilterNet or RNNoise before feeding audio to Whisper. This cleans up street noise, keyboard typing, and wind, drastically reducing Whisper hallucinations.\n4. Keyword & Glossary Boosting: Add a custom dictionary/glossary feature (e.g., specific project names, names of friends, technical jargon like \"MLX\", \"Obsidian\", \"OpenClaw\") so Whisper stops misspelling niche terms.\n5. Watchdog / Auto-Ingest: A background daemon that watches a specific folder (e.g., ~/Audio To Transcribe or directly hooks into Apple Voice Memos/Notes). As soon as a new audio file appears, it silently processes it and drops the Markdown in Obsidian without manual triggers.\n\nLet's formulate these suggestions in a concise, technical, and engaging way (using 🦀, markdown, short paragraphs).\n\nDrafting the response:\n🦀 Пока скрипт переваривает аудио, давай накидаем roadmap для Krab Ear. Учитывая мощь твоего M4 Max, мы можем сделать из него не просто \"переводчик голоса в текст\", а полноценного аналитического агента.\n\nВот 5 крутых идей для апгрейда:\n\n1. LLM-постпроцессинг (Авто-Саммари и Задачи)\nСвяжем Krab Ear с твоим LM Studio. Как только Whisper выдал полотно текста, оно тут же летит в локальную модель (например, Llama 3 8B), которая сама формирует:\n- Краткую выжимку (о чем говорили).\n- Action items (кто что обещал сделать).\n- Готовый Markdown для Obsidian (текст + метаданные).\n\n2. Real-time транскрибация (Стриминг)\nMLX Whisper умеет работать в потоке. Можно сделать так, чтобы Krab Ear слушал системный звук (например, во время Google Meet или Zoom) и писал субтитры прямо в консоль или текстовый файл в реальном времени.\n\n3. Пре-фильтрация шума (DeepFilterNet)\nWhisper часто галлюцинирует, если на фоне шум машин, ветер или стук клавиатуры. Если перед транскрибацией прогонять аудио через легкую нейросеть DeepFilterNet, качество распознавания взлетит до небес, а галлюцинации пропадут.\n\n4. Watchdog (Папка-шпион)\n[19/03/2026 01:05] OG P Cod/id BCI inside: [Часть 2/2]\nНапишем фоновый демон, который будет следить за папкой (например, ~/Downloads/To_Transcribe или прямо за диктофоном). Скинул туда файл — Krab Ear сам проснулся, обработал, положил результат в Obsidian и прислал пуш-уведомление, что всё готово.\n\n5. Кастомный словарь (Glossary / Prompt injection)\nWhisper часто коверкает специфичные термины, имена друзей или названия проектов. Добавим конфиг glossary.json, который будет динамически подшиваться в системный промпт, чтобы модель всегда правильно писала имена (например, \"Дашуля\", \"OpenClaw\", \"MLX\").\n\nЧто из этого звучит вкуснее всего? Можем закинуть эти фичи в беклог и начать пилить их по одной.🦀 Пока скрипт переваривает тестовое аудио, давай накидаем roadmap для Krab Ear. \n\nУчитывая огромный запас мощности твоего M4 Max, мы можем сделать из него не просто \"расшифровщик диктофона\", а полноценного автономного аналитика.\n\nВот 5 архитектурных идей, как прокачать движок:\n\n1. LLM-постпроцессинг (Интеграция с LM Studio)\nЗачем читать длинные простыни диалогов? Свяжем выход из Whisper с твоими локальными моделями. Как только транскрипт готов, Krab Ear тихо скармливает его в LLM, и та генерирует:\n- Короткое саммари (суть звонка в 3-х предложениях).\n- Action Items (кто, что и когда пообещал сделать).\n- Индексы и теги для Obsidian.\nКонтекст: reply_to_me",
+              "created_at_utc": "2026-03-19T01:16:30+00:00",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "identity": {
+                "operator_id": "pablito",
+                "account_id": "149902cc257e",
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:f697ed89d309",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10897",
+                "chat_type": "private",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "is_reply_to_me": true,
+                "has_trigger": false,
+                "has_photo": false,
+                "has_audio": false,
+                "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (",
+                "workflow_events": [
+                  {
+                    "ts_utc": "2026-03-19T01:16:30+00:00",
+                    "action": "created",
+                    "actor": "telegram-userbot",
+                    "status": "open"
+                  }
+                ]
+              }
+            },
+            {
+              "item_id": "0c72d27c92fa",
+              "dedupe_key": "incoming:312322764:10848",
+              "kind": "owner_request",
+              "source": "telegram-userbot",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "body": "Чат: `312322764`\nСообщение: `10848`\nОт: `@p0lrd`\nТекст: Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+              "created_at_utc": "2026-03-19T00:17:49+00:00",
+              "updated_at_utc": "2026-03-19T00:17:49+00:00",
+              "identity": {
+                "operator_id": "pablito",
+                "account_id": "149902cc257e",
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:a299c28356e5",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10848",
+                "chat_type": "private",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "is_reply_to_me": false,
+                "has_trigger": false,
+                "has_photo": false,
+                "has_audio": false,
+                "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                "workflow_events": [
+                  {
+                    "ts_utc": "2026-03-19T00:17:49+00:00",
+                    "action": "created",
+                    "actor": "telegram-userbot",
+                    "status": "open"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "workflow": {
+          "summary": {
+            "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
+            "account_id": "149902cc257e",
+            "operator_id": "pablito",
+            "total_items": 124,
+            "open_items": 2,
+            "attention_items": 0,
+            "pending_reminders": 0,
+            "open_escalations": 0,
+            "pending_owner_tasks": 0,
+            "pending_approvals": 0,
+            "pending_owner_requests": 2,
+            "pending_owner_mentions": 0,
+            "latest_open_items": [
+              {
+                "item_id": "65517a55a011",
+                "dedupe_key": "incoming:312322764:10897",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10897`\nОт: `@p0lrd`\nТекст: Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (to-do lists).\n - Brief summaries.\n - Meeting minutes.\n - Sentiment analysis (was the call tense or relaxed?).\n3. Audio Enhancement (Noise Reduction): Integrate something like DeepFilterNet or RNNoise before feeding audio to Whisper. This cleans up street noise, keyboard typing, and wind, drastically reducing Whisper hallucinations.\n4. Keyword & Glossary Boosting: Add a custom dictionary/glossary feature (e.g., specific project names, names of friends, technical jargon like \"MLX\", \"Obsidian\", \"OpenClaw\") so Whisper stops misspelling niche terms.\n5. Watchdog / Auto-Ingest: A background daemon that watches a specific folder (e.g., ~/Audio To Transcribe or directly hooks into Apple Voice Memos/Notes). As soon as a new audio file appears, it silently processes it and drops the Markdown in Obsidian without manual triggers.\n\nLet's formulate these suggestions in a concise, technical, and engaging way (using 🦀, markdown, short paragraphs).\n\nDrafting the response:\n🦀 Пока скрипт переваривает аудио, давай накидаем roadmap для Krab Ear. Учитывая мощь твоего M4 Max, мы можем сделать из него не просто \"переводчик голоса в текст\", а полноценного аналитического агента.\n\nВот 5 крутых идей для апгрейда:\n\n1. LLM-постпроцессинг (Авто-Саммари и Задачи)\nСвяжем Krab Ear с твоим LM Studio. Как только Whisper выдал полотно текста, оно тут же летит в локальную модель (например, Llama 3 8B), которая сама формирует:\n- Краткую выжимку (о чем говорили).\n- Action items (кто что обещал сделать).\n- Готовый Markdown для Obsidian (текст + метаданные).\n\n2. Real-time транскрибация (Стриминг)\nMLX Whisper умеет работать в потоке. Можно сделать так, чтобы Krab Ear слушал системный звук (например, во время Google Meet или Zoom) и писал субтитры прямо в консоль или текстовый файл в реальном времени.\n\n3. Пре-фильтрация шума (DeepFilterNet)\nWhisper часто галлюцинирует, если на фоне шум машин, ветер или стук клавиатуры. Если перед транскрибацией прогонять аудио через легкую нейросеть DeepFilterNet, качество распознавания взлетит до небес, а галлюцинации пропадут.\n\n4. Watchdog (Папка-шпион)\n[19/03/2026 01:05] OG P Cod/id BCI inside: [Часть 2/2]\nНапишем фоновый демон, который будет следить за папкой (например, ~/Downloads/To_Transcribe или прямо за диктофоном). Скинул туда файл — Krab Ear сам проснулся, обработал, положил результат в Obsidian и прислал пуш-уведомление, что всё готово.\n\n5. Кастомный словарь (Glossary / Prompt injection)\nWhisper часто коверкает специфичные термины, имена друзей или названия проектов. Добавим конфиг glossary.json, который будет динамически подшиваться в системный промпт, чтобы модель всегда правильно писала имена (например, \"Дашуля\", \"OpenClaw\", \"MLX\").\n\nЧто из этого звучит вкуснее всего? Можем закинуть эти фичи в беклог и начать пилить их по одной.🦀 Пока скрипт переваривает тестовое аудио, давай накидаем roadmap для Krab Ear. \n\nУчитывая огромный запас мощности твоего M4 Max, мы можем сделать из него не просто \"расшифровщик диктофона\", а полноценного автономного аналитика.\n\nВот 5 архитектурных идей, как прокачать движок:\n\n1. LLM-постпроцессинг (Интеграция с LM Studio)\nЗачем читать длинные простыни диалогов? Свяжем выход из Whisper с твоими локальными моделями. Как только транскрипт готов, Krab Ear тихо скармливает его в LLM, и та генерирует:\n- Короткое саммари (суть звонка в 3-х предложениях).\n- Action Items (кто, что и когда пообещал сделать).\n- Индексы и теги для Obsidian.\nКонтекст: reply_to_me",
+                "created_at_utc": "2026-03-19T01:16:30+00:00",
+                "updated_at_utc": "2026-03-19T01:16:30+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:f697ed89d309",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10897",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": true,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T01:16:30+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              },
+              {
+                "item_id": "0c72d27c92fa",
+                "dedupe_key": "incoming:312322764:10848",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10848`\nОт: `@p0lrd`\nТекст: Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                "created_at_utc": "2026-03-19T00:17:49+00:00",
+                "updated_at_utc": "2026-03-19T00:17:49+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:a299c28356e5",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10848",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": false,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T00:17:49+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "attention_items": [],
+          "pending_approvals": [],
+          "approval_history": [],
+          "recent_approval_decisions": [],
+          "pending_owner_tasks": [],
+          "incoming_owner_requests": [
+            {
+              "item_id": "65517a55a011",
+              "kind": "owner_request",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "created_at_utc": "2026-03-19T01:16:30+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:f697ed89d309",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10897",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming cap"
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T01:16:30+00:00",
+                "action": "created",
+                "actor": "telegram-userbot",
+                "status": "open"
+              }
+            },
+            {
+              "item_id": "0c72d27c92fa",
+              "kind": "owner_request",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T00:17:49+00:00",
+              "created_at_utc": "2026-03-19T00:17:49+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:a299c28356e5",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10848",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab"
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T00:17:49+00:00",
+                "action": "created",
+                "actor": "telegram-userbot",
+                "status": "open"
+              }
+            }
+          ],
+          "incoming_owner_mentions": [],
+          "escalated_owner_items": [],
+          "linked_followups": [],
+          "recent_replied_requests": [
+            {
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T20:36:21+00:00",
+              "created_at_utc": "2026-03-19T20:25:00+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:8cc6ba41aab9",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10960",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T20:36:21+00:00",
+                "reply_delivery_mode": "edit_and_reply",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "ты тут? продолжаем?",
+                "reply_excerpt": "❌ OpenClaw слишком долго собирает первый ответ. Похоже, цепочка fallback зависла или все cloud-кандидаты перегружены. Попробуй `!model local",
+                "reply_message_ids": [
+                  "10961"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T20:36:21+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "edit_and_reply",
+                "reply_message_ids": [
+                  "10961"
+                ],
+                "reply_excerpt": "❌ OpenClaw слишком долго собирает первый ответ. Похоже, цепочка fallback зависла или все cloud-кандидаты перегружены. Попробуй `!model local"
+              }
+            },
+            {
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T19:36:18+00:00",
+              "created_at_utc": "2026-03-19T19:26:33+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:1930d80e7a64",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10950",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T19:36:18+00:00",
+                "reply_delivery_mode": "send_message",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "хорошо, тогда продолжаем как и говоришь, добъем krab ear, чтобы он соответствовал всем нашим ожиданиям и качество транскрибации было максима",
+                "reply_excerpt": "Продолжаю с фактического состояния `Krab Ear`: перечитаю ключевые файлы, проверю текущие launcher’ы, окружение для `advanced`-ветки и после ",
+                "reply_message_ids": [
+                  "10954",
+                  "10955"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T19:36:18+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "send_message",
+                "reply_message_ids": [
+                  "10954",
+                  "10955"
+                ],
+                "reply_excerpt": "Продолжаю с фактического состояния `Krab Ear`: перечитаю ключевые файлы, проверю текущие launcher’ы, окружение для `advanced`-ветки и после "
+              }
+            },
+            {
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T19:14:34+00:00",
+              "created_at_utc": "2026-03-19T19:08:52+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:9da21e958d67",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10943",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T19:14:34+00:00",
+                "reply_delivery_mode": "edit_and_reply",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "ты живой? почему не ответил? как успехи?",
+                "reply_excerpt": "Я на связи. Сначала быстро перепроверю фактическое состояние workspace и недавних правок по `Krab Ear`, чтобы ответить не по памяти, а по ре",
+                "reply_message_ids": [
+                  "10944",
+                  "10945"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T19:14:34+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "edit_and_reply",
+                "reply_message_ids": [
+                  "10944",
+                  "10945"
+                ],
+                "reply_excerpt": "Я на связи. Сначала быстро перепроверю фактическое состояние workspace и недавних правок по `Krab Ear`, чтобы ответить не по памяти, а по ре"
+              }
+            },
+            {
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T18:40:30+00:00",
+              "created_at_utc": "2026-03-19T18:29:30+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:265cebb3dd11",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10941",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T18:40:30+00:00",
+                "reply_delivery_mode": "edit_and_reply",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "да, ведь изначально мой транскрибатор был сделан под транскрибацию голоса в текст и использования в системе для этого, и лайв текст тоже был",
+                "reply_excerpt": "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`.",
+                "reply_message_ids": [
+                  "10942"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T18:40:30+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "edit_and_reply",
+                "reply_message_ids": [
+                  "10942"
+                ],
+                "reply_excerpt": "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
+              }
+            }
+          ],
+          "recent_owner_actions": [
+            {
+              "ts_utc": "2026-03-16T15:32:31+00:00",
+              "action": "done",
+              "actor": "owner",
+              "status": "done",
+              "note": "",
+              "item_id": "709d6acb9eae",
+              "kind": "watch_alert",
+              "title": "Gateway недоступен",
+              "trace_id": "watch:869d9a8e80b8",
+              "approval_scope": "owner"
+            }
+          ],
+          "recent_activity": [
+            {
+              "ts_utc": "2026-03-19T20:36:21+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:8cc6ba41aab9",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T20:25:00+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:8cc6ba41aab9",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:36:18+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:1930d80e7a64",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:26:33+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:1930d80e7a64",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:14:34+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:9da21e958d67",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:08:52+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:9da21e958d67",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:40:30+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:265cebb3dd11",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:29:30+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:265cebb3dd11",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:09:13+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "d696fc9bd2a4",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:e4eed652968d",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:00:07+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "d696fc9bd2a4",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:e4eed652968d",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T17:53:01+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "54911f6fef6c",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:c9e10a4a5f4d",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T17:52:03+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "54911f6fef6c",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:c9e10a4a5f4d",
+              "approval_scope": "owner"
+            }
+          ],
+          "trace_index": [
+            {
+              "trace_id": "telegram:8cc6ba41aab9",
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T20:36:21+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:1930d80e7a64",
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T19:36:18+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:9da21e958d67",
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T19:14:34+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:265cebb3dd11",
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T18:40:30+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:e4eed652968d",
+              "item_id": "d696fc9bd2a4",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T18:09:13+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:c9e10a4a5f4d",
+              "item_id": "54911f6fef6c",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T17:53:01+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:ef6fae7b458b",
+              "item_id": "f13e13f99001",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T13:22:08+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:78778cacadf2",
+              "item_id": "1a60e303ee71",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T12:57:38+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:c34df578347f",
+              "item_id": "e3ef7b8f2791",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T12:43:00+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:559f2cd9dfc8",
+              "item_id": "17edf59511f9",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T12:33:44+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:f697ed89d309",
+              "item_id": "65517a55a011",
+              "kind": "owner_request",
+              "status": "open",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:0b2b79442258",
+              "item_id": "141c0f0a0097",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "approval_scope": "owner"
+            }
+          ]
+        }
+      }
+    },
+    "runtime_handoff": {
+      "ok": true,
+      "status_code": 200,
+      "error": null,
+      "payload": {
+        "ok": true,
+        "generated_at_utc": "2026-03-19T20:40:33+00:00",
+        "project_root": "/Users/pablito/Antigravity_AGENTS/Краб",
+        "git": {
+          "branch": "fix/routing-qwen-thinking",
+          "head": "595943956459a82de3837b6bbdfc5a91081bcd20",
+          "status_short": "## fix/routing-qwen-thinking\n M \"Login Codex CLI.command\"\n D ROADMAP_STABILIZATION_2026-03-02.md\n M data/scheduler/reminders.json\n M scripts/openclaw_runtime_repair.py\n M src/config.py\n M src/core/auth_recovery_readiness.py\n M src/modules/perceptor.py\n M src/modules/web_app.py\n M src/openclaw_client.py\n M src/userbot_bridge.py\n M src/voice_engine.py\n M src/web/index.html\n M temp/runtime_snapshot.json\n M tests/unit/test_auth_recovery_readiness.py\n M tests/unit/test_openclaw_client.py\n M tests/unit/test_openclaw_runtime_repair.py\n M tests/unit/test_web_app_runtime_endpoints.py\n?? scripts/codex_cli_device_login.py\n?? tests/unit/test_codex_cli_device_login.py\n?? tests/unit/test_voice_engine.py"
+        },
+        "health_lite": {
+          "ok": true,
+          "status": "up",
+          "telegram_session_state": "ready",
+          "lmstudio_model_state": "loaded",
+          "openclaw_auth_state": "configured",
+          "workspace_attached": true,
+          "last_runtime_route": {
+            "timestamp": 1773952566,
+            "channel": "error",
+            "provider": "codex-cli",
+            "model": "codex-cli/gpt-5.4",
+            "active_tier": "free",
+            "force_cloud": true,
+            "status": "error",
+            "error_code": "first_chunk_timeout",
+            "route_reason": "userbot_buffered_wait_timeout",
+            "route_detail": "Userbot дождался buffered OpenClaw дольше допустимого окна"
+          },
+          "inbox_summary": {
+            "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
+            "account_id": "149902cc257e",
+            "operator_id": "pablito",
+            "total_items": 124,
+            "open_items": 2,
+            "attention_items": 0,
+            "pending_reminders": 0,
+            "open_escalations": 0,
+            "pending_owner_tasks": 0,
+            "pending_approvals": 0,
+            "pending_owner_requests": 2,
+            "pending_owner_mentions": 0,
+            "latest_open_items": [
+              {
+                "item_id": "65517a55a011",
+                "dedupe_key": "incoming:312322764:10897",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10897`\nОт: `@p0lrd`\nТекст: Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (to-do lists).\n - Brief summaries.\n - Meeting minutes.\n - Sentiment analysis (was the call tense or relaxed?).\n3. Audio Enhancement (Noise Reduction): Integrate something like DeepFilterNet or RNNoise before feeding audio to Whisper. This cleans up street noise, keyboard typing, and wind, drastically reducing Whisper hallucinations.\n4. Keyword & Glossary Boosting: Add a custom dictionary/glossary feature (e.g., specific project names, names of friends, technical jargon like \"MLX\", \"Obsidian\", \"OpenClaw\") so Whisper stops misspelling niche terms.\n5. Watchdog / Auto-Ingest: A background daemon that watches a specific folder (e.g., ~/Audio To Transcribe or directly hooks into Apple Voice Memos/Notes). As soon as a new audio file appears, it silently processes it and drops the Markdown in Obsidian without manual triggers.\n\nLet's formulate these suggestions in a concise, technical, and engaging way (using 🦀, markdown, short paragraphs).\n\nDrafting the response:\n🦀 Пока скрипт переваривает аудио, давай накидаем roadmap для Krab Ear. Учитывая мощь твоего M4 Max, мы можем сделать из него не просто \"переводчик голоса в текст\", а полноценного аналитического агента.\n\nВот 5 крутых идей для апгрейда:\n\n1. LLM-постпроцессинг (Авто-Саммари и Задачи)\nСвяжем Krab Ear с твоим LM Studio. Как только Whisper выдал полотно текста, оно тут же летит в локальную модель (например, Llama 3 8B), которая сама формирует:\n- Краткую выжимку (о чем говорили).\n- Action items (кто что обещал сделать).\n- Готовый Markdown для Obsidian (текст + метаданные).\n\n2. Real-time транскрибация (Стриминг)\nMLX Whisper умеет работать в потоке. Можно сделать так, чтобы Krab Ear слушал системный звук (например, во время Google Meet или Zoom) и писал субтитры прямо в консоль или текстовый файл в реальном времени.\n\n3. Пре-фильтрация шума (DeepFilterNet)\nWhisper часто галлюцинирует, если на фоне шум машин, ветер или стук клавиатуры. Если перед транскрибацией прогонять аудио через легкую нейросеть DeepFilterNet, качество распознавания взлетит до небес, а галлюцинации пропадут.\n\n4. Watchdog (Папка-шпион)\n[19/03/2026 01:05] OG P Cod/id BCI inside: [Часть 2/2]\nНапишем фоновый демон, который будет следить за папкой (например, ~/Downloads/To_Transcribe или прямо за диктофоном). Скинул туда файл — Krab Ear сам проснулся, обработал, положил результат в Obsidian и прислал пуш-уведомление, что всё готово.\n\n5. Кастомный словарь (Glossary / Prompt injection)\nWhisper часто коверкает специфичные термины, имена друзей или названия проектов. Добавим конфиг glossary.json, который будет динамически подшиваться в системный промпт, чтобы модель всегда правильно писала имена (например, \"Дашуля\", \"OpenClaw\", \"MLX\").\n\nЧто из этого звучит вкуснее всего? Можем закинуть эти фичи в беклог и начать пилить их по одной.🦀 Пока скрипт переваривает тестовое аудио, давай накидаем roadmap для Krab Ear. \n\nУчитывая огромный запас мощности твоего M4 Max, мы можем сделать из него не просто \"расшифровщик диктофона\", а полноценного автономного аналитика.\n\nВот 5 архитектурных идей, как прокачать движок:\n\n1. LLM-постпроцессинг (Интеграция с LM Studio)\nЗачем читать длинные простыни диалогов? Свяжем выход из Whisper с твоими локальными моделями. Как только транскрипт готов, Krab Ear тихо скармливает его в LLM, и та генерирует:\n- Короткое саммари (суть звонка в 3-х предложениях).\n- Action Items (кто, что и когда пообещал сделать).\n- Индексы и теги для Obsidian.\nКонтекст: reply_to_me",
+                "created_at_utc": "2026-03-19T01:16:30+00:00",
+                "updated_at_utc": "2026-03-19T01:16:30+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:f697ed89d309",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10897",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": true,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T01:16:30+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              },
+              {
+                "item_id": "0c72d27c92fa",
+                "dedupe_key": "incoming:312322764:10848",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10848`\nОт: `@p0lrd`\nТекст: Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                "created_at_utc": "2026-03-19T00:17:49+00:00",
+                "updated_at_utc": "2026-03-19T00:17:49+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:a299c28356e5",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10848",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": false,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T00:17:49+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "runtime": {
+          "telegram_session_state": "ready",
+          "telegram_session": {
+            "state": "ready",
+            "session_name": "kraab",
+            "session_path": "/Users/pablito/Antigravity_AGENTS/Краб/data/sessions/kraab.session",
+            "session_exists": true,
+            "session_size_bytes": 49152,
+            "wal_exists": false,
+            "shm_exists": false,
+            "journal_exists": true,
+            "lock_files": [],
+            "sqlite_quick_check_ok": true,
+            "sqlite_error": "",
+            "state_file_raw": "open_or_unclean",
+            "state_source": "runtime+file",
+            "state_reason": "sqlite_sidecars_expected_while_userbot_running",
+            "state_detail": "Userbot подключён; sidecar-файлы SQLite считаются штатным признаком открытой сессии."
+          },
+          "lmstudio_model_state": "loaded",
+          "lmstudio": {
+            "state": "loaded",
+            "base_url": "http://192.168.0.171:1234",
+            "loaded_count": 1,
+            "loaded_models": [
+              "qwen2-0.5b-instruct"
+            ],
+            "error": ""
+          },
+          "openclaw_auth_state": "configured",
+          "last_runtime_route": {
+            "timestamp": 1773952566,
+            "channel": "error",
+            "provider": "codex-cli",
+            "model": "codex-cli/gpt-5.4",
+            "active_tier": "free",
+            "force_cloud": true,
+            "status": "error",
+            "error_code": "first_chunk_timeout",
+            "route_reason": "userbot_buffered_wait_timeout",
+            "route_detail": "Userbot дождался buffered OpenClaw дольше допустимого окна"
+          },
+          "openclaw_tier_state": {
+            "active_tier": "free",
+            "switches": 0,
+            "last_switch_at": null,
+            "last_error_code": "provider_timeout",
+            "last_error_message": "timeout waiting for codex-cli/gpt-5.4: ",
+            "last_provider_status": "unknown",
+            "last_recovery_action": "switch_to_cloud_quality_retry",
+            "last_probe_at": null,
+            "tiers_configured": {
+              "free": true,
+              "paid": true
+            }
+          },
+          "telegram_userbot": {
+            "startup_state": "running",
+            "startup_error_code": "",
+            "startup_error": "",
+            "client_connected": true,
+            "authorized_user": "yung_nagato",
+            "authorized_user_id": 6435872621,
+            "voice_profile": {
+              "enabled": false,
+              "delivery": "text+voice",
+              "speed": 1.5,
+              "voice": "ru-RU-DmitryNeural",
+              "input_transcription_ready": false,
+              "output_tts_ready": true,
+              "live_voice_foundation": false
+            },
+            "translator_profile": {
+              "language_pair": "es-ru",
+              "translation_mode": "bilingual",
+              "voice_strategy": "voice-first",
+              "target_device": "iphone_companion",
+              "ordinary_calls_enabled": true,
+              "internet_calls_enabled": true,
+              "subtitles_enabled": true,
+              "timeline_enabled": true,
+              "summary_enabled": true,
+              "diagnostics_enabled": false,
+              "quick_phrases": [],
+              "quick_phrase_count": 0,
+              "voice_foundation_ready": false,
+              "voice_runtime_enabled": false
+            },
+            "translator_session": {
+              "session_status": "idle",
+              "session_id": "",
+              "active_session_label": "",
+              "translation_muted": false,
+              "last_language_pair": "",
+              "last_translated_original": "",
+              "last_translated_translation": "",
+              "last_event": "session_idle",
+              "updated_at": "",
+              "timeline_summary": {
+                "total": 0,
+                "line_events": 0,
+                "control_events": 0
+              },
+              "timeline_preview": [],
+              "timeline_event_count": 0,
+              "language_pair": "es-ru",
+              "target_device": "iphone_companion"
+            }
+          },
+          "scheduler_enabled": true,
+          "inbox_summary": {
+            "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
+            "account_id": "149902cc257e",
+            "operator_id": "pablito",
+            "total_items": 124,
+            "open_items": 2,
+            "attention_items": 0,
+            "pending_reminders": 0,
+            "open_escalations": 0,
+            "pending_owner_tasks": 0,
+            "pending_approvals": 0,
+            "pending_owner_requests": 2,
+            "pending_owner_mentions": 0,
+            "latest_open_items": [
+              {
+                "item_id": "65517a55a011",
+                "dedupe_key": "incoming:312322764:10897",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10897`\nОт: `@p0lrd`\nТекст: Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (to-do lists).\n - Brief summaries.\n - Meeting minutes.\n - Sentiment analysis (was the call tense or relaxed?).\n3. Audio Enhancement (Noise Reduction): Integrate something like DeepFilterNet or RNNoise before feeding audio to Whisper. This cleans up street noise, keyboard typing, and wind, drastically reducing Whisper hallucinations.\n4. Keyword & Glossary Boosting: Add a custom dictionary/glossary feature (e.g., specific project names, names of friends, technical jargon like \"MLX\", \"Obsidian\", \"OpenClaw\") so Whisper stops misspelling niche terms.\n5. Watchdog / Auto-Ingest: A background daemon that watches a specific folder (e.g., ~/Audio To Transcribe or directly hooks into Apple Voice Memos/Notes). As soon as a new audio file appears, it silently processes it and drops the Markdown in Obsidian without manual triggers.\n\nLet's formulate these suggestions in a concise, technical, and engaging way (using 🦀, markdown, short paragraphs).\n\nDrafting the response:\n🦀 Пока скрипт переваривает аудио, давай накидаем roadmap для Krab Ear. Учитывая мощь твоего M4 Max, мы можем сделать из него не просто \"переводчик голоса в текст\", а полноценного аналитического агента.\n\nВот 5 крутых идей для апгрейда:\n\n1. LLM-постпроцессинг (Авто-Саммари и Задачи)\nСвяжем Krab Ear с твоим LM Studio. Как только Whisper выдал полотно текста, оно тут же летит в локальную модель (например, Llama 3 8B), которая сама формирует:\n- Краткую выжимку (о чем говорили).\n- Action items (кто что обещал сделать).\n- Готовый Markdown для Obsidian (текст + метаданные).\n\n2. Real-time транскрибация (Стриминг)\nMLX Whisper умеет работать в потоке. Можно сделать так, чтобы Krab Ear слушал системный звук (например, во время Google Meet или Zoom) и писал субтитры прямо в консоль или текстовый файл в реальном времени.\n\n3. Пре-фильтрация шума (DeepFilterNet)\nWhisper часто галлюцинирует, если на фоне шум машин, ветер или стук клавиатуры. Если перед транскрибацией прогонять аудио через легкую нейросеть DeepFilterNet, качество распознавания взлетит до небес, а галлюцинации пропадут.\n\n4. Watchdog (Папка-шпион)\n[19/03/2026 01:05] OG P Cod/id BCI inside: [Часть 2/2]\nНапишем фоновый демон, который будет следить за папкой (например, ~/Downloads/To_Transcribe или прямо за диктофоном). Скинул туда файл — Krab Ear сам проснулся, обработал, положил результат в Obsidian и прислал пуш-уведомление, что всё готово.\n\n5. Кастомный словарь (Glossary / Prompt injection)\nWhisper часто коверкает специфичные термины, имена друзей или названия проектов. Добавим конфиг glossary.json, который будет динамически подшиваться в системный промпт, чтобы модель всегда правильно писала имена (например, \"Дашуля\", \"OpenClaw\", \"MLX\").\n\nЧто из этого звучит вкуснее всего? Можем закинуть эти фичи в беклог и начать пилить их по одной.🦀 Пока скрипт переваривает тестовое аудио, давай накидаем roadmap для Krab Ear. \n\nУчитывая огромный запас мощности твоего M4 Max, мы можем сделать из него не просто \"расшифровщик диктофона\", а полноценного автономного аналитика.\n\nВот 5 архитектурных идей, как прокачать движок:\n\n1. LLM-постпроцессинг (Интеграция с LM Studio)\nЗачем читать длинные простыни диалогов? Свяжем выход из Whisper с твоими локальными моделями. Как только транскрипт готов, Krab Ear тихо скармливает его в LLM, и та генерирует:\n- Короткое саммари (суть звонка в 3-х предложениях).\n- Action Items (кто, что и когда пообещал сделать).\n- Индексы и теги для Obsidian.\nКонтекст: reply_to_me",
+                "created_at_utc": "2026-03-19T01:16:30+00:00",
+                "updated_at_utc": "2026-03-19T01:16:30+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:f697ed89d309",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10897",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": true,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T01:16:30+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              },
+              {
+                "item_id": "0c72d27c92fa",
+                "dedupe_key": "incoming:312322764:10848",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10848`\nОт: `@p0lrd`\nТекст: Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                "created_at_utc": "2026-03-19T00:17:49+00:00",
+                "updated_at_utc": "2026-03-19T00:17:49+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:a299c28356e5",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10848",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": false,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T00:17:49+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "workspace_state": {
+            "ok": true,
+            "workspace_dir": "/Users/pablito/.openclaw/workspace-main-messaging",
+            "exists": true,
+            "shared_workspace_attached": true,
+            "shared_memory_ready": true,
+            "memory_dir": "/Users/pablito/.openclaw/workspace-main-messaging/memory",
+            "memory_dir_exists": true,
+            "prompt_files": {
+              "SOUL.md": {
+                "path": "/Users/pablito/.openclaw/workspace-main-messaging/SOUL.md",
+                "exists": true
+              },
+              "USER.md": {
+                "path": "/Users/pablito/.openclaw/workspace-main-messaging/USER.md",
+                "exists": true
+              },
+              "TOOLS.md": {
+                "path": "/Users/pablito/.openclaw/workspace-main-messaging/TOOLS.md",
+                "exists": true
+              },
+              "MEMORY.md": {
+                "path": "/Users/pablito/.openclaw/workspace-main-messaging/MEMORY.md",
+                "exists": true
+              }
+            },
+            "prompt_files_present": [
+              "SOUL.md",
+              "USER.md",
+              "TOOLS.md",
+              "MEMORY.md"
+            ],
+            "prompt_files_present_count": 4,
+            "memory_file_count": 10,
+            "recent_memory_entries_count": 3,
+            "recent_memory_entries": [
+              {
+                "date": "2026-03-18",
+                "time": "23:20",
+                "source": "proactive-watch",
+                "author": "",
+                "text": "watch=route_model_changed; gateway=ON; primary=qwen-portal/coder-model; route=openai-codex/gpt-5.1-codex-mini; scheduler=0; memory=0; front=Safari"
+              },
+              {
+                "date": "2026-03-18",
+                "time": "23:05",
+                "source": "proactive-watch",
+                "author": "",
+                "text": "watch=route_model_changed; gateway=ON; primary=google/gemini-3.1-pro-preview; route=google/gemini-3.1-pro-preview; scheduler=0; memory=0; front=Cursor"
+              },
+              {
+                "date": "2026-03-18",
+                "time": "22:50",
+                "source": "proactive-watch",
+                "author": "",
+                "text": "watch=frontmost_app_changed; gateway=ON; primary=google/gemini-3.1-pro-preview; route=openai-codex/gpt-5.1-codex-mini; scheduler=0; memory=0; front=Telegram"
+              }
+            ],
+            "last_memory_entry": {
+              "date": "2026-03-18",
+              "time": "23:20",
+              "source": "proactive-watch",
+              "author": "",
+              "text": "watch=route_model_changed; gateway=ON; primary=qwen-portal/coder-model; route=openai-codex/gpt-5.1-codex-mini; scheduler=0; memory=0; front=Safari"
+            }
+          },
+          "voice_gateway_configured": true
+        },
+        "inbox_summary": {
+          "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
+          "account_id": "149902cc257e",
+          "operator_id": "pablito",
+          "total_items": 124,
+          "open_items": 2,
+          "attention_items": 0,
+          "pending_reminders": 0,
+          "open_escalations": 0,
+          "pending_owner_tasks": 0,
+          "pending_approvals": 0,
+          "pending_owner_requests": 2,
+          "pending_owner_mentions": 0,
+          "latest_open_items": [
+            {
+              "item_id": "65517a55a011",
+              "dedupe_key": "incoming:312322764:10897",
+              "kind": "owner_request",
+              "source": "telegram-userbot",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "body": "Чат: `312322764`\nСообщение: `10897`\nОт: `@p0lrd`\nТекст: Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (to-do lists).\n - Brief summaries.\n - Meeting minutes.\n - Sentiment analysis (was the call tense or relaxed?).\n3. Audio Enhancement (Noise Reduction): Integrate something like DeepFilterNet or RNNoise before feeding audio to Whisper. This cleans up street noise, keyboard typing, and wind, drastically reducing Whisper hallucinations.\n4. Keyword & Glossary Boosting: Add a custom dictionary/glossary feature (e.g., specific project names, names of friends, technical jargon like \"MLX\", \"Obsidian\", \"OpenClaw\") so Whisper stops misspelling niche terms.\n5. Watchdog / Auto-Ingest: A background daemon that watches a specific folder (e.g., ~/Audio To Transcribe or directly hooks into Apple Voice Memos/Notes). As soon as a new audio file appears, it silently processes it and drops the Markdown in Obsidian without manual triggers.\n\nLet's formulate these suggestions in a concise, technical, and engaging way (using 🦀, markdown, short paragraphs).\n\nDrafting the response:\n🦀 Пока скрипт переваривает аудио, давай накидаем roadmap для Krab Ear. Учитывая мощь твоего M4 Max, мы можем сделать из него не просто \"переводчик голоса в текст\", а полноценного аналитического агента.\n\nВот 5 крутых идей для апгрейда:\n\n1. LLM-постпроцессинг (Авто-Саммари и Задачи)\nСвяжем Krab Ear с твоим LM Studio. Как только Whisper выдал полотно текста, оно тут же летит в локальную модель (например, Llama 3 8B), которая сама формирует:\n- Краткую выжимку (о чем говорили).\n- Action items (кто что обещал сделать).\n- Готовый Markdown для Obsidian (текст + метаданные).\n\n2. Real-time транскрибация (Стриминг)\nMLX Whisper умеет работать в потоке. Можно сделать так, чтобы Krab Ear слушал системный звук (например, во время Google Meet или Zoom) и писал субтитры прямо в консоль или текстовый файл в реальном времени.\n\n3. Пре-фильтрация шума (DeepFilterNet)\nWhisper часто галлюцинирует, если на фоне шум машин, ветер или стук клавиатуры. Если перед транскрибацией прогонять аудио через легкую нейросеть DeepFilterNet, качество распознавания взлетит до небес, а галлюцинации пропадут.\n\n4. Watchdog (Папка-шпион)\n[19/03/2026 01:05] OG P Cod/id BCI inside: [Часть 2/2]\nНапишем фоновый демон, который будет следить за папкой (например, ~/Downloads/To_Transcribe или прямо за диктофоном). Скинул туда файл — Krab Ear сам проснулся, обработал, положил результат в Obsidian и прислал пуш-уведомление, что всё готово.\n\n5. Кастомный словарь (Glossary / Prompt injection)\nWhisper часто коверкает специфичные термины, имена друзей или названия проектов. Добавим конфиг glossary.json, который будет динамически подшиваться в системный промпт, чтобы модель всегда правильно писала имена (например, \"Дашуля\", \"OpenClaw\", \"MLX\").\n\nЧто из этого звучит вкуснее всего? Можем закинуть эти фичи в беклог и начать пилить их по одной.🦀 Пока скрипт переваривает тестовое аудио, давай накидаем roadmap для Krab Ear. \n\nУчитывая огромный запас мощности твоего M4 Max, мы можем сделать из него не просто \"расшифровщик диктофона\", а полноценного автономного аналитика.\n\nВот 5 архитектурных идей, как прокачать движок:\n\n1. LLM-постпроцессинг (Интеграция с LM Studio)\nЗачем читать длинные простыни диалогов? Свяжем выход из Whisper с твоими локальными моделями. Как только транскрипт готов, Krab Ear тихо скармливает его в LLM, и та генерирует:\n- Короткое саммари (суть звонка в 3-х предложениях).\n- Action Items (кто, что и когда пообещал сделать).\n- Индексы и теги для Obsidian.\nКонтекст: reply_to_me",
+              "created_at_utc": "2026-03-19T01:16:30+00:00",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "identity": {
+                "operator_id": "pablito",
+                "account_id": "149902cc257e",
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:f697ed89d309",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10897",
+                "chat_type": "private",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "is_reply_to_me": true,
+                "has_trigger": false,
+                "has_photo": false,
+                "has_audio": false,
+                "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (",
+                "workflow_events": [
+                  {
+                    "ts_utc": "2026-03-19T01:16:30+00:00",
+                    "action": "created",
+                    "actor": "telegram-userbot",
+                    "status": "open"
+                  }
+                ]
+              }
+            },
+            {
+              "item_id": "0c72d27c92fa",
+              "dedupe_key": "incoming:312322764:10848",
+              "kind": "owner_request",
+              "source": "telegram-userbot",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "body": "Чат: `312322764`\nСообщение: `10848`\nОт: `@p0lrd`\nТекст: Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+              "created_at_utc": "2026-03-19T00:17:49+00:00",
+              "updated_at_utc": "2026-03-19T00:17:49+00:00",
+              "identity": {
+                "operator_id": "pablito",
+                "account_id": "149902cc257e",
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:a299c28356e5",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10848",
+                "chat_type": "private",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "is_reply_to_me": false,
+                "has_trigger": false,
+                "has_photo": false,
+                "has_audio": false,
+                "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                "workflow_events": [
+                  {
+                    "ts_utc": "2026-03-19T00:17:49+00:00",
+                    "action": "created",
+                    "actor": "telegram-userbot",
+                    "status": "open"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "operator_workflow": {
+          "summary": {
+            "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
+            "account_id": "149902cc257e",
+            "operator_id": "pablito",
+            "total_items": 124,
+            "open_items": 2,
+            "attention_items": 0,
+            "pending_reminders": 0,
+            "open_escalations": 0,
+            "pending_owner_tasks": 0,
+            "pending_approvals": 0,
+            "pending_owner_requests": 2,
+            "pending_owner_mentions": 0,
+            "latest_open_items": [
+              {
+                "item_id": "65517a55a011",
+                "dedupe_key": "incoming:312322764:10897",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10897`\nОт: `@p0lrd`\nТекст: Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (to-do lists).\n - Brief summaries.\n - Meeting minutes.\n - Sentiment analysis (was the call tense or relaxed?).\n3. Audio Enhancement (Noise Reduction): Integrate something like DeepFilterNet or RNNoise before feeding audio to Whisper. This cleans up street noise, keyboard typing, and wind, drastically reducing Whisper hallucinations.\n4. Keyword & Glossary Boosting: Add a custom dictionary/glossary feature (e.g., specific project names, names of friends, technical jargon like \"MLX\", \"Obsidian\", \"OpenClaw\") so Whisper stops misspelling niche terms.\n5. Watchdog / Auto-Ingest: A background daemon that watches a specific folder (e.g., ~/Audio To Transcribe or directly hooks into Apple Voice Memos/Notes). As soon as a new audio file appears, it silently processes it and drops the Markdown in Obsidian without manual triggers.\n\nLet's formulate these suggestions in a concise, technical, and engaging way (using 🦀, markdown, short paragraphs).\n\nDrafting the response:\n🦀 Пока скрипт переваривает аудио, давай накидаем roadmap для Krab Ear. Учитывая мощь твоего M4 Max, мы можем сделать из него не просто \"переводчик голоса в текст\", а полноценного аналитического агента.\n\nВот 5 крутых идей для апгрейда:\n\n1. LLM-постпроцессинг (Авто-Саммари и Задачи)\nСвяжем Krab Ear с твоим LM Studio. Как только Whisper выдал полотно текста, оно тут же летит в локальную модель (например, Llama 3 8B), которая сама формирует:\n- Краткую выжимку (о чем говорили).\n- Action items (кто что обещал сделать).\n- Готовый Markdown для Obsidian (текст + метаданные).\n\n2. Real-time транскрибация (Стриминг)\nMLX Whisper умеет работать в потоке. Можно сделать так, чтобы Krab Ear слушал системный звук (например, во время Google Meet или Zoom) и писал субтитры прямо в консоль или текстовый файл в реальном времени.\n\n3. Пре-фильтрация шума (DeepFilterNet)\nWhisper часто галлюцинирует, если на фоне шум машин, ветер или стук клавиатуры. Если перед транскрибацией прогонять аудио через легкую нейросеть DeepFilterNet, качество распознавания взлетит до небес, а галлюцинации пропадут.\n\n4. Watchdog (Папка-шпион)\n[19/03/2026 01:05] OG P Cod/id BCI inside: [Часть 2/2]\nНапишем фоновый демон, который будет следить за папкой (например, ~/Downloads/To_Transcribe или прямо за диктофоном). Скинул туда файл — Krab Ear сам проснулся, обработал, положил результат в Obsidian и прислал пуш-уведомление, что всё готово.\n\n5. Кастомный словарь (Glossary / Prompt injection)\nWhisper часто коверкает специфичные термины, имена друзей или названия проектов. Добавим конфиг glossary.json, который будет динамически подшиваться в системный промпт, чтобы модель всегда правильно писала имена (например, \"Дашуля\", \"OpenClaw\", \"MLX\").\n\nЧто из этого звучит вкуснее всего? Можем закинуть эти фичи в беклог и начать пилить их по одной.🦀 Пока скрипт переваривает тестовое аудио, давай накидаем roadmap для Krab Ear. \n\nУчитывая огромный запас мощности твоего M4 Max, мы можем сделать из него не просто \"расшифровщик диктофона\", а полноценного автономного аналитика.\n\nВот 5 архитектурных идей, как прокачать движок:\n\n1. LLM-постпроцессинг (Интеграция с LM Studio)\nЗачем читать длинные простыни диалогов? Свяжем выход из Whisper с твоими локальными моделями. Как только транскрипт готов, Krab Ear тихо скармливает его в LLM, и та генерирует:\n- Короткое саммари (суть звонка в 3-х предложениях).\n- Action Items (кто, что и когда пообещал сделать).\n- Индексы и теги для Obsidian.\nКонтекст: reply_to_me",
+                "created_at_utc": "2026-03-19T01:16:30+00:00",
+                "updated_at_utc": "2026-03-19T01:16:30+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:f697ed89d309",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10897",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": true,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming capabilities to transcribe system audio or microphone input on the fly (like a real-time subtitle overlay for Zoom/Google Meet calls).\n2. LLM Post-processing Pipeline: Right now it outputs raw text + speakers. We can pipe the output directly into a local LLM (like Llama 3 or Qwen via LM Studio, since the user has it) to automatically generate:\n - Action items (",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T01:16:30+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              },
+              {
+                "item_id": "0c72d27c92fa",
+                "dedupe_key": "incoming:312322764:10848",
+                "kind": "owner_request",
+                "source": "telegram-userbot",
+                "status": "open",
+                "severity": "info",
+                "title": "Входящий owner request",
+                "body": "Чат: `312322764`\nСообщение: `10848`\nОт: `@p0lrd`\nТекст: Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                "created_at_utc": "2026-03-19T00:17:49+00:00",
+                "updated_at_utc": "2026-03-19T00:17:49+00:00",
+                "identity": {
+                  "operator_id": "pablito",
+                  "account_id": "149902cc257e",
+                  "channel_id": "312322764",
+                  "team_id": "owner",
+                  "trace_id": "telegram:a299c28356e5",
+                  "approval_scope": "owner"
+                },
+                "metadata": {
+                  "chat_id": "312322764",
+                  "message_id": "10848",
+                  "chat_type": "private",
+                  "sender_id": "312322764",
+                  "sender_username": "p0lrd",
+                  "is_reply_to_me": false,
+                  "has_trigger": false,
+                  "has_photo": false,
+                  "has_audio": false,
+                  "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab ear, если через него будет лучше, ну и если нужно будет - или через облачные, или я подключу ссд с моделями и прогнать можно через локальные. А так да, звучит неплохо, давай, папка обсидиан у меня по умолчанию сейчас кажется только",
+                  "workflow_events": [
+                    {
+                      "ts_utc": "2026-03-19T00:17:49+00:00",
+                      "action": "created",
+                      "actor": "telegram-userbot",
+                      "status": "open"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "attention_items": [],
+          "pending_approvals": [],
+          "approval_history": [],
+          "recent_approval_decisions": [],
+          "pending_owner_tasks": [],
+          "incoming_owner_requests": [
+            {
+              "item_id": "65517a55a011",
+              "kind": "owner_request",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "created_at_utc": "2026-03-19T01:16:30+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:f697ed89d309",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10897",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "text_excerpt": "Ideas for Krab Ear improvements:\n1. Real-time processing (Streaming API): Instead of just processing recorded files, use MLX's streaming cap"
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T01:16:30+00:00",
+                "action": "created",
+                "actor": "telegram-userbot",
+                "status": "open"
+              }
+            },
+            {
+              "item_id": "0c72d27c92fa",
+              "kind": "owner_request",
+              "status": "open",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T00:17:49+00:00",
+              "created_at_utc": "2026-03-19T00:17:49+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:a299c28356e5",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10848",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "text_excerpt": "Хорошо, можешь прогнать это для качества, чтобы разделить говорящих, с пунктуацией и без галлюцинаций во первых через наш транскрибатор krab"
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T00:17:49+00:00",
+                "action": "created",
+                "actor": "telegram-userbot",
+                "status": "open"
+              }
+            }
+          ],
+          "incoming_owner_mentions": [],
+          "escalated_owner_items": [],
+          "linked_followups": [],
+          "recent_replied_requests": [
+            {
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T20:36:21+00:00",
+              "created_at_utc": "2026-03-19T20:25:00+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:8cc6ba41aab9",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10960",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T20:36:21+00:00",
+                "reply_delivery_mode": "edit_and_reply",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "ты тут? продолжаем?",
+                "reply_excerpt": "❌ OpenClaw слишком долго собирает первый ответ. Похоже, цепочка fallback зависла или все cloud-кандидаты перегружены. Попробуй `!model local",
+                "reply_message_ids": [
+                  "10961"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T20:36:21+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "edit_and_reply",
+                "reply_message_ids": [
+                  "10961"
+                ],
+                "reply_excerpt": "❌ OpenClaw слишком долго собирает первый ответ. Похоже, цепочка fallback зависла или все cloud-кандидаты перегружены. Попробуй `!model local"
+              }
+            },
+            {
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T19:36:18+00:00",
+              "created_at_utc": "2026-03-19T19:26:33+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:1930d80e7a64",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10950",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T19:36:18+00:00",
+                "reply_delivery_mode": "send_message",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "хорошо, тогда продолжаем как и говоришь, добъем krab ear, чтобы он соответствовал всем нашим ожиданиям и качество транскрибации было максима",
+                "reply_excerpt": "Продолжаю с фактического состояния `Krab Ear`: перечитаю ключевые файлы, проверю текущие launcher’ы, окружение для `advanced`-ветки и после ",
+                "reply_message_ids": [
+                  "10954",
+                  "10955"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T19:36:18+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "send_message",
+                "reply_message_ids": [
+                  "10954",
+                  "10955"
+                ],
+                "reply_excerpt": "Продолжаю с фактического состояния `Krab Ear`: перечитаю ключевые файлы, проверю текущие launcher’ы, окружение для `advanced`-ветки и после "
+              }
+            },
+            {
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T19:14:34+00:00",
+              "created_at_utc": "2026-03-19T19:08:52+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:9da21e958d67",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10943",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T19:14:34+00:00",
+                "reply_delivery_mode": "edit_and_reply",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "ты живой? почему не ответил? как успехи?",
+                "reply_excerpt": "Я на связи. Сначала быстро перепроверю фактическое состояние workspace и недавних правок по `Krab Ear`, чтобы ответить не по памяти, а по ре",
+                "reply_message_ids": [
+                  "10944",
+                  "10945"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T19:14:34+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "edit_and_reply",
+                "reply_message_ids": [
+                  "10944",
+                  "10945"
+                ],
+                "reply_excerpt": "Я на связи. Сначала быстро перепроверю фактическое состояние workspace и недавних правок по `Krab Ear`, чтобы ответить не по памяти, а по ре"
+              }
+            },
+            {
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "status": "done",
+              "severity": "info",
+              "title": "Входящий owner request",
+              "source": "telegram-userbot",
+              "updated_at_utc": "2026-03-19T18:40:30+00:00",
+              "created_at_utc": "2026-03-19T18:29:30+00:00",
+              "identity": {
+                "channel_id": "312322764",
+                "team_id": "owner",
+                "trace_id": "telegram:265cebb3dd11",
+                "approval_scope": "owner"
+              },
+              "metadata": {
+                "chat_id": "312322764",
+                "message_id": "10941",
+                "sender_id": "312322764",
+                "sender_username": "p0lrd",
+                "reply_sent_at_utc": "2026-03-19T18:40:30+00:00",
+                "reply_delivery_mode": "edit_and_reply",
+                "reply_actor": "kraab",
+                "reply_count": 1,
+                "text_excerpt": "да, ведь изначально мой транскрибатор был сделан под транскрибацию голоса в текст и использования в системе для этого, и лайв текст тоже был",
+                "reply_excerpt": "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`.",
+                "reply_message_ids": [
+                  "10942"
+                ]
+              },
+              "last_event": {
+                "ts_utc": "2026-03-19T18:40:30+00:00",
+                "action": "reply_sent",
+                "actor": "kraab",
+                "status": "done",
+                "note": "llm_response_delivered",
+                "delivery_mode": "edit_and_reply",
+                "reply_message_ids": [
+                  "10942"
+                ],
+                "reply_excerpt": "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
+              }
+            }
+          ],
+          "recent_owner_actions": [
+            {
+              "ts_utc": "2026-03-16T15:32:31+00:00",
+              "action": "done",
+              "actor": "owner",
+              "status": "done",
+              "note": "",
+              "item_id": "709d6acb9eae",
+              "kind": "watch_alert",
+              "title": "Gateway недоступен",
+              "trace_id": "watch:869d9a8e80b8",
+              "approval_scope": "owner"
+            }
+          ],
+          "recent_activity": [
+            {
+              "ts_utc": "2026-03-19T20:36:21+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:8cc6ba41aab9",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T20:25:00+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:8cc6ba41aab9",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:36:18+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:1930d80e7a64",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:26:33+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:1930d80e7a64",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:14:34+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:9da21e958d67",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T19:08:52+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:9da21e958d67",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:40:30+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:265cebb3dd11",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:29:30+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:265cebb3dd11",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:09:13+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "d696fc9bd2a4",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:e4eed652968d",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T18:00:07+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "d696fc9bd2a4",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:e4eed652968d",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T17:53:01+00:00",
+              "action": "reply_sent",
+              "actor": "kraab",
+              "status": "done",
+              "note": "llm_response_delivered",
+              "item_id": "54911f6fef6c",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:c9e10a4a5f4d",
+              "approval_scope": "owner"
+            },
+            {
+              "ts_utc": "2026-03-19T17:52:03+00:00",
+              "action": "created",
+              "actor": "telegram-userbot",
+              "status": "open",
+              "note": "",
+              "item_id": "54911f6fef6c",
+              "kind": "owner_request",
+              "title": "Входящий owner request",
+              "trace_id": "telegram:c9e10a4a5f4d",
+              "approval_scope": "owner"
+            }
+          ],
+          "trace_index": [
+            {
+              "trace_id": "telegram:8cc6ba41aab9",
+              "item_id": "83eacc2cb75a",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T20:36:21+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:1930d80e7a64",
+              "item_id": "87d3c4e8e2b7",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T19:36:18+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:9da21e958d67",
+              "item_id": "26c21d5787f2",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T19:14:34+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:265cebb3dd11",
+              "item_id": "6813d2aafd46",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T18:40:30+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:e4eed652968d",
+              "item_id": "d696fc9bd2a4",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T18:09:13+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:c9e10a4a5f4d",
+              "item_id": "54911f6fef6c",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T17:53:01+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:ef6fae7b458b",
+              "item_id": "f13e13f99001",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T13:22:08+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:78778cacadf2",
+              "item_id": "1a60e303ee71",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T12:57:38+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:c34df578347f",
+              "item_id": "e3ef7b8f2791",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T12:43:00+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:559f2cd9dfc8",
+              "item_id": "17edf59511f9",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T12:33:44+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:f697ed89d309",
+              "item_id": "65517a55a011",
+              "kind": "owner_request",
+              "status": "open",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "approval_scope": "owner"
+            },
+            {
+              "trace_id": "telegram:0b2b79442258",
+              "item_id": "141c0f0a0097",
+              "kind": "owner_request",
+              "status": "done",
+              "updated_at_utc": "2026-03-19T01:16:30+00:00",
+              "approval_scope": "owner"
+            }
+          ]
+        },
+        "operator_profile": {
+          "ok": true,
+          "collected_at": "2026-03-19T20:40:31+00:00",
+          "operator_id": "pablito",
+          "operator_name": "pablito",
+          "account_id": "149902cc257e",
+          "account_mode": "split_runtime_per_account",
+          "home_dir": "/Users/pablito",
+          "project_root": "/Users/pablito/Antigravity_AGENTS/Краб",
+          "project_exists": true,
+          "project_writable": true,
+          "python_executable": "/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python",
+          "openclaw_home": "/Users/pablito/.openclaw",
+          "openclaw_home_exists": true,
+          "openclaw_config_path": "/Users/pablito/.openclaw/openclaw.json",
+          "openclaw_models_path": "/Users/pablito/.openclaw/agents/main/agent/models.json",
+          "openclaw_auth_profiles_path": "/Users/pablito/.openclaw/agents/main/agent/auth-profiles.json",
+          "workspace_main_dir": "/Users/pablito/.openclaw/workspace-main-messaging",
+          "userbot_acl_file": "/Users/pablito/.openclaw/krab_userbot_acl.json",
+          "browser_state_root": "/Users/pablito/Library/Application Support/Google/Chrome",
+          "browser_state_root_exists": true,
+          "owner_chrome_helper_path": "/Users/pablito/Antigravity_AGENTS/Краб/new Enable Chrome Remote Debugging.command",
+          "web_public_base_url": "http://127.0.0.1:8080",
+          "notes": [
+            "Канонический режим для нескольких macOS-учёток: shared repo/docs/artifacts, но split runtime/auth/secrets/browser state.",
+            "Если запускаешь проект из соседней учётки, truth нужно проверять по этой карточке, а не по старому handoff на другой HOME.",
+            "Параллельные диалоги допустимы, но один mutating implementation dialog на активный runtime-контур остаётся safer default."
+          ]
+        },
+        "capability_registry_summary": {
+          "total_contours": 6,
+          "ready_contours": 3,
+          "degraded_contours": 3,
+          "primary_transport": "telegram_userbot",
+          "reserve_transport": "telegram_reserve_bot",
+          "translator_backend": "krab_voice_gateway"
+        },
+        "policy_matrix_summary": {
+          "owner_subjects": 0,
+          "full_subjects": 1,
+          "partial_subjects": 0,
+          "guest_policy": "implicit_default",
+          "owner_only_command_count": 5
+        },
+        "channel_capabilities_summary": {
+          "primary_transport": "telegram_userbot",
+          "reserve_transport": "telegram_reserve_bot",
+          "reserve_safe": false,
+          "shared_workspace_attached": true,
+          "shared_memory_ready": true,
+          "shared_workspace_dir": "/Users/pablito/.openclaw/workspace-main-messaging",
+          "shared_memory_recent_entries": 3,
+          "configured_runtime_channels": 6,
+          "total_channels": 8,
+          "ready_channels": 7
+        },
+        "translator_readiness": {
+          "ok": true,
+          "collected_at": "2026-03-19T20:40:31+00:00",
+          "readiness": "degraded",
+          "foundation_ready": false,
+          "live_voice_ready": false,
+          "v1_target": "iphone_companion",
+          "canonical_backend": "krab_voice_gateway",
+          "foundation_checks": {
+            "perceptor": {
+              "ready": false,
+              "status": "missing",
+              "label": "Perceptor / STT",
+              "detail": {
+                "whisper_model": "",
+                "isolated_worker": false
+              }
+            },
+            "voice_gateway": {
+              "ready": true,
+              "status": "ok",
+              "label": "Krab Voice Gateway",
+              "detail": {
+                "source": "http://127.0.0.1:8090/health",
+                "latency_ms": 4,
+                "contract_version": null,
+                "service": null
+              }
+            },
+            "krab_ear": {
+              "ready": false,
+              "status": "ipc_error:[Errno 61] Connection refused",
+              "label": "Krab Ear",
+              "detail": {
+                "source": "ipc:/Users/pablito/Library/Application Support/KrabEar/krabear.sock",
+                "latency_ms": 0,
+                "transport": null
+              }
+            },
+            "voice_replies": {
+              "ready": false,
+              "status": "disabled",
+              "label": "Voice replies",
+              "detail": {
+                "delivery": "text+voice",
+                "speed": 1.5,
+                "voice": "ru-RU-DmitryNeural"
+              }
+            },
+            "voice_ingress": {
+              "ready": false,
+              "status": "missing",
+              "label": "Voice ingress",
+              "detail": {
+                "input_transcription_ready": false,
+                "output_tts_ready": true
+              }
+            }
+          },
+          "ordinary_calls": {
+            "path": "iphone_companion",
+            "status": "in_progress"
+          },
+          "internet_calls": {
+            "path": "voice_gateway_session_adapters",
+            "status": "planned"
+          },
+          "languages": [
+            "es-ru",
+            "es-en",
+            "en-ru",
+            "auto-detect"
+          ],
+          "delivery_paths": {
+            "debug_install": "xcode_free_signing",
+            "daily_use": "altstore_or_sidestore",
+            "paid_apple_developer_required": false
+          },
+          "account_runtime": {
+            "status": "ready",
+            "operator_id": "pablito",
+            "account_id": "149902cc257e",
+            "account_mode": "split_runtime_per_account",
+            "userbot_authorized": true,
+            "userbot_authorized_user": "yung_nagato",
+            "shared_workspace_attached": true,
+            "shared_memory_ready": true,
+            "scheduler_enabled": true,
+            "voice_gateway_configured": true,
+            "openclaw_auth_state": "configured",
+            "current_route_model": "codex-cli/gpt-5.4",
+            "current_route_channel": "error"
+          },
+          "active_session": {
+            "status": "gateway_unavailable",
+            "session_id": "",
+            "label": "",
+            "timeline_status": "not_reported",
+            "diagnostics_status": "not_reported",
+            "device_binding_status": "not_reported"
+          },
+          "product_surface": {
+            "owner_panel_endpoint": "/api/translator/readiness",
+            "control_plane_endpoint": "/api/translator/control-plane",
+            "delivery_matrix_endpoint": "/api/translator/delivery-matrix",
+            "live_trial_preflight_endpoint": "/api/translator/live-trial-preflight",
+            "runtime_snapshot_endpoint": "/api/ops/runtime_snapshot",
+            "capability_registry_endpoint": "/api/capabilities/registry",
+            "policy_matrix_endpoint": "/api/policy/matrix",
+            "translator_audit_doc": "/Users/pablito/Antigravity_AGENTS/Краб/docs/CALL_TRANSLATOR_AUDIT_RU.md"
+          },
+          "services": {
+            "krab": {
+              "ok": true,
+              "status": "ok",
+              "source": "web_app",
+              "detail": {
+                "mode": "orchestration_policy_ui",
+                "assistant_capabilities_endpoint": "/api/assistant/capabilities",
+                "ecosystem_capabilities_endpoint": "/api/ecosystem/capabilities"
+              }
+            },
+            "voice_gateway": {
+              "ok": true,
+              "status": "ok",
+              "latency_ms": 4,
+              "source": "http://127.0.0.1:8090/health",
+              "detail": {
+                "ok": true,
+                "service": "krab-voice-gateway",
+                "version": "0.1.0"
+              }
+            },
+            "voice_gateway_capabilities": {
+              "ok": false,
+              "status": "not_configured",
+              "source": "voice_gateway",
+              "detail": {}
+            },
+            "krab_ear": {
+              "ok": false,
+              "status": "ipc_error:[Errno 61] Connection refused",
+              "latency_ms": 0,
+              "source": "ipc:/Users/pablito/Library/Application Support/KrabEar/krabear.sock",
+              "detail": {
+                "mode": "ipc",
+                "socket_path": "/Users/pablito/Library/Application Support/KrabEar/krabear.sock"
+              }
+            },
+            "krab_ear_capabilities": {
+              "ok": false,
+              "status": "not_configured",
+              "source": "krab_ear",
+              "detail": {}
+            }
+          },
+          "runtime": {
+            "voice_profile": {
+              "enabled": false,
+              "delivery": "text+voice",
+              "speed": 1.5,
+              "voice": "ru-RU-DmitryNeural",
+              "input_transcription_ready": false,
+              "output_tts_ready": true,
+              "live_voice_foundation": false
+            },
+            "telegram_userbot_state": {
+              "startup_state": "running",
+              "startup_error_code": "",
+              "startup_error": "",
+              "client_connected": true,
+              "authorized_user": "yung_nagato",
+              "authorized_user_id": 6435872621,
+              "voice_profile": {
+                "enabled": false,
+                "delivery": "text+voice",
+                "speed": 1.5,
+                "voice": "ru-RU-DmitryNeural",
+                "input_transcription_ready": false,
+                "output_tts_ready": true,
+                "live_voice_foundation": false
+              },
+              "translator_profile": {
+                "language_pair": "es-ru",
+                "translation_mode": "bilingual",
+                "voice_strategy": "voice-first",
+                "target_device": "iphone_companion",
+                "ordinary_calls_enabled": true,
+                "internet_calls_enabled": true,
+                "subtitles_enabled": true,
+                "timeline_enabled": true,
+                "summary_enabled": true,
+                "diagnostics_enabled": false,
+                "quick_phrases": [],
+                "quick_phrase_count": 0,
+                "voice_foundation_ready": false,
+                "voice_runtime_enabled": false
+              },
+              "translator_session": {
+                "session_status": "idle",
+                "session_id": "",
+                "active_session_label": "",
+                "translation_muted": false,
+                "last_language_pair": "",
+                "last_translated_original": "",
+                "last_translated_translation": "",
+                "last_event": "session_idle",
+                "updated_at": "",
+                "timeline_summary": {
+                  "total": 0,
+                  "line_events": 0,
+                  "control_events": 0
+                },
+                "timeline_preview": [],
+                "timeline_event_count": 0,
+                "language_pair": "es-ru",
+                "target_device": "iphone_companion"
+              }
+            },
+            "runtime_lite_route": {
+              "timestamp": 1773952566,
+              "channel": "error",
+              "provider": "codex-cli",
+              "model": "codex-cli/gpt-5.4",
+              "active_tier": "free",
+              "force_cloud": true,
+              "status": "error",
+              "error_code": "first_chunk_timeout",
+              "route_reason": "userbot_buffered_wait_timeout",
+              "route_detail": "Userbot дождался buffered OpenClaw дольше допустимого окна"
+            }
+          },
+          "notes": [
+            "Переводчик звонков интегрируется в экосистему Краба, но не merge-ится внутрь OpenClaw как монолит.",
+            "Старые RealTimeVoiceTranslator-проекты рассматриваются только как доноры UX и companion flow.",
+            "Для ordinary calls v1 целевой delivery path — iPhone companion; internet-call adapters идут следующим слоем."
+          ],
+          "recommendations": [
+            "Локальный STT/perceptor ещё не подтверждён для translator foundation.",
+            "Krab Ear должен быть доступен как low-latency local perception/STT контур.",
+            "Voice replies сейчас выключены; voice-first контур translator v1 останется неполным."
+          ]
+        },
+        "services": {
+          "openclaw": {
+            "ok": true,
+            "status": "ok",
+            "source": "openclaw",
+            "detail": {}
+          },
+          "voice_gateway": {
+            "ok": true,
+            "status": "ok",
+            "latency_ms": 4,
+            "source": "http://127.0.0.1:8090/health",
+            "detail": {
+              "ok": true,
+              "service": "krab-voice-gateway",
+              "version": "0.1.0"
+            }
+          },
+          "krab_ear": {
+            "ok": false,
+            "status": "ipc_error:[Errno 61] Connection refused",
+            "latency_ms": 0,
+            "source": "ipc:/Users/pablito/Library/Application Support/KrabEar/krabear.sock",
+            "detail": {
+              "mode": "ipc",
+              "socket_path": "/Users/pablito/Library/Application Support/KrabEar/krabear.sock"
+            }
+          }
+        },
+        "cloud_runtime": {
+          "available": true,
+          "report": {
+            "ok": true,
+            "active_tier": "free",
+            "provider": "google",
+            "free": {
+              "provider_status": "ok",
+              "key_source": "env:GEMINI_API_KEY_FREE",
+              "key_tier": "free",
+              "semantic_error_code": "ok",
+              "recovery_action": "none",
+              "http_status": 200,
+              "detail": ""
+            },
+            "paid": {
+              "provider_status": "ok",
+              "key_source": "env:GEMINI_API_KEY_PAID",
+              "key_tier": "paid",
+              "semantic_error_code": "ok",
+              "recovery_action": "none",
+              "http_status": 200,
+              "detail": ""
+            },
+            "current_google_key_masked": "GEMI..._KEY",
+            "tier_state": {
+              "active_tier": "free",
+              "switches": 0,
+              "last_switch_at": null,
+              "last_error_code": null,
+              "last_error_message": "",
+              "last_provider_status": "ok",
+              "last_recovery_action": "none",
+              "last_probe_at": 1773952833,
+              "tiers_configured": {
+                "free": true,
+                "paid": true
+              }
+            }
+          }
+        },
+        "masked_secrets": {
+          "openclaw_token": "526...805",
+          "web_api_key": "",
+          "gemini_free": "AIz...UKY",
+          "gemini_paid": "AIz...y3A",
+          "openai_api_key": "sk-...V4A"
+        },
+        "artifacts": {
+          "latest_handoff_bundle_dir": "/Users/pablito/Antigravity_AGENTS/Краб/artifacts/handoff_20260314_183113",
+          "latest_context_checkpoint": null,
+          "latest_transition_pack_dir": null,
+          "latest_transfer_prompt": null,
+          "master_plan_doc": "/Users/pablito/Antigravity_AGENTS/Краб/docs/MASTER_PLAN_VNEXT_RU.md",
+          "translator_audit_doc": "/Users/pablito/Antigravity_AGENTS/Краб/docs/CALL_TRANSLATOR_AUDIT_RU.md",
+          "multi_account_doc": "/Users/pablito/Antigravity_AGENTS/Краб/docs/MULTI_ACCOUNT_SWITCHOVER_RU.md",
+          "parallel_dialog_doc": "/Users/pablito/Antigravity_AGENTS/Краб/docs/PARALLEL_DIALOG_PROTOCOL_RU.md"
+        }
       }
     },
     "channels_status": {
@@ -37,7 +2328,7 @@
       "error": null,
       "payload": {
         "ok": true,
-        "raw": "[plugins] krab-output-sanitizer: loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records (/Users/pablito/.openclaw/extensions/krab-output-sanitizer/index.mjs)\nChecking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:allowlist, allow:*\n- Discord default: enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, configured, running, connected, url:http://127.0.0.1:12345, works\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).\n",
+        "raw": "Checking channel status (probe)…\nGateway reachable.\n- Telegram default: enabled, configured, running, mode:polling, bot:@mytest_feb2026_bot, token:config, works\n- WhatsApp default: enabled, configured, linked, running, connected, dm:open, allow:*\n- Discord default: enabled, configured, running, connected, bot:@OpenClaw, token:config, intents:content=limited, works\n- Slack default: enabled, configured, running, bot:config, app:config, works\n- Signal default: enabled, configured, running, url:http://127.0.0.1:18080, works\n- iMessage default: enabled, configured, running, works\n- BlueBubbles default: enabled, configured, running, connected, url:http://127.0.0.1:12345, works\n\nTip: https://docs.openclaw.ai/cli#status adds gateway health probes to status output (requires a reachable gateway).\n",
         "warnings": [],
         "exit_code": 0,
         "channels": [
@@ -49,7 +2340,7 @@
           {
             "name": "WhatsApp default",
             "status": "OK",
-            "meta": "enabled, configured, linked, running, connected, dm:allowlist, allow:*"
+            "meta": "enabled, configured, linked, running, connected, dm:open, allow:*"
           },
           {
             "name": "Discord default",
@@ -99,10 +2390,10 @@
             "relay_reachable": true,
             "tab_attached": false,
             "local_target": "ws://127.0.0.1:18789",
-            "detail": "gateway=Connect: ok (15ms) · RPC: ok; browser relay authorized (200)"
+            "detail": "gateway=Connect: ok (14ms) · RPC: limited - missing scope: operator.read; browser relay authorized (200)"
           },
           "raw": {
-            "gateway_probe": "Gateway Status\nReachable: yes\nProbe budget: 3000ms\n\nDiscovery (this machine)\nFound 1 gateway(s) via Bonjour (local.)\n\nTargets\nLocal loopback ws://127.0.0.1:18789\n  Connect: ok (15ms) · RPC: ok\n  Gateway: MacBook-Pro-Pablito.local (192.168.0.171) · macos 26.4 · app 2026.3.8\n  Wide-area discovery: unknown\n\n",
+            "gateway_probe": "Gateway Status\nReachable: yes\nProbe budget: 3000ms\n\nWarning:\n- Probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but status details may be incomplete. Hint: pair device identity or use credentials with operator.read.\n\nDiscovery (this machine)\nFound 1 gateway(s) via Bonjour (local.)\n\nTargets\nLocal loopback ws://127.0.0.1:18789\n  Connect: ok (14ms) · RPC: limited - missing scope: operator.read\n\n",
             "gateway_probe_error": "",
             "browser_http_status": 200,
             "browser_http_error": ""
@@ -111,292 +2402,10 @@
       }
     },
     "browser_mcp_readiness": {
-      "ok": true,
-      "status_code": 200,
-      "error": null,
-      "payload": {
-        "available": true,
-        "overall": {
-          "readiness": "ready",
-          "detail": "Browser relay и managed MCP готовы."
-        },
-        "browser": {
-          "state": "attached",
-          "readiness": "ready",
-          "stage_label": "Вкладка подключена",
-          "summary": "Browser relay готов к owner automation.",
-          "next_step": "Контур готов: можно выполнять browser/MCP сценарии.",
-          "warnings": [],
-          "blockers": [],
-          "runtime": {
-            "running": true,
-            "cdp_ready": true,
-            "profile": "openclaw",
-            "cdp_url": "http://127.0.0.1:18800",
-            "cdp_port": 18800,
-            "tabs_count": 1,
-            "detected_browser": "chrome"
-          },
-          "smoke": {
-            "relay_reachable": true,
-            "gateway_reachable": true,
-            "tab_attached": false,
-            "auth_required": false,
-            "browser_http_state": "authorized",
-            "local_target": "ws://127.0.0.1:18789",
-            "detail": "gateway=Connect: ok (15ms) · RPC: ok; browser relay authorized (200)"
-          }
-        },
-        "mcp": {
-          "readiness": "ready",
-          "detail": "Managed MCP registry синхронизирован и готов.",
-          "warnings": [
-            "chrome-profile: В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging."
-          ],
-          "sync": {
-            "status": "synced",
-            "path": "/Users/pablito/.lmstudio/mcp.json",
-            "included": [
-              "brave-search",
-              "chrome-profile",
-              "context7",
-              "filesystem",
-              "firecrawl",
-              "github",
-              "lmstudio",
-              "memory",
-              "openai-chat",
-              "openclaw-browser"
-            ],
-            "skipped_missing": [],
-            "skipped_risk": [
-              "filesystem-home",
-              "shell"
-            ],
-            "preserved_existing": [
-              "neovim",
-              "xcodebuild"
-            ],
-            "detail": "LM Studio mcp.json синхронизирован с managed registry."
-          },
-          "summary": {
-            "total": 12,
-            "ready": 11,
-            "attention": 1,
-            "blocked": 0,
-            "required_total": 3,
-            "required_ready": 3,
-            "required_attention": 0,
-            "required_blocked": 0
-          },
-          "servers": [
-            {
-              "name": "brave-search",
-              "category": "integrations",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "Быстрый web search через Brave Search MCP.",
-              "risk": "low",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "chrome-profile",
-              "category": "integrations",
-              "required_for_owner_browser": false,
-              "readiness": "attention",
-              "state": "manual_setup_required",
-              "description": "Chrome DevTools MCP для обычного Chrome-профиля пользователя.",
-              "risk": "medium",
-              "missing_env": [],
-              "manual_setup": [
-                "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging.",
-                "После этого перезапустить LM Studio/Codex, чтобы MCP перечитал конфиг."
-              ],
-              "detail": "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging."
-            },
-            {
-              "name": "context7",
-              "category": "integrations",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "Актуальная документация библиотек и фреймворков.",
-              "risk": "low",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "filesystem",
-              "category": "core",
-              "required_for_owner_browser": true,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "Доступ к файлам проекта Krab/OpenClaw.",
-              "risk": "medium",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "filesystem-home",
-              "category": "core",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "Широкий доступ к домашней директории пользователя.",
-              "risk": "high",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "firecrawl",
-              "category": "integrations",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "Глубокий web crawl/search/extract сервер.",
-              "risk": "medium",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "github",
-              "category": "integrations",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "GitHub MCP для issue/PR/repo automation.",
-              "risk": "medium",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "lmstudio",
-              "category": "llm",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "OpenAI-compatible bridge к локальному LM Studio API.",
-              "risk": "low",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "memory",
-              "category": "core",
-              "required_for_owner_browser": true,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "Лёгкая MCP-память для заметок и промежуточных фактов.",
-              "risk": "low",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "openai-chat",
-              "category": "llm",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "OpenAI MCP bridge для внешних моделей/API.",
-              "risk": "medium",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            },
-            {
-              "name": "openclaw-browser",
-              "category": "browser",
-              "required_for_owner_browser": true,
-              "readiness": "ready",
-              "state": "attached",
-              "description": "Chrome DevTools MCP поверх OpenClaw browser relay.",
-              "risk": "medium",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Browser relay готов к owner automation."
-            },
-            {
-              "name": "shell",
-              "category": "core",
-              "required_for_owner_browser": false,
-              "readiness": "ready",
-              "state": "ready_to_launch",
-              "description": "Полноценный shell MCP. Сильный, но рискованный инструмент.",
-              "risk": "high",
-              "missing_env": [],
-              "manual_setup": [],
-              "detail": "Конфигурация готова к запуску."
-            }
-          ]
-        },
-        "raw": {
-          "browser_status": {
-            "enabled": true,
-            "profile": "openclaw",
-            "running": true,
-            "cdpReady": true,
-            "cdpHttp": true,
-            "pid": 52613,
-            "cdpPort": 18800,
-            "cdpUrl": "http://127.0.0.1:18800",
-            "chosenBrowser": "chrome",
-            "detectedBrowser": "chrome",
-            "detectedExecutablePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "detectError": null,
-            "userDataDir": "/Users/pablito/.openclaw/browser/openclaw/user-data",
-            "color": "#FF4500",
-            "headless": false,
-            "noSandbox": false,
-            "executablePath": null,
-            "attachOnly": false
-          },
-          "browser_status_error": "",
-          "tabs": {
-            "tabs": [
-              {
-                "targetId": "231EB674B4B7572E6DE0F6877C3F831C",
-                "title": "Example Domain",
-                "url": "https://example.com/",
-                "wsUrl": "ws://127.0.0.1:18800/devtools/page/231EB674B4B7572E6DE0F6877C3F831C",
-                "type": "page"
-              }
-            ]
-          },
-          "tabs_error": "",
-          "browser_smoke": {
-            "browser_smoke": {
-              "ok": true,
-              "channel": "endpoint",
-              "tool": "gateway_probe+http_probe",
-              "path": "https://example.com",
-              "gateway_reachable": true,
-              "browser_http_reachable": true,
-              "browser_http_state": "authorized",
-              "browser_auth_required": false,
-              "relay_reachable": true,
-              "tab_attached": false,
-              "local_target": "ws://127.0.0.1:18789",
-              "detail": "gateway=Connect: ok (15ms) · RPC: ok; browser relay authorized (200)"
-            },
-            "raw": {
-              "gateway_probe": "Gateway Status\nReachable: yes\nProbe budget: 3000ms\n\nDiscovery (this machine)\nFound 1 gateway(s) via Bonjour (local.)\n\nTargets\nLocal loopback ws://127.0.0.1:18789\n  Connect: ok (15ms) · RPC: ok\n  Gateway: MacBook-Pro-Pablito.local (192.168.0.171) · macos 26.4 · app 2026.3.8\n  Wide-area discovery: unknown\n\n",
-              "gateway_probe_error": "",
-              "browser_http_status": 200,
-              "browser_http_error": ""
-            }
-          }
-        }
-      }
+      "ok": false,
+      "status_code": null,
+      "error": "timed out",
+      "payload": {}
     },
     "photo_smoke": {
       "ok": true,
@@ -410,10 +2419,10 @@
             "local_available": false,
             "models_count": 92,
             "local_vision_count": 27,
-            "selected_model": "openai-codex/gpt-5.4",
-            "selected_provider": "openai-codex",
+            "selected_model": "codex-cli/gpt-5.4",
+            "selected_provider": "codex-cli",
             "selected_local": false,
-            "detail": "selected=openai-codex/gpt-5.4; route=cloud_vision_fallback"
+            "detail": "selected=codex-cli/gpt-5.4; route=cloud_vision_fallback"
           }
         }
       }
@@ -439,7 +2448,7 @@
       "payload": {
         "ok": true,
         "report": {
-          "generated_at": "2026-03-11T05:10:00+00:00",
+          "generated_at": "2026-03-19T20:40:57+00:00",
           "status": "degraded",
           "risk_level": "medium",
           "degradation": "normal",
@@ -447,7 +2456,7 @@
             "openclaw": {
               "ok": true,
               "status": "ok",
-              "latency_ms": 21,
+              "latency_ms": 11,
               "source": "openclaw",
               "degraded": false,
               "token_status": {
@@ -464,28 +2473,28 @@
                     "is_aistudio_key": true
                   }
                 },
-                "current_google_key_masked": "AIza...PUKY",
+                "current_google_key_masked": "GEMI..._KEY",
                 "last_error_code": null
               }
             },
             "local_lm": {
               "ok": true,
               "status": "ok",
-              "latency_ms": 24,
+              "latency_ms": 14,
               "source": "model_manager.health_check",
               "degraded": false
             },
             "voice_gateway": {
-              "ok": false,
-              "status": "unavailable",
-              "latency_ms": 12,
+              "ok": true,
+              "status": "ok",
+              "latency_ms": 7,
               "source": "voice_gateway",
               "degraded": false
             },
             "krab_ear": {
-              "ok": true,
-              "status": "ok",
-              "latency_ms": 1,
+              "ok": false,
+              "status": "unavailable",
+              "latency_ms": 0,
               "source": "krab_ear_client",
               "degraded": false
             }
@@ -496,30 +2505,30 @@
             "voice_assist_ready": false
           },
           "resources": {
-            "cpu_percent": 33.4,
-            "ram_percent": 77.6,
-            "ram_available_gb": 8.1,
+            "cpu_percent": 26.2,
+            "ram_percent": 72.6,
+            "ram_available_gb": 9.9,
             "load_avg": [
-              6.1328125,
-              6.48583984375,
-              7.6142578125
+              4.82568359375,
+              4.927734375,
+              5.6435546875
             ]
           },
           "queue": {},
           "budget": {},
           "recommendations": [
-            "Voice Gateway недоступен: команды `!call*` будут ограничены."
+            "Krab Ear backend недоступен: desktop call-assist поток неактивен."
           ],
           "_diagnostics": {
             "latency_summary": {
-              "openclaw": 21,
-              "local_lm": 24,
-              "voice_gateway": 12,
-              "krab_ear": 1
+              "openclaw": 11,
+              "local_lm": 14,
+              "voice_gateway": 7,
+              "krab_ear": 0
             },
             "slowest_source": "local_lm",
-            "slowest_latency_ms": 24,
-            "total_collect_ms": 24,
+            "slowest_latency_ms": 14,
+            "total_collect_ms": 14,
             "timeout_budget_sec": 2.5
           }
         }

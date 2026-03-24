@@ -641,6 +641,8 @@ class _FakeUserbot:
         client_connected: bool = True,
         startup_error_code: str = "",
     ) -> None:
+        self.start_calls = 0
+        self.stop_calls = 0
         self._payload = {
             "startup_state": startup_state,
             "startup_error_code": startup_error_code,
@@ -676,6 +678,19 @@ class _FakeUserbot:
             profile["voice"] = str(kwargs["voice"])
         self._payload["voice_profile"] = profile
         return dict(profile)
+
+    async def start(self) -> None:
+        """Имитирует безопасный старт userbot после restart endpoint."""
+        self.start_calls += 1
+        self._payload["startup_state"] = "running"
+        self._payload["client_connected"] = True
+        self._payload["startup_error_code"] = ""
+
+    async def stop(self) -> None:
+        """Имитирует безопасную остановку userbot перед restart endpoint."""
+        self.stop_calls += 1
+        self._payload["startup_state"] = "stopped"
+        self._payload["client_connected"] = False
 
 
 def _make_client(*, openclaw_client=None) -> TestClient:
@@ -764,6 +779,54 @@ def test_health_lite_contains_runtime_fields(monkeypatch):
     assert "voice_gateway_configured" in data
 
 
+def test_health_lite_overlays_paid_tier_on_google_cloud_route(monkeypatch):
+    """Lightweight runtime snapshot не должен оставлять stale free для truthful paid cloud-route."""
+
+    class _PaidTierOpenClaw(_FakeOpenClaw):
+        def get_last_runtime_route(self):
+            return {
+                "channel": "openclaw_cloud",
+                "provider": "google-gemini-cli",
+                "model": "google-gemini-cli/gemini-3.1-pro-preview",
+                "active_tier": "free",
+                "status": "ok",
+                "error_code": None,
+            }
+
+        def get_tier_state_export(self):
+            return {
+                "active_tier": "paid",
+                "last_error_code": None,
+                "last_provider_status": "ok",
+                "last_recovery_action": "none",
+            }
+
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("OPENCLAW_TOKEN", "test-token")
+    app = _make_app(openclaw_client=_PaidTierOpenClaw())
+
+    snapshot = asyncio.run(app._build_runtime_lite_snapshot_uncached())
+
+    assert snapshot["last_runtime_route"]["provider"] == "google-gemini-cli"
+    assert snapshot["last_runtime_route"]["active_tier"] == "paid"
+    assert snapshot["openclaw_tier_state"]["active_tier"] == "paid"
+
+
+def test_cloud_runtime_check_invalidates_runtime_lite_cache(monkeypatch):
+    """Truthful cloud runtime-check должен сбрасывать lightweight cache, чтобы UI не жил stale snapshot."""
+    monkeypatch.setenv("LM_STUDIO_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("OPENCLAW_TOKEN", "test-token")
+    app = _make_app()
+    app._runtime_lite_cache = (time.time(), {"last_runtime_route": {"active_tier": "free"}})
+    client = TestClient(app.app)
+
+    resp = client.get("/api/openclaw/cloud/runtime-check")
+
+    assert resp.status_code == 200
+    assert resp.json()["available"] is True
+    assert app._runtime_lite_cache is None
+
+
 def test_provider_ui_metadata_allows_openai_api_key_fallback() -> None:
     """UI не должен помечать OpenAI API key как strictly manual-only."""
     metadata = WebApp._provider_ui_metadata("openai")
@@ -778,7 +841,125 @@ def test_provider_ui_metadata_exposes_codex_cli_helper() -> None:
 
     assert metadata["manual_only"] is False
     assert metadata["repair_action"] == "repair_oauth"
-    assert "Codex CLI" in metadata["repair_label"]
+    assert metadata["repair_label"] == "Перелогинить Codex CLI"
+
+
+def test_provider_label_and_sort_rank_include_codex_cli() -> None:
+    """Codex CLI должен иметь понятный label и предсказуемый сортировочный приоритет."""
+    assert WebApp._provider_label("codex-cli") == "Codex CLI"
+    assert WebApp._provider_sort_rank("codex-cli") < WebApp._provider_sort_rank("openai-codex")
+
+
+def test_runtime_cloud_presets_build_codex_cli_synthetic_catalog(monkeypatch) -> None:
+    """Если OpenClaw не публикует catalog codex-cli, панель должна синтезировать его из OpenAI-каталога."""
+
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_models",
+        classmethod(
+            lambda cls: {
+                "providers": {
+                    "codex-cli": {
+                        "auth": "cli",
+                        "models": [
+                            {
+                                "id": "gpt-5.4",
+                                "name": "GPT-5.4",
+                                "reasoning": True,
+                                "maxTokens": 32768,
+                                "contextWindow": 128000,
+                                "input": ["text"],
+                            }
+                        ],
+                    }
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_runtime_config",
+        classmethod(
+            lambda cls: {
+                "agents": {
+                    "defaults": {
+                        "model": {
+                            "primary": "codex-cli/gpt-5.4",
+                            "fallbacks": [],
+                        }
+                    }
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: {}))
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_status_snapshot",
+        classmethod(lambda cls: {"raw": {}, "providers": {}}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_runtime_signal_failed_providers",
+        classmethod(lambda cls: {}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_full_catalog",
+        classmethod(
+            lambda cls: {
+                "count": 3,
+                "providers": {
+                    "openai-codex": [
+                        {
+                            "key": "openai-codex/gpt-5.4",
+                            "name": "GPT-5.4",
+                            "reasoning": True,
+                            "maxTokens": 32768,
+                            "contextWindow": 128000,
+                            "input": ["text"],
+                            "tags": ["configured", "default"],
+                            "available": True,
+                        }
+                    ],
+                    "openai": [
+                        {
+                            "key": "openai/gpt-5",
+                            "name": "GPT-5",
+                            "reasoning": True,
+                            "maxTokens": 32768,
+                            "contextWindow": 128000,
+                            "input": ["text"],
+                            "tags": ["default"],
+                            "available": True,
+                        },
+                        {
+                            "key": "openai/o3",
+                            "name": "o3",
+                            "reasoning": True,
+                            "maxTokens": 16384,
+                            "contextWindow": 200000,
+                            "input": ["text"],
+                            "tags": [],
+                            "available": True,
+                        },
+                    ],
+                },
+            }
+        ),
+    )
+
+    presets = WebApp._build_runtime_cloud_presets({"chat": "codex-cli/gpt-5.4"})
+    preset_ids = [str(item.get("id") or "") for item in presets if str(item.get("provider") or "") == "codex-cli"]
+
+    assert "codex-cli/gpt-5.4" in preset_ids
+    assert "codex-cli/gpt-5" in preset_ids
+    assert "codex-cli/o3" in preset_ids
+    synthetic_o3 = next(item for item in presets if item["id"] == "codex-cli/o3")
+    assert synthetic_o3["provider_label"] == "Codex CLI"
+    assert synthetic_o3["source"] == "provider_catalog"
+    assert "synthetic" in synthetic_o3["catalog_tags"]
+    assert synthetic_o3["configured_runtime"] is True
 
 
 def test_transcriber_status_is_degraded_when_local_stt_ready_but_voice_gateway_down() -> None:
@@ -1334,8 +1515,90 @@ def test_runtime_handoff_returns_machine_readable_snapshot(monkeypatch):
     assert data["runtime"]["workspace_state"]["workspace_dir"].endswith("workspace-main-messaging")
     assert "workspace_attached" in data["health_lite"]
     assert data["operator_profile"]["account_mode"] == "split_runtime_per_account"
+    assert "workspace_alignment" in data["operator_profile"]
+    assert data["operator_profile"]["workspace_alignment"]["recommended_project_root"]
+    assert "active_shared_permission_health" in data["operator_profile"]
+    assert "non_writable_count" in data["operator_profile"]["active_shared_permission_health"]
     assert data["translator_readiness"]["canonical_backend"] == "krab_voice_gateway"
     assert data["health_lite"]["last_runtime_route"]["model"] == "nvidia/nemotron-3-nano"
+
+
+def test_runtime_handoff_refreshes_runtime_lite_after_cloud_probe(monkeypatch):
+    """`runtime_handoff` не должен уносить stale free/configured сразу после cloud-probe."""
+
+    state = {
+        "openclaw_auth_state": "configured",
+        "last_runtime_route": {
+            "channel": "openclaw_cloud",
+            "provider": "google-gemini-cli",
+            "model": "google-gemini-cli/gemini-3.1-pro-preview",
+            "active_tier": "free",
+            "status": "ok",
+            "error_code": None,
+        },
+        "openclaw_tier_state": {"active_tier": "free"},
+    }
+
+    class _RefreshingOpenClaw(_FakeOpenClaw):
+        async def get_cloud_runtime_check(self):
+            state["openclaw_auth_state"] = "ok"
+            state["last_runtime_route"] = {
+                "channel": "openclaw_cloud",
+                "provider": "google-gemini-cli",
+                "model": "google-gemini-cli/gemini-3.1-pro-preview",
+                "active_tier": "paid",
+                "status": "ok",
+                "error_code": None,
+            }
+            state["openclaw_tier_state"] = {"active_tier": "paid"}
+            return {"ok": True, "provider": "google-gemini-cli", "active_tier": "paid"}
+
+    async def _fake_build_runtime_lite(self):
+        return {
+            "runtime_mode": "personal-runtime",
+            "telegram_session_state": "ready",
+            "telegram_session": {"state": "ready"},
+            "lmstudio_model_state": "idle",
+            "lmstudio": {"state": "idle", "loaded_models": []},
+            "openclaw_auth_state": state["openclaw_auth_state"],
+            "last_runtime_route": dict(state["last_runtime_route"]),
+            "openclaw_tier_state": dict(state["openclaw_tier_state"]),
+            "telegram_userbot": {"startup_state": "running"},
+            "scheduler_enabled": True,
+            "inbox_summary": {},
+            "workspace_state": {"workspace_dir": "/Users/test/.openclaw/workspace-main-messaging"},
+            "voice_gateway_configured": True,
+        }
+
+    monkeypatch.setattr(WebApp, "_build_runtime_lite_snapshot_uncached", _fake_build_runtime_lite)
+    app = WebApp(
+        {
+            "router": _DummyRouter(),
+            "openclaw_client": _RefreshingOpenClaw(),
+            "black_box": None,
+            "health_service": None,
+            "provisioning_service": None,
+            "ai_runtime": None,
+            "reaction_engine": None,
+            "voice_gateway_client": _FakeHealthClient(ok=True),
+            "krab_ear_client": _FakeHealthClient(ok=True),
+            "perceptor": None,
+            "watchdog": None,
+            "queue": None,
+        },
+        port=18080,
+        host="127.0.0.1",
+    )
+    client = TestClient(app.app)
+
+    resp = client.get("/api/runtime/handoff")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["runtime"]["openclaw_auth_state"] == "ok"
+    assert data["runtime"]["last_runtime_route"]["active_tier"] == "paid"
+    assert data["runtime"]["openclaw_tier_state"]["active_tier"] == "paid"
+    assert data["health_lite"]["openclaw_auth_state"] == "ok"
+    assert data["health_lite"]["last_runtime_route"]["active_tier"] == "paid"
 
 
 def test_runtime_operator_profile_returns_machine_readable_state() -> None:
@@ -1351,7 +1614,61 @@ def test_runtime_operator_profile_returns_machine_readable_state() -> None:
     assert profile["account_mode"] == "split_runtime_per_account"
     assert profile["project_exists"] is True
     assert profile["openclaw_config_path"].endswith("/.openclaw/openclaw.json")
-    assert profile["owner_chrome_helper_path"].endswith("new Enable Chrome Remote Debugging.command")
+    assert profile["owner_chrome_helper_path"].endswith("new Open Owner Chrome Remote Debugging.command")
+    assert profile["debug_chrome_helper_path"].endswith("new Enable Chrome Remote Debugging.command")
+    assert profile["workspace_alignment"]["canonical_shared_root"].endswith("/Users/Shared/Antigravity_AGENTS/Краб")
+    assert profile["workspace_alignment"]["active_shared_root"].endswith("/Users/Shared/Antigravity_AGENTS/Краб-active")
+    assert profile["workspace_alignment"]["recommended_project_root"]
+    assert "active_shared_permission_health" in profile
+    assert "non_writable_count" in profile["active_shared_permission_health"]
+
+
+def test_runtime_repair_active_shared_permissions_requires_web_key_and_returns_health(monkeypatch) -> None:
+    """Repair endpoint должен работать только под web-key и возвращать обновлённый permission health."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    monkeypatch.setattr(
+        "src.modules.web_app.normalize_shared_worktree_permissions",
+        lambda root: {
+            "ok": True,
+            "path": str(root),
+            "exists": True,
+            "dry_run": False,
+            "changed_count": 7,
+            "error_count": 0,
+            "skipped_foreign_owner_count": 0,
+            "changed_paths": [],
+            "errors": [],
+            "skipped_foreign_owner_paths": [],
+        },
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_active_shared_permission_health_snapshot",
+        lambda self: {
+            "active_shared_root": "/Users/Shared/Antigravity_AGENTS/Краб-active",
+            "active_shared_root_exists": True,
+            "non_writable_count": 0,
+            "samples": [],
+            "checked_entries": 128,
+            "status": "ready",
+        },
+    )
+    client = TestClient(_make_app().app)
+
+    forbidden = client.post("/api/runtime/repair-active-shared-permissions", json={})
+    assert forbidden.status_code == 403
+
+    resp = client.post(
+        "/api/runtime/repair-active-shared-permissions",
+        json={},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["repair"]["changed_count"] == 7
+    assert data["active_shared_permission_health"]["status"] == "ready"
 
 
 def test_translator_readiness_aggregates_voice_foundation_truth() -> None:
@@ -1375,12 +1692,46 @@ def test_translator_readiness_aggregates_voice_foundation_truth() -> None:
     assert data["languages"] == ["es-ru", "es-en", "en-ru", "auto-detect"]
     assert data["foundation_checks"]["perceptor"]["status"] == "missing"
     assert data["foundation_checks"]["voice_replies"]["status"] == "disabled"
+    assert data["active_shared_permission_health"]["status"] in {"ready", "attention"}
+    assert "non_writable_count" in data["active_shared_permission_health"]
     assert data["account_runtime"]["operator_id"]
     assert data["account_runtime"]["userbot_authorized"] is True
     assert data["account_runtime"]["voice_gateway_configured"] is True
     assert data["product_surface"]["owner_panel_endpoint"] == "/api/translator/readiness"
     assert data["product_surface"]["control_plane_endpoint"] == "/api/translator/control-plane"
     assert data["active_session"]["status"] == "not_reported"
+
+
+def test_translator_readiness_exposes_active_shared_permission_health(monkeypatch) -> None:
+    """Translator readiness должен прокидывать truth о правах active shared worktree в UI-friendly payload."""
+    monkeypatch.setattr(
+        WebApp,
+        "_active_shared_permission_health_snapshot",
+        lambda self: {
+            "active_shared_root": "/Users/Shared/Antigravity_AGENTS/Краб-active",
+            "active_shared_root_exists": True,
+            "non_writable_count": 2,
+            "samples": ["src/web/index.html", "tests/unit/test_web_app_runtime_endpoints.py"],
+            "checked_entries": 128,
+            "status": "attention",
+        },
+    )
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/readiness")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["active_shared_permission_health"]["status"] == "attention"
+    assert data["active_shared_permission_health"]["non_writable_count"] == 2
+    assert data["active_shared_permission_health"]["samples"] == [
+        "src/web/index.html",
+        "tests/unit/test_web_app_runtime_endpoints.py",
+    ]
 
 
 def test_translator_readiness_reports_active_session_if_gateway_exposes_it() -> None:
@@ -1993,6 +2344,30 @@ def test_runtime_recover_requires_web_api_key(monkeypatch):
     assert resp.status_code == 403
 
 
+def test_restart_userbot_requires_web_key_and_restarts_runtime(monkeypatch):
+    """Legacy watchdog endpoint должен требовать web-key и реально перезапускать userbot."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    fake_userbot = _FakeUserbot(startup_state="running", client_connected=True)
+    client = TestClient(_make_app(kraab_userbot=fake_userbot).app)
+
+    forbidden = client.post("/api/krab/restart_userbot")
+    assert forbidden.status_code == 403
+
+    resp = client.post(
+        "/api/krab/restart_userbot",
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["action"] == "restart_userbot"
+    assert data["before"]["startup_state"] == "running"
+    assert data["after"]["startup_state"] == "running"
+    assert fake_userbot.stop_calls == 1
+    assert fake_userbot.start_calls == 1
+
+
 def test_runtime_recover_minimal_flow(monkeypatch):
     """
     Минимальный recovery flow без запуска скриптов:
@@ -2019,6 +2394,44 @@ def test_runtime_recover_minimal_flow(monkeypatch):
     assert isinstance(data["steps"], list)
     assert data["runtime_after"]["last_runtime_route"]["model"] == "nvidia/nemotron-3-nano"
     assert data["cloud_runtime"]["available"] is True
+
+
+def test_runtime_recover_uses_noninteractive_python_scripts(monkeypatch):
+    """Recovery flow не должен вызывать `.command`-лаунчеры с `read -p`."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    client = _make_client()
+
+    calls: list[str] = []
+
+    def _fake_run(self, script_path, *, timeout_seconds=90, args=None):
+        _ = timeout_seconds, args
+        calls.append(str(script_path))
+        return {"ok": True, "exit_code": 0, "stdout_tail": "ok", "error": ""}
+
+    monkeypatch.setattr(WebApp, "_run_project_python_script", _fake_run)
+
+    resp = client.post(
+        "/api/runtime/recover",
+        json={
+            "run_openclaw_runtime_repair": True,
+            "run_sync_openclaw_models": True,
+            "probe_cloud_runtime": False,
+        },
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    project_root = WebApp._project_root()
+    assert calls == [
+        str(project_root / "scripts" / "openclaw_runtime_repair.py"),
+        str(project_root / "scripts" / "sync_openclaw_models.py"),
+    ]
+    assert [step["step"] for step in data["steps"]] == [
+        "openclaw_runtime_repair",
+        "sync_openclaw_models",
+    ]
 
 
 def test_model_local_status_uses_runtime_truth_when_router_state_stale(monkeypatch):
@@ -2963,6 +3376,155 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
     assert data["result"]["runtime"]["subagent_max_concurrent"] == 1
 
 
+def test_set_runtime_chain_returns_cached_catalog_when_post_apply_refresh_times_out(monkeypatch, tmp_path: Path):
+    """Даже при медленном catalog refresh write-path должен быстро вернуть success и cache-backed catalog."""
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    monkeypatch.setenv("KRAB_WEB_MODEL_APPLY_CATALOG_TIMEOUT_SEC", "0.2")
+
+    openclaw_path = tmp_path / "openclaw.json"
+    agent_path = tmp_path / "agent.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "model": {
+                            "primary": "google/gemini-2.5-flash",
+                            "fallbacks": [],
+                        },
+                        "models": {},
+                        "contextTokens": 128000,
+                        "thinkingDefault": "off",
+                        "maxConcurrent": 4,
+                        "subagents": {"maxConcurrent": 8, "model": "google/gemini-2.5-flash"},
+                    },
+                    "list": [{"id": "main", "model": "google/gemini-2.5-flash"}],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    agent_path.write_text(
+        json.dumps({"id": "main", "model": "google/gemini-2.5-flash"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(WebApp, "_openclaw_config_path", staticmethod(lambda: openclaw_path))
+    monkeypatch.setattr(WebApp, "_openclaw_agent_config_path", classmethod(lambda cls: agent_path))
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_full_catalog",
+        classmethod(lambda cls: {"providers": {}}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_models_status_snapshot",
+        classmethod(lambda cls: {"providers": {}}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_load_openclaw_auth_profiles",
+        classmethod(lambda cls: {"profiles": {}, "usageStats": {}}),
+    )
+    monkeypatch.setattr(
+        WebApp,
+        "_build_runtime_cloud_presets",
+        classmethod(lambda cls, current_slots=None: []),
+    )
+
+    async def _slow_local_truth(self, router_obj, *, force_refresh: bool = False):
+        del router_obj, force_refresh
+        await asyncio.sleep(0.35)
+        return {
+            "engine": "lm_studio",
+            "active_model": "",
+            "runtime_reachable": False,
+            "loaded_models": [],
+        }
+
+    monkeypatch.setattr(WebApp, "_resolve_local_runtime_truth", _slow_local_truth)
+
+    class _Router(_DummyRouter):
+        def __init__(self) -> None:
+            self.models = {"chat": "openai-codex/gpt-5.4"}
+            self.force_mode = "auto"
+            self.local_engine = "lm_studio"
+
+    app = WebApp(
+        {
+            "router": _Router(),
+            "openclaw_client": _FakeOpenClaw(),
+            "black_box": None,
+            "health_service": None,
+            "provisioning_service": None,
+            "ai_runtime": None,
+            "reaction_engine": None,
+            "voice_gateway_client": _FakeHealthClient(ok=True),
+            "krab_ear_client": _FakeHealthClient(ok=True),
+            "perceptor": None,
+            "watchdog": None,
+            "queue": None,
+        },
+        port=18080,
+        host="127.0.0.1",
+    )
+    app._store_model_catalog_cache(
+        {
+            "cloud_inventory": [],
+            "cloud_presets": [],
+            "cloud_provider_groups": [],
+            "runtime_controls": {
+                "primary": "google/gemini-2.5-flash",
+                "fallbacks": [],
+                "context_tokens": 128000,
+                "thinking_default": "off",
+                "main_max_concurrent": 4,
+                "subagent_max_concurrent": 8,
+                "execution_preset": "parallel",
+                "execution_presets": [],
+                "thinking_modes": ["off", "medium", "high"],
+                "chain_items": [],
+                "max_fallback_slots": 8,
+            },
+            "routing_status": {
+                "current_primary": "google/gemini-2.5-flash",
+                "current_fallbacks": [],
+                "warnings": [],
+            },
+        }
+    )
+    client = TestClient(app.app)
+
+    resp = client.post(
+        "/api/model/apply",
+        json={
+            "action": "set_runtime_chain",
+            "primary": "openai-codex/gpt-5.4",
+            "fallbacks": ["google/gemini-2.5-flash"],
+            "context_tokens": 128000,
+            "thinking_default": "medium",
+            "execution_preset": "sequential",
+            "main_max_concurrent": 1,
+            "subagent_max_concurrent": 1,
+            "slot_thinking": {
+                "openai-codex/gpt-5.4": "medium",
+                "google/gemini-2.5-flash": "off",
+            },
+        },
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["catalog_refresh"]["degraded"] is True
+    assert data["catalog_refresh"]["reason"] == "catalog_refresh_timeout"
+    assert data["catalog"]["catalog_refresh_degraded"] is True
+    assert data["catalog"]["runtime_controls"]["primary"] == "openai-codex/gpt-5.4"
+    assert data["catalog"]["runtime_controls"]["fallbacks"] == ["google/gemini-2.5-flash"]
+
+
 
 def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antigravity_fallback(monkeypatch):
     """Routing status должен честно отражать сломанный primary и disabled Antigravity fallback."""
@@ -3010,7 +3572,7 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antig
     monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
     monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
-    monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4")
+    monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4")
 
     client = _make_client_with_router(_DummyRouter())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -3019,13 +3581,56 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antig
     data = resp.json()["routing"]
     assert data["current_primary"] == "openai-codex/gpt-4.5-preview"
     assert data["current_primary_broken"] is True
-    assert data["target_primary_candidate"] == "openai-codex/gpt-5.4"
+    assert data["target_primary_candidate"] == "codex-cli/gpt-5.4"
     assert data["target_primary_in_runtime"] is False
     assert data["temporary_primary_recommendation"] == "google/gemini-2.5-flash"
     assert data["google_antigravity"]["readiness_label"] == "Disabled"
     assert data["google_antigravity_legacy_removed"] is False
     assert any("model_not_found" in item for item in data["warnings"])
     assert any("disabled" in item.lower() for item in data["warnings"])
+
+
+def test_openclaw_model_routing_status_checks_target_provider_runtime_for_codex_cli(monkeypatch):
+    """Target primary для Codex CLI должен проверяться по runtime-моделям самого Codex CLI."""
+
+    runtime_config = {
+        "agents": {
+            "defaults": {
+                "model": {
+                    "primary": "openai-codex/gpt-4.5-preview",
+                    "fallbacks": [
+                        "google/gemini-2.5-flash",
+                    ],
+                },
+                "workspace": "/Users/pablito/.openclaw/workspace-main-messaging",
+            }
+        }
+    }
+    runtime_models = {
+        "providers": {
+            "openai-codex": {
+                "models": [{"id": "gpt-4.5-preview"}]
+            },
+            "codex-cli": {
+                "models": [{"id": "gpt-5.4"}]
+            },
+        }
+    }
+
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
+    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
+    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4")
+
+    client = _make_client_with_router(_DummyRouter())
+    resp = client.get("/api/openclaw/model-routing/status")
+
+    assert resp.status_code == 200
+    data = resp.json()["routing"]
+    assert data["target_primary_candidate"] == "codex-cli/gpt-5.4"
+    assert data["target_primary_in_runtime"] is True
 
 
 def test_openclaw_model_routing_status_prefers_live_antigravity_profile_over_disabled_legacy_profile(monkeypatch):
@@ -4269,7 +4874,25 @@ Local loopback ws://127.0.0.1:18789
             },
         ),
     )
+    async def _fake_owner_probe(self, url: str = "https://example.com"):
+        assert url == "https://example.com"
+        return {
+            "readiness": "attention",
+            "state": "manual_setup_required",
+            "detail": "Обычный Chrome ещё не attach-нут по CDP на порту 9222.",
+            "next_step": "Запусти helper для обычного Chrome, дождись relaunch и затем обнови Browser / MCP Readiness.",
+            "attached": False,
+            "confirmed": False,
+            "tab_count": 0,
+            "action_probe": {
+                "ok": False,
+                "state": "not_attached",
+                "detail": "browser_bridge_not_attached",
+            },
+        }
+
     monkeypatch.setattr("src.modules.web_app.LMSTUDIO_MCP_PATH", lmstudio_path)
+    monkeypatch.setattr(WebApp, "_probe_owner_chrome_devtools", _fake_owner_probe)
     client = _make_client()
 
     resp = client.get("/api/openclaw/browser-mcp-readiness")
@@ -4306,6 +4929,28 @@ def test_browser_mcp_readiness_treats_reachable_auth_relay_as_attention_even_if_
     assert browser["state"] == "auth_required"
     assert browser["readiness"] == "attention"
     assert any("stale status" in item for item in browser["warnings"])
+
+
+def test_browser_mcp_readiness_marks_authorized_scope_limited_relay_as_attention_without_fake_tab_verdict():
+    """Authorized relay с scope-limited probe не должен притворяться обычным `tab_not_connected`."""
+
+    browser = WebApp._classify_browser_stage(
+        {"running": False, "cdpReady": False, "profile": "openclaw", "attachOnly": False},
+        {"tabs": []},
+        {
+            "relay_reachable": True,
+            "browser_http_reachable": True,
+            "browser_auth_required": False,
+            "tab_attached": False,
+            "browser_http_state": "authorized",
+            "detail": "gateway=Connect: ok (42ms) · RPC: limited - missing scope: operator.read; browser relay authorized (200)",
+        },
+    )
+
+    assert browser["state"] == "relay_scope_limited"
+    assert browser["readiness"] == "attention"
+    assert browser["stage_label"] == "Debug browser c ограниченным probe"
+    assert any("operator.read" in item for item in browser["warnings"])
 
 
 def test_browser_mcp_readiness_marks_authorized_running_browser_with_tabs_as_ready():
@@ -4371,7 +5016,7 @@ def test_browser_access_paths_include_relay_and_chrome_devtools():
         "readiness": "attention",
         "state": "tab_not_connected",
         "summary": "Сейчас активен отдельный OpenClaw Debug browser. Это не обычный Chrome владельца и не его профиль/расширения.",
-        "next_step": "Открой вкладку в отдельном debug browser или используй `Открыть Мой Chrome`, если нужен обычный профиль.",
+        "next_step": "Открой вкладку в отдельном debug browser или подними отдельный attach к обычному Chrome владельца, если нужен его профиль.",
         "runtime": {
             "running": True,
             "active_contour": "debug_browser",
@@ -4402,6 +5047,51 @@ def test_browser_access_paths_include_relay_and_chrome_devtools():
     assert devtools_path["active"] is False
     assert devtools_path["state"] == "manual_setup_required"
     assert "Remote Debugging" in devtools_path["next_step"]
+
+
+def test_browser_access_paths_mark_owner_devtools_as_confirmed_when_action_probe_passed():
+    """Chrome DevTools path должен становиться confirmed, если owner action probe уже успешен."""
+
+    browser = {
+        "readiness": "attention",
+        "state": "debug_attached",
+        "summary": "Сейчас активен отдельный OpenClaw Debug browser.",
+        "next_step": "Для ordinary Chrome path используй helper.",
+        "runtime": {
+            "running": True,
+            "active_contour": "debug_browser",
+            "active_contour_label": "Debug browser",
+            "owner_attach_confirmed": False,
+        },
+    }
+    mcp = {
+        "servers": [
+            {
+                "name": "chrome-profile",
+                "readiness": "ready",
+                "state": "action_probe_ok",
+                "detail": "Chrome DevTools action probe выполнен: https://example.com/ (Example Domain)",
+                "manual_setup": ["Обычный Chrome владельца готов для DevTools/MCP сценариев."],
+                "attached": True,
+                "confirmed": True,
+                "action_probe": {
+                    "ok": True,
+                    "state": "ok",
+                    "final_url": "https://example.com/",
+                    "title": "Example Domain",
+                },
+            }
+        ]
+    }
+
+    paths = WebApp._build_browser_access_paths(browser, mcp)
+
+    devtools_path = next(item for item in paths if item["kind"] == "chrome_devtools")
+    assert devtools_path["active"] is True
+    assert devtools_path["confirmed"] is True
+    assert devtools_path["active_label"] == "Обычный Chrome владельца"
+    assert devtools_path["state"] == "action_probe_ok"
+    assert "Example Domain" in devtools_path["detail"]
 
 
 def test_openclaw_runtime_config_exposes_runtime_policy(monkeypatch):
@@ -4436,6 +5126,292 @@ def test_openclaw_runtime_config_exposes_runtime_policy(monkeypatch):
     assert data["runtime_policy"]["output_tokens"]["text"] == 1200
     assert data["runtime_policy"]["history_budget"]["local_max_chars"] == 12000
     assert data["runtime_policy"]["timeouts_sec"]["photo_first_chunk"] == 540.0
+
+
+def test_browser_mcp_readiness_promotes_owner_chrome_to_ready_after_action_probe(monkeypatch, tmp_path: Path):
+    """`chrome-profile` должен переходить в ready, если owner Chrome уже проходит action probe."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str = "", stderr_text: str = "", *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+            self._stderr = stderr_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, self._stderr
+
+        def terminate(self):
+            return None
+
+    class _Resp:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, *, headers=None):
+            assert url == "http://127.0.0.1:18791/"
+            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            return _Resp(200)
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[:3] == ("openclaw", "gateway", "probe"):
+            return _Proc(
+                """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok (15ms) · RPC: ok
+""".strip(),
+                returncode=0,
+            )
+        if cmd[:4] == ("openclaw", "browser", "--json", "status"):
+            return _Proc(
+                json.dumps(
+                    {
+                        "running": True,
+                        "cdpReady": True,
+                        "profile": "openclaw",
+                        "cdpUrl": "http://127.0.0.1:18800",
+                        "cdpPort": 18800,
+                        "detectedBrowser": "chrome",
+                    }
+                ),
+                returncode=0,
+            )
+        if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
+            return _Proc(
+                json.dumps({"tabs": [{"targetId": "abc", "title": "Example Domain", "url": "https://example.com/"}]}),
+                returncode=0,
+            )
+        raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
+
+    async def _fake_owner_probe(self, url: str = "https://example.com"):
+        assert url == "https://example.com"
+        return {
+            "readiness": "ready",
+            "state": "action_probe_ok",
+            "detail": "Chrome DevTools action probe выполнен: https://example.com/ (Example Domain)",
+            "next_step": "Обычный Chrome владельца готов для DevTools/MCP сценариев.",
+            "attached": True,
+            "confirmed": True,
+            "tab_count": 1,
+            "action_probe": {
+                "ok": True,
+                "state": "ok",
+                "final_url": "https://example.com/",
+                "title": "Example Domain",
+            },
+        }
+
+    managed_registry = {
+        "filesystem": {"description": "files"},
+        "memory": {"description": "memory"},
+        "openclaw-browser": {"description": "browser"},
+        "chrome-profile": {"description": "chrome"},
+    }
+
+    def _fake_resolve(name: str):
+        return {
+            "name": name,
+            "description": name,
+            "risk": "medium",
+            "missing_env": [],
+            "manual_setup": [],
+        }
+
+    lmstudio_path = tmp_path / "mcp.json"
+    lmstudio_path.write_text(
+        json.dumps({"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
+    monkeypatch.setattr(WebApp, "_probe_owner_chrome_devtools", _fake_owner_probe)
+    monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: managed_registry)
+    monkeypatch.setattr("src.modules.web_app.resolve_managed_server_launch", _fake_resolve)
+    monkeypatch.setattr(
+        "src.modules.web_app.build_lmstudio_mcp_json",
+        lambda include_optional_missing=False, include_high_risk=False: (
+            {"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}},
+            {
+                "included": ["filesystem", "memory", "openclaw-browser", "chrome-profile"],
+                "skipped_missing": [],
+                "skipped_risk": [],
+                "managed_names": ["filesystem", "memory", "openclaw-browser", "chrome-profile"],
+            },
+        ),
+    )
+    monkeypatch.setattr("src.modules.web_app.LMSTUDIO_MCP_PATH", lmstudio_path)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/browser-mcp-readiness")
+    assert resp.status_code == 200
+    data = resp.json()
+    chrome_profile = next(item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile")
+    devtools_path = next(item for item in data["browser"]["paths"] if item["kind"] == "chrome_devtools")
+    assert chrome_profile["readiness"] == "ready"
+    assert chrome_profile["state"] == "action_probe_ok"
+    assert chrome_profile["confirmed"] is True
+    assert chrome_profile["action_probe"]["final_url"] == "https://example.com/"
+    assert devtools_path["active"] is True
+    assert devtools_path["confirmed"] is True
+    assert devtools_path["state"] == "action_probe_ok"
+
+
+def test_browser_mcp_readiness_marks_owner_chrome_blocked_when_chrome_policy_rejects_default_profile(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """`chrome-profile` должен честно переходить в blocked, если Chrome запретил default-profile remote debugging."""
+
+    class _Proc:
+        def __init__(self, stdout_text: str = "", stderr_text: str = "", *, returncode: int = 0):
+            self.returncode = returncode
+            self._stdout = stdout_text.encode("utf-8")
+            self._stderr = stderr_text.encode("utf-8")
+
+        async def communicate(self):
+            return self._stdout, self._stderr
+
+        def terminate(self):
+            return None
+
+    class _Resp:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    class _AsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, *, headers=None):
+            assert url == "http://127.0.0.1:18791/"
+            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            return _Resp(200)
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        if cmd[:3] == ("openclaw", "gateway", "probe"):
+            return _Proc(
+                """
+Gateway Status
+Reachable: yes
+Probe budget: 3000ms
+
+Targets
+Local loopback ws://127.0.0.1:18789
+  Connect: ok (15ms) · RPC: ok
+""".strip(),
+                returncode=0,
+            )
+        if cmd[:4] == ("openclaw", "browser", "--json", "status"):
+            return _Proc(
+                json.dumps(
+                    {
+                        "running": True,
+                        "cdpReady": True,
+                        "profile": "openclaw",
+                        "cdpUrl": "http://127.0.0.1:18800",
+                        "cdpPort": 18800,
+                        "detectedBrowser": "chrome",
+                    }
+                ),
+                returncode=0,
+            )
+        if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
+            return _Proc(json.dumps({"tabs": []}), returncode=0)
+        raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
+
+    async def _fake_owner_probe(self, url: str = "https://example.com"):
+        assert url == "https://example.com"
+        return {
+            "readiness": "blocked",
+            "state": "chrome_policy_blocked",
+            "detail": "Chrome отклонил remote debugging для default profile: требуется non-default data directory.",
+            "next_step": "Используй OpenClaw Debug browser или отдельный non-default Chrome data dir.",
+            "attached": False,
+            "confirmed": False,
+            "tab_count": 0,
+            "log_path": "/tmp/krab-owner-chrome-remote-debugging.log",
+            "action_probe": {
+                "ok": False,
+                "state": "chrome_policy_blocked",
+                "detail": "Chrome policy block",
+            },
+        }
+
+    managed_registry = {
+        "filesystem": {"description": "files"},
+        "memory": {"description": "memory"},
+        "openclaw-browser": {"description": "browser"},
+        "chrome-profile": {"description": "chrome"},
+    }
+
+    def _fake_resolve(name: str):
+        return {
+            "name": name,
+            "description": name,
+            "risk": "medium",
+            "missing_env": [],
+            "manual_setup": [],
+        }
+
+    lmstudio_path = tmp_path / "mcp.json"
+    lmstudio_path.write_text(
+        json.dumps({"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
+    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
+    monkeypatch.setattr(WebApp, "_probe_owner_chrome_devtools", _fake_owner_probe)
+    monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: managed_registry)
+    monkeypatch.setattr("src.modules.web_app.resolve_managed_server_launch", _fake_resolve)
+    monkeypatch.setattr(
+        "src.modules.web_app.build_lmstudio_mcp_json",
+        lambda include_optional_missing=False, include_high_risk=False: (
+            {"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}},
+            {
+                "included": ["filesystem", "memory", "openclaw-browser", "chrome-profile"],
+                "skipped_missing": [],
+                "skipped_risk": [],
+                "managed_names": ["filesystem", "memory", "openclaw-browser", "chrome-profile"],
+            },
+        ),
+    )
+    monkeypatch.setattr("src.modules.web_app.LMSTUDIO_MCP_PATH", lmstudio_path)
+    client = _make_client()
+
+    resp = client.get("/api/openclaw/browser-mcp-readiness")
+    assert resp.status_code == 200
+    data = resp.json()
+    chrome_profile = next(item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile")
+    devtools_path = next(item for item in data["browser"]["paths"] if item["kind"] == "chrome_devtools")
+    assert chrome_profile["readiness"] == "blocked"
+    assert chrome_profile["state"] == "chrome_policy_blocked"
+    assert chrome_profile["confirmed"] is False
+    assert devtools_path["confirmed"] is False
+    assert devtools_path["state"] == "chrome_policy_blocked"
 
 
 def test_browser_mcp_readiness_retries_transient_empty_cli_state_when_relay_authorized(monkeypatch, tmp_path: Path):
@@ -4651,7 +5627,7 @@ Local loopback ws://127.0.0.1:18789
 def test_open_owner_chrome_endpoint_uses_existing_command_helper(monkeypatch, tmp_path: Path):
     """`POST /api/openclaw/browser/open-owner-chrome` должен использовать существующий `.command` helper."""
 
-    helper_path = tmp_path / "new Enable Chrome Remote Debugging.command"
+    helper_path = tmp_path / "new Open Owner Chrome Remote Debugging.command"
     helper_path.write_text("#!/bin/zsh\nexit 0\n", encoding="utf-8")
     helper_path.chmod(0o755)
     calls: list[tuple[str, ...]] = []
@@ -5271,7 +6247,12 @@ def test_runtime_chat_session_clear_calls_openclaw_client(monkeypatch: pytest.Mo
     """Owner runtime endpoint должен чистить chat-session через общий openclaw_client."""
     monkeypatch.setenv("WEB_API_KEY", "secret")
     fake_openclaw = _FakeOpenClaw()
-    client = TestClient(_make_app(openclaw_client=fake_openclaw).app)
+    client = TestClient(
+        _make_app(
+            openclaw_client=fake_openclaw,
+            kraab_userbot=_FakeUserbot(startup_state="running", client_connected=True),
+        ).app
+    )
 
     resp = client.post(
         "/api/runtime/chat-session/clear",

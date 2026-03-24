@@ -77,7 +77,7 @@ class Perceptor:
         try:
             from ..voice_engine import text_to_speech
 
-            filename = await text_to_speech(text)
+            filename = await text_to_speech(text, voice=voice_id)
             return filename or ""
         except Exception as exc:
             logger.warning("perceptor_speak_failed", error=str(exc))

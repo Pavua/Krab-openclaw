@@ -103,5 +103,10 @@ python scripts/sync_lmstudio_mcp.py --write --backup
 - Если нужен старый eager-start сценарий для acceptance/debug, выставь `OPENCLAW_BROWSER_AUTOSTART=1` в `.env`
 
 ### `chrome-profile`
-- Требует включить Remote Debugging в обычном Chrome-профиле
-- После этого нужен перезапуск LM Studio / Codex, чтобы MCP перечитал конфиг
+- Используй helper `new Open Owner Chrome Remote Debugging.command` или эквивалентный relaunch обычного Chrome владельца с `--remote-debugging-port=9222`
+- Простого открытия `chrome://inspect/#remote-debugging` недостаточно: сам DevTools MCP не поднимает порт за тебя
+- Owner panel теперь проверяет этот путь не только по readiness, но и реальным action probe через CDP
+- Если LM Studio / Codex уже были открыты до relaunch Chrome, после attach может понадобиться их перезапуск, чтобы MCP перечитал состояние
+- Если ordinary Chrome сейчас запущен из другой macOS учётки, helper из USER2 не сможет его перезапустить: relaunch нужно делать из той же учётки, которой принадлежит процесс Chrome
+- На Chrome `146.0.7680.154` подтверждён новый блокер: default profile может отклонять DevTools remote debugging с текстом `DevTools remote debugging requires a non-default data directory`
+- Это означает, что ordinary attach к настоящему дефолтному профилю владельца может быть принципиально недоступен; truthful fallback в таком случае: использовать OpenClaw Debug browser или поднимать отдельный non-default Chrome data dir

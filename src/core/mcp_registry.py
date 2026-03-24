@@ -162,6 +162,13 @@ def get_managed_mcp_servers() -> dict[str, dict[str, Any]]:
             args=["-y", "mcp-shell"],
             risk="high",
         ),
+        "telegram": _server(
+            description="Telegram MCP: чтение чатов, отправка, транскрипция голосовых, dev-утилиты Краба.",
+            command=_python_command(),
+            args=[str(PROJECT_ROOT / "mcp-servers" / "telegram" / "server.py"),
+                  "--transport", "stdio"],
+            risk="high",
+        ),
         "memory": _server(
             description="Лёгкая MCP-память для заметок и промежуточных фактов.",
             command="npx",
@@ -232,8 +239,8 @@ def get_managed_mcp_servers() -> dict[str, dict[str, Any]]:
                 "--no-usage-statistics",
             ],
             manual_setup=[
-                "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging.",
-                "После этого перезапустить LM Studio/Codex, чтобы MCP перечитал конфиг.",
+                "Запусти helper `new Open Owner Chrome Remote Debugging.command`, чтобы проверить ordinary Chrome path. На Chrome 146+ default profile может быть заблокирован политикой remote debugging и тогда нужен non-default data dir или Debug browser.",
+                "Если LM Studio/Codex уже были запущены до relaunch Chrome, после attach перезапусти их, чтобы MCP перечитал состояние.",
             ],
             risk="medium",
         ),

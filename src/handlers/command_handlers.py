@@ -271,6 +271,24 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"❌ Ошибка поиска: {e}")
 
 
+async def handle_shop(bot: "KraabUserbot", message: Message) -> None:
+    """Поиск товаров на Mercadona через перехват XHR/Fetch ответов API."""
+    from ..skills.mercadona import search_mercadona
+
+    query = bot._get_command_args(message)
+    if not query or query.lower() in ["shop", "!shop"]:
+        raise UserInputError(user_message="🛒 Что ищем? Напиши: `!shop <товар>`")
+    msg = await message.reply(f"🛒 **Краб ищет на Mercadona:** `{query}`...")
+    try:
+        results = await search_mercadona(query)
+        if len(results) > 4000:
+            results = results[:3900] + "..."
+        await msg.edit(results)
+    except Exception as exc:
+        logger.error("mercadona_search_failed", error=repr(exc))
+        await msg.edit(f"❌ Ошибка при поиске на Mercadona: {exc}")
+
+
 async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
     """Запомнить факт."""
     text = bot._get_command_args(message)
@@ -2149,6 +2167,15 @@ async def handle_claude_cli(bot: "KraabUserbot", message: Message) -> None:
     timeout = float(getattr(config, "CLI_CLAUDE_TIMEOUT_SEC", 120.0))
     await _run_cli_with_progress(
         bot, message, "claude", prompt, timeout=timeout, tool_label="claude-code"
+    )
+
+
+async def handle_opencode(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить opencode с запросом. Использование: !opencode <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_OPENCODE_TIMEOUT_SEC", 180.0))
+    await _run_cli_with_progress(
+        bot, message, "opencode", prompt, timeout=timeout, tool_label="opencode"
     )
 
 

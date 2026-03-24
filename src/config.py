@@ -93,6 +93,29 @@ class Config:
     OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC: float = float(
         os.getenv("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "540")
     )
+    # Отдельные read-timeout бюджеты для buffered `stream=False` completion.
+    # Зачем:
+    # - userbot сейчас получает финальный ответ только после полного JSON-ответа провайдера;
+    # - без read-timeout некоторые cloud-маршруты (особенно codex-cli/openai-codex)
+    #   могут "держать" запрос очень долго, не считаясь упавшими;
+    # - из-за этого fallback-цепочка не стартует, хотя с точки зрения пользователя
+    #   Краб уже выглядит зависшим.
+    #
+    # None/пусто = не ограничивать buffered read-timeout на уровне клиента.
+    OPENCLAW_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
+        float(x)
+        if (x := os.getenv("OPENCLAW_BUFFERED_READ_TIMEOUT_SEC", "").strip())
+        else None
+    )
+    OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC: float = float(
+        os.getenv("OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", "240")
+    )
+    OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC: float = float(
+        os.getenv("OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", "240")
+    )
+    OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC: float = float(
+        os.getenv("OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC", "240")
+    )
     # Ранние тех-уведомления до hard-timeout.
     # Зачем:
     # - пользователь должен понимать, что запрос жив и модель действительно думает;

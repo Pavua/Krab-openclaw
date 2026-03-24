@@ -119,6 +119,23 @@ IMESSAGE_REPLY_PATCH_MARKER = "Краб: iMessage показывает [[reply_t
 IMESSAGE_REPLY_TAG_REGEX_JS = (
     '/^\\s*\\[\\[\\s*(?:reply_to_current|reply_to\\s*:[^\\]]+|reply_to_[^\\]]+)\\s*\\]\\]\\s*/i'
 )
+DEFAULT_CODEX_CLI_COMMAND = "/opt/homebrew/bin/codex"
+DEFAULT_CODEX_CLI_ARGS = [
+    "exec",
+    "--json",
+    "--color",
+    "never",
+    "--sandbox",
+    "workspace-write",
+    "--skip-git-repo-check",
+]
+DEFAULT_CODEX_CLI_RESUME_ARGS = [
+    "exec",
+    "resume",
+    "{sessionId}",
+    "--json",
+    "--skip-git-repo-check",
+]
 LMSTUDIO_PROVIDER_DEFAULT_MAX_TOKENS = 2048
 DEFAULT_OWNER_ALIASES = ["По", "Павел", "Pavel", "Pablo"]
 SAFE_GUEST_ALLOWED_TOOLS = ["web_search", "web_fetch", "weather", "time"]
@@ -1469,6 +1486,64 @@ def sync_openclaw_json(path: Path, target_key: str, lmstudio_token: str) -> dict
     }
 
 
+def repair_codex_cli_backend(path: Path) -> dict[str, Any]:
+    """
+    Нормализует runtime override для `codex-cli` в openclaw.json.
+
+    Почему это нужно:
+    - встроенный backend OpenClaw отстаёт от текущего Codex CLI по `resumeArgs`;
+    - без явного `resumeOutput=jsonl` native dashboard может показать сырой
+      JSONL-хвост (`item.completed`, `turn.completed`) как обычный текст;
+    - repair должен детерминированно возвращать совместимый override после
+      любого следующего рестарта или ручного восстановления runtime.
+    """
+    payload = _read_json(path)
+    agents = payload.setdefault("agents", {})
+    defaults = agents.setdefault("defaults", {})
+    cli_backends = defaults.setdefault("cliBackends", {})
+    if not isinstance(cli_backends, dict):
+        cli_backends = {}
+        defaults["cliBackends"] = cli_backends
+
+    current = cli_backends.get("codex-cli")
+    if not isinstance(current, dict):
+        current = {}
+        cli_backends["codex-cli"] = current
+
+    changed_entries: list[str] = []
+    command = str(current.get("command", "") or "").strip() or shutil.which("codex") or DEFAULT_CODEX_CLI_COMMAND
+    if current.get("command") != command:
+        current["command"] = command
+        changed_entries.append("agents.defaults.cliBackends.codex-cli.command")
+
+    if current.get("args") != DEFAULT_CODEX_CLI_ARGS:
+        current["args"] = list(DEFAULT_CODEX_CLI_ARGS)
+        changed_entries.append("agents.defaults.cliBackends.codex-cli.args")
+
+    if current.get("resumeArgs") != DEFAULT_CODEX_CLI_RESUME_ARGS:
+        current["resumeArgs"] = list(DEFAULT_CODEX_CLI_RESUME_ARGS)
+        changed_entries.append("agents.defaults.cliBackends.codex-cli.resumeArgs")
+
+    if str(current.get("output", "") or "").strip().lower() != "jsonl":
+        current["output"] = "jsonl"
+        changed_entries.append("agents.defaults.cliBackends.codex-cli.output")
+
+    if str(current.get("resumeOutput", "") or "").strip().lower() != "jsonl":
+        current["resumeOutput"] = "jsonl"
+        changed_entries.append("agents.defaults.cliBackends.codex-cli.resumeOutput")
+
+    if changed_entries:
+        _write_json(path, payload)
+
+    return {
+        "path": str(path),
+        "changed": bool(changed_entries),
+        "entries": changed_entries,
+        "command": command,
+        "resume_output": str(current.get("resumeOutput", "") or ""),
+    }
+
+
 def sync_auth_profiles_json(path: Path, target_key: str, lmstudio_token: str) -> dict[str, Any]:
     """
     Синхронизирует auth-profiles.json для живых direct-каналов OpenClaw.
@@ -2131,6 +2206,7 @@ def should_restart_gateway(report_steps: dict[str, Any]) -> bool:
         return False
 
     restart_sensitive_steps = (
+        "repair_codex_cli_backend",
         "sync_managed_output_sanitizer_plugin",
         "sync_models_json",
         "sync_openclaw_json",
@@ -2985,6 +3061,7 @@ def main() -> int:
 
     report["steps"]["sync_models_json"] = sync_models_json(models_path, target_key, lmstudio_token)
     report["steps"]["sync_openclaw_json"] = sync_openclaw_json(openclaw_path, target_key, lmstudio_token)
+    report["steps"]["repair_codex_cli_backend"] = repair_codex_cli_backend(openclaw_path)
     report["steps"]["sync_auth_profiles_json"] = sync_auth_profiles_json(
         auth_profiles_path,
         target_key,
