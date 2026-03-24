@@ -107,6 +107,16 @@ from .voice_engine import text_to_speech
 logger = get_logger(__name__)
 
 
+_RELAY_INTENT_KEYWORDS: frozenset[str] = frozenset({
+    "передай", "передайте", "передать", "перешли", "переслать",
+    "скажи", "скажите", "сообщи", "сообщите",
+    "расскажи", "расскажите",
+    "передайте ему", "передай ему",
+    "let know", "tell him", "tell her", "notify",
+    "pass along", "pass it on",
+})
+
+
 def _current_runtime_primary_model() -> str:
     """
     Возвращает primary-модель из живого OpenClaw runtime.
@@ -2704,6 +2714,87 @@ class KraabUserbot:
         )
 
     @staticmethod
+    def _detect_relay_intent(query: str) -> bool:
+        """
+        Детектирует намерение передать сообщение владельцу.
+
+        Зачем детерминированный keyword-match, а не LLM:
+        - LLM уже обещает передать, но без side-effect;
+        - нужна надёжная точка срабатывания независимо от формулировки ответа модели;
+        - false-positives лучше чем missed relay — inbox потом закроет владелец.
+        """
+        normalized = str(query or "").lower()
+        return any(kw in normalized for kw in _RELAY_INTENT_KEYWORDS)
+
+    async def _escalate_relay_to_owner(
+        self,
+        *,
+        message: Message,
+        user: Any,
+        query: str,
+        chat_type: str,
+    ) -> None:
+        """
+        Фиксирует relay-запрос в inbox и уведомляет владельца в Saved Messages.
+
+        Почему Saved Messages (send to self):
+        - userbot является аккаунтом владельца, поэтому отправка себе = уведомление;
+        - это надёжнее любого бота/вебхука и работает без дополнительных токенов;
+        - владелец увидит уведомление через обычный Telegram.
+        """
+        sender_display = f"@{user.username}" if getattr(user, "username", None) else f"id:{getattr(user, 'id', '?')}"
+        chat_id_str = str(getattr(getattr(message, "chat", None), "id", "") or "")
+        message_id_str = str(getattr(message, "id", "") or "")
+        excerpt = str(query or "")[:1500]
+
+        try:
+            inbox_service.upsert_item(
+                dedupe_key=f"relay:{chat_id_str}:{message_id_str}",
+                kind="relay_request",
+                source="telegram-userbot",
+                title=f"📨 Relay от {sender_display}",
+                body=(
+                    f"Чат: `{chat_id_str}`\nОт: `{sender_display}`\nТип: `{chat_type}`\n\n"
+                    f"Сообщение:\n{excerpt}"
+                ),
+                severity="warning",
+                status="open",
+                identity=inbox_service.build_identity(
+                    channel_id=chat_id_str,
+                    team_id="owner",
+                    trace_id=build_trace_id("relay", chat_id_str, message_id_str),
+                    approval_scope="owner",
+                ),
+                metadata={
+                    "chat_id": chat_id_str,
+                    "message_id": message_id_str,
+                    "sender_id": str(getattr(user, "id", "") or ""),
+                    "sender_username": str(getattr(user, "username", "") or ""),
+                    "chat_type": chat_type,
+                    "relay_text": excerpt,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("relay_inbox_escalation_failed", error=str(exc))
+
+        try:
+            me = await self.client.get_me()
+            notification = (
+                f"📨 **Relay-запрос**\n\n"
+                f"От: `{sender_display}`\n"
+                f"Чат: `{chat_id_str}` ({chat_type})\n\n"
+                f"**Сообщение:**\n{excerpt[:800]}"
+            )
+            await self.client.send_message(me.id, notification)
+            logger.info(
+                "relay_owner_notified",
+                sender=sender_display,
+                chat_id=chat_id_str,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("relay_owner_notification_failed", error=str(exc))
+
+    @staticmethod
     def _voice_download_suffix(message: Message) -> str:
         """Подбирает расширение для временного voice/audio файла."""
         voice = getattr(message, "voice", None)
@@ -3803,6 +3894,17 @@ class KraabUserbot:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("incoming_message_inbox_sync_failed", chat_id=chat_id, error=str(exc))
+
+        if not is_self and query and self._detect_relay_intent(query):
+            chat_type_raw = getattr(getattr(message, "chat", None), "type", "")
+            asyncio.create_task(
+                self._escalate_relay_to_owner(
+                    message=message,
+                    user=user,
+                    query=query,
+                    chat_type=str(getattr(chat_type_raw, "value", chat_type_raw) or "").lower(),
+                )
+            )
 
         logger.info(
             "processing_ai_request",
