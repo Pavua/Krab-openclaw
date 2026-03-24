@@ -67,6 +67,7 @@ from .handlers import (
     handle_clear,
     handle_codex,
     handle_gemini_cli,
+    handle_hs,
     handle_opencode,
     handle_config,
     handle_cronstatus,
@@ -663,6 +664,12 @@ class KraabUserbot:
         )
         async def wrap_opencode(c, m):
             await run_cmd(handle_opencode, m)
+
+        @self.client.on_message(
+            filters.command("hs", prefixes=prefixes) & _make_command_filter("hs"), group=-1
+        )
+        async def wrap_hs(c, m):
+            await run_cmd(handle_hs, m)
 
         @self.client.on_message(filters.command("acl", prefixes=prefixes) & _make_command_filter("acl"), group=-1)
         async def wrap_acl(c, m):

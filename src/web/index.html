@@ -1644,6 +1644,50 @@
       </div>
     </div>
 
+    <!-- --- INBOX --- -->
+    <div class="card" id="inboxSection" style="border-top: 2px solid var(--accent-yellow, #f5a623); padding: 24px">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <h3 class="card-title" style="margin: 0; display: flex; align-items: center; gap: 8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            style="color: var(--accent-yellow, #f5a623);">
+            <path d="M22 12h-6l-2 3h-4l-2-3H2"/>
+            <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+          </svg>
+          Inbox
+          <span id="inboxBadge" style="display: none; background: var(--accent-yellow, #f5a623); color: #000;
+            border-radius: 9999px; font-size: 0.7rem; font-weight: 700; padding: 1px 7px; margin-left: 4px;">0</span>
+        </h3>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span id="inboxMeta" style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);">—</span>
+          <button id="inboxRefreshBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.8rem;"
+            onclick="loadInboxItems()">↻</button>
+        </div>
+      </div>
+
+      <!-- Filter row -->
+      <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+        <select id="inboxFilterStatus" class="field" style="width: auto; padding: 4px 8px; font-size: 0.8rem;"
+          onchange="loadInboxItems()">
+          <option value="">Все статусы</option>
+          <option value="pending">pending</option>
+          <option value="resolved">resolved</option>
+          <option value="rejected">rejected</option>
+        </select>
+        <select id="inboxFilterKind" class="field" style="width: auto; padding: 4px 8px; font-size: 0.8rem;"
+          onchange="loadInboxItems()">
+          <option value="">Все типы</option>
+          <option value="approval">approval</option>
+          <option value="escalation">escalation</option>
+          <option value="alert">alert</option>
+        </select>
+      </div>
+
+      <!-- Items list -->
+      <div id="inboxItemsList" style="display: flex; flex-direction: column; gap: 8px; min-height: 40px;">
+        <span style="color: var(--text-muted); font-size: 0.85rem;">Загрузка...</span>
+      </div>
+    </div>
+
     <!-- --- AI ASSISTANT --- -->
     <div class="card" style="border-top: 2px solid var(--accent-cyan); padding: 32px">
       <h3 class="card-title" style="
@@ -6631,6 +6675,158 @@ ${channelsText}`;
         setText("ocTranslatorMeta", `Translator action error: ${error.message}`);
       }
     }
+
+    // ─── INBOX ──────────────────────────────────────────────────────────────
+
+    const _INBOX_KIND_COLORS = {
+      approval:  "var(--accent-yellow, #f5a623)",
+      escalation:"var(--state-warn, #ff9800)",
+      alert:     "var(--state-error, #f44336)",
+    };
+
+    function _buildInboxItemEl(item) {
+      const kindColor = _INBOX_KIND_COLORS[String(item.kind || "")] || "var(--text-muted)";
+      const isPending = item.status === "pending";
+      const safeId    = String(item.id || "");
+
+      const wrapper = document.createElement("div");
+      wrapper.dataset.itemId = safeId;
+      Object.assign(wrapper.style, {
+        background: "rgba(0,0,0,0.2)", border: "1px solid var(--border-subtle)",
+        borderLeft: "3px solid " + kindColor, borderRadius: "6px",
+        padding: "12px 14px", display: "flex", flexDirection: "column", gap: "6px",
+      });
+
+      const header = document.createElement("div");
+      Object.assign(header.style, { display: "flex", alignItems: "flex-start", gap: "8px", flexWrap: "wrap" });
+
+      const kindBadge = document.createElement("span");
+      kindBadge.textContent = String(item.kind || "—").toUpperCase();
+      Object.assign(kindBadge.style, {
+        fontSize: "0.7rem", fontWeight: "700", color: kindColor,
+        padding: "1px 6px", borderRadius: "3px",
+        border: "1px solid " + kindColor, whiteSpace: "nowrap",
+      });
+
+      const titleEl = document.createElement("span");
+      titleEl.textContent = String(item.title || "(no title)");
+      Object.assign(titleEl.style, { fontSize: "0.85rem", color: "var(--text-main)", flex: "1" });
+
+      const statusEl = document.createElement("span");
+      statusEl.textContent = String(item.status || "?");
+      Object.assign(statusEl.style, {
+        fontSize: "0.7rem", color: "var(--text-muted)",
+        fontFamily: "var(--font-mono)", whiteSpace: "nowrap",
+      });
+
+      header.appendChild(kindBadge);
+      header.appendChild(titleEl);
+      header.appendChild(statusEl);
+      wrapper.appendChild(header);
+
+      if (item.body) {
+        const bodyEl = document.createElement("div");
+        bodyEl.textContent = String(item.body);
+        Object.assign(bodyEl.style, {
+          fontSize: "0.8rem", color: "var(--text-muted)",
+          lineHeight: "1.4", maxHeight: "4em", overflow: "hidden",
+        });
+        wrapper.appendChild(bodyEl);
+      }
+
+      if (item.created_at) {
+        const tsEl = document.createElement("div");
+        tsEl.textContent = String(item.created_at);
+        Object.assign(tsEl.style, {
+          fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)",
+        });
+        wrapper.appendChild(tsEl);
+      }
+
+      if (isPending) {
+        const actionsRow = document.createElement("div");
+        Object.assign(actionsRow.style, { display: "flex", gap: "6px", marginTop: "4px" });
+
+        const resolveBtn = document.createElement("button");
+        resolveBtn.className = "btn-ghost";
+        resolveBtn.textContent = "\u2713 Resolve";
+        Object.assign(resolveBtn.style, { padding: "3px 10px", fontSize: "0.75rem", color: "var(--state-ok)" });
+        resolveBtn.addEventListener("click", () => inboxUpdateItem(safeId, "resolved"));
+
+        const rejectBtn = document.createElement("button");
+        rejectBtn.className = "btn-ghost";
+        rejectBtn.textContent = "\u2717 Reject";
+        Object.assign(rejectBtn.style, {
+          padding: "3px 10px", fontSize: "0.75rem", color: "var(--state-error, #f44336)",
+        });
+        rejectBtn.addEventListener("click", () => inboxUpdateItem(safeId, "rejected"));
+
+        actionsRow.appendChild(resolveBtn);
+        actionsRow.appendChild(rejectBtn);
+        wrapper.appendChild(actionsRow);
+      }
+
+      return wrapper;
+    }
+
+    async function loadInboxItems() {
+      const listEl  = document.getElementById("inboxItemsList");
+      const metaEl  = document.getElementById("inboxMeta");
+      const badgeEl = document.getElementById("inboxBadge");
+      if (!listEl) return;
+
+      const status = (document.getElementById("inboxFilterStatus") || {}).value || "";
+      const kind   = (document.getElementById("inboxFilterKind")   || {}).value || "";
+      const params = new URLSearchParams({ limit: "30" });
+      if (status) params.set("status", status);
+      if (kind)   params.set("kind",   kind);
+
+      try {
+        const resp = await fetch("/api/inbox/items?" + params.toString());
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data  = await resp.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+
+        const pendingCount = items.filter(function(i) { return i.status === "pending"; }).length;
+        if (badgeEl) {
+          badgeEl.textContent = String(pendingCount);
+          badgeEl.style.display = pendingCount > 0 ? "inline-block" : "none";
+        }
+        if (metaEl) metaEl.textContent = items.length + " item(s)";
+
+        while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+
+        if (!items.length) {
+          const empty = document.createElement("span");
+          empty.textContent = "Inbox \u043f\u0443\u0441\u0442";
+          Object.assign(empty.style, { color: "var(--text-muted)", fontSize: "0.85rem" });
+          listEl.appendChild(empty);
+          return;
+        }
+
+        items.forEach(function(item) { listEl.appendChild(_buildInboxItemEl(item)); });
+      } catch (err) {
+        if (metaEl) metaEl.textContent = "error";
+        while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+        const errEl = document.createElement("span");
+        errEl.textContent = "\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438 inbox: " + String((err && err.message) || err);
+        Object.assign(errEl.style, { color: "var(--state-error, #f44336)", fontSize: "0.85rem" });
+        listEl.appendChild(errEl);
+      }
+    }
+
+    async function inboxUpdateItem(itemId, action) {
+      try {
+        await postJson("/api/inbox/update", { item_id: itemId, action: action });
+        await loadInboxItems();
+      } catch (err) {
+        console.warn("inbox_update_failed", err);
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", function() { loadInboxItems(); });
+
+    // ─────────────────────────────────────────────────────────────────────────
 
     async function registerTranslatorMobileDevice() {
       try {

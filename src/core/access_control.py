@@ -73,6 +73,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "codex",
         "gemini",
         "claude_cli",
+        # Desktop automation
+        "hs",
     }
 )
 
@@ -89,6 +91,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "gemini",
         "claude_cli",
         "opencode",
+        # Desktop automation — управляет окнами через Hammerspoon, только владелец
+        "hs",
     }
 )
 

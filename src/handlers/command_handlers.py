@@ -41,6 +41,7 @@ from ..core.translator_runtime_profile import (
     default_translator_runtime_profile,
 )
 from ..employee_templates import ROLES, get_role_prompt, list_roles, save_role
+from ..integrations.hammerspoon_bridge import HammerspoonBridgeError, hammerspoon
 from ..integrations.macos_automation import macos_automation
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
@@ -2177,6 +2178,125 @@ async def handle_opencode(bot: "KraabUserbot", message: Message) -> None:
     await _run_cli_with_progress(
         bot, message, "opencode", prompt, timeout=timeout, tool_label="opencode"
     )
+
+
+async def handle_hs(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление окнами macOS через Hammerspoon.
+
+    Требует:
+    - Установленного Hammerspoon (https://www.hammerspoon.org/)
+    - ~/.hammerspoon/init.lua из репозитория Краба (hammerspoon/init.lua)
+    - Accessibility permission для Hammerspoon в System Settings
+
+    Использование:
+      !hs               — эта справка
+      !hs status        — версия Hammerspoon, количество экранов
+      !hs windows       — список видимых окон
+      !hs focus <app>   — сфокусировать окно приложения
+      !hs tile <preset> [<app>]  — раскладка: left|right|top|bottom|full
+      !hs move <app> <x> <y> <w> <h>  — переместить/изменить размер окна
+                        (координаты 0..1 = доля экрана, >2 = пиксели)
+    """
+    del bot
+    raw = str(message.text or "").split(maxsplit=1)
+    args_str = raw[1].strip() if len(raw) > 1 else ""
+
+    _HELP = (
+        "🔨 **Hammerspoon window control**\n\n"
+        "`!hs status` — версия и статус HS\n"
+        "`!hs windows` — список видимых окон\n"
+        "`!hs focus <app>` — сфокусировать окно\n"
+        "`!hs tile <preset> [<app>]` — раскладка: `left` `right` `top` `bottom` `full`\n"
+        "`!hs move <app> <x> <y> <w> <h>` — переместить окно\n\n"
+        "_Установи Hammerspoon и скопируй `hammerspoon/init.lua` в `~/.hammerspoon/init.lua`_"
+    )
+
+    if not args_str:
+        await message.reply(_HELP)
+        return
+
+    if not hammerspoon.is_available():
+        await message.reply(
+            "🔨 Hammerspoon недоступен.\n\n"
+            "Убедись, что:\n"
+            "1. Hammerspoon установлен и запущен\n"
+            "2. `~/.hammerspoon/init.lua` содержит krab-hs server\n"
+            "3. Выданы разрешения Accessibility в System Settings → Privacy & Security"
+        )
+        return
+
+    parts = args_str.split()
+    sub = parts[0].lower()
+
+    try:
+        if sub == "status":
+            data = await hammerspoon.status()
+            lines = [
+                "🔨 **Hammerspoon**",
+                f"- Версия: `{data.get('version', '?')}`",
+                f"- Build: `{data.get('build', '?')}`",
+                f"- Экранов: `{data.get('screens', '?')}`",
+            ]
+            await message.reply("\n".join(lines))
+
+        elif sub == "windows":
+            windows = await hammerspoon.list_windows()
+            if not windows:
+                await message.reply("🔨 Нет видимых окон.")
+                return
+            lines = ["🔨 **Видимые окна**"]
+            for w in windows[:20]:
+                lines.append(f"- `{w.get('app', '?')}` — {w.get('title', '')}")
+            await message.reply("\n".join(lines))
+
+        elif sub == "focus":
+            app = " ".join(parts[1:]) if len(parts) > 1 else ""
+            if not app:
+                raise UserInputError(user_message="🔨 Формат: `!hs focus <app>`")
+            result = await hammerspoon.focus(app)
+            await message.reply(
+                f"🔨 Сфокусировано: `{result.get('app', app)}`"
+                + (f" — {result.get('title', '')}" if result.get("title") else "")
+            )
+
+        elif sub == "tile":
+            preset = parts[1].lower() if len(parts) > 1 else "left"
+            app    = " ".join(parts[2:]) if len(parts) > 2 else ""
+            result = await hammerspoon.tile(preset=preset, app=app)
+            await message.reply(
+                f"🔨 Раскладка `{preset}` применена: `{result.get('app', app or 'активное окно')}`"
+            )
+
+        elif sub == "move":
+            # !hs move <app> <x> <y> <w> <h>   или   !hs move <x> <y> <w> <h>
+            floats: list[float] = []
+            app_parts: list[str] = []
+            for p in parts[1:]:
+                try:
+                    floats.append(float(p))
+                except ValueError:
+                    if not floats:
+                        app_parts.append(p)
+            if len(floats) < 4:
+                raise UserInputError(
+                    user_message="🔨 Формат: `!hs move [<app>] <x> <y> <w> <h>`\n"
+                    "Пример: `!hs move Cursor 0 0 0.5 1` (левая половина экрана)"
+                )
+            x, y, w, h = floats[:4]
+            app = " ".join(app_parts)
+            result = await hammerspoon.move(app=app, x=x, y=y, w=w, h=h)
+            frame = result.get("frame", {})
+            await message.reply(
+                f"🔨 Окно перемещено: x={frame.get('x')} y={frame.get('y')} "
+                f"w={frame.get('w')} h={frame.get('h')}"
+            )
+
+        else:
+            await message.reply(_HELP)
+
+    except HammerspoonBridgeError as exc:
+        await message.reply(f"🔨 Ошибка Hammerspoon: `{exc}`")
 
 
 async def handle_audio_message(bot: "KraabUserbot", message: Message) -> None:
