@@ -322,7 +322,10 @@
     <div class="grid-metrics" style="margin-bottom: 24px;">
       <div class="card" style="border-left: 3px solid var(--accent-cyan); display: flex; flex-direction: column;">
         <h3 class="card-title" style="display: flex; align-items: center; justify-content: space-between;">
-          Core Liveness (Lite)
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--accent-cyan)"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            Core Liveness (Lite)
+          </div>
           <div id="coreLivenessPulse" class="pulse-warn"
             style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></div>
         </h3>
@@ -334,7 +337,10 @@
 
       <div class="card" style="border-left: 3px solid var(--accent-purple); display: flex; flex-direction: column;">
         <h3 class="card-title" style="display: flex; align-items: center; justify-content: space-between;">
-          Ecosystem Deep Health
+          <div style="display: flex; align-items: center; gap: 8px;">
+             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--accent-purple)"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+             Ecosystem Deep Health
+          </div>
           <span id="deepHealthRisk" class="badge"
             style="background: rgba(255,255,255,0.1); border-color: transparent;">—</span>
         </h3>
@@ -350,19 +356,31 @@
     <!-- --- METRICS --- -->
     <div class="grid-metrics">
       <div class="card">
-        <h3 class="card-title">Система</h3>
+        <h3 class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
+          Система
+        </h3>
         <p class="card-value break-word" id="degradation">—</p>
       </div>
       <div class="card">
-        <h3 class="card-title">Black Box</h3>
+        <h3 class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+          Black Box
+        </h3>
         <p class="card-value" id="bb_total">—</p>
       </div>
       <div class="card">
-        <h3 class="card-title">RAG Docs</h3>
+        <h3 class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          RAG Docs
+        </h3>
         <p class="card-value" id="rag_total">—</p>
       </div>
       <div class="card">
-        <h3 class="card-title">Local Model</h3>
+        <h3 class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+          Local Model
+        </h3>
         <p class="card-value break-word" id="local_model">—</p>
       </div>
     </div>
@@ -371,15 +389,21 @@
     <div class="grid-middle">
       <div class="form-group" style="gap: 16px">
         <div class="card state-container" style="padding: 20px;">
-          <h3 class="card-title">Сервисы & Интеграции</h3>
+          <h3 class="card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            Сервисы & Интеграции
+          </h3>
           <div id="checks" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">—</div>
           <div class="card-meta" id="updated_at" style="font-family: var(--font-mono); font-size: 0.75rem;">Waiting for
             sync...</div>
         </div>
 
         <div class="card state-container"
-          style="background: linear-gradient(145deg, var(--bg-surface), var(--bg-panel)); padding: 20px;">
-          <h3 class="card-title">Рекомендовано (Routing)</h3>
+          style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.4), rgba(15, 23, 42, 0.4)); padding: 20px;">
+          <h3 class="card-title" style="color: var(--accent-cyan);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Рекомендовано (Routing)
+          </h3>
           <p class="card-value text-info" id="recommended_model"
             style="font-size: 1.4rem; text-shadow: var(--accent-glow); margin-bottom: 8px;">
             —

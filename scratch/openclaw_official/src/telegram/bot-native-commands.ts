@@ -583,21 +583,6 @@ export const registerTelegramNativeCommands = ({
               disableBlockStreaming,
             },
           });
-          if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
-            await deliverReplies({
-              replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
-              chatId: String(chatId),
-              token: opts.token,
-              runtime,
-              bot,
-              replyToMode,
-              textLimit,
-              thread: threadSpec,
-              tableMode,
-              chunkMode,
-              linkPreview: telegramCfg.linkPreview,
-            });
-          }
         });
       }
 

@@ -1,0 +1,184 @@
+# Krab Ecosystem Master Plan vNext + Realtime Call Translator
+
+## Summary
+- Базовая стратегия остаётся `foundation first`: сначала стабилизируем и унифицируем capability/runtime/panel/channel слои `Krab + OpenClaw + Krab Ear + Krab Voice Gateway`, потом поверх этого строим продуктовые команды и переводчик звонков.
+- По итогам аудита старых проектов: использовать их как `доноров UX, iPhone companion flow, локализации, ранних call/session идей`, но не как канонический backend. Канонический backend для переводчика должен строиться на `Krab Voice Gateway`, а `Krab Ear` должен оставаться локальным audio/STT/perception сервисом.
+- Для multi-account на одном Mac принимаем новый default: `shared repo/docs/artifacts`, но `split runtime/auth/secrets/browser state per macOS account`. Это критично из-за второй учётки с другой квотой Codex.
+- Команды становятся first-class сущностями и могут общаться между собой через контролируемый `inter-team bus` с trace/artifacts/policy. Пример: `trading` ставит задачу `coding` на торговый софт.
+- Отдельный обязательный продуктовый трек: `realtime переводчик обычных и интернет-звонков`, с `озвучкой first` для v1 и обязательными субтитрами/timeline как поддерживающим слоем.
+
+## Key Changes
+- Ввести единый `Capability Registry + Policy Matrix` для всех контуров: каналы, browser/system, voice, multimodal ingest, moderation, trading, research, content, shopping, life assistant, call translator. Панель `:8080` показывает не только health, но и фактические права/ограничения каждого контура.
+- Добавить `Operator Identity Layer`: `operator_id`, `account_id`, `channel_id`, `team_id`, `trace_id`, `approval_scope`. Он обязателен для второй macOS-учётки и будущих одобренных операторов.
+- Зафиксировать `split-runtime per macOS account`:
+  - общий repo и общие документы;
+  - отдельные `~/.openclaw/*`, OAuth/auth-profiles, browser profiles, secrets и per-account state;
+  - отдельные traces/approvals;
+  - общая только типизированная память и артефакты через sync/handoff layer.
+- Собрать `Inbox / Escalation Layer`: все поручения, mentions, approvals, входящие userbot-просьбы и незавершённые действия складываются в единый owner-visible inbox и не теряются.
+- Довести `Channel Capability Parity`: userbot как richest contour, reserve bot как safe contour, остальные каналы получают одинаковую семантику streaming, attachments, approvals и action reporting там, где это технически возможно.
+- Собрать `System Control v2`: окна, приложения, Finder, clipboard, notifications, browser relay, screenshots/OCR, файловые операции, UI automation, optional camera/screen awareness. Все рискованные действия идут через policy tier и audit trail.
+- Собрать единый `Multimodal Ingest Layer`: текст, фото, документы, видео, voice notes, GIF, stickers, кружочки, web pages и ссылки идут через один pipeline `detect -> extract -> normalize -> route -> memory -> reply`.
+- Собрать `Swarm v2 / Inter-Team Bus`:
+  - planner/executor/verifier/critic циклы;
+  - task board и artifact store;
+  - peer-to-peer handoffs между командами;
+  - recovery/checkpointing;
+  - профили `dev`, `research`, `ops`, `trade`, `content`, `life`, `shopping`.
+- Оформить команды как productized execution systems, а не просто prompt-роли:
+  - `Trading Lab`
+  - `Coding/Dev Team`
+  - `Content Factory`
+  - `Deep Research Team`
+  - `Life Assistant Team`
+  - `Shopping/Buyer’s Agent`
+- Оформить `Experimental Providers Lab` для web/session-backed подписочных подключений OpenAI/Google:
+  - быстрые relogin-кнопки;
+  - capability flags;
+  - health score;
+  - строгий запрет быть `primary` до отдельного live acceptance.
+
+## Realtime Call Translator
+- Принять продуктовую архитектуру: `Krab Voice Gateway` — ядро voice/call sessions, `Krab Ear` — low-latency local perception/STT, `Krab` — orchestration/policy/UI, `iPhone companion` — основной клиент для обычных звонков.
+- Для старых проектов зафиксировать роль:
+  - `RealTimeVoiceTranslator*`, `CursorProject`, ранние `iOSApp + Server` — использовать только как банк идей и UX-компонентов;
+  - `CallTranslatorUltimate v2` — лучший донор по UX и modular iOS/macOS structure, но не источник истины по readiness, потому что в roadmap там много задекларированного поверх mock/placeholder логики.
+- Целевой продукт v1:
+  - `обычные звонки` как first target;
+  - `iPhone companion` как основной delivery path;
+  - `озвучка first`;
+  - live subtitles/timeline/summary обязательны как supporting layer;
+  - языки first-class: `ES <-> RU`, `ES <-> EN`, `EN -> RU`, `auto-detect`.
+- V1 calls scope:
+  - обычные звонки через iPhone companion;
+  - интернет-звонки закладываются как следующий слой через `Voice Gateway + WebRTC/VoIP/session adapters`;
+  - channel-specific internet-call adapters (Telegram/WhatsApp и т.д.) проектируются как последующий этап, а не как предпосылка v1.
+- V1 translator features:
+  - session state, pause/resume, mute translation, bilingual mode;
+  - quick phrases;
+  - replay last translated line;
+  - timeline с original/transcript/translation/tts events;
+  - diagnostics/why-report;
+  - owner escalation в текстовом виде;
+  - subtitles на устройстве и в companion UI.
+- Delivery without paid Apple Developer:
+  - `debug/install path`: `Xcode free signing`;
+  - `daily-use path`: `AltStore/SideStore`;
+  - paid Apple Developer не принимается как prerequisite.
+- Public interfaces, которые надо заложить в реализацию:
+  - `Krab Voice Gateway`: versioned `/v1/sessions/*`, realtime stream, runtime tuning, timeline, diagnostics, device binding, capabilities;
+  - `Krab Ear`: IPC capabilities + low-latency ingest methods как source-of-truth по локальному аудио контуру;
+  - `Krab`: owner UI endpoints для translator readiness, active sessions, language/runtime policy, approval state, device/account status.
+- Ключевое техническое ограничение:
+  - нативные carrier/PSTN вызовы на iPhone нельзя проектировать так, будто приложение свободно “встраивается” в системный телефонный аудиопоток. План должен исходить из `companion/VoIP/call-assist architecture`, а не из предположения о полном захвате native phone internals.
+- Внешние best practices и референсы, на которые опираемся:
+  - [Apple CallKit](https://developer.apple.com/documentation/callkit) и [PushKit](https://developer.apple.com/documentation/pushkit/responding-to-voip-notifications-from-pushkit)
+  - [Twilio Voice iOS SDK](https://www.twilio.com/docs/voice/sdks/ios)
+  - [Twilio Media Streams](https://www.twilio.com/docs/voice/media-streams)
+  - [WhisperKit](https://github.com/argmaxinc/WhisperKit)
+  - [LiveKit voice AI docs](https://docs.livekit.io/agents/start/voice-ai/)
+  - [OpenAI Realtime / Voice Agents](https://platform.openai.com/docs/guides/realtime)
+
+## Delivery Program
+- Фаза 1. `Foundation Hardening`
+  - truthful panel;
+  - capability registry;
+  - live-refresh;
+  - operator/account identity;
+  - split runtime per macOS account;
+  - полный relogin coverage;
+  - mutable settings truth.
+- Фаза 2. `Channel + Inbox Reliability`
+  - inbox/escalation;
+  - guaranteed delivery semantics;
+  - consistent streaming;
+  - attachment normalization;
+  - owner-facing action reports.
+- Фаза 3. `System / Browser Agency`
+  - system control v2;
+  - browser attach truth;
+  - MCP governance;
+  - window/app automation;
+  - optional camera/screen awareness.
+- Фаза 4. `Multimodal + Voice Foundation`
+  - unified ingest;
+  - robust text+voice delivery;
+  - realtime streaming;
+  - stable Ear/Gateway/Krab contracts.
+- Фаза 5. `Realtime Call Translator v1`
+  - iPhone companion;
+  - ordinary calls first;
+  - voice-first translation;
+  - subtitles/timeline/summary;
+  - ES/RU/EN core flows;
+  - Xcode free signing + AltStore/SideStore delivery.
+- Фаза 6. `Internet Call Translation`
+  - Voice Gateway session adapters;
+  - WebRTC/VoIP path;
+  - internet-call subtitles + dubbing;
+  - later channel-specific adapters.
+- Фаза 7. `Swarm v2 + Inter-Team Bus`
+  - teams as runtime entities;
+  - peer-to-peer delegation;
+  - shared artifacts;
+  - quality gate `plan -> execute -> verify -> critique`.
+- Фаза 8. `Trading Lab`
+  - paper-only;
+  - history learning;
+  - explainable signals;
+  - risk engine;
+  - shadow execution;
+  - KPI gate;
+  - real money only after explicit owner approval.
+- Фаза 9. `Product Teams`
+  - coding/dev;
+  - content factory;
+  - deep research;
+  - life assistant;
+  - shopping;
+  - dashboards, recurring jobs, inbox integration.
+- Фаза 10. `Controlled Real Autonomy`
+  - guarded real-world actions only after KPI + owner gate;
+  - kill-switch;
+  - daily loss/risk caps;
+  - same pattern for money/admin/high-impact tasks.
+
+## Test Plan And Handoff
+- Для каждой фазы: `unit + integration + live smoke + owner UI smoke + channel E2E + restart recovery`.
+- Для `Translator v1` acceptance:
+  - companion устанавливается и запускается без paid developer account;
+  - ordinary-call flow работает по выбранной architecture;
+  - озвучка туда/обратно стабильна;
+  - subtitles/timeline/summary/diagnostics сохраняются;
+  - fallback не рвёт звонок;
+  - latency и quality метрики замеряются отдельно.
+- Для `Internet Call Translation` acceptance:
+  - сессия поднимается через Voice Gateway;
+  - realtime events идут предсказуемо;
+  - subtitles и dubbing согласованы по timeline.
+- Для `Trading Lab` acceptance:
+  - только paper mode до gate;
+  - журнал всех сделок обязателен;
+  - обучение на истории сделок работает;
+  - метрики включают `PnL`, risk-adjusted score, `max drawdown`, discipline score, news attribution.
+- Для `Multi-account` acceptance:
+  - соседняя macOS-учётка может полноценно запускать, тестировать и сопровождать проект;
+  - при возвращении на текущую учётку ничего не ломается;
+  - runtime/auth/secrets не пересекаются опасным образом.
+- Handoff bundle для перехода в новый диалог и другую учётку должен включать:
+  - truthful runtime snapshot;
+  - known issues;
+  - active contracts/capabilities;
+  - approved roadmap/master-plan;
+  - audit старых translator-проектов;
+  - список канонических сервисов и what-not-to-reuse;
+  - инструкции по multi-account запуску и sideload paths.
+
+## Assumptions And Defaults
+- Старые translator-проекты не merge’им в `Krab` целиком. Используем только как доноров клиентских идей, UX и отдельных компонентов.
+- `Krab Voice Gateway` — единственный канонический backend трека переводчика звонков.
+- `Krab Ear` остаётся отдельным локальным сервисом и не превращается в дублирующий voice gateway.
+- `OpenAI Codex` остаётся primary для основного Krab runtime; экспериментальные подписочные обходные пути допускаются только как lab/fallback.
+- Команды могут общаться между собой напрямую, но только через контролируемый `team bus` с trace/policy/artifacts.
+- Для разработки на соседней учётке принимаем: один Mac, один repo, несколько runtime-профилей и разные auth/secrets слои.
+- Полный редизайн owner-панели откладываем до стабилизации `Foundation + Channel/System parity + Voice foundation`, чтобы рисовать её один раз под реальную карту возможностей.

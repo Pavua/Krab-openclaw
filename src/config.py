@@ -83,15 +83,20 @@ class Config:
         os.getenv("GUARDED_IDLE_UNLOAD_GRACE_SEC", "90")
     )
     # Таймауты stream-ответа OpenClaw (сек):
-    # - CHUNK: ожидание между чанками;
+    # - CHUNK: ожидание нового чанка стриминга (между порциями данных);
     # - FIRST_CHUNK: ожидание первого чанка для текстового запроса;
     # - PHOTO_FIRST_CHUNK: ожидание первого чанка для фото/vision запроса.
-    OPENCLAW_CHUNK_TIMEOUT_SEC: float = float(os.getenv("OPENCLAW_CHUNK_TIMEOUT_SEC", "180"))
+    #
+    # Зачем 3600 (1 час):
+    # - Краб на практике обрабатывает запросы по 30-40 минут (Gemini Pro, локальные модели);
+    # - старый лимит 180 сек обрывал живой stream и порождал ложную ошибку;
+    # - Gateway сам управляет своим lifecycle — двойной таймаут вреден.
+    OPENCLAW_CHUNK_TIMEOUT_SEC: float = float(os.getenv("OPENCLAW_CHUNK_TIMEOUT_SEC", "3600"))
     OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC: float = float(
-        os.getenv("OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", "420")
+        os.getenv("OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", "3600")
     )
     OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC: float = float(
-        os.getenv("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "540")
+        os.getenv("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", "3600")
     )
     # Отдельные read-timeout бюджеты для buffered `stream=False` completion.
     # Зачем:
@@ -129,11 +134,13 @@ class Config:
     # Зачем:
     # - пользователь должен понимать, что запрос жив и модель действительно думает;
     # - эти уведомления не обрывают stream, а только редактируют временное сообщение.
+    # INITIAL_SEC=15: первый сигнал через 15 сек — быстро подтверждаем, что запрос принят.
+    # REPEAT_SEC=30: повторяем каждые 30 сек с обновлённым статусом инструмента.
     OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC: float = float(
-        os.getenv("OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC", "20")
+        os.getenv("OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC", "15")
     )
     OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC: float = float(
-        os.getenv("OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC", "45")
+        os.getenv("OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC", "30")
     )
     OPENCLAW_PHOTO_PROGRESS_NOTICE_INITIAL_SEC: float = float(
         os.getenv("OPENCLAW_PHOTO_PROGRESS_NOTICE_INITIAL_SEC", "30")

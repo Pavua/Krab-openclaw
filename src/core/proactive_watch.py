@@ -333,6 +333,25 @@ class ProactiveWatchService:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("proactive_watch_inbox_sync_failed", reason=reason, error=str(exc))
+            try:
+                inbox_service.upsert_item(
+                    dedupe_key=f"proactive:watch_trigger:{reason}:{snapshot.ts_utc}",
+                    kind="proactive_action",
+                    source="krab-internal",
+                    title=f"Proactive watch: {reason}",
+                    body=digest,
+                    severity="info",
+                    status="open",
+                    identity=inbox_service.build_identity(
+                        channel_id="system",
+                        team_id="owner",
+                        trace_id=f"watch:{reason}",
+                        approval_scope="owner",
+                    ),
+                    metadata={"action_type": "watch_trigger", "reason": reason, "alerted": alerted},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("proactive_watch_action_trace_failed", reason=reason, error=str(exc))
         return {
             "snapshot": asdict(snapshot),
             "reason": reason,

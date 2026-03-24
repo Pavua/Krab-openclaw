@@ -386,8 +386,23 @@ export const buildTelegramMessageContext = async ({
   if (!bodyText && allMedia.length > 0) {
     bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
   }
+
+  const hasDocumentOrAudio = msg.document || msg.audio || msg.voice;
+  if (hasDocumentOrAudio && allMedia.length > 0) {
+    const mediaContexts = allMedia.map((m) =>
+      `[Файл сохранён: ${m.path}]${m.contentType ? ` (mime: ${m.contentType})` : ""}`
+    );
+    const mediaNotice = mediaContexts.join("\n");
+    if (bodyText === placeholder) {
+      bodyText = mediaNotice;
+      rawBody = mediaNotice;
+    } else {
+      bodyText = `${mediaNotice}\n\n${bodyText}`;
+      rawBody = `${mediaNotice}\n\n${rawBody}`;
+    }
+  }
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
-    (ent) => ent.type === "mention",
+    (ent: any) => ent.type === "mention",
   );
   const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
   const computedWasMentioned = matchesMentionWithExplicit({

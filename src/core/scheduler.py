@@ -381,6 +381,26 @@ class KrabScheduler:
             rec.last_error = ""
             self._reminders.pop(reminder_id, None)
             self._persist()
+            inbox_service.upsert_item(
+                dedupe_key=f"proactive:reminder_fired:{reminder_id}",
+                kind="proactive_action",
+                source="krab-internal",
+                title=f"Reminder delivered: {rec.text[:80]}",
+                body=(
+                    f"Chat: `{rec.chat_id}`\n"
+                    f"Text: {rec.text}\n"
+                    f"Fired at: `{rec.fired_at_iso}`"
+                ),
+                severity="info",
+                status="open",
+                identity=inbox_service.build_identity(
+                    channel_id=str(rec.chat_id),
+                    team_id="owner",
+                    trace_id=reminder_id,
+                    approval_scope="owner",
+                ),
+                metadata={"action_type": "reminder_fired", "reminder_id": reminder_id, "chat_id": rec.chat_id},
+            )
             inbox_service.resolve_reminder(reminder_id, status="done")
         except Exception as exc:  # noqa: BLE001
             await self._retry_or_fail(rec, f"send_error:{exc}")

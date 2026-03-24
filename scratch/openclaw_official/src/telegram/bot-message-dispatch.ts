@@ -284,26 +284,8 @@ export const dispatchTelegramMessage = async ({
     },
   });
   draftStream?.stop();
-  let sentFallback = false;
-  if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
-    const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
-      chatId: String(chatId),
-      token: opts.token,
-      runtime,
-      bot,
-      replyToMode,
-      textLimit,
-      thread: threadSpec,
-      tableMode,
-      chunkMode,
-      linkPreview: telegramCfg.linkPreview,
-      replyQuoteText,
-    });
-    sentFallback = result.delivered;
-  }
 
-  const hasFinalResponse = queuedFinal || sentFallback;
+  const hasFinalResponse = queuedFinal;
   if (!hasFinalResponse) {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });

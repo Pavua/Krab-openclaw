@@ -86,7 +86,12 @@ async def test_scheduler_reminder_delivers_via_bound_sender(tmp_path: Path) -> N
         assert sent[0][0] == "-10012345"
         assert "⏰ Напоминание" in sent[0][1]
         assert scheduler.list_reminders() == []
-        assert inbox.get_summary()["open_items"] == 0
+        # The reminder item is resolved to "done"; new proactive_action trace stays open.
+        open_non_proactive = [
+            item for item in inbox.list_items(limit=20)
+            if item["kind"] != "proactive_action" and item["status"] in {"open", "acked"}
+        ]
+        assert open_non_proactive == [], f"Expected no open reminder items; found: {open_non_proactive}"
         done_items = inbox.list_items(status="done", kind="reminder", limit=5)
         assert done_items
         assert done_items[0]["metadata"]["chat_id"] == "-10012345"

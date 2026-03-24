@@ -30,15 +30,31 @@ DEFAULT_TTL_SECONDS = 3600
 # Корневая директория для cache DB — user-specific, избегаем readonly-проблем при
 # запуске под другим macOS аккаунтом, чем владелец репозитория.
 _CACHE_DIR = Path.home() / ".openclaw" / "krab_runtime_state"
+# Fallback: если HOME недоступен (другая учётка без прав), используем /tmp
+_CACHE_DIR_FALLBACK = Path("/tmp") / "krab_runtime_cache"
 
 
 def _resolve_cache_path(db_name: str) -> str:
     """
     Возвращает абсолютный путь к cache DB.
     Директория создаётся автоматически если не существует.
+
+    Fallback-стратегия: если ~/.openclaw недоступна (например, запуск от другой
+    macOS учётки без прав), используем /tmp/krab_runtime_cache — это лучше чем краш.
+    /tmp-кэш эфемерен, но поддерживает работу бота без ошибок.
     """
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return str(_CACHE_DIR / db_name)
+    for cache_dir in (_CACHE_DIR, _CACHE_DIR_FALLBACK):
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            # Пробуем записать тестовый файл, чтобы убедиться в реальном rw-доступе
+            test_path = cache_dir / ".write_test"
+            test_path.write_text("ok")
+            test_path.unlink(missing_ok=True)
+            return str(cache_dir / db_name)
+        except (PermissionError, OSError):
+            continue
+    # Если оба варианта недоступны — возвращаем /tmp (будет ошибка при connect, но не при импорте)
+    return str(_CACHE_DIR_FALLBACK / db_name)
 
 
 class CacheManager:

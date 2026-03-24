@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Krab Core (web panel :8080)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "src.main"],
+      "port": 8080
+    },
+    {
+      "name": "OpenClaw Gateway (:18789)",
+      "runtimeExecutable": "openclaw",
+      "runtimeArgs": ["gateway"],
+      "port": 18789
+    },
+    {
+      "name": "Voice Gateway (:8090)",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["../Krab Voice Gateway/scripts/start_gateway.command"],
+      "port": 8090
+    },
+    {
+      "name": "Claude Proxy Server (:17191)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["scripts/claude_proxy_server.py"],
+      "port": 17191
+    }
+  ]
+}

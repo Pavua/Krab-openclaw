@@ -177,7 +177,12 @@ async def test_capture_gateway_transition_syncs_inbox(monkeypatch: pytest.Monkey
     up = await service.capture(manual=False, persist_memory=True, notify=False)
 
     assert down["reason"] == "gateway_down"
-    assert inbox.get_summary()["open_items"] == 0
+    # watch_alert items are resolved; only proactive_action traces remain open.
+    open_non_proactive = [
+        item for item in inbox.list_items(limit=20)
+        if item["kind"] != "proactive_action" and item["status"] in {"open", "acked"}
+    ]
+    assert open_non_proactive == [], f"Expected no open watch_alert items; found: {open_non_proactive}"
     done_items = inbox.list_items(status="done", kind="watch_alert", limit=5)
     assert up["reason"] == "gateway_recovered"
     assert done_items

@@ -1,0 +1,838 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - heading "Krab Web Panel V2" [level=1] [ref=e6]
+        - generic [ref=e9]: "Gateway Token: Missing"
+      - paragraph [ref=e10]: Nexus Orchestration & Local LM Gateway
+    - button "Синхронизировать данные" [ref=e11] [cursor=pointer]:
+      - img [ref=e12]
+      - text: Sync Data
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - heading "Core Liveness (Lite)" [level=3] [ref=e16]: Core Liveness (Lite)
+      - paragraph [ref=e18]: —
+      - paragraph [ref=e19]: Waiting for ping...
+    - generic [ref=e20]:
+      - heading "Ecosystem Deep Health —" [level=3] [ref=e21]:
+        - text: Ecosystem Deep Health
+        - generic [ref=e22]: —
+      - paragraph [ref=e23]: —
+      - generic [ref=e24]: —
+      - paragraph [ref=e25]: Waiting for deep scan...
+  - generic [ref=e26]:
+    - generic [ref=e27]:
+      - heading "Система" [level=3] [ref=e28]
+      - paragraph [ref=e29]: —
+    - generic [ref=e30]:
+      - heading "Black Box" [level=3] [ref=e31]
+      - paragraph [ref=e32]: —
+    - generic [ref=e33]:
+      - heading "RAG Docs" [level=3] [ref=e34]
+      - paragraph [ref=e35]: —
+    - generic [ref=e36]:
+      - heading "Local Model" [level=3] [ref=e37]
+      - paragraph [ref=e38]: —
+  - generic [ref=e39]:
+    - generic [ref=e40]:
+      - generic [ref=e41]:
+        - heading "Сервисы & Интеграции" [level=3] [ref=e42]
+        - generic [ref=e43]: —
+        - generic [ref=e44]: "Ошибка обновления: HTTP 500"
+      - generic [ref=e45]:
+        - heading "Рекомендовано (Routing)" [level=3] [ref=e46]
+        - paragraph [ref=e47]: —
+        - paragraph
+      - group [ref=e49]:
+        - generic "Диагностика & API Ссылки ▼" [ref=e50] [cursor=pointer]:
+          - generic [ref=e51]: Диагностика & API Ссылки
+          - generic [ref=e52]: ▼
+    - generic [ref=e53]:
+      - heading "Ops Center v2" [level=3] [ref=e54]
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - heading "Queue Stability" [level=4] [ref=e57]: Queue Stability
+          - generic [ref=e59]:
+            - generic [ref=e60]: "Глубина очереди:"
+            - generic [ref=e61]: "0"
+          - generic [ref=e62]:
+            - generic [ref=e63]: "Активные задачи:"
+            - generic [ref=e64]: "0"
+          - generic [ref=e65]:
+            - generic [ref=e66]: "Среднее время (с):"
+            - generic [ref=e67]: "0.0"
+          - generic [ref=e68]:
+            - generic [ref=e69]: "Возраст старейшей:"
+            - generic [ref=e70]: 0s
+          - generic [ref=e71]:
+            - generic [ref=e72]: "Застрявшие задачи:"
+            - generic [ref=e73]: "0"
+          - generic [ref=e74]:
+            - generic [ref=e75]: "Task Aborts/Retries:"
+            - generic [ref=e76]: "0"
+          - generic [ref=e77]:
+            - generic [ref=e78]: "Guard Triggers:"
+            - generic [ref=e79]: "0"
+        - generic [ref=e80]:
+          - heading "Cloud Routing UX" [level=4] [ref=e81]: Cloud Routing UX
+          - generic [ref=e83]:
+            - generic [ref=e84]: "Активный тир:"
+            - generic [ref=e85]: —
+          - generic [ref=e86]:
+            - generic [ref=e87]: "Использован Fallback:"
+            - generic [ref=e88]: "No"
+          - generic [ref=e89]:
+            - generic [ref=e90]: "Причина Fallback:"
+            - generic [ref=e91]: —
+          - generic [ref=e92]:
+            - generic [ref=e93]: "Код последней ошибки:"
+            - generic [ref=e94]: None
+          - generic [ref=e95]:
+            - generic [ref=e96]: "Заблокировано (Preflight):"
+            - generic [ref=e97]: "0"
+        - generic [ref=e98]:
+          - heading "SLA & Performance" [level=4] [ref=e99]: SLA & Performance
+          - generic [ref=e101]:
+            - generic [ref=e102]: "Success Rate:"
+            - generic [ref=e103]: —
+          - generic [ref=e104]:
+            - generic [ref=e105]: "Latency p50:"
+            - generic [ref=e106]: —
+          - generic [ref=e107]:
+            - generic [ref=e108]: "Latency p95:"
+            - generic [ref=e109]: —
+          - generic [ref=e110]:
+            - generic [ref=e111]: "Fail-Fast Count:"
+            - generic [ref=e112]: —
+      - heading "Alerts & Guardrails" [level=4] [ref=e113]
+      - textbox "Поиск по коду alert..." [ref=e115]
+      - generic [ref=e116]: —
+      - paragraph [ref=e117]
+      - generic [ref=e118]:
+        - generic [ref=e119]:
+          - 'textbox "Alert Code (ex: cloud_share)" [ref=e120]'
+          - textbox "Note (opt)" [ref=e121]
+        - generic [ref=e122]:
+          - button "Acknowledge" [ref=e123] [cursor=pointer]
+          - button "Revoke Ack" [ref=e124] [cursor=pointer]
+        - paragraph [ref=e125]: Ожидание...
+      - generic [ref=e126]:
+        - heading "Event Timeline (Timeline UI)" [level=4] [ref=e127]
+        - generic [ref=e128]:
+          - combobox [ref=e129] [cursor=pointer]:
+            - option "All Sev" [selected]
+            - option "Info"
+            - option "Warn"
+            - option "Error"
+          - combobox [ref=e130] [cursor=pointer]:
+            - option "All Chan" [selected]
+            - option "Local"
+            - option "Cloud"
+          - combobox [ref=e131] [cursor=pointer]:
+            - option "All Types" [selected]
+            - option "Metrics"
+            - option "Routing"
+            - option "Lifecycle"
+      - generic [ref=e133]:
+        - img [ref=e134]
+        - generic [ref=e135]: Loading timeline events...
+      - heading "Runtime Controls" [level=4] [ref=e136]
+      - generic [ref=e137]:
+        - generic [ref=e138]:
+          - text: "Channel State:"
+          - generic [ref=e139]: Wait...
+        - generic [ref=e140]:
+          - text: "Breaker State:"
+          - generic [ref=e141]: Wait...
+      - generic [ref=e142]:
+        - button "Repair Core" [ref=e143] [cursor=pointer]
+        - button "Clear Cache" [ref=e144] [cursor=pointer]
+        - button "Reset Cloud Tier" [ref=e145] [cursor=pointer]
+        - button "Run Smoke Trigger" [ref=e146] [cursor=pointer]
+      - paragraph [ref=e147]: Ready.
+  - generic [ref=e148]:
+    - heading "Anti-413 Recovery" [level=3] [ref=e149]
+    - paragraph [ref=e150]: Быстрые действия для перехода в новый чат без потери контекста.
+    - generic [ref=e151]:
+      - button "Create Checkpoint" [ref=e152] [cursor=pointer]
+      - button "Build Transition Pack" [ref=e153] [cursor=pointer]
+      - button "Refresh Context Links" [ref=e154] [cursor=pointer]
+    - paragraph [ref=e155]: Ожидание...
+    - generic [ref=e157]: —
+  - generic [ref=e158]:
+    - heading "OpenClaw Control Center" [level=3] [ref=e159]:
+      - img [ref=e160]
+      - text: OpenClaw Control Center
+    - generic [ref=e162]:
+      - generic [ref=e163]:
+        - heading "Route & Model" [level=4] [ref=e164]: Route & Model
+        - generic [ref=e166]:
+          - generic [ref=e167]:
+            - generic [ref=e168]: "Режим роутинга:"
+            - generic [ref=e169]: —
+          - generic [ref=e170]:
+            - generic [ref=e171]: "Локальный узел:"
+            - generic [ref=e172]: —
+          - generic [ref=e173]:
+            - generic [ref=e174]: "Облачные слоты:"
+            - generic [ref=e175]: —
+      - generic [ref=e176]:
+        - heading "Channels Health" [level=4] [ref=e177]: Channels Health
+        - generic [ref=e180]: —
+      - generic [ref=e181]:
+        - heading "Browser / MCP Readiness" [level=4] [ref=e182]: Browser / MCP Readiness
+        - generic [ref=e184]:
+          - generic [ref=e185]:
+            - generic [ref=e186]: "Stage:"
+            - generic [ref=e187]: —
+          - generic [ref=e188]:
+            - generic [ref=e189]: "Contour:"
+            - generic [ref=e190]: —
+          - generic [ref=e191]:
+            - generic [ref=e192]: "Relay reachable:"
+            - generic [ref=e193]: —
+          - generic [ref=e194]:
+            - generic [ref=e195]: "Tabs:"
+            - generic [ref=e196]: —
+          - generic [ref=e197]:
+            - generic [ref=e198]: "Мой Chrome:"
+            - generic [ref=e199]: —
+          - generic [ref=e200]:
+            - generic [ref=e201]: "OpenClaw path:"
+            - generic [ref=e202]: —
+          - generic [ref=e203]:
+            - generic [ref=e204]: "Chrome DevTools:"
+            - generic [ref=e205]: —
+          - generic [ref=e206]:
+            - generic [ref=e207]: "mcp.json:"
+            - generic [ref=e208]: —
+          - generic [ref=e209]:
+            - generic [ref=e210]: "Required MCP:"
+            - generic [ref=e211]: —
+        - generic [ref=e212]:
+          - generic [ref=e213]: —
+          - generic [ref=e214]: —
+        - generic [ref=e215]:
+          - button "Запустить Debug browser" [ref=e216] [cursor=pointer]
+          - button "Открыть Мой Chrome" [ref=e217] [cursor=pointer]
+        - generic [ref=e218]:
+          - generic [ref=e219]: —
+          - generic [ref=e220]: —
+      - generic [ref=e221]:
+        - heading "Autoswitch & Queue" [level=4] [ref=e222]
+        - generic [ref=e223]:
+          - generic [ref=e224]:
+            - generic [ref=e225]: "Статус:"
+            - generic [ref=e226]: —
+          - generic [ref=e227]:
+            - generic [ref=e228]: "Последнее перекл.:"
+            - generic [ref=e229]: —
+          - generic [ref=e230]:
+            - generic [ref=e231]: "Причина:"
+            - generic [ref=e232]: —
+        - generic [ref=e233]:
+          - generic [ref=e234]:
+            - generic [ref=e235]: "Queue preset:"
+            - generic [ref=e236]: —
+          - generic [ref=e237]:
+            - generic [ref=e238]: "Queue caps:"
+            - generic [ref=e239]: —
+          - generic [ref=e240]: Queue concurrency ещё не синхронизирован.
+          - generic [ref=e241]:
+            - button "Sequential 1/1" [ref=e242] [cursor=pointer]
+            - button "Parallel 4/8" [ref=e243] [cursor=pointer]
+      - generic [ref=e244]:
+        - heading "Local Model Engine" [level=4] [ref=e245]
+        - generic [ref=e246]:
+          - generic [ref=e247]:
+            - generic [ref=e248]: "Статус:"
+            - generic [ref=e249]: —
+          - generic [ref=e250]:
+            - generic [ref=e251]: "Загруженная модель:"
+            - generic [ref=e252]: —
+        - generic [ref=e253]:
+          - button "Загрузить по умолчанию" [ref=e254] [cursor=pointer]
+          - button "Выгрузить" [ref=e255] [cursor=pointer]
+          - button "Синхронизировать статус" [ref=e256] [cursor=pointer]
+      - generic [ref=e257]:
+        - heading "Совместимость Control UI" [level=4] [ref=e258]
+        - generic [ref=e259]:
+          - generic [ref=e260]:
+            - generic [ref=e261]: "Runtime:"
+            - generic [ref=e262]: —
+          - generic [ref=e263]:
+            - generic [ref=e264]: "Schema Warning:"
+            - generic [ref=e265]: —
+          - generic [ref=e266]:
+            - generic [ref=e267]: "Уровень влияния:"
+            - generic [ref=e268]: —
+          - generic [ref=e269]:
+            - generic [ref=e270]: "Рекомендация:"
+            - generic [ref=e271]: —
+      - generic [ref=e272]:
+        - heading "Эффективный роутинг" [level=4] [ref=e273]
+        - generic [ref=e274]:
+          - generic [ref=e275]:
+            - generic [ref=e276]: "Запрошено:"
+            - generic [ref=e277]: —
+          - generic [ref=e278]:
+            - generic [ref=e279]: "Эффективный:"
+            - generic [ref=e280]: —
+          - generic [ref=e281]:
+            - generic [ref=e282]: "Активный слот/модель:"
+            - generic [ref=e283]: —
+          - generic [ref=e284]:
+            - generic [ref=e285]: "Cloud Fallback:"
+            - generic [ref=e286]: —
+          - generic [ref=e287]:
+            - generic [ref=e288]: "Gateway auth:"
+            - generic [ref=e289]: —
+          - generic [ref=e290]:
+            - generic [ref=e291]: "Reasoning:"
+            - generic [ref=e292]: —
+          - generic [ref=e293]:
+            - generic [ref=e294]: "History budget:"
+            - generic [ref=e295]: —
+          - generic [ref=e296]:
+            - generic [ref=e297]: "Output cap:"
+            - generic [ref=e298]: —
+          - generic [ref=e299]:
+            - generic [ref=e300]: "Decision notes:"
+            - generic [ref=e301]: —
+      - generic [ref=e302]:
+        - heading "Cloud Keys Diagnostics" [level=4] [ref=e303]: Cloud Keys Diagnostics
+        - generic [ref=e305]:
+          - generic [ref=e306]:
+            - generic [ref=e307]: "OpenClaw (OpenAI):"
+            - generic [ref=e308]:
+              - generic [ref=e309]: —
+              - text: —
+          - generic [ref=e310]:
+            - generic [ref=e311]: "Google Gemini:"
+            - generic [ref=e312]:
+              - generic [ref=e313]: —
+              - text: —
+        - button "Deep Check OpenClaw Connection" [ref=e314] [cursor=pointer]
+      - generic [ref=e315]:
+        - heading "Cloud Tier Status" [level=4] [ref=e316]
+        - generic [ref=e317]:
+          - generic [ref=e318]:
+            - generic [ref=e319]: "Active Tier:"
+            - generic [ref=e320]: —
+          - generic [ref=e321]:
+            - generic [ref=e322]: "Configured:"
+            - generic [ref=e323]: —
+          - generic [ref=e324]:
+            - generic [ref=e325]: "Last Error:"
+            - generic [ref=e326]: —
+        - button "Run cloud diag" [ref=e327] [cursor=pointer]
+      - generic [ref=e328]:
+        - heading "Userbot ACL" [level=4] [ref=e329]
+        - generic [ref=e330]:
+          - generic [ref=e331]:
+            - generic [ref=e332]: "Owner:"
+            - generic [ref=e333]: —
+          - generic [ref=e334]:
+            - generic [ref=e335]: "Full:"
+            - generic [ref=e336]: —
+          - generic [ref=e337]:
+            - generic [ref=e338]: "Partial:"
+            - generic [ref=e339]: —
+          - generic [ref=e340]:
+            - generic [ref=e341]: "Partial commands:"
+            - generic [ref=e342]: —
+        - generic [ref=e343]:
+          - combobox [ref=e344] [cursor=pointer]:
+            - option "full" [selected]
+            - option "partial"
+          - textbox "@username или id" [ref=e345]
+        - generic [ref=e346]:
+          - button "Grant" [ref=e347] [cursor=pointer]
+          - button "Revoke" [ref=e348] [cursor=pointer]
+          - button "Refresh ACL" [ref=e349] [cursor=pointer]
+        - generic [ref=e350]: Готов
+      - generic [ref=e351]:
+        - heading "Voice Runtime" [level=4] [ref=e352]
+        - generic [ref=e353]:
+          - generic [ref=e354]:
+            - generic [ref=e355]: "Replies:"
+            - generic [ref=e356]: —
+          - generic [ref=e357]:
+            - generic [ref=e358]: "Delivery:"
+            - generic [ref=e359]: —
+          - generic [ref=e360]:
+            - generic [ref=e361]: "Speed:"
+            - generic [ref=e362]: —
+          - generic [ref=e363]:
+            - generic [ref=e364]: "Voice:"
+            - generic [ref=e365]: —
+          - generic [ref=e366]:
+            - generic [ref=e367]: "Voice ingress:"
+            - generic [ref=e368]: —
+          - generic [ref=e369]:
+            - generic [ref=e370]: "Live foundation:"
+            - generic [ref=e371]: —
+        - generic [ref=e372]:
+          - generic [ref=e373]:
+            - generic [ref=e374]: Replies
+            - combobox [ref=e375] [cursor=pointer]:
+              - option "Off" [selected]
+              - option "On"
+          - generic [ref=e376]:
+            - generic [ref=e377]: Delivery
+            - combobox [ref=e378] [cursor=pointer]:
+              - option "text+voice" [selected]
+              - option "voice-only"
+        - generic [ref=e379]:
+          - generic [ref=e380]:
+            - generic [ref=e381]: Speed
+            - spinbutton [ref=e382]
+          - generic [ref=e383]:
+            - generic [ref=e384]: Voice ID
+            - textbox "ru-RU-DmitryNeural" [ref=e385]
+        - generic [ref=e386]:
+          - button "Сохранить Voice Runtime" [ref=e387] [cursor=pointer]
+          - button "Обновить Voice Runtime" [ref=e388] [cursor=pointer]
+        - generic [ref=e389]: Готов
+      - generic [ref=e390]:
+        - heading "Translator Readiness" [level=4] [ref=e391]
+        - generic [ref=e392]:
+          - generic [ref=e393]:
+            - generic [ref=e394]: "Readiness:"
+            - generic [ref=e395]: —
+          - generic [ref=e396]:
+            - generic [ref=e397]: "Foundation:"
+            - generic [ref=e398]: —
+          - generic [ref=e399]:
+            - generic [ref=e400]: "Voice-first:"
+            - generic [ref=e401]: —
+          - generic [ref=e402]:
+            - generic [ref=e403]: "Аккаунт:"
+            - generic [ref=e404]: —
+          - generic [ref=e405]:
+            - generic [ref=e406]: "Маршрут runtime:"
+            - generic [ref=e407]: —
+          - generic [ref=e408]:
+            - generic [ref=e409]:
+              - generic [ref=e410]: "Userbot:"
+              - generic [ref=e411]: —
+            - generic [ref=e412]:
+              - generic [ref=e413]: "Workspace:"
+              - generic [ref=e414]: —
+          - generic [ref=e415]:
+            - generic [ref=e416]: "Shared write:"
+            - generic [ref=e417]: —
+          - generic [ref=e419]: —
+        - generic [ref=e420]:
+          - generic [ref=e421]:
+            - generic [ref=e422]: Ordinary calls
+            - generic [ref=e423]:
+              - generic [ref=e424]: —
+              - generic [ref=e425]: —
+          - generic [ref=e426]:
+            - generic [ref=e427]: Internet calls
+            - generic [ref=e428]:
+              - generic [ref=e429]: —
+              - generic [ref=e430]: —
+        - generic [ref=e431]:
+          - generic [ref=e432]:
+            - generic [ref=e433]: "Languages:"
+            - generic [ref=e434]: —
+          - generic [ref=e435]:
+            - generic [ref=e436]: "Active session:"
+            - generic [ref=e437]: —
+        - generic [ref=e438]:
+          - generic [ref=e439]:
+            - generic [ref=e440]: Session policy
+            - generic [ref=e441]:
+              - generic [ref=e442]: —
+              - generic [ref=e443]: —
+          - generic [ref=e444]:
+            - generic [ref=e445]: Runtime tuning
+            - generic [ref=e446]:
+              - generic [ref=e447]: —
+              - generic [ref=e448]: —
+        - generic [ref=e449]:
+          - generic [ref=e450]: Quick phrases
+          - generic [ref=e452]: —
+        - generic [ref=e453]:
+          - generic [ref=e454]:
+            - generic [ref=e455]: Session orchestration
+            - generic [ref=e456]: "session: —"
+          - generic [ref=e457]:
+            - generic [ref=e458]:
+              - generic [ref=e459]: Source
+              - combobox [ref=e460] [cursor=pointer]:
+                - option "mic" [selected]
+                - option "mobile"
+            - generic [ref=e461]:
+              - generic [ref=e462]: Mode
+              - combobox [ref=e463] [cursor=pointer]:
+                - option "auto_to_ru" [selected]
+                - option "ru_es_duplex"
+            - generic [ref=e464]:
+              - generic [ref=e465]: SRC lang
+              - combobox [ref=e466] [cursor=pointer]:
+                - option "auto" [selected]
+                - option "ru"
+                - option "es"
+                - option "en"
+            - generic [ref=e467]:
+              - generic [ref=e468]: TGT lang
+              - combobox [ref=e469] [cursor=pointer]:
+                - option "ru" [selected]
+                - option "es"
+                - option "en"
+            - generic [ref=e470]:
+              - generic [ref=e471]: TTS mode
+              - combobox [ref=e472] [cursor=pointer]:
+                - option "hybrid" [selected]
+                - option "local"
+                - option "cloud"
+            - generic [ref=e473]:
+              - generic [ref=e474]: Notify
+              - combobox [ref=e475] [cursor=pointer]:
+                - option "auto_on" [selected]
+                - option "auto_off"
+          - generic [ref=e476]:
+            - generic [ref=e477]:
+              - generic [ref=e478]: Label
+              - textbox "Owner Session" [ref=e479]
+            - generic [ref=e480]:
+              - generic [ref=e481]: Buffering
+              - combobox [ref=e482] [cursor=pointer]:
+                - option "adaptive" [selected]
+                - option "low_latency"
+                - option "stable"
+            - generic [ref=e483]:
+              - generic [ref=e484]: Target latency
+              - spinbutton [ref=e485]
+            - generic [ref=e486]:
+              - generic [ref=e487]: VAD sensitivity
+              - spinbutton [ref=e488]
+          - generic [ref=e489]:
+            - button "Старт сессии" [ref=e490] [cursor=pointer]
+            - button "Применить policy" [ref=e491] [cursor=pointer]
+            - button "Пауза" [ref=e492] [cursor=pointer]
+            - button "Resume" [ref=e493] [cursor=pointer]
+            - button "Стоп" [ref=e494] [cursor=pointer]
+            - button "Применить tuning" [ref=e495] [cursor=pointer]
+        - generic [ref=e496]:
+          - generic [ref=e497]: Quick phrase test
+          - generic [ref=e498]:
+            - generic [ref=e499]:
+              - generic [ref=e500]: Text
+              - textbox "Говорите медленнее" [ref=e501]
+            - generic [ref=e502]:
+              - generic [ref=e503]: Voice
+              - textbox "default" [ref=e504]
+            - generic [ref=e505]:
+              - generic [ref=e506]: Style
+              - textbox "neutral" [ref=e507]
+          - button "Отправить quick phrase" [ref=e509] [cursor=pointer]
+        - generic [ref=e510]:
+          - generic [ref=e511]: Why report
+          - generic [ref=e513]: —
+        - generic [ref=e514]:
+          - generic [ref=e515]:
+            - generic [ref=e516]: Timeline digest
+            - generic [ref=e517]: —
+          - generic [ref=e518]: —
+          - generic [ref=e520]: —
+          - generic [ref=e522]: —
+          - generic [ref=e523]:
+            - button "Пересобрать summary" [ref=e524] [cursor=pointer]
+            - button "Эскалировать в Inbox" [ref=e525] [cursor=pointer]
+        - generic [ref=e526]:
+          - generic [ref=e527]:
+            - generic [ref=e528]: iPhone companion
+            - generic [ref=e529]: —
+          - generic [ref=e530]:
+            - generic [ref=e531]:
+              - generic [ref=e532]: Registry
+              - generic [ref=e533]: —
+            - generic [ref=e534]:
+              - generic [ref=e535]: Current device
+              - generic [ref=e536]: —
+          - generic [ref=e537]:
+            - generic [ref=e538]:
+              - generic [ref=e539]: Device ID
+              - textbox "iphone-dev-1" [ref=e540]
+            - generic [ref=e541]:
+              - generic [ref=e542]: App version
+              - textbox "0.1.0" [ref=e543]
+            - generic [ref=e544]:
+              - generic [ref=e545]: Locale
+              - combobox [ref=e546] [cursor=pointer]:
+                - option "ru" [selected]
+                - option "es"
+                - option "en"
+            - generic [ref=e547]:
+              - generic [ref=e548]: APNS env
+              - combobox [ref=e549] [cursor=pointer]:
+                - option "development" [selected]
+                - option "production"
+            - generic [ref=e550]:
+              - generic [ref=e551]: Preferred source
+              - combobox [ref=e552] [cursor=pointer]:
+                - option "auto" [selected]
+                - option "ru"
+                - option "es"
+                - option "en"
+            - generic [ref=e553]:
+              - generic [ref=e554]: Preferred target
+              - combobox [ref=e555] [cursor=pointer]:
+                - option "ru" [selected]
+                - option "es"
+                - option "en"
+          - generic [ref=e557]:
+            - generic [ref=e558]: VoIP push token
+            - textbox "опционально для readiness / masked в registry" [ref=e559]
+          - generic [ref=e561]: —
+          - generic [ref=e563]: —
+          - generic [ref=e564]:
+            - button "Зарегистрировать companion" [ref=e565] [cursor=pointer]
+            - button "Привязать к session" [ref=e566] [cursor=pointer]
+            - button "Подготовить companion trial" [ref=e567] [cursor=pointer]
+            - button "Удалить companion" [ref=e568] [cursor=pointer]
+        - generic [ref=e569]:
+          - generic [ref=e570]:
+            - generic [ref=e571]: Delivery matrix
+            - generic [ref=e572]: —
+          - generic [ref=e573]:
+            - generic [ref=e574]:
+              - generic [ref=e575]:
+                - generic [ref=e576]: Ordinary calls v1
+                - generic [ref=e577]: —
+              - generic [ref=e578]: —
+              - generic [ref=e580]: —
+              - generic [ref=e582]: —
+            - generic [ref=e583]:
+              - generic [ref=e584]:
+                - generic [ref=e585]: Internet adapters
+                - generic [ref=e586]: —
+              - generic [ref=e587]: —
+              - generic [ref=e589]: —
+              - generic [ref=e591]: —
+          - generic [ref=e593]: —
+          - generic [ref=e595]: —
+        - generic [ref=e596]:
+          - generic [ref=e597]:
+            - generic [ref=e598]: Live trial preflight
+            - generic [ref=e599]: —
+          - generic [ref=e600]: —
+          - generic [ref=e602]: —
+          - generic [ref=e604]: —
+          - generic [ref=e605]: —
+        - generic [ref=e606]:
+          - generic [ref=e607]:
+            - generic [ref=e608]: Companion onboarding packet
+            - generic [ref=e609]: —
+          - generic [ref=e610]:
+            - generic [ref=e611]:
+              - generic [ref=e612]: Install tracks
+              - generic [ref=e613]: —
+            - generic [ref=e614]:
+              - generic [ref=e615]: Next packet step
+              - generic [ref=e616]: —
+          - generic [ref=e618]: —
+          - generic [ref=e620]: —
+          - generic [ref=e622]: —
+          - generic [ref=e624]: —
+          - generic [ref=e625]:
+            - button "Подставить subtitles-first" [ref=e626] [cursor=pointer]
+            - button "Подставить voice-first" [ref=e627] [cursor=pointer]
+            - button "Подставить RU-ES duplex" [ref=e628] [cursor=pointer]
+            - button "Собрать onboarding packet" [ref=e629] [cursor=pointer]
+        - generic [ref=e630]:
+          - generic [ref=e631]: Foundation checks
+          - generic [ref=e633]: —
+        - generic [ref=e634]:
+          - generic [ref=e635]: Следующие шаги
+          - generic [ref=e637]: —
+        - button "Обновить Translator" [ref=e639] [cursor=pointer]
+        - generic [ref=e640]: Готов
+      - generic [ref=e641]:
+        - heading "Recurring Cron" [level=4] [ref=e642]
+        - generic [ref=e643]:
+          - generic [ref=e644]:
+            - generic [ref=e645]: "Scheduler:"
+            - generic [ref=e646]: —
+          - generic [ref=e647]:
+            - generic [ref=e648]: "Jobs:"
+            - generic [ref=e649]: —
+          - generic [ref=e650]:
+            - generic [ref=e651]: "Next wake:"
+            - generic [ref=e652]: —
+          - generic [ref=e653]:
+            - generic [ref=e654]: "Store:"
+            - generic [ref=e655]: —
+        - generic [ref=e656]:
+          - generic [ref=e657]:
+            - generic [ref=e658]: Название
+            - textbox "Каждые 10 минут" [ref=e659]
+          - generic [ref=e660]:
+            - generic [ref=e661]: Every
+            - textbox "10m" [ref=e662]
+        - generic [ref=e663]:
+          - generic [ref=e664]:
+            - generic [ref=e665]: Тип
+            - combobox [ref=e666] [cursor=pointer]:
+              - option "system event" [selected]
+              - option "agent turn"
+          - generic [ref=e667]:
+            - generic [ref=e668]: Session
+            - combobox [ref=e669] [cursor=pointer]:
+              - option "main" [selected]
+              - option "isolated"
+        - generic [ref=e670]:
+          - generic [ref=e671]:
+            - generic [ref=e672]: Wake
+            - combobox [ref=e673] [cursor=pointer]:
+              - option "now" [selected]
+              - option "next-heartbeat"
+          - generic [ref=e674]:
+            - generic [ref=e675]: Agent
+            - textbox "main" [ref=e676]
+        - generic [ref=e677]:
+          - generic [ref=e678]: Сообщение / system event
+          - textbox "Проверь контур и пришли краткий отчёт." [ref=e679]
+        - generic [ref=e680]:
+          - button "Создать recurring" [ref=e681] [cursor=pointer]
+          - button "Обновить cron" [ref=e682] [cursor=pointer]
+        - generic [ref=e683]: Готов
+        - generic [ref=e685]: —
+    - generic [ref=e686]:
+      - button "Cloud Probe" [ref=e687] [cursor=pointer]:
+        - img [ref=e688]
+        - text: Cloud Probe
+      - combobox [ref=e691] [cursor=pointer]:
+        - option "Autoswitch Toggle" [selected]
+        - option "Production Safe"
+        - option "GPT-5.4 Canary"
+        - option "OpenAI Safe"
+        - option "Local First"
+        - option "Cloud First"
+      - button "Apply Autoswitch" [ref=e692] [cursor=pointer]
+      - generic [ref=e693]:
+        - button "Режим Local" [ref=e694] [cursor=pointer]
+        - button "Режим Auto" [ref=e695] [cursor=pointer]
+        - button "Режим Cloud" [ref=e696] [cursor=pointer]
+        - button "Обновить статус" [ref=e697] [cursor=pointer]
+      - generic [ref=e698]: Готов
+  - generic [ref=e699]:
+    - heading "Интерфейс AI Ассистента" [level=3] [ref=e700]:
+      - img [ref=e701]
+      - text: Интерфейс AI Ассистента
+    - generic [ref=e703]:
+      - generic [ref=e704]:
+        - generic [ref=e705]: 1. Режим роутинга
+        - combobox [ref=e706] [cursor=pointer]:
+          - option "Auto (Local-First)" [selected]
+          - option "Local (Force)"
+          - option "Cloud (Force)"
+      - generic [ref=e707]:
+        - generic [ref=e708]: 2. Профиль запуска
+        - combobox [ref=e709] [cursor=pointer]:
+          - option "Balanced Auto" [selected]
+          - option "Local Focus"
+          - option "Cloud Reasoning"
+    - generic [ref=e710]:
+      - button "Синхронизировать каталог" [ref=e711] [cursor=pointer]
+      - button "Применить только режим и профиль" [ref=e712] [cursor=pointer]
+      - generic [ref=e713]: Каталог моделей загружен.
+    - generic [ref=e714]: "Основной путь: режим + профиль. Точную cloud-модель меняй только если нужен ручной override."
+    - generic [ref=e715]: —
+    - generic [ref=e716]: —
+    - generic [ref=e717]:
+      - generic [ref=e718]: —
+      - generic [ref=e719]: —
+      - generic [ref=e720]: —
+    - generic [ref=e721]: —
+    - group [ref=e722]:
+      - generic "Глобальная цепочка OpenClaw и runtime-настройки" [ref=e723] [cursor=pointer]
+      - generic [ref=e724]: "Этот блок меняет live `~/.openclaw/openclaw.json` для всех каналов, userbot и main-agent, а не только текущий web-запуск."
+      - generic [ref=e725]:
+        - button "Сохранить глобальную цепочку, thinking и очередь" [ref=e726] [cursor=pointer]
+        - generic [ref=e727]: —
+    - generic [ref=e728]: —
+    - generic [ref=e729]: —
+    - group [ref=e730]:
+      - generic "Cloud inventory и live-check" [ref=e731] [cursor=pointer]
+      - option "(inventory пуст)" [selected]
+    - group [ref=e732]:
+      - 'generic "Advanced: точная привязка cloud-слота" [ref=e733] [cursor=pointer]'
+      - option "Chat" [selected]
+      - option "gemini-2.5-flash" [selected]
+    - generic [ref=e734]:
+      - generic [ref=e735]:
+        - generic [ref=e736]: Тип Задачи
+        - combobox [ref=e737] [cursor=pointer]:
+          - option "Chat" [selected]
+          - option "Reasoning"
+          - option "Coding"
+          - option "Review"
+      - generic [ref=e738]:
+        - generic [ref=e739]: Глубина
+        - combobox [ref=e740] [cursor=pointer]:
+          - option "Auto" [selected]
+          - option "Fast"
+          - option "Deep"
+      - generic [ref=e741]:
+        - generic [ref=e742]: RAG Контекст
+        - combobox [ref=e743] [cursor=pointer]:
+          - option "Off" [selected]
+          - option "On"
+      - generic [ref=e744]:
+        - generic [ref=e745]: Модель для этого запуска (облако + local)
+        - combobox [ref=e746] [cursor=pointer]:
+          - option "Авто по текущему роутингу" [selected]
+    - generic [ref=e747]:
+      - generic [ref=e748]: "Здесь показаны все доступные модели для разового запуска: облачные и локальные. В `Advanced: точная привязка cloud-слота` список уже уже и содержит только cloud-модели."
+      - generic [ref=e749]:
+        - generic [ref=e750]: "Обработка запросов:"
+        - generic [ref=e751]: —
+        - generic [ref=e752]: —
+        - button "Sequential 1/1" [ref=e753] [cursor=pointer]
+        - button "Parallel 4/8" [ref=e754] [cursor=pointer]
+        - generic [ref=e755]: Это не ускоряет один ответ, а меняет, сколько запросов runtime может обрабатывать одновременно.
+    - group [ref=e756]:
+      - generic "Расширенные параметры запроса" [ref=e757] [cursor=pointer]
+    - textbox "Введите задачу, промпт или фрагмент кода..." [ref=e758]
+    - generic [ref=e759]:
+      - generic [ref=e760]:
+        - button "Запустить ассистента" [ref=e761] [cursor=pointer]:
+          - img [ref=e762]
+          - text: Запустить
+        - button "Собрать preflight-план" [ref=e764] [cursor=pointer]: План (Preflight)
+      - generic [ref=e766]:
+        - generic [ref=e767]: "Rule:"
+        - generic [ref=e768]: "Exec:"
+        - generic [ref=e769]: Готов к запуску
+    - generic [ref=e771]:
+      - img [ref=e772]
+      - generic [ref=e773]: Ожидаю запрос
+      - generic [ref=e774]: Запусти ассистента или используй быстрые утилиты ниже.
+    - generic [ref=e775]:
+      - heading "Быстрые утилиты" [level=4] [ref=e776]
+      - generic [ref=e777]:
+        - generic [ref=e778]:
+          - textbox "Поисковый запрос..." [ref=e779]
+          - button "Искать в вебе" [ref=e780] [cursor=pointer]: Поиск
+        - generic [ref=e781]:
+          - textbox "Тема deep research..." [ref=e782]
+          - button "Начать глубокое исследование" [ref=e783] [cursor=pointer]: Глубокое исследование
+        - generic [ref=e784]:
+          - textbox "URL для разбора..." [ref=e785]
+          - button "Анализировать ссылку" [ref=e786] [cursor=pointer]: Анализ URL
+        - generic [ref=e787]:
+          - button "Выбрать файл для загрузки" [ref=e788]
+          - button "Прикрепить файл" [ref=e789] [cursor=pointer]
+      - paragraph [ref=e790]: Используй утилиты для автоподготовки качественного промпта.
+    - generic [ref=e791]:
+      - spinbutton [ref=e792]: "5"
+      - textbox "Профиль (опц)" [ref=e793]
+      - textbox "Комментарии к отзыву..." [ref=e794]
+      - button "Отправить отзыв" [ref=e795] [cursor=pointer]
+      - button "Показать стату" [ref=e796] [cursor=pointer]
+    - paragraph [ref=e797]: Score is applied to the latest engine run profile.

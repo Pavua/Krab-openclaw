@@ -68,6 +68,28 @@ class Perceptor:
             logger.warning("perceptor_transcribe_failed", error=str(exc))
             return ""
 
+    async def transcribe(self, audio_path: str, model_manager: object = None) -> str:
+        """
+        Алиас для совместимости с userbot_bridge.py:
+            perceptor.transcribe(str(saved_path), model_manager)
+
+        Читает файл с диска и делегирует в transcribe_audio через Voice Gateway.
+        model_manager не используется (транскрипция идёт через Gateway, а не LLM).
+        """
+        import pathlib
+
+        path = pathlib.Path(audio_path)
+        if not path.exists():
+            logger.warning("perceptor_transcribe_file_not_found", path=str(path))
+            return "Ошибка транскрибации: файл не найден"
+        try:
+            audio_bytes = path.read_bytes()
+        except Exception as exc:
+            logger.warning("perceptor_transcribe_read_failed", path=str(path), error=str(exc))
+            return "Ошибка транскрибации: не удалось прочитать файл"
+
+        return await self.transcribe_audio(audio_bytes)
+
     async def speak(self, text: str, voice_id: str | None = None) -> str:
         """
         Синтезирует речь через voice_engine.py.

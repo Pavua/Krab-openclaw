@@ -272,6 +272,50 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"❌ Ошибка поиска: {e}")
 
 
+async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Запуск роевого обсуждения (аналитик -> критик -> интегратор).
+    Использование: !swarm <тема>
+    """
+    from ..core.swarm import AgentRoom
+    
+    topic = bot._get_command_args(message)
+    if not topic:
+        raise UserInputError(user_message="🐝 О чем поговорить роем? Напиши: `!swarm <тема>`")
+
+    msg = await message.reply(f"🐝 **Запуск Swarm Room...**\nТема: `{topic}`")
+    
+    try:
+        chat_id = str(message.chat.id)
+        user = message.from_user
+        access_profile = bot._get_access_profile(user)
+        is_allowed_sender = bot._is_allowed_sender(user)
+        system_prompt = bot._build_system_prompt_for_sender(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_profile.level,
+        )
+        
+        router_adapter = _AgentRoomRouterAdapter(
+            chat_id=chat_id,
+            system_prompt=system_prompt,
+        )
+        
+        room = AgentRoom()
+        result_text = await room.run_round(topic, router_adapter)
+        
+        if len(result_text) > 4000:
+            chunks = _split_text_for_telegram(result_text)
+            await msg.edit(chunks[0])
+            for part in chunks[1:]:
+                await message.reply(part)
+        else:
+            await msg.edit(result_text)
+            
+    except Exception as e:
+        logger.error("swarm_error", error=str(e))
+        await msg.edit(f"❌ Ошибка Swarm: {str(e)[:500]}")
+
+
 async def handle_shop(bot: "KraabUserbot", message: Message) -> None:
     """Поиск товаров на Mercadona через перехват XHR/Fetch ответов API."""
     from ..skills.mercadona import search_mercadona
