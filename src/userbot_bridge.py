@@ -61,7 +61,6 @@ from .integrations.macos_automation import macos_automation
 from .handlers import (
     handle_agent,
     handle_acl,
-    handle_audio_message,
     handle_browser,
     handle_claude_cli,
     handle_clear,
@@ -92,6 +91,7 @@ from .handlers import (
     handle_set,
     handle_shop,
     handle_status,
+    handle_swarm,
     handle_sysinfo,
     handle_translator,
     handle_voice,
@@ -556,6 +556,10 @@ class KraabUserbot:
         async def wrap_status(c, m):
             await run_cmd(handle_status, m)
 
+        @self.client.on_message(filters.command("swarm", prefixes=prefixes) & _make_command_filter("swarm"), group=-1)
+        async def wrap_swarm(c, m):
+            await run_cmd(handle_swarm, m)
+
         @self.client.on_message(filters.command("model", prefixes=prefixes) & _make_command_filter("model"), group=-1)
         async def wrap_model(c, m):
             await run_cmd(handle_model, m)
@@ -727,13 +731,10 @@ class KraabUserbot:
         async def wrap_browser(c, m):
             await run_cmd(handle_browser, m)
 
-        # Обработка голосовых/аудио сообщений
-        @self.client.on_message((filters.voice | filters.audio) & ~filters.bot, group=-1)
-        async def wrap_audio(c, m):
-            await run_cmd(handle_audio_message, m)
-
-        # Обработка обычных сообщений и медиа
-        @self.client.on_message((filters.text | filters.photo | filters.voice | filters.audio) & ~filters.bot, group=0)
+        # Обработка обычных сообщений, медиа, голосовых и документов.
+        # Voice/audio проходят в _process_message → _transcribe_audio_message
+        # (устаревший wrap_audio с stop_propagation() удалён — он блокировал AI pipeline).
+        @self.client.on_message((filters.text | filters.photo | filters.voice | filters.audio | filters.document) & ~filters.bot, group=0)
         async def wrap_message(c, m):
             await self._process_message(m)
 
@@ -3521,17 +3522,87 @@ class KraabUserbot:
                     break
                 except asyncio.TimeoutError:
                     elapsed_wait_sec = time.monotonic() - started_wait_at
+                    
+                    if received_any_chunk:
+                        logger.error(
+                            "openclaw_stream_chunk_timeout",
+                            chat_id=chat_id,
+                            timeout_sec=wait_timeout,
+                            first_chunk=False,
+                            has_photo=bool(images),
+                        )
+                        full_response = "❌ Модель слишком долго пишет ответ (оборвано на полуслове)."
+                        if next_chunk_task and not next_chunk_task.done():
+                            next_chunk_task.cancel()
+                            try:
+                                await next_chunk_task
+                            except (asyncio.CancelledError, StopAsyncIteration):
+                                pass
+                            except Exception:
+                                pass
+                        try:
+                            await stream.aclose()
+                        except Exception:
+                            pass
+                        break
+
+                    # Fetch tool summary if needed for intervals
                     tool_summary = ""
                     if hasattr(openclaw_client, "get_active_tool_calls_summary"):
                         try:
                             tool_summary = openclaw_client.get_active_tool_calls_summary()
                         except Exception:
                             tool_summary = ""
-                    if (
-                        not received_any_chunk
-                        and tool_summary
-                        and elapsed_wait_sec >= next_tool_progress_sec - 1e-6
-                    ):
+
+                    handled_interval = False
+
+                    # Handle Tool Progress
+                    if elapsed_wait_sec >= next_tool_progress_sec - 1e-6:
+                        handled_interval = True
+                        if tool_summary:
+                            route_meta = {}
+                            if hasattr(openclaw_client, "get_last_runtime_route"):
+                                try:
+                                    route_meta = openclaw_client.get_last_runtime_route() or {}
+                                except Exception:
+                                    route_meta = {}
+                            route_model = str(
+                                route_meta.get("model")
+                                or startup_route_model
+                                or getattr(config, "MODEL", "")
+                                or ""
+                            ).strip()
+                            route_attempt = int(route_meta.get("attempt") or 0) or None
+                            progress_notice = _build_openclaw_progress_wait_notice(
+                                route_model=route_model,
+                                attempt=route_attempt,
+                                elapsed_sec=elapsed_wait_sec,
+                                notice_index=max(1, progress_notice_count),
+                                tool_calls_summary=tool_summary,
+                            )
+                            if progress_notice != last_progress_notice_text or tool_summary != last_tool_summary:
+                                try:
+                                    if is_self:
+                                        message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
+                                    else:
+                                        temp_msg = await self._safe_edit(temp_msg, progress_notice)
+                                    last_progress_notice_text = progress_notice
+                                    last_tool_summary = tool_summary
+                                except Exception as exc:
+                                    logger.warning(
+                                        "openclaw_tool_progress_notice_delivery_failed",
+                                        chat_id=chat_id,
+                                        route_model=route_model,
+                                        route_attempt=route_attempt,
+                                        error=str(exc),
+                                        has_photo=bool(images),
+                                    )
+                        next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
+
+                    # Handle Slow First Chunk
+                    if not slow_first_chunk_notice_sent and elapsed_wait_sec >= float(first_chunk_timeout_sec) - 1e-6:
+                        handled_interval = True
+                        slow_first_chunk_notice_sent = True
                         route_meta = {}
                         if hasattr(openclaw_client, "get_last_runtime_route"):
                             try:
@@ -3545,152 +3616,114 @@ class KraabUserbot:
                             or ""
                         ).strip()
                         route_attempt = int(route_meta.get("attempt") or 0) or None
+                        logger.warning(
+                            "openclaw_first_chunk_slow_waiting_more",
+                            chat_id=chat_id,
+                            elapsed_sec=round(elapsed_wait_sec, 3),
+                            soft_timeout_sec=first_chunk_timeout_sec,
+                            hard_timeout_sec=buffered_response_timeout_sec,
+                            route_model=route_model,
+                            route_attempt=route_attempt,
+                            has_photo=bool(images),
+                        )
+                        slow_notice = _build_openclaw_slow_wait_notice(
+                            route_model=route_model,
+                            attempt=route_attempt,
+                        )
+                        try:
+                            if is_self:
+                                message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
+                            else:
+                                temp_msg = await self._safe_edit(temp_msg, slow_notice)
+                        except Exception as exc:
+                            logger.warning(
+                                "openclaw_slow_notice_delivery_failed",
+                                ...
+                            )
+                        # We don't continue immediately, we might have progress notice to send
+
+                    # Handle Progress Notice Keepalive
+                    if next_progress_notice_sec > 0.0 and elapsed_wait_sec >= next_progress_notice_sec - 1e-6:
+                        handled_interval = True
+                        route_meta = {}
+                        if hasattr(openclaw_client, "get_last_runtime_route"):
+                            try:
+                                route_meta = openclaw_client.get_last_runtime_route() or {}
+                            except Exception:
+                                route_meta = {}
+                        route_model = str(
+                            route_meta.get("model")
+                            or startup_route_model
+                            or getattr(config, "MODEL", "")
+                            or ""
+                        ).strip()
+                        route_attempt = int(route_meta.get("attempt") or 0) or None
+                        progress_notice_count += 1
+                        logger.info(
+                            "openclaw_first_chunk_progress_notice",
+                            chat_id=chat_id,
+                            elapsed_sec=round(elapsed_wait_sec, 3),
+                            notice_index=progress_notice_count,
+                            route_model=route_model,
+                            route_attempt=route_attempt,
+                            has_photo=bool(images),
+                        )
                         progress_notice = _build_openclaw_progress_wait_notice(
                             route_model=route_model,
                             attempt=route_attempt,
                             elapsed_sec=elapsed_wait_sec,
-                            notice_index=max(1, progress_notice_count),
+                            notice_index=progress_notice_count,
                             tool_calls_summary=tool_summary,
                         )
-                        if progress_notice != last_progress_notice_text or tool_summary != last_tool_summary:
-                            try:
-                                if is_self:
-                                    message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
-                                else:
-                                    temp_msg = await self._safe_edit(temp_msg, progress_notice)
-                                last_progress_notice_text = progress_notice
-                                last_tool_summary = tool_summary
-                            except Exception as exc:
-                                logger.warning(
-                                    "openclaw_tool_progress_notice_delivery_failed",
-                                    chat_id=chat_id,
-                                    route_model=route_model,
-                                    route_attempt=route_attempt,
-                                    error=str(exc),
-                                    has_photo=bool(images),
-                                )
-                        next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
-                        continue
-                    if not received_any_chunk and not slow_first_chunk_notice_sent:
-                        if elapsed_wait_sec >= float(first_chunk_timeout_sec) - 1e-6:
-                            slow_first_chunk_notice_sent = True
-                            route_meta = {}
-                            if hasattr(openclaw_client, "get_last_runtime_route"):
-                                try:
-                                    route_meta = openclaw_client.get_last_runtime_route() or {}
-                                except Exception:
-                                    route_meta = {}
-                            route_model = str(
-                                route_meta.get("model")
-                                or startup_route_model
-                                or getattr(config, "MODEL", "")
-                                or ""
-                            ).strip()
-                            route_attempt = int(route_meta.get("attempt") or 0) or None
-                            logger.warning(
-                                "openclaw_first_chunk_slow_waiting_more",
-                                chat_id=chat_id,
-                                elapsed_sec=round(elapsed_wait_sec, 3),
-                                soft_timeout_sec=first_chunk_timeout_sec,
-                                hard_timeout_sec=buffered_response_timeout_sec,
-                                route_model=route_model,
-                                route_attempt=route_attempt,
-                                has_photo=bool(images),
-                            )
-                            slow_notice = _build_openclaw_slow_wait_notice(
-                                route_model=route_model,
-                                attempt=route_attempt,
-                            )
-                            try:
-                                if is_self:
-                                    message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
-                                else:
-                                    temp_msg = await self._safe_edit(temp_msg, slow_notice)
-                            except Exception as exc:
-                                logger.warning(
-                                    "openclaw_slow_notice_delivery_failed",
-                                    chat_id=chat_id,
-                                    route_model=route_model,
-                                    route_attempt=route_attempt,
-                                    error=str(exc),
-                                    has_photo=bool(images),
-                                )
-                            continue
-                    if not received_any_chunk and next_progress_notice_sec > 0.0:
-                        if elapsed_wait_sec >= next_progress_notice_sec - 1e-6:
-                            route_meta = {}
-                            if hasattr(openclaw_client, "get_last_runtime_route"):
-                                try:
-                                    route_meta = openclaw_client.get_last_runtime_route() or {}
-                                except Exception:
-                                    route_meta = {}
-                            route_model = str(
-                                route_meta.get("model")
-                                or startup_route_model
-                                or getattr(config, "MODEL", "")
-                                or ""
-                            ).strip()
-                            route_attempt = int(route_meta.get("attempt") or 0) or None
-                            progress_notice_count += 1
-                            logger.info(
-                                "openclaw_first_chunk_progress_notice",
-                                chat_id=chat_id,
-                                elapsed_sec=round(elapsed_wait_sec, 3),
-                                notice_index=progress_notice_count,
-                                route_model=route_model,
-                                route_attempt=route_attempt,
-                                has_photo=bool(images),
-                            )
-                            progress_notice = _build_openclaw_progress_wait_notice(
-                                route_model=route_model,
-                                attempt=route_attempt,
-                                elapsed_sec=elapsed_wait_sec,
-                                notice_index=progress_notice_count,
-                                tool_calls_summary=tool_summary,
-                            )
-                            try:
-                                if is_self:
-                                    message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
-                                else:
-                                    temp_msg = await self._safe_edit(temp_msg, progress_notice)
-                                last_progress_notice_text = progress_notice
-                                last_tool_summary = tool_summary
-                            except Exception as exc:
-                                logger.warning(
-                                    "openclaw_progress_notice_delivery_failed",
-                                    chat_id=chat_id,
-                                    route_model=route_model,
-                                    route_attempt=route_attempt,
-                                    notice_index=progress_notice_count,
-                                    error=str(exc),
-                                    has_photo=bool(images),
-                                )
-                            next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
-                            next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
-                            continue
-                    logger.error(
-                        "openclaw_stream_chunk_timeout",
-                        chat_id=chat_id,
-                        timeout_sec=wait_timeout,
-                        first_chunk=not received_any_chunk,
-                        has_photo=bool(images),
-                    )
-                    full_response = (
-                        "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
-                    )
-                    if next_chunk_task and not next_chunk_task.done():
-                        next_chunk_task.cancel()
                         try:
-                            await next_chunk_task
-                        except (asyncio.CancelledError, StopAsyncIteration):
-                            pass
+                            if is_self:
+                                message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
+                            else:
+                                temp_msg = await self._safe_edit(temp_msg, progress_notice)
+                            last_progress_notice_text = progress_notice
+                            last_tool_summary = tool_summary
+                        except Exception as exc:
+                            logger.warning(
+                                "openclaw_progress_notice_delivery_failed",
+                                ...
+                            )
+                        next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
+                        next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
+
+                    if handled_interval:
+                        continue
+                        
+                    # If it wasn't an expected interval, and we haven't received a chunk,
+                    # AND we have passed the initial slow_first_chunk_notice_sent (so wait_timeout becomes chunk_timeout_sec)
+                    # then this is a real timeout:
+                    if slow_first_chunk_notice_sent:
+                        logger.error(
+                            "openclaw_stream_chunk_timeout",
+                            chat_id=chat_id,
+                            timeout_sec=wait_timeout,
+                            first_chunk=True,
+                            has_photo=bool(images),
+                        )
+                        full_response = (
+                            "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
+                        )
+                        if next_chunk_task and not next_chunk_task.done():
+                            next_chunk_task.cancel()
+                            try:
+                                await next_chunk_task
+                            except (asyncio.CancelledError, StopAsyncIteration):
+                                pass
+                            except Exception:
+                                pass
+                        try:
+                            await stream.aclose()
                         except Exception:
                             pass
-                    try:
-                        await stream.aclose()
-                    except Exception:
-                        pass
-                    break
+                        break
+
+                    # If none of the conditions triggered an abort, wait for the next timeout
+                    # (This shouldn't be reached if timers are exact, but floats are floats)
+                    continue
 
                 full_response_raw += chunk
                 received_any_chunk = True

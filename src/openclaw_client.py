@@ -161,6 +161,11 @@ class OpenClawClient:
 
         Здесь мы задаём не глобальный hard-timeout userbot, а именно потолок ожидания
         одного cloud-route до принудительного перехода к следующему кандидату.
+
+        ВАЖНО: для CLI-провайдеров (codex-cli, google-gemini-cli, openai-codex) дефолт — None,
+        т.к. OpenClaw Gateway сам управляет fallback-цепочкой и retry внутри timeoutSeconds.
+        Двойной read-timeout (Gateway + Краб) вызывал ложные ошибки "Провайдер недоступен"
+        при долгих, но корректных запросах (tool use, reasoning).
         """
         normalized_model = str(model_id or "").strip()
         provider = self._provider_from_model(normalized_model)
@@ -170,33 +175,29 @@ class OpenClawClient:
             "OPENCLAW_BUFFERED_READ_TIMEOUT_SEC",
             None,
         )
+        # CLI-провайдеры: дефолт None — OpenClaw Gateway сам управляет retry/fallback.
+        # Пользователь может переопределить через .env, если нужен explicit budget.
         if provider == "codex-cli":
-            timeout_sec = float(
-                getattr(
-                    config,
-                    "OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC",
-                    240.0,
-                )
-                or 240.0
+            env_val = getattr(
+                config,
+                "OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC",
+                None,
             )
+            timeout_sec = float(env_val) if env_val else None
         elif provider == "google-gemini-cli":
-            timeout_sec = float(
-                getattr(
-                    config,
-                    "OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC",
-                    240.0,
-                )
-                or 240.0
+            env_val = getattr(
+                config,
+                "OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC",
+                None,
             )
+            timeout_sec = float(env_val) if env_val else None
         elif provider == "openai-codex":
-            timeout_sec = float(
-                getattr(
-                    config,
-                    "OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC",
-                    240.0,
-                )
-                or 240.0
+            env_val = getattr(
+                config,
+                "OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC",
+                None,
             )
+            timeout_sec = float(env_val) if env_val else None
 
         if timeout_sec is None:
             return None

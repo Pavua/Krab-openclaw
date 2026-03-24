@@ -107,14 +107,23 @@ class Config:
         if (x := os.getenv("OPENCLAW_BUFFERED_READ_TIMEOUT_SEC", "").strip())
         else None
     )
-    OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC: float = float(
-        os.getenv("OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", "240")
+    # CLI-провайдеры: по умолчанию None — OpenClaw Gateway сам управляет fallback/retry.
+    # Двойной read-timeout (Gateway 180с + Краб 240с) вызывал ложные ошибки "Провайдер недоступен".
+    # Переопредели через .env если нужен явный бюджет.
+    OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
+        float(x)
+        if (x := os.getenv("OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", "").strip())
+        else None
     )
-    OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC: float = float(
-        os.getenv("OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", "240")
+    OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
+        float(x)
+        if (x := os.getenv("OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", "").strip())
+        else None
     )
-    OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC: float = float(
-        os.getenv("OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC", "240")
+    OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
+        float(x)
+        if (x := os.getenv("OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC", "").strip())
+        else None
     )
     # Ранние тех-уведомления до hard-timeout.
     # Зачем:
