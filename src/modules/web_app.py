@@ -48,6 +48,7 @@ from src.core.capability_registry import (  # noqa: E402
     build_capability_registry,
     build_channel_capability_snapshot,
     build_policy_matrix,
+    build_system_control_snapshot,
 )
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.inbox_service import inbox_service  # noqa: E402
@@ -3232,6 +3233,7 @@ class WebApp:
             self._ecosystem_capabilities_snapshot(),
             self._translator_readiness_snapshot(runtime_lite=runtime_state),
         )
+        system_control = build_system_control_snapshot()
         return build_capability_registry(
             operator_profile=operator_profile,
             runtime_lite=runtime_state,
@@ -3240,6 +3242,7 @@ class WebApp:
             translator_readiness=translator_snapshot,
             policy_matrix=policy_matrix,
             channel_capabilities=channel_capabilities,
+            system_control=system_control,
         )
 
     async def _safe_client_health_summary(

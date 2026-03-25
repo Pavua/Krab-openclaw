@@ -34,6 +34,12 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
         "file_ops": True,
         "browser_control": True,
         "macos_control": True,
+        "screenshots": True,
+        "ocr": True,
+        "ui_automation": True,
+        "clipboard_read": True,
+        "clipboard_write": True,
+        "tor_proxy": False,       # wishlist — не реализован (Phase 3 Шаг 7)
         "voice_runtime": True,
         "model_routing": True,
         "acl_admin": True,
@@ -49,6 +55,12 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
         "file_ops": True,
         "browser_control": True,
         "macos_control": True,
+        "screenshots": True,
+        "ocr": True,
+        "ui_automation": False,   # только owner
+        "clipboard_read": True,
+        "clipboard_write": True,
+        "tor_proxy": False,
         "voice_runtime": True,
         "model_routing": True,
         "acl_admin": False,
@@ -64,6 +76,12 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
         "file_ops": False,
         "browser_control": False,
         "macos_control": False,
+        "screenshots": False,
+        "ocr": False,
+        "ui_automation": False,
+        "clipboard_read": False,
+        "clipboard_write": False,
+        "tor_proxy": False,
         "voice_runtime": False,
         "model_routing": False,
         "acl_admin": False,
@@ -79,6 +97,12 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
         "file_ops": False,
         "browser_control": False,
         "macos_control": False,
+        "screenshots": False,
+        "ocr": False,
+        "ui_automation": False,
+        "clipboard_read": False,
+        "clipboard_write": False,
+        "tor_proxy": False,
         "voice_runtime": False,
         "model_routing": False,
         "acl_admin": False,
@@ -396,6 +420,139 @@ def build_channel_capability_snapshot(
     }
 
 
+def build_system_control_snapshot(
+    *,
+    browser_probe: dict[str, Any] | None = None,
+    macos_probe: dict[str, Any] | None = None,
+    mcp_probe: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Строит truthful System Control v2 capability snapshot (Phase 3).
+
+    Принимает опциональные результаты live-проб bridge-классов:
+    - browser_probe: результат BrowserBridge.health_check() (Шаг 2)
+    - macos_probe:   результат MacOSAutomation.health_check() (Шаг 4)
+    - mcp_probe:     результат MCPClient.health_check() (Шаг 2)
+
+    Если проба не передана → статус capability = "unknown".
+    Это отличается от "unavailable" (проверено и недоступно) и "blocked" (CDP/порт заблокирован).
+    """
+    browser_payload = browser_probe if isinstance(browser_probe, dict) else {}
+    macos_payload = macos_probe if isinstance(macos_probe, dict) else {}
+    mcp_payload = mcp_probe if isinstance(mcp_probe, dict) else {}
+
+    def _probe_status(payload: dict[str, Any]) -> tuple[str, str]:
+        """Returns (status, error) from a probe result dict."""
+        if not payload:
+            return "unknown", ""
+        if payload.get("ok"):
+            return "ready", ""
+        if payload.get("blocked"):
+            return "blocked", str(payload.get("error") or "").strip()
+        return "degraded", str(payload.get("error") or "").strip()
+
+    browser_status, browser_error = _probe_status(browser_payload)
+    macos_status, macos_error = _probe_status(macos_payload)
+    mcp_status, mcp_error = _probe_status(mcp_payload)
+
+    def _derived(base_status: str) -> str:
+        """Derives a capability status from its required base status."""
+        if base_status == "unknown":
+            return "unknown"
+        if base_status == "ready":
+            return "ready"
+        return "unavailable"
+
+    capabilities: dict[str, Any] = {
+        "browser_control": {
+            "status": browser_status,
+            "error": browser_error,
+            "role_requirement": "owner_or_full",
+            "note": "CDP через port 9222; Шаг 2 добавит BrowserBridge.health_check()",
+        },
+        "screenshots": {
+            "status": _derived(browser_status),
+            "depends_on": "browser_control",
+            "role_requirement": "owner_or_full",
+            "note": "browser_bridge.take_screenshot() — Шаг 3",
+        },
+        "mcp_relay": {
+            "status": mcp_status,
+            "error": mcp_error,
+            "role_requirement": "owner_or_full",
+            "note": "MCP клиент через OpenClaw; Шаг 2 добавит health_check()",
+        },
+        "macos_control": {
+            "status": macos_status,
+            "error": macos_error,
+            "role_requirement": "owner_or_full",
+            "note": "macos_automation.py — osascript + Accessibility; Шаг 4",
+        },
+        "ui_automation": {
+            "status": _derived(macos_status),
+            "depends_on": "macos_control",
+            "role_requirement": "owner_only",
+            "note": "click/type/focus через AppleScript — Шаг 4",
+        },
+        "clipboard_read": {
+            "status": _derived(macos_status),
+            "depends_on": "macos_control",
+            "role_requirement": "owner_or_full",
+        },
+        "clipboard_write": {
+            "status": _derived(macos_status),
+            "depends_on": "macos_control",
+            "role_requirement": "owner_or_full",
+        },
+        "ocr": {
+            "status": "not_implemented",
+            "depends_on": "macos_control",
+            "role_requirement": "owner_or_full",
+            "note": "pytesseract / mlx_ocr — Шаг 5",
+        },
+        "tor_proxy": {
+            "status": "not_implemented",
+            "role_requirement": "owner_only",
+            "note": "SOCKS5 :9050 — wishlist / Шаг 7",
+        },
+    }
+
+    ready_count = sum(1 for c in capabilities.values() if c.get("status") == "ready")
+    unknown_count = sum(1 for c in capabilities.values() if c.get("status") == "unknown")
+    unavailable_count = sum(1 for c in capabilities.values() if c.get("status") in {"unavailable", "degraded", "blocked"})
+    not_impl_count = sum(1 for c in capabilities.values() if c.get("status") == "not_implemented")
+
+    if ready_count > 0:
+        overall_status = "ready"
+    elif unknown_count > 0:
+        overall_status = "unknown"
+    else:
+        overall_status = "degraded"
+
+    return {
+        "ok": True,
+        "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "status": overall_status,
+        "capabilities": capabilities,
+        "probes": {
+            "browser_probed": bool(browser_payload),
+            "macos_probed": bool(macos_payload),
+            "mcp_probed": bool(mcp_payload),
+        },
+        "summary": {
+            "total": len(capabilities),
+            "ready": ready_count,
+            "unknown": unknown_count,
+            "unavailable": unavailable_count,
+            "not_implemented": not_impl_count,
+        },
+        "notes": [
+            "Phase 3 Шаг 1: capability matrix зарегистрирована. Статус 'unknown' пока health_check() не добавлен.",
+            "Phase 3 Шаг 2: добавить BrowserBridge.health_check() и MCPClient.health_check().",
+            "Phase 3 Шаг 4: добавить MacOSAutomation.health_check() для ui_automation/clipboard.",
+        ],
+    }
+
+
 def build_capability_registry(
     *,
     operator_profile: dict[str, Any],
@@ -405,6 +562,7 @@ def build_capability_registry(
     translator_readiness: dict[str, Any],
     policy_matrix: dict[str, Any],
     channel_capabilities: dict[str, Any] | None = None,
+    system_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Собирает единый registry snapshot поверх уже подтверждённых truthful-срезов."""
     assistant_payload = assistant_capabilities if isinstance(assistant_capabilities, dict) else {}
@@ -431,11 +589,15 @@ def build_capability_registry(
     ).strip() or "unknown"
     browser_readiness = runtime_state.get("browser_readiness") if isinstance(runtime_state.get("browser_readiness"), dict) else {}
     voice_profile = translator_payload.get("runtime", {}).get("voice_profile") if isinstance(translator_payload.get("runtime"), dict) else {}
+    system_control_payload = system_control if isinstance(system_control, dict) else {}
     system_status = "ok"
     if str(runtime_state.get("openclaw_auth_state") or "").strip().lower() not in {"ok", "configured", "ready"}:
         system_status = "degraded"
     if browser_readiness and str(browser_readiness.get("readiness") or "").strip().lower() == "blocked":
         system_status = "degraded"
+    # Если есть live system_control snapshot — он переопределяет system_status
+    if system_control_payload and str(system_control_payload.get("status") or "").strip().lower() in {"ready", "degraded", "unknown"}:
+        system_status = str(system_control_payload.get("status")).strip().lower()
     channel_summary = channel_payload.get("summary") if isinstance(channel_payload.get("summary"), dict) else {}
     channels_status = "degraded"
     if bool(channel_summary.get("reserve_safe")) and bool(channel_summary.get("ready_channels")):
@@ -473,6 +635,7 @@ def build_capability_registry(
             "scheduler_enabled": bool(runtime_state.get("scheduler_enabled")),
             "voice_delivery": str(voice_profile.get("delivery") or "").strip(),
             "voice_enabled": bool(voice_profile.get("enabled")),
+            **({"control": system_control_payload} if system_control_payload else {}),
         },
     }
     if channel_payload:
@@ -524,5 +687,6 @@ __all__ = [
     "build_capability_registry",
     "build_channel_capability_snapshot",
     "build_policy_matrix",
+    "build_system_control_snapshot",
     "resolve_access_mode",
 ]
