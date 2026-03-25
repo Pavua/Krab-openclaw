@@ -90,7 +90,16 @@ class RawCDPConnection:
 class BrowserBridge:
     """Async-клиент для управления Chrome через Chrome DevTools Protocol."""
 
-    CDP_URL = "http://127.0.0.1:9222"
+    # Порт по умолчанию; переопределяется через KRAB_CDP_PORT env var.
+    _DEFAULT_CDP_PORT = 9222
+    # Порты, которые сканируются при HTTP-fallback (когда DevToolsActivePort не найден).
+    _CDP_PORT_CANDIDATES = [9222, 9223, 9224]
+
+    @property
+    def CDP_URL(self) -> str:
+        """HTTP CDP base URL. Читает KRAB_CDP_PORT из env; default 9222."""
+        port = int(os.getenv("KRAB_CDP_PORT", str(self._DEFAULT_CDP_PORT)))
+        return f"http://127.0.0.1:{port}"
 
     def __init__(self) -> None:
         self._playwright = None
@@ -240,20 +249,28 @@ class BrowserBridge:
         """
         Асинхронно запрашивает `webSocketDebuggerUrl` из HTTP CDP endpoint (/json/version).
 
-        Используется как fallback когда DevToolsActivePort не найден,
-        но CDP HTTP уже доступен (например, non-default Chrome profile с non-default user-data-dir).
-
-        Выполняется через asyncio.to_thread чтобы не блокировать event loop.
+        Используется как fallback когда DevToolsActivePort не найден.
+        Порядок портов: KRAB_CDP_PORT env var (если задан) → кандидаты 9222, 9223, 9224.
+        Первый успешный ответ выигрывает.
         """
-        cdp_http = self.CDP_URL.rstrip("/") + "/json/version"
-        try:
-            ws_url = await asyncio.to_thread(self._fetch_ws_from_json_version_sync, cdp_http)
-            if ws_url:
-                logger.info("browser_bridge_ws_from_json_version", ws_url=ws_url)
-            return ws_url
-        except Exception as exc:
-            logger.debug("browser_bridge_ws_from_json_version_failed", error=repr(exc))
-            return None
+        env_port = os.getenv("KRAB_CDP_PORT")
+        if env_port and env_port.isdigit():
+            candidates = [int(env_port)]
+        else:
+            configured_port = self._DEFAULT_CDP_PORT
+            candidates = [configured_port] + [p for p in self._CDP_PORT_CANDIDATES if p != configured_port]
+
+        for port in candidates:
+            cdp_http = f"http://127.0.0.1:{port}/json/version"
+            try:
+                ws_url = await asyncio.to_thread(self._fetch_ws_from_json_version_sync, cdp_http)
+                if ws_url:
+                    logger.info("browser_bridge_ws_from_json_version", ws_url=ws_url, port=port)
+                    return ws_url
+            except Exception as exc:
+                logger.debug("browser_bridge_ws_from_json_version_failed", port=port, error=repr(exc))
+
+        return None
 
     async def _open_raw_cdp(self, ws_endpoint: str) -> RawCDPConnection:
         """Открывает прямое websocket CDP-соединение к browser endpoint."""
@@ -461,16 +478,28 @@ class BrowserBridge:
         return await self._with_page_session_via_raw_cdp(ws_endpoint, _handler)
 
     async def _connect_browser(self):
-        """Подключает Playwright к Chrome, пробуя сначала HTTP CDP, затем websocket fallback."""
+        """Подключает Playwright к Chrome, пробуя сначала DevToolsActivePort, затем HTTP CDP по кандидатам."""
         from playwright.async_api import async_playwright
 
         if self._playwright is None:
             self._playwright = await async_playwright().start()
 
-        endpoints = [self.CDP_URL]
+        # Порядок: файл DevToolsActivePort → кандидаты HTTP CDP (9222, 9223, 9224)
+        endpoints: list[str] = []
         ws_endpoint = self._read_devtools_ws_endpoint()
-        if ws_endpoint and ws_endpoint not in endpoints:
+        if ws_endpoint:
             endpoints.append(ws_endpoint)
+
+        env_port = os.getenv("KRAB_CDP_PORT")
+        if env_port and env_port.isdigit():
+            port_candidates = [int(env_port)]
+        else:
+            port_candidates = self._CDP_PORT_CANDIDATES
+
+        for port in port_candidates:
+            http_url = f"http://127.0.0.1:{port}"
+            if http_url not in endpoints:
+                endpoints.append(http_url)
 
         last_error: Exception | None = None
         for endpoint in endpoints:
