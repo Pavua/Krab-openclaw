@@ -42,6 +42,7 @@ class EcosystemHealthService:
         voice_gateway_client: Any | None = None,
         krab_ear_client: Any | None = None,
         krab_ear_backend_url: str | None = None,
+        local_health_override: dict[str, Any] | None = None,
         timeout_sec: float = 2.5,
     ):
         self.router = router
@@ -51,6 +52,9 @@ class EcosystemHealthService:
         self.krab_ear_backend_url = (
             (krab_ear_backend_url or os.getenv("KRAB_EAR_BACKEND_URL", "http://127.0.0.1:5005")).strip().rstrip("/")
         )
+        # Позволяет верхнему слою переиспользовать уже собранный local runtime truth,
+        # чтобы deep health не создавал ещё один лишний probe в LM Studio.
+        self.local_health_override = dict(local_health_override or {}) if local_health_override else None
         # [R20] Гарантируем минимально вменяемый таймаут
         self.timeout_sec = max(0.5, float(timeout_sec))
 
@@ -100,9 +104,17 @@ class EcosystemHealthService:
         # [R20] Все источники проверяются параллельно; gather не бросает исключений
         # благодаря return_exceptions=True + _safe_run уже ловит всё сам.
         collect_started = time.monotonic()
+        async def _return_local_override() -> dict[str, Any]:
+            return dict(self.local_health_override or {})
+
+        if self.local_health_override is not None:
+            local_task = _return_local_override()
+        else:
+            local_task = _safe_run(self._check_local_health(), "local_lm")
+
         results = await asyncio.gather(
             _safe_run(self._check_client_health(self.openclaw_client, "openclaw"), "openclaw"),
-            _safe_run(self._check_local_health(), "local_lm"),
+            local_task,
             _safe_run(self._check_client_health(self.voice_gateway_client, "voice_gateway"), "voice_gateway"),
             _safe_run(self._check_krab_ear_health(), "krab_ear"),
             return_exceptions=True,

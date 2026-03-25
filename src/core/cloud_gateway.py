@@ -34,6 +34,7 @@ CLOUD_TIER_1_IDS = [
 ]
 CLOUD_TIER_2_IDS = [
     "google/gemini-2.5-pro",
+    "google/gemini-3.1-pro-preview",
     "google/gemini-2.0-flash",
 ]
 CLOUD_TIER_3_IDS = [
@@ -82,6 +83,9 @@ async def fetch_google_models(
     *,
     models_cache: dict[str, ModelInfo],
     timeout: float = 30.0,
+    diagnostics_sink: list[dict] | None = None,
+    key_tier: str = "",
+    key_source: str = "",
 ) -> list[ModelInfo]:
     """
     Запрашивает список моделей у Google Gemini API.
@@ -99,6 +103,16 @@ async def fetch_google_models(
         response = await client.get(url, params=params, timeout=timeout)
         if response.status_code != 200:
             kind = classify_gemini_error(status_code=response.status_code)
+            if diagnostics_sink is not None:
+                diagnostics_sink.append(
+                    {
+                        "status_code": response.status_code,
+                        "error_kind": kind.value,
+                        "detail": response.text[:240],
+                        "key_tier": key_tier,
+                        "key_source": key_source,
+                    }
+                )
             logger.warning(
                 "google_api_error",
                 status=response.status_code,
@@ -106,11 +120,41 @@ async def fetch_google_models(
             )
             return []
         data = response.json()
+        if diagnostics_sink is not None:
+            diagnostics_sink.append(
+                {
+                    "status_code": 200,
+                    "error_kind": "ok",
+                    "detail": "",
+                    "key_tier": key_tier,
+                    "key_source": key_source,
+                }
+            )
     except (httpx.HTTPError, OSError) as e:
         kind = classify_gemini_error(exc=e)
+        if diagnostics_sink is not None:
+            diagnostics_sink.append(
+                {
+                    "status_code": None,
+                    "error_kind": kind.value,
+                    "detail": str(e)[:240],
+                    "key_tier": key_tier,
+                    "key_source": key_source,
+                }
+            )
         logger.error("google_api_exception", error=str(e), error_kind=kind.value)
         return []
     except (json.JSONDecodeError, KeyError) as e:
+        if diagnostics_sink is not None:
+            diagnostics_sink.append(
+                {
+                    "status_code": None,
+                    "error_kind": "parse",
+                    "detail": str(e)[:240],
+                    "key_tier": key_tier,
+                    "key_source": key_source,
+                }
+            )
         logger.error("google_api_parse_error", error=str(e))
         return []
 
@@ -244,14 +288,33 @@ async def fetch_google_models_with_fallback(
     *,
     models_cache: dict[str, ModelInfo],
     timeout: float = 30.0,
+    diagnostics_sink: list[dict] | None = None,
 ) -> list[ModelInfo]:
     """Tries free key first for model listing; falls back to paid."""
-    for key in [api_key_free, api_key_paid]:
+    for tier, key in [("free", api_key_free), ("paid", api_key_paid)]:
         if not key:
             continue
         if not is_ai_studio_key(key):
+            if diagnostics_sink is not None:
+                diagnostics_sink.append(
+                    {
+                        "status_code": None,
+                        "error_kind": "invalid",
+                        "detail": "Ожидается API key формата AIza...",
+                        "key_tier": tier,
+                        "key_source": f"env:GEMINI_API_KEY_{tier.upper()}",
+                    }
+                )
             continue
-        result = await fetch_google_models(key, client, models_cache=models_cache, timeout=timeout)
+        result = await fetch_google_models(
+            key,
+            client,
+            models_cache=models_cache,
+            timeout=timeout,
+            diagnostics_sink=diagnostics_sink,
+            key_tier=tier,
+            key_source=f"env:GEMINI_API_KEY_{tier.upper()}",
+        )
         if result:
             return result
     return []

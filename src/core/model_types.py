@@ -21,6 +21,7 @@ class ModelType(Enum):
     """Тип модели"""
     LOCAL_MLX = "mlx"
     LOCAL_GGUF = "gguf"
+    CLI_BACKEND = "cli_backend"
     CLOUD_GEMINI = "gemini"
     CLOUD_OPENROUTER = "openrouter"
 

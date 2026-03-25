@@ -4,11 +4,17 @@
 
 Бэкенд вынесен в методы _backend_* для последующей замены на Redis
 без изменения публичного API (get/set/clear_expired).
+
+Почему хранилище в ~/.openclaw/krab_runtime_state/:
+- файлы в корне проекта принадлежат тому пользователю, кто создал репо;
+- при запуске под другим macOS аккаунтом корень проекта = read-only для "others";
+- ~/.openclaw/krab_runtime_state/ — user-specific runtime каталог, всегда rw для текущего юзера.
 """
 
 import os
 import sqlite3
 import time
+from pathlib import Path
 from typing import Optional
 
 from src.core.exceptions import CacheError
@@ -21,6 +27,35 @@ logger = get_logger(__name__)
 # TTL по умолчанию для ответов (1 час), чтобы не раздувать хранилище
 DEFAULT_TTL_SECONDS = 3600
 
+# Корневая директория для cache DB — user-specific, избегаем readonly-проблем при
+# запуске под другим macOS аккаунтом, чем владелец репозитория.
+_CACHE_DIR = Path.home() / ".openclaw" / "krab_runtime_state"
+# Fallback: если HOME недоступен (другая учётка без прав), используем /tmp
+_CACHE_DIR_FALLBACK = Path("/tmp") / "krab_runtime_cache"
+
+
+def _resolve_cache_path(db_name: str) -> str:
+    """
+    Возвращает абсолютный путь к cache DB.
+    Директория создаётся автоматически если не существует.
+
+    Fallback-стратегия: если ~/.openclaw недоступна (например, запуск от другой
+    macOS учётки без прав), используем /tmp/krab_runtime_cache — это лучше чем краш.
+    /tmp-кэш эфемерен, но поддерживает работу бота без ошибок.
+    """
+    for cache_dir in (_CACHE_DIR, _CACHE_DIR_FALLBACK):
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            # Пробуем записать тестовый файл, чтобы убедиться в реальном rw-доступе
+            test_path = cache_dir / ".write_test"
+            test_path.write_text("ok")
+            test_path.unlink(missing_ok=True)
+            return str(cache_dir / db_name)
+        except (PermissionError, OSError):
+            continue
+    # Если оба варианта недоступны — возвращаем /tmp (будет ошибка при connect, но не при импорте)
+    return str(_CACHE_DIR_FALLBACK / db_name)
+
 
 class CacheManager:
     """
@@ -29,7 +64,7 @@ class CacheManager:
     """
 
     def __init__(self, db_name: str = "cache.db"):
-        self.db_path = os.path.join(config.BASE_DIR, db_name)
+        self.db_path = _resolve_cache_path(db_name)
         self._init_db()
         self.clear_expired()
 
