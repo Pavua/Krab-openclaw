@@ -682,6 +682,46 @@ class MacOSAutomationService:
         await self._run_osascript(script)
         return {"key": key, "modifiers": mods}
 
+    @staticmethod
+    def is_ocr_available() -> bool:
+        """True если tesseract установлен (brew install tesseract)."""
+        return bool(shutil.which("tesseract"))
+
+    async def ocr_image(self, image_bytes: bytes, *, lang: str = "") -> str:
+        """Извлекает текст из изображения через tesseract OCR CLI.
+
+        Требует: brew install tesseract
+        Поддерживает PNG, JPEG и другие форматы Pillow/tesseract.
+        Параметры:
+          image_bytes: байты изображения (PNG от browser_bridge.screenshot())
+          lang:        язык OCR (например "rus", "eng", "rus+eng"); по умолчанию auto
+        """
+        if not self.is_ocr_available():
+            raise MacOSAutomationError(
+                "tesseract_not_installed: установи через 'brew install tesseract' "
+                "и 'brew install tesseract-lang' для русского языка"
+            )
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(image_bytes)
+            tmp_path = f.name
+        try:
+            args = ["tesseract", tmp_path, "stdout", "--psm", "3"]
+            if lang:
+                args += ["-l", lang]
+            text = await asyncio.wait_for(
+                self._run_command(args),
+                timeout=30.0,
+            )
+            return text.strip()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
     async def status(self) -> dict[str, Any]:
         """
         Возвращает мягкий status macOS automation без падения всего ответа.
@@ -777,7 +817,13 @@ class MacOSAutomationService:
             return {"ok": False, "blocked": False, "error": repr(exc), "tools": []}
 
         available_tools = [t for t in ("osascript", "open", "pbcopy", "pbpaste") if shutil.which(t)]
-        return {"ok": True, "blocked": False, "error": "", "tools": available_tools}
+        return {
+            "ok": True,
+            "blocked": False,
+            "error": "",
+            "tools": available_tools,
+            "ocr_available": self.is_ocr_available(),
+        }
 
 
 # Глобальный синглтон для импорта в хендлерах
