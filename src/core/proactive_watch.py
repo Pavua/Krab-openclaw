@@ -132,7 +132,7 @@ class ProactiveWatchService:
         # не подмешиваем чужой repo-level state за его спиной.
         self.legacy_state_path = _legacy_state_path() if state_path is None else self.state_path
         self.alert_cooldown_sec = max(
-            60,
+            1800,
             int(alert_cooldown_sec or getattr(config, "PROACTIVE_WATCH_ALERT_COOLDOWN_SEC", 1800) or 1800),
         )
 
@@ -301,8 +301,9 @@ class ProactiveWatchService:
             )
 
         last_alert_ts = str(state.get("last_alert_ts") or "")
+        last_alerted_reason = str(state.get("last_alerted_reason") or "")
         cooldown_ok = True
-        if last_alert_ts:
+        if last_alert_ts and last_alerted_reason == reason:
             try:
                 elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(last_alert_ts)
                 cooldown_ok = elapsed.total_seconds() >= self.alert_cooldown_sec
@@ -333,25 +334,37 @@ class ProactiveWatchService:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("proactive_watch_inbox_sync_failed", reason=reason, error=str(exc))
-            try:
-                inbox_service.upsert_item(
-                    dedupe_key=f"proactive:watch_trigger:{reason}:{snapshot.ts_utc}",
-                    kind="proactive_action",
-                    source="krab-internal",
-                    title=f"Proactive watch: {reason}",
-                    body=digest,
-                    severity="info",
-                    status="open",
-                    identity=inbox_service.build_identity(
-                        channel_id="system",
-                        team_id="owner",
-                        trace_id=f"watch:{reason}",
-                        approval_scope="owner",
-                    ),
-                    metadata={"action_type": "watch_trigger", "reason": reason, "alerted": alerted},
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("proactive_watch_action_trace_failed", reason=reason, error=str(exc))
+            
+            # Создаем proactive_action item только для actionable transitions
+            actionable_reasons = {
+                "gateway_down", "gateway_recovered", 
+                "scheduler_backlog_created", "scheduler_backlog_cleared"
+            }
+            if reason in actionable_reasons:
+                try:
+                    inbox_service.upsert_item(
+                        dedupe_key=f"proactive:watch_trigger:{reason}",
+                        kind="proactive_action",
+                        source="krab-internal",
+                        title=f"Proactive watch: {reason}",
+                        body=digest,
+                        severity="info",
+                        status="open",
+                        identity=inbox_service.build_identity(
+                            channel_id="system",
+                            team_id="owner",
+                            trace_id=f"watch:{reason}",
+                            approval_scope="owner",
+                        ),
+                        metadata={
+                            "action_type": "watch_trigger", 
+                            "reason": reason, 
+                            "alerted": alerted,
+                            "latest_snapshot_ts": snapshot.ts_utc,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("proactive_watch_action_trace_failed", reason=reason, error=str(exc))
         return {
             "snapshot": asdict(snapshot),
             "reason": reason,

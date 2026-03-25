@@ -406,11 +406,71 @@ class KrabScheduler:
             await self._retry_or_fail(rec, f"send_error:{exc}")
 
     async def _retry_or_fail(self, rec: ReminderRecord, reason: str) -> None:
+        # Increment retry count and record last_error
         rec.retries += 1
         rec.last_error = reason
+        
+        # If retries > max_retries (5), set status to "failed" and create warning inbox item
         if rec.retries > self._max_retries:
             rec.status = "failed"
             self._persist()
+            
+            # Create warning inbox item for failed reminder
+            try:
+                inbox_service.upsert_item(
+                    dedupe_key=f"reminder_failed:{rec.reminder_id}",
+                    kind="reminder_failure",
+                    source="scheduler",
+                    title=f"Reminder failed after {rec.retries} attempts",
+                    body=(
+                        f"Chat: `{rec.chat_id}`\n"
+                        f"Text: {rec.text}\n"
+                        f"Last error: `{reason}`\n"
+                        f"Retries: `{rec.retries}`"
+                    ),
+                    severity="warning",
+                    status="open",
+                    identity=inbox_service.build_identity(
+                        channel_id=str(rec.chat_id),
+                        team_id="owner",
+                        trace_id=rec.reminder_id,
+                        approval_scope="owner",
+                    ),
+                    metadata={
+                        "reminder_id": rec.reminder_id,
+                        "chat_id": rec.chat_id,
+                        "retries": rec.retries,
+                        "last_error": reason,
+                        "failed_at": _now_local().isoformat(),
+                    },
+                )
+            except Exception as inbox_exc:  # noqa: BLE001
+                logger.warning("scheduler_failed_reminder_inbox_sync_failed", reminder_id=rec.reminder_id, error=str(inbox_exc))
+            
+            # Update inbox reminder with failure status
+            try:
+                inbox_service.upsert_reminder(
+                    reminder_id=rec.reminder_id,
+                    chat_id=rec.chat_id,
+                    text=rec.text,
+                    due_at_iso=rec.due_at_iso,
+                    retries=rec.retries,
+                    last_error=reason,
+                )
+            except Exception as sync_exc:  # noqa: BLE001
+                logger.warning("scheduler_failed_reminder_sync_failed", reminder_id=rec.reminder_id, error=str(sync_exc))
+                
+            logger.warning("scheduler_reminder_failed", reminder_id=rec.reminder_id, reason=reason)
+            return
+        
+        # Otherwise, reschedule with 60 second delay
+        next_due = _now_local() + timedelta(seconds=self._retry_delay_sec)
+        rec.due_at_iso = next_due.isoformat()
+        rec.status = "scheduled"
+        self._persist()
+        
+        # Sync to inbox with retry count and last_error after each attempt
+        try:
             inbox_service.upsert_reminder(
                 reminder_id=rec.reminder_id,
                 chat_id=rec.chat_id,
@@ -419,20 +479,9 @@ class KrabScheduler:
                 retries=rec.retries,
                 last_error=reason,
             )
-            logger.warning("scheduler_reminder_failed", reminder_id=rec.reminder_id, reason=reason)
-            return
-        next_due = _now_local() + timedelta(seconds=self._retry_delay_sec)
-        rec.due_at_iso = next_due.isoformat()
-        rec.status = "scheduled"
-        self._persist()
-        inbox_service.upsert_reminder(
-            reminder_id=rec.reminder_id,
-            chat_id=rec.chat_id,
-            text=rec.text,
-            due_at_iso=rec.due_at_iso,
-            retries=rec.retries,
-            last_error=reason,
-        )
+        except Exception as sync_exc:  # noqa: BLE001
+            logger.warning("scheduler_retry_inbox_sync_failed", reminder_id=rec.reminder_id, error=str(sync_exc))
+        
         self._schedule_reminder(rec.reminder_id)
         logger.warning(
             "scheduler_reminder_retry",
@@ -443,18 +492,83 @@ class KrabScheduler:
         )
 
     def _load(self) -> None:
+        """Загружает reminders из persisted storage с graceful recovery."""
         self._reminders.clear()
+        
+        # Если файл не существует, инициализируем пустое состояние
         if not self.storage_path.exists():
+            logger.info("scheduler_load_empty", path=str(self.storage_path))
             return
+        
+        loaded_count = 0
+        invalid_count = 0
+        failed_parsing = 0
+        invalid_records = 0
+        
         try:
+            # Пытаемся прочитать и распарсить JSON
             payload = json.loads(self.storage_path.read_text(encoding="utf-8"))
-            rows = payload.get("reminders", []) if isinstance(payload, dict) else []
-            for item in rows:
-                if not isinstance(item, dict):
-                    continue
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("scheduler_load_failed", 
+                         path=str(self.storage_path), 
+                         error=str(exc))
+            # Инициализируем пустое состояние при ошибке парсинга
+            logger.warning("scheduler_load_corrupted", 
+                         path=str(self.storage_path),
+                         action="initializing_empty_state")
+            return
+        
+        # Извлекаем reminders из payload
+        rows = payload.get("reminders", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+        
+        for idx, item in enumerate(rows):
+            if not isinstance(item, dict):
+                invalid_records += 1
+                logger.warning("scheduler_load_invalid_row", 
+                             index=idx, 
+                             type=type(item).__name__)
+                continue
+            
+            try:
+                # Пытаемся создать ReminderRecord
                 rec = ReminderRecord.from_dict(item)
-                if rec.reminder_id and rec.status == "scheduled":
-                    self._reminders[rec.reminder_id] = rec
+                
+                # Валидируем обязательные поля
+                if not rec.reminder_id or not rec.chat_id or not rec.text or not rec.due_at_iso:
+                    logger.warning("scheduler_load_invalid_record", 
+                                 reminder_id=rec.reminder_id or "unknown",
+                                 missing_fields=", ".join([
+                                     "reminder_id" if not rec.reminder_id else "",
+                                     "chat_id" if not rec.chat_id else "",
+                                     "text" if not rec.text else "",
+                                     "due_at_iso" if not rec.due_at_iso else ""
+                                 ]).strip(", "))
+                    invalid_records += 1
+                    continue
+                
+                # Валидируем due_at_iso
+                try:
+                    due_datetime = datetime.fromisoformat(rec.due_at_iso.replace('Z', '+00:00'))
+                    # Если дата в прошлом, помечаем как failed
+                    if due_datetime < datetime.now(due_datetime.tzinfo):
+                        rec.status = "failed"
+                        rec.last_error = "due_date_in_past"
+                except (ValueError, TypeError) as exc:
+                    logger.warning("scheduler_load_invalid_date", 
+                                 reminder_id=rec.reminder_id,
+                                 due_at_iso=rec.due_at_iso,
+                                 error=str(exc))
+                    rec.status = "failed"
+                    rec.last_error = f"invalid_due_at_format: {exc}"
+                
+                # Добавляем в коллекцию
+                self._reminders[rec.reminder_id] = rec
+                loaded_count += 1
+                
+                # Синхронизируем с InboxService
+                try:
                     inbox_service.upsert_reminder(
                         reminder_id=rec.reminder_id,
                         chat_id=rec.chat_id,
@@ -463,21 +577,83 @@ class KrabScheduler:
                         retries=rec.retries,
                         last_error=rec.last_error,
                     )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("scheduler_load_failed", path=str(self.storage_path), error=str(exc))
+                except Exception as sync_exc:
+                    logger.warning("scheduler_load_inbox_sync_failed", 
+                                 reminder_id=rec.reminder_id,
+                                 error=str(sync_exc))
+                
+            except Exception as exc:  # noqa: BLE001
+                failed_parsing += 1
+                logger.warning("scheduler_load_record_failed", 
+                             index=idx, 
+                             error=str(exc))
+                continue
+        
+        # Логируем результаты загрузки
+        logger.info("scheduler_load_complete", 
+                   loaded=loaded_count, 
+                   invalid=invalid_records, 
+                   failed_parsing=failed_parsing,
+                   total_loaded=len(self._reminders))
+        
+        # Синхронизируем все загруженные reminders с InboxService
+        for rec in self._reminders.values():
+            if rec.status == "scheduled":
+                try:
+                    inbox_service.upsert_reminder(
+                        reminder_id=rec.reminder_id,
+                        chat_id=rec.chat_id,
+                        text=rec.text,
+                        due_at_iso=rec.due_at_iso,
+                        retries=rec.retries,
+                        last_error=rec.last_error,
+                    )
+                except Exception as sync_exc:  # noqa: BLE001
+                    logger.warning("scheduler_load_inbox_sync_failed", 
+                                 reminder_id=rec.reminder_id,
+                                 error=str(sync_exc))
 
     def _persist(self) -> None:
         try:
+            # Создаем parent directories если отсутствуют
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+            
             rows = [rec.to_dict() for rec in self._reminders.values() if rec.status == "scheduled"]
             payload = {
                 "updated_at": _now_local().isoformat(),
                 "reminders": rows,
             }
-            self.storage_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            
+            # Atomic write pattern: write to temp file, then rename
+            temp_path = self.storage_path.with_suffix(f"{self.storage_path.suffix}.tmp")
+            try:
+                temp_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                # Atomic rename
+                temp_path.replace(self.storage_path)
+            except Exception:
+                # Cleanup temp file if something went wrong
+                if temp_path.exists():
+                    temp_path.unlink(missing_ok=True)
+                raise
+            
+            # Sync reminder state to InboxService after each persist
+            for rec in self._reminders.values():
+                if rec.status == "scheduled":
+                    try:
+                        inbox_service.upsert_reminder(
+                            reminder_id=rec.reminder_id,
+                            chat_id=rec.chat_id,
+                            text=rec.text,
+                            due_at_iso=rec.due_at_iso,
+                            retries=rec.retries,
+                            last_error=rec.last_error,
+                        )
+                    except Exception as sync_exc:  # noqa: BLE001
+                        logger.warning("scheduler_inbox_sync_failed", reminder_id=rec.reminder_id, error=str(sync_exc))
+                        
         except Exception as exc:  # noqa: BLE001
             logger.warning("scheduler_persist_failed", path=str(self.storage_path), error=str(exc))
 

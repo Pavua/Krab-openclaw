@@ -314,3 +314,122 @@ def test_escalate_owner_mention_to_followup_preserves_trace_and_links_source(tmp
     assert source_rows[0]["metadata"]["followup_latest_kind"] == "approval_request"
     assert workflow["escalated_owner_items"][0]["item_id"] == source["item_id"]
     assert workflow["linked_followups"][0]["metadata"]["source_item_id"] == source["item_id"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 1.6 — bulk_update_status / filter_by_age / archive_by_kind / open filter
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_bulk_update_status_updates_multiple_items(tmp_path: Path) -> None:
+    """bulk_update_status должен обновить все переданные items за один вызов."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    id1 = service.upsert_item(
+        dedupe_key="bulk-1", kind="watch_alert", source="test", title="T1", body="b1", severity="info"
+    )["item"]["item_id"]
+    id2 = service.upsert_item(
+        dedupe_key="bulk-2", kind="watch_alert", source="test", title="T2", body="b2", severity="info"
+    )["item"]["item_id"]
+
+    result = service.bulk_update_status(
+        item_ids=[id1, id2], status="done", actor="test-actor", note="batch close"
+    )
+
+    assert result["ok"] is True
+    assert result["success_count"] == 2
+    assert result["error_count"] == 0
+    done_items = service.list_items(status="done", kind="watch_alert", limit=5)
+    assert len(done_items) == 2
+
+
+def test_bulk_update_status_exceeds_batch_size(tmp_path: Path) -> None:
+    """Превышение max_batch_size должно возвращать ошибку без обновлений."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    result = service.bulk_update_status(
+        item_ids=["id1", "id2", "id3", "id4", "id5"], status="done", max_batch_size=3
+    )
+    assert result["ok"] is False
+    assert "batch_size_exceeded" in result["error"]
+
+
+def test_bulk_update_status_rejects_missing_items(tmp_path: Path) -> None:
+    """bulk_update_status должен вернуть ошибку если хотя бы один item не существует."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    result = service.bulk_update_status(item_ids=["nonexistent-id-123"], status="done")
+    assert result["ok"] is False
+    assert result["error"] == "items_not_found"
+
+
+def test_bulk_update_status_empty_list_returns_ok(tmp_path: Path) -> None:
+    """bulk_update_status с пустым списком должен вернуть ok без ошибок."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    result = service.bulk_update_status(item_ids=[], status="done")
+    assert result["ok"] is True
+    assert result["success_count"] == 0
+
+
+def test_filter_by_age_returns_only_older_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """filter_by_age должен возвращать только items старше cutoff даты."""
+    import src.core.inbox_service as inbox_module
+
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    monkeypatch.setattr(inbox_module, "_now_utc_iso", lambda: "2026-01-15T00:00:00+00:00")
+    service.upsert_item(dedupe_key="old-item", kind="watch_alert", source="test", title="Old", body="old", severity="info")
+
+    monkeypatch.setattr(inbox_module, "_now_utc_iso", lambda: "2026-03-20T00:00:00+00:00")
+    service.upsert_item(dedupe_key="new-item", kind="watch_alert", source="test", title="New", body="new", severity="info")
+
+    result = service.filter_by_age(older_than_date="2026-02-01T00:00:00+00:00")
+
+    assert len(result) == 1
+    assert result[0]["dedupe_key"] == "old-item"
+
+
+def test_filter_by_age_invalid_date_returns_empty(tmp_path: Path) -> None:
+    """filter_by_age с невалидной датой должен возвращать пустой список."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    service.upsert_item(dedupe_key="item-x", kind="watch_alert", source="test", title="X", body="x", severity="info")
+    result = service.filter_by_age(older_than_date="not-a-valid-date")
+    assert result == []
+
+
+def test_archive_by_kind_cancels_matching_items(tmp_path: Path) -> None:
+    """archive_by_kind должен отменить все items нужного kind, не трогая остальные."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    service.upsert_item(dedupe_key="req-1", kind="owner_request", source="test", title="R1", body="b", severity="info")
+    service.upsert_item(dedupe_key="req-2", kind="owner_request", source="test", title="R2", body="b", severity="info")
+    service.upsert_item(dedupe_key="alert-1", kind="watch_alert", source="test", title="A1", body="b", severity="info")
+
+    result = service.archive_by_kind(kind="owner_request", actor="system-cleanup", note="migration test")
+
+    assert result["ok"] is True
+    assert result["archived_count"] == 2
+    assert len(result["item_ids"]) == 2
+    # watch_alert должен оставаться открытым
+    open_alerts = service.list_items(status="open", kind="watch_alert", limit=5)
+    assert len(open_alerts) == 1
+
+
+def test_archive_by_kind_empty_kind_returns_error(tmp_path: Path) -> None:
+    """archive_by_kind с пустым kind должен возвращать ошибку."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    result = service.archive_by_kind(kind="")
+    assert result["ok"] is False
+
+
+def test_list_items_open_filter_excludes_all_closed_statuses(tmp_path: Path) -> None:
+    """Фильтр status='open' должен исключать done, cancelled, approved, rejected."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    open_id = service.upsert_item(
+        dedupe_key="open-item", kind="watch_alert", source="test", title="Open", body="b", severity="info"
+    )["item"]["item_id"]
+    close_id = service.upsert_item(
+        dedupe_key="done-item", kind="watch_alert", source="test", title="Done", body="b", severity="info"
+    )["item"]["item_id"]
+    service.set_item_status(close_id, status="done", actor="test")
+
+    open_items = service.list_items(status="open", limit=10)
+
+    assert len(open_items) == 1
+    assert open_items[0]["item_id"] == open_id

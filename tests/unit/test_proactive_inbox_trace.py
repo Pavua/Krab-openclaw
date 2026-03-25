@@ -104,9 +104,13 @@ async def test_proactive_watch_trigger_writes_proactive_action_trace(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """
-    When proactive_watch.capture() detects a state change (reason != ''),
-    it must upsert a kind='proactive_action' inbox item in addition to the
-    existing report_watch_transition call.
+    When proactive_watch.capture() detects an actionable state change (gateway_down,
+    gateway_recovered, scheduler_backlog_*), it must upsert a kind='proactive_action'
+    inbox item in addition to the existing report_watch_transition call.
+
+    Note: memory-only transitions (route_model_changed, frontmost_app_changed, etc.)
+    do NOT create inbox items — they only update memory/digest. Use gateway_down to
+    verify the proactive_action trace mechanism.
     """
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     service = ProactiveWatchService(
@@ -114,12 +118,8 @@ async def test_proactive_watch_trigger_writes_proactive_action_trace(
     )
 
     snapshots = [
-        _snapshot(route_model="google-gemini-cli/gemini-3.1-pro-preview"),
-        _snapshot(
-            ts_utc="2026-03-24T10:05:00+00:00",
-            route_provider="openai-codex",
-            route_model="openai-codex/gpt-5.4",
-        ),
+        _snapshot(gateway_ok=True),
+        _snapshot(ts_utc="2026-03-24T10:05:00+00:00", gateway_ok=False),  # → gateway_down
     ]
 
     async def _collect():
@@ -139,17 +139,17 @@ async def test_proactive_watch_trigger_writes_proactive_action_trace(
         first = await service.capture(manual=False, persist_memory=True, notify=False)
         assert first["reason"] == ""
 
-        # Second capture: route_model changed -> reason set
+        # Second capture: gateway went down -> actionable reason
         second = await service.capture(manual=False, persist_memory=True, notify=False)
-        assert second["reason"] == "route_model_changed"
+        assert second["reason"] == "gateway_down"
 
-        # Must have a proactive_action item for the watch trigger
+        # Actionable reasons must create proactive_action inbox items
         proactive_items = inbox.list_items(kind="proactive_action", limit=10)
         assert proactive_items, "Expected at least one proactive_action inbox item from watch trigger"
         item = proactive_items[0]
         assert item["kind"] == "proactive_action"
         assert item["metadata"]["action_type"] == "watch_trigger"
-        assert item["metadata"]["reason"] == "route_model_changed"
+        assert item["metadata"]["reason"] == "gateway_down"
     finally:
         proactive_watch_module.inbox_service = original_inbox
 

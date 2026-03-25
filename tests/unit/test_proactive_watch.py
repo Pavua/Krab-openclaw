@@ -187,3 +187,129 @@ async def test_capture_gateway_transition_syncs_inbox(monkeypatch: pytest.Monkey
     assert up["reason"] == "gateway_recovered"
     assert done_items
     assert done_items[0]["dedupe_key"] == "watch:gateway_down"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2.4 — dedupe key, noise reduction, cooldown
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_gateway_down_dedupe_key_has_no_timestamp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Повторный gateway_down должен обновлять существующий item, а не создавать новый."""
+    service = ProactiveWatchService(state_path=tmp_path / "watch.json", alert_cooldown_sec=0)
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    snapshots = [
+        _snapshot(),
+        _snapshot(ts_utc="2026-03-12T05:01:00+00:00", gateway_ok=False),
+        _snapshot(ts_utc="2026-03-12T05:02:00+00:00", gateway_ok=False),
+    ]
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
+    monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+
+    await service.capture(manual=False, persist_memory=False, notify=False)
+    await service.capture(manual=False, persist_memory=False, notify=False)  # первый gateway_down
+    await service.capture(manual=False, persist_memory=False, notify=False)  # второй gateway_down
+
+    proactive_items = inbox.list_items(status="open", kind="proactive_action", limit=10)
+    # Дедупликация: два gateway_down → один item с одним dedupe_key
+    assert len(proactive_items) == 1
+    assert proactive_items[0]["dedupe_key"] == "proactive:watch_trigger:gateway_down"
+
+
+@pytest.mark.asyncio
+async def test_memory_only_reason_does_not_create_inbox_item(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """route_model_changed (memory-only) не должен создавать inbox item."""
+    service = ProactiveWatchService(state_path=tmp_path / "watch.json", alert_cooldown_sec=0)
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    snapshots = [
+        _snapshot(route_model="openai-codex/gpt-5.4"),
+        _snapshot(route_model="google-gemini-cli/gemini-3-flash-preview"),
+    ]
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
+    monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+
+    await service.capture(manual=False, persist_memory=False, notify=False)
+    result = await service.capture(manual=False, persist_memory=False, notify=False)
+
+    assert result["reason"] == "route_model_changed"
+    proactive_items = inbox.list_items(kind="proactive_action", limit=10)
+    assert proactive_items == [], f"Expected no inbox items for route_model_changed; got: {proactive_items}"
+
+
+@pytest.mark.asyncio
+async def test_actionable_reason_creates_inbox_item(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """gateway_down (actionable) должен создавать proactive_action inbox item."""
+    service = ProactiveWatchService(state_path=tmp_path / "watch.json", alert_cooldown_sec=0)
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    snapshots = [
+        _snapshot(),
+        _snapshot(ts_utc="2026-03-12T05:01:00+00:00", gateway_ok=False),
+    ]
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
+    monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+
+    await service.capture(manual=False, persist_memory=False, notify=False)
+    result = await service.capture(manual=False, persist_memory=False, notify=False)
+
+    assert result["reason"] == "gateway_down"
+    proactive_items = inbox.list_items(kind="proactive_action", limit=5)
+    assert len(proactive_items) == 1
+    assert proactive_items[0]["metadata"]["reason"] == "gateway_down"
+
+
+@pytest.mark.asyncio
+async def test_cooldown_blocks_repeat_alert_for_same_reason(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Повторный alert для того же reason внутри cooldown не должен вызывать notifier."""
+    service = ProactiveWatchService(
+        state_path=tmp_path / "watch.json",
+        alert_cooldown_sec=3600,  # 1 час
+    )
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    snapshots = [
+        _snapshot(),
+        _snapshot(ts_utc="2026-03-12T05:01:00+00:00", gateway_ok=False),
+        _snapshot(ts_utc="2026-03-12T05:02:00+00:00", gateway_ok=False),
+    ]
+
+    notify_calls: list[str] = []
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    async def _notifier(digest: str) -> None:
+        notify_calls.append(digest)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
+    monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+
+    await service.capture(manual=False, persist_memory=False, notify=True, notifier=_notifier)
+    await service.capture(manual=False, persist_memory=False, notify=True, notifier=_notifier)  # first gateway_down
+    await service.capture(manual=False, persist_memory=False, notify=True, notifier=_notifier)  # second gateway_down
+
+    # Notifier должен быть вызван только один раз (первый gateway_down в cooldown)
+    assert len(notify_calls) == 1

@@ -265,7 +265,9 @@ class InboxService:
         normalized_kind = str(kind or "").strip().lower()
         rows: list[dict[str, Any]] = []
         for item in self._load_items():
-            if normalized_status and item.status != normalized_status:
+            if normalized_status == "open" and item.status not in self._open_statuses:
+                continue
+            elif normalized_status and item.status != normalized_status:
                 continue
             if normalized_kind and item.kind != normalized_kind:
                 continue
@@ -273,6 +275,250 @@ class InboxService:
             if len(rows) >= max(1, int(limit or 20)):
                 break
         return rows
+
+    def filter_by_age(
+        self,
+        *,
+        older_than_date: str,
+        kind: str = "",
+        status: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """
+        Возвращает items старше указанной даты, отсортированные по created_at_utc (старые первыми).
+        
+        Args:
+            older_than_date: ISO timestamp для фильтрации (items старше этой даты)
+            kind: Опциональный фильтр по типу item-а
+            status: Опциональный фильтр по статусу
+            limit: Максимальное количество возвращаемых items
+        """
+        try:
+            # Парсим ISO timestamp
+            cutoff_date = datetime.fromisoformat(str(older_than_date or "").strip().replace("Z", "+00:00"))
+        except (ValueError, TypeError) as exc:
+            logger.warning("filter_by_age_invalid_date", date=older_than_date, error=str(exc))
+            return []
+        
+        normalized_kind = str(kind or "").strip().lower()
+        normalized_status = str(status or "").strip().lower()
+        
+        # Загружаем все items и фильтруем
+        all_items = self._load_items()
+        filtered_items: list[InboxItem] = []
+        
+        for item in all_items:
+            try:
+                # Парсим created_at_utc item-а
+                item_date = datetime.fromisoformat(item.created_at_utc.replace("Z", "+00:00"))
+                
+                # Проверяем, что item старше cutoff_date
+                if item_date >= cutoff_date:
+                    continue
+                    
+                # Применяем фильтры kind и status
+                if normalized_kind and item.kind != normalized_kind:
+                    continue
+                if normalized_status == "open" and item.status not in self._open_statuses:
+                    continue
+                elif normalized_status and item.status != normalized_status:
+                    continue
+                    
+                filtered_items.append(item)
+                
+            except (ValueError, TypeError) as exc:
+                logger.warning("filter_by_age_invalid_item_date", item_id=item.item_id, date=item.created_at_utc, error=str(exc))
+                continue
+        
+        # Сортируем по created_at_utc (старые первыми)
+        filtered_items.sort(key=lambda item: item.created_at_utc)
+        
+        # Применяем лимит и возвращаем как dict
+        return [item.to_dict() for item in filtered_items[:max(1, int(limit or 50))]]
+
+    def archive_by_kind(
+        self,
+        *,
+        kind: str,
+        actor: str = "system-cleanup",
+        note: str = "",
+    ) -> dict[str, Any]:
+        """
+        Архивирует все items указанного kind, устанавливая статус "cancelled".
+        
+        Args:
+            kind: Тип items для архивирования
+            actor: Актор для записи в workflow events (по умолчанию "system-cleanup")
+            note: Опциональная заметка для workflow event
+            
+        Returns:
+            dict с archived_count и item_ids списком
+        """
+        normalized_kind = str(kind or "").strip().lower()
+        if not normalized_kind:
+            return {"ok": False, "error": "inbox_empty_kind", "archived_count": 0, "item_ids": []}
+        
+        normalized_actor = str(actor or "system-cleanup").strip().lower() or "system-cleanup"
+        items = self._load_items()
+        archived_items: list[InboxItem] = []
+        archived_ids: list[str] = []
+        
+        # Находим все items указанного kind
+        for item in items:
+            if item.kind == normalized_kind:
+                # Обновляем статус на "cancelled"
+                item.status = "cancelled"
+                item.updated_at_utc = _now_utc_iso()
+                
+                # Обновляем metadata с resolution информацией
+                metadata = self._normalize_metadata(item.metadata)
+                metadata["last_action_actor"] = normalized_actor
+                metadata["last_action_status"] = "cancelled"
+                metadata["last_action_at_utc"] = item.updated_at_utc
+                metadata["resolved_at_utc"] = item.updated_at_utc
+                metadata["resolved_by"] = normalized_actor
+                
+                if note:
+                    metadata["last_action_note"] = str(note).strip()
+                    metadata["resolution_note"] = str(note).strip()
+                
+                # Добавляем workflow event
+                item.metadata = self._append_workflow_event(
+                    metadata,
+                    action="archived",
+                    actor=normalized_actor,
+                    status="cancelled",
+                    note=note,
+                )
+                
+                archived_items.append(item)
+                archived_ids.append(item.item_id)
+        
+        # Сохраняем обновленные items
+        if archived_items:
+            self._save_items(items)
+        
+        return {
+            "ok": True,
+            "archived_count": len(archived_items),
+            "item_ids": archived_ids,
+        }
+
+    def bulk_update_status(
+        self,
+        *,
+        item_ids: list[str],
+        status: str,
+        actor: str = "owner",
+        note: str = "",
+        max_batch_size: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Обновляет статус для множества items в одной операции.
+        
+        Args:
+            item_ids: Список ID items для обновления
+            status: Новый статус для всех items
+            actor: Актор для записи в workflow events
+            note: Опциональная заметка для workflow events
+            max_batch_size: Максимальный размер batch (по умолчанию 50)
+            
+        Returns:
+            dict с success_count, error_count и details списком
+        """
+        normalized_status = self._normalize_status(status)
+        normalized_actor = str(actor or "owner").strip().lower() or "owner"
+        
+        # Валидируем размер batch
+        ids_list = [str(item_id or "").strip() for item_id in (item_ids or []) if str(item_id or "").strip()]
+        if len(ids_list) > max_batch_size:
+            return {
+                "ok": False,
+                "error": f"batch_size_exceeded_max_{max_batch_size}",
+                "success_count": 0,
+                "error_count": len(ids_list),
+                "details": [],
+            }
+        
+        if not ids_list:
+            return {
+                "ok": True,
+                "success_count": 0,
+                "error_count": 0,
+                "details": [],
+            }
+        
+        items = self._load_items()
+        items_by_id = {item.item_id: item for item in items}
+        
+        # Валидируем что все items существуют
+        missing_ids = [item_id for item_id in ids_list if item_id not in items_by_id]
+        if missing_ids:
+            return {
+                "ok": False,
+                "error": "items_not_found",
+                "success_count": 0,
+                "error_count": len(ids_list),
+                "details": [{"item_id": item_id, "error": "not_found"} for item_id in missing_ids],
+            }
+        
+        # Обновляем все items
+        success_count = 0
+        error_count = 0
+        details = []
+        now_iso = _now_utc_iso()
+        
+        for item_id in ids_list:
+            try:
+                item = items_by_id[item_id]
+                
+                # Обновляем статус и timestamp
+                item.status = normalized_status
+                item.updated_at_utc = now_iso
+                
+                # Обновляем metadata
+                metadata = self._normalize_metadata(item.metadata)
+                metadata["last_action_actor"] = normalized_actor
+                metadata["last_action_status"] = normalized_status
+                metadata["last_action_at_utc"] = now_iso
+                
+                if note:
+                    metadata["last_action_note"] = str(note).strip()
+                
+                # Для закрытых статусов записываем resolution metadata
+                if normalized_status in self._closed_statuses:
+                    metadata["resolved_at_utc"] = now_iso
+                    metadata["resolved_by"] = normalized_actor
+                    if note:
+                        metadata["resolution_note"] = str(note).strip()
+                
+                # Добавляем workflow event
+                item.metadata = self._append_workflow_event(
+                    metadata,
+                    action="bulk_updated",
+                    actor=normalized_actor,
+                    status=normalized_status,
+                    note=note,
+                )
+                
+                success_count += 1
+                details.append({"item_id": item_id, "status": "updated"})
+                
+            except Exception as exc:
+                logger.warning("bulk_update_status_item_failed", item_id=item_id, error=str(exc))
+                error_count += 1
+                details.append({"item_id": item_id, "error": str(exc)})
+        
+        # Сохраняем обновленные items
+        if success_count > 0:
+            self._save_items(items)
+        
+        return {
+            "ok": error_count == 0,
+            "success_count": success_count,
+            "error_count": error_count,
+            "details": details,
+        }
 
     def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
         """Собирает owner-facing summary из уже загруженного набора item-ов."""

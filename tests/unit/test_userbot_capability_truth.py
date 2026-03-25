@@ -70,19 +70,21 @@ def test_looks_like_integrations_question_detects_runtime_tools() -> None:
 
 
 def test_looks_like_runtime_truth_question_detects_self_check_intent() -> None:
-    """Вопросы про self-check должны уходить в truthful fast-path."""
-    assert KraabUserbot._looks_like_runtime_truth_question("Проверка связи") is True
-    assert KraabUserbot._looks_like_runtime_truth_question("Что работает, а что нет?") is True
-    assert KraabUserbot._looks_like_runtime_truth_question("Есть ли у тебя доступ к браузеру?") is True
+    """Fast-path отключён по просьбе пользователя — функция всегда возвращает False."""
+    # NOTE: _looks_like_runtime_truth_question disabled ("все вопросы уходят в LLM")
+    assert KraabUserbot._looks_like_runtime_truth_question("Проверка связи") is False
+    assert KraabUserbot._looks_like_runtime_truth_question("Что работает, а что нет?") is False
+    assert KraabUserbot._looks_like_runtime_truth_question("Есть ли у тебя доступ к браузеру?") is False
     assert KraabUserbot._looks_like_runtime_truth_question("Расскажи шутку") is False
 
 
 def test_looks_like_runtime_truth_question_detects_full_diagnostics_intent() -> None:
-    """Полная диагностика рантайма не должна уходить в свободную генерацию."""
-    assert KraabUserbot._looks_like_runtime_truth_question("Cron у тебя уже работает? Проведи полную диагностику") is True
+    """Fast-path отключён — диагностические вопросы тоже уходят в LLM."""
+    # NOTE: _looks_like_runtime_truth_question disabled ("все вопросы уходят в LLM")
+    assert KraabUserbot._looks_like_runtime_truth_question("Cron у тебя уже работает? Проведи полную диагностику") is False
     assert KraabUserbot._looks_like_runtime_truth_question(
         "Проведи полную диагностику рантайма и скажи текущую модель"
-    ) is True
+    ) is False
 
 
 def test_build_runtime_capability_status_owner_includes_real_tools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -304,6 +306,7 @@ async def test_process_message_integrations_question_uses_fast_path_without_llm(
     assert "LM Studio local: ON (`nvidia/nemotron-3-nano`)" in delivered_text
 
 
+@pytest.mark.skip(reason="runtime truth fast-path disabled per user request — все вопросы уходят в LLM")
 @pytest.mark.asyncio
 async def test_process_message_runtime_truth_question_uses_fast_path_without_llm(
     monkeypatch: pytest.MonkeyPatch,
@@ -352,6 +355,7 @@ async def test_process_message_runtime_truth_question_uses_fast_path_without_llm
     assert "Cron / heartbeat: scheduler активен, transport живой." in delivered_text
 
 
+@pytest.mark.skip(reason="runtime truth fast-path disabled per user request — все вопросы уходят в LLM")
 @pytest.mark.asyncio
 async def test_process_message_full_diagnostics_question_uses_runtime_truth_fast_path(
     monkeypatch: pytest.MonkeyPatch,
