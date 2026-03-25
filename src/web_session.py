@@ -3,6 +3,7 @@ import asyncio
 import os
 from playwright.async_api import async_playwright, BrowserContext, Page
 from structlog import get_logger
+from src.config import config
 
 logger = get_logger(__name__)
 
@@ -100,7 +101,8 @@ class WebSessionManager:
             await self.start(headless=False)
         if self.page:
             await self.page.goto(url)
-            await self.page.bring_to_front()
+            if config.BROWSER_FOCUS_TAB:
+                await self.page.bring_to_front()
 
     async def login_mode(self):
         """Starts browser in HEADFUL mode for manual login."""
