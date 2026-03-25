@@ -42,13 +42,17 @@ class Config:
         os.getenv("LM_STUDIO_AUTH_TOKEN", ""),
     ).strip()
 
-    # Gemini (fallback): free key first, paid key as fallback
+    # Gemini (fallback): free key first, paid key as opt-in
     GEMINI_API_KEY_FREE: Optional[str] = os.getenv("GEMINI_API_KEY_FREE")
     GEMINI_API_KEY_PAID: Optional[str] = os.getenv("GEMINI_API_KEY_PAID")
+    # Платный ключ НЕ используется пока GEMINI_PAID_KEY_ENABLED != 1.
+    # Защита от случайных расходов: ключ в .env можно оставить, но без флага
+    # он игнорируется. Включить: GEMINI_PAID_KEY_ENABLED=1 в .env.
+    GEMINI_PAID_KEY_ENABLED: bool = os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in ("1", "true", "yes")
     GEMINI_API_KEY: Optional[str] = (
-        os.getenv("GEMINI_API_KEY_PAID")   # платный ключ приоритетнее
-        or os.getenv("GEMINI_API_KEY")
+        (os.getenv("GEMINI_API_KEY_PAID") if os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in ("1", "true", "yes") else None)
         or os.getenv("GEMINI_API_KEY_FREE")
+        or os.getenv("GEMINI_API_KEY")
     )
     GEMINI_MODELS: list[str] = [
         "google/gemini-2.5-flash",
@@ -424,6 +428,8 @@ class Config:
                     cls.GROUP_VOICE_FALLBACK_TRIGGER = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
+                elif key == "GEMINI_PAID_KEY_ENABLED":
+                    cls.GEMINI_PAID_KEY_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "BRAVE_SEARCH_API_KEY":
                     cls.BRAVE_SEARCH_API_KEY = value
 
