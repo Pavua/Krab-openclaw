@@ -1625,6 +1625,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!sysinfo` — информация о хосте
 `!mac ...` — управление macOS (clipboard / notify / apps / Finder / Notes / Reminders / Calendar)
 `!screenshot` — снимок текущей вкладки Chrome; `!screenshot ocr [lang]` — OCR; `!screenshot health` — статус CDP
+`!cap` — просмотр/toggle capabilities матрицы; `!cap <name> on|off`; `!cap reset`
 `!diagnose` — диагностика подключений
 
 **Dev**
@@ -2511,3 +2512,69 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
         return
 
     await message.reply_photo(io.BytesIO(png_bytes), caption="📸 Screenshot")
+
+
+async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
+    """Управление Policy Matrix — горячий toggle capabilities.
+
+    Использование:
+      !cap                     — список текущих оверрайдов + все валидные capability
+      !cap <capability> on     — включить capability для всех ролей
+      !cap <capability> off    — выключить capability для всех ролей
+      !cap reset               — сбросить все оверрайды (вернуть дефолты)
+    """
+    del bot
+    from ..core.capability_registry import (
+        clear_capability_overrides,
+        get_capability_overrides,
+        set_capability_override,
+    )
+    from ..core.capability_registry import _VALID_CAPABILITIES  # type: ignore[attr-defined]
+
+    raw_parts = str(message.text or "").split()
+    sub = raw_parts[1].lower().strip() if len(raw_parts) > 1 else ""
+
+    if not sub or sub == "list":
+        overrides = get_capability_overrides()
+        valid = sorted(_VALID_CAPABILITIES)
+        lines = ["🎛 **Policy Matrix — capability overrides**"]
+        if overrides:
+            lines.append("")
+            lines.append("**Активные оверрайды:**")
+            for cap, val in sorted(overrides.items()):
+                icon = "✅" if val else "🚫"
+                lines.append(f"  {icon} `{cap}`")
+        else:
+            lines.append("_(оверрайды не заданы — используются дефолты ролей)_")
+        lines.append("")
+        lines.append("**Все capabilities:**")
+        lines.append("`" + "`, `".join(valid) + "`")
+        lines.append("")
+        lines.append("📝 `!cap <name> on/off` · `!cap reset`")
+        await message.reply("\n".join(lines))
+        return
+
+    if sub == "reset":
+        clear_capability_overrides()
+        await message.reply("♻️ Все оверрайды сброшены — используются дефолты ролей.")
+        return
+
+    # !cap <capability> on/off
+    if len(raw_parts) < 3:
+        raise UserInputError(user_message="🎛 `!cap <capability> on|off`")
+    cap_name = sub
+    action = raw_parts[2].lower().strip()
+    if action not in ("on", "off"):
+        raise UserInputError(user_message="🎛 Значение должно быть `on` или `off`")
+
+    result = set_capability_override(cap_name, action == "on")
+    if "error" in result:
+        valid = sorted(_VALID_CAPABILITIES)
+        await message.reply(
+            f"❌ `{cap_name}` — неизвестная capability.\n"
+            f"Доступные: `{'`, `'.join(valid)}`"
+        )
+        return
+
+    icon = "✅" if action == "on" else "🚫"
+    await message.reply(f"{icon} `{cap_name}` → **{action.upper()}** (все роли)")

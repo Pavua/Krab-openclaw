@@ -7,6 +7,7 @@
 
 from .command_handlers import (
     handle_acl,
+    handle_cap,
     handle_agent,
     handle_audio_message,
     handle_claude_cli,
@@ -51,6 +52,7 @@ from .command_handlers import (
 
 __all__ = [
     "handle_acl",
+    "handle_cap",
     "handle_agent",
     "handle_audio_message",
     "handle_claude_cli",
