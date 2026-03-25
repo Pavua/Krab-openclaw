@@ -6,19 +6,43 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from pyrogram.types import Message
 
 from ..config import config
+from ..core.access_control import (
+    AccessLevel,
+    PARTIAL_ACCESS_COMMANDS,
+    get_effective_owner_label,
+    load_acl_runtime_state,
+    update_acl_subject,
+)
 from ..core.exceptions import UserInputError
+from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
-from ..employee_templates import ROLES, list_roles, save_role
+from ..core.openclaw_runtime_models import get_runtime_primary_model
+from ..core.openclaw_workspace import append_workspace_memory_entry, recall_workspace_memory
+from ..core.openclaw_workspace import list_workspace_memory_entries
+from ..core.proactive_watch import proactive_watch
+from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
+from ..core.swarm import AgentRoom
+from ..core.translator_runtime_profile import (
+    ALLOWED_LANGUAGE_PAIRS,
+    ALLOWED_TRANSLATION_MODES,
+    ALLOWED_VOICE_STRATEGIES,
+    default_translator_runtime_profile,
+)
+from ..employee_templates import ROLES, get_role_prompt, list_roles, save_role
+from ..integrations.hammerspoon_bridge import HammerspoonBridgeError, hammerspoon
+from ..integrations.macos_automation import macos_automation
 from ..mcp_client import mcp_manager
 from ..memory_engine import memory_manager
 from ..model_manager import model_manager
@@ -29,6 +53,133 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from ..userbot_bridge import KraabUserbot
+
+
+def _render_voice_profile(profile: dict[str, Any]) -> str:
+    """Форматирует runtime voice-профиль для Telegram-ответа."""
+    enabled = bool(profile.get("enabled"))
+    delivery = str(profile.get("delivery") or "text+voice")
+    speed = float(profile.get("speed") or 1.5)
+    voice_name = str(profile.get("voice") or "ru-RU-DmitryNeural")
+    input_ready = bool(profile.get("input_transcription_ready"))
+    live_foundation = bool(profile.get("live_voice_foundation"))
+    return (
+        "🎙️ **Voice runtime**\n"
+        f"- Озвучка ответов: `{'ВКЛ' if enabled else 'ВЫКЛ'}`\n"
+        f"- Режим доставки: `{delivery}`\n"
+        f"- Скорость: `{speed:.2f}x`\n"
+        f"- Голос: `{voice_name}`\n"
+        f"- Входящие voice/STT: `{'READY' if input_ready else 'DOWN'}`\n"
+        f"- Live voice foundation: `{'READY' if live_foundation else 'DEGRADED'}`\n\n"
+        "Команды:\n"
+        "`!voice on|off|toggle`\n"
+        "`!voice speed <0.75..2.5>`\n"
+        "`!voice voice <edge-tts-id>`\n"
+        "`!voice delivery <text+voice|voice-only>`\n"
+        "`!voice reset`"
+    )
+
+
+def _render_translator_profile(profile: dict[str, Any]) -> str:
+    """Форматирует product-level translator runtime profile для Telegram-ответа."""
+    language_pair = str(profile.get("language_pair") or "es-ru")
+    mode = str(profile.get("translation_mode") or "bilingual")
+    strategy = str(profile.get("voice_strategy") or "voice-first")
+    target = str(profile.get("target_device") or "iphone_companion")
+    quick_phrases = profile.get("quick_phrases") or []
+    quick_phrase_count = int(profile.get("quick_phrase_count") or len(quick_phrases) or 0)
+    voice_foundation = bool(profile.get("voice_foundation_ready"))
+    voice_runtime = bool(profile.get("voice_runtime_enabled"))
+    ordinary_calls = "ВКЛ" if bool(profile.get("ordinary_calls_enabled")) else "ВЫКЛ"
+    internet_calls = "ВКЛ" if bool(profile.get("internet_calls_enabled")) else "ВЫКЛ"
+    subtitles = "ВКЛ" if bool(profile.get("subtitles_enabled")) else "ВЫКЛ"
+    timeline = "ВКЛ" if bool(profile.get("timeline_enabled")) else "ВЫКЛ"
+    summary = "ВКЛ" if bool(profile.get("summary_enabled")) else "ВЫКЛ"
+    diagnostics = "ВКЛ" if bool(profile.get("diagnostics_enabled")) else "ВЫКЛ"
+    preview = ", ".join(f"`{item}`" for item in list(quick_phrases)[:3]) or "—"
+    return (
+        "🗣️ **Translator runtime**\n"
+        f"- Языковая пара: `{language_pair}`\n"
+        f"- Mode: `{mode}`\n"
+        f"- Voice strategy: `{strategy}`\n"
+        f"- Target device: `{target}`\n"
+        f"- Ordinary calls: `{ordinary_calls}`\n"
+        f"- Internet calls: `{internet_calls}`\n"
+        f"- Subtitles / Timeline / Summary / Diagnostics: `{subtitles}` / `{timeline}` / `{summary}` / `{diagnostics}`\n"
+        f"- Quick phrases: `{quick_phrase_count}`\n"
+        f"- Voice foundation: `{'READY' if voice_foundation else 'DEGRADED'}`\n"
+        f"- Voice runtime replies: `{'ВКЛ' if voice_runtime else 'ВЫКЛ'}`\n"
+        f"- Preview: {preview}\n\n"
+        "Команды:\n"
+        "`!translator status`\n"
+        "`!translator lang <es-ru|es-en|en-ru|auto-detect>`\n"
+        "`!translator mode <bilingual|auto_to_ru|auto_to_en>`\n"
+        "`!translator strategy <voice-first|subtitles-first>`\n"
+        "`!translator ordinary <on|off>` / `!translator internet <on|off>`\n"
+        "`!translator subtitles|timeline|summary|diagnostics <on|off>`\n"
+        "`!translator phrase add <текст>` / `!translator phrase remove <номер>`\n"
+        "`!translator reset`"
+    )
+
+
+def _render_translator_session_state(state: dict[str, Any]) -> str:
+    """Форматирует translator session state для Telegram-ответа."""
+    status = str(state.get("session_status") or "idle")
+    muted = bool(state.get("translation_muted"))
+    session_id = str(state.get("session_id") or "—")
+    label = str(state.get("active_session_label") or "—")
+    pair = str(state.get("language_pair") or state.get("last_language_pair") or "—")
+    original = str(state.get("last_translated_original") or "—")
+    translation = str(state.get("last_translated_translation") or "—")
+    last_event = str(state.get("last_event") or "session_idle")
+    updated_at = str(state.get("updated_at") or "—")
+    timeline_summary = state.get("timeline_summary") if isinstance(state.get("timeline_summary"), dict) else {}
+    preview = state.get("timeline_preview") if isinstance(state.get("timeline_preview"), list) else []
+    preview_lines: list[str] = []
+    for item in preview[:3]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "session_updated")
+        ts = str(item.get("ts") or "—")
+        item_translation = str(item.get("translation") or item.get("original") or "").strip()
+        suffix = f" · {item_translation}" if item_translation else ""
+        preview_lines.append(f"- `{ts}` `{kind}`{suffix}")
+    preview_block = "\n".join(preview_lines) if preview_lines else "- `timeline пока пуст`"
+    return (
+        "🎧 **Translator session**\n"
+        f"- Состояние: `{status}`\n"
+        f"- Translation muted: `{'YES' if muted else 'NO'}`\n"
+        f"- Session id: `{session_id}`\n"
+        f"- Session label: `{label}`\n"
+        f"- Language pair: `{pair}`\n"
+        f"- Last event: `{last_event}`\n"
+        f"- Updated: `{updated_at}`\n"
+        f"- Timeline events: `{timeline_summary.get('total', state.get('timeline_event_count', 0))}`\n"
+        f"- Line / control: `{timeline_summary.get('line_events', 0)}` / `{timeline_summary.get('control_events', 0)}`\n"
+        f"- Last original: `{original}`\n"
+        f"- Last translation: `{translation}`\n"
+        "Recent timeline:\n"
+        f"{preview_block}\n\n"
+        "Команды:\n"
+        "`!translator session status`\n"
+        "`!translator session start [label]`\n"
+        "`!translator session pause`\n"
+        "`!translator session resume`\n"
+        "`!translator session stop`\n"
+        "`!translator session mute` / `!translator session unmute`\n"
+        "`!translator session replay <original> | <translation>`\n"
+        "`!translator session clear`"
+    )
+
+
+def _parse_toggle_arg(raw: Any, *, field_name: str) -> bool:
+    """Нормализует `on/off` аргумент для командных флагов."""
+    value = str(raw or "").strip().lower()
+    if value == "on":
+        return True
+    if value == "off":
+        return False
+    raise UserInputError(user_message=f"❌ Для `{field_name}` поддерживаются только `on` и `off`.")
 
 
 def _format_size_gb(size_gb: float) -> str:
@@ -72,6 +223,40 @@ def _split_text_for_telegram(text: str, limit: int = 3900) -> list[str]:
     return chunks or [text[:limit]]
 
 
+class _AgentRoomRouterAdapter:
+    """
+    Легковесный адаптер роевого запуска для userbot-команд.
+
+    Почему отдельно:
+    - AgentRoom ожидает контракт `route_query(prompt, skip_swarm=True)`;
+    - userbot работает напрямую через `openclaw_client.send_message_stream`;
+    - адаптер связывает эти два слоя без изменения core-логики.
+    """
+
+    def __init__(self, *, chat_id: str, system_prompt: str) -> None:
+        self.chat_id = chat_id
+        self.system_prompt = system_prompt
+
+    async def route_query(self, prompt: str, skip_swarm: bool = False, **_: Any) -> str:
+        """
+        Выполняет один роевой шаг через OpenClaw stream.
+
+        `skip_swarm` принят для совместимости контракта AgentRoom.
+        """
+        del skip_swarm
+        chunks: list[str] = []
+        max_output_tokens = int(getattr(config, "SWARM_ROLE_MAX_OUTPUT_TOKENS", 700) or 700)
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=self.chat_id,
+            system_prompt=self.system_prompt,
+            force_cloud=bool(getattr(config, "FORCE_CLOUD", False)),
+            max_output_tokens=max_output_tokens,
+        ):
+            chunks.append(str(chunk))
+        return "".join(chunks).strip()
+
+
 async def handle_search(bot: "KraabUserbot", message: Message) -> None:
     """Ручной веб-поиск через Brave."""
     query = bot._get_command_args(message)
@@ -87,13 +272,81 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"❌ Ошибка поиска: {e}")
 
 
+async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Запуск роевого обсуждения (аналитик -> критик -> интегратор).
+    Использование: !swarm <тема>
+    """
+    from ..core.swarm import AgentRoom
+    
+    topic = bot._get_command_args(message)
+    if not topic:
+        raise UserInputError(user_message="🐝 О чем поговорить роем? Напиши: `!swarm <тема>`")
+
+    msg = await message.reply(f"🐝 **Запуск Swarm Room...**\nТема: `{topic}`")
+    
+    try:
+        chat_id = str(message.chat.id)
+        user = message.from_user
+        access_profile = bot._get_access_profile(user)
+        is_allowed_sender = bot._is_allowed_sender(user)
+        system_prompt = bot._build_system_prompt_for_sender(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_profile.level,
+        )
+        
+        router_adapter = _AgentRoomRouterAdapter(
+            chat_id=chat_id,
+            system_prompt=system_prompt,
+        )
+        
+        room = AgentRoom()
+        result_text = await room.run_round(topic, router_adapter)
+        
+        if len(result_text) > 4000:
+            chunks = _split_text_for_telegram(result_text)
+            await msg.edit(chunks[0])
+            for part in chunks[1:]:
+                await message.reply(part)
+        else:
+            await msg.edit(result_text)
+            
+    except Exception as e:
+        logger.error("swarm_error", error=str(e))
+        await msg.edit(f"❌ Ошибка Swarm: {str(e)[:500]}")
+
+
+async def handle_shop(bot: "KraabUserbot", message: Message) -> None:
+    """Поиск товаров на Mercadona через перехват XHR/Fetch ответов API."""
+    from ..skills.mercadona import search_mercadona
+
+    query = bot._get_command_args(message)
+    if not query or query.lower() in ["shop", "!shop"]:
+        raise UserInputError(user_message="🛒 Что ищем? Напиши: `!shop <товар>`")
+    msg = await message.reply(f"🛒 **Краб ищет на Mercadona:** `{query}`...")
+    try:
+        results = await search_mercadona(query)
+        if len(results) > 4000:
+            results = results[:3900] + "..."
+        await msg.edit(results)
+    except Exception as exc:
+        logger.error("mercadona_search_failed", error=repr(exc))
+        await msg.edit(f"❌ Ошибка при поиске на Mercadona: {exc}")
+
+
 async def handle_remember(bot: "KraabUserbot", message: Message) -> None:
     """Запомнить факт."""
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(user_message="🧠 Что запомнить? Напиши: `!remember <текст>`")
     try:
-        success = memory_manager.save_fact(text)
+        workspace_saved = append_workspace_memory_entry(
+            text,
+            source="userbot",
+            author=str(getattr(getattr(message, "from_user", None), "username", "") or ""),
+        )
+        vector_saved = memory_manager.save_fact(text)
+        success = workspace_saved or vector_saved
         if success:
             await message.reply(f"🧠 **Запомнил:** `{text}`")
         else:
@@ -108,7 +361,14 @@ async def handle_recall(bot: "KraabUserbot", message: Message) -> None:
     if not text:
         raise UserInputError(user_message="🧠 Что вспомнить? Напиши: `!recall <запрос>`")
     try:
-        facts = memory_manager.recall(text)
+        workspace_facts = recall_workspace_memory(text)
+        vector_facts = memory_manager.recall(text)
+        sections: list[str] = []
+        if workspace_facts:
+            sections.append(f"**OpenClaw workspace:**\n{workspace_facts}")
+        if vector_facts and vector_facts not in workspace_facts:
+            sections.append(f"**Local vector memory:**\n{vector_facts}")
+        facts = "\n\n".join(section for section in sections if section).strip()
         if facts:
             await message.reply(f"🧠 **Вспомнил:**\n\n{facts}")
         else:
@@ -169,16 +429,35 @@ async def handle_status(bot: "KraabUserbot", message: Message) -> None:
     """Статус системы и ресурсов."""
     ram = model_manager.get_ram_usage()
     is_ok = await openclaw_client.health_check()
+    route_meta = {}
+    if hasattr(openclaw_client, "get_last_runtime_route"):
+        try:
+            route_meta = openclaw_client.get_last_runtime_route() or {}
+        except Exception:
+            route_meta = {}
+    actual_model = str(route_meta.get("model") or "").strip()
+    actual_channel = str(route_meta.get("channel") or "").strip()
+    route_status = str(route_meta.get("status") or "").strip()
+    route_error = str(route_meta.get("error_code") or "").strip()
+    declared_primary = str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "").strip()
+    effective_model = actual_model or declared_primary or "unknown"
     bar = "▓" * int(ram["percent"] / 10) + "░" * (10 - int(ram["percent"] / 10))
     text = f"""
 🦀 **Системный статус Краба**
 ---------------------------
 📡 **Gateway (OpenClaw):** {"✅ Online" if is_ok else "❌ Offline"}
-🧠 **Модель:** `{config.MODEL}`
+🧠 **Фактическая модель:** `{effective_model}`
 🎭 **Роль:** `{bot.current_role}`
 🎙️ **Голос:** `{"ВКЛ" if bot.voice_mode else "ВЫКЛ"}`
 💻 **RAM:** [{bar}] {ram["percent"]}%
 """
+    if declared_primary and declared_primary != effective_model:
+        text += f"🧭 **Primary runtime:** `{declared_primary}`\n"
+    if actual_channel:
+        text += f"🛣️ **Маршрут:** `{actual_channel}`\n"
+    if route_status and (route_status != "ok" or route_error):
+        suffix = f" / `{route_error}`" if route_error else ""
+        text += f"⚠️ **Route status:** `{route_status}`{suffix}\n"
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(text)
     else:
@@ -227,16 +506,22 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if sub == "local":
+        # Фиксируем режим в .env, чтобы он не слетал после рестартов runtime.
+        config.update_setting("FORCE_CLOUD", "0")
         config.FORCE_CLOUD = False
         await message.reply("💻 Режим: **local** — используется локальная модель (LM Studio).")
         return
 
     if sub == "cloud":
+        # Фиксируем режим в .env, чтобы cloud оставался активным после перезапуска.
+        config.update_setting("FORCE_CLOUD", "1")
         config.FORCE_CLOUD = True
         await message.reply(f"☁️ Режим: **cloud** — используется `{config.MODEL}`.")
         return
 
     if sub == "auto":
+        # Auto = не форсить cloud, отдаём выбор роутеру.
+        config.update_setting("FORCE_CLOUD", "0")
         config.FORCE_CLOUD = False
         await message.reply("🤖 Режим: **auto** — автоматический выбор лучшей модели.")
         return
@@ -251,6 +536,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
 
         if is_local:
             config.update_setting("LOCAL_PREFERRED_MODEL", resolved_id)
+            config.update_setting("FORCE_CLOUD", "0")
             config.FORCE_CLOUD = False
             await message.reply(
                 "💻 Зафиксирована локальная модель.\n"
@@ -261,6 +547,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             return
 
         config.update_setting("MODEL", resolved_id)
+        config.update_setting("FORCE_CLOUD", "1")
         config.FORCE_CLOUD = True
         await message.reply(
             "☁️ Зафиксирована облачная модель.\n"
@@ -358,7 +645,8 @@ async def handle_config(bot: "KraabUserbot", message: Message) -> None:
     text = f"""
 ⚙️ **Конфигурация Краба**
 ----------------------
-👤 **Владелец:** `{config.OWNER_USERNAME}`
+👤 **Владелец (effective):** `{get_effective_owner_label()}`
+🧷 **Fallback owner_username:** `{config.OWNER_USERNAME}`
 🎯 **Триггеры:** `{", ".join(config.TRIGGER_PREFIXES)}`
 🧠 **Память (RAM):** `{config.MAX_RAM_GB}GB`
 """
@@ -370,10 +658,153 @@ async def handle_set(bot: "KraabUserbot", message: Message) -> None:
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
         raise UserInputError(user_message="⚙️ `!set <KEY> <VAL>`")
-    if config.update_setting(args[1], args[2]):
-        await message.reply(f"✅ `{args[1]}` обновлено!")
+    key = str(args[1] or "").upper()
+    if config.update_setting(key, args[2]):
+        extra = ""
+        if key == "SCHEDULER_ENABLED" and hasattr(bot, "_sync_scheduler_runtime"):
+            try:
+                bot._sync_scheduler_runtime()
+                state = "ON" if bool(getattr(config, "SCHEDULER_ENABLED", False)) else "OFF"
+                extra = f"\n⏰ Scheduler runtime: `{state}`"
+            except Exception as exc:  # noqa: BLE001
+                extra = f"\n⚠️ Scheduler sync warning: `{str(exc)[:120]}`"
+        await message.reply(f"✅ `{key}` обновлено!{extra}")
     else:
         await message.reply("❌ Ошибка обновления.")
+
+
+async def handle_acl(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление runtime ACL userbot.
+
+    Доступно только owner-контуру.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(
+            user_message=(
+                "🔒 Управление ACL доступно только владельцу.\n"
+                "Можно попросить владельца выдать full или partial доступ."
+            )
+        )
+
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split()
+    action = str(parts[0] or "status").strip().lower() if parts else "status"
+    state = load_acl_runtime_state()
+
+    def _render_state() -> str:
+        full_items = state.get(AccessLevel.FULL.value, [])
+        partial_items = state.get(AccessLevel.PARTIAL.value, [])
+        owner_items = state.get(AccessLevel.OWNER.value, [])
+        return (
+            "🛂 **Runtime ACL userbot**\n"
+            "-----------------------\n"
+            f"- Файл: `{config.USERBOT_ACL_FILE}`\n"
+            f"- Владелец (effective): `{get_effective_owner_label()}`\n"
+            f"- Fallback owner_username (config): `{config.OWNER_USERNAME}`\n"
+            f"- Owner в runtime-файле: `{', '.join(owner_items) if owner_items else '-'}`\n"
+            f"- Full: `{', '.join(full_items) if full_items else '-'}`\n"
+            f"- Partial: `{', '.join(partial_items) if partial_items else '-'}`\n"
+            f"- Partial-команды: `{', '.join(sorted(PARTIAL_ACCESS_COMMANDS))}`\n\n"
+            "Команды:\n"
+            "- `!acl status`\n"
+            "- `!acl grant full @username`\n"
+            "- `!acl grant partial @username`\n"
+            "- `!acl revoke full @username`\n"
+            "- `!acl revoke partial @username`\n"
+            "- `!acl list`"
+        )
+
+    if action in {"", "status", "list"}:
+        await message.reply(_render_state())
+        return
+
+    if action not in {"grant", "revoke"}:
+        raise UserInputError(
+            user_message=(
+                "❌ Неизвестное действие ACL.\n"
+                "Используй: `status`, `list`, `grant`, `revoke`."
+            )
+        )
+
+    if len(parts) < 3:
+        raise UserInputError(
+            user_message=(
+                "❌ Формат ACL-команды:\n"
+                "- `!acl grant full @username`\n"
+                "- `!acl grant partial 123456789`\n"
+                "- `!acl revoke full @username`"
+            )
+        )
+
+    level = str(parts[1] or "").strip().lower()
+    subject = str(parts[2] or "").strip()
+    if level not in {AccessLevel.FULL.value, AccessLevel.PARTIAL.value}:
+        raise UserInputError(
+            user_message="❌ Можно изменять только уровни `full` и `partial`."
+        )
+
+    result = update_acl_subject(level, subject, add=(action == "grant"))
+    state = result["state"]
+    verb = "выдан" if action == "grant" else "снят"
+    changed_note = "обновлено" if result["changed"] else "без изменений"
+    await message.reply(
+        "✅ ACL обновлён.\n"
+        f"- Уровень: `{level}`\n"
+        f"- Subject: `{result['subject']}`\n"
+        f"- Результат: `{verb}` / {changed_note}\n"
+        f"- Full: `{', '.join(state.get('full', [])) if state.get('full') else '-'}`\n"
+        f"- Partial: `{', '.join(state.get('partial', [])) if state.get('partial') else '-'}`"
+    )
+
+
+async def handle_reasoning(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Показывает скрытую reasoning-trace отдельно от основного ответа.
+
+    Это owner/debug-команда: мысли не идут в обычный ответ, но владелец может
+    посмотреть последний скрытый trace по явному запросу.
+    """
+    args = str(bot._get_command_args(message) or "").strip().lower()
+    chat_id = str(getattr(getattr(message, "chat", None), "id", "") or "")
+
+    if args in {"clear", "reset"}:
+        cleared = bool(bot.clear_hidden_reasoning_trace_snapshot(chat_id))
+        await message.reply(
+            "🧼 Скрытая reasoning-trace для этого чата очищена."
+            if cleared
+            else "🧼 Для этого чата пока нечего очищать: reasoning-trace ещё не накоплена."
+        )
+        return
+
+    trace = bot.get_hidden_reasoning_trace_snapshot(chat_id)
+    if not trace:
+        await message.reply(
+            "🧠 Для этого чата пока нет сохранённой reasoning-trace.\n"
+            "Сначала дождись обычного ответа Краба, а потом вызови `!reasoning`."
+        )
+        return
+
+    lines = [
+        "🧠 **Скрытая reasoning-trace**",
+        f"- Updated: `{trace.get('updated_at') or '-'}`",
+        f"- Transport: `{trace.get('transport_mode') or 'unknown'}`",
+        f"- Route: `{trace.get('route_channel') or '-'} / {trace.get('route_model') or '-'}`",
+        f"- Query: `{trace.get('query') or '-'}`",
+        f"- Preview: `{trace.get('answer_preview') or '-'}`",
+    ]
+    if not bool(trace.get("available")):
+        lines.append(
+            "⚠️ Для последнего ответа отдельный reasoning-блок не пришёл: "
+            "провайдер вернул только финальный текст или скрытые мысли не доехали до транспорта."
+        )
+        await message.reply("\n".join(lines))
+        return
+
+    body = "\n".join(lines + ["", str(trace.get("reasoning") or "").strip()])
+    for chunk in _split_text_for_telegram(body):
+        await message.reply(chunk)
 
 
 async def handle_role(bot: "KraabUserbot", message: Message) -> None:
@@ -391,9 +822,292 @@ async def handle_role(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_voice(bot: "KraabUserbot", message: Message) -> None:
-    """Переключение голосовых ответов."""
-    bot.voice_mode = not bot.voice_mode
-    await message.reply(f"🎙️ Голосовой режим: `{'ВКЛ' if bot.voice_mode else 'ВЫКЛ'}`")
+    """
+    Управление runtime voice-профилем userbot.
+
+    Раньше это был только toggle-флаг. Теперь команда управляет целым профилем:
+    enabled/speed/voice/delivery, чтобы owner мог нормально настраивать голосовой
+    контур без ручной правки `.env`.
+    """
+    args = str(message.text or "").split()
+    if len(args) == 1 or str(args[1] or "").strip().lower() in {"status", "show"}:
+        await message.reply(_render_voice_profile(bot.get_voice_runtime_profile()))
+        return
+
+    sub = str(args[1] or "").strip().lower()
+    if sub in {"toggle", "on", "off"}:
+        if sub == "toggle":
+            profile = bot.update_voice_runtime_profile(
+                enabled=not bool(bot.get_voice_runtime_profile().get("enabled")),
+                persist=True,
+            )
+        else:
+            profile = bot.update_voice_runtime_profile(enabled=(sub == "on"), persist=True)
+        await message.reply(_render_voice_profile(profile))
+        return
+
+    if sub == "speed":
+        if len(args) < 3:
+            raise UserInputError(user_message="❌ Укажи скорость: `!voice speed 1.25`")
+        try:
+            profile = bot.update_voice_runtime_profile(speed=float(args[2]), persist=True)
+        except ValueError as exc:
+            raise UserInputError(user_message="❌ Скорость должна быть числом, например `1.25`.") from exc
+        await message.reply(_render_voice_profile(profile))
+        return
+
+    if sub == "voice":
+        if len(args) < 3:
+            raise UserInputError(
+                user_message="❌ Укажи voice-id, например `!voice voice ru-RU-SvetlanaNeural`."
+            )
+        profile = bot.update_voice_runtime_profile(voice=args[2], persist=True)
+        await message.reply(_render_voice_profile(profile))
+        return
+
+    if sub == "delivery":
+        if len(args) < 3:
+            raise UserInputError(
+                user_message="❌ Укажи режим: `!voice delivery text+voice` или `!voice delivery voice-only`."
+            )
+        delivery = str(args[2] or "").strip().lower()
+        if delivery not in {"text+voice", "voice-only"}:
+            raise UserInputError(
+                user_message="❌ Поддерживаются только `text+voice` и `voice-only`."
+            )
+        profile = bot.update_voice_runtime_profile(delivery=delivery, persist=True)
+        await message.reply(_render_voice_profile(profile))
+        return
+
+    if sub == "reset":
+        profile = bot.update_voice_runtime_profile(
+            enabled=False,
+            speed=1.5,
+            voice="ru-RU-DmitryNeural",
+            delivery="text+voice",
+            persist=True,
+        )
+        await message.reply(_render_voice_profile(profile))
+        return
+
+    raise UserInputError(user_message="❌ Неизвестная подкоманда voice. Используй `!voice status`.")
+
+
+async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление product-level translator runtime profile.
+
+    Это не live call session-control. Команда управляет persisted owner-профилем,
+    который потом читают owner UI, handoff и будущий iPhone companion flow.
+    """
+    args = str(message.text or "").split(maxsplit=3)
+    if len(args) == 1 or str(args[1] or "").strip().lower() in {"status", "show"}:
+        await message.reply(_render_translator_profile(bot.get_translator_runtime_profile()))
+        return
+
+    sub = str(args[1] or "").strip().lower()
+
+    if sub in {"lang", "language"}:
+        if len(args) < 3:
+            raise UserInputError(
+                user_message="❌ Укажи языковую пару: `!translator lang es-ru`."
+            )
+        value = str(args[2] or "").strip().lower()
+        if value not in ALLOWED_LANGUAGE_PAIRS:
+            raise UserInputError(
+                user_message="❌ Поддерживаются только `es-ru`, `es-en`, `en-ru`, `auto-detect`."
+            )
+        profile = bot.update_translator_runtime_profile(language_pair=value, persist=True)
+        await message.reply(_render_translator_profile(profile))
+        return
+
+    if sub == "mode":
+        if len(args) < 3:
+            raise UserInputError(
+                user_message="❌ Укажи mode: `!translator mode bilingual`."
+            )
+        value = str(args[2] or "").strip().lower()
+        if value not in ALLOWED_TRANSLATION_MODES:
+            raise UserInputError(
+                user_message="❌ Поддерживаются только `bilingual`, `auto_to_ru`, `auto_to_en`."
+            )
+        profile = bot.update_translator_runtime_profile(translation_mode=value, persist=True)
+        await message.reply(_render_translator_profile(profile))
+        return
+
+    if sub in {"strategy", "voice_strategy"}:
+        if len(args) < 3:
+            raise UserInputError(
+                user_message="❌ Укажи strategy: `!translator strategy voice-first`."
+            )
+        value = str(args[2] or "").strip().lower()
+        if value not in ALLOWED_VOICE_STRATEGIES:
+            raise UserInputError(
+                user_message="❌ Поддерживаются только `voice-first` и `subtitles-first`."
+            )
+        profile = bot.update_translator_runtime_profile(voice_strategy=value, persist=True)
+        await message.reply(_render_translator_profile(profile))
+        return
+
+    toggle_fields = {
+        "ordinary": "ordinary_calls_enabled",
+        "internet": "internet_calls_enabled",
+        "subtitles": "subtitles_enabled",
+        "timeline": "timeline_enabled",
+        "summary": "summary_enabled",
+        "diagnostics": "diagnostics_enabled",
+    }
+    if sub in toggle_fields:
+        if len(args) < 3:
+            raise UserInputError(
+                user_message=f"❌ Укажи состояние: `!translator {sub} on` или `!translator {sub} off`."
+            )
+        enabled = _parse_toggle_arg(args[2], field_name=f"!translator {sub}")
+        profile = bot.update_translator_runtime_profile(
+            **{toggle_fields[sub]: enabled},
+            persist=True,
+        )
+        await message.reply(_render_translator_profile(profile))
+        return
+
+    if sub == "phrase":
+        action = str(args[2] or "").strip().lower() if len(args) >= 3 else ""
+        current = bot.get_translator_runtime_profile()
+        quick_phrases = list(current.get("quick_phrases") or [])
+
+        if action == "add":
+            if len(args) < 4 or not str(args[3] or "").strip():
+                raise UserInputError(
+                    user_message="❌ Укажи фразу: `!translator phrase add Повтори медленнее`."
+                )
+            quick_phrases.append(str(args[3]).strip())
+            profile = bot.update_translator_runtime_profile(
+                quick_phrases=quick_phrases,
+                persist=True,
+            )
+            await message.reply(_render_translator_profile(profile))
+            return
+
+        if action == "remove":
+            if len(args) < 4:
+                raise UserInputError(
+                    user_message="❌ Укажи номер фразы: `!translator phrase remove 2`."
+                )
+            try:
+                index = int(str(args[3]).strip()) - 1
+            except ValueError as exc:
+                raise UserInputError(user_message="❌ Номер фразы должен быть целым числом.") from exc
+            if index < 0 or index >= len(quick_phrases):
+                raise UserInputError(
+                    user_message=f"❌ Нет фразы с номером `{index + 1}`. Сейчас их: `{len(quick_phrases)}`."
+                )
+            quick_phrases.pop(index)
+            profile = bot.update_translator_runtime_profile(
+                quick_phrases=quick_phrases,
+                persist=True,
+            )
+            await message.reply(_render_translator_profile(profile))
+            return
+
+        raise UserInputError(
+            user_message="❌ Используй `!translator phrase add <текст>` или `!translator phrase remove <номер>`."
+        )
+
+    if sub == "session":
+        action = str(args[2] or "").strip().lower() if len(args) >= 3 else "status"
+        if action in {"status", "show"}:
+            await message.reply(_render_translator_session_state(bot.get_translator_session_state()))
+            return
+        if action == "start":
+            label = str(args[3] or "").strip() if len(args) >= 4 else ""
+            profile = bot.get_translator_runtime_profile()
+            state = bot.update_translator_session_state(
+                session_status="active",
+                translation_muted=False,
+                active_session_label=label,
+                last_language_pair=profile.get("language_pair"),
+                last_event="session_started",
+                persist=True,
+            )
+            await message.reply(_render_translator_session_state(state))
+            return
+        if action == "pause":
+            state = bot.update_translator_session_state(
+                session_status="paused",
+                last_event="session_paused",
+                persist=True,
+            )
+            await message.reply(_render_translator_session_state(state))
+            return
+        if action == "resume":
+            state = bot.update_translator_session_state(
+                session_status="active",
+                last_event="session_resumed",
+                persist=True,
+            )
+            await message.reply(_render_translator_session_state(state))
+            return
+        if action == "stop":
+            state = bot.update_translator_session_state(
+                session_status="idle",
+                translation_muted=False,
+                active_session_label="",
+                last_event="session_stopped",
+                persist=True,
+            )
+            await message.reply(_render_translator_session_state(state))
+            return
+        if action == "clear":
+            state = bot.update_translator_session_state(
+                clear_timeline=True,
+                persist=True,
+            )
+            await message.reply(_render_translator_session_state(state))
+            return
+        if action in {"mute", "unmute"}:
+            state = bot.update_translator_session_state(
+                translation_muted=(action == "mute"),
+                last_event="translation_muted" if action == "mute" else "translation_unmuted",
+                persist=True,
+            )
+            await message.reply(_render_translator_session_state(state))
+            return
+        if action == "replay":
+            raw = str(args[3] or "").strip() if len(args) >= 4 else ""
+            if "|" not in raw:
+                raise UserInputError(
+                    user_message="❌ Используй `!translator session replay original | translation`."
+                )
+            original, translation = [part.strip() for part in raw.split("|", 1)]
+            if not original or not translation:
+                raise UserInputError(
+                    user_message="❌ Для replay нужны и original, и translation."
+                )
+            profile = bot.get_translator_runtime_profile()
+            state = bot.update_translator_session_state(
+                last_translated_original=original,
+                last_translated_translation=translation,
+                last_language_pair=profile.get("language_pair"),
+                last_event="line_replayed",
+                persist=True,
+            )
+            await message.reply(_render_translator_session_state(state))
+            return
+        raise UserInputError(
+            user_message="❌ Используй `!translator session status|start|pause|resume|stop|mute|unmute|replay|clear`."
+        )
+
+    if sub == "reset":
+        profile = bot.update_translator_runtime_profile(
+            **default_translator_runtime_profile(),
+            persist=True,
+        )
+        await message.reply(_render_translator_profile(profile))
+        return
+
+    raise UserInputError(
+        user_message="❌ Неизвестная подкоманда translator. Используй `!translator status`."
+    )
 
 
 async def handle_web(bot: "KraabUserbot", message: Message) -> None:
@@ -445,6 +1159,286 @@ async def handle_panel(bot: "KraabUserbot", message: Message) -> None:
     await handle_status(bot, message)
 
 
+async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Базовое управление macOS из owner/full-контура.
+
+    Держим здесь только понятные и контролируемые действия:
+    clipboard, уведомления, активные приложения, `open` и Finder reveal.
+    Это даёт реальную пользу уже сейчас и служит фундаментом для следующего
+    этапа с Calendar/Reminders/Notes.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=1)
+    args = raw_args[1].strip() if len(raw_args) > 1 else ""
+
+    if not macos_automation.is_available():
+        await message.reply(
+            "🍎 macOS automation сейчас недоступен.\n"
+            "Нужны `osascript`, `open`, `pbcopy`, `pbpaste` и запуск на macOS."
+        )
+        return
+
+    if not args:
+        await message.reply(
+            "🍎 **macOS control layer**\n\n"
+            "`!mac status` — краткий статус desktop-контура\n"
+            "`!mac clip get` — прочитать clipboard\n"
+            "`!mac clip set <текст>` — записать clipboard\n"
+            "`!mac notify <текст>` — показать системное уведомление\n"
+            "`!mac notify <заголовок> | <текст>` — уведомление с заголовком\n"
+            "`!mac app front` — активное приложение\n"
+            "`!mac app list` — список видимых приложений\n"
+            "`!mac app open <имя>` — открыть приложение\n"
+            "`!mac reminders list` — список напоминаний из macOS Reminders\n"
+            "`!mac reminders add <время> | <текст>` — создать reminder в Reminders\n"
+            "`!mac notes list` — список заметок\n"
+            "`!mac notes add <заголовок> | <текст>` — создать заметку\n"
+            "`!mac calendar list` — список календарей\n"
+            "`!mac calendar events` — ближайшие события\n"
+            "`!mac calendar add <время> | <название>` — создать событие (30 мин)\n"
+            "`!mac open <url|path>` — открыть URL или путь\n"
+            "`!mac finder reveal <path>` — показать файл/папку в Finder"
+        )
+        return
+
+    parts = args.split(maxsplit=2)
+    sub = parts[0].lower()
+
+    if sub == "status":
+        status = await macos_automation.status()
+        lines = [
+            "🍎 **macOS control layer**",
+            f"- Доступность: {'ON' if status.get('available') else 'OFF'}",
+            f"- Активное приложение: `{status.get('frontmost_app') or 'n/a'}`",
+        ]
+        if status.get("frontmost_window"):
+            lines.append(f"- Переднее окно: `{status.get('frontmost_window')}`")
+        running_apps = status.get("running_apps") or []
+        if running_apps:
+            lines.append("- Видимые приложения: " + ", ".join(f"`{item}`" for item in running_apps))
+        lines.append(
+            f"- Clipboard: {int(status.get('clipboard_chars', 0) or 0)} символов"
+            + (
+                f" (`{status.get('clipboard_preview')}`)"
+                if status.get("clipboard_preview")
+                else ""
+            )
+        )
+        warnings = status.get("warnings") or []
+        if warnings:
+            lines.append("- Warnings: " + "; ".join(str(item) for item in warnings[:3]))
+        reminder_lists = status.get("reminder_lists") or []
+        note_folders = status.get("note_folders") or []
+        calendars = status.get("calendars") or []
+        if reminder_lists:
+            lines.append("- Reminders lists: " + ", ".join(f"`{item}`" for item in reminder_lists[:5]))
+        if note_folders:
+            lines.append("- Notes folders: " + ", ".join(f"`{item}`" for item in note_folders[:5]))
+        if calendars:
+            lines.append("- Calendars: " + ", ".join(f"`{item}`" for item in calendars[:6]))
+        await message.reply("\n".join(lines))
+        return
+
+    if sub == "reminders":
+        if len(parts) < 2:
+            raise UserInputError(user_message="🍎 Формат: `!mac reminders list` или `!mac reminders add <время> | <текст>`")
+        rem_action = parts[1].lower()
+        if rem_action == "list":
+            rows = await macos_automation.list_reminders(limit=8)
+            if not rows:
+                await message.reply("📝 В macOS Reminders сейчас нет незавершённых напоминаний.")
+                return
+            lines = ["📝 **Reminders (macOS)**"]
+            for item in rows:
+                due = f" · `{item['due_label']}`" if item.get("due_label") else ""
+                lines.append(f"- `{item['title']}` — список `{item['list_name']}`{due}")
+            await message.reply("\n".join(lines))
+            return
+        if rem_action == "add":
+            payload = args.split(maxsplit=2)[2] if len(args.split(maxsplit=2)) > 2 else ""
+            time_spec, reminder_text = split_reminder_input(payload)
+            if not time_spec or not reminder_text:
+                raise UserInputError(user_message="🍎 Формат: `!mac reminders add <время> | <текст>`")
+            due_at = parse_due_time(time_spec)
+            created = await macos_automation.create_reminder(title=reminder_text, due_at=due_at)
+            due_label = due_at.astimezone().strftime("%d.%m.%Y %H:%M")
+            await message.reply(
+                "✅ Reminder создан в macOS Reminders.\n"
+                f"- ID: `{created['id']}`\n"
+                f"- Список: `{created['list_name']}`\n"
+                f"- Когда: `{due_label}`\n"
+                f"- Текст: {reminder_text}"
+            )
+            return
+        raise UserInputError(user_message="🍎 Формат: `!mac reminders list` или `!mac reminders add <время> | <текст>`")
+
+    if sub == "notes":
+        if len(parts) < 2:
+            raise UserInputError(user_message="🍎 Формат: `!mac notes list` или `!mac notes add <заголовок> | <текст>`")
+        notes_action = parts[1].lower()
+        if notes_action == "list":
+            rows = await macos_automation.list_notes(limit=8)
+            if not rows:
+                await message.reply("🗒️ В Notes пока ничего не найдено.")
+                return
+            lines = ["🗒️ **Notes (macOS)**"]
+            for item in rows:
+                lines.append(
+                    f"- `{item['title']}` — папка `{item['folder_name']}`, аккаунт `{item['account_name']}`"
+                )
+            await message.reply("\n".join(lines))
+            return
+        if notes_action == "add":
+            payload = args.split(maxsplit=2)[2] if len(args.split(maxsplit=2)) > 2 else ""
+            if "|" not in payload:
+                raise UserInputError(user_message="🍎 Формат: `!mac notes add <заголовок> | <текст>`")
+            raw_title, raw_body = payload.split("|", 1)
+            title = raw_title.strip()
+            body = raw_body.strip()
+            if not title or not body:
+                raise UserInputError(user_message="🍎 Заголовок и текст заметки не должны быть пустыми.")
+            created = await macos_automation.create_note(title=title, body=body)
+            await message.reply(
+                "✅ Заметка создана в Notes.\n"
+                f"- ID: `{created['id']}`\n"
+                f"- Папка: `{created['folder_name']}`\n"
+                f"- Заголовок: `{title}`"
+            )
+            return
+        raise UserInputError(user_message="🍎 Формат: `!mac notes list` или `!mac notes add <заголовок> | <текст>`")
+
+    if sub == "calendar":
+        if len(parts) < 2:
+            raise UserInputError(
+                user_message="🍎 Формат: `!mac calendar list`, `!mac calendar events` или `!mac calendar add <время> | <название>`"
+            )
+        cal_action = parts[1].lower()
+        if cal_action == "list":
+            rows = await macos_automation.list_calendars()
+            await message.reply(
+                "📆 **Calendars (macOS)**\n"
+                + ("\n".join(f"- `{item}`" for item in rows[:12]) if rows else "- список пуст")
+            )
+            return
+        if cal_action == "events":
+            rows = await macos_automation.list_upcoming_calendar_events(limit=8, days_ahead=7)
+            if not rows:
+                await message.reply("📆 На ближайшие 7 дней событий не найдено.")
+                return
+            lines = ["📆 **Ближайшие события Calendar**"]
+            for item in rows:
+                lines.append(
+                    f"- `{item['title']}` — календарь `{item['calendar_name']}` · `{item['start_label']}`"
+                )
+            await message.reply("\n".join(lines))
+            return
+        if cal_action == "add":
+            payload = args.split(maxsplit=2)[2] if len(args.split(maxsplit=2)) > 2 else ""
+            time_spec, event_title = split_reminder_input(payload)
+            if not time_spec or not event_title:
+                raise UserInputError(user_message="🍎 Формат: `!mac calendar add <время> | <название>`")
+            start_at = parse_due_time(time_spec)
+            created = await macos_automation.create_calendar_event(title=event_title, start_at=start_at, duration_minutes=30)
+            start_label = start_at.astimezone().strftime("%d.%m.%Y %H:%M")
+            await message.reply(
+                "✅ Событие создано в Calendar.\n"
+                f"- ID: `{created['id']}`\n"
+                f"- Календарь: `{created['calendar_name']}`\n"
+                f"- Начало: `{start_label}`\n"
+                f"- Название: `{event_title}`"
+            )
+            return
+        raise UserInputError(
+            user_message="🍎 Формат: `!mac calendar list`, `!mac calendar events` или `!mac calendar add <время> | <название>`"
+        )
+
+    if sub in {"clip", "clipboard"}:
+        if len(parts) < 2:
+            raise UserInputError(user_message="🍎 Формат: `!mac clip get` или `!mac clip set <текст>`")
+        clip_action = parts[1].lower()
+        if clip_action == "get":
+            content = await macos_automation.get_clipboard_text()
+            preview = content if len(content) <= 3400 else content[:3400] + "…"
+            await message.reply(
+                "📋 **Clipboard**\n\n"
+                + (f"```\n{preview}\n```" if preview else "_Буфер обмена пустой или не текстовый._")
+            )
+            return
+        if clip_action == "set":
+            if len(parts) < 3 or not parts[2].strip():
+                raise UserInputError(user_message="🍎 Формат: `!mac clip set <текст>`")
+            await macos_automation.set_clipboard_text(parts[2])
+            await message.reply(f"📋 Clipboard обновлён: `{parts[2][:120]}`")
+            return
+        raise UserInputError(user_message="🍎 Формат: `!mac clip get` или `!mac clip set <текст>`")
+
+    if sub == "notify":
+        payload = args[len("notify") :].strip()
+        if not payload:
+            raise UserInputError(user_message="🍎 Формат: `!mac notify <текст>` или `!mac notify <заголовок> | <текст>`")
+        title = "Краб"
+        body = payload
+        if "|" in payload:
+            raw_title, raw_body = payload.split("|", 1)
+            title = raw_title.strip() or "Краб"
+            body = raw_body.strip()
+        if not body:
+            raise UserInputError(user_message="🍎 Уведомление не может быть пустым.")
+        await macos_automation.show_notification(title=title, message=body)
+        await message.reply(f"🔔 Уведомление отправлено: `{title}`")
+        return
+
+    if sub == "app":
+        if len(parts) < 2:
+            raise UserInputError(user_message="🍎 Формат: `!mac app front|list|open <имя>`")
+        app_action = parts[1].lower()
+        if app_action == "front":
+            front = await macos_automation.get_frontmost_app()
+            reply = f"🪟 Активное приложение: `{front.get('app_name') or 'n/a'}`"
+            if front.get("window_title"):
+                reply += f"\nЗаголовок окна: `{front['window_title']}`"
+            await message.reply(reply)
+            return
+        if app_action == "list":
+            apps = await macos_automation.list_running_apps(limit=12)
+            await message.reply(
+                "🧩 **Видимые приложения**\n"
+                + ("\n".join(f"- `{item}`" for item in apps) if apps else "\n- список пуст")
+            )
+            return
+        if app_action == "open":
+            if len(parts) < 3 or not parts[2].strip():
+                raise UserInputError(user_message="🍎 Формат: `!mac app open <имя приложения>`")
+            opened = await macos_automation.open_app(parts[2])
+            await message.reply(f"🚀 Открываю приложение: `{opened}`")
+            return
+        raise UserInputError(user_message="🍎 Формат: `!mac app front|list|open <имя>`")
+
+    if sub == "open":
+        target = args[len("open") :].strip()
+        if not target:
+            raise UserInputError(user_message="🍎 Формат: `!mac open <url|path>`")
+        opened = await macos_automation.open_target(target)
+        await message.reply(f"🚀 Открываю {opened['kind']}: `{opened['target']}`")
+        return
+
+    if sub == "finder":
+        if len(parts) < 3 or parts[1].lower() != "reveal":
+            raise UserInputError(user_message="🍎 Формат: `!mac finder reveal <path>`")
+        revealed = await macos_automation.reveal_in_finder(parts[2])
+        await message.reply(f"📂 Показываю в Finder: `{revealed}`")
+        return
+
+    raise UserInputError(
+        user_message=(
+            "🍎 Неизвестная подкоманда macOS.\n"
+            "Используй: `!mac status`, `!mac clip ...`, `!mac notify ...`, "
+            "`!mac app ...`, `!mac open ...`, `!mac finder reveal ...`"
+        )
+    )
+
+
 async def handle_restart(bot: "KraabUserbot", message: Message) -> None:
     """Мягкая перезагрузка процесса."""
     await message.reply("🔄 Перезапускаюсь...")
@@ -456,10 +1450,74 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
     text = bot._get_command_args(message)
     if not text:
         raise UserInputError(
-            user_message="🕵️‍♂️ Использование: `!agent new <имя> <промпт>`\nИли: `!agent list`"
+            user_message=(
+                "🕵️‍♂️ Использование:\n"
+                "- `!agent new <имя> <промпт>`\n"
+                "- `!agent list`\n"
+                "- `!agent swarm <тема>`\n"
+                "- `!agent swarm loop [N] <тема>`"
+            )
         )
     if text.startswith("list"):
         await message.reply(f"🕵️‍♂️ **Доступные агенты:**\n\n{list_roles()}")
+        return
+    if text.startswith("swarm"):
+        swarm_args = text[5:].strip()
+        if not swarm_args:
+            raise UserInputError(user_message="🐝 Формат: `!agent swarm <тема>`")
+
+        topic = swarm_args
+        is_loop = False
+        loop_rounds = 2
+        if swarm_args.startswith("loop"):
+            is_loop = True
+            loop_payload = swarm_args[4:].strip()
+            if not loop_payload:
+                raise UserInputError(
+                    user_message="🐝 Формат: `!agent swarm loop [N] <тема>`"
+                )
+            first, *rest = loop_payload.split(" ", 1)
+            if first.isdigit():
+                loop_rounds = int(first)
+                topic = rest[0].strip() if rest else ""
+            else:
+                topic = loop_payload
+            if not topic:
+                raise UserInputError(
+                    user_message="🐝 Формат: `!agent swarm loop [N] <тема>`"
+                )
+
+        max_rounds = int(getattr(config, "SWARM_LOOP_MAX_ROUNDS", 3) or 3)
+        next_round_clip = int(getattr(config, "SWARM_LOOP_NEXT_ROUND_CLIP", 4000) or 4000)
+        safe_rounds = max(1, min(loop_rounds, max_rounds))
+
+        if is_loop:
+            status = await message.reply(
+                f"🐝 Запускаю роевой loop: {safe_rounds} раунд(а), роли аналитик → критик → интегратор..."
+            )
+        else:
+            status = await message.reply("🐝 Запускаю роевой раунд: аналитик → критик → интегратор...")
+        room = AgentRoom()
+        role_prompt = get_role_prompt(getattr(bot, "current_role", "default"))
+        room_chat_id = f"swarm:{message.chat.id}"
+        router = _AgentRoomRouterAdapter(
+            chat_id=room_chat_id,
+            system_prompt=role_prompt,
+        )
+        if is_loop:
+            result = await room.run_loop(
+                topic,
+                router,
+                rounds=safe_rounds,
+                max_rounds=max_rounds,
+                next_round_clip=next_round_clip,
+            )
+        else:
+            result = await room.run_round(topic, router)
+        chunks = _split_text_for_telegram(result)
+        await status.edit(chunks[0])
+        for part in chunks[1:]:
+            await message.reply(part)
         return
     if text.startswith("new"):
         parts = text[3:].strip().split(" ", 1)
@@ -501,19 +1559,32 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!search <query>` — веб-поиск
 `!remember <text>` — запомнить факт
 `!recall <query>` — вспомнить факт
+`!acl ...` / `!access ...` — управление full/partial доступом (owner-only)
 `!role [name|list]` — смена личности
+`!remind <время> | <текст>` — поставить напоминание
+`!reminders` — список активных напоминаний
+`!rm_remind <id>` — удалить напоминание
+`!cronstatus` — статус scheduler
+`!watch status|now` — proactive watch / owner-digest
+`!memory recent` — последние записи общей памяти
+`!inbox [list|status|ack|done|cancel|approve|reject|task|approval]` — owner-visible inbox / escalation
 
 **System**
 `!ls [path]` — список файлов
 `!read <path>` — чтение файла
 `!write <file> <content>` — запись файла
 `!sysinfo` — информация о хосте
+`!mac ...` — управление macOS (clipboard / notify / apps / Finder / Notes / Reminders / Calendar)
 `!diagnose` — диагностика подключений
 
 **Dev**
 `!agent new <name> <prompt>` — создать агента
 `!agent list` — список агентов
-`!voice` — голосовой режим
+`!agent swarm <тема>` — роевой раунд (аналитик/критик/интегратор)
+`!agent swarm loop [N] <тема>` — несколько роевых раундов (итеративная доработка)
+`!voice ...` — голосовой runtime-профиль (on/off/speed/voice/delivery)
+`!translator ...` — product runtime-профиль переводчика (языки/mode/strategy/flags/phrases)
+`!reasoning [show|clear]` — owner-only просмотр скрытой reasoning-trace последнего ответа
 `!web` — управление браузером
 `!panel` — панель управления (soon)
 """
@@ -542,3 +1613,763 @@ async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:
         report.append(f"- OpenClaw: ❌ Unreachable ({str(e)})")
         report.append("  _Совет: Проверьте, запущен ли Gateway и совпадает ли порт (обычно 18792)_")
     await msg.edit("\n".join(report))
+
+
+async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Добавляет reminder-задачу в runtime scheduler.
+
+    Форматы:
+    - `!remind 10m | купить воду`
+    - `!remind через 20 минут проверить почту`
+    - `!remind в 18:30 созвон`
+    """
+    if not bool(getattr(config, "SCHEDULER_ENABLED", False)):
+        raise UserInputError(
+            user_message=(
+                "⏰ Scheduler сейчас выключен (`SCHEDULER_ENABLED=0`).\n"
+                "Включи его (`!set SCHEDULER_ENABLED 1`) и перезапусти Krab."
+            )
+        )
+
+    raw_args = bot._get_command_args(message)
+    if not raw_args:
+        raise UserInputError(
+            user_message=(
+                "⏰ Формат:\n"
+                "`!remind <время> | <текст>`\n\n"
+                "Примеры:\n"
+                "- `!remind 10m | выпить воды`\n"
+                "- `!remind через 20 минут проверить почту`\n"
+                "- `!remind в 18:30 созвон`"
+            )
+        )
+
+    time_spec, reminder_text = split_reminder_input(raw_args)
+    if not time_spec or not reminder_text:
+        raise UserInputError(
+            user_message=(
+                "⏰ Не удалось разобрать время/текст.\n"
+                "Используй формат: `!remind <время> | <текст>`"
+            )
+        )
+
+    try:
+        due_at = parse_due_time(time_spec)
+    except ValueError:
+        raise UserInputError(
+            user_message=(
+                "❌ Не удалось распознать время.\n"
+                "Поддерживается: `10m`, `через 20 минут`, `в 18:30`, `2026-03-05 09:00`."
+            )
+        )
+
+    if hasattr(bot, "_sync_scheduler_runtime"):
+        try:
+            bot._sync_scheduler_runtime()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scheduler_runtime_sync_failed_in_remind", error=str(exc))
+
+    if not krab_scheduler.is_started:
+        try:
+            krab_scheduler.start()
+        except RuntimeError:
+            raise UserInputError(user_message="❌ Scheduler не запущен в runtime loop.")
+
+    reminder_id = krab_scheduler.add_reminder(
+        chat_id=str(message.chat.id),
+        text=reminder_text,
+        due_at=due_at,
+    )
+    due_label = due_at.astimezone().strftime("%d.%m.%Y %H:%M")
+    await message.reply(
+        "✅ Напоминание создано.\n"
+        f"- ID: `{reminder_id}`\n"
+        f"- Когда: `{due_label}`\n"
+        f"- Текст: {reminder_text}"
+    )
+
+
+async def handle_reminders(bot: "KraabUserbot", message: Message) -> None:
+    """Показывает pending reminders текущего чата."""
+    rows = krab_scheduler.list_reminders(chat_id=str(message.chat.id))
+    if not rows:
+        await message.reply("⏰ Активных напоминаний нет.")
+        return
+    lines = ["⏰ **Активные напоминания:**"]
+    for item in rows:
+        due = str(item.get("due_at_iso") or "")
+        text = str(item.get("text") or "")
+        rid = str(item.get("reminder_id") or "")
+        lines.append(f"- `{rid}` · `{due}` · {text}")
+    payload = "\n".join(lines)
+    chunks = _split_text_for_telegram(payload, limit=3600)
+    await message.reply(chunks[0])
+    for part in chunks[1:]:
+        await message.reply(part)
+
+
+async def handle_rm_remind(bot: "KraabUserbot", message: Message) -> None:
+    """Удаляет reminder по ID."""
+    raw_args = bot._get_command_args(message).strip()
+    if not raw_args:
+        raise UserInputError(user_message="🗑️ Формат: `!rm_remind <id>`")
+    ok = krab_scheduler.remove_reminder(raw_args)
+    if ok:
+        await message.reply(f"🗑️ Напоминание `{raw_args}` удалено.")
+    else:
+        await message.reply(f"⚠️ Напоминание `{raw_args}` не найдено.")
+
+
+async def handle_cronstatus(bot: "KraabUserbot", message: Message) -> None:
+    """Отдает runtime-статус scheduler."""
+    status = krab_scheduler.get_status()
+    await message.reply(
+        "🧭 **Scheduler status**\n"
+        f"- enabled (config): `{status.get('scheduler_enabled')}`\n"
+        f"- started: `{status.get('started')}`\n"
+        f"- pending: `{status.get('pending_count')}`\n"
+        f"- next_due_at: `{status.get('next_due_at') or '-'}`\n"
+        f"- storage: `{status.get('storage_path')}`"
+    )
+
+
+async def handle_watch(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление proactive watch контуром.
+
+    Команды:
+    - `!watch status` — persisted состояние фонового watch;
+    - `!watch now` — принудительно снять digest и записать его в общую память.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=2)
+    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "status"
+
+    if action == "status":
+        status = proactive_watch.get_status()
+        snapshot = status.get("last_snapshot") or {}
+        route_model = str(snapshot.get("route_model") or snapshot.get("primary_model") or "n/a")
+        await message.reply(
+            "🛰️ **Proactive Watch**\n"
+            f"- enabled: `{status.get('enabled')}`\n"
+            f"- interval_sec: `{status.get('interval_sec')}`\n"
+            f"- alert_cooldown_sec: `{status.get('alert_cooldown_sec')}`\n"
+            f"- last_reason: `{status.get('last_reason') or '-'}`\n"
+            f"- last_digest_ts: `{status.get('last_digest_ts') or '-'}`\n"
+            f"- last_alert_ts: `{status.get('last_alert_ts') or '-'}`\n"
+            f"- last_model: `{route_model}`"
+        )
+        return
+
+    if action == "now":
+        result = await proactive_watch.capture(manual=True, persist_memory=True, notify=False)
+        suffix = "\n- Память: записано в workspace memory" if result.get("wrote_memory") else "\n- Память: запись пропущена"
+        await message.reply(str(result.get("digest") or "watch digest unavailable") + suffix)
+        return
+
+    raise UserInputError(user_message="🛰️ Формат: `!watch status` или `!watch now`")
+
+
+async def handle_memory(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Короткий просмотр общей памяти OpenClaw без поиска по словам.
+
+    Пока сознательно ограничиваемся read-only режимом:
+    - `!remember` уже отвечает за запись фактов;
+    - эта команда нужна для последних записей и owner-digest слоёв.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=2)
+    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "recent"
+    source_filter = raw_args[2].strip() if len(raw_args) > 2 else ""
+
+    if action != "recent":
+        raise UserInputError(user_message="🧠 Формат: `!memory recent [source_filter]`")
+
+    rows = list_workspace_memory_entries(limit=8, source_filter=source_filter)
+    if not rows:
+        await message.reply("🧠 В общей памяти пока нет подходящих записей.")
+        return
+    lines = ["🧠 **Последние записи общей памяти**"]
+    for item in rows:
+        author_suffix = f":{item['author']}" if item.get("author") else ""
+        lines.append(
+            f"- `{item['date']} {item['time']}` [{item['source']}{author_suffix}] {item['text']}"
+        )
+    await message.reply("\n".join(lines))
+
+
+async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Owner-visible inbox и escalation foundation.
+
+    Поддерживаем owner workflow-подмножество:
+    - `!inbox` / `!inbox list` — открыть текущие open items;
+    - `!inbox status` — краткий summary;
+    - `!inbox ack <id>` — отметить как просмотренное;
+    - `!inbox done <id>` — закрыть item;
+    - `!inbox cancel <id>` — отменить item вручную.
+    - `!inbox approve <id>` / `!inbox reject <id>` — принять решение по approval item;
+    - `!inbox task <title> | <body>` — создать owner-task;
+    - `!inbox taskfrom <source_id> | <title> | <body>` — эскалировать item в owner-task;
+    - `!inbox approval <scope> | <title> | <body>` — создать approval-request.
+    - `!inbox approvalfrom <source_id> | <scope> | <title> | <body>` — эскалировать item в approval.
+    """
+    del bot
+    raw_args = str(message.text or "").split(maxsplit=2)
+    action = raw_args[1].strip().lower() if len(raw_args) > 1 else "list"
+
+    if action == "status":
+        summary = inbox_service.get_summary()
+        await message.reply(
+            "📥 **Inbox / Escalation**\n"
+            f"- operator: `{summary.get('operator_id')}`\n"
+            f"- account_id: `{summary.get('account_id')}`\n"
+            f"- open_items: `{summary.get('open_items')}`\n"
+            f"- attention_items: `{summary.get('attention_items')}`\n"
+            f"- pending_reminders: `{summary.get('pending_reminders')}`\n"
+            f"- open_escalations: `{summary.get('open_escalations')}`\n"
+            f"- pending_owner_tasks: `{summary.get('pending_owner_tasks')}`\n"
+            f"- pending_approvals: `{summary.get('pending_approvals')}`\n"
+            f"- pending_owner_requests: `{summary.get('pending_owner_requests')}`\n"
+            f"- pending_owner_mentions: `{summary.get('pending_owner_mentions')}`\n"
+            f"- state: `{summary.get('state_path')}`"
+        )
+        return
+
+    if action in {"list", "open"}:
+        rows = inbox_service.list_items(status="open", limit=8)
+        if not rows:
+            await message.reply("📥 Inbox сейчас пуст: открытых items нет.")
+            return
+        lines = ["📥 **Открытые inbox items**"]
+        for item in rows:
+            meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            due = str(meta.get("due_at_iso") or "").strip()
+            due_suffix = f" · due `{due}`" if due else ""
+            approval_scope = str((item.get("identity") or {}).get("approval_scope") or "").strip()
+            approval_suffix = f" · scope `{approval_scope}`" if approval_scope and item["kind"] == "approval_request" else ""
+            lines.append(
+                f"- `{item['item_id']}` · `{item['kind']}` · `{item['severity']}`{due_suffix}{approval_suffix}\n"
+                f"  {item['title']}"
+            )
+        await message.reply("\n".join(lines))
+        return
+
+    if action == "task":
+        if len(raw_args) < 3 or "|" not in raw_args[2]:
+            raise UserInputError(user_message="📥 Формат: `!inbox task <title> | <body>`")
+        title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=1)]
+        if not title or not body:
+            raise UserInputError(user_message="📥 Для task нужны и заголовок, и описание.")
+        created = inbox_service.upsert_owner_task(title=title, body=body, source="telegram-owner")
+        await message.reply(
+            "📝 Owner-task создан.\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Title: {created['item']['title']}"
+        )
+        return
+
+    if action == "taskfrom":
+        if len(raw_args) < 3 or raw_args[2].count("|") < 2:
+            raise UserInputError(user_message="📥 Формат: `!inbox taskfrom <source_id> | <title> | <body>`")
+        source_item_id, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=2)]
+        if not source_item_id or not title or not body:
+            raise UserInputError(user_message="📥 Для taskfrom нужны source_id, заголовок и описание.")
+        created = inbox_service.escalate_item_to_owner_task(
+            source_item_id=source_item_id,
+            title=title,
+            body=body,
+            source="telegram-owner",
+            metadata={"requested_via": "telegram"},
+        )
+        if not created.get("ok"):
+            raise UserInputError(user_message=f"📥 Source item `{source_item_id}` не найден.")
+        await message.reply(
+            "📝 Owner-task создан из inbox item.\n"
+            f"- Source: `{source_item_id}`\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Trace: `{created['item']['identity']['trace_id']}`"
+        )
+        return
+
+    if action == "approval":
+        if len(raw_args) < 3 or raw_args[2].count("|") < 2:
+            raise UserInputError(user_message="📥 Формат: `!inbox approval <scope> | <title> | <body>`")
+        scope, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=2)]
+        if not scope or not title or not body:
+            raise UserInputError(user_message="📥 Для approval нужны scope, заголовок и описание.")
+        created = inbox_service.upsert_approval_request(
+            title=title,
+            body=body,
+            source="telegram-owner",
+            approval_scope=scope,
+            requested_action=title,
+            metadata={"requested_via": "telegram"},
+        )
+        await message.reply(
+            "🛂 Approval-request создан.\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Scope: `{scope}`\n"
+            f"- Title: {created['item']['title']}"
+        )
+        return
+
+    if action == "approvalfrom":
+        if len(raw_args) < 3 or raw_args[2].count("|") < 3:
+            raise UserInputError(user_message="📥 Формат: `!inbox approvalfrom <source_id> | <scope> | <title> | <body>`")
+        source_item_id, scope, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=3)]
+        if not source_item_id or not scope or not title or not body:
+            raise UserInputError(user_message="📥 Для approvalfrom нужны source_id, scope, заголовок и описание.")
+        created = inbox_service.escalate_item_to_approval_request(
+            source_item_id=source_item_id,
+            title=title,
+            body=body,
+            source="telegram-owner",
+            approval_scope=scope,
+            requested_action=title,
+            metadata={"requested_via": "telegram"},
+        )
+        if not created.get("ok"):
+            raise UserInputError(user_message=f"📥 Source item `{source_item_id}` не найден.")
+        await message.reply(
+            "🛂 Approval-request создан из inbox item.\n"
+            f"- Source: `{source_item_id}`\n"
+            f"- ID: `{created['item']['item_id']}`\n"
+            f"- Scope: `{scope}`\n"
+            f"- Trace: `{created['item']['identity']['trace_id']}`"
+        )
+        return
+
+    if action not in {"ack", "done", "cancel", "approve", "reject"}:
+        raise UserInputError(
+            user_message=(
+                "📥 Формат: "
+                "`!inbox [list|status|ack <id>|done <id>|cancel <id>|approve <id>|reject <id>|task <title> | <body>|taskfrom <source_id> | <title> | <body>|approval <scope> | <title> | <body>|approvalfrom <source_id> | <scope> | <title> | <body>]`"
+            )
+        )
+
+    if len(raw_args) < 3 or not raw_args[2].strip():
+        raise UserInputError(user_message="📥 Укажи item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`")
+    target_payload = raw_args[2].strip()
+    target_id, note = [part.strip() for part in target_payload.split("|", maxsplit=1)] if "|" in target_payload else (target_payload, "")
+    if not target_id:
+        raise UserInputError(user_message="📥 Укажи корректный item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`")
+    if action in {"approve", "reject"}:
+        result = inbox_service.resolve_approval(
+            target_id,
+            approved=(action == "approve"),
+            actor="telegram-owner",
+            note=note,
+        )
+        target_status = "approved" if action == "approve" else "rejected"
+    else:
+        target_status = {"ack": "acked", "done": "done", "cancel": "cancelled"}[action]
+        result = inbox_service.set_item_status(
+            target_id,
+            status=target_status,
+            actor="telegram-owner",
+            note=note,
+        )
+    if not result.get("ok"):
+        if result.get("error") == "inbox_item_not_approval":
+            raise UserInputError(user_message=f"📥 Item `{target_id}` не является approval-request.")
+        raise UserInputError(user_message=f"📥 Item `{target_id}` не найден.")
+    await message.reply(
+        "✅ Inbox item обновлён.\n"
+        f"- ID: `{target_id}`\n"
+        f"- Новый статус: `{target_status}`"
+        + (f"\n- Note: {note}" if note else "")
+    )
+
+
+async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление Chrome через CDP.
+
+    !browser status              — статус подключения
+    !browser tabs                — список вкладок
+    !browser open <url>          — навигация
+    !browser read                — текст текущей страницы
+    !browser shot                — скриншот (фото в Telegram)
+    !browser js <code>           — выполнить JS
+    !browser ai [gemini|chatgpt] <prompt> — запрос через браузерный AI
+    """
+    from ..integrations.browser_bridge import browser_bridge
+
+    args = str(message.text or "").split(maxsplit=2)
+    sub = str(args[1] if len(args) > 1 else "status").strip().lower()
+
+    if sub == "status":
+        attached = await browser_bridge.is_attached()
+        if not attached:
+            await message.reply(
+                "🌐 Браузер: **отключён**\n"
+                "Запусти `new Enable Chrome Remote Debugging.command` для подключения."
+            )
+            return
+        tabs = await browser_bridge.list_tabs()
+        active = tabs[-1] if tabs else None
+        active_info = f"\n🔗 Активная: {active['url']}" if active else ""
+        await message.reply(f"🌐 Браузер: **подключён** ({len(tabs)} вкладок){active_info}")
+        return
+
+    if sub == "tabs":
+        tabs = await browser_bridge.list_tabs()
+        if not tabs:
+            await message.reply("🌐 Вкладок не найдено (браузер отключён или пуст).")
+            return
+        lines = [f"{i + 1}. {t.get('title') or t.get('url')}\n   {t['url']}" for i, t in enumerate(tabs)]
+        await message.reply("🌐 Вкладки:\n" + "\n".join(lines))
+        return
+
+    if sub == "open":
+        url = str(args[2] if len(args) > 2 else "").strip()
+        if not url:
+            raise UserInputError(user_message="❌ Укажи URL: `!browser open <url>`")
+        final_url = await browser_bridge.navigate(url)
+        await message.reply(f"✅ Переход: {final_url}")
+        return
+
+    if sub == "read":
+        text = await browser_bridge.get_page_text()
+        if not text:
+            await message.reply("❌ Не удалось получить текст страницы.")
+            return
+        await message.reply(f"📄 Страница (до 2000 символов):\n```\n{text[:2000]}\n```")
+        return
+
+    if sub == "shot":
+        data = await browser_bridge.screenshot()
+        if data is None:
+            await message.reply("❌ Не удалось сделать скриншот.")
+            return
+        import io
+        await message.reply_photo(io.BytesIO(data))
+        return
+
+    if sub == "js":
+        code = str(args[2] if len(args) > 2 else "").strip()
+        if not code:
+            raise UserInputError(user_message="❌ Укажи код: `!browser js <code>`")
+        result = await browser_bridge.execute_js(code)
+        await message.reply(f"✅ Результат:\n```\n{str(result)[:1000]}\n```")
+        return
+
+    if sub == "ai":
+        from ..integrations.browser_ai_provider import browser_ai_provider
+
+        # Разбираем: !browser ai [gemini|chatgpt] <prompt>
+        rest_parts = str(message.text or "").split(maxsplit=3)
+        service = "gemini"
+        prompt = ""
+        if len(rest_parts) >= 3:
+            maybe_service = rest_parts[2].lower()
+            if maybe_service in ("gemini", "chatgpt"):
+                service = maybe_service
+                prompt = rest_parts[3] if len(rest_parts) > 3 else ""
+            else:
+                prompt = " ".join(rest_parts[2:])
+        if not prompt:
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи запрос: `!browser ai <prompt>` или\n"
+                    "`!browser ai gemini <prompt>` / `!browser ai chatgpt <prompt>`"
+                )
+            )
+
+        status_msg = await message.reply(f"🌐 Отправляю в {service}... ⏳")
+        response = await browser_ai_provider.chat(prompt, service=service)  # type: ignore[arg-type]
+
+        if response.startswith("[ERROR]"):
+            await status_msg.edit(f"❌ {response}")
+        else:
+            # Обрезаем до разумного лимита
+            preview = response[:3500]
+            if len(response) > 3500:
+                preview += "\n\n_[ответ обрезан]_"
+            await status_msg.edit(f"🌐 **{service}**:\n\n{preview}")
+        return
+
+    raise UserInputError(
+        user_message=(
+            "🌐 Команды браузера:\n"
+            "`!browser status` — статус\n"
+            "`!browser tabs` — список вкладок\n"
+            "`!browser open <url>` — навигация\n"
+            "`!browser read` — текст страницы\n"
+            "`!browser shot` — скриншот\n"
+            "`!browser js <code>` — выполнить JS\n"
+            "`!browser ai [gemini|chatgpt] <prompt>` — запрос через браузерный AI"
+        )
+    )
+
+
+async def _cli_keepalive(
+    status_msg: Message,
+    tool: str,
+    started_at: float,
+    *,
+    interval: float = 20.0,
+    stop_event: asyncio.Event,
+) -> None:
+    """Фоновая задача: обновляет сообщение с прогрессом пока CLI работает."""
+    step = 0
+    spinners = ["⏳", "⏳⏳", "⏳⏳⏳"]
+    try:
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(stop_event.wait()),
+                    timeout=interval,
+                )
+                break
+            except asyncio.TimeoutError:
+                pass
+            elapsed = int(time.monotonic() - started_at)
+            mins, secs = divmod(elapsed, 60)
+            time_str = f"{mins}м {secs}с" if mins else f"{secs}с"
+            indicator = spinners[step % len(spinners)]
+            try:
+                await status_msg.edit(f"{indicator} `{tool}` работает... {time_str}")
+            except Exception:
+                pass
+            step += 1
+    except asyncio.CancelledError:
+        pass
+
+
+async def _run_cli_with_progress(
+    bot: "KraabUserbot",
+    message: Message,
+    tool: str,
+    prompt: str,
+    *,
+    timeout: float = 120.0,
+    tool_label: str | None = None,
+) -> None:
+    """Общая реализация для handle_codex/handle_gemini/handle_claude."""
+    from ..integrations.cli_runner import run_cli
+
+    if not prompt:
+        raise UserInputError(
+            user_message=(
+                f"🤖 Использование: `!{tool} <запрос>`\n"
+                f"Пример: `!{tool} напиши hello world на Python`"
+            )
+        )
+
+    label = tool_label or tool
+    status_msg = await message.reply(f"⏳ Запускаю `{label}`...")
+    started_at = time.monotonic()
+    stop_event = asyncio.Event()
+    keepalive = asyncio.create_task(
+        _cli_keepalive(status_msg, label, started_at, stop_event=stop_event)
+    )
+    try:
+        result = await run_cli(tool, prompt, timeout=timeout)
+    finally:
+        stop_event.set()
+        keepalive.cancel()
+        try:
+            await keepalive
+        except asyncio.CancelledError:
+            pass
+
+    elapsed = int(time.monotonic() - started_at)
+    output = result.output or "(нет вывода)"
+    header = f"🤖 **{label}** (`{elapsed}с`)"
+    if result.exit_code != 0 and not result.timed_out:
+        header += f" — код {result.exit_code}"
+
+    full_text = f"{header}\n\n{output}"
+    chunks = _split_text_for_telegram(full_text)
+    await status_msg.edit(chunks[0])
+    for part in chunks[1:]:
+        await message.reply(part)
+
+
+async def handle_codex(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить codex-cli с запросом. Использование: !codex <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_CODEX_TIMEOUT_SEC", 120.0))
+    await _run_cli_with_progress(bot, message, "codex", prompt, timeout=timeout)
+
+
+async def handle_gemini_cli(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить gemini-cli с запросом. Использование: !gemini <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_GEMINI_TIMEOUT_SEC", 120.0))
+    await _run_cli_with_progress(
+        bot, message, "gemini", prompt, timeout=timeout, tool_label="gemini-cli"
+    )
+
+
+async def handle_claude_cli(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить claude code CLI с запросом. Использование: !claude_cli <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_CLAUDE_TIMEOUT_SEC", 120.0))
+    await _run_cli_with_progress(
+        bot, message, "claude", prompt, timeout=timeout, tool_label="claude-code"
+    )
+
+
+async def handle_opencode(bot: "KraabUserbot", message: Message) -> None:
+    """Запустить opencode с запросом. Использование: !opencode <запрос>"""
+    prompt = bot._get_command_args(message)
+    timeout = float(getattr(config, "CLI_OPENCODE_TIMEOUT_SEC", 180.0))
+    await _run_cli_with_progress(
+        bot, message, "opencode", prompt, timeout=timeout, tool_label="opencode"
+    )
+
+
+async def handle_hs(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление окнами macOS через Hammerspoon.
+
+    Требует:
+    - Установленного Hammerspoon (https://www.hammerspoon.org/)
+    - ~/.hammerspoon/init.lua из репозитория Краба (hammerspoon/init.lua)
+    - Accessibility permission для Hammerspoon в System Settings
+
+    Использование:
+      !hs               — эта справка
+      !hs status        — версия Hammerspoon, количество экранов
+      !hs windows       — список видимых окон
+      !hs focus <app>   — сфокусировать окно приложения
+      !hs tile <preset> [<app>]  — раскладка: left|right|top|bottom|full
+      !hs move <app> <x> <y> <w> <h>  — переместить/изменить размер окна
+                        (координаты 0..1 = доля экрана, >2 = пиксели)
+    """
+    del bot
+    raw = str(message.text or "").split(maxsplit=1)
+    args_str = raw[1].strip() if len(raw) > 1 else ""
+
+    _HELP = (
+        "🔨 **Hammerspoon window control**\n\n"
+        "`!hs status` — версия и статус HS\n"
+        "`!hs windows` — список видимых окон\n"
+        "`!hs focus <app>` — сфокусировать окно\n"
+        "`!hs tile <preset> [<app>]` — раскладка: `left` `right` `top` `bottom` `full`\n"
+        "`!hs move <app> <x> <y> <w> <h>` — переместить окно\n\n"
+        "_Установи Hammerspoon и скопируй `hammerspoon/init.lua` в `~/.hammerspoon/init.lua`_"
+    )
+
+    if not args_str:
+        await message.reply(_HELP)
+        return
+
+    if not hammerspoon.is_available():
+        await message.reply(
+            "🔨 Hammerspoon недоступен.\n\n"
+            "Убедись, что:\n"
+            "1. Hammerspoon установлен и запущен\n"
+            "2. `~/.hammerspoon/init.lua` содержит krab-hs server\n"
+            "3. Выданы разрешения Accessibility в System Settings → Privacy & Security"
+        )
+        return
+
+    parts = args_str.split()
+    sub = parts[0].lower()
+
+    try:
+        if sub == "status":
+            data = await hammerspoon.status()
+            lines = [
+                "🔨 **Hammerspoon**",
+                f"- Версия: `{data.get('version', '?')}`",
+                f"- Build: `{data.get('build', '?')}`",
+                f"- Экранов: `{data.get('screens', '?')}`",
+            ]
+            await message.reply("\n".join(lines))
+
+        elif sub == "windows":
+            windows = await hammerspoon.list_windows()
+            if not windows:
+                await message.reply("🔨 Нет видимых окон.")
+                return
+            lines = ["🔨 **Видимые окна**"]
+            for w in windows[:20]:
+                lines.append(f"- `{w.get('app', '?')}` — {w.get('title', '')}")
+            await message.reply("\n".join(lines))
+
+        elif sub == "focus":
+            app = " ".join(parts[1:]) if len(parts) > 1 else ""
+            if not app:
+                raise UserInputError(user_message="🔨 Формат: `!hs focus <app>`")
+            result = await hammerspoon.focus(app)
+            await message.reply(
+                f"🔨 Сфокусировано: `{result.get('app', app)}`"
+                + (f" — {result.get('title', '')}" if result.get("title") else "")
+            )
+
+        elif sub == "tile":
+            preset = parts[1].lower() if len(parts) > 1 else "left"
+            app    = " ".join(parts[2:]) if len(parts) > 2 else ""
+            result = await hammerspoon.tile(preset=preset, app=app)
+            await message.reply(
+                f"🔨 Раскладка `{preset}` применена: `{result.get('app', app or 'активное окно')}`"
+            )
+
+        elif sub == "move":
+            # !hs move <app> <x> <y> <w> <h>   или   !hs move <x> <y> <w> <h>
+            floats: list[float] = []
+            app_parts: list[str] = []
+            for p in parts[1:]:
+                try:
+                    floats.append(float(p))
+                except ValueError:
+                    if not floats:
+                        app_parts.append(p)
+            if len(floats) < 4:
+                raise UserInputError(
+                    user_message="🔨 Формат: `!hs move [<app>] <x> <y> <w> <h>`\n"
+                    "Пример: `!hs move Cursor 0 0 0.5 1` (левая половина экрана)"
+                )
+            x, y, w, h = floats[:4]
+            app = " ".join(app_parts)
+            result = await hammerspoon.move(app=app, x=x, y=y, w=w, h=h)
+            frame = result.get("frame", {})
+            await message.reply(
+                f"🔨 Окно перемещено: x={frame.get('x')} y={frame.get('y')} "
+                f"w={frame.get('w')} h={frame.get('h')}"
+            )
+
+        else:
+            await message.reply(_HELP)
+
+    except HammerspoonBridgeError as exc:
+        await message.reply(f"🔨 Ошибка Hammerspoon: `{exc}`")
+
+
+async def handle_audio_message(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Обработка входящих голосовых/аудио сообщений Telegram.
+
+    Скачивает аудио, транскрибирует через perceptor, обрабатывает как текстовый запрос.
+    """
+    from ..modules.perceptor import perceptor
+
+    try:
+        audio_bytes = await message.download(in_memory=True)
+        if audio_bytes is None:
+            await message.reply("❌ Не удалось скачать аудио.")
+            return
+
+        transcript = await perceptor.transcribe_audio(bytes(audio_bytes))
+        if not transcript:
+            await message.reply("❌ Не удалось распознать речь.")
+            return
+
+        await message.reply(f"_{transcript}_")
+
+        # Обрабатываем транскрипт как обычный текстовый запрос через bot
+        fake_text = transcript
+        response = await bot.process_text_query(fake_text, message)
+        if response:
+            await message.reply(response)
+
+    except Exception as exc:
+        logger.error("handle_audio_message_error", error=str(exc))
+        await message.reply(f"❌ Ошибка обработки аудио: {str(exc)[:200]}")

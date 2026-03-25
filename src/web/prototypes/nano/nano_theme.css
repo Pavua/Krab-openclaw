@@ -74,47 +74,65 @@ body {
     margin: 0;
     min-height: 100vh;
     font-family: var(--font-main);
-    background: linear-gradient(135deg, #050505 0%, #080a10 50%, #030406 100%);
+    background: radial-gradient(circle at 15% 10%, #080a10 0%, #030406 50%, #000000 100%);
+    background-attachment: fixed;
+    background-color: var(--bg-base);
     color: var(--text-main);
     padding: 32px;
     line-height: 1.5;
+    position: relative;
+    overflow-x: hidden;
+}
+
+/* Subtle decorative glow on the background */
+body::before {
+    content: '';
+    position: fixed;
+    top: -150px;
+    right: -100px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(14, 165, 233, 0.05) 0%, transparent 70%);
+    border-radius: 50%;
+    z-index: -1;
+    pointer-events: none;
+}
+
+body::after {
+    content: '';
+    position: fixed;
+    bottom: -200px;
+    left: -150px;
+    width: 800px;
+    height: 800px;
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.03) 0%, transparent 70%);
+    border-radius: 50%;
+    z-index: -1;
+    pointer-events: none;
 }
 
 /* ----- LAYOUT ----- */
 .container {
-    max-width: 1280px;
+    max-width: 1400px;
     margin: 0 auto;
     position: relative;
-}
-
-.container::before {
-    content: '';
-    position: absolute;
-    top: -100px;
-    left: 20%;
-    width: 400px;
-    height: 400px;
-    background: rgba(14, 165, 233, 0.04);
-    filter: blur(80px);
-    z-index: -1;
-    border-radius: 50%;
 }
 
 header {
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
-    margin-bottom: 32px;
-    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 40px;
     padding-bottom: 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .header-titles h1 {
-    margin: 0 0 4px 0;
-    font-size: 2.2rem;
+    margin: 0 0 6px 0;
+    font-size: 2.5rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
-    background: -webkit-linear-gradient(right, #fff, #94a3b8);
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #ffffff 0%, #94a3b8 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -123,29 +141,44 @@ header {
 .header-titles .subtitle {
     margin: 0;
     color: var(--text-muted);
-    font-size: 0.95rem;
+    font-size: 1rem;
     font-weight: 300;
+    letter-spacing: 0.01em;
 }
 
-/* ----- CARDS ----- */
+/* ----- CARDS (Glassmorphism) ----- */
 .card {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-card);
+    background: rgba(13, 14, 18, 0.65);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    -webkit-transform: translate3d(0, 0, 0);
+    transform: translateZ(0);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: var(--radius-lg);
     padding: 24px;
-    box-shadow: var(--shadow-panel);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     position: relative;
-    overflow: hidden;
+    animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+@keyframes fadeUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.card:nth-child(1) { animation-delay: 0.05s; }
+.card:nth-child(2) { animation-delay: 0.1s; }
+.card:nth-child(3) { animation-delay: 0.15s; }
+.card:nth-child(4) { animation-delay: 0.2s; }
+
 .card::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+    display: none;
 }
 
 .card-title {

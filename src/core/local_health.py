@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 import httpx
 import structlog
 
+from .lm_studio_auth import build_lm_studio_auth_headers
 from .model_types import ModelInfo, ModelStatus, ModelType
 
 if TYPE_CHECKING:
@@ -42,23 +43,31 @@ async def is_lm_studio_available(
     client: Optional["AsyncClient"] = None,
 ) -> bool:
     """
-    Проверяет доступность LM Studio по GET {base_url}/v1/models.
+    Проверяет доступность LM Studio по GET `{base_url}/api/v1/models`
+    с fallback на OpenAI-совместимый `{base_url}/v1/models`.
 
     Returns True при status_code == 200, иначе False (включая сетевые ошибки).
     """
-    url = f"{base_url.rstrip('/')}/v1/models"
-    if client is not None:
-        try:
-            resp = await client.get(url, timeout=timeout)
-            return resp.status_code == 200
-        except (httpx.HTTPError, OSError):
-            return False
-    async with httpx.AsyncClient(timeout=timeout) as ac:
-        try:
-            resp = await ac.get(url)
-            return resp.status_code == 200
-        except (httpx.HTTPError, OSError):
-            return False
+    base = base_url.rstrip("/")
+    urls = [f"{base}/api/v1/models", f"{base}/v1/models"]
+    headers = build_lm_studio_auth_headers()
+    for url in urls:
+        if client is not None:
+            try:
+                resp = await client.get(url, timeout=timeout, headers=headers or None)
+                if resp.status_code == 200:
+                    return True
+                continue
+            except (httpx.HTTPError, OSError):
+                continue
+        async with httpx.AsyncClient(timeout=timeout, headers=headers or None) as ac:
+            try:
+                resp = await ac.get(url)
+                if resp.status_code == 200:
+                    return True
+            except (httpx.HTTPError, OSError):
+                continue
+    return False
 
 
 def _bytes_to_gb(value: int | float) -> float:
@@ -100,13 +109,14 @@ async def fetch_lm_studio_models_list(
     base = base_url.rstrip("/")
     urls = [f"{base}/api/v1/models", f"{base}/v1/models"]
     used_client = client
+    headers = build_lm_studio_auth_headers()
 
     for url in urls:
         try:
             if used_client:
-                resp = await used_client.get(url, timeout=timeout)
+                resp = await used_client.get(url, timeout=timeout, headers=headers or None)
             else:
-                async with httpx.AsyncClient(timeout=timeout) as ac:
+                async with httpx.AsyncClient(timeout=timeout, headers=headers or None) as ac:
                     resp = await ac.get(url, timeout=timeout)
             if resp.status_code != 200:
                 continue

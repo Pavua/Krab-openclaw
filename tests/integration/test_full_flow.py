@@ -47,7 +47,7 @@ async def test_full_message_flow():
         mock_msg.photo = None
         
         # Setup reply/edit mocks
-        mock_msg.edit = AsyncMock()
+        mock_msg.edit = AsyncMock(return_value=mock_msg)
         mock_msg.reply = AsyncMock()
         
         # 3. Mock OpenClaw Client to return a HUGE response
@@ -77,13 +77,15 @@ async def test_full_message_flow():
             args, _ = mock_msg.edit.call_args_list[-1]
             content = args[0]
             assert len(content) <= 4096
-            assert "AAAA" in content
+            assert content.startswith("[Часть 1/")
+            assert "расскажи длинную историю" in content
             
             # Check reply call (second chunk)
             mock_msg.reply.assert_awaited()
             args_reply, _ = mock_msg.reply.call_args_list[0]
             content_reply = args_reply[0]
             assert len(content_reply) <= 4096
+            assert content_reply.startswith("[Часть 2/")
             assert "AAAA" in content_reply # Should contain the overflow
             
             print("\n✅ Verification Successful: Long message was split and sent correctly.")
