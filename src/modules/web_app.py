@@ -3233,7 +3233,23 @@ class WebApp:
             self._ecosystem_capabilities_snapshot(),
             self._translator_readiness_snapshot(runtime_lite=runtime_state),
         )
-        system_control = build_system_control_snapshot()
+        # Phase 3 Шаг 2: live health checks для browser и macos
+        browser_probe: dict | None = None
+        macos_probe: dict | None = None
+        try:
+            from ..integrations.browser_bridge import browser_bridge as _bb
+            browser_probe = await asyncio.wait_for(_bb.health_check(), timeout=5.0)
+        except Exception:
+            pass
+        try:
+            from ..integrations.macos_automation import macos_automation as _ma
+            macos_probe = await asyncio.wait_for(_ma.health_check(), timeout=5.0)
+        except Exception:
+            pass
+        system_control = build_system_control_snapshot(
+            browser_probe=browser_probe,
+            macos_probe=macos_probe,
+        )
         return build_capability_registry(
             operator_profile=operator_profile,
             runtime_lite=runtime_state,
