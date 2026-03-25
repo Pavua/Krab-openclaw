@@ -224,6 +224,10 @@ class Config:
 
     # Routing: force_cloud полностью обходит локальный путь (Фаза 2.2)
     FORCE_CLOUD: bool = os.getenv("FORCE_CLOUD", "0").strip().lower() in ("1", "true", "yes")
+    # Переводить ли браузерную вкладку на передний план при каждом обращении.
+    # Дефолт 0 = тихий режим (Краб работает с браузером не переключая окно).
+    # Включить: BROWSER_FOCUS_TAB=1 в .env или !config BROWSER_FOCUS_TAB=1
+    BROWSER_FOCUS_TAB: bool = os.getenv("BROWSER_FOCUS_TAB", "0").strip().lower() in ("1", "true", "yes")
     # Разрешать ли автоматический fallback cloud -> local при ошибках облака.
     # Важно: это НЕ отключает ручной local-режим (!model local), а только аварийный
     # автопереход в локаль из cloud-сценариев.
@@ -360,6 +364,8 @@ class Config:
                     cls.MODEL = value
                 elif key == "FORCE_CLOUD":
                     cls.FORCE_CLOUD = value.strip().lower() in ("1", "true", "yes")
+                elif key == "BROWSER_FOCUS_TAB":
+                    cls.BROWSER_FOCUS_TAB = value.strip().lower() in ("1", "true", "yes")
                 elif key == "LOCAL_FALLBACK_ENABLED":
                     cls.LOCAL_FALLBACK_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "LOCAL_PREFERRED_MODEL":

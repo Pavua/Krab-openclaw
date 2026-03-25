@@ -872,7 +872,8 @@ class BrowserBridge:
         """Возвращает существующую вкладку по fragment или открывает новую с url."""
         existing = await self.find_tab_by_url_fragment(url_fragment)
         if existing is not None:
-            await existing.bring_to_front()
+            if config.BROWSER_FOCUS_TAB:
+                await existing.bring_to_front()
             return existing
         browser = await self._get_browser()
         contexts = browser.contexts
