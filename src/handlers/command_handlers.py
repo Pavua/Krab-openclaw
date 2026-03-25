@@ -1624,7 +1624,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!write <file> <content>` — запись файла
 `!sysinfo` — информация о хосте
 `!mac ...` — управление macOS (clipboard / notify / apps / Finder / Notes / Reminders / Calendar)
-`!screenshot` — снимок текущей вкладки Chrome (CDP); `!screenshot health` — статус CDP
+`!screenshot` — снимок текущей вкладки Chrome; `!screenshot ocr [lang]` — OCR; `!screenshot health` — статус CDP
 `!diagnose` — диагностика подключений
 
 **Dev**
@@ -2431,13 +2431,15 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
     Использование:
       !screenshot          — скриншот активной вкладки
       !screenshot health   — статус CDP подключения (без снимка)
+      !screenshot ocr      — снимок + OCR (tesseract, brew install tesseract)
+      !screenshot ocr rus  — OCR с указанием языка
     """
     import io
     del bot
     from ..integrations.browser_bridge import browser_bridge as _bb
 
-    args = str(message.text or "").split(maxsplit=1)
-    sub = args[1].lower().strip() if len(args) > 1 else ""
+    raw_parts = str(message.text or "").split()
+    sub = raw_parts[1].lower().strip() if len(raw_parts) > 1 else ""
 
     if sub == "health":
         probe = await _bb.health_check()
@@ -2448,6 +2450,43 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
         if err:
             text += f"\n`{err[:200]}`"
         await message.reply(text)
+        return
+
+    if sub == "ocr":
+        lang = raw_parts[2] if len(raw_parts) > 2 else ""
+        probe = await _bb.health_check(timeout_sec=4.0)
+        if not probe.get("ok"):
+            err_detail = probe.get("error") or "CDP недоступен"
+            await message.reply(f"📡 **!screenshot ocr**: браузер недоступен\n`{err_detail[:300]}`")
+            return
+        try:
+            png_bytes = await asyncio.wait_for(_bb.screenshot(), timeout=15.0)
+        except asyncio.TimeoutError:
+            await message.reply("⏱ Таймаут снимка (15 с).")
+            return
+        if not png_bytes:
+            await message.reply("❌ Снимок пустой.")
+            return
+        try:
+            from ..integrations.macos_automation import macos_automation as _ma
+            if not _ma.is_ocr_available():
+                await message.reply(
+                    "📄 **OCR**: tesseract не установлен.\n"
+                    "`brew install tesseract` + `brew install tesseract-lang` для русского"
+                )
+                return
+            text_result = await asyncio.wait_for(_ma.ocr_image(png_bytes, lang=lang), timeout=30.0)
+        except asyncio.TimeoutError:
+            await message.reply("⏱ OCR таймаут (30 с).")
+            return
+        except Exception as exc:
+            await message.reply(f"❌ OCR ошибка: `{str(exc)[:300]}`")
+            return
+        if not text_result:
+            await message.reply("📄 OCR: текст не найден.")
+            return
+        lang_label = f" [{lang}]" if lang else ""
+        await message.reply(f"📄 **OCR{lang_label}:**\n```\n{text_result[:4000]}\n```")
         return
 
     # Проверяем доступность перед снимком

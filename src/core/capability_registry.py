@@ -504,10 +504,12 @@ def build_system_control_snapshot(
             "role_requirement": "owner_or_full",
         },
         "ocr": {
-            "status": "not_implemented",
+            "status": "ready" if macos_payload.get("ocr_available") else (
+                "unavailable" if macos_payload and not macos_payload.get("ocr_available") else "unknown"
+            ),
             "depends_on": "macos_control",
             "role_requirement": "owner_or_full",
-            "note": "pytesseract / mlx_ocr — Шаг 5",
+            "note": "tesseract CLI — brew install tesseract; Шаг 5",
         },
         "tor_proxy": {
             "status": "not_implemented",
