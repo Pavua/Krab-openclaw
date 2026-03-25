@@ -539,6 +539,149 @@ class MacOSAutomationService:
         resolved_calendar = parts[1] if len(parts) > 1 else calendar_name
         return {"id": event_id, "calendar_name": resolved_calendar}
 
+    async def focus_app(self, app_name: str) -> dict[str, str]:
+        """Выводит приложение на передний план через AppleScript activate.
+
+        Требует Accessibility permission в macOS (Системные настройки → Конфиденциальность → Accessibility).
+        """
+        if not app_name or not app_name.strip():
+            raise MacOSAutomationError("empty_app_name")
+        name = app_name.strip()
+        script = f'\ntell application "{name}" to activate\nreturn "ok"\n'
+        await self._run_osascript(script)
+        return {"app_name": name, "action": "focused"}
+
+    async def type_text(self, text: str, *, app_name: str | None = None) -> dict[str, str]:
+        """Вводит текст через keystroke System Events (имитация клавиатуры).
+
+        Если app_name передан — сначала активирует приложение.
+        Требует Accessibility permission.
+        Внимание: работает с латиницей и спецсимволами; для кириллицы используй clipboard workaround.
+        """
+        if not text:
+            raise MacOSAutomationError("empty_text")
+        if app_name:
+            await self.focus_app(app_name)
+            # Небольшая пауза после активации чтобы окно успело стать foreground
+            script = (
+                '\ntell application "System Events"\n'
+                f'    keystroke "{text}"\n'
+                'end tell\n'
+                'return "ok"\n'
+            )
+        else:
+            script = (
+                '\ntell application "System Events"\n'
+                f'    keystroke "{text}"\n'
+                'end tell\n'
+                'return "ok"\n'
+            )
+        await self._run_osascript(script)
+        return {"text_length": str(len(text)), "app_name": app_name or "frontmost"}
+
+    async def type_text_via_clipboard(self, text: str, *, app_name: str | None = None) -> dict[str, str]:
+        """Вводит текст через clipboard + Cmd+V (работает с кириллицей и Unicode).
+
+        Алгоритм: записывает text в clipboard → активирует приложение (опционально) → Cmd+V.
+        Предыдущее содержимое clipboard перезаписывается.
+        """
+        if not text:
+            raise MacOSAutomationError("empty_text")
+        await self.set_clipboard_text(text)
+        if app_name:
+            await self.focus_app(app_name)
+        script = (
+            '\ntell application "System Events"\n'
+            '    keystroke "v" using {command down}\n'
+            'end tell\n'
+            'return "ok"\n'
+        )
+        await self._run_osascript(script)
+        return {"text_length": str(len(text)), "app_name": app_name or "frontmost", "method": "clipboard_paste"}
+
+    async def click_ui_element(
+        self,
+        app_name: str,
+        element_name: str,
+        *,
+        element_type: str = "button",
+        window_index: int = 1,
+    ) -> dict[str, str]:
+        """Нажимает кнопку/элемент UI через System Events Accessibility API.
+
+        Требует Accessibility permission.
+        Параметры:
+          app_name:     имя процесса приложения (например "Safari", "Finder")
+          element_name: заголовок/имя элемента (например "OK", "Отмена")
+          element_type: тип элемента ("button" по умолчанию; также "menu item", "checkbox")
+          window_index: номер окна (1-based, по умолчанию переднее окно)
+        """
+        if not app_name or not element_name:
+            raise MacOSAutomationError("empty_app_or_element")
+        app = app_name.strip()
+        elem = element_name.strip()
+        etype = element_type.strip() or "button"
+        script = (
+            '\ntell application "System Events"\n'
+            f'    tell process "{app}"\n'
+            f'        click {etype} "{elem}" of window {window_index}\n'
+            '    end tell\n'
+            'end tell\n'
+            'return "ok"\n'
+        )
+        await self._run_osascript(script)
+        return {"app_name": app, "element": elem, "type": etype, "window": str(window_index)}
+
+    async def press_key(self, key: str, *, modifiers: list[str] | None = None) -> dict[str, str]:
+        """Нажимает клавишу (возможно с модификаторами) через System Events.
+
+        Примеры:
+          press_key("return")
+          press_key("tab")
+          press_key("a", modifiers=["command"])
+          press_key("z", modifiers=["command", "shift"])
+        Требует Accessibility permission.
+        """
+        if not key:
+            raise MacOSAutomationError("empty_key")
+        mods = modifiers or []
+        if mods:
+            mod_str = "{" + ", ".join(f"{m} down" for m in mods) + "}"
+            script = (
+                '\ntell application "System Events"\n'
+                f'    key code (key code of "{key}") using {mod_str}\n'
+                'end tell\n'
+                'return "ok"\n'
+            )
+            # key code lookup не всегда работает — используем keystroke для простых случаев
+            # и key code для навигационных клавиш
+            nav_keys = {"return", "tab", "escape", "space", "delete", "backspace",
+                        "up", "down", "left", "right", "home", "end", "pageup", "pagedown"}
+            if key.lower() in nav_keys:
+                key_map = {
+                    "return": "13", "tab": "48", "escape": "53", "space": "49",
+                    "delete": "51", "backspace": "51", "up": "126", "down": "125",
+                    "left": "123", "right": "124", "home": "115", "end": "119",
+                    "pageup": "116", "pagedown": "121",
+                }
+                code = key_map.get(key.lower(), "")
+                if code:
+                    script = (
+                        '\ntell application "System Events"\n'
+                        f'    key code {code} using {mod_str}\n'
+                        'end tell\n'
+                        'return "ok"\n'
+                    )
+        else:
+            script = (
+                '\ntell application "System Events"\n'
+                f'    keystroke "{key}"\n'
+                'end tell\n'
+                'return "ok"\n'
+            )
+        await self._run_osascript(script)
+        return {"key": key, "modifiers": mods}
+
     async def status(self) -> dict[str, Any]:
         """
         Возвращает мягкий status macOS automation без падения всего ответа.

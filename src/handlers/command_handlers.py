@@ -1190,6 +1190,11 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
             "`!mac app front` — активное приложение\n"
             "`!mac app list` — список видимых приложений\n"
             "`!mac app open <имя>` — открыть приложение\n"
+            "`!mac focus <имя>` — вывести приложение на передний план\n"
+            "`!mac type <текст>` — напечатать текст в активном окне\n"
+            "`!mac typeclip <текст>` — вставить текст через clipboard (Unicode/кириллица)\n"
+            "`!mac click <приложение> <кнопка>` — нажать кнопку UI элемент\n"
+            "`!mac key <клавиша>` — нажать клавишу (return/tab/escape/...)\n"
             "`!mac reminders list` — список напоминаний из macOS Reminders\n"
             "`!mac reminders add <время> | <текст>` — создать reminder в Reminders\n"
             "`!mac notes list` — список заметок\n"
@@ -1430,11 +1435,55 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"📂 Показываю в Finder: `{revealed}`")
         return
 
+    # Phase 3 Шаг 4: UI automation
+    if sub == "focus":
+        app_arg = args[len("focus"):].strip()
+        if not app_arg:
+            raise UserInputError(user_message="🍎 Формат: `!mac focus <имя приложения>`")
+        result = await macos_automation.focus_app(app_arg)
+        await message.reply(f"🪟 Фокус: `{result['app_name']}`")
+        return
+
+    if sub == "type":
+        text_arg = args[len("type"):].strip()
+        if not text_arg:
+            raise UserInputError(user_message="🍎 Формат: `!mac type <текст>`")
+        result = await macos_automation.type_text(text_arg)
+        await message.reply(f"⌨️ Напечатано {result['text_length']} символов в `{result['app_name']}`")
+        return
+
+    if sub == "typeclip":
+        text_arg = args[len("typeclip"):].strip()
+        if not text_arg:
+            raise UserInputError(user_message="🍎 Формат: `!mac typeclip <текст>` (через clipboard, поддерживает Unicode)")
+        result = await macos_automation.type_text_via_clipboard(text_arg)
+        await message.reply(f"📋→⌨️ Вставлено {result['text_length']} символов в `{result['app_name']}`")
+        return
+
+    if sub == "click":
+        # !mac click <app> <element>
+        if len(parts) < 3:
+            raise UserInputError(user_message="🍎 Формат: `!mac click <приложение> <кнопка>`")
+        app_arg = parts[1]
+        elem_arg = " ".join(parts[2:])
+        result = await macos_automation.click_ui_element(app_arg, elem_arg)
+        await message.reply(f"🖱 Нажато: `{result['element']}` в `{result['app_name']}`")
+        return
+
+    if sub == "key":
+        key_arg = args[len("key"):].strip()
+        if not key_arg:
+            raise UserInputError(user_message="🍎 Формат: `!mac key <клавиша>` (return/tab/escape/...)")
+        result = await macos_automation.press_key(key_arg)
+        await message.reply(f"⌨️ Нажато: `{result['key']}`")
+        return
+
     raise UserInputError(
         user_message=(
             "🍎 Неизвестная подкоманда macOS.\n"
             "Используй: `!mac status`, `!mac clip ...`, `!mac notify ...`, "
-            "`!mac app ...`, `!mac open ...`, `!mac finder reveal ...`"
+            "`!mac app ...`, `!mac focus ...`, `!mac type ...`, `!mac click ...`, "
+            "`!mac key ...`, `!mac open ...`, `!mac finder reveal ...`"
         )
     )
 
