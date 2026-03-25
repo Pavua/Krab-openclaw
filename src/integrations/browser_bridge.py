@@ -882,5 +882,32 @@ class BrowserBridge:
         await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
         return page
 
+    async def health_check(self, *, timeout_sec: float = 4.0) -> dict:
+        """Возвращает probe-результат для build_system_control_snapshot().
+
+        Формат: {"ok": bool, "blocked": bool, "error": str, "tab_count": int, "cdp_url": str}
+        - ok=True:      CDP доступен, браузер отвечает
+        - blocked=True: CDP порт не отвечает (Chrome не запущен или remote debugging выключен)
+        - ok=False, blocked=False: нечто неожиданное (таймаут, parse error и т.д.)
+        """
+        try:
+            attached = await asyncio.wait_for(self.is_attached(), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            return {"ok": False, "blocked": False, "error": f"health_check timeout {timeout_sec}s", "tab_count": 0, "cdp_url": self.CDP_URL}
+        except Exception as exc:
+            return {"ok": False, "blocked": False, "error": repr(exc), "tab_count": 0, "cdp_url": self.CDP_URL}
+
+        if not attached:
+            return {"ok": False, "blocked": True, "error": "CDP not reachable", "tab_count": 0, "cdp_url": self.CDP_URL}
+
+        tab_count = 0
+        try:
+            tabs = await asyncio.wait_for(self.list_tabs(), timeout=timeout_sec)
+            tab_count = len(tabs) if isinstance(tabs, list) else 0
+        except Exception:
+            pass
+
+        return {"ok": True, "blocked": False, "error": "", "tab_count": tab_count, "cdp_url": self.CDP_URL}
+
 
 browser_bridge = BrowserBridge()

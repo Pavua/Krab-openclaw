@@ -607,6 +607,35 @@ class MacOSAutomationService:
 
         return result
 
+    async def health_check(self) -> dict:
+        """Возвращает probe-результат для build_system_control_snapshot().
+
+        Формат: {"ok": bool, "blocked": bool, "error": str, "tools": list[str]}
+        - ok=True:      osascript + pbcopy/pbpaste доступны, базовый осascript работает
+        - blocked=True: macOS недоступна или инструменты не установлены
+        """
+        if not self.is_available():
+            missing = [t for t in ("osascript", "open", "pbcopy", "pbpaste") if not shutil.which(t)]
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": f"unavailable on {platform.system()}" if platform.system() != "Darwin" else f"missing tools: {missing}",
+                "tools": [],
+            }
+        # Быстрая проверка — запускаем минимальный osascript без side-effects
+        try:
+            await asyncio.wait_for(
+                self._run_osascript('return "ok"'),
+                timeout=3.0,
+            )
+        except asyncio.TimeoutError:
+            return {"ok": False, "blocked": False, "error": "osascript timeout 3s", "tools": []}
+        except Exception as exc:
+            return {"ok": False, "blocked": False, "error": repr(exc), "tools": []}
+
+        available_tools = [t for t in ("osascript", "open", "pbcopy", "pbpaste") if shutil.which(t)]
+        return {"ok": True, "blocked": False, "error": "", "tools": available_tools}
+
 
 # Глобальный синглтон для импорта в хендлерах
 macos_automation = MacOSAutomationService()
