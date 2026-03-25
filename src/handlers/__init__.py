@@ -46,6 +46,7 @@ from .command_handlers import (
     handle_web,
     handle_write,
     handle_ls,
+    handle_screenshot,
 )
 
 __all__ = [
@@ -89,4 +90,5 @@ __all__ = [
     "handle_web",
     "handle_write",
     "handle_ls",
+    "handle_screenshot",
 ]

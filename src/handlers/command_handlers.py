@@ -1575,6 +1575,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!write <file> <content>` — запись файла
 `!sysinfo` — информация о хосте
 `!mac ...` — управление macOS (clipboard / notify / apps / Finder / Notes / Reminders / Calendar)
+`!screenshot` — снимок текущей вкладки Chrome (CDP); `!screenshot health` — статус CDP
 `!diagnose` — диагностика подключений
 
 **Dev**
@@ -2373,3 +2374,52 @@ async def handle_audio_message(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:
         logger.error("handle_audio_message_error", error=str(exc))
         await message.reply(f"❌ Ошибка обработки аудио: {str(exc)[:200]}")
+
+
+async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
+    """Снимок экрана текущей вкладки Chrome через CDP.
+
+    Использование:
+      !screenshot          — скриншот активной вкладки
+      !screenshot health   — статус CDP подключения (без снимка)
+    """
+    import io
+    del bot
+    from ..integrations.browser_bridge import browser_bridge as _bb
+
+    args = str(message.text or "").split(maxsplit=1)
+    sub = args[1].lower().strip() if len(args) > 1 else ""
+
+    if sub == "health":
+        probe = await _bb.health_check()
+        status = "✅ CDP ready" if probe.get("ok") else ("🚫 blocked" if probe.get("blocked") else "⚠️ degraded")
+        tabs = probe.get("tab_count", 0)
+        err = probe.get("error", "")
+        text = f"📡 **Browser CDP**\n{status} — {tabs} вкладок"
+        if err:
+            text += f"\n`{err[:200]}`"
+        await message.reply(text)
+        return
+
+    # Проверяем доступность перед снимком
+    probe = await _bb.health_check(timeout_sec=4.0)
+    if not probe.get("ok"):
+        err_detail = probe.get("error") or ("Chrome не запущен или CDP недоступен" if probe.get("blocked") else "неизвестная ошибка")
+        await message.reply(f"📡 **!screenshot**: браузер недоступен\n`{err_detail[:300]}`")
+        return
+
+    await message.reply("📸 Делаю снимок…")
+    try:
+        png_bytes = await asyncio.wait_for(_bb.screenshot(), timeout=15.0)
+    except asyncio.TimeoutError:
+        await message.reply("⏱ Таймаут снимка (15 с). Попробуй позже.")
+        return
+    except Exception as exc:
+        await message.reply(f"❌ Ошибка: `{str(exc)[:300]}`")
+        return
+
+    if not png_bytes:
+        await message.reply("❌ Снимок пустой — возможно вкладок нет или CDP не отвечает.")
+        return
+
+    await message.reply_photo(io.BytesIO(png_bytes), caption="📸 Screenshot")
