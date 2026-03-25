@@ -99,6 +99,7 @@ from .handlers import (
     handle_web,
     handle_write,
     handle_screenshot,
+    handle_cap,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -650,6 +651,10 @@ class KraabUserbot:
         @self.client.on_message(filters.command("screenshot", prefixes=prefixes) & _make_command_filter("screenshot"), group=-1)
         async def wrap_screenshot(c, m):
             await run_cmd(handle_screenshot, m)
+
+        @self.client.on_message(filters.command("cap", prefixes=prefixes) & _make_command_filter("cap"), group=-1)
+        async def wrap_cap(c, m):
+            await run_cmd(handle_cap, m)
 
         @self.client.on_message(filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1)
         async def wrap_watch(c, m):
