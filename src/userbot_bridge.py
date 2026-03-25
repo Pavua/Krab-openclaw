@@ -114,8 +114,23 @@ _RELAY_INTENT_KEYWORDS: frozenset[str] = frozenset({
     "скажи", "скажите", "сообщи", "сообщите",
     "расскажи", "расскажите",
     "передайте ему", "передай ему",
+    "напомни", "напомните", "напоминание",
+    "запомни", "запомните", "запомнить",
+    "хозяину", "хозяин", "хозяином",
+    "владельцу", "владелец", "владельцу",
     "let know", "tell him", "tell her", "notify",
     "pass along", "pass it on",
+    "tell pablo", "tell the owner",
+})
+
+# Слова в ОТВЕТЕ Краба, указывающие на обещание передать/запомнить.
+# Используется как backup-триггер: если входящее не попало в _RELAY_INTENT_KEYWORDS,
+# но Краб всё равно пообещал передать — форсируем relay после доставки.
+_RELAY_PROMISE_IN_RESPONSE: frozenset[str] = frozenset({
+    "передам", "передаю", "передал",
+    "сообщу", "уведомлю",
+    "запомнил", "запомню", "запомнил это",
+    "хозяину передам", "передам владельцу",
 })
 
 
@@ -2612,6 +2627,7 @@ class KraabUserbot:
         query: str,
         full_response: str,
         prefer_send_message_for_background: bool = False,
+        force_new_message: bool = False,
     ) -> dict[str, Any]:
         """
         Доставляет готовый ответ в Telegram с безопасным split.
@@ -2642,7 +2658,7 @@ class KraabUserbot:
         )
         delivered_ids: list[str] = []
 
-        if is_self:
+        if is_self and not force_new_message:
             source_message = await self._safe_edit(source_message, parts[0])
             if getattr(source_message, "id", None):
                 delivered_ids.append(str(source_message.id))
@@ -2656,7 +2672,7 @@ class KraabUserbot:
                 "parts_count": len(parts),
             }
 
-        if self._should_send_voice_reply() or prefer_send_message_for_background:
+        if self._should_send_voice_reply() or prefer_send_message_for_background or force_new_message:
             # Для связки `text+voice` делаем явную текстовую отправку отдельным
             # сообщением: edit плейсхолдера в некоторых клиентах теряется
             # визуально, а send_message даёт надёжный финальный event доставки.
@@ -2919,6 +2935,52 @@ class KraabUserbot:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("relay_owner_notification_failed", error=str(exc))
+
+    async def _forward_guest_incoming_to_owner(
+        self,
+        *,
+        message: Message,
+        query: str,
+        krab_response: str,
+    ) -> None:
+        """
+        Форвардит входящее сообщение от незнакомого контакта (GUEST) owner-у.
+
+        Почему нужно: аптека пишет 'препараты приехали' → Краб отвечает от лица
+        пользователя, но owner не знает об этом. Это решает проблему пропущенных
+        входящих от незнакомых контактов.
+        """
+        try:
+            user = getattr(message, "from_user", None) or getattr(message, "sender_chat", None)
+            fname = str(getattr(user, "first_name", "") or "").strip()
+            lname = str(getattr(user, "last_name", "") or "").strip()
+            username = str(getattr(user, "username", "") or "").strip()
+            sender_name = f"{fname} {lname}".strip() or ""
+            if username:
+                sender_name = f"{sender_name} (@{username})".strip() if sender_name else f"@{username}"
+            if not sender_name:
+                sender_name = f"id:{getattr(user, 'id', '?')}"
+
+            chat_id_str = str(getattr(getattr(message, "chat", None), "id", "") or "")
+            excerpt = str(query or "")[:1500]
+            response_excerpt = str(krab_response or "")[:400]
+
+            notification = (
+                f"📩 **Незнакомый контакт написал**\n\n"
+                f"От: `{sender_name}`\n"
+                f"Чат: `{chat_id_str}`\n\n"
+                f"**Сообщение:**\n{excerpt}\n\n"
+                f"↩️ **Краб ответил:**\n{response_excerpt}"
+            )
+            me = await self.client.get_me()
+            await self.client.send_message(me.id, notification)
+            logger.info(
+                "guest_incoming_forwarded_to_owner",
+                sender=sender_name,
+                chat_id=chat_id_str,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("guest_incoming_forward_failed", error=str(exc))
 
     @staticmethod
     def _voice_download_suffix(message: Message) -> str:
@@ -3507,6 +3569,7 @@ class KraabUserbot:
         full_response = ""
         full_response_raw = ""
         last_edit_time = 0.0
+        timeout_error_was_sent = False
 
         first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
             has_photo=bool(images)
@@ -3609,6 +3672,7 @@ class KraabUserbot:
                             "Похоже, цепочка fallback зависла или все cloud-кандидаты перегружены. "
                             "Попробуй `!model local` или повтори запрос позже."
                         )
+                        timeout_error_was_sent = True
                         if next_chunk_task and not next_chunk_task.done():
                             next_chunk_task.cancel()
                             try:
@@ -3832,6 +3896,7 @@ class KraabUserbot:
                         full_response = (
                             "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
                         )
+                        timeout_error_was_sent = True
                         if next_chunk_task and not next_chunk_task.done():
                             next_chunk_task.cancel()
                             try:
@@ -3915,6 +3980,7 @@ class KraabUserbot:
                 query=query,
                 full_response=full_response,
                 prefer_send_message_for_background=prefer_send_message_for_background,
+                force_new_message=timeout_error_was_sent,
             )
             self._record_incoming_reply_to_inbox(
                 incoming_item_result=incoming_item_result,
@@ -3922,6 +3988,40 @@ class KraabUserbot:
                 delivery_result=delivery_result,
                 note="llm_response_delivered_background" if prefer_send_message_for_background else "llm_response_delivered",
             )
+
+            # Post-response relay: если Краб пообещал передать в ответе, а входящее
+            # не попало в _RELAY_INTENT_KEYWORDS — форсируем relay.
+            if not is_self and full_response and not timeout_error_was_sent:
+                response_lower = full_response.lower()
+                if any(kw in response_lower for kw in _RELAY_PROMISE_IN_RESPONSE):
+                    asyncio.create_task(
+                        self._escalate_relay_to_owner(
+                            message=message,
+                            user=getattr(message, "from_user", None) or getattr(message, "sender_chat", None),
+                            query=query,
+                            chat_type="private",
+                        )
+                    )
+
+            # Forwarding B: входящее от гостя → форвардим owner-у, чтобы ничего не
+            # потерялось (аптека написала "препараты приехали" — owner должен знать).
+            # Пропускаем если уже сработал relay intent (pre-LLM эскалация) — там уже
+            # есть уведомление, не дублируем.
+            if (
+                not is_self
+                and access_profile.level == AccessLevel.GUEST
+                and bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True))
+                and full_response
+                and not timeout_error_was_sent
+                and not self._detect_relay_intent(query)
+            ):
+                asyncio.create_task(
+                    self._forward_guest_incoming_to_owner(
+                        message=message,
+                        query=query,
+                        krab_response=full_response,
+                    )
+                )
 
             if self._should_send_voice_reply():
                 voice_path = await text_to_speech(
