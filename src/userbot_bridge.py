@@ -37,6 +37,7 @@ from .core.access_control import (
 from .core.capability_registry import resolve_access_mode
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
+from .core.operator_identity import build_trace_id
 from .core.logger import get_logger
 from .core.mcp_registry import resolve_managed_server_launch
 from .core.proactive_watch import proactive_watch
@@ -411,6 +412,22 @@ class KraabUserbot:
     _plaintext_reasoning_meta_pattern = re.compile(
         r"(?i)^(?:step\s*\d+|thinking process|analysis|reasoning|analyze(?: the)? user(?:'s)? request|draft the response)\b"
     )
+    _agentic_scratchpad_line_pattern = re.compile(
+        r"(?ix)^("
+        r"ready\.?"
+        r"|yes\.?"
+        r"|let'?s\s+(?:go|execute)\.?"
+        r"|\.\.\."
+        r"|wait[,.!]?\s+(?:(?:i|we)(?:'ll| will))\s+"
+        r"(?:check|verify|inspect|look|use|open|run|try|confirm|explain|answer|draft|respond)\b.*"
+        r"|(?:(?:i|we)(?:'ll| will))\s+"
+        r"(?:check|verify|inspect|look|use|open|run|try|confirm|explain|answer|draft|respond)\b.*"
+        r")$"
+    )
+    _agentic_scratchpad_command_pattern = re.compile(
+        r"(?i)^(?:which|pwd|ls|rg|grep|find|git|python(?:3)?|pytest|ffmpeg|say|opencode|codex|claude|pi)\b.*$"
+    )
+    _split_chunk_header_pattern = re.compile(r"(?i)^\[часть\s+\d+/\d+\]$")
     _voice_delivery_modes = {"text+voice", "voice-only"}
     _deferred_intent_pattern = re.compile(
         r"(?is)\b(напомню|сделаю|выполню|запланирую|отправлю)\b.{0,80}\b(позже|через|завтра|утром|вечером|по таймеру|по расписанию)\b"
@@ -1400,9 +1417,11 @@ class KraabUserbot:
 
         # WAKE UP CHECK
         try:
-            # Wait for OpenClaw to spin up (up to 10s)
+            # Wait for OpenClaw to spin up (up to 180s)
+            # После рестарта gateway через LaunchAgent crash-loop стабилизация занимает 3-5 мин.
+            # 180 сек = достаточный запас; wait_for_healthy возвращает True как только /health OK.
             logger.info("waiting_for_openclaw")
-            is_claw_ready = await openclaw_client.wait_for_healthy(timeout=10)
+            is_claw_ready = await openclaw_client.wait_for_healthy(timeout=180)
 
             status_emoji = "✅" if is_claw_ready else "⚠️"
             status_text = "Online" if is_claw_ready else "Gateway Unreachable (Check logs)"
@@ -1719,6 +1738,7 @@ class KraabUserbot:
         cleaned = cls._tool_response_block_pattern.sub("", cleaned)
         cleaned = cls._llm_transport_tokens_pattern.sub("", cleaned)
         cleaned = cls._strip_plaintext_reasoning_prefix(cleaned)
+        cleaned = cls._strip_agentic_scratchpad(cleaned)
         cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
         cleaned = re.sub(r"(?mi)^\s*(assistant|user|system)\s*$", "", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -1808,6 +1828,55 @@ class KraabUserbot:
         """
         _, answer = cls._split_plaintext_reasoning_and_answer(text)
         return answer
+
+    @classmethod
+    def _strip_agentic_scratchpad(cls, text: str) -> str:
+        """
+        Убирает codex-style scratchpad, если модель прислала self-talk вместо ответа.
+
+        Почему нужен отдельный guard:
+        - некоторые agentic-маршруты протекают в ответ строками вида
+          `Wait, I'll check ...`, `Ready.`, `Let's go.` и shell-командами;
+        - такие блоки не являются полезным ответом пользователю и забивают Telegram;
+        - режем их только при уверенном scratchpad-профиле первых строк, чтобы не
+          ломать обычные ответы, где команды действительно нужны пользователю.
+        """
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+
+        non_empty = [line.strip() for line in raw.splitlines() if line.strip()]
+        if not non_empty:
+            return raw
+
+        probe_lines = non_empty[:12]
+        scratch_hits = sum(
+            1 for line in probe_lines if cls._agentic_scratchpad_line_pattern.match(line)
+        )
+        command_hits = sum(
+            1 for line in probe_lines if cls._agentic_scratchpad_command_pattern.match(line)
+        )
+        if scratch_hits < 2 or (scratch_hits + command_hits) < 3:
+            return raw
+
+        kept_lines: list[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                if kept_lines and kept_lines[-1] != "":
+                    kept_lines.append("")
+                continue
+            if cls._split_chunk_header_pattern.match(stripped):
+                continue
+            if cls._agentic_scratchpad_line_pattern.match(stripped):
+                continue
+            if cls._agentic_scratchpad_command_pattern.match(stripped):
+                continue
+            kept_lines.append(line)
+
+        cleaned = "\n".join(kept_lines).strip()
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned
 
     @classmethod
     def _extract_reasoning_trace(cls, text: str) -> str:
@@ -3193,6 +3262,11 @@ class KraabUserbot:
         """Определяет ошибку Telegram при попытке отправить/отредактировать пустой текст."""
         return "MESSAGE_EMPTY" in str(exc).upper()
 
+    @staticmethod
+    def _is_message_too_long_error(exc: Exception) -> bool:
+        """Определяет ошибку Telegram при превышении лимита длины сообщения (4096 chars)."""
+        return "MESSAGE_TOO_LONG" in str(exc).upper()
+
     async def _safe_edit(self, msg: Message, text: str) -> Message:
         """
         Безопасно редактирует сообщение.
@@ -3217,6 +3291,10 @@ class KraabUserbot:
             if self._is_message_id_invalid_error(exc) or self._is_message_empty_error(exc):
                 logger.warning("telegram_edit_fallback_send_new", error=str(exc))
                 return await self.client.send_message(msg.chat.id, target_text)
+            if self._is_message_too_long_error(exc):
+                # Текст превысил лимит Telegram (4096). Отрезаем и отправляем новым сообщением.
+                logger.warning("telegram_edit_too_long_fallback_send_new", error=str(exc))
+                return await self.client.send_message(msg.chat.id, target_text[:4000])
             raise
 
     def _get_command_args(self, message: Message) -> str:
@@ -3959,6 +4037,46 @@ class KraabUserbot:
                 full_response = self._strip_transport_markup(full_response)
                 if not full_response:
                     full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
+
+            # Извлекаем MEDIA:-ссылки, которые OpenClaw-агент вставляет в ответ
+            # когда генерирует аудио или прикрепляет файлы из workspace.
+            # Формат: `MEDIA:/abs/path/to/file` на отдельной строке.
+            logger.info(
+                "media_parse_attempt",
+                chat_id=chat_id,
+                has_media_keyword="MEDIA:" in (full_response or ""),
+                response_tail=repr((full_response or "")[-200:]),
+            )
+            _media_refs = re.findall(r"(?m)^MEDIA:\s*(\S+)\s*$", full_response)
+            if _media_refs:
+                logger.info("media_refs_found", chat_id=chat_id, paths=_media_refs)
+                full_response = re.sub(r"(?m)^MEDIA:\s*\S+\s*$", "", full_response).strip()
+            else:
+                logger.info("media_refs_not_found", chat_id=chat_id)
+                # Fallback: агент иногда генерирует голосовой файл, но забывает
+                # вставить MEDIA:-строку в ответ (говорит "слушай ниже!" без протокола).
+                # Если свежий /tmp/voice_reply.* существует (mtime < 15 мин) — инжектируем.
+                _now_ts = time.time()
+                _auto_voice_candidates = [
+                    "/tmp/voice_reply.ogg",
+                    "/tmp/voice_reply.opus",
+                    "/tmp/voice_reply.mp3",
+                ]
+                for _vpath in _auto_voice_candidates:
+                    try:
+                        _age = _now_ts - os.path.getmtime(_vpath)
+                        if os.path.exists(_vpath) and _age < 900:  # 15 минут
+                            logger.info(
+                                "media_auto_inject_fallback",
+                                chat_id=chat_id,
+                                path=_vpath,
+                                age_sec=round(_age, 1),
+                            )
+                            _media_refs = [_vpath]
+                            break
+                    except OSError:
+                        pass
+
             full_response = self._apply_deferred_action_guard(full_response)
             self._remember_hidden_reasoning_trace(
                 chat_id=chat_id,
@@ -4023,16 +4141,47 @@ class KraabUserbot:
                     )
                 )
 
-            if self._should_send_voice_reply():
-                voice_path = await text_to_speech(
-                    full_response,
-                    speed=self.voice_reply_speed,
-                    voice=self.voice_reply_voice,
-                )
-                if voice_path:
-                    await self.client.send_voice(message.chat.id, voice_path)
-                    if os.path.exists(voice_path):
-                        os.remove(voice_path)
+            # Отправляем файлы из MEDIA:-ссылок (голос, сгенерированный OpenClaw-агентом
+            # через workspace, или другие вложения). Аудио-файлы идут как voice-message.
+            _agent_sent_voice = False
+            _audio_exts = {".mp3", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".aiff"}
+            for _mpath in _media_refs:
+                if not os.path.exists(_mpath):
+                    logger.warning("media_file_not_found", path=_mpath)
+                    continue
+                try:
+                    _ext = os.path.splitext(_mpath)[1].lower()
+                    if _ext in _audio_exts:
+                        await self.client.send_voice(message.chat.id, _mpath)
+                        _agent_sent_voice = True
+                    else:
+                        await self.client.send_document(message.chat.id, _mpath)
+                    logger.info("media_sent", path=_mpath, ext=_ext)
+                except Exception as _me:  # noqa: BLE001
+                    logger.error("media_send_failed", path=_mpath, error=str(_me))
+
+            # Запускаем Python TTS (edge_tts) только если агент не прислал аудио сам.
+            # Это предотвращает дублирование: оба движка не должны отвечать голосом.
+            if self._should_send_voice_reply() and not _agent_sent_voice:
+                # Пропускаем TTS для очень коротких ответов (< 10 символов): Telegram
+                # отклоняет голосовые < ~1 секунды, что роняет весь delivery pipeline.
+                _tts_text = (full_response or "").strip()
+                if len(_tts_text) >= 10:
+                    voice_path = await text_to_speech(
+                        _tts_text,
+                        speed=self.voice_reply_speed,
+                        voice=self.voice_reply_voice,
+                    )
+                    if voice_path:
+                        try:
+                            logger.info("tts_voice_send_attempt", chat_id=chat_id, path=voice_path)
+                            await self.client.send_voice(message.chat.id, voice_path)
+                            logger.info("tts_voice_send_ok", chat_id=chat_id, path=voice_path)
+                        except Exception as _ve:  # noqa: BLE001
+                            logger.error("tts_voice_send_failed", error=str(_ve))
+                        finally:
+                            if os.path.exists(voice_path):
+                                os.remove(voice_path)
         finally:
             action_stop_event.set()
             action_task.cancel()

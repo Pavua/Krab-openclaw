@@ -332,6 +332,22 @@ class Config:
         "GROUP_VOICE_FALLBACK_TRIGGER",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+    # Голосовые ответы userbot.
+    # Эти поля обязаны жить в typed-config, иначе после рестарта `getattr(config, ...)`
+    # вернёт fallback и voice silently выключится, даже если `.env` уже настроен.
+    VOICE_MODE_DEFAULT: bool = os.getenv(
+        "VOICE_MODE_DEFAULT",
+        "0",
+    ).strip().lower() in ("1", "true", "yes")
+    VOICE_REPLY_SPEED: float = float(os.getenv("VOICE_REPLY_SPEED", "1.5"))
+    VOICE_REPLY_VOICE: str = (
+        os.getenv("VOICE_REPLY_VOICE", "ru-RU-DmitryNeural").strip()
+        or "ru-RU-DmitryNeural"
+    )
+    VOICE_REPLY_DELIVERY: str = (
+        os.getenv("VOICE_REPLY_DELIVERY", "text+voice").strip().lower()
+        or "text+voice"
+    )
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -433,6 +449,14 @@ class Config:
                     cls.DEFERRED_ACTION_GUARD_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GROUP_VOICE_FALLBACK_TRIGGER":
                     cls.GROUP_VOICE_FALLBACK_TRIGGER = value.strip().lower() in ("1", "true", "yes")
+                elif key == "VOICE_MODE_DEFAULT":
+                    cls.VOICE_MODE_DEFAULT = value.strip().lower() in ("1", "true", "yes")
+                elif key == "VOICE_REPLY_SPEED":
+                    cls.VOICE_REPLY_SPEED = float(value)
+                elif key == "VOICE_REPLY_VOICE":
+                    cls.VOICE_REPLY_VOICE = value.strip() or "ru-RU-DmitryNeural"
+                elif key == "VOICE_REPLY_DELIVERY":
+                    cls.VOICE_REPLY_DELIVERY = value.strip().lower() or "text+voice"
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
                 elif key == "GEMINI_PAID_KEY_ENABLED":

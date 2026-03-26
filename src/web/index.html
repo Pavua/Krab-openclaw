@@ -4605,13 +4605,24 @@ ${channelsText}`;
     }
 
     async function refreshAll() {
-      await updateStats(true);
-      await loadModelCatalog(false);
-      await loadOpenclawStatus(false);
-      await loadVoiceRuntimeStatus(false, false);
-      await loadTranslatorReadinessStatus(false);
-      await loadCronStatus(false);
-      await loadContextLatest(false);
+      const refreshTasks = [
+        ["stats", () => updateStats(true)],
+        ["model_catalog", () => loadModelCatalog(false)],
+        ["openclaw_status", () => loadOpenclawStatus(false)],
+        ["voice_runtime", () => loadVoiceRuntimeStatus(false, false)],
+        ["translator_readiness", () => loadTranslatorReadinessStatus(false)],
+        ["cron_status", () => loadCronStatus(false)],
+        ["context_latest", () => loadContextLatest(false)],
+      ];
+      const settled = await Promise.allSettled(
+        refreshTasks.map(([, task]) => task()),
+      );
+      settled.forEach((result, index) => {
+        if (result.status === "rejected") {
+          const [taskName] = refreshTasks[index];
+          console.error(`refreshAll failed: ${taskName}`, result.reason);
+        }
+      });
     }
 
     document.getElementById("refreshBtn").addEventListener("click", withBtnState("refreshBtn", "Syncing...", refreshAll));
@@ -5017,11 +5028,62 @@ ${channelsText}`;
         loadControlCompatStatus(false);
         loadEffectiveRouting(false);
         loadAclStatus(false);
+        const stageBadge = document.getElementById("ocBrowserStage");
+        const contourValue = document.getElementById("ocBrowserContour");
+        const relayBadge = document.getElementById("ocRelayReachable");
+        const tabsValue = document.getElementById("ocBrowserTabs");
+        const ownerAttachBadge = document.getElementById("ocBrowserOwnerAttach");
+        const relayPathBadge = document.getElementById("ocBrowserRelayPath");
+        const devtoolsPathBadge = document.getElementById("ocChromeDevtoolsPath");
+        const syncBadge = document.getElementById("ocMcpSync");
+        const mcpReady = document.getElementById("ocMcpReady");
+        const nextStep = document.getElementById("ocBrowserNext");
+        const notes = document.getElementById("ocBrowserMcpNotes");
+        const startBtn = document.getElementById("ocBrowserStartBtn");
+        const startMeta = document.getElementById("ocBrowserStartMeta");
+        const ownerBtn = document.getElementById("ocBrowserOwnerBtn");
+        const ownerMeta = document.getElementById("ocBrowserOwnerMeta");
         const autoswitchProfileSelect = document.getElementById("ocAutoswitchProfileSelect");
         const autoswitchProfile = autoswitchProfileSelect ? String(autoswitchProfileSelect.value || "toggle") : "toggle";
         const autoswitchStatusProfile = autoswitchProfile === "toggle" ? "current" : autoswitchProfile;
+        const browserReadinessPromise = fetch("/api/openclaw/browser-mcp-readiness?url=https%3A%2F%2Fexample.com").catch((e) => ({
+          ok: false,
+          error: e.message,
+        }));
 
-        const [catalogRes, autoswitchRes, channelsRes, browserReadinessRes, runtimeConfigRes] = await Promise.all([
+        if (stageBadge) {
+          stageBadge.className = "badge warn";
+          stageBadge.textContent = "LOADING";
+        }
+        if (contourValue) contourValue.textContent = "Проверяю...";
+        if (relayBadge) {
+          relayBadge.className = "badge warn";
+          relayBadge.textContent = "…";
+        }
+        if (tabsValue) tabsValue.textContent = "…";
+        if (ownerAttachBadge) {
+          ownerAttachBadge.className = "badge warn";
+          ownerAttachBadge.textContent = "WAIT";
+        }
+        if (relayPathBadge) {
+          relayPathBadge.className = "badge warn";
+          relayPathBadge.textContent = "Проверяю...";
+        }
+        if (devtoolsPathBadge) {
+          devtoolsPathBadge.className = "badge warn";
+          devtoolsPathBadge.textContent = "Проверяю...";
+        }
+        if (syncBadge) {
+          syncBadge.className = "badge warn";
+          syncBadge.textContent = "CHECK";
+        }
+        if (mcpReady) mcpReady.textContent = "…";
+        if (nextStep) nextStep.textContent = "probing_browser_mcp";
+        if (notes) {
+          notes.textContent = "Проверяю Browser / MCP readiness отдельно от базовой гидратации...";
+        }
+
+        const [catalogRes, autoswitchRes, channelsRes, runtimeConfigRes] = await Promise.all([
           fetch("/api/model/catalog").catch((e) => ({
             ok: false,
             error: e.message,
@@ -5031,10 +5093,6 @@ ${channelsText}`;
             error: e.message,
           })),
           fetch("/api/openclaw/channels/status").catch((e) => ({
-            ok: false,
-            error: e.message,
-          })),
-          fetch("/api/openclaw/browser-mcp-readiness?url=https%3A%2F%2Fexample.com").catch((e) => ({
             ok: false,
             error: e.message,
           })),
@@ -5132,22 +5190,9 @@ ${channelsText}`;
             `<span class="badge bad">FAIL</span> <span style="font-size: 0.8em; color: var(--state-error);">${errText}</span>`;
         }
 
-        // Browser / MCP readiness
-        const stageBadge = document.getElementById("ocBrowserStage");
-        const contourValue = document.getElementById("ocBrowserContour");
-        const relayBadge = document.getElementById("ocRelayReachable");
-        const tabsValue = document.getElementById("ocBrowserTabs");
-        const ownerAttachBadge = document.getElementById("ocBrowserOwnerAttach");
-        const relayPathBadge = document.getElementById("ocBrowserRelayPath");
-        const devtoolsPathBadge = document.getElementById("ocChromeDevtoolsPath");
-        const syncBadge = document.getElementById("ocMcpSync");
-        const mcpReady = document.getElementById("ocMcpReady");
-        const nextStep = document.getElementById("ocBrowserNext");
-        const notes = document.getElementById("ocBrowserMcpNotes");
-        const startBtn = document.getElementById("ocBrowserStartBtn");
-        const startMeta = document.getElementById("ocBrowserStartMeta");
-        const ownerBtn = document.getElementById("ocBrowserOwnerBtn");
-        const ownerMeta = document.getElementById("ocBrowserOwnerMeta");
+        // Browser / MCP readiness догружаем отдельно, чтобы тяжёлый probe не блокировал
+        // базовую гидратацию OpenClaw-карточки.
+        const browserReadinessRes = await browserReadinessPromise;
         if (browserReadinessRes.ok) {
           const payload = await browserReadinessRes.json().catch(() => ({}));
           const browser = payload.browser || {};

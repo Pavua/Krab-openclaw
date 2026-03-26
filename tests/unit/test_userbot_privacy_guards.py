@@ -69,6 +69,23 @@ def test_strip_transport_markup_removes_plaintext_reasoning_prefix() -> None:
     assert cleaned == "Короткий итоговый ответ пользователю."
 
 
+def test_strip_transport_markup_removes_agentic_scratchpad_prefix() -> None:
+    raw = (
+        "Ready.\n"
+        "Wait, I'll check if ffmpeg is in path.\n"
+        "which ffmpeg\n"
+        "Let's go.\n\n"
+        "🦀 `ffmpeg` найден. Могу продолжать с озвучкой."
+    )
+
+    cleaned = KraabUserbot._strip_transport_markup(raw)
+
+    assert "Wait, I'll check" not in cleaned
+    assert "which ffmpeg" not in cleaned
+    assert "Let's go." not in cleaned
+    assert cleaned == "🦀 `ffmpeg` найден. Могу продолжать с озвучкой."
+
+
 def test_extract_reasoning_trace_returns_think_block_separately() -> None:
     """`<think>` блок должен сохраняться отдельно для owner-only reasoning trace."""
     raw = "<think>Сначала проверяю маршрут\nПотом сверяю ACL</think><final>Готовый ответ</final>"

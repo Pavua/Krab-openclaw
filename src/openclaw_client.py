@@ -73,6 +73,21 @@ class OpenClawClient:
     _plaintext_reasoning_meta_pattern = re.compile(
         r"(?i)^(?:step\s*\d+|thinking process|analysis|reasoning|analyze(?: the)? user(?:'s)? request|draft the response)\b"
     )
+    _agentic_scratchpad_line_pattern = re.compile(
+        r"(?ix)^("
+        r"ready\.?"
+        r"|yes\.?"
+        r"|let'?s\s+(?:go|execute)\.?"
+        r"|\.\.\."
+        r"|wait[,.!]?\s+(?:(?:i|we)(?:'ll| will))\s+"
+        r"(?:check|verify|inspect|look|use|open|run|try|confirm|explain|answer|draft|respond)\b.*"
+        r"|(?:(?:i|we)(?:'ll| will))\s+"
+        r"(?:check|verify|inspect|look|use|open|run|try|confirm|explain|answer|draft|respond)\b.*"
+        r")$"
+    )
+    _agentic_scratchpad_command_pattern = re.compile(
+        r"(?i)^(?:which|pwd|ls|rg|grep|find|git|python(?:3)?|pytest|ffmpeg|say|opencode|codex|claude|pi)\b.*$"
+    )
 
     def __init__(self):
         self.base_url = config.OPENCLAW_URL.rstrip("/")
@@ -597,10 +612,56 @@ class OpenClawClient:
         cleaned = cls._think_final_tag_pattern.sub("", cleaned)
         _, answer = cls._split_plaintext_reasoning_and_answer(cleaned)
         normalized = answer or cleaned
+        normalized = cls._strip_agentic_scratchpad(normalized)
         normalized = re.sub(r"[ \t]{2,}", " ", normalized)
         normalized = re.sub(r"(?mi)^\s*(assistant|user|system)\s*$", "", normalized)
         normalized = re.sub(r"\n{3,}", "\n\n", normalized)
         return normalized.strip()
+
+    @classmethod
+    def _strip_agentic_scratchpad(cls, text: str) -> str:
+        """
+        Убирает codex-style scratchpad до записи в историю и до отдачи userbot.
+
+        Почему это делаем уже в OpenClawClient:
+        - загрязнённый assistant-output иначе попадёт в history cache и будет
+          воспроизводить тот же мусор на следующих ходах;
+        - userbot тоже санирует ответ, но история должна очищаться раньше.
+        """
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+
+        non_empty = [line.strip() for line in raw.splitlines() if line.strip()]
+        if not non_empty:
+            return raw
+
+        probe_lines = non_empty[:12]
+        scratch_hits = sum(
+            1 for line in probe_lines if cls._agentic_scratchpad_line_pattern.match(line)
+        )
+        command_hits = sum(
+            1 for line in probe_lines if cls._agentic_scratchpad_command_pattern.match(line)
+        )
+        if scratch_hits < 2 or (scratch_hits + command_hits) < 3:
+            return raw
+
+        kept_lines: list[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                if kept_lines and kept_lines[-1] != "":
+                    kept_lines.append("")
+                continue
+            if cls._agentic_scratchpad_line_pattern.match(stripped):
+                continue
+            if cls._agentic_scratchpad_command_pattern.match(stripped):
+                continue
+            kept_lines.append(line)
+
+        cleaned = "\n".join(kept_lines).strip()
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned
 
     @classmethod
     def _sanitize_session_history(
@@ -1656,10 +1717,14 @@ class OpenClawClient:
         from .mcp_client import mcp_manager  # lazy import
         tools = await mcp_manager.get_tool_manifest()
         
+        # ФИКС 2026.3.x: новый OpenClaw gateway требует "openclaw" или "openclaw/<agentId>"
+        # вместо прямого имени провайдер/модель. Gateway сам маршрутизирует запрос
+        # через агентскую конфигурацию (agents.defaults.model.primary + fallbacks).
+        # model_id по-прежнему используется для логирования и трекинга fallback-цепи в Крабе.
         payload = {
             "messages": messages_to_send,
             "stream": False,  # ФИКС: streaming даёт пустой [DONE], JSON работает корректно
-            "model": model_id,
+            "model": "openclaw",
         }
         if tools:
             payload["tools"] = tools
@@ -2651,6 +2716,13 @@ class OpenClawClient:
             if not final_response:
                 final_response = "❌ Модель не вернула ответ."
 
+            # Сохраняем MEDIA:-строки до sanitize, потому что _sanitize_assistant_response
+            # при наличии <final>...</final> оставляет ТОЛЬКО содержимое внутри тега —
+            # всё снаружи (в т.ч. MEDIA: после </final>) вырезается.
+            # Userbot читает итоговый yield и ищет MEDIA: через regex; если они пропали
+            # из финального текста, голосовое сообщение никогда не будет отправлено.
+            _pre_sanitize_media = re.findall(r"(?m)^MEDIA:\s*\S+\s*$", final_response)
+
             sanitized_response = self._sanitize_assistant_response(final_response)
             if sanitized_response:
                 final_response = sanitized_response
@@ -2684,7 +2756,15 @@ class OpenClawClient:
                 )
 
             self._finalize_chat_response(chat_id, final_response)
-            yield final_response
+
+            # В историю пишем без MEDIA:-строк; для yield восстанавливаем их,
+            # чтобы userbot мог распознать и отправить голосовое/файл.
+            response_for_delivery = final_response
+            if _pre_sanitize_media:
+                for _ml in _pre_sanitize_media:
+                    if _ml not in response_for_delivery:
+                        response_for_delivery = response_for_delivery.rstrip() + "\n" + _ml
+            yield response_for_delivery
 
         except RouterError:
             raise

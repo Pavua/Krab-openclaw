@@ -5734,6 +5734,86 @@ class WebApp:
             },
         }
 
+    async def _collect_openclaw_photo_smoke_payload(self) -> dict[str, Any]:
+        """
+        Собирает payload photo-smoke в одном месте для reuse в нескольких endpoint'ах.
+
+        Почему helper нужен отдельно:
+        - owner panel теперь использует этот же smoke-контур из агрегирующего
+          `/api/diagnostics/smoke`;
+        - дублировать одну и ту же logic-ветку в двух endpoint'ах опасно:
+          UI снова может уехать в 404 или начать врать разными payload'ами.
+        """
+        router = self.deps.get("router")
+        if not router:
+            return {"available": False, "error": "router_not_configured"}
+
+        mm = getattr(router, "_mm", None)
+        if mm is None:
+            return {"available": False, "error": "model_manager_not_available"}
+
+        models_count = 0
+        local_vision_count = 0
+        selected_model = ""
+        selected_provider = ""
+        selected_local = False
+        local_available = bool(getattr(router, "is_local_available", False))
+        discovery_error = ""
+        selection_error = ""
+
+        try:
+            discovered = await asyncio.wait_for(mm.discover_models(), timeout=20.0)
+            models_count = len(discovered or [])
+            for model in discovered or []:
+                supports_vision = bool(getattr(model, "supports_vision", False))
+                model_type = str(getattr(model, "type", "")).lower()
+                if supports_vision and "local" in model_type:
+                    local_vision_count += 1
+        except Exception as exc:  # noqa: BLE001
+            discovery_error = str(exc)
+
+        try:
+            selected_model = str(await asyncio.wait_for(mm.get_best_model(has_photo=True), timeout=20.0) or "")
+            selected_local = bool(mm.is_local_model(selected_model)) if selected_model else False
+            if "/" in selected_model:
+                selected_provider = selected_model.split("/", 1)[0]
+            else:
+                selected_provider = "local" if selected_local else (selected_model or "unknown")
+        except Exception as exc:  # noqa: BLE001
+            selection_error = str(exc)
+
+        photo_ready = bool(selected_model) and not bool(selection_error)
+        if selected_local and local_vision_count == 0:
+            photo_ready = False
+
+        detail_parts: list[str] = []
+        if selected_model:
+            detail_parts.append(f"selected={selected_model}")
+        if selected_local:
+            detail_parts.append("route=local_vision")
+        elif selected_model:
+            detail_parts.append("route=cloud_vision_fallback")
+        if discovery_error:
+            detail_parts.append(f"discovery_error={discovery_error}")
+        if selection_error:
+            detail_parts.append(f"selection_error={selection_error}")
+
+        return {
+            "available": True,
+            "report": {
+                "photo_smoke": {
+                    "ok": photo_ready,
+                    "local_available": local_available,
+                    "models_count": models_count,
+                    "local_vision_count": local_vision_count,
+                    "selected_model": selected_model,
+                    "selected_provider": selected_provider,
+                    "selected_local": selected_local,
+                    "detail": "; ".join(detail_parts) if detail_parts else "n/a",
+                }
+            },
+        }
+
     @staticmethod
     def _infer_browser_runtime_contour(browser_status: dict[str, Any]) -> dict[str, Any]:
         """
@@ -10364,6 +10444,57 @@ class WebApp:
                 "report": await self._collect_openclaw_browser_smoke_report(url),
             }
 
+        @self.app.post("/api/diagnostics/smoke")
+        async def diagnostics_smoke():
+            """
+            Агрегированный owner-smoke для быстрой кнопки в панели.
+
+            Нам нужен честный backend-контракт под кнопку `Run Smoke Trigger`, а не
+            фронтовый placeholder. Endpoint собирает базовые browser/photo smoke
+            и возвращает единый verdict, который потом можно расширять дальше.
+            """
+            browser_report, photo_payload = await asyncio.gather(
+                self._collect_openclaw_browser_smoke_report("https://example.com"),
+                self._collect_openclaw_photo_smoke_payload(),
+            )
+
+            browser_smoke = dict(browser_report.get("browser_smoke", {}) or {})
+            photo_smoke = dict((photo_payload.get("report") or {}).get("photo_smoke", {}) or {})
+            browser_ok = bool(browser_smoke.get("ok"))
+            photo_available = bool(photo_payload.get("available"))
+            photo_ok = bool(photo_smoke.get("ok")) if photo_available else False
+
+            checks: list[dict[str, Any]] = [
+                {
+                    "name": "browser_smoke",
+                    "ok": browser_ok,
+                    "detail": str(browser_smoke.get("detail") or "browser smoke unavailable"),
+                },
+                {
+                    "name": "photo_smoke",
+                    "ok": photo_ok,
+                    "detail": (
+                        str(photo_smoke.get("detail") or "photo smoke unavailable")
+                        if photo_available
+                        else str(photo_payload.get("error") or "photo smoke unavailable")
+                    ),
+                },
+            ]
+
+            ok = all(bool(item.get("ok")) for item in checks)
+            return {
+                "ok": ok,
+                "available": True,
+                "checks": checks,
+                "report": {
+                    "browser": {
+                        "available": True,
+                        "report": browser_report,
+                    },
+                    "photo": photo_payload,
+                },
+            }
+
         @self.app.post("/api/openclaw/browser/start")
         async def openclaw_browser_start(
             token: str = Query(default=""),
@@ -10495,75 +10626,7 @@ class WebApp:
             2) наличие vision-capable локальных моделей;
             3) выбранную модель для `has_photo=True`.
             """
-            router = self.deps.get("router")
-            if not router:
-                return {"available": False, "error": "router_not_configured"}
-
-            mm = getattr(router, "_mm", None)
-            if mm is None:
-                return {"available": False, "error": "model_manager_not_available"}
-
-            models_count = 0
-            local_vision_count = 0
-            selected_model = ""
-            selected_provider = ""
-            selected_local = False
-            local_available = bool(getattr(router, "is_local_available", False))
-            discovery_error = ""
-            selection_error = ""
-
-            try:
-                discovered = await asyncio.wait_for(mm.discover_models(), timeout=20.0)
-                models_count = len(discovered or [])
-                for model in discovered or []:
-                    supports_vision = bool(getattr(model, "supports_vision", False))
-                    model_type = str(getattr(model, "type", "")).lower()
-                    if supports_vision and "local" in model_type:
-                        local_vision_count += 1
-            except Exception as exc:  # noqa: BLE001
-                discovery_error = str(exc)
-
-            try:
-                selected_model = str(await asyncio.wait_for(mm.get_best_model(has_photo=True), timeout=20.0) or "")
-                selected_local = bool(mm.is_local_model(selected_model)) if selected_model else False
-                if "/" in selected_model:
-                    selected_provider = selected_model.split("/", 1)[0]
-                else:
-                    selected_provider = "local" if selected_local else (selected_model or "unknown")
-            except Exception as exc:  # noqa: BLE001
-                selection_error = str(exc)
-
-            photo_ready = bool(selected_model) and not bool(selection_error)
-            if selected_local and local_vision_count == 0:
-                photo_ready = False
-
-            detail_parts: list[str] = []
-            if selected_model:
-                detail_parts.append(f"selected={selected_model}")
-            if selected_local:
-                detail_parts.append("route=local_vision")
-            elif selected_model:
-                detail_parts.append("route=cloud_vision_fallback")
-            if discovery_error:
-                detail_parts.append(f"discovery_error={discovery_error}")
-            if selection_error:
-                detail_parts.append(f"selection_error={selection_error}")
-
-            return {
-                "available": True,
-                "report": {
-                    "photo_smoke": {
-                        "ok": photo_ready,
-                        "local_available": local_available,
-                        "models_count": models_count,
-                        "local_vision_count": local_vision_count,
-                        "selected_model": selected_model,
-                        "selected_provider": selected_provider,
-                        "selected_local": selected_local,
-                        "detail": "; ".join(detail_parts) if detail_parts else "n/a",
-                    }
-                },
-            }
+            return await self._collect_openclaw_photo_smoke_payload()
 
         async def _openclaw_cloud_diagnostics_impl(providers: str = ""):
             """Проверка cloud-провайдеров OpenClaw с классификацией ошибок ключей/API."""

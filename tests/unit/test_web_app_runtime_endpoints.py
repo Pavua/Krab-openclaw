@@ -5811,6 +5811,62 @@ def test_photo_smoke_endpoint_reports_ready_with_local_vision():
     assert smoke["local_vision_count"] == 1
 
 
+def test_diagnostics_smoke_endpoint_aggregates_browser_and_photo(monkeypatch):
+    """`/api/diagnostics/smoke` должен перестать быть 404 и агрегировать smoke-отчёты."""
+    deps = {
+        "router": _PhotoRouter(),
+        "openclaw_client": _FakeOpenClaw(),
+        "black_box": None,
+        "health_service": None,
+        "provisioning_service": None,
+        "ai_runtime": None,
+        "reaction_engine": None,
+        "voice_gateway_client": _FakeHealthClient(ok=True),
+        "krab_ear_client": _FakeHealthClient(ok=True),
+        "perceptor": None,
+        "watchdog": None,
+        "queue": None,
+    }
+
+    async def _fake_browser_smoke(self, url: str = "https://example.com"):
+        return {
+            "browser_smoke": {
+                "ok": True,
+                "detail": f"browser ok: {url}",
+            }
+        }
+
+    async def _fake_photo_smoke(self):
+        return {
+            "available": True,
+            "report": {
+                "photo_smoke": {
+                    "ok": True,
+                    "detail": "photo ok",
+                    "selected_model": "vision/local",
+                }
+            },
+        }
+
+    monkeypatch.setattr(WebApp, "_collect_openclaw_browser_smoke_report", _fake_browser_smoke)
+    monkeypatch.setattr(WebApp, "_collect_openclaw_photo_smoke_payload", _fake_photo_smoke)
+
+    app = WebApp(deps, port=18080, host="127.0.0.1")
+    client = TestClient(app.app)
+
+    resp = client.post("/api/diagnostics/smoke")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ok"] is True
+    assert payload["available"] is True
+    assert payload["checks"][0]["name"] == "browser_smoke"
+    assert payload["checks"][0]["ok"] is True
+    assert payload["checks"][1]["name"] == "photo_smoke"
+    assert payload["checks"][1]["ok"] is True
+    assert payload["report"]["browser"]["report"]["browser_smoke"]["detail"] == "browser ok: https://example.com"
+    assert payload["report"]["photo"]["report"]["photo_smoke"]["selected_model"] == "vision/local"
+
+
 def test_openclaw_cli_env_fallback_to_env_gateway_token(monkeypatch):
     """Если в конфиге нет токена, используем OPENCLAW_GATEWAY_TOKEN из env."""
     monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "gateway-token-from-env")

@@ -158,6 +158,31 @@ async def test_send_message_stream_strips_reasoning_before_history_cache(client:
 
 
 @pytest.mark.asyncio
+async def test_send_message_stream_strips_agentic_scratchpad_before_history_cache(
+    client: OpenClawClient,
+) -> None:
+    from src.model_manager import model_manager
+
+    noisy_response = (
+        "Ready.\n"
+        "Wait, I'll check if codex is installed.\n"
+        "which codex\n"
+        "Let's execute.\n\n"
+        "🦀 `codex` найден. Продолжаем работу."
+    )
+
+    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(model_manager, "is_local_model", return_value=False):
+            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value=noisy_response)):
+                chunks = []
+                async for chunk in client.send_message_stream("Hi", "chat-agentic-clean"):
+                    chunks.append(chunk)
+
+    assert "".join(chunks) == "🦀 `codex` найден. Продолжаем работу."
+    assert client._sessions["chat-agentic-clean"][-1]["content"] == "🦀 `codex` найден. Продолжаем работу."
+
+
+@pytest.mark.asyncio
 async def test_send_message_stream_sanitizes_restored_history_cache(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 

@@ -23,8 +23,12 @@ from structlog import get_logger
 
 logger = get_logger(__name__)
 
-VOICE_OUTPUT_DIR = "voice_cache"
+VOICE_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "voice_cache")
 os.makedirs(VOICE_OUTPUT_DIR, exist_ok=True)
+
+# Максимальная длина текста для TTS: edge_tts не справляется с длинными ответами
+# (возможен NoAudioReceived). 600 символов ≈ 20-25 секунд речи — оптимальный размер.
+_TTS_MAX_CHARS = 600
 
 # Russian voices: ru-RU-DmitryNeural, ru-RU-SvetlanaNeural
 # English: en-US-ChristopherNeural, en-US-JennyNeural
@@ -53,8 +57,19 @@ async def text_to_speech(
     try:
         # edge-tts принимает скорость в процентах относительно baseline.
         rate_str = f"+{int((speed - 1) * 100)}%"
-        
-        communicate = edge_tts.Communicate(text, selected_voice, rate=rate_str)
+
+        # Обрезаем слишком длинный текст: edge_tts может вернуть NoAudioReceived
+        # на многоабзацных ответах. Голосовое ≤ _TTS_MAX_CHARS символов = ~20-25 сек.
+        tts_text = text[:_TTS_MAX_CHARS].rsplit(" ", 1)[0] if len(text) > _TTS_MAX_CHARS else text
+        logger.info(
+            "tts_generation_started",
+            voice=selected_voice,
+            speed=speed,
+            input_chars=len(text),
+            emitted_chars=len(tts_text),
+        )
+
+        communicate = edge_tts.Communicate(tts_text, selected_voice, rate=rate_str)
         await communicate.save(temp_mp3)
         
         # Telegram лучше всего переваривает именно OGG/Opus voice message.
@@ -74,15 +89,24 @@ async def text_to_speech(
             stderr=subprocess.DEVNULL
         )
         await process.wait()
-        
+
         if os.path.exists(output_ogg):
+            logger.info(
+                "tts_generation_finished",
+                path=output_ogg,
+                size_bytes=os.path.getsize(output_ogg),
+                voice=selected_voice,
+            )
             return output_ogg
         else:
             logger.error("ffmpeg_failed", path=output_ogg)
             return ""
             
-    except (OSError, ValueError, RuntimeError) as e:
-        logger.error("tts_error", error=str(e))
+    except Exception as e:  # noqa: BLE001
+        # Ловим всё: edge_tts.exceptions.NoAudioReceived, aiohttp.ClientError, и т.д.
+        # не наследуются от OSError/ValueError/RuntimeError, поэтому предыдущий narrow
+        # catch пропускал их и крашил весь voice-flow молча.
+        logger.error("tts_error", error=str(e), error_type=type(e).__name__)
         return ""
     finally:
         if os.path.exists(temp_mp3):
