@@ -59,6 +59,7 @@
 - Прогнать живой Telegram smoke на `voice note` в mention-gated/group flow, чтобы подтвердить поведение не только verifier'ом, но и реальным transport roundtrip.
 - Перепроверить debouncing пересланных пачек сообщений живым сценарием, а не только логом `private_text_burst_coalesced`.
 - Подтвердить живым owner roundtrip, что внутренний scratchpad (`Ready.`, `Wait, I'll check...`, shell-команды) больше не утекает в ответы после новых санитайзеров.
+- Reserve Telegram Bot всё ещё не проходит `reserve-safe` preflight: живой text roundtrip отвечает, но `live_reserve_telegram_roundtrip.py` остаётся красным, потому что policy пока `dm_policy=open`. Это policy debt, а не transport outage.
 
 ### 9. Обновление Vision API и чтение скриншотов
 **Симптом:** `vision_read.py` стучился в устаревшую модель `gemini-1.5-pro-latest` (ошибка 404).
@@ -83,11 +84,10 @@
 **Статус:** ✅ ПОДТВЕРЖДЕНО — в логах видно `private_text_burst_coalesced absorbed_message_ids=['11127', '11128'] messages_count=3`. Склейка пересланных подряд сообщений работает.
 
 ### 17. Owner Panel: детерминированная initial hydration после рестарта
-**Актуализация 2026-03-26:** грубый all-or-nothing блокер уже снят: `refreshAll()` распараллелен, а тяжёлый Browser/MCP probe вынесен из критического пути, поэтому быстрые runtime-блоки и `Voice Runtime` гидрируются сразу, а Browser/MCP честно показывает `LOADING`.
+**Актуализация 2026-03-26:** грубый all-or-nothing блокер уже снят: `refreshAll()` распараллелен, тяжёлый Browser/MCP probe вынесен из критического пути, translator переключён на единый `/api/translator/bootstrap`, а вкладка теперь сама делает recovery-pass после transient `ERR_CONNECTION_REFUSED` во время controlled restart.
 **Что остаётся открытым:**
-- Добить first-paint для оставшихся OpenClaw/Translator подблоков, которые всё ещё несколько секунд держат `—` на cold reload, пока догружаются тяжёлые auxiliary endpoint'ы.
-- Разделить translator first-paint на быстрый readiness snapshot и вторичные detail-endpoint'ы, чтобы owner panel раньше переставала выглядеть полупустой.
-- Решить, нужен ли last-known-good state для некоторых карточек, чтобы после рестарта панель показывала не `—`, а безопасный loading/truthful cached-state.
+- Добить cold-reload first-paint для оставшихся подблоков, где на самом первом кадре ещё виден `—`, хотя recovery после рестарта уже автоматический.
+- Решить, нужен ли last-known-good state для некоторых карточек, чтобы на самом первом кадре показывать не `—`, а безопасный loading/truthful cached-state.
 
 ---
 

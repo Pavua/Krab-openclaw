@@ -40,3 +40,13 @@
   - `pytest -q tests/unit/test_web_panel_bootstrap_order.py -q`
   - живой reload owner panel: на первом кадре `Voice Runtime` уже показывает `ON / text+voice`, а Browser/MCP честно в состоянии `LOADING`, затем карточка догидрируется без ручного refresh
   - артефакты: [owner-panel-first-paint-20260326-2003.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-first-paint-20260326-2003.png), [owner-panel-settled-after-reload-20260326-2004.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-settled-after-reload-20260326-2004.png)
+
+### Owner Panel: translator и runtime-карточки сами восстанавливаются после controlled restart
+- Причина: открытая вкладка переживала краткий даунтайм `:8080`, ловила `ERR_CONNECTION_REFUSED`, но без автоматических recovery-pass оставалась в полугидрированном состоянии до ручного `Синхронизировать данные`.
+- Что сделано: в [src/modules/web_app.py](/Users/pablito/Antigravity_AGENTS/Краб/src/modules/web_app.py) добавлен единый `/api/translator/bootstrap`, а в [src/web/index.html](/Users/pablito/Antigravity_AGENTS/Краб/src/web/index.html) translator переведён на этот fast-path и добавлены автоматические recovery-pass после старта страницы и при возврате видимости; статическая регрессия расширена в [tests/unit/test_web_panel_bootstrap_order.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_web_panel_bootstrap_order.py), backend-покрытие добавлено в [tests/unit/test_web_app_runtime_endpoints.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_web_app_runtime_endpoints.py).
+- Проверка:
+  - `pytest -q tests/unit/test_web_app_runtime_endpoints.py tests/unit/test_web_panel_bootstrap_order.py -q`
+  - живой controlled restart с открытой owner panel: после transient `ERR_CONNECTION_REFUSED` вкладка без ручного `Sync` снова показывает `Translator Readiness = READY`, `Route & Model = auto`, `Channel State = LOCAL`
+  - `python3 scripts/live_channel_smoke.py --max-age-minutes 120 --output /tmp/krab_live_channel_smoke_now.json` -> `ok=true`
+  - `python3 scripts/channels_photo_chrome_acceptance.py --output /tmp/krab_channels_photo_acceptance_now.json` -> `ok=true`
+  - артефакт: [owner-panel-post-restart-auto-recovery-20260326-2026.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-post-restart-auto-recovery-20260326-2026.png)

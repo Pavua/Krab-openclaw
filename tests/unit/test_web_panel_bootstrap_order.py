@@ -44,3 +44,16 @@ def test_openclaw_status_keeps_browser_probe_outside_fast_batch() -> None:
     assert 'const browserReadinessPromise = fetch("/api/openclaw/browser-mcp-readiness?url=https%3A%2F%2Fexample.com")' in source
     assert "const [catalogRes, autoswitchRes, channelsRes, runtimeConfigRes] = await Promise.all([" in source
     assert "const browserReadinessRes = await browserReadinessPromise;" in source
+
+
+def test_owner_panel_schedules_bootstrap_recovery_after_transient_restart_failures() -> None:
+    """Панель должна сама повторять гидратацию после кратких `ERR_CONNECTION_REFUSED` во время restart."""
+
+    source = _index_html_source()
+
+    assert "const BOOTSTRAP_RECOVERY_DELAYS_MS = [2000, 6000, 15000];" in source
+    assert "function ownerPanelNeedsBootstrapRecovery()" in source
+    assert '"ocTranslatorReadinessBadge"' in source
+    assert '"ocTranslatorFoundationBadge"' in source
+    assert "scheduleBootstrapRecoveryPasses();" in source
+    assert 'refreshAll().catch((error) => console.error("refreshAll_visibility_recovery_failed", error));' in source

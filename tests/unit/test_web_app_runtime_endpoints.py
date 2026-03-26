@@ -1778,6 +1778,34 @@ def test_translator_readiness_reports_active_session_if_gateway_exposes_it() -> 
     assert data["foundation_checks"]["perceptor"]["status"] == "ready"
 
 
+def test_translator_bootstrap_endpoint_returns_consistent_first_paint_payload() -> None:
+    """`/api/translator/bootstrap` должен отдавать единый payload для first-paint translator-карточки."""
+    client = TestClient(
+        _make_app(
+            kraab_userbot=_FakeUserbot(),
+            voice_gateway_client=_FakeVoiceGatewayControlPlaneClient(),
+            krab_ear_client=_FakeHealthClient(ok=True),
+            perceptor=_FakePerceptor(),
+        ).app
+    )
+
+    resp = client.get("/api/translator/bootstrap")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["readiness"]["ok"] is True
+    assert data["control_plane"]["ok"] is True
+    assert data["session_inspector"]["ok"] is True
+    assert data["mobile_readiness"]["ok"] is True
+    assert data["delivery_matrix"]["ok"] is True
+    assert data["live_trial_preflight"]["status"]
+    assert data["mobile_onboarding"]["status"]
+    assert data["readiness"]["capability_registry_endpoint"] == "/api/capabilities/registry"
+    assert data["readiness"]["policy_matrix_endpoint"] == "/api/policy/matrix"
+    assert data["control_plane"]["current_session"]["id"] == "sess-mobile-1"
+
+
 def test_translator_control_plane_aggregates_session_policy_truth() -> None:
     """Control-plane endpoint должен подтягивать active session, policy и quick phrases через Gateway client."""
     deps = {

@@ -7589,6 +7589,61 @@ class WebApp:
             snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
             return snapshot
 
+        @self.app.get("/api/translator/bootstrap")
+        async def translator_bootstrap():
+            """
+            Возвращает единый bootstrap payload для first-paint translator-карточки.
+
+            Это снижает cold-load стоимость owner panel:
+            - один HTTP roundtrip вместо каскада отдельных fetch;
+            - повторно используем уже собранные snapshot'ы, а не пересчитываем
+              readiness/control/mobile по кругу в соседних endpoint'ах.
+            """
+            runtime_lite = await self._collect_runtime_lite_snapshot()
+            readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
+            readiness["capability_registry_endpoint"] = "/api/capabilities/registry"
+            readiness["policy_matrix_endpoint"] = "/api/policy/matrix"
+            control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            session_inspector = await self._translator_session_inspector_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            mobile_readiness = await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_lite,
+                current_control_plane=control_plane,
+            )
+            delivery_matrix = await self._translator_delivery_matrix_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+            )
+            live_trial_preflight = await self._translator_live_trial_preflight_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_mobile_readiness=mobile_readiness,
+            )
+            mobile_onboarding = await self._translator_mobile_onboarding_snapshot(
+                runtime_lite=runtime_lite,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_live_trial_preflight=live_trial_preflight,
+            )
+            return {
+                "ok": True,
+                "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "readiness": readiness,
+                "control_plane": control_plane,
+                "session_inspector": session_inspector,
+                "mobile_readiness": mobile_readiness,
+                "delivery_matrix": delivery_matrix,
+                "live_trial_preflight": live_trial_preflight,
+                "mobile_onboarding": mobile_onboarding,
+            }
+
         @self.app.get("/api/translator/control-plane")
         async def translator_control_plane():
             """Возвращает session/policy truth translator-контура через control-plane Краба."""

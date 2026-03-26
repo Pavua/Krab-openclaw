@@ -4604,6 +4604,51 @@ ${channelsText}`;
       }
     }
 
+    // После restart вкладка может пережить краткий даунтайм :8080 и остаться с `—`.
+    // Эти recovery-pass'ы дают панели несколько автоматических попыток
+    // догидратировать ключевые runtime-блоки без ручного Sync.
+    const BOOTSTRAP_RECOVERY_DELAYS_MS = [2000, 6000, 15000];
+
+    function ownerPanelTextValue(id) {
+      const element = document.getElementById(id);
+      return element ? String(element.textContent || "").trim() : "";
+    }
+
+    function ownerPanelNeedsBootstrapRecovery() {
+      const unresolvedValues = new Set(["", "—", "…", "WAIT", "Wait...", "LOADING"]);
+      const criticalIds = [
+        "rtChannelState",
+        "ocrouteReq",
+        "ocTranslatorReadinessBadge",
+        "ocTranslatorFoundationBadge",
+      ];
+      return criticalIds.some((id) => unresolvedValues.has(ownerPanelTextValue(id)));
+    }
+
+    function scheduleBootstrapRecoveryPasses() {
+      BOOTSTRAP_RECOVERY_DELAYS_MS.forEach((delayMs, index) => {
+        window.setTimeout(() => {
+          if (!ownerPanelNeedsBootstrapRecovery()) {
+            return;
+          }
+          refreshAll().catch((error) =>
+            console.error("bootstrap_recovery_refresh_failed", {
+              attempt: index + 1,
+              delayMs,
+              error,
+            }),
+          );
+          loadLocalLifecycleStatus(false).catch((error) =>
+            console.error("bootstrap_recovery_local_status_failed", {
+              attempt: index + 1,
+              delayMs,
+              error,
+            }),
+          );
+        }, delayMs);
+      });
+    }
+
     async function refreshAll() {
       const refreshTasks = [
         ["stats", () => updateStats(true)],
@@ -6536,55 +6581,32 @@ ${channelsText}`;
     async function loadTranslatorReadinessStatus(showStatus = true) {
       try {
         if (showStatus) setText("ocTranslatorMeta", "Загружаю translator readiness...");
-        const [readinessResponse, controlPlaneResponse, inspectorResponse, mobileResponse, deliveryMatrixResponse, liveTrialPreflightResponse, onboardingResponse] = await Promise.all([
-          fetch("/api/translator/readiness"),
-          fetch("/api/translator/control-plane").catch(() => null),
-          fetch("/api/translator/session-inspector").catch(() => null),
-          fetch("/api/translator/mobile-readiness").catch(() => null),
-          fetch("/api/translator/delivery-matrix").catch(() => null),
-          fetch("/api/translator/live-trial-preflight").catch(() => null),
-          fetch("/api/translator/mobile/onboarding").catch(() => null),
-        ]);
-        const payload = await readinessResponse.json().catch(() => ({}));
-        if (!readinessResponse.ok || !payload?.ok) {
-          throw new Error(payload?.detail || payload?.error || `HTTP ${readinessResponse.status}`);
+        const bootstrapResponse = await fetch("/api/translator/bootstrap");
+        const bootstrapPayload = await bootstrapResponse.json().catch(() => ({}));
+        if (!bootstrapResponse.ok || !bootstrapPayload?.ok) {
+          throw new Error(bootstrapPayload?.detail || bootstrapPayload?.error || `HTTP ${bootstrapResponse.status}`);
         }
+        const payload = bootstrapPayload.readiness && typeof bootstrapPayload.readiness === "object"
+          ? bootstrapPayload.readiness
+          : {};
         applyTranslatorReadinessTruth(payload);
-        if (controlPlaneResponse && controlPlaneResponse.ok) {
-          const controlPlanePayload = await controlPlaneResponse.json().catch(() => ({}));
-          if (controlPlanePayload?.ok) {
-            applyTranslatorControlPlaneTruth(controlPlanePayload);
-          }
+        if (bootstrapPayload.control_plane && typeof bootstrapPayload.control_plane === "object" && bootstrapPayload.control_plane.ok) {
+          applyTranslatorControlPlaneTruth(bootstrapPayload.control_plane);
         }
-        if (inspectorResponse && inspectorResponse.ok) {
-          const inspectorPayload = await inspectorResponse.json().catch(() => ({}));
-          if (inspectorPayload?.ok) {
-            applyTranslatorSessionInspectorTruth(inspectorPayload);
-          }
+        if (bootstrapPayload.session_inspector && typeof bootstrapPayload.session_inspector === "object" && bootstrapPayload.session_inspector.ok) {
+          applyTranslatorSessionInspectorTruth(bootstrapPayload.session_inspector);
         }
-        if (mobileResponse && mobileResponse.ok) {
-          const mobilePayload = await mobileResponse.json().catch(() => ({}));
-          if (mobilePayload?.ok) {
-            applyTranslatorMobileReadinessTruth(mobilePayload);
-          }
+        if (bootstrapPayload.mobile_readiness && typeof bootstrapPayload.mobile_readiness === "object" && bootstrapPayload.mobile_readiness.ok) {
+          applyTranslatorMobileReadinessTruth(bootstrapPayload.mobile_readiness);
         }
-        if (deliveryMatrixResponse && deliveryMatrixResponse.ok) {
-          const deliveryMatrixPayload = await deliveryMatrixResponse.json().catch(() => ({}));
-          if (deliveryMatrixPayload?.ok) {
-            applyTranslatorDeliveryMatrixTruth(deliveryMatrixPayload);
-          }
+        if (bootstrapPayload.delivery_matrix && typeof bootstrapPayload.delivery_matrix === "object" && bootstrapPayload.delivery_matrix.ok) {
+          applyTranslatorDeliveryMatrixTruth(bootstrapPayload.delivery_matrix);
         }
-        if (liveTrialPreflightResponse && liveTrialPreflightResponse.ok) {
-          const liveTrialPreflightPayload = await liveTrialPreflightResponse.json().catch(() => ({}));
-          if (liveTrialPreflightPayload && liveTrialPreflightPayload.status) {
-            applyTranslatorLiveTrialPreflightTruth(liveTrialPreflightPayload);
-          }
+        if (bootstrapPayload.live_trial_preflight && typeof bootstrapPayload.live_trial_preflight === "object" && bootstrapPayload.live_trial_preflight.status) {
+          applyTranslatorLiveTrialPreflightTruth(bootstrapPayload.live_trial_preflight);
         }
-        if (onboardingResponse && onboardingResponse.ok) {
-          const onboardingPayload = await onboardingResponse.json().catch(() => ({}));
-          if (onboardingPayload && onboardingPayload.status) {
-            applyTranslatorMobileOnboardingTruth(onboardingPayload);
-          }
+        if (bootstrapPayload.mobile_onboarding && typeof bootstrapPayload.mobile_onboarding === "object" && bootstrapPayload.mobile_onboarding.status) {
+          applyTranslatorMobileOnboardingTruth(bootstrapPayload.mobile_onboarding);
         }
         const collectedAt = payload.collected_at ? new Date(payload.collected_at).toLocaleString() : "";
         const surface = payload.product_surface && typeof payload.product_surface === "object" ? payload.product_surface : {};
@@ -7231,11 +7253,18 @@ ${channelsText}`;
         if (!isStatsFresh) {
           updateStats(true).catch((error) => console.error("updateStats_visibility_refresh_failed", error));
         }
+        if (ownerPanelNeedsBootstrapRecovery()) {
+          refreshAll().catch((error) => console.error("refreshAll_visibility_recovery_failed", error));
+          loadLocalLifecycleStatus(false).catch((error) =>
+            console.error("loadLocalLifecycleStatus_visibility_recovery_failed", error),
+          );
+        }
       } else {
         clearPollLeaderStateIfOwned();
       }
     });
     refreshAll();
+    scheduleBootstrapRecoveryPasses();
     loadLocalLifecycleStatus(false);
   </script>
 </body>
