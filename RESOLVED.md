@@ -127,3 +127,13 @@
     - финальный voice `764830`
     - persisted inbox item `incoming:-1001804661353:764827` завершился статусом `done` и событием `reply_sent`
   - отдельный evidence: [output/reports/TELEGRAM_GROUP_FALLBACK_RECOVERY_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/TELEGRAM_GROUP_FALLBACK_RECOVERY_2026-03-27.md)
+
+### `new start_krab.command` снова переживает зависший старый `src.main` без ручного Stop
+- Причина: launcher пытался завершить старый `src.main` только через `SIGTERM` и ждал около 6 секунд. Если процесс зависал или держался в старой сессии, one-click старт обрывался на сообщении `Старый процесс Krab не завершился мягко`, не доходя до `🚀 Starting Krab...`.
+- Что сделано:
+  - в [new start_krab.command](/Users/pablito/Antigravity_AGENTS/new%20start_krab.command) `stop_old_krab_processes()` усилен по схеме `TERM -> wait -> KILL -> wait`, с явным логом, что launcher применяет forced-stop именно как last resort для one-click UX;
+  - проверка прогнана на живом зависшем `src.main`: launcher сам добил старый процесс, поднял gateway, дошёл до `Starting Krab...` и стартовал новый runtime.
+- Проверка:
+  - live launcher trace показал последовательность `🧹 Found old Krab processes -> 🪓 Применяю принудительную остановку -> 🚀 Starting Krab...`
+  - `curl http://127.0.0.1:8080/api/health/lite` после старта вернул `{\"ok\":true,\"status\":\"up\"...}`
+  - `krab_status` снова показывает `status=up`, `telegram_session_state=ready`

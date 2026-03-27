@@ -56,10 +56,6 @@
 ### 8. Telegram-транспорт: live-smoke голосовых и hygiene ответов
 **Актуализация 2026-03-27:** owner private text+voice roundtrip, mention-gated/group flow и graceful-content после raw fallback уже подтверждены живым E2E через второй Telegram MCP аккаунт `p0lrd`; детали и артефакты перенесены в `RESOLVED.md`.
 
-### 8b. Launcher `new start_krab.command`: иногда не доходит до `Starting Krab...`
-**Симптом:** после controlled restart launcher может корректно поднять voice gateway и OpenClaw gateway, но завершиться до шага `🚀 Starting Krab...`, из-за чего `src.main` и `:8080` не поднимаются.
-**Статус:** ОТКРЫТО — воспроизводилось 2026-03-27 во время live E2E, временный обходной путь: ручной запуск `./venv/bin/python -m src.main`.
-
 ### 9. Обновление Vision API и чтение скриншотов
 **Симптом:** `vision_read.py` стучился в устаревшую модель `gemini-1.5-pro-latest` (ошибка 404).
 **Статус:** ✅ ПОЛНОСТЬЮ ИСПРАВЛЕНО (2026-03-23) — нативный путь через OpenClaw images уже работает, `vision_read.py` не используется в основном потоке обработки фото.
