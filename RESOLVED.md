@@ -110,3 +110,20 @@
     - queue handoff `764821`
     - финальный text `764824`
     - voice `764825`
+
+### Raw fallback `No response from OpenClaw.` больше не проходит как пользовательский group-answer
+- Причина: часть group/background сценариев могла завершиться сырым transport-fallback текстом `No response from OpenClaw.`; такой текст доходил в Telegram как есть и ещё озвучивался TTS, что выглядело как неаккуратная деградация, хотя сам transport/inbox lifecycle был рабочим.
+- Что сделано:
+  - в [src/userbot_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/src/userbot_bridge.py) добавлена нормализация сырых fallback-строк в user-facing Telegram surface;
+  - voice/TTS теперь не озвучивает transport/model error-surface;
+  - автоподклейка `/tmp/voice_reply.*` больше не срабатывает поверх error-surface;
+  - в [tests/unit/test_userbot_buffered_stream_flow.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_userbot_buffered_stream_flow.py) добавлены точечные регрессии на нормализацию fallback и запрет voice для error-ответов.
+- Проверка:
+  - `pytest -q tests/unit/test_userbot_buffered_stream_flow.py tests/unit/test_userbot_message_batching.py -q` -> `14 passed`
+  - live group E2E через второй Telegram MCP аккаунт `p0lrd`:
+    - trigger `764827` с маркером `GROUPP0-FIX2-20260327-1834`
+    - ack `764828`
+    - финальный text `764829`: `GROUPP0-FIX2-20260327-1834 🦀 Краб на связи, всё работает стабильно и чётко.`
+    - финальный voice `764830`
+    - persisted inbox item `incoming:-1001804661353:764827` завершился статусом `done` и событием `reply_sent`
+  - отдельный evidence: [output/reports/TELEGRAM_GROUP_FALLBACK_RECOVERY_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/TELEGRAM_GROUP_FALLBACK_RECOVERY_2026-03-27.md)

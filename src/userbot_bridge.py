@@ -2844,6 +2844,49 @@ class KraabUserbot:
         return ""
 
     @staticmethod
+    def _normalize_user_visible_fallback_text(text: str) -> str:
+        """
+        Приводит сырые fallback-строки OpenClaw к понятному Telegram-тексту.
+
+        Это не меняет содержательные ответы модели, а только перехватывает
+        технические заглушки transport/runtime слоя.
+        """
+        normalized = str(text or "").strip()
+        if not normalized:
+            return normalized
+        compact = re.sub(r"\s+", " ", normalized).strip().lower()
+        fallback_map = {
+            "no response from openclaw.": "❌ OpenClaw не вернул текстовый ответ. Попробуй повторить запрос.",
+            "no response from openclaw": "❌ OpenClaw не вернул текстовый ответ. Попробуй повторить запрос.",
+        }
+        return fallback_map.get(compact, normalized)
+
+    @classmethod
+    def _looks_like_error_surface_text(cls, text: str) -> bool:
+        """Определяет, что текст уже является пользовательской ошибкой/деградацией."""
+        normalized = cls._normalize_user_visible_fallback_text(text)
+        compact = re.sub(r"\s+", " ", str(normalized or "")).strip().lower()
+        if not compact:
+            return False
+        if str(normalized).lstrip().startswith("❌"):
+            return True
+        return compact in {
+            "no response from openclaw.",
+            "no response from openclaw",
+        }
+
+    def _should_send_voice_for_response(self, text: str) -> bool:
+        """
+        Решает, нужно ли озвучивать конкретный ответ.
+
+        Голос для полезного ответа нужен, а для transport/model fallback только
+        мешает и создаёт странные голосовые вроде «No response from OpenClaw».
+        """
+        if not self._should_send_voice_reply():
+            return False
+        return not self._looks_like_error_surface_text(text)
+
+    @staticmethod
     def _message_has_audio(message: Message) -> bool:
         """Определяет voice/audio attachment, который можно отдать в STT."""
         return bool(getattr(message, "voice", None) or getattr(message, "audio", None))
@@ -4161,6 +4204,7 @@ class KraabUserbot:
                 full_response = self._strip_transport_markup(full_response)
                 if not full_response:
                     full_response = "❌ Модель вернула пустой ответ. Попробуй повторить запрос."
+            full_response = self._normalize_user_visible_fallback_text(full_response)
 
             # Извлекаем MEDIA:-ссылки, которые OpenClaw-агент вставляет в ответ
             # когда генерирует аудио или прикрепляет файлы из workspace.
@@ -4180,26 +4224,27 @@ class KraabUserbot:
                 # Fallback: агент иногда генерирует голосовой файл, но забывает
                 # вставить MEDIA:-строку в ответ (говорит "слушай ниже!" без протокола).
                 # Если свежий /tmp/voice_reply.* существует (mtime < 15 мин) — инжектируем.
-                _now_ts = time.time()
-                _auto_voice_candidates = [
-                    "/tmp/voice_reply.ogg",
-                    "/tmp/voice_reply.opus",
-                    "/tmp/voice_reply.mp3",
-                ]
-                for _vpath in _auto_voice_candidates:
-                    try:
-                        _age = _now_ts - os.path.getmtime(_vpath)
-                        if os.path.exists(_vpath) and _age < 900:  # 15 минут
-                            logger.info(
-                                "media_auto_inject_fallback",
-                                chat_id=chat_id,
-                                path=_vpath,
-                                age_sec=round(_age, 1),
-                            )
-                            _media_refs = [_vpath]
-                            break
-                    except OSError:
-                        pass
+                if not self._looks_like_error_surface_text(full_response):
+                    _now_ts = time.time()
+                    _auto_voice_candidates = [
+                        "/tmp/voice_reply.ogg",
+                        "/tmp/voice_reply.opus",
+                        "/tmp/voice_reply.mp3",
+                    ]
+                    for _vpath in _auto_voice_candidates:
+                        try:
+                            _age = _now_ts - os.path.getmtime(_vpath)
+                            if os.path.exists(_vpath) and _age < 900:  # 15 минут
+                                logger.info(
+                                    "media_auto_inject_fallback",
+                                    chat_id=chat_id,
+                                    path=_vpath,
+                                    age_sec=round(_age, 1),
+                                )
+                                _media_refs = [_vpath]
+                                break
+                        except OSError:
+                            pass
 
             full_response = self._apply_deferred_action_guard(full_response)
             self._remember_hidden_reasoning_trace(
@@ -4286,7 +4331,7 @@ class KraabUserbot:
 
             # Запускаем Python TTS (edge_tts) только если агент не прислал аудио сам.
             # Это предотвращает дублирование: оба движка не должны отвечать голосом.
-            if self._should_send_voice_reply() and not _agent_sent_voice:
+            if self._should_send_voice_for_response(full_response) and not _agent_sent_voice:
                 # Пропускаем TTS для очень коротких ответов (< 10 символов): Telegram
                 # отклоняет голосовые < ~1 секунды, что роняет весь delivery pipeline.
                 _tts_text = (full_response or "").strip()

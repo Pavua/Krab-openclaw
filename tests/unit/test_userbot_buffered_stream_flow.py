@@ -72,6 +72,24 @@ def _make_buffered_bot_stub() -> KraabUserbot:
     return bot
 
 
+def test_normalize_user_visible_fallback_text_converts_raw_openclaw_stub() -> None:
+    """Сырой англоязычный fallback не должен доходить до Telegram как есть."""
+    assert (
+        KraabUserbot._normalize_user_visible_fallback_text("No response from OpenClaw.")
+        == "❌ OpenClaw не вернул текстовый ответ. Попробуй повторить запрос."
+    )
+
+
+def test_should_send_voice_for_response_skips_error_surfaces() -> None:
+    """Голос не должен озвучивать transport/model fallback."""
+    bot = _make_buffered_bot_stub()
+    bot._should_send_voice_reply = Mock(return_value=True)
+
+    assert bot._should_send_voice_for_response("Всё готово, погнали дальше.")
+    assert not bot._should_send_voice_for_response("No response from OpenClaw.")
+    assert not bot._should_send_voice_for_response("❌ Модель не вернула ответ.")
+
+
 @pytest.mark.asyncio
 async def test_text_route_waits_past_first_chunk_soft_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """

@@ -54,9 +54,11 @@
 - Использовать `sendChatAction` (`typing`), чтобы индикатор набора текста висел всё время, пока ИИ думает.
 
 ### 8. Telegram-транспорт: live-smoke голосовых и hygiene ответов
-**Актуализация 2026-03-27:** owner private text+voice roundtrip и mention-gated/group flow уже подтверждены живым E2E через второй Telegram MCP аккаунт `p0lrd`; детали и артефакты перенесены в `RESOLVED.md`.
-**Что остаётся открытым:**
-- Разобрать graceful-content для группового fallback-ответа `No response from OpenClaw.`: transport честно доставляет text+voice и inbox lifecycle закрывается, но сам fallback-текст для части group-сценариев пока слишком сырой.
+**Актуализация 2026-03-27:** owner private text+voice roundtrip, mention-gated/group flow и graceful-content после raw fallback уже подтверждены живым E2E через второй Telegram MCP аккаунт `p0lrd`; детали и артефакты перенесены в `RESOLVED.md`.
+
+### 8b. Launcher `new start_krab.command`: иногда не доходит до `Starting Krab...`
+**Симптом:** после controlled restart launcher может корректно поднять voice gateway и OpenClaw gateway, но завершиться до шага `🚀 Starting Krab...`, из-за чего `src.main` и `:8080` не поднимаются.
+**Статус:** ОТКРЫТО — воспроизводилось 2026-03-27 во время live E2E, временный обходной путь: ручной запуск `./venv/bin/python -m src.main`.
 
 ### 9. Обновление Vision API и чтение скриншотов
 **Симптом:** `vision_read.py` стучился в устаревшую модель `gemini-1.5-pro-latest` (ошибка 404).
