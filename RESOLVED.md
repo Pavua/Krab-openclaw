@@ -137,3 +137,17 @@
   - live launcher trace показал последовательность `🧹 Found old Krab processes -> 🪓 Применяю принудительную остановку -> 🚀 Starting Krab...`
   - `curl http://127.0.0.1:8080/api/health/lite` после старта вернул `{\"ok\":true,\"status\":\"up\"...}`
   - `krab_status` снова показывает `status=up`, `telegram_session_state=ready`
+
+### Stale owner inbox cleanup больше не завязан на два жёстко вшитых message_id
+- Причина: старая утилита `cleanup_old_inbox_items.py` была одноразовой миграцией под `10897/10848`, из-за чего любой следующий cleanup снова требовал ручной правки кода. В runtime при этом реально висели именно эти два старых `owner_request`, которые засоряли `api/health/lite`.
+- Что сделано:
+  - в [scripts/cleanup_old_inbox_items.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/cleanup_old_inbox_items.py) утилита переведена в reusable CLI: по умолчанию она архивирует только stale `owner_request/open` старше `3` суток, а любые более рискованные cleanup-сценарии требуют явных флагов `--kind`, `--message-id`, `--item-id`;
+  - добавлены unit-тесты в [tests/unit/test_cleanup_old_inbox_items.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_cleanup_old_inbox_items.py) на cutoff, default selection и message-id narrowing;
+  - живой runtime cleanup выполнен на `inbox_state.json`: записи `incoming:312322764:10848` и `incoming:312322764:10897` переведены в `cancelled` с actor `system-cleanup`.
+- Проверка:
+  - `python3 -m py_compile scripts/cleanup_old_inbox_items.py tests/unit/test_cleanup_old_inbox_items.py`
+  - `pytest -q tests/unit/test_cleanup_old_inbox_items.py tests/unit/test_inbox_service.py -q` -> `23 passed`
+  - `./venv/bin/python scripts/cleanup_old_inbox_items.py --dry-run` показал ровно два кандидата: `10848` и `10897`
+  - `./venv/bin/python scripts/cleanup_old_inbox_items.py` успешно закрыл оба stale item-а
+  - `curl http://127.0.0.1:8080/api/health/lite` спустя короткий TTL-кеш показал `open_items=4`, `pending_owner_requests=2`
+  - evidence: [output/reports/INBOX_STALE_OWNER_REQUEST_CLEANUP_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_STALE_OWNER_REQUEST_CLEANUP_2026-03-27.md)
