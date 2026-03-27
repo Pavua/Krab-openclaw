@@ -14,6 +14,7 @@ import asyncio
 import http.server
 import json
 import threading
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -84,6 +85,33 @@ async def test_auto_export_on_stop_success(tmp_path: Path) -> None:
     assert dest.exists()
     written = json.loads(dest.read_text(encoding="utf-8"))
     assert written == FAKE_HANDOFF_PAYLOAD
+
+
+@pytest.mark.asyncio
+async def test_auto_export_uses_fast_handoff_snapshot_query(tmp_path: Path) -> None:
+    """Auto-export должен ходить в облегчённый handoff без cloud-probe."""
+
+    captured_urls: list[str] = []
+
+    def _fake_urlopen(req, timeout=0):  # noqa: ANN001
+        _ = timeout
+        captured_urls.append(req.full_url if isinstance(req, urllib.request.Request) else str(req))
+        mock_response = mock.MagicMock()
+        mock_response.read.return_value = json.dumps(FAKE_HANDOFF_PAYLOAD).encode()
+        mock_response.__enter__.return_value = mock_response
+        mock_response.__exit__.return_value = None
+        return mock_response
+
+    with (
+        mock.patch("src.config.config.BASE_DIR", tmp_path),
+        mock.patch("urllib.request.urlopen", side_effect=_fake_urlopen),
+    ):
+        bot = KraabUserbot()
+        result = await bot._auto_export_handoff_snapshot(reason="test_fast_query")
+
+    assert result["exported"] is True
+    assert captured_urls
+    assert captured_urls[0].endswith("/api/runtime/handoff?probe_cloud_runtime=0")
 
 
 @pytest.mark.asyncio

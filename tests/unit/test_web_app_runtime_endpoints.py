@@ -1601,6 +1601,42 @@ def test_runtime_handoff_refreshes_runtime_lite_after_cloud_probe(monkeypatch):
     assert data["health_lite"]["last_runtime_route"]["active_tier"] == "paid"
 
 
+def test_runtime_handoff_can_skip_cloud_probe_for_fast_auto_exports(monkeypatch):
+    """`probe_cloud_runtime=0` должен отключать тяжёлый cloud probe и не трогать runtime truth."""
+
+    class _ExplodingOpenClaw(_FakeOpenClaw):
+        async def get_cloud_runtime_check(self):
+            raise AssertionError("cloud_runtime_probe_must_be_skipped")
+
+    app = WebApp(
+        {
+            "router": _DummyRouter(),
+            "openclaw_client": _ExplodingOpenClaw(),
+            "black_box": None,
+            "health_service": None,
+            "provisioning_service": None,
+            "ai_runtime": None,
+            "reaction_engine": None,
+            "voice_gateway_client": _FakeHealthClient(ok=True),
+            "krab_ear_client": _FakeHealthClient(ok=True),
+            "perceptor": None,
+            "watchdog": None,
+            "queue": None,
+        },
+        port=18080,
+        host="127.0.0.1",
+    )
+    client = TestClient(app.app)
+
+    resp = client.get("/api/runtime/handoff?probe_cloud_runtime=0")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["cloud_runtime"]["available"] is False
+    assert data["cloud_runtime"]["skipped"] is True
+    assert data["cloud_runtime"]["reason"] == "probe_disabled"
+
+
 def test_runtime_operator_profile_returns_machine_readable_state() -> None:
     """Профиль учётки должен явно фиксировать split-runtime стратегию и ключевые пути."""
     client = _make_client()

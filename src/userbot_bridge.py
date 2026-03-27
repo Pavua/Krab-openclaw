@@ -933,7 +933,9 @@ class KraabUserbot:
         
         try:
             artifacts_dir.mkdir(parents=True, exist_ok=True)
-            handoff_url = "http://127.0.0.1:8080/api/runtime/handoff"
+            # Для периодического auto-export нам нужен быстрый truthful snapshot,
+            # а не тяжёлый cloud runtime probe, который может жить дольше maintenance-таймаута.
+            handoff_url = "http://127.0.0.1:8080/api/runtime/handoff?probe_cloud_runtime=0"
             req = urllib.request.Request(handoff_url, method="GET")
             with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
                 raw = resp.read()

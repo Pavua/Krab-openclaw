@@ -50,3 +50,13 @@
   - `python3 scripts/live_channel_smoke.py --max-age-minutes 120 --output /tmp/krab_live_channel_smoke_now.json` -> `ok=true`
   - `python3 scripts/channels_photo_chrome_acceptance.py --output /tmp/krab_channels_photo_acceptance_now.json` -> `ok=true`
   - артефакт: [owner-panel-post-restart-auto-recovery-20260326-2026.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-post-restart-auto-recovery-20260326-2026.png)
+
+## 2026-03-27
+
+### Periodic auto-handoff export больше не ловит искусственный timeout на тяжёлом cloud probe
+- Причина: `userbot_bridge` ходил в `/api/runtime/handoff` с жёстким `timeout=10`, а сам endpoint внутри мог ждать `get_cloud_runtime_check()` до `18s`, поэтому periodic maintenance иногда логировал `auto_handoff_export_failed timed out` без реальной поломки runtime.
+- Что сделано: в [src/modules/web_app.py](/Users/pablito/Antigravity_AGENTS/Краб/src/modules/web_app.py) `GET /api/runtime/handoff` получил явный флаг `probe_cloud_runtime`, а в [src/userbot_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/src/userbot_bridge.py) periodic auto-export переведён на быстрый snapshot `?probe_cloud_runtime=0`; добавлены регрессии в [tests/unit/test_web_app_runtime_endpoints.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_web_app_runtime_endpoints.py) и [tests/unit/test_userbot_auto_handoff_export.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_userbot_auto_handoff_export.py).
+- Проверка:
+  - `pytest -q tests/unit/test_userbot_auto_handoff_export.py tests/unit/test_web_app_runtime_endpoints.py -q`
+  - `GET /api/runtime/handoff?probe_cloud_runtime=0` -> примерно `1.0s`, `cloud_runtime = {available: false, skipped: true, reason: "probe_disabled"}`
+  - `GET /api/runtime/handoff` -> примерно `3.3s`, тяжёлый cloud runtime probe остаётся доступен для полного handoff

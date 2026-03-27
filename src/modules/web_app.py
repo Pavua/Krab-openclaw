@@ -8397,7 +8397,7 @@ class WebApp:
             )
 
         @self.app.get("/api/runtime/handoff")
-        async def runtime_handoff():
+        async def runtime_handoff(probe_cloud_runtime: str = Query(default="1")):
             """
             Единый runtime-снимок для безопасной миграции в новый чат (Anti-413).
 
@@ -8429,8 +8429,12 @@ class WebApp:
                 timeout_sec=3.0,
             )
 
-            cloud_runtime: dict[str, Any] = {"available": False, "error": "not_supported"}
-            if openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
+            should_probe_cloud_runtime = self._bool_env(str(probe_cloud_runtime or "1"), True)
+
+            cloud_runtime: dict[str, Any]
+            if not should_probe_cloud_runtime:
+                cloud_runtime = {"available": False, "skipped": True, "reason": "probe_disabled"}
+            elif openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
                 try:
                     cloud_report = await asyncio.wait_for(openclaw.get_cloud_runtime_check(), timeout=18.0)
                     cloud_runtime = {"available": True, "report": cloud_report}
@@ -8442,6 +8446,8 @@ class WebApp:
                     cloud_runtime = {"available": False, "error": "timeout"}
                 except Exception as exc:
                     cloud_runtime = {"available": False, "error": str(exc)}
+            else:
+                cloud_runtime = {"available": False, "error": "not_supported"}
 
             latest_bundle = self._latest_path_by_glob("artifacts/handoff_*")
             latest_checkpoint = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
