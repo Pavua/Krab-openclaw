@@ -56,10 +56,8 @@
 ### 8. Telegram-транспорт: live-smoke голосовых и hygiene ответов
 **Актуализация 2026-03-26:** закрытые части по `audio preflight` и restart-регрессии voice replies перенесены в `RESOLVED.md`.
 **Что остаётся открытым:**
-- Прогнать живой Telegram smoke на `voice note` в mention-gated/group flow, чтобы подтвердить поведение не только verifier'ом, но и реальным transport roundtrip.
+- Прогнать живой Telegram smoke на `voice note` именно в mention-gated/group flow: owner text+voice roundtrip уже подтверждён живым сценарием 2026-03-27, но групповой/mention-gated путь ещё не закрыт.
 - Перепроверить debouncing пересланных пачек сообщений живым сценарием, а не только логом `private_text_burst_coalesced`.
-- Подтвердить живым owner roundtrip, что внутренний scratchpad (`Ready.`, `Wait, I'll check...`, shell-команды) больше не утекает в ответы после новых санитайзеров.
-- Reserve Telegram Bot всё ещё не проходит `reserve-safe` preflight: живой text roundtrip отвечает, но `live_reserve_telegram_roundtrip.py` остаётся красным, потому что policy пока `dm_policy=open`. Это policy debt, а не transport outage.
 
 ### 9. Обновление Vision API и чтение скриншотов
 **Симптом:** `vision_read.py` стучился в устаревшую модель `gemini-1.5-pro-latest` (ошибка 404).

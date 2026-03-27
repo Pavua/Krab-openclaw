@@ -60,3 +60,18 @@
   - `pytest -q tests/unit/test_userbot_auto_handoff_export.py tests/unit/test_web_app_runtime_endpoints.py -q`
   - `GET /api/runtime/handoff?probe_cloud_runtime=0` -> примерно `1.0s`, `cloud_runtime = {available: false, skipped: true, reason: "probe_disabled"}`
   - `GET /api/runtime/handoff` -> примерно `3.3s`, тяжёлый cloud runtime probe остаётся доступен для полного handoff
+
+### Reserve Telegram Bot переведён в reserve-safe без потери доставки
+- Причина: live reserve roundtrip уже отвечал, но оставался красным по preflight, потому что runtime policy была небезопасной: `dmPolicy=open`, а `allowFrom` фактически допускал wildcard-сценарий. Это был policy debt, а не transport outage.
+- Что сделано: создан rollback-бэкап runtime-конфига `/Users/pablito/.openclaw/openclaw.json.reservebot_backup_20260327_165059`, затем через [scripts/openclaw_runtime_repair.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/openclaw_runtime_repair.py) применён reserve-safe repair для канала `telegram`, после чего gateway перезапущен. Итоговый runtime truth: `dmPolicy=allowlist`, `groupPolicy=allowlist`, `allowFrom=[312322764, 6435872621]`, `groupAllowFrom=[312322764]`.
+- Проверка:
+  - `./venv/bin/python scripts/live_reserve_telegram_roundtrip.py --timeout-sec 40 --output /tmp/krab_reserve_roundtrip_after_policy.json` -> `ok=true`, `reserve_safe=true`, ответ от reserve bot получен
+  - `python3 scripts/live_channel_smoke.py --max-age-minutes 120 --output /tmp/krab_live_channel_smoke_after_reserve_policy.json` -> `ok=true`
+
+### Живой owner Telegram roundtrip подтверждает voice delivery и отсутствие свежей scratchpad leakage
+- Что сделано: в owner chat `312322764` отправлен контролируемый smoke-trigger с маркером `SMOKE-OK-20260327-165416`, после чего собран фактический ответ из Telegram history и отдельно проверено наличие voice-вложения.
+- Проверка:
+  - текстовый ответ пришёл с тем же message id `11410` и содержит маркер `SMOKE-OK-20260327-165416`, без сигнатур вида `Ready.`, `Wait, I'll check...`, shell-команд и прочего внутреннего scratchpad-мусора;
+  - отдельное voice-сообщение пришло как message id `11411`;
+  - `telegram_transcribe_voice(chat_id=312322764, message_id=11411)` подтвердил смысл voice-ответа;
+  - evidence-отчёт сохранён в [output/reports/OWNER_TELEGRAM_VOICE_HYGIENE_SMOKE_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/OWNER_TELEGRAM_VOICE_HYGIENE_SMOKE_2026-03-27.md).
