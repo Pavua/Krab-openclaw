@@ -291,6 +291,44 @@ def test_summary_marks_old_acked_items_as_stale_processing(tmp_path: Path) -> No
     assert summary["stale_processing_owner_mentions"] == 0
 
 
+def test_list_stale_processing_items_returns_oldest_acked_items_with_age(tmp_path: Path) -> None:
+    """Runbook helper должен возвращать только stale `acked` item-ы и сортировать их по возрасту."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    first = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Старый stale item",
+        sender_username="owner",
+        chat_type="private",
+    )
+    second = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="11",
+        text="Свежий acked item",
+        sender_username="owner",
+        chat_type="private",
+    )
+    service.set_item_status(first["item"]["item_id"], status="acked", actor="kraab", note="started")
+    service.set_item_status(second["item"]["item_id"], status="acked", actor="kraab", note="started")
+
+    state = service._load_state()
+    old_timestamp = (
+        datetime.now(timezone.utc) - InboxService._stale_processing_after - timedelta(minutes=5)
+    ).isoformat(timespec="seconds")
+    for item in state["items"]:
+        if item["item_id"] != first["item"]["item_id"]:
+            continue
+        item["updated_at_utc"] = old_timestamp
+        item.setdefault("metadata", {})["last_action_at_utc"] = old_timestamp
+    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    items = service.list_stale_processing_items(kind="owner_request", limit=10)
+
+    assert len(items) == 1
+    assert items[0]["item_id"] == first["item"]["item_id"]
+    assert items[0]["processing_age_sec"] >= int(InboxService._stale_processing_after.total_seconds())
+
+
 def test_workflow_snapshot_exposes_trace_index_and_approval_history(tmp_path: Path) -> None:
     """Workflow snapshot должен собирать компактные buckets и traceable approval history."""
     service = InboxService(state_path=tmp_path / "inbox.json")

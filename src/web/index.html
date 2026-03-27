@@ -1683,6 +1683,10 @@
         </h3>
         <div style="display: flex; gap: 8px; align-items: center;">
           <span id="inboxMeta" style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);">—</span>
+          <button id="inboxCancelStaleBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.78rem; display: none;"
+            onclick="remediateInboxStale('cancelled')">Cancel stale req</button>
+          <button id="inboxDoneStaleBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.78rem; display: none;"
+            onclick="remediateInboxStale('done')">Done stale req</button>
           <button id="inboxRefreshBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.8rem;"
             onclick="loadInboxItems()">↻</button>
         </div>
@@ -1716,6 +1720,7 @@
       <div id="inboxItemsList" style="display: flex; flex-direction: column; gap: 8px; min-height: 40px;">
         <span style="color: var(--text-muted); font-size: 0.85rem;">Загрузка...</span>
       </div>
+      <div id="inboxActionMeta" style="margin-top: 10px; color: var(--text-muted); font-size: 0.78rem; font-family: var(--font-mono);">—</div>
     </div>
 
     <!-- --- AI ASSISTANT --- -->
@@ -6842,6 +6847,26 @@ ${channelsText}`;
       return parts.join(" · ");
     }
 
+    function _applyInboxStaleActionState(summary) {
+      const payload = summary && typeof summary === "object" ? summary : {};
+      const staleOwnerRequests = Number(payload.stale_processing_owner_requests || 0);
+      const cancelBtn = document.getElementById("inboxCancelStaleBtn");
+      const doneBtn = document.getElementById("inboxDoneStaleBtn");
+      const actionMeta = document.getElementById("inboxActionMeta");
+      const shouldShow = staleOwnerRequests > 0;
+      [cancelBtn, doneBtn].forEach(function(btn) {
+        if (!btn) return;
+        btn.style.display = shouldShow ? "inline-flex" : "none";
+        btn.disabled = !shouldShow;
+        btn.title = shouldShow
+          ? `${staleOwnerRequests} stale owner_request ждут remediation`
+          : "Stale owner_request сейчас нет";
+      });
+      if (actionMeta && !shouldShow) {
+        actionMeta.textContent = "Stale owner_request сейчас нет.";
+      }
+    }
+
     function _parseInboxIso(rawValue) {
       const normalized = String(rawValue || "").trim();
       if (!normalized) {
@@ -6970,6 +6995,7 @@ ${channelsText}`;
       const listEl  = document.getElementById("inboxItemsList");
       const metaEl  = document.getElementById("inboxMeta");
       const badgeEl = document.getElementById("inboxBadge");
+      const actionMeta = document.getElementById("inboxActionMeta");
       if (!listEl) return;
 
       const status = (document.getElementById("inboxFilterStatus") || {}).value || "";
@@ -7002,6 +7028,10 @@ ${channelsText}`;
             : "Новых inbox item(s) нет";
         }
         if (metaEl) metaEl.textContent = _buildInboxMetaText(summary, items.length);
+        _applyInboxStaleActionState(summary);
+        if (actionMeta && Number(summary.stale_processing_owner_requests || 0) > 0) {
+          actionMeta.textContent = `Stale owner_request: ${Number(summary.stale_processing_owner_requests || 0)}. Используй bulk remediation только если фон уже точно не продолжится.`;
+        }
 
         while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
 
@@ -7016,6 +7046,7 @@ ${channelsText}`;
         items.forEach(function(item) { listEl.appendChild(_buildInboxItemEl(item)); });
       } catch (err) {
         if (metaEl) metaEl.textContent = "error";
+        if (actionMeta) actionMeta.textContent = "Inbox action state unavailable";
         while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
         const errEl = document.createElement("span");
         errEl.textContent = "\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438 inbox: " + String((err && err.message) || err);
@@ -7030,6 +7061,40 @@ ${channelsText}`;
         await loadInboxItems();
       } catch (err) {
         console.warn("inbox_update_failed", err);
+      }
+    }
+
+    async function remediateInboxStale(status) {
+      const actionMeta = document.getElementById("inboxActionMeta");
+      const normalizedStatus = String(status || "").trim().toLowerCase();
+      if (!["done", "cancelled"].includes(normalizedStatus)) {
+        if (actionMeta) actionMeta.textContent = "Inbox remediation error: invalid stale status";
+        return;
+      }
+      try {
+        if (actionMeta) {
+          actionMeta.textContent = normalizedStatus === "done"
+            ? "Remediating stale owner_request as done..."
+            : "Cancelling stale owner_request...";
+        }
+        const payload = await postJson("/api/inbox/stale-processing/remediate", {
+          kind: "owner_request",
+          status: normalizedStatus,
+          actor: "owner-ui",
+          note: normalizedStatus === "done"
+            ? "owner_ui_bulk_stale_done"
+            : "owner_ui_bulk_stale_cancelled",
+          limit: 20,
+        });
+        const affected = Number(payload.count || 0);
+        if (actionMeta) {
+          actionMeta.textContent = affected > 0
+            ? `Stale remediation complete: ${affected} owner_request -> ${normalizedStatus}.`
+            : "Stale remediation complete: no stale owner_request found.";
+        }
+        await loadInboxItems();
+      } catch (error) {
+        if (actionMeta) actionMeta.textContent = `Inbox remediation error: ${error.message}`;
       }
     }
 

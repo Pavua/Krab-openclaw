@@ -337,6 +337,40 @@ class InboxService:
         # Применяем лимит и возвращаем как dict
         return [item.to_dict() for item in filtered_items[:max(1, int(limit or 50))]]
 
+    def list_stale_processing_items(
+        self,
+        *,
+        kind: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """
+        Возвращает реально застрявшие `acked` item-ы с возрастом обработки.
+
+        Нужен для owner-facing remediation runbook, где владелец сначала видит
+        stale-кандидатов, а затем может применить безопасный bulk-action только
+        к ним.
+        """
+        normalized_kind = str(kind or "").strip().lower()
+        stale_items: list[tuple[datetime, InboxItem]] = []
+        for item in self._load_items():
+            if normalized_kind and item.kind != normalized_kind:
+                continue
+            if not self._is_processing_stale(item):
+                continue
+            activity_at = self._parse_item_activity_at(item)
+            if activity_at is None:
+                continue
+            stale_items.append((activity_at, item))
+
+        stale_items.sort(key=lambda row: row[0])
+        rows: list[dict[str, Any]] = []
+        now_utc = datetime.now(timezone.utc)
+        for activity_at, item in stale_items[: max(1, int(limit or 20))]:
+            payload = item.to_dict()
+            payload["processing_age_sec"] = max(0, int((now_utc - activity_at).total_seconds()))
+            rows.append(payload)
+        return rows
+
     def archive_by_kind(
         self,
         *,

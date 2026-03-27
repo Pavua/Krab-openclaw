@@ -70,6 +70,8 @@ def test_inbox_widget_uses_truthful_summary_and_runtime_statuses() -> None:
     assert 'const safeId = String(item.item_id || item.id || "");' in source
     assert 'const isStaleProcessing = _isInboxItemStaleProcessing(item);' in source
     assert 'await postJson("/api/inbox/update", { item_id: itemId, status: action });' in source
+    assert 'onclick="remediateInboxStale(\'cancelled\')"' in source
+    assert 'await postJson("/api/inbox/stale-processing/remediate", {' in source
     assert '<option value="open">Открытые и в обработке</option>' in source
     assert '<option value="acked">acked</option>' in source
     assert '<option value="owner_request">owner_request</option>' in source

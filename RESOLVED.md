@@ -224,6 +224,34 @@
   - [inbox-stale-processing-focused-20260327-2004.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/inbox-stale-processing-focused-20260327-2004.png)
   - [INBOX_OWNER_UI_TRUTH_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_OWNER_UI_TRUTH_2026-03-27.md)
 
+### Owner UI теперь умеет безопасно bulk-remediate stale owner-request
+- Причина: truthful `stale processing` сам по себе ещё оставлял owner в ручном режиме по одной карточке. Для старых зависших `acked owner_request` нужен был безопасный runbook `preview -> bulk action`, а не серия из двух-трёх ручных кликов.
+- Что сделано:
+  - в [src/core/inbox_service.py](/Users/pablito/Antigravity_AGENTS/Краб/src/core/inbox_service.py) добавлен helper `list_stale_processing_items(...)`, который возвращает только реально stale `acked` item-ы и их `processing_age_sec`;
+  - в [src/modules/web_app.py](/Users/pablito/Antigravity_AGENTS/Краб/src/modules/web_app.py) добавлены endpoints:
+    - `GET /api/inbox/stale-processing`
+    - `POST /api/inbox/stale-processing/remediate`
+  - bulk-remediation ограничен финальными статусами `done/cancelled`, чтобы owner UI не мог массово выполнять опасные approval-переходы;
+  - в [src/web/index.html](/Users/pablito/Antigravity_AGENTS/Краб/src/web/index.html) добавлены кнопки `Cancel stale req` / `Done stale req` и truthful status-line `inboxActionMeta`.
+- Проверка:
+  - `./venv/bin/pytest -q tests/unit/test_inbox_service.py tests/unit/test_web_app_runtime_endpoints.py tests/unit/test_web_panel_bootstrap_order.py -q` -> `160 passed`
+  - live `GET /api/inbox/stale-processing?kind=owner_request&limit=10` до remediation возвращал `count=2`;
+  - через owner panel нажата bulk-кнопка `Cancel stale req`;
+  - после action runtime truth стал:
+    - `open_items=1`
+    - `fresh_open_items=1`
+    - `acked_items=0`
+    - `stale_processing_items=0`
+    - `stale_processing_owner_requests=0`
+  - persisted state для `incoming:312322764:11440` и `incoming:312322764:11443` зафиксировал:
+    - `status=cancelled`
+    - `last_action_actor=owner-ui`
+    - `last_action_note=owner_ui_bulk_stale_cancelled`
+- Артефакты:
+  - [inbox-stale-remediation-before-20260327-2015.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/inbox-stale-remediation-before-20260327-2015.png)
+  - [inbox-stale-remediation-after-20260327-2016.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/inbox-stale-remediation-after-20260327-2016.png)
+  - [INBOX_OWNER_UI_TRUTH_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_OWNER_UI_TRUTH_2026-03-27.md)
+
 ### Второй Telegram MCP переживает `database is locked` через serialized access и controlled restart клиента
 - Причина: второй Telegram MCP (`krab_test_mcp`) после restart-переходов иногда падал на `database is locked`, потому что Pyrogram session живёт в sqlite-файле и параллельные tool-call'ы/подвисший session handle могли конфликтовать.
 - Что сделано:

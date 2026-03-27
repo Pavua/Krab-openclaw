@@ -6260,6 +6260,71 @@ def test_inbox_update_approval_path_preserves_owner_note(
     assert data["result"]["item"]["metadata"]["resolution_note"] == "approved after smoke"
 
 
+def test_inbox_stale_processing_preview_and_bulk_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Owner UI должен получать stale preview и bulk-cancel только реально застрявшие item-ы."""
+    from datetime import datetime, timedelta, timezone
+    import json
+
+    monkeypatch.setenv("WEB_API_KEY", "secret")
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    stale_item = inbox.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Старый owner request",
+        sender_username="owner",
+        chat_type="private",
+    )["item"]
+    fresh_item = inbox.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="11",
+        text="Свежий owner request",
+        sender_username="owner",
+        chat_type="private",
+    )["item"]
+    inbox.set_item_status(stale_item["item_id"], status="acked", actor="kraab", note="started")
+    inbox.set_item_status(fresh_item["item_id"], status="acked", actor="kraab", note="started")
+
+    state = inbox._load_state()
+    stale_timestamp = (
+        datetime.now(timezone.utc) - InboxService._stale_processing_after - timedelta(minutes=2)
+    ).isoformat(timespec="seconds")
+    for item in state["items"]:
+        if item["item_id"] != stale_item["item_id"]:
+            continue
+        item["updated_at_utc"] = stale_timestamp
+        item.setdefault("metadata", {})["last_action_at_utc"] = stale_timestamp
+    inbox.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
+    client = _make_client()
+
+    preview_resp = client.get("/api/inbox/stale-processing?kind=owner_request&limit=10")
+    denied_resp = client.post(
+        "/api/inbox/stale-processing/remediate",
+        json={"kind": "owner_request", "status": "cancelled"},
+    )
+    apply_resp = client.post(
+        "/api/inbox/stale-processing/remediate",
+        json={"kind": "owner_request", "status": "cancelled", "note": "cleanup"},
+        headers={"X-Krab-Web-Key": "secret"},
+    )
+
+    assert preview_resp.status_code == 200
+    assert preview_resp.json()["count"] == 1
+    assert preview_resp.json()["items"][0]["item_id"] == stale_item["item_id"]
+    assert denied_resp.status_code == 403
+    assert apply_resp.status_code == 200
+    payload = apply_resp.json()
+    assert payload["count"] == 1
+    assert payload["result"]["success_count"] == 1
+    assert payload["summary"]["stale_processing_owner_requests"] == 0
+    cancelled_items = inbox.list_items(status="cancelled", kind="owner_request", limit=5)
+    assert any(item["item_id"] == stale_item["item_id"] for item in cancelled_items)
+
+
 def test_inbox_create_can_escalate_from_existing_source_item(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

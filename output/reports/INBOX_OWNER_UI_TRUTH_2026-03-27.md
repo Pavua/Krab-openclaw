@@ -86,3 +86,61 @@ Owner UI inbox теперь синхронизирован с runtime truth по
 1. Честно показывает split между новыми и уже обрабатываемыми owner-request.
 2. Отдельно маркирует реально застрявшие `acked` item-ы как `stale processing`.
 3. Реально управляет persisted inbox item-ами через backend, а не рисует декоративные кнопки по legacy-схеме.
+
+## Дополнение: bulk remediation stale owner-request
+
+### Что добавлено
+
+- `src/core/inbox_service.py`
+  - helper `list_stale_processing_items(...)` для owner remediation runbook;
+- `src/modules/web_app.py`
+  - `GET /api/inbox/stale-processing`
+  - `POST /api/inbox/stale-processing/remediate`
+- `src/web/index.html`
+  - owner UI кнопки `Cancel stale req` и `Done stale req`;
+  - status-line `inboxActionMeta` для truthful feedback после bulk-action.
+
+### Unit / regression
+
+```bash
+./venv/bin/pytest -q tests/unit/test_inbox_service.py tests/unit/test_web_app_runtime_endpoints.py tests/unit/test_web_panel_bootstrap_order.py -q
+```
+
+Результат:
+
+- `160 passed, 1 warning`
+
+### Live remediation
+
+Перед action:
+
+- `GET /api/inbox/stale-processing?kind=owner_request&limit=10` -> `count=2`
+- owner UI показывал:
+  - `3 open · 1 new · 2 processing · 2 stale · owner req 3 (1/2) stale 2`
+  - action-meta: `Stale owner_request: 2. Используй bulk remediation только если фон уже точно не продолжится.`
+
+Через owner panel нажата bulk-кнопка:
+
+- `Cancel stale req`
+
+После action:
+
+- `GET /api/inbox/status` показал:
+  - `open_items=1`
+  - `fresh_open_items=1`
+  - `acked_items=0`
+  - `stale_processing_items=0`
+  - `stale_processing_owner_requests=0`
+- owner UI показывал:
+  - `1 open · 1 new · 0 processing · owner req 1 (1/0)`
+  - `Stale owner_request сейчас нет.`
+
+Persisted proof:
+
+- `incoming:312322764:11440` -> `status=cancelled`, `last_action_actor=owner-ui`, `last_action_note=owner_ui_bulk_stale_cancelled`
+- `incoming:312322764:11443` -> `status=cancelled`, `last_action_actor=owner-ui`, `last_action_note=owner_ui_bulk_stale_cancelled`
+
+Артефакты:
+
+- `output/playwright/inbox-stale-remediation-before-20260327-2015.png`
+- `output/playwright/inbox-stale-remediation-after-20260327-2016.png`
