@@ -189,6 +189,52 @@ def test_incoming_owner_request_and_mention_update_summary_without_duplicates(tm
     assert summary["pending_owner_mentions"] == 1
 
 
+def test_summary_splits_fresh_and_acked_owner_items(tmp_path: Path) -> None:
+    """Summary должен различать новые owner items и уже взятые в background processing."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    request = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Первый запрос",
+        sender_username="owner",
+        chat_type="private",
+    )
+    mention = service.upsert_incoming_owner_request(
+        chat_id="-100777",
+        message_id="11",
+        text="Второй запрос",
+        sender_username="owner",
+        chat_type="group",
+        is_reply_to_me=True,
+        has_trigger=True,
+    )
+    service.set_item_status(
+        request["item"]["item_id"],
+        status="acked",
+        actor="kraab",
+        note="background_processing_started",
+    )
+    service.set_item_status(
+        mention["item"]["item_id"],
+        status="acked",
+        actor="kraab",
+        note="background_processing_started",
+    )
+
+    summary = service.get_summary()
+
+    assert summary["open_items"] == 2
+    assert summary["fresh_open_items"] == 0
+    assert summary["acked_items"] == 2
+    assert summary["pending_owner_requests"] == 1
+    assert summary["new_owner_requests"] == 0
+    assert summary["processing_owner_requests"] == 1
+    assert summary["pending_owner_mentions"] == 1
+    assert summary["new_owner_mentions"] == 0
+    assert summary["processing_owner_mentions"] == 1
+
+
 def test_workflow_snapshot_exposes_trace_index_and_approval_history(tmp_path: Path) -> None:
     """Workflow snapshot должен собирать компактные buckets и traceable approval history."""
     service = InboxService(state_path=tmp_path / "inbox.json")
@@ -255,6 +301,51 @@ def test_record_incoming_owner_reply_persists_reply_and_recent_activity(tmp_path
     assert workflow["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Handoff truth синхронизирован."
     assert workflow["recent_activity"][0]["action"] == "reply_sent"
     assert workflow["recent_activity"][0]["note"] == "llm_response_delivered"
+
+
+def test_record_relay_delivery_closes_relay_request_and_persists_delivery_metadata(tmp_path: Path) -> None:
+    """Успешный relay в Saved Messages должен закрывать relay_request как выполненный."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    service.upsert_item(
+        dedupe_key="relay:312322764:11402",
+        kind="relay_request",
+        source="telegram-userbot",
+        title="📨 Relay от @p0lrd",
+        body="Relay body",
+        severity="warning",
+        status="open",
+        identity=service.build_identity(
+            channel_id="312322764",
+            team_id="owner",
+            trace_id="relay:test",
+            approval_scope="owner",
+        ),
+        metadata={
+            "chat_id": "312322764",
+            "message_id": "11402",
+            "sender_username": "p0lrd",
+        },
+    )
+
+    result = service.record_relay_delivery(
+        chat_id="312322764",
+        message_id="11402",
+        notification_text="Relay доставлен владельцу",
+        delivery_mode="saved_messages",
+        delivered_to_chat_id="6435872621",
+        relay_message_ids=["555"],
+        actor="kraab",
+        note="relay_owner_notified",
+    )
+    relay_items = service.list_items(kind="relay_request", limit=5)
+
+    assert result["ok"] is True
+    assert result["item"]["status"] == "done"
+    assert relay_items[0]["metadata"]["relay_delivery_mode"] == "saved_messages"
+    assert relay_items[0]["metadata"]["relay_target_chat_id"] == "6435872621"
+    assert relay_items[0]["metadata"]["relay_message_ids"] == ["555"]
+    assert relay_items[0]["metadata"]["resolution_note"] == "relay_owner_notified"
+    assert relay_items[0]["metadata"]["workflow_events"][0]["action"] == "relay_sent"
 
 
 def test_set_item_status_persists_owner_resolution_metadata(tmp_path: Path) -> None:

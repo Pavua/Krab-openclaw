@@ -167,3 +167,29 @@
     - legacy `proactive:watch_trigger:route_model_changed:2026-03-12T05:05:00+00:00` -> `done`, note `legacy_non_actionable_proactive_trace`
   - `GET /api/inbox/status` и `GET /api/health/lite` после TTL-кеша показывают уже `open_items=2`, `attention_items=0`, `pending_owner_requests=2`
   - evidence: [output/reports/INBOX_LIFECYCLE_TRUTH_SYNC_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_LIFECYCLE_TRUTH_SYNC_2026-03-27.md)
+
+### Inbox summary теперь различает новые owner-запросы и уже взятые в background processing
+- Причина: после честного lifecycle-fix `health-lite` всё ещё сваливал в один счётчик и настоящие `open`, и `acked` items. В результате `pending_owner_requests=7` выглядел как семь забытых запросов, хотя часть из них уже обрабатывалась в фоне.
+- Что сделано:
+  - в [src/core/inbox_service.py](/Users/pablito/Antigravity_AGENTS/Краб/src/core/inbox_service.py) summary расширен truthful-полями:
+    - `fresh_open_items`
+    - `acked_items`
+    - `new_owner_requests`
+    - `processing_owner_requests`
+    - `new_owner_mentions`
+    - `processing_owner_mentions`
+  - добавлен regression-тест в [tests/unit/test_inbox_service.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_inbox_service.py), который подтверждает split `open vs acked`.
+- Проверка:
+  - `pytest -q tests/unit/test_inbox_service.py -q` -> `22 passed`
+
+### Второй Telegram MCP переживает `database is locked` через serialized access и controlled restart клиента
+- Причина: второй Telegram MCP (`krab_test_mcp`) после restart-переходов иногда падал на `database is locked`, потому что Pyrogram session живёт в sqlite-файле и параллельные tool-call'ы/подвисший session handle могли конфликтовать.
+- Что сделано:
+  - в [mcp-servers/telegram/telegram_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/mcp-servers/telegram/telegram_bridge.py) добавлена сериализация всех Telegram API операций через `asyncio.Lock()`;
+  - при transient session-lock bridge теперь один раз делает controlled `stop -> recreate client -> start -> retry`;
+  - добавлены unit-тесты в [tests/unit/test_telegram_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_telegram_bridge.py) на idempotent `start()` и recovery после `database is locked`.
+- Проверка:
+  - `python3 -m py_compile mcp-servers/telegram/telegram_bridge.py tests/unit/test_telegram_bridge.py`
+  - `pytest -q tests/unit/test_telegram_bridge.py -q` -> `2 passed`
+- Важная оговорка:
+  - уже поднятый MCP host в текущем чате hot-reload не умеет, поэтому этот hardening начнёт работать для tool-host после следующего restart/new chat, но код и тесты уже готовы.

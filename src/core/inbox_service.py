@@ -523,6 +523,8 @@ class InboxService:
     def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
         """Собирает owner-facing summary из уже загруженного набора item-ов."""
         open_items = [item for item in items if item.status in self._open_statuses]
+        fresh_open_items = [item for item in open_items if item.status == "open"]
+        acked_items = [item for item in open_items if item.status == "acked"]
         warning_items = [item for item in open_items if item.severity in {"warning", "error"}]
         reminder_items = [item for item in open_items if item.kind == "reminder"]
         escalation_items = [item for item in open_items if item.kind.startswith("watch_")]
@@ -530,19 +532,29 @@ class InboxService:
         approval_items = [item for item in open_items if item.kind == "approval_request"]
         owner_request_items = [item for item in open_items if item.kind == "owner_request"]
         owner_mention_items = [item for item in open_items if item.kind == "owner_mention"]
+        new_owner_request_items = [item for item in owner_request_items if item.status == "open"]
+        processing_owner_request_items = [item for item in owner_request_items if item.status == "acked"]
+        new_owner_mention_items = [item for item in owner_mention_items if item.status == "open"]
+        processing_owner_mention_items = [item for item in owner_mention_items if item.status == "acked"]
         return {
             "state_path": str(self.state_path),
             "account_id": current_account_id(),
             "operator_id": current_operator_id(),
             "total_items": len(items),
             "open_items": len(open_items),
+            "fresh_open_items": len(fresh_open_items),
+            "acked_items": len(acked_items),
             "attention_items": len(warning_items),
             "pending_reminders": len(reminder_items),
             "open_escalations": len(escalation_items),
             "pending_owner_tasks": len(owner_task_items),
             "pending_approvals": len(approval_items),
             "pending_owner_requests": len(owner_request_items),
+            "new_owner_requests": len(new_owner_request_items),
+            "processing_owner_requests": len(processing_owner_request_items),
             "pending_owner_mentions": len(owner_mention_items),
+            "new_owner_mentions": len(new_owner_mention_items),
+            "processing_owner_mentions": len(processing_owner_mention_items),
             "latest_open_items": [item.to_dict() for item in open_items[:5]],
         }
 
@@ -1273,6 +1285,72 @@ class InboxService:
                 "delivery_mode": metadata["reply_delivery_mode"],
                 "reply_message_ids": reply_ids,
                 "reply_excerpt": excerpt[:140],
+            },
+        )
+        item.status = normalized_status
+        item.updated_at_utc = _now_utc_iso()
+        items = [row for row in items if row.item_id != item.item_id]
+        items.insert(0, item)
+        self._save_items(items)
+        return {"ok": True, "item": item.to_dict()}
+
+    def record_relay_delivery(
+        self,
+        *,
+        chat_id: str,
+        message_id: str,
+        notification_text: str,
+        delivery_mode: str,
+        delivered_to_chat_id: str = "",
+        relay_message_ids: list[str] | None = None,
+        actor: str = "kraab",
+        note: str = "",
+        status: str = "done",
+    ) -> dict[str, Any]:
+        """
+        Фиксирует, что relay-запрос реально доставлен владельцу.
+
+        Почему отдельный helper:
+        - `relay_request` отличается от owner_request: его задача считается
+          выполненной, как только уведомление ушло владельцу;
+        - transport-слой не должен оставлять такой item в `open`, иначе inbox
+          врёт о pending-задачах, хотя relay уже завершён;
+        - логика закрытия и trace metadata должна жить в одном месте, а не быть
+          размазанной по Telegram bridge.
+        """
+        dedupe = f"relay:{str(chat_id or '').strip()}:{str(message_id or '').strip()}"
+        normalized_status = self._normalize_status(status)
+        items = self._load_items()
+        item = next((row for row in items if row.dedupe_key == dedupe), None)
+        if item is None:
+            return {"ok": False, "error": "inbox_item_not_found"}
+
+        excerpt = str(notification_text or "").strip()
+        relay_ids = [str(row).strip() for row in (relay_message_ids or []) if str(row).strip()]
+        metadata = self._normalize_metadata(item.metadata)
+        metadata["relay_delivered_at_utc"] = _now_utc_iso()
+        metadata["relay_delivery_mode"] = str(delivery_mode or "saved_messages").strip().lower() or "saved_messages"
+        metadata["relay_delivery_excerpt"] = excerpt[:500]
+        metadata["relay_actor"] = str(actor or "kraab").strip().lower() or "kraab"
+        metadata["relay_message_ids"] = relay_ids
+        metadata["relay_target_chat_id"] = str(delivered_to_chat_id or "").strip()
+        metadata["relay_delivery_count"] = int(metadata.get("relay_delivery_count", 0) or 0) + 1
+        if normalized_status in self._closed_statuses:
+            metadata["resolved_at_utc"] = metadata["relay_delivered_at_utc"]
+            metadata["resolved_by"] = metadata["relay_actor"]
+            if note:
+                metadata["resolution_note"] = str(note).strip()
+        item.metadata = self._append_workflow_event(
+            metadata,
+            action="relay_sent",
+            actor=actor,
+            status=normalized_status,
+            note=note,
+            extra={
+                "delivery_mode": metadata["relay_delivery_mode"],
+                "relay_message_ids": relay_ids,
+                "relay_target_chat_id": metadata["relay_target_chat_id"],
+                "relay_excerpt": excerpt[:140],
             },
         )
         item.status = normalized_status
