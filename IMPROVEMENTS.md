@@ -54,11 +54,9 @@
 - Использовать `sendChatAction` (`typing`), чтобы индикатор набора текста висел всё время, пока ИИ думает.
 
 ### 8. Telegram-транспорт: live-smoke голосовых и hygiene ответов
-**Актуализация 2026-03-26:** закрытые части по `audio preflight` и restart-регрессии voice replies перенесены в `RESOLVED.md`.
+**Актуализация 2026-03-27:** owner private text+voice roundtrip и mention-gated/group flow уже подтверждены живым E2E через второй Telegram MCP аккаунт `p0lrd`; детали и артефакты перенесены в `RESOLVED.md`.
 **Что остаётся открытым:**
-- Прогнать живой Telegram smoke на `voice note` именно в mention-gated/group flow: owner text+voice roundtrip уже подтверждён живым сценарием 2026-03-27, но групповой/mention-gated путь ещё не закрыт.
-
-**Наблюдение 2026-03-27:** из текущей Codex-сессии Telegram MCP подключён к userbot-аккаунту `Yung Nagato`, а не к owner-аккаунту `p0lrd`, поэтому честно автоматизировать новый входящий group mention/reply owner'а из этой сессии нельзя. Пока это не баг runtime, а ограничение тестового контура; для доказательной базы добавлен launcher `Collect Telegram Transport Evidence.command`.
+- Разобрать graceful-content для группового fallback-ответа `No response from OpenClaw.`: transport честно доставляет text+voice и inbox lifecycle закрывается, но сам fallback-текст для части group-сценариев пока слишком сырой.
 
 ### 9. Обновление Vision API и чтение скриншотов
 **Симптом:** `vision_read.py` стучился в устаревшую модель `gemini-1.5-pro-latest` (ошибка 404).

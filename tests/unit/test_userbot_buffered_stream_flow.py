@@ -341,3 +341,207 @@ async def test_process_message_serialized_defers_long_text_route_to_background(
 
     background_release.set()
     await asyncio.wait_for(task, timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_process_message_serialized_falls_back_to_send_message_when_initial_reply_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Стартовый ack не должен ломать background-path, если Telegram валит reply."""
+    bot = _make_buffered_bot_stub()
+    placeholder = SimpleNamespace(chat=SimpleNamespace(id=126), id=902, text="", caption="", delete=AsyncMock())
+    bot.client.send_message = AsyncMock(return_value=placeholder)
+    incoming = SimpleNamespace(
+        id=13,
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Сделай ещё одну долгую задачу",
+        caption=None,
+        photo=None,
+        voice=None,
+        audio=None,
+        chat=SimpleNamespace(id=126, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(side_effect=RuntimeError("MESSAGE_ID_INVALID")),
+    )
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL,
+        source="unit-test",
+        matched_subject="tester",
+    )
+    background_started = asyncio.Event()
+    background_release = asyncio.Event()
+
+    async def _fake_run_llm_request_flow(**kwargs):
+        _ = kwargs
+        background_started.set()
+        await background_release.wait()
+
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_LLM_HANDOFF",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(bot, "_run_llm_request_flow", _fake_run_llm_request_flow)
+    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
+
+    await bot._process_message_serialized(
+        message=incoming,
+        user=incoming.from_user,
+        access_profile=access_profile,
+        is_allowed_sender=True,
+        chat_id=str(incoming.chat.id),
+    )
+
+    bot.client.send_message.assert_awaited()
+    await asyncio.wait_for(background_started.wait(), timeout=0.2)
+    task = bot._get_active_chat_background_task(str(incoming.chat.id))
+    assert task is not None
+
+    background_release.set()
+    await asyncio.wait_for(task, timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_process_message_serialized_queues_after_active_background_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Новый запрос не должен падать в inline-path, если в чате уже есть background-task."""
+    bot = _make_buffered_bot_stub()
+    incoming = SimpleNamespace(
+        id=13,
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Сделай ещё одну долгую задачу",
+        caption=None,
+        photo=None,
+        voice=None,
+        audio=None,
+        chat=SimpleNamespace(id=126, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=126), id=902, text="", caption="", delete=AsyncMock())),
+    )
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL,
+        source="unit-test",
+        matched_subject="tester",
+    )
+    previous_release = asyncio.Event()
+    queued_started = asyncio.Event()
+
+    async def _previous_task() -> None:
+        await previous_release.wait()
+
+    async def _fake_finish_after_previous(*, previous_task: asyncio.Task, **kwargs) -> None:
+        _ = kwargs
+        await previous_task
+        queued_started.set()
+
+    previous_task = asyncio.create_task(_previous_task())
+    bot._register_chat_background_task(str(incoming.chat.id), previous_task)
+
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_LLM_HANDOFF",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
+    monkeypatch.setattr(bot, "_finish_ai_request_background_after_previous", _fake_finish_after_previous)
+    bot._run_llm_request_flow = AsyncMock()
+
+    await bot._process_message_serialized(
+        message=incoming,
+        user=incoming.from_user,
+        access_profile=access_profile,
+        is_allowed_sender=True,
+        chat_id=str(incoming.chat.id),
+    )
+
+    bot._run_llm_request_flow.assert_not_awaited()
+    bot._mark_incoming_item_background_started.assert_called_once()
+    edited_texts = [call.args[1] for call in bot._safe_edit.await_args_list]
+    assert any("поставлен сразу за ней" in text.lower() for text in edited_texts)
+
+    previous_release.set()
+    await asyncio.wait_for(queued_started.wait(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_get_active_chat_background_task_cancels_stale_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stale background-task должен отменяться и не блокировать новый запрос."""
+    bot = _make_buffered_bot_stub()
+    release = asyncio.Event()
+
+    async def _stuck_task() -> None:
+        await release.wait()
+
+    task = asyncio.create_task(_stuck_task())
+    bot._register_chat_background_task("777", task)
+    bot._chat_background_task_started_at["777"] = 10.0
+
+    monkeypatch.setattr(userbot_bridge_module.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_TASK_STALE_TIMEOUT_SEC",
+        60.0,
+        raising=False,
+    )
+
+    active_task = bot._get_active_chat_background_task("777")
+
+    assert active_task is None
+    assert "777" not in bot._chat_background_tasks
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_process_message_serialized_survives_initial_ack_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Сбой на первом Telegram-ack не должен оставлять owner request без background handoff."""
+    bot = _make_buffered_bot_stub()
+    incoming = SimpleNamespace(
+        id=14,
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Короткий текст",
+        caption=None,
+        photo=None,
+        voice=None,
+        audio=None,
+        chat=SimpleNamespace(id=127, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(side_effect=RuntimeError("telegram reply failed")),
+    )
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL,
+        source="unit-test",
+        matched_subject="tester",
+    )
+    background_started = asyncio.Event()
+
+    async def _fake_finish_background(**kwargs) -> None:
+        _ = kwargs
+        background_started.set()
+
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_LLM_HANDOFF",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
+    monkeypatch.setattr(bot, "_finish_ai_request_background", _fake_finish_background)
+
+    await bot._process_message_serialized(
+        message=incoming,
+        user=incoming.from_user,
+        access_profile=access_profile,
+        is_allowed_sender=True,
+        chat_id=str(incoming.chat.id),
+    )
+
+    await asyncio.wait_for(background_started.wait(), timeout=0.2)
+    bot._mark_incoming_item_background_started.assert_called_once()

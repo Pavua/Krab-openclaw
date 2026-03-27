@@ -92,3 +92,21 @@
   - `pytest -q tests/unit/test_telegram_transport_evidence.py`
   - `Collect Telegram Transport Evidence.command`
   - живой артефакт: [telegram_transport_evidence_20260327-171617.json](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/telegram_transport_evidence_20260327-171617.json)
+
+### Private explicit trigger и mention-gated/group flow подтверждены живым second-account E2E
+- Причина: после подключения второго Telegram MCP аккаунта `p0lrd` нужно было честно проверить не только self/owner path, но и реальный inbound от другого аккаунта, включая `owner_request` и `owner_mention`.
+- Что сделано:
+  - в [src/userbot_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/src/userbot_bridge.py) userbot-путь усилен против застревания новых запросов в `open`: stale per-chat background-task теперь отменяется, новый owner-запрос ставится в честную background-очередь вместо отката в inline-path, а initial Telegram ack больше не валит handoff при сбое `reply()`;
+  - в [tests/unit/test_userbot_buffered_stream_flow.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_userbot_buffered_stream_flow.py) добавлены регрессии на stale background-task, очередь второго фонового запроса и выживание при падении initial ack;
+  - проведён live E2E через второй Telegram MCP аккаунт `p0lrd`, evidence сохранён в [output/reports/TELEGRAM_OWNER_E2E_SECOND_ACCOUNT_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/TELEGRAM_OWNER_E2E_SECOND_ACCOUNT_2026-03-27.md).
+- Проверка:
+  - `pytest -q tests/unit/test_userbot_buffered_stream_flow.py tests/unit/test_userbot_message_batching.py`
+  - private inbound explicit trigger:
+    - persisted inbox item `incoming:312322764:11432`
+    - text delivery `11434`
+    - voice delivery `11435`
+  - group mention / owner mention в `YMB FAMILY FOREVER` (`-1001804661353`):
+    - persisted inbox items `incoming:-1001804661353:764818` и `incoming:-1001804661353:764820`
+    - queue handoff `764821`
+    - финальный text `764824`
+    - voice `764825`

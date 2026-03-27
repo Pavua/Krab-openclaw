@@ -2734,7 +2734,7 @@ class KraabUserbot:
             if getattr(source_message, "id", None):
                 delivered_ids.append(str(source_message.id))
             for part in parts[1:]:
-                sent = await source_message.reply(part)
+                sent = await self._safe_reply_or_send_new(source_message, part)
                 if getattr(sent, "id", None):
                     delivered_ids.append(str(sent.id))
             return {
@@ -2772,7 +2772,7 @@ class KraabUserbot:
         if getattr(temp_message, "id", None):
             delivered_ids.append(str(temp_message.id))
         for part in parts[1:]:
-            sent = await source_message.reply(part)
+            sent = await self._safe_reply_or_send_new(source_message, part)
             if getattr(sent, "id", None):
                 delivered_ids.append(str(sent.id))
         return {
@@ -3299,6 +3299,26 @@ class KraabUserbot:
                 return await self.client.send_message(msg.chat.id, target_text[:4000])
             raise
 
+    async def _safe_reply_or_send_new(self, msg: Message, text: str) -> Message:
+        """
+        Безопасно отвечает на сообщение через reply с fallback на send_message.
+
+        Это защищает private owner-path от silent-drop, когда Telegram принимает
+        обычную отправку в чат, но валит именно reply на конкретный message id.
+        """
+        target_text = (text or "").strip() or "…"
+        try:
+            sent = await msg.reply(target_text)
+            return sent or msg
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "telegram_reply_fallback_send_new",
+                chat_id=str(getattr(getattr(msg, "chat", None), "id", "") or ""),
+                message_id=str(getattr(msg, "id", "") or ""),
+                error=str(exc),
+            )
+            return await self.client.send_message(msg.chat.id, target_text)
+
     def _get_command_args(self, message: Message) -> str:
         """Извлекает аргументы команды, убирая саму команду"""
         if not message.text:
@@ -3635,24 +3655,83 @@ class KraabUserbot:
         if tasks is None:
             tasks = {}
             self._chat_background_tasks = tasks
+        started_at_rows = getattr(self, "_chat_background_task_started_at", None)
+        if started_at_rows is None:
+            started_at_rows = {}
+            self._chat_background_task_started_at = started_at_rows
         chat_key = str(chat_id or "").strip() or "unknown"
+        task_started_at = time.monotonic()
         tasks[chat_key] = task
+        started_at_rows[chat_key] = task_started_at
 
         def _cleanup(_task: asyncio.Task) -> None:
             current = tasks.get(chat_key)
             if current is _task:
                 tasks.pop(chat_key, None)
+            current_started_at = started_at_rows.get(chat_key)
+            if current_started_at == task_started_at:
+                started_at_rows.pop(chat_key, None)
 
         task.add_done_callback(_cleanup)
 
     def _get_active_chat_background_task(self, chat_id: str) -> asyncio.Task | None:
         """Возвращает активную background-task чата, если она ещё жива."""
         tasks = getattr(self, "_chat_background_tasks", None) or {}
+        started_at_rows = getattr(self, "_chat_background_task_started_at", None) or {}
         chat_key = str(chat_id or "").strip() or "unknown"
         task = tasks.get(chat_key)
-        if task and not task.done():
-            return task
+        if task is None:
+            started_at_rows.pop(chat_key, None)
+            return None
+        if task.done():
+            tasks.pop(chat_key, None)
+            started_at_rows.pop(chat_key, None)
+            return None
+        stale_timeout_sec = max(
+            60.0,
+            float(getattr(config, "USERBOT_BACKGROUND_TASK_STALE_TIMEOUT_SEC", 900.0) or 900.0),
+        )
+        started_at = float(started_at_rows.get(chat_key) or 0.0)
+        if started_at > 0.0:
+            age_sec = max(0.0, time.monotonic() - started_at)
+            if age_sec > stale_timeout_sec:
+                logger.warning(
+                    "chat_background_task_stale_cancelled",
+                    chat_id=chat_key,
+                    age_sec=round(age_sec, 3),
+                    stale_timeout_sec=stale_timeout_sec,
+                )
+                task.cancel()
+                tasks.pop(chat_key, None)
+                started_at_rows.pop(chat_key, None)
+                return None
+        return task
         return None
+
+    async def _finish_ai_request_background_after_previous(
+        self,
+        *,
+        previous_task: asyncio.Task,
+        **kwargs: Any,
+    ) -> None:
+        """
+        Запускает новую background-задачу только после завершения предыдущей.
+
+        Почему это отдельный helper:
+        - новый owner-запрос не должен падать обратно в inline-path только потому,
+          что в чате уже есть активный фоновой run;
+        - так мы честно помечаем входящий запрос как `background_started`, не
+          удерживая per-chat lock до конца старой задачи;
+        - если предыдущая задача упала, новая всё равно должна стартовать.
+        """
+        chat_id = str(kwargs.get("chat_id") or "").strip()
+        try:
+            await asyncio.shield(previous_task)
+        except asyncio.CancelledError:
+            logger.warning("chat_background_task_previous_cancelled", chat_id=chat_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat_background_task_previous_failed", chat_id=chat_id, error=str(exc))
+        await self._finish_ai_request_background(**kwargs)
 
     @staticmethod
     def _build_background_handoff_notice(query: str) -> str:
@@ -4271,7 +4350,10 @@ class KraabUserbot:
             cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
             if cmd_word in self._known_commands:
                 if not access_profile.can_execute_command(cmd_word, self._known_commands):
-                    await message.reply(self._build_command_access_denied_text(cmd_word, access_profile))
+                    await self._safe_reply_or_send_new(
+                        message,
+                        self._build_command_access_denied_text(cmd_word, access_profile),
+                    )
                 return
 
         has_document = bool(getattr(message, "document", None))
@@ -4310,7 +4392,10 @@ class KraabUserbot:
         if not query and has_audio_message:
             query, voice_error = await self._transcribe_audio_message(message)
             if not query:
-                await message.reply(voice_error or "❌ Не удалось распознать голосовое сообщение.")
+                await self._safe_reply_or_send_new(
+                    message,
+                    voice_error or "❌ Не удалось распознать голосовое сообщение.",
+                )
                 return
         elif query and not message.photo and not has_audio_message:
             message, query = await self._coalesce_private_text_burst(
@@ -4365,7 +4450,10 @@ class KraabUserbot:
             for role in ROLES:
                 if role in text.lower():
                     self.current_role = role
-                    await message.reply(f"🎭 **Режим изменен:** `{role}`. Слушаю.")
+                    await self._safe_reply_or_send_new(
+                        message,
+                        f"🎭 **Режим изменен:** `{role}`. Слушаю.",
+                    )
                     _typing_stop_event.set()
                     _typing_task.cancel()
                     await asyncio.gather(_typing_task, return_exceptions=True)
@@ -4373,9 +4461,28 @@ class KraabUserbot:
 
         temp_msg = message
         if not is_self:
-            temp_msg = await message.reply(
-                "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут..."
-            )
+            try:
+                temp_msg = await asyncio.wait_for(
+                    self._safe_reply_or_send_new(
+                        message,
+                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
+                    ),
+                    timeout=10.0,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
+                try:
+                    temp_msg = await self.client.send_message(
+                        message.chat.id,
+                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
+                    )
+                except Exception as send_exc:  # noqa: BLE001
+                    logger.warning(
+                        "initial_request_ack_send_fallback_failed",
+                        chat_id=chat_id,
+                        error=str(send_exc),
+                    )
+                    temp_msg = message
         else:
             message = await self._safe_edit(
                 message,
@@ -4590,29 +4697,16 @@ class KraabUserbot:
             and not bool(message.photo)
             and not has_document
         )
-        if should_defer_background and self._get_active_chat_background_task(chat_id):
-            await self._run_llm_request_flow(
-                message=message,
-                temp_msg=temp_msg,
-                is_self=is_self,
-                query=query,
-                chat_id=chat_id,
-                runtime_chat_id=runtime_chat_id,
-                access_profile=access_profile,
-                is_allowed_sender=is_allowed_sender,
-                incoming_item_result=incoming_item_result,
-                images=images,
-                force_cloud=force_cloud,
-                system_prompt=system_prompt,
-                action_stop_event=_typing_stop_event,
-                action_task=_typing_task,
-                prefer_send_message_for_background=False,
-            )
-            return
-
         if should_defer_background:
+            active_background_task = self._get_active_chat_background_task(chat_id)
             try:
                 handoff_notice = self._build_background_handoff_notice(query)
+                if active_background_task is not None:
+                    handoff_notice = (
+                        f"{handoff_notice}\n\n"
+                        "🧵 В этом чате ещё завершается предыдущая фоновая задача. "
+                        "Новый запрос поставлен сразу за ней."
+                    )
                 await self._safe_edit(temp_msg, handoff_notice)
             except Exception:
                 pass
@@ -4620,24 +4714,33 @@ class KraabUserbot:
                 incoming_item_result=incoming_item_result,
                 note="background_processing_started",
             )
-            background_task = asyncio.create_task(
-                self._finish_ai_request_background(
-                    message=message,
-                    temp_msg=temp_msg,
-                    is_self=is_self,
-                    query=query,
-                    chat_id=chat_id,
-                    runtime_chat_id=runtime_chat_id,
-                    access_profile=access_profile,
-                    is_allowed_sender=is_allowed_sender,
-                    incoming_item_result=incoming_item_result,
-                    images=images,
-                    force_cloud=force_cloud,
-                    system_prompt=system_prompt,
-                    action_stop_event=_typing_stop_event,
-                    action_task=_typing_task,
+            background_kwargs = {
+                "message": message,
+                "temp_msg": temp_msg,
+                "is_self": is_self,
+                "query": query,
+                "chat_id": chat_id,
+                "runtime_chat_id": runtime_chat_id,
+                "access_profile": access_profile,
+                "is_allowed_sender": is_allowed_sender,
+                "incoming_item_result": incoming_item_result,
+                "images": images,
+                "force_cloud": force_cloud,
+                "system_prompt": system_prompt,
+                "action_stop_event": _typing_stop_event,
+                "action_task": _typing_task,
+            }
+            if active_background_task is not None:
+                background_task = asyncio.create_task(
+                    self._finish_ai_request_background_after_previous(
+                        previous_task=active_background_task,
+                        **background_kwargs,
+                    )
                 )
-            )
+            else:
+                background_task = asyncio.create_task(
+                    self._finish_ai_request_background(**background_kwargs)
+                )
             self._register_chat_background_task(chat_id, background_task)
             return
 
@@ -4696,21 +4799,21 @@ class KraabUserbot:
 
         except KrabError as e:
             logger.warning("provider_error", error=str(e), retryable=e.retryable)
-            await message.reply(e.user_message or str(e))
+            await self._safe_reply_or_send_new(message, e.user_message or str(e))
         except RouterError as e:
             logger.warning("routing_error", code=e.code, error=str(e))
-            await message.reply(user_message_for_surface(e, telegram=True))
+            await self._safe_reply_or_send_new(message, user_message_for_surface(e, telegram=True))
         except Exception as e:
             if self._is_auth_key_invalid(e):
                 logger.error("telegram_session_invalid_in_handler", error=str(e))
                 await self._recover_telegram_session(reason=str(e))
                 return
             logger.error("process_message_error", error=str(e))
-            await message.reply(f"🦀❌ **Ошибка в клешнях:** `{str(e)}`")
+            await self._safe_reply_or_send_new(message, f"🦀❌ **Ошибка в клешнях:** `{str(e)}`")
 
     async def _run_self_test(self, message: Message):
         """Вызов внешнего теста здоровья"""
-        await message.reply("🧪 Запуск теста...")
+        await self._safe_reply_or_send_new(message, "🧪 Запуск теста...")
         proc = await asyncio.create_subprocess_exec(
             "python3",
             "tests/autonomous_test.py",
@@ -4718,7 +4821,7 @@ class KraabUserbot:
             stderr=asyncio.subprocess.DEVNULL,
         )
         asyncio.create_task(proc.wait())  # reap in background
-        await message.reply("✅ Тест запущен в фоне. Проверьте `health_check.log`.")
+        await self._safe_reply_or_send_new(message, "✅ Тест запущен в фоне. Проверьте `health_check.log`.")
 
     async def _get_chat_context(self, chat_id: int, limit: int = 20, max_chars: int = 8000) -> str:
         """
