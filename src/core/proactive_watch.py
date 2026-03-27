@@ -335,12 +335,18 @@ class ProactiveWatchService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("proactive_watch_inbox_sync_failed", reason=reason, error=str(exc))
             
-            # Создаем proactive_action item только для actionable transitions
-            actionable_reasons = {
-                "gateway_down", "gateway_recovered", 
-                "scheduler_backlog_created", "scheduler_backlog_cleared"
+            # `proactive_action` нужен как owner-visible trace именно для активной проблемы.
+            # Recovery-событие должно закрывать открытый trace проблемы, а не оставлять ещё
+            # один `open` item с пометкой "всё восстановилось".
+            open_trace_reasons = {
+                "gateway_down",
+                "scheduler_backlog_created",
             }
-            if reason in actionable_reasons:
+            close_trace_reasons = {
+                "gateway_recovered": "gateway_down",
+                "scheduler_backlog_cleared": "scheduler_backlog_created",
+            }
+            if reason in open_trace_reasons:
                 try:
                     inbox_service.upsert_item(
                         dedupe_key=f"proactive:watch_trigger:{reason}",
@@ -357,14 +363,29 @@ class ProactiveWatchService:
                             approval_scope="owner",
                         ),
                         metadata={
-                            "action_type": "watch_trigger", 
-                            "reason": reason, 
+                            "action_type": "watch_trigger",
+                            "reason": reason,
                             "alerted": alerted,
                             "latest_snapshot_ts": snapshot.ts_utc,
                         },
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("proactive_watch_action_trace_failed", reason=reason, error=str(exc))
+            elif reason in close_trace_reasons:
+                try:
+                    inbox_service.set_status_by_dedupe(
+                        f"proactive:watch_trigger:{close_trace_reasons[reason]}",
+                        status="done",
+                        actor="krab-internal",
+                        note=f"watch_recovered:{reason}",
+                        event_action="resolved",
+                        metadata_updates={
+                            "recovered_reason": reason,
+                            "latest_snapshot_ts": snapshot.ts_utc,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("proactive_watch_action_trace_close_failed", reason=reason, error=str(exc))
         return {
             "snapshot": asdict(snapshot),
             "reason": reason,

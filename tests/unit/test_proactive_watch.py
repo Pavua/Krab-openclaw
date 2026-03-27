@@ -156,7 +156,7 @@ def test_get_status_reads_legacy_state_as_fallback(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_capture_gateway_transition_syncs_inbox(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`gateway_down -> gateway_recovered` должен открывать и закрывать escalation item в inbox."""
+    """`gateway_down -> gateway_recovered` должен закрывать и watch_alert, и proactive trace."""
     service = ProactiveWatchService(state_path=tmp_path / "watch_state.json", alert_cooldown_sec=60)
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     snapshots = [
@@ -187,6 +187,10 @@ async def test_capture_gateway_transition_syncs_inbox(monkeypatch: pytest.Monkey
     assert up["reason"] == "gateway_recovered"
     assert done_items
     assert done_items[0]["dedupe_key"] == "watch:gateway_down"
+    proactive_done = inbox.list_items(status="done", kind="proactive_action", limit=5)
+    assert proactive_done
+    assert proactive_done[0]["dedupe_key"] == "proactive:watch_trigger:gateway_down"
+    assert proactive_done[0]["metadata"]["recovered_reason"] == "gateway_recovered"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -277,6 +281,39 @@ async def test_actionable_reason_creates_inbox_item(
     proactive_items = inbox.list_items(kind="proactive_action", limit=5)
     assert len(proactive_items) == 1
     assert proactive_items[0]["metadata"]["reason"] == "gateway_down"
+
+
+@pytest.mark.asyncio
+async def test_recovery_reason_closes_existing_proactive_action_trace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`gateway_recovered` не должен плодить новый open trace, а обязан закрыть `gateway_down`."""
+    service = ProactiveWatchService(state_path=tmp_path / "watch.json", alert_cooldown_sec=0)
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    snapshots = [
+        _snapshot(),
+        _snapshot(ts_utc="2026-03-12T05:01:00+00:00", gateway_ok=False),
+        _snapshot(ts_utc="2026-03-12T05:02:00+00:00", gateway_ok=True),
+    ]
+
+    async def _collect():
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(service, "collect_snapshot", _collect)
+    monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
+    monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+
+    await service.capture(manual=False, persist_memory=False, notify=False)
+    await service.capture(manual=False, persist_memory=False, notify=False)
+    await service.capture(manual=False, persist_memory=False, notify=False)
+
+    open_proactive = inbox.list_items(status="open", kind="proactive_action", limit=10)
+    done_proactive = inbox.list_items(status="done", kind="proactive_action", limit=10)
+
+    assert open_proactive == []
+    assert done_proactive
+    assert done_proactive[0]["dedupe_key"] == "proactive:watch_trigger:gateway_down"
+    assert done_proactive[0]["metadata"]["recovered_reason"] == "gateway_recovered"
 
 
 @pytest.mark.asyncio

@@ -168,3 +168,51 @@ def test_group_reply_to_me_is_captured_as_owner_mention(
     assert items
     assert items[0]["metadata"]["is_reply_to_me"] is True
     assert inbox.get_summary()["pending_owner_mentions"] == 1
+
+
+def test_incoming_owner_message_closes_open_relay_request_for_same_chat(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Если owner уже вернулся в тот же чат, старый relay_request должен закрыться."""
+    bot = _build_inbox_bot_stub(has_trigger=True)
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    inbox.upsert_item(
+        dedupe_key="relay:312322764:11402",
+        kind="relay_request",
+        source="telegram-userbot",
+        title="📨 Relay от @p0lrd",
+        body="relay body",
+        severity="warning",
+        status="open",
+        identity=inbox.build_identity(
+            channel_id="312322764",
+            team_id="owner",
+            trace_id="relay:test",
+            approval_scope="owner",
+        ),
+        metadata={"chat_id": "312322764", "message_id": "11402"},
+    )
+    incoming, _ = _make_message(
+        chat_id=312322764,
+        chat_type=enums.ChatType.PRIVATE,
+        text="Краб, проверь этот диалог",
+        message_id=11427,
+        reply_to_me=False,
+    )
+
+    result = _run_inbox_sync(
+        bot=bot,
+        inbox=inbox,
+        message=incoming,
+        monkeypatch=monkeypatch,
+        query=incoming.text,
+        has_trigger=True,
+        is_reply_to_me=False,
+    )
+
+    assert result["ok"] is True
+    relay_items = inbox.list_items(kind="relay_request", limit=5)
+    assert relay_items
+    assert relay_items[0]["status"] == "done"
+    assert relay_items[0]["metadata"]["resolution_note"] == "owner_followed_up_after_relay"

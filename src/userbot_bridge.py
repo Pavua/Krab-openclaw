@@ -2921,6 +2921,49 @@ class KraabUserbot:
             return False
         return bool(str(query or "").strip() or has_photo or has_audio or is_reply_to_me)
 
+    def _acknowledge_open_relay_requests_for_chat(
+        self,
+        *,
+        chat_id: str,
+        actor: str = "kraab",
+        note: str = "owner_followed_up_after_relay",
+    ) -> dict[str, Any]:
+        """
+        Закрывает открытые relay_request для чата, если владелец уже вернулся в диалог.
+
+        Почему это нужно:
+        - relay item создаётся как owner-visible напоминание о том, что в чате был
+          запрос "передай/сообщи";
+        - если затем owner уже пишет в этот же чат, старый relay долг больше не
+          отражает реальное состояние и начинает захламлять inbox summary;
+        - закрываем только open/acked relay_request с совпадающим `chat_id`.
+        """
+        normalized_chat_id = str(chat_id or "").strip()
+        if not normalized_chat_id:
+            return {"ok": False, "skipped": True, "reason": "chat_id_missing"}
+
+        matched_item_ids: list[str] = []
+        for item in inbox_service.list_items(status="open", kind="relay_request", limit=100):
+            metadata = item.get("metadata") or {}
+            if str(metadata.get("chat_id") or "").strip() != normalized_chat_id:
+                continue
+            item_id = str(item.get("item_id") or "").strip()
+            if item_id:
+                matched_item_ids.append(item_id)
+
+        if not matched_item_ids:
+            return {"ok": True, "updated_count": 0, "item_ids": []}
+
+        result = inbox_service.bulk_update_status(
+            item_ids=matched_item_ids,
+            status="done",
+            actor=actor,
+            note=note,
+        )
+        result["updated_count"] = int(result.get("success_count") or 0)
+        result["item_ids"] = matched_item_ids
+        return result
+
     def _sync_incoming_message_to_inbox(
         self,
         *,
@@ -2956,7 +2999,7 @@ class KraabUserbot:
         chat_obj = getattr(message, "chat", None)
         chat_type = getattr(chat_obj, "type", "")
         normalized_chat_type = str(getattr(chat_type, "value", chat_type) or "").strip().lower()
-        return inbox_service.upsert_incoming_owner_request(
+        result = inbox_service.upsert_incoming_owner_request(
             chat_id=str(getattr(chat_obj, "id", "") or ""),
             message_id=str(getattr(message, "id", "") or ""),
             text=str(query or "").strip(),
@@ -2968,6 +3011,17 @@ class KraabUserbot:
             has_photo=bool(getattr(message, "photo", None)),
             has_audio=bool(has_audio_message),
         )
+        try:
+            self._acknowledge_open_relay_requests_for_chat(
+                chat_id=str(getattr(chat_obj, "id", "") or ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "relay_request_auto_ack_failed",
+                chat_id=str(getattr(chat_obj, "id", "") or ""),
+                error=str(exc),
+            )
+        return result
 
     @staticmethod
     def _detect_relay_intent(query: str) -> bool:
@@ -3041,7 +3095,20 @@ class KraabUserbot:
                 f"Чат: `{chat_id_str}` ({chat_type})\n\n"
                 f"**Сообщение:**\n{excerpt[:800]}"
             )
-            await self.client.send_message(me.id, notification)
+            sent_message = await self.client.send_message(me.id, notification)
+            try:
+                inbox_service.record_relay_delivery(
+                    chat_id=chat_id_str,
+                    message_id=message_id_str,
+                    notification_text=notification,
+                    delivery_mode="saved_messages",
+                    delivered_to_chat_id=str(getattr(me, "id", "") or ""),
+                    relay_message_ids=[str(getattr(sent_message, "id", "") or "")],
+                    actor="kraab",
+                    note="relay_owner_notified",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("relay_inbox_resolution_failed", error=str(exc))
             logger.info(
                 "relay_owner_notified",
                 sender=sender_display,

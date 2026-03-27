@@ -151,3 +151,19 @@
   - `./venv/bin/python scripts/cleanup_old_inbox_items.py` успешно закрыл оба stale item-а
   - `curl http://127.0.0.1:8080/api/health/lite` спустя короткий TTL-кеш показал `open_items=4`, `pending_owner_requests=2`
   - evidence: [output/reports/INBOX_STALE_OWNER_REQUEST_CLEANUP_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_STALE_OWNER_REQUEST_CLEANUP_2026-03-27.md)
+
+### Inbox lifecycle теперь автоматически закрывает stale relay и recovery-traces вместо накопления open-хвоста
+- Причина: в runtime оставались два системных долга:
+  - `relay_request` создавался в `_escalate_relay_to_owner()`, но никогда не закрывался автоматически, даже если владелец уже вернулся в тот же чат;
+  - `proactive_watch` открывал `proactive_action` не только на `gateway_down`, но и на `gateway_recovered/scheduler_backlog_cleared`, то есть recovery-события тоже оставались `open`.
+- Что сделано:
+  - в [src/userbot_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/src/userbot_bridge.py) добавлен `_acknowledge_open_relay_requests_for_chat()`: при следующем directed owner message в том же чате старые `open relay_request` автоматически переводятся в `done`;
+  - в [src/core/proactive_watch.py](/Users/pablito/Antigravity_AGENTS/Краб/src/core/proactive_watch.py) `proactive_action` теперь открывается только для активных проблем (`gateway_down`, `scheduler_backlog_created`), а recovery-события закрывают соответствующий trace через `set_status_by_dedupe(...)`;
+  - добавлены регрессии в [tests/unit/test_userbot_inbox_flow.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_userbot_inbox_flow.py) и [tests/unit/test_proactive_watch.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_proactive_watch.py).
+- Проверка:
+  - `pytest -q tests/unit/test_userbot_inbox_flow.py tests/unit/test_proactive_watch.py tests/unit/test_proactive_inbox_trace.py tests/unit/test_scheduler.py -q` -> `26 passed`
+  - live cleanup existing runtime-tail:
+    - `relay:312322764:11402` -> `done`, note `owner_followed_up_after_relay`
+    - legacy `proactive:watch_trigger:route_model_changed:2026-03-12T05:05:00+00:00` -> `done`, note `legacy_non_actionable_proactive_trace`
+  - `GET /api/inbox/status` и `GET /api/health/lite` после TTL-кеша показывают уже `open_items=2`, `attention_items=0`, `pending_owner_requests=2`
+  - evidence: [output/reports/INBOX_LIFECYCLE_TRUTH_SYNC_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_LIFECYCLE_TRUTH_SYNC_2026-03-27.md)
