@@ -57,7 +57,8 @@
 **Актуализация 2026-03-26:** закрытые части по `audio preflight` и restart-регрессии voice replies перенесены в `RESOLVED.md`.
 **Что остаётся открытым:**
 - Прогнать живой Telegram smoke на `voice note` именно в mention-gated/group flow: owner text+voice roundtrip уже подтверждён живым сценарием 2026-03-27, но групповой/mention-gated путь ещё не закрыт.
-- Перепроверить debouncing пересланных пачек сообщений живым сценарием, а не только логом `private_text_burst_coalesced`.
+
+**Наблюдение 2026-03-27:** из текущей Codex-сессии Telegram MCP подключён к userbot-аккаунту `Yung Nagato`, а не к owner-аккаунту `p0lrd`, поэтому честно автоматизировать новый входящий group mention/reply owner'а из этой сессии нельзя. Пока это не баг runtime, а ограничение тестового контура; для доказательной базы добавлен launcher `Collect Telegram Transport Evidence.command`.
 
 ### 9. Обновление Vision API и чтение скриншотов
 **Симптом:** `vision_read.py` стучился в устаревшую модель `gemini-1.5-pro-latest` (ошибка 404).

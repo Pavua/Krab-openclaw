@@ -145,6 +145,78 @@ async def test_private_text_burst_coalesces_followup_messages(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+async def test_private_text_burst_retries_history_until_followups_appear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batching должен переживать краткую задержку появления follower-сообщений в history."""
+    bot = _make_batching_bot_stub()
+    first = _make_message(message_id=300, text="alpha", seconds_offset=0.0)
+    second = _make_message(message_id=301, text="beta", seconds_offset=0.2)
+    third = _make_message(message_id=302, text="gamma", seconds_offset=0.4)
+    sent_queries: list[str] = []
+    history_reads = {"count": 0}
+
+    async def _fake_history(chat_id: int, limit: int = 0):
+        _ = (chat_id, limit)
+        history_reads["count"] += 1
+        if history_reads["count"] == 1:
+            for row in (first,):
+                yield row
+            return
+        for row in (third, second, first):
+            yield row
+
+    async def _fake_stream(**kwargs):
+        sent_queries.append(kwargs["message"])
+        yield "Склеенный delayed-ответ"
+
+    bot.client = SimpleNamespace(
+        send_chat_action=AsyncMock(),
+        send_message=AsyncMock(),
+        send_voice=AsyncMock(),
+        get_chat_history=_fake_history,
+    )
+
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", _fake_stream)
+    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False)
+    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "TELEGRAM_MESSAGE_BATCH_SETTLE_INTERVAL_SEC",
+        0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "TELEGRAM_MESSAGE_BATCH_SETTLE_MAX_EXTRA_SEC",
+        0.05,
+        raising=False,
+    )
+    monkeypatch.setattr(userbot_bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
+
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL,
+        source="unit-test",
+        matched_subject="tester",
+    )
+    await bot._process_message_serialized(
+        message=first,
+        user=first.from_user,
+        access_profile=access_profile,
+        is_allowed_sender=True,
+        chat_id=str(first.chat.id),
+    )
+
+    assert history_reads["count"] >= 2
+    assert sent_queries == ["alpha\n\nbeta\n\ngamma"]
+    delivered_text = bot._deliver_response_parts.await_args.kwargs["full_response"]
+    assert delivered_text == "Склеенный delayed-ответ"
+    assert bot._consume_batched_followup_message_id(chat_id="123", message_id="301") is True
+    assert bot._consume_batched_followup_message_id(chat_id="123", message_id="302") is True
+
+
+@pytest.mark.asyncio
 async def test_process_message_skips_absorbed_followup(monkeypatch: pytest.MonkeyPatch) -> None:
     """Handler не должен повторно запускать обработку для уже поглощённого follower-сообщения."""
     bot = _make_batching_bot_stub()

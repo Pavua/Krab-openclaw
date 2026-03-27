@@ -3460,9 +3460,52 @@ class KraabUserbot:
         max_messages = max(1, int(getattr(config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6) or 6))
         max_chars = max(1, int(getattr(config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000) or 12000))
         history_limit = max(12, max_messages * 4)
-        history_rows: list[Message] = []
-        async for row in history_reader(message.chat.id, limit=history_limit):
-            history_rows.append(row)
+        # В реальном Telegram self-sent burst может появляться в server-side history
+        # не мгновенно: первый снимок истории иногда ещё не видит follower-сообщения,
+        # хотя они уже отправлены буквально через 100-200 мс. Поэтому даём короткий
+        # settle-poll и перечитываем историю несколько раз, пока список id не
+        # стабилизируется или не истечёт небольшой дополнительный бюджет.
+        settle_interval_sec = max(
+            0.05,
+            float(getattr(config, "TELEGRAM_MESSAGE_BATCH_SETTLE_INTERVAL_SEC", 0.18) or 0.18),
+        )
+        settle_max_extra_sec = max(
+            0.0,
+            float(getattr(config, "TELEGRAM_MESSAGE_BATCH_SETTLE_MAX_EXTRA_SEC", 0.72) or 0.72),
+        )
+
+        async def _read_recent_rows() -> list[Message]:
+            rows: list[Message] = []
+            async for row in history_reader(message.chat.id, limit=history_limit):
+                rows.append(row)
+            return rows
+
+        history_rows = await _read_recent_rows()
+        last_signature: tuple[int, ...] | None = None
+        settle_deadline = time.monotonic() + settle_max_extra_sec
+        while time.monotonic() < settle_deadline:
+            current_signature = tuple(
+                sorted(
+                    int(getattr(row, "id", 0) or 0)
+                    for row in history_rows
+                    if int(getattr(row, "id", 0) or 0) >= int(getattr(message, "id", 0) or 0)
+                )
+            )
+            if len(current_signature) > 1 and current_signature == last_signature:
+                break
+            last_signature = current_signature
+            await asyncio.sleep(settle_interval_sec)
+            refreshed_rows = await _read_recent_rows()
+            refreshed_signature = tuple(
+                sorted(
+                    int(getattr(row, "id", 0) or 0)
+                    for row in refreshed_rows
+                    if int(getattr(row, "id", 0) or 0) >= int(getattr(message, "id", 0) or 0)
+                )
+            )
+            history_rows = refreshed_rows
+            if refreshed_signature == current_signature:
+                break
 
         current_message_id = int(getattr(message, "id", 0) or 0)
         sender_id = int(getattr(user, "id", 0) or 0)

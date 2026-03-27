@@ -75,3 +75,20 @@
   - отдельное voice-сообщение пришло как message id `11411`;
   - `telegram_transcribe_voice(chat_id=312322764, message_id=11411)` подтвердил смысл voice-ответа;
   - evidence-отчёт сохранён в [output/reports/OWNER_TELEGRAM_VOICE_HYGIENE_SMOKE_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/OWNER_TELEGRAM_VOICE_HYGIENE_SMOKE_2026-03-27.md).
+
+### Private burst batching подтверждён unit-тестом и живым MCP-burst smoke
+- Причина: быстрые private-пачки сообщений должны схлопываться в один query, иначе userbot плодит несколько независимых AI-маршрутов и ответы расползаются по чату.
+- Что сделано: в [src/userbot_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/src/userbot_bridge.py) batching переведён с одноразового history-snapshot на короткий `settle-poll`, чтобы follower-сообщения успевали появиться в Telegram history перед финальной склейкой; в [tests/unit/test_userbot_message_batching.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_userbot_message_batching.py) добавлен regression на delayed history visibility.
+- Проверка:
+  - `source venv/bin/activate && pytest -q tests/unit/test_userbot_message_batching.py -q` -> `3 passed`
+  - live MCP-burst `BURSTMCP-20260327-172132`: сообщения `11423/11424/11425` ушли в одну секунду, а message `11425` стал единым anchor со склеенными `part 1/3`, `part 2/3` и `part 3/3`, что зафиксировано в [output/reports/PRIVATE_BURST_BATCHING_SMOKE_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/PRIVATE_BURST_BATCHING_SMOKE_2026-03-27.md).
+
+### Добавлен one-click сбор evidence по Telegram transport
+- Что сделано: добавлен CLI-скрипт [scripts/telegram_transport_evidence.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/telegram_transport_evidence.py) и launcher [Collect Telegram Transport Evidence.command](/Users/pablito/Antigravity_AGENTS/Краб/Collect%20Telegram%20Transport%20Evidence.command).
+- Что собирает:
+  - последние `owner_mention` из persisted inbox (`inbox_state.json`);
+  - сигнатуры `private_text_burst_coalesced` из `krab.log` / `openclaw.log`.
+- Проверка:
+  - `pytest -q tests/unit/test_telegram_transport_evidence.py`
+  - `Collect Telegram Transport Evidence.command`
+  - живой артефакт: [telegram_transport_evidence_20260327-171617.json](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/telegram_transport_evidence_20260327-171617.json)
