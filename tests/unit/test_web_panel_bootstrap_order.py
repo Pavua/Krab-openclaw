@@ -57,3 +57,19 @@ def test_owner_panel_schedules_bootstrap_recovery_after_transient_restart_failur
     assert '"ocTranslatorFoundationBadge"' in source
     assert "scheduleBootstrapRecoveryPasses();" in source
     assert 'refreshAll().catch((error) => console.error("refreshAll_visibility_recovery_failed", error));' in source
+
+
+def test_inbox_widget_uses_truthful_summary_and_runtime_statuses() -> None:
+    """Inbox-виджет должен брать truthful summary и работать с реальными inbox-статусами."""
+
+    source = _index_html_source()
+
+    assert 'fetch("/api/inbox/status")' in source
+    assert 'const pendingCount = Number(summary.fresh_open_items' in source
+    assert 'const staleAcked = Number(payload.stale_processing_items || 0);' in source
+    assert 'const safeId = String(item.item_id || item.id || "");' in source
+    assert 'const isStaleProcessing = _isInboxItemStaleProcessing(item);' in source
+    assert 'await postJson("/api/inbox/update", { item_id: itemId, status: action });' in source
+    assert '<option value="open">Открытые и в обработке</option>' in source
+    assert '<option value="acked">acked</option>' in source
+    assert '<option value="owner_request">owner_request</option>' in source

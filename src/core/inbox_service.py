@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +124,7 @@ class InboxService:
     _closed_statuses = {"done", "cancelled", "approved", "rejected"}
     _allowed_statuses = _open_statuses | _closed_statuses
     _allowed_severities = {"info", "warning", "error"}
+    _stale_processing_after = timedelta(minutes=15)
 
     def __init__(self, *, state_path: Path | None = None, max_items: int = 200) -> None:
         self.state_path = state_path or _default_state_path()
@@ -525,6 +526,7 @@ class InboxService:
         open_items = [item for item in items if item.status in self._open_statuses]
         fresh_open_items = [item for item in open_items if item.status == "open"]
         acked_items = [item for item in open_items if item.status == "acked"]
+        stale_acked_items = [item for item in acked_items if self._is_processing_stale(item)]
         warning_items = [item for item in open_items if item.severity in {"warning", "error"}]
         reminder_items = [item for item in open_items if item.kind == "reminder"]
         escalation_items = [item for item in open_items if item.kind.startswith("watch_")]
@@ -536,6 +538,12 @@ class InboxService:
         processing_owner_request_items = [item for item in owner_request_items if item.status == "acked"]
         new_owner_mention_items = [item for item in owner_mention_items if item.status == "open"]
         processing_owner_mention_items = [item for item in owner_mention_items if item.status == "acked"]
+        stale_owner_request_items = [
+            item for item in processing_owner_request_items if self._is_processing_stale(item)
+        ]
+        stale_owner_mention_items = [
+            item for item in processing_owner_mention_items if self._is_processing_stale(item)
+        ]
         return {
             "state_path": str(self.state_path),
             "account_id": current_account_id(),
@@ -544,6 +552,7 @@ class InboxService:
             "open_items": len(open_items),
             "fresh_open_items": len(fresh_open_items),
             "acked_items": len(acked_items),
+            "stale_processing_items": len(stale_acked_items),
             "attention_items": len(warning_items),
             "pending_reminders": len(reminder_items),
             "open_escalations": len(escalation_items),
@@ -552,11 +561,46 @@ class InboxService:
             "pending_owner_requests": len(owner_request_items),
             "new_owner_requests": len(new_owner_request_items),
             "processing_owner_requests": len(processing_owner_request_items),
+            "stale_processing_owner_requests": len(stale_owner_request_items),
             "pending_owner_mentions": len(owner_mention_items),
             "new_owner_mentions": len(new_owner_mention_items),
             "processing_owner_mentions": len(processing_owner_mention_items),
+            "stale_processing_owner_mentions": len(stale_owner_mention_items),
             "latest_open_items": [item.to_dict() for item in open_items[:5]],
         }
+
+    @classmethod
+    def _parse_item_activity_at(cls, item: InboxItem) -> datetime | None:
+        """
+        Возвращает timestamp последней активности item-а для truthful processing age.
+
+        Для фоновой обработки важнее момент последнего action/update, чем исходное
+        время создания. Это помогает отделить живую обработку от реально
+        застрявших `acked` item-ов.
+        """
+        metadata = item.metadata if isinstance(item.metadata, dict) else {}
+        for raw_value in (
+            metadata.get("last_action_at_utc"),
+            item.updated_at_utc,
+            item.created_at_utc,
+        ):
+            if not raw_value:
+                continue
+            try:
+                return datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+        return None
+
+    @classmethod
+    def _is_processing_stale(cls, item: InboxItem) -> bool:
+        """Определяет, что `acked` item слишком долго висит без нового прогресса."""
+        if item.status != "acked":
+            return False
+        activity_at = cls._parse_item_activity_at(item)
+        if activity_at is None:
+            return False
+        return datetime.now(timezone.utc) - activity_at >= cls._stale_processing_after
 
     def get_summary(self) -> dict[str, Any]:
         """Возвращает краткий owner-facing summary inbox."""

@@ -1692,17 +1692,23 @@
       <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
         <select id="inboxFilterStatus" class="field" style="width: auto; padding: 4px 8px; font-size: 0.8rem;"
           onchange="loadInboxItems()">
+          <option value="open">Открытые и в обработке</option>
           <option value="">Все статусы</option>
-          <option value="pending">pending</option>
-          <option value="resolved">resolved</option>
+          <option value="acked">acked</option>
+          <option value="done">done</option>
+          <option value="cancelled">cancelled</option>
+          <option value="approved">approved</option>
           <option value="rejected">rejected</option>
         </select>
         <select id="inboxFilterKind" class="field" style="width: auto; padding: 4px 8px; font-size: 0.8rem;"
           onchange="loadInboxItems()">
           <option value="">Все типы</option>
-          <option value="approval">approval</option>
-          <option value="escalation">escalation</option>
-          <option value="alert">alert</option>
+          <option value="owner_request">owner_request</option>
+          <option value="owner_mention">owner_mention</option>
+          <option value="owner_task">owner_task</option>
+          <option value="approval_request">approval_request</option>
+          <option value="relay_request">relay_request</option>
+          <option value="proactive_action">proactive_action</option>
         </select>
       </div>
 
@@ -6770,15 +6776,104 @@ ${channelsText}`;
     // ─── INBOX ──────────────────────────────────────────────────────────────
 
     const _INBOX_KIND_COLORS = {
-      approval:  "var(--accent-yellow, #f5a623)",
-      escalation:"var(--state-warn, #ff9800)",
-      alert:     "var(--state-error, #f44336)",
+      approval_request: "var(--accent-yellow, #f5a623)",
+      owner_request: "var(--accent-yellow, #f5a623)",
+      owner_mention: "var(--state-ok, #4caf50)",
+      owner_task: "var(--accent-blue, #4fa3ff)",
+      relay_request: "var(--state-warn, #ff9800)",
+      proactive_action: "var(--state-error, #f44336)",
     };
+    const _INBOX_STALE_PROCESSING_MS = 15 * 60 * 1000;
+
+    function _inboxStatusLabel(status) {
+      const normalized = String(status || "").trim().toLowerCase();
+      const labels = {
+        open: "NEW",
+        acked: "PROCESSING",
+        done: "DONE",
+        cancelled: "CANCELLED",
+        approved: "APPROVED",
+        rejected: "REJECTED",
+      };
+      return labels[normalized] || (normalized ? normalized.toUpperCase() : "—");
+    }
+
+    function _buildInboxMetaText(summary, itemsCount) {
+      const payload = summary && typeof summary === "object" ? summary : {};
+      const totalOpen = Number(payload.open_items || 0);
+      const freshOpen = Number(payload.fresh_open_items || 0);
+      const acked = Number(payload.acked_items || 0);
+      const staleAcked = Number(payload.stale_processing_items || 0);
+      const ownerRequests = Number(payload.pending_owner_requests || 0);
+      const newOwnerRequests = Number(payload.new_owner_requests || 0);
+      const processingOwnerRequests = Number(payload.processing_owner_requests || 0);
+      const staleOwnerRequests = Number(payload.stale_processing_owner_requests || 0);
+      const ownerMentions = Number(payload.pending_owner_mentions || 0);
+      const newOwnerMentions = Number(payload.new_owner_mentions || 0);
+      const processingOwnerMentions = Number(payload.processing_owner_mentions || 0);
+      const staleOwnerMentions = Number(payload.stale_processing_owner_mentions || 0);
+      const parts = [];
+      if (totalOpen > 0) {
+        parts.push(`${totalOpen} open`);
+      } else {
+        parts.push(`${Number(itemsCount || 0)} shown`);
+      }
+      if (freshOpen > 0 || acked > 0) {
+        parts.push(`${freshOpen} new`);
+        parts.push(`${acked} processing`);
+        if (staleAcked > 0) {
+          parts.push(`${staleAcked} stale`);
+        }
+      }
+      if (ownerRequests > 0) {
+        let ownerRequestText = `owner req ${ownerRequests} (${newOwnerRequests}/${processingOwnerRequests})`;
+        if (staleOwnerRequests > 0) {
+          ownerRequestText += ` stale ${staleOwnerRequests}`;
+        }
+        parts.push(ownerRequestText);
+      }
+      if (ownerMentions > 0) {
+        let ownerMentionText = `mentions ${ownerMentions} (${newOwnerMentions}/${processingOwnerMentions})`;
+        if (staleOwnerMentions > 0) {
+          ownerMentionText += ` stale ${staleOwnerMentions}`;
+        }
+        parts.push(ownerMentionText);
+      }
+      return parts.join(" · ");
+    }
+
+    function _parseInboxIso(rawValue) {
+      const normalized = String(rawValue || "").trim();
+      if (!normalized) {
+        return null;
+      }
+      const parsed = Date.parse(normalized);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function _isInboxItemStaleProcessing(item) {
+      if (String(item.status || "").trim().toLowerCase() !== "acked") {
+        return false;
+      }
+      const metadata = item && typeof item.metadata === "object" ? item.metadata : {};
+      const activityAt = _parseInboxIso(metadata.last_action_at_utc || item.updated_at_utc || item.created_at_utc);
+      if (activityAt === null) {
+        return false;
+      }
+      return Date.now() - activityAt >= _INBOX_STALE_PROCESSING_MS;
+    }
 
     function _buildInboxItemEl(item) {
       const kindColor = _INBOX_KIND_COLORS[String(item.kind || "")] || "var(--text-muted)";
-      const isPending = item.status === "pending";
-      const safeId    = String(item.id || "");
+      const safeId = String(item.item_id || item.id || "");
+      const normalizedKind = String(item.kind || "").trim().toLowerCase();
+      const normalizedStatus = String(item.status || "").trim().toLowerCase();
+      const isStaleProcessing = _isInboxItemStaleProcessing(item);
+      const isApproval = normalizedKind === "approval_request";
+      const isActionable = !!safeId && (
+        (isApproval && normalizedStatus === "open")
+        || (!isApproval && (normalizedStatus === "open" || normalizedStatus === "acked"))
+      );
 
       const wrapper = document.createElement("div");
       wrapper.dataset.itemId = safeId;
@@ -6804,7 +6899,9 @@ ${channelsText}`;
       Object.assign(titleEl.style, { fontSize: "0.85rem", color: "var(--text-main)", flex: "1" });
 
       const statusEl = document.createElement("span");
-      statusEl.textContent = String(item.status || "?");
+      statusEl.textContent = isStaleProcessing
+        ? `${_inboxStatusLabel(item.status || "?")} · STALE`
+        : _inboxStatusLabel(item.status || "?");
       Object.assign(statusEl.style, {
         fontSize: "0.7rem", color: "var(--text-muted)",
         fontFamily: "var(--font-mono)", whiteSpace: "nowrap",
@@ -6825,35 +6922,44 @@ ${channelsText}`;
         wrapper.appendChild(bodyEl);
       }
 
-      if (item.created_at) {
+      const createdAt = item.created_at_utc || item.created_at;
+      if (createdAt) {
         const tsEl = document.createElement("div");
-        tsEl.textContent = String(item.created_at);
+        const activityAt = item.metadata && item.metadata.last_action_at_utc
+          ? String(item.metadata.last_action_at_utc)
+          : "";
+        tsEl.textContent = isStaleProcessing && activityAt
+          ? `stale since ${activityAt}`
+          : String(createdAt);
         Object.assign(tsEl.style, {
           fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)",
         });
+        if (isStaleProcessing) {
+          tsEl.style.color = "var(--state-warn, #ff9800)";
+        }
         wrapper.appendChild(tsEl);
       }
 
-      if (isPending) {
+      if (isActionable) {
         const actionsRow = document.createElement("div");
         Object.assign(actionsRow.style, { display: "flex", gap: "6px", marginTop: "4px" });
 
-        const resolveBtn = document.createElement("button");
-        resolveBtn.className = "btn-ghost";
-        resolveBtn.textContent = "\u2713 Resolve";
-        Object.assign(resolveBtn.style, { padding: "3px 10px", fontSize: "0.75rem", color: "var(--state-ok)" });
-        resolveBtn.addEventListener("click", () => inboxUpdateItem(safeId, "resolved"));
+        const primaryBtn = document.createElement("button");
+        primaryBtn.className = "btn-ghost";
+        primaryBtn.textContent = isApproval ? "\u2713 Approve" : "\u2713 Done";
+        Object.assign(primaryBtn.style, { padding: "3px 10px", fontSize: "0.75rem", color: "var(--state-ok)" });
+        primaryBtn.addEventListener("click", () => inboxUpdateItem(safeId, isApproval ? "approved" : "done"));
 
-        const rejectBtn = document.createElement("button");
-        rejectBtn.className = "btn-ghost";
-        rejectBtn.textContent = "\u2717 Reject";
-        Object.assign(rejectBtn.style, {
+        const secondaryBtn = document.createElement("button");
+        secondaryBtn.className = "btn-ghost";
+        secondaryBtn.textContent = isApproval ? "\u2717 Reject" : "\u2717 Cancel";
+        Object.assign(secondaryBtn.style, {
           padding: "3px 10px", fontSize: "0.75rem", color: "var(--state-error, #f44336)",
         });
-        rejectBtn.addEventListener("click", () => inboxUpdateItem(safeId, "rejected"));
+        secondaryBtn.addEventListener("click", () => inboxUpdateItem(safeId, isApproval ? "rejected" : "cancelled"));
 
-        actionsRow.appendChild(resolveBtn);
-        actionsRow.appendChild(rejectBtn);
+        actionsRow.appendChild(primaryBtn);
+        actionsRow.appendChild(secondaryBtn);
         wrapper.appendChild(actionsRow);
       }
 
@@ -6873,17 +6979,29 @@ ${channelsText}`;
       if (kind)   params.set("kind",   kind);
 
       try {
-        const resp = await fetch("/api/inbox/items?" + params.toString());
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const data  = await resp.json();
+        const [itemsResp, summaryResp] = await Promise.all([
+          fetch("/api/inbox/items?" + params.toString()),
+          fetch("/api/inbox/status"),
+        ]);
+        if (!itemsResp.ok) throw new Error("HTTP " + itemsResp.status);
+        const data  = await itemsResp.json();
+        const summaryPayload = summaryResp.ok ? await summaryResp.json().catch(() => ({})) : {};
+        const summary = summaryPayload.summary && typeof summaryPayload.summary === "object"
+          ? summaryPayload.summary
+          : {};
         const items = Array.isArray(data.items) ? data.items : [];
 
-        const pendingCount = items.filter(function(i) { return i.status === "pending"; }).length;
+        const pendingCount = Number(summary.fresh_open_items || items.filter(function(i) {
+          return String(i.status || "").trim().toLowerCase() === "open";
+        }).length);
         if (badgeEl) {
           badgeEl.textContent = String(pendingCount);
           badgeEl.style.display = pendingCount > 0 ? "inline-block" : "none";
+          badgeEl.title = pendingCount > 0
+            ? `${pendingCount} новых inbox item(s), требующих внимания`
+            : "Новых inbox item(s) нет";
         }
-        if (metaEl) metaEl.textContent = items.length + " item(s)";
+        if (metaEl) metaEl.textContent = _buildInboxMetaText(summary, items.length);
 
         while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
 
@@ -6908,7 +7026,7 @@ ${channelsText}`;
 
     async function inboxUpdateItem(itemId, action) {
       try {
-        await postJson("/api/inbox/update", { item_id: itemId, action: action });
+        await postJson("/api/inbox/update", { item_id: itemId, status: action });
         await loadInboxItems();
       } catch (err) {
         console.warn("inbox_update_failed", err);

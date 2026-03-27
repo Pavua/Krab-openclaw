@@ -178,9 +178,51 @@
     - `processing_owner_requests`
     - `new_owner_mentions`
     - `processing_owner_mentions`
+
+### Owner Inbox UI теперь truthfully показывает `new / processing` и реально закрывает item-ы
+- Причина: owner panel рендерила inbox по legacy-схеме: фильтры были привязаны к `pending/resolved`, badge считал только несуществующий статус `pending`, action-кнопки отправляли `resolved`, а карточки пытались читать `item.id` вместо `item.item_id`. Из-за этого UI не совпадал с runtime truth и не мог надёжно закрывать живые inbox item-ы.
+- Что сделано:
+  - в [src/web/index.html](/Users/pablito/Antigravity_AGENTS/Краб/src/web/index.html) inbox-фильтры переведены на реальные статусы `open/acked/done/cancelled/approved/rejected` и актуальные kinds (`owner_request`, `owner_mention`, `owner_task`, `approval_request`, `relay_request`, `proactive_action`);
+  - meta и badge теперь читают `/api/inbox/status` и показывают split `open / new / processing`, а не одну грубую цифру;
+  - карточки используют `item.item_id`, правильный `created_at_utc` и живой action-path `done/cancelled/approved/rejected`;
+  - добавлена статическая регрессия в [tests/unit/test_web_panel_bootstrap_order.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_web_panel_bootstrap_order.py).
+- Проверка:
+  - `./venv/bin/pytest -q tests/unit/test_web_panel_bootstrap_order.py tests/unit/test_inbox_service.py -q` -> `26 passed`
+  - после controlled restart `GET /api/inbox/status` и `GET /api/health/lite` отдают truthful split-поля (`fresh_open_items`, `acked_items`, `new_owner_requests`, `processing_owner_requests`);
+  - live Playwright smoke на `http://127.0.0.1:8080` показал inbox-meta `4 open · 2 new · 2 processing · owner req 4 (2/2)` и рабочие кнопки `Done / Cancel`;
+  - живой клик `Done` закрыл stale item `incoming:312322764:11428`, после чего runtime truth переключился на `3 open · 1 new · 2 processing`, а `inbox_state.json` зафиксировал `actor=owner-ui`, `status=done`.
+- Артефакты:
+  - [inbox-truthful-summary-focused-20260327-1954.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/inbox-truthful-summary-focused-20260327-1954.png)
+  - [INBOX_OWNER_UI_TRUTH_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_OWNER_UI_TRUTH_2026-03-27.md)
   - добавлен regression-тест в [tests/unit/test_inbox_service.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_inbox_service.py), который подтверждает split `open vs acked`.
 - Проверка:
   - `pytest -q tests/unit/test_inbox_service.py -q` -> `22 passed`
+
+### Inbox summary и owner UI теперь отдельно показывают реально застрявшие `acked` item-ы
+- Причина: после truthful split `new / processing` всё ещё оставался слепой участок: старые `acked` owner-request выглядели так же, как свежая фоновая обработка. В итоге владелец видел `processing=2`, но не понимал, что оба item-а висят уже давно и требуют ручного решения.
+- Что сделано:
+  - в [src/core/inbox_service.py](/Users/pablito/Antigravity_AGENTS/Краб/src/core/inbox_service.py) добавлен truthful age-check для `acked` item-ов по `last_action_at_utc -> updated_at_utc -> created_at_utc` с порогом `15 минут`;
+  - summary расширен полями:
+    - `stale_processing_items`
+    - `stale_processing_owner_requests`
+    - `stale_processing_owner_mentions`
+  - в [src/web/index.html](/Users/pablito/Antigravity_AGENTS/Краб/src/web/index.html) owner inbox теперь:
+    - добавляет `stale` в агрегатный meta-text;
+    - маркирует конкретные карточки как `PROCESSING · STALE`;
+    - показывает `stale since ...` вместо обычного timestamp на старых `acked` item-ах;
+  - добавлены регрессии в [tests/unit/test_inbox_service.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_inbox_service.py) и [tests/unit/test_web_panel_bootstrap_order.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_web_panel_bootstrap_order.py).
+- Проверка:
+  - `./venv/bin/pytest -q tests/unit/test_inbox_service.py tests/unit/test_web_panel_bootstrap_order.py -q` -> `27 passed`
+  - после controlled restart `GET /api/health/lite` и `GET /api/inbox/status` показывают:
+    - `open_items=3`
+    - `fresh_open_items=1`
+    - `acked_items=2`
+    - `stale_processing_items=2`
+    - `stale_processing_owner_requests=2`
+  - live Playwright smoke на `http://127.0.0.1:8080` при фильтре `acked` показал две реальные карточки `owner_request` со статусом `PROCESSING · STALE` и `stale since 2026-03-27T18:08:23+00:00` / `stale since 2026-03-27T18:07:59+00:00`.
+- Артефакты:
+  - [inbox-stale-processing-focused-20260327-2004.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/inbox-stale-processing-focused-20260327-2004.png)
+  - [INBOX_OWNER_UI_TRUTH_2026-03-27.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_OWNER_UI_TRUTH_2026-03-27.md)
 
 ### Второй Telegram MCP переживает `database is locked` через serialized access и controlled restart клиента
 - Причина: второй Telegram MCP (`krab_test_mcp`) после restart-переходов иногда падал на `database is locked`, потому что Pyrogram session живёт в sqlite-файле и параллельные tool-call'ы/подвисший session handle могли конфликтовать.

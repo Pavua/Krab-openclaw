@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -233,6 +235,60 @@ def test_summary_splits_fresh_and_acked_owner_items(tmp_path: Path) -> None:
     assert summary["pending_owner_mentions"] == 1
     assert summary["new_owner_mentions"] == 0
     assert summary["processing_owner_mentions"] == 1
+
+
+def test_summary_marks_old_acked_items_as_stale_processing(tmp_path: Path) -> None:
+    """Summary должен отдельно считать `acked` item-ы, которые реально застряли."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    request = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Зависший owner request",
+        sender_username="owner",
+        chat_type="private",
+    )
+    mention = service.upsert_incoming_owner_request(
+        chat_id="-100777",
+        message_id="11",
+        text="Свежий owner mention",
+        sender_username="owner",
+        chat_type="group",
+        is_reply_to_me=True,
+        has_trigger=True,
+    )
+    service.set_item_status(
+        request["item"]["item_id"],
+        status="acked",
+        actor="kraab",
+        note="background_processing_started",
+    )
+    service.set_item_status(
+        mention["item"]["item_id"],
+        status="acked",
+        actor="kraab",
+        note="background_processing_started",
+    )
+
+    state = service._load_state()
+    stale_timestamp = (
+        datetime.now(timezone.utc) - InboxService._stale_processing_after - timedelta(minutes=1)
+    ).isoformat(timespec="seconds")
+    for item in state["items"]:
+        if item["item_id"] != request["item"]["item_id"]:
+            continue
+        item["updated_at_utc"] = stale_timestamp
+        item.setdefault("metadata", {})["last_action_at_utc"] = stale_timestamp
+    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    summary = service.get_summary()
+
+    assert summary["acked_items"] == 2
+    assert summary["stale_processing_items"] == 1
+    assert summary["processing_owner_requests"] == 1
+    assert summary["stale_processing_owner_requests"] == 1
+    assert summary["processing_owner_mentions"] == 1
+    assert summary["stale_processing_owner_mentions"] == 0
 
 
 def test_workflow_snapshot_exposes_trace_index_and_approval_history(tmp_path: Path) -> None:
