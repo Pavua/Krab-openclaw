@@ -19,7 +19,11 @@ echo "Введи номер телефона, код Telegram и при необ
 echo
 
 export TELEGRAM_SESSION_NAME="$session_name"
-python3 mcp-servers/telegram/auth_setup.py
+if [[ -x "$ROOT_DIR/venv/bin/python" ]]; then
+  "$ROOT_DIR/venv/bin/python" mcp-servers/telegram/auth_setup.py
+else
+  python3 mcp-servers/telegram/auth_setup.py
+fi
 
 echo
 echo "Готово."

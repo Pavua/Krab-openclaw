@@ -35,7 +35,7 @@
 
 Он:
 - спросит `session name` (по умолчанию `krab_test`);
-- запустит `mcp-servers/telegram/auth_setup.py`;
+- запустит `mcp-servers/telegram/auth_setup.py` через repo-level `venv`, где уже установлен `pyrofork 2.3.69` (импортируется как модуль `pyrogram`);
 - сохранит отдельный session-файл вида:
   - `~/.krab_mcp_sessions/krab_test_mcp.session`
 
