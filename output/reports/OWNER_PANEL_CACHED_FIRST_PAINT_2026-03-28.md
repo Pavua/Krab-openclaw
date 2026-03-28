@@ -31,6 +31,8 @@ Truthful evidence по owner panel после добавления last-good boo
 
 Дополнительно owner panel теперь не перетирает уже поднятый cache в `ERR/FAIL`, если live fetch временно недоступен.
 Это касается `openclawCatalog`, `openclawAutoswitch`, `openclawChannels` и `localLifecycle`.
+Верхние `Core Liveness (Lite)` и `Ecosystem Deep Health` тоже переведены на cache-aware fallback:
+poller сначала пытается поднять `dashboardStats`-snapshot, и только при отсутствии last-good cache уходит в `Offline/Error`.
 
 ## Проверка
 
@@ -97,6 +99,12 @@ Truthful evidence по owner panel после добавления last-good boo
 
 ### First paint при полностью недоступных `/api/*`
 
+- `coreLivenessStatus = Online`
+- `coreLivenessTime = 12:34:56`
+- `deepHealthRisk = LOW`
+- `deepHealthStatus = OK`
+- `deepHealthDegradation = normal`
+- `deepHealthTime = 12:34:57`
 - `degradation = stable`
 - `bb_total = 12`
 - `rag_total = 34`
@@ -111,15 +119,17 @@ Truthful evidence по owner panel после добавления last-good boo
 - `ocLocalLifecycleStatus = WARN`
 - `ocMeta = ⚠️ Ошибка [Local Status]: Failed to fetch`
 
-Ключевой инвариант: даже при полностью сломанной live-сети first-paint больше не деградирует обратно в пустые `—` по high-value карточкам.
+Ключевой инвариант: даже при полностью сломанной live-сети first-paint больше не деградирует обратно ни в пустые `—`, ни в `Offline/Error` по high-value карточкам.
 
 ## Verdict
 
 - Fixed: ключевые owner runtime-блоки больше не возвращаются в пустые `—` на cold reload.
 - Fixed: transient fetch-failure больше не стирает уже применённый last-good cache в `ERR/FAIL` поверх первого кадра.
+- Fixed: верхние `Core Liveness / Deep Health` больше не срываются в `Offline / Error`, если у вкладки уже есть свежий last-good bootstrap.
 - Intentionally unchanged: `Browser / MCP Readiness` остаётся в честном `LOADING`, потому что это volatile probe и fake cached-ready здесь хуже пустоты.
 
 ## Артефакты
 
 - Screenshot: `/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-cached-first-paint-20260328-1514.png`
 - Screenshot (cache-only acceptance): `/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-cache-first-paint-20260328-1619.png`
+- Screenshot (core health cache-only acceptance): `/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-core-health-cache-first-paint-20260328-160210.png`

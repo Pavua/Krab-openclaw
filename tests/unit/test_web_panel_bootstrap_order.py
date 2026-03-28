@@ -66,11 +66,16 @@ def test_owner_panel_reuses_last_good_dashboard_bootstrap_on_first_paint() -> No
 
     assert 'const OWNER_PANEL_DASHBOARD_CACHE_IDS = [' in source
     assert 'const OWNER_PANEL_DASHBOARD_CACHE_HTML_IDS = [' in source
+    assert 'const OWNER_PANEL_DASHBOARD_CACHE_STYLE_ONLY_IDS = [' in source
     assert 'function captureOwnerPanelDashboardSnapshot()' in source
     assert 'function applyCachedDashboardStatsTruth(snapshot)' in source
+    assert 'function getCachedDashboardStatsSnapshot(maxAgeMs = OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS)' in source
+    assert 'function applyCachedCoreHealthFallbackFromBootstrap(kind)' in source
     assert 'rememberOwnerPanelBootstrapPayload("dashboardStats", captureOwnerPanelDashboardSnapshot());' in source
     assert 'if (cached.dashboardStats) {' in source
     assert 'applyCachedDashboardStatsTruth(cached.dashboardStats);' in source
+    assert 'if (!applyCachedCoreHealthFallbackFromBootstrap("lite")) {' in source
+    assert 'if (!applyCachedCoreHealthFallbackFromBootstrap("deep")) {' in source
     assert "function ownerPanelHasResolvedValue(id)" in source
     assert "} else if (!ownerPanelHasResolvedValue(\"ocForceMode\")) {" in source
     assert "} else if (!ownerPanelHasResolvedValue(\"ocAutoswitchStatus\")) {" in source

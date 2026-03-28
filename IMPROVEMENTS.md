@@ -85,6 +85,7 @@
 2. Translator first-paint идёт через единый `/api/translator/bootstrap`.
 3. Owner panel поднимает last-good runtime sections из `localStorage` (`krab:owner-panel-bootstrap:v1`) до live refresh, поэтому cold reload больше не возвращает ключевые блоки в пустые `—`.
 4. Верхний dashboard snapshot и high-value error-path теперь тоже cache-aware, поэтому transient fetch-failure не стирает уже поднятый first-paint обратно в `ERR/FAIL`.
+5. `Core Liveness (Lite)` и `Ecosystem Deep Health` теперь при transient fetch-сбое сначала поднимают last-good bootstrap, а не прыгают сразу в `Offline/Error`.
 
 **Оставшееся наблюдение:** `Browser / MCP Readiness` намеренно остаётся в `LOADING`, а не в cached-ready, потому что это volatile probe. Единичные `browser_action_probe_raw_failed` при зелёном acceptance пока считаем шумом health-probe, а не runtime-регрессией.
 
