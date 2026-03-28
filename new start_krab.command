@@ -34,6 +34,43 @@ EAR_WATCHDOG_LOG="${EAR_STATE_DIR}/krab_ear_watchdog.log"
 EAR_WATCHDOG_PID="${EAR_STATE_DIR}/krab_ear_watchdog.pid"
 EAR_LOG="${EAR_STATE_DIR}/krab_ear_start.log"
 
+probe_krab_ear_ready() {
+    # Истину о готовности Ear берём из IPC probe, а не из мгновенного pgrep.
+    if [ -f "$EAR_WATCHDOG" ] && [ -n "${KRAB_PYTHON_BIN:-}" ] && [ -x "${KRAB_PYTHON_BIN:-}" ]; then
+        local probe_json=""
+        probe_json="$("$KRAB_PYTHON_BIN" "$EAR_WATCHDOG" --probe --ear-dir "$EAR_DIR" 2>/dev/null || true)"
+        if printf '%s' "$probe_json" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+            return 0
+        fi
+    fi
+
+    if [ -x "$EAR_RUNTIME" ] && pgrep -f "$EAR_RUNTIME --project-root $EAR_DIR" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    return 1
+}
+
+wait_krab_ear_ready() {
+    local timeout_sec="${1:-12}"
+    local started_at
+    local now
+
+    started_at="$(date +%s)"
+    while true; do
+        if probe_krab_ear_ready; then
+            return 0
+        fi
+
+        now="$(date +%s)"
+        if [ $((now - started_at)) -ge "$timeout_sec" ]; then
+            return 1
+        fi
+
+        sleep 1
+    done
+}
+
 ensure_krab_ear_started() {
     mkdir -p "$EAR_STATE_DIR"
 
@@ -42,16 +79,15 @@ ensure_krab_ear_started() {
         return 0
     fi
 
-    if [ -x "$EAR_RUNTIME" ] && pgrep -f "$EAR_RUNTIME --project-root $EAR_DIR" >/dev/null 2>&1; then
+    if probe_krab_ear_ready; then
         echo "🦻 Krab Ear уже запущен."
     else
         echo "🦻 Запускаю Krab Ear Agent..."
         nohup "$EAR_START" --launched-by-launchd > "$EAR_LOG" 2>&1 &
-        sleep 1
-        if [ -x "$EAR_RUNTIME" ] && pgrep -f "$EAR_RUNTIME --project-root $EAR_DIR" >/dev/null 2>&1; then
+        if wait_krab_ear_ready 12; then
             echo "✅ Krab Ear Agent запущен."
         else
-            echo "⚠️ Krab Ear пока не подтвердил запуск. Лог: $EAR_LOG"
+            echo "⚠️ Krab Ear не подтвердил IPC readiness за 12 сек. Лог: $EAR_LOG"
         fi
     fi
 

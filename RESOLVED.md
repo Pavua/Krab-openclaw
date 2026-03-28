@@ -263,3 +263,21 @@
   - `pytest -q tests/unit/test_telegram_bridge.py -q` -> `2 passed`
 - Важная оговорка:
   - уже поднятый MCP host в текущем чате hot-reload не умеет, поэтому этот hardening начнёт работать для tool-host после следующего restart/new chat, но код и тесты уже готовы.
+
+### One-click launcher теперь truthfully ждёт Krab Ear IPC readiness
+- Причина: внешний launcher и [Start Full Ecosystem.command](/Users/pablito/Antigravity_AGENTS/Краб/Start%20Full%20Ecosystem.command) считали успех Krab Ear по схеме `sleep 1 -> pgrep`. Реальный Ear поднимал IPC сокет примерно через 8 секунд, поэтому one-click старт иногда пугал ложным `Krab Ear пока не подтвердил запуск`, хотя watchdog probe уже вскоре видел healthy backend.
+- Что сделано:
+  - в [new start_krab.command](/Users/pablito/Antigravity_AGENTS/Краб/new%20start_krab.command) добавлены `probe_krab_ear_ready()` и `wait_krab_ear_ready()`, которые используют truthful watchdog probe `scripts/krab_ear_watchdog.py --probe --ear-dir ...` и только потом fallback на `pgrep`;
+  - тот же readiness-паттерн добавлен в [Start Full Ecosystem.command](/Users/pablito/Antigravity_AGENTS/Краб/Start%20Full%20Ecosystem.command);
+  - синхронизирован и реально используемый внешний launcher [new start_krab.command](/Users/pablito/Antigravity_AGENTS/new%20start_krab.command), чтобы двойной клик у пользователя сразу получил ту же логику ожидания.
+- Проверка:
+  - `bash -n /Users/pablito/Antigravity_AGENTS/Краб/new\\ start_krab.command`
+  - `bash -n /Users/pablito/Antigravity_AGENTS/Краб/Start\\ Full\\ Ecosystem.command`
+  - `bash -n /Users/pablito/Antigravity_AGENTS/new\\ start_krab.command`
+  - `bash /Users/pablito/Antigravity_AGENTS/new\\ Stop\\ Krab.command`
+  - `bash /Users/pablito/Antigravity_AGENTS/new\\ start_krab.command` -> launcher выдал `✅ Krab Ear Agent запущен.` вместо ложного warning и дошёл до `🚀 Starting Krab...`
+  - `python3 /Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_ear_watchdog.py --probe --ear-dir /Users/pablito/Antigravity_AGENTS/Krab\\ Ear` -> `{\"ok\": true, \"status\": \"ok\" ...}`
+  - `curl -sf http://127.0.0.1:8080/api/health/lite` -> `ok=true`, `status=up`, `telegram_userbot_state=running`
+- Артефакт:
+  - [KRAB_EAR_LAUNCHER_READINESS_2026-03-28.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/KRAB_EAR_LAUNCHER_READINESS_2026-03-28.md)
+  - [owner-panel-post-ear-launcher-fix-20260328-1430.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-post-ear-launcher-fix-20260328-1430.png)
