@@ -73,8 +73,18 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "codex",
         "gemini",
         "claude_cli",
+        "opencode",
         # Desktop automation
         "hs",
+        # Browser & screenshots
+        "screenshot",
+        "browser",
+        # Shopping
+        "shop",
+        # Agent swarm
+        "swarm",
+        # Capability policy matrix
+        "cap",
     }
 )
 
@@ -93,6 +103,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "opencode",
         # Desktop automation — управляет окнами через Hammerspoon, только владелец
         "hs",
+        # Capability policy matrix — runtime toggle, только владелец
+        "cap",
     }
 )
 
