@@ -4395,9 +4395,13 @@ class KraabUserbot:
             # через workspace, или другие вложения). Аудио-файлы идут как voice-message.
             _agent_sent_voice = False
             _audio_exts = {".mp3", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".aiff"}
+            _image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
             for _mpath in _media_refs:
                 if not os.path.exists(_mpath):
                     logger.warning("media_file_not_found", path=_mpath)
+                    await self.client.send_message(
+                        message.chat.id, f"⚠️ Медиафайл не найден: `{_mpath}`"
+                    )
                     continue
                 try:
                     _ext = os.path.splitext(_mpath)[1].lower()
@@ -4409,6 +4413,13 @@ class KraabUserbot:
                         )
                         await self.client.send_voice(message.chat.id, _mpath)
                         _agent_sent_voice = True
+                    elif _ext in _image_exts:
+                        await self._send_delivery_chat_action(
+                            self.client,
+                            message.chat.id,
+                            getattr(enums.ChatAction, "UPLOAD_PHOTO", enums.ChatAction.TYPING),
+                        )
+                        await self.client.send_photo(message.chat.id, _mpath)
                     else:
                         await self._send_delivery_chat_action(
                             self.client,
@@ -4419,6 +4430,9 @@ class KraabUserbot:
                     logger.info("media_sent", path=_mpath, ext=_ext)
                 except Exception as _me:  # noqa: BLE001
                     logger.error("media_send_failed", path=_mpath, error=str(_me))
+                    await self.client.send_message(
+                        message.chat.id, f"⚠️ Не удалось отправить медиа `{os.path.basename(_mpath)}`: `{str(_me)[:200]}`"
+                    )
 
             # Запускаем Python TTS (edge_tts) только если агент не прислал аудио сам.
             # Это предотвращает дублирование: оба движка не должны отвечать голосом.

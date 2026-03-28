@@ -2096,8 +2096,21 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
         if data is None:
             await message.reply("❌ Не удалось сделать скриншот.")
             return
-        import io
-        await message.reply_photo(io.BytesIO(data))
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmp:
+            _tmp.write(data)
+            _tmp_path = _tmp.name
+        try:
+            await message.reply_photo(_tmp_path)
+        except Exception as _photo_err:
+            logger.warning("reply_photo_failed_browser_shot", error=str(_photo_err))
+            try:
+                await message.reply_document(_tmp_path, caption="📸 Screenshot (fallback)")
+            except Exception as _doc_err:
+                logger.error("reply_document_failed_browser_shot", error=str(_doc_err))
+                await message.reply(f"❌ Не удалось отправить скриншот: `{str(_photo_err)[:200]}`")
+        finally:
+            os.unlink(_tmp_path)
         return
 
     if sub == "js":
@@ -2511,7 +2524,21 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
         await message.reply("❌ Снимок пустой — возможно вкладок нет или CDP не отвечает.")
         return
 
-    await message.reply_photo(io.BytesIO(png_bytes), caption="📸 Screenshot")
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmp:
+        _tmp.write(png_bytes)
+        _tmp_path = _tmp.name
+    try:
+        await message.reply_photo(_tmp_path, caption="📸 Screenshot")
+    except Exception as _photo_err:
+        logger.warning("reply_photo_failed", error=str(_photo_err))
+        try:
+            await message.reply_document(_tmp_path, caption="📸 Screenshot (fallback)")
+        except Exception as _doc_err:
+            logger.error("reply_document_failed", error=str(_doc_err))
+            await message.reply(f"❌ Не удалось отправить скриншот: `{str(_photo_err)[:200]}`")
+    finally:
+        os.unlink(_tmp_path)
 
 
 async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
