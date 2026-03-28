@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-03-28
+
+### Release Gate: текущий срез ветки проходит обязательные smoke/gate без blocker-ов
+- Причина: после серии правок по voice runtime, owner panel, inbox truth и Telegram E2E нужно было не “на глаз” оценить готовность, а собрать честный merge/release verdict по обязательным и advisory проверкам.
+- Что сделано: собран release-gate срез через [scripts/pre_release_smoke.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/pre_release_smoke.py), [scripts/r20_merge_gate.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/r20_merge_gate.py) и [scripts/live_channel_smoke.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/live_channel_smoke.py). Дополнительно перепроверены live endpoints `GET /api/health/lite`, `GET /api/inbox/status`, `GET /api/voice/runtime`.
+- Проверка:
+  - `python3 scripts/pre_release_smoke.py` -> `required failed: 0`, `advisory failed: 0`, отчёт: [pre_release_smoke_20260328_163019.json](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/pre_release_smoke_20260328_163019.json)
+  - `python3 scripts/r20_merge_gate.py` -> `required_failed: 0`, `advisory_failed: 0`, отчёт: [r20_merge_gate_20260328_152850Z.json](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/ops/r20_merge_gate_20260328_152850Z.json)
+  - `python3 scripts/live_channel_smoke.py --max-age-minutes 60` -> `ok=true`, все 6 обязательных каналов `OK`
+  - `GET /api/health/lite` -> `telegram_userbot_state=running`, `telegram_session_state=ready`, `lmstudio_model_state=idle`
+  - `GET /api/inbox/status` -> `open_items=0`, `acked_items=0`, `stale_open_items=0`, `stale_processing_items=0`
+  - `GET /api/voice/runtime` -> `enabled=true`, `delivery=text+voice`, `live_voice_foundation=true`
+- Evidence: [RELEASE_GATE_2026-03-28.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/RELEASE_GATE_2026-03-28.md)
+
 ## 2026-03-26
 
 ### Голосовые ответы больше не выключаются после рестарта
