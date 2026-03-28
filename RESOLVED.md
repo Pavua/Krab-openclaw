@@ -8,6 +8,15 @@
 
 ## 2026-03-28
 
+### Handoff bundle exporter больше не вшивает исторический baseline `~31%` в свежий attach-пакет
+- Причина: `scripts/export_handoff_bundle.py` держал захардкоженный `PROJECT_READINESS = "~31%"`, поэтому даже после зелёного release gate свежие `ATTACH_SUMMARY_RU.md`, `START_NEXT_CHAT.md` и `HANDOFF_MANIFEST.json` продолжали рассказывать новому чату устаревшую цифру.
+- Что сделано: в [scripts/export_handoff_bundle.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/export_handoff_bundle.py) readiness переведён на вычисляемый truthful verdict по текущему `health/lite`, operator workflow, `pre_release_smoke_latest` и `r20_merge_gate_latest`. Туда же добавлен свежий `RELEASE_GATE_*.md` в ops evidence. После фикса пересобран новый bundle: [handoff_20260328_154103](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/handoff_20260328_154103) и [handoff_20260328_154103.zip](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/handoff_20260328_154103.zip).
+- Проверка:
+  - `python3 -m py_compile scripts/export_handoff_bundle.py`
+  - `python3 scripts/export_handoff_bundle.py` -> `OK: artifacts/handoff_20260328_154103`
+  - [ATTACH_SUMMARY_RU.md](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/handoff_20260328_154103/ATTACH_SUMMARY_RU.md) теперь показывает `~99% (стабилизационный срез: 100%)`
+  - [START_NEXT_CHAT.md](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/handoff_20260328_154103/START_NEXT_CHAT.md) и [HANDOFF_MANIFEST.json](/Users/pablito/Antigravity_AGENTS/Краб/artifacts/handoff_20260328_154103/HANDOFF_MANIFEST.json) синхронизированы с тем же verdict
+
 ### Release Gate: текущий срез ветки проходит обязательные smoke/gate без blocker-ов
 - Причина: после серии правок по voice runtime, owner panel, inbox truth и Telegram E2E нужно было не “на глаз” оценить готовность, а собрать честный merge/release verdict по обязательным и advisory проверкам.
 - Что сделано: собран release-gate срез через [scripts/pre_release_smoke.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/pre_release_smoke.py), [scripts/r20_merge_gate.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/r20_merge_gate.py) и [scripts/live_channel_smoke.py](/Users/pablito/Antigravity_AGENTS/Краб/scripts/live_channel_smoke.py). Дополнительно перепроверены live endpoints `GET /api/health/lite`, `GET /api/inbox/status`, `GET /api/voice/runtime`.
