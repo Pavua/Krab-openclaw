@@ -51,6 +51,16 @@
   - `python3 scripts/channels_photo_chrome_acceptance.py --output /tmp/krab_channels_photo_acceptance_now.json` -> `ok=true`
   - артефакт: [owner-panel-post-restart-auto-recovery-20260326-2026.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-post-restart-auto-recovery-20260326-2026.png)
 
+### Owner Panel: cold reload теперь поднимает last-good runtime state до live refresh
+- Причина: после предыдущих фиксов recovery уже работал, но обычный reload всё ещё показывал голые `—` в части owner-карточек до завершения сетевых вызовов, хотя у вкладки уже был подтверждённый last-good state.
+- Что сделано: в [src/web/index.html](/Users/pablito/Antigravity_AGENTS/Краб/src/web/index.html) добавлен `localStorage`-bootstrap cache `krab:owner-panel-bootstrap:v1`; туда сохраняются last-good snapshot'ы секций `OpenClaw`, `Voice Runtime`, `Translator`, `Cron`, `Local Lifecycle`, `Compat`, `Effective Routing`. На старте страницы теперь вызывается `applyOwnerPanelBootstrapCache()` до `refreshAll()`, поэтому high-value runtime-блоки поднимаются из truthful cache сразу, а volatile `Browser / MCP` остаётся в честном `LOADING`. Добавлена регрессия в [tests/unit/test_web_panel_bootstrap_order.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_web_panel_bootstrap_order.py).
+- Проверка:
+  - `node --check /tmp/krab_index_script.js`
+  - `./venv/bin/pytest -q tests/unit/test_web_panel_bootstrap_order.py tests/unit/test_web_app_runtime_endpoints.py -q` -> `138 passed, 1 warning`
+  - живой reload owner panel: на втором cold reload сразу видны `Route & Model = auto`, `Voice Runtime = ON / text+voice`, `Translator Readiness = READY`, `Cron = ACTIVE`, `Compat = OK`, `Effective routing = auto`, а `Browser / MCP` остаётся `LOADING`
+  - evidence: [OWNER_PANEL_CACHED_FIRST_PAINT_2026-03-28.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/OWNER_PANEL_CACHED_FIRST_PAINT_2026-03-28.md)
+  - артефакт: [owner-panel-cached-first-paint-20260328-1514.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-cached-first-paint-20260328-1514.png)
+
 ## 2026-03-27
 
 ### Periodic auto-handoff export больше не ловит искусственный timeout на тяжёлом cloud probe

@@ -4117,6 +4117,8 @@ ${channelsText}`;
     const DASHBOARD_STATS_POLL_HIDDEN_MS = 90000;
     const DASHBOARD_DEEP_HEALTH_CACHE_MAX_AGE_MS = 75000;
     const DASHBOARD_VISIBILITY_REFRESH_MIN_MS = 8000;
+    const OWNER_PANEL_BOOTSTRAP_CACHE_KEY = "krab:owner-panel-bootstrap:v1";
+    const OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
     const dashboardTabId = (() => {
       try {
         if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -4129,6 +4131,7 @@ ${channelsText}`;
     })();
     let pollLeaderHeartbeatHandle = null;
     let dashboardDeepHealthCache = { ts: 0, payload: null };
+    let ownerPanelBootstrapCache = { ts: 0, payload: null };
 
     function isDashboardTabVisible() {
       return document.visibilityState !== "hidden";
@@ -4140,6 +4143,110 @@ ${channelsText}`;
         payload: payload && typeof payload === "object" ? payload : null,
       };
       return dashboardDeepHealthCache.payload;
+    }
+
+    function cloneJsonish(value) {
+      if (value === null || value === undefined) return value;
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function readOwnerPanelBootstrapCacheStorage() {
+      try {
+        const raw = window.localStorage.getItem(OWNER_PANEL_BOOTSTRAP_CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      } catch (error) {
+        console.error("owner_panel_bootstrap_cache_read_failed", error);
+        return null;
+      }
+    }
+
+    function rememberOwnerPanelBootstrapPayload(section, payload) {
+      if (!section || !payload || typeof payload !== "object") {
+        return null;
+      }
+      const previous = ownerPanelBootstrapCache?.payload && typeof ownerPanelBootstrapCache.payload === "object"
+        ? ownerPanelBootstrapCache.payload
+        : (readOwnerPanelBootstrapCacheStorage()?.payload || {});
+      const nextPayload = {
+        ...previous,
+        [section]: cloneJsonish(payload),
+      };
+      ownerPanelBootstrapCache = {
+        ts: Date.now(),
+        payload: nextPayload,
+      };
+      try {
+        window.localStorage.setItem(OWNER_PANEL_BOOTSTRAP_CACHE_KEY, JSON.stringify(ownerPanelBootstrapCache));
+      } catch (error) {
+        console.error("owner_panel_bootstrap_cache_write_failed", error);
+      }
+      return ownerPanelBootstrapCache.payload;
+    }
+
+    function getCachedOwnerPanelBootstrapPayload(maxAgeMs = OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS) {
+      const inMemoryTs = Number(ownerPanelBootstrapCache?.ts || 0);
+      const inMemoryPayload = ownerPanelBootstrapCache?.payload || null;
+      if (inMemoryPayload && inMemoryTs && (Date.now() - inMemoryTs) <= maxAgeMs) {
+        return cloneJsonish(inMemoryPayload);
+      }
+      const persisted = readOwnerPanelBootstrapCacheStorage();
+      const persistedTs = Number(persisted?.ts || 0);
+      const persistedPayload = persisted?.payload || null;
+      if (!persistedPayload || !persistedTs) {
+        return null;
+      }
+      if ((Date.now() - persistedTs) > maxAgeMs) {
+        return null;
+      }
+      ownerPanelBootstrapCache = {
+        ts: persistedTs,
+        payload: cloneJsonish(persistedPayload),
+      };
+      return cloneJsonish(ownerPanelBootstrapCache.payload);
+    }
+
+    const OWNER_PANEL_DASHBOARD_CACHE_IDS = [
+      "degradation",
+      "bb_total",
+      "rag_total",
+      "local_model",
+      "recommended_model",
+      "rtChannelState",
+      "rtBreakerState",
+      "opsCloudActiveTier",
+      "opsCloudFallbackReason",
+      "opsLatencyP50",
+      "opsLatencyP95",
+      "opsFailFastCount",
+    ];
+
+    function captureOwnerPanelDashboardSnapshot() {
+      const snapshot = {};
+      OWNER_PANEL_DASHBOARD_CACHE_IDS.forEach((id) => {
+        const element = document.getElementById(id);
+        if (!element) return;
+        snapshot[id] = {
+          text: String(element.textContent || "").trim(),
+          className: String(element.className || ""),
+        };
+      });
+      return snapshot;
+    }
+
+    function applyCachedDashboardStatsTruth(snapshot) {
+      const payload = snapshot && typeof snapshot === "object" ? snapshot : {};
+      Object.entries(payload).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (!element || !value || typeof value !== "object") return;
+        const text = String(value.text || "").trim();
+        if (!text || text === "—") return;
+        element.textContent = text;
+        if (value.className) {
+          element.className = String(value.className);
+        }
+      });
     }
 
     function getCachedDeepHealthPayload(maxAgeMs = DASHBOARD_DEEP_HEALTH_CACHE_MAX_AGE_MS) {
@@ -4601,6 +4708,8 @@ ${channelsText}`;
           if (rtChan) rtChan.textContent = String(stChannel).toUpperCase();
           if (rtBrk) rtBrk.textContent = String(stBreaker).toUpperCase();
 
+          rememberOwnerPanelBootstrapPayload("dashboardStats", captureOwnerPanelDashboardSnapshot());
+
           setText(
             "updated_at",
             `Обновлено: ${new Date().toLocaleTimeString()}`,
@@ -4623,10 +4732,21 @@ ${channelsText}`;
     // Эти recovery-pass'ы дают панели несколько автоматических попыток
     // догидратировать ключевые runtime-блоки без ручного Sync.
     const BOOTSTRAP_RECOVERY_DELAYS_MS = [2000, 6000, 15000];
-
     function ownerPanelTextValue(id) {
       const element = document.getElementById(id);
       return element ? String(element.textContent || "").trim() : "";
+    }
+
+    function ownerPanelHasResolvedValue(id) {
+      const unresolvedValues = new Set(["", "—", "…", "WAIT", "Wait...", "LOADING", "ERR", "FAIL", "ERROR"]);
+      return !unresolvedValues.has(ownerPanelTextValue(id));
+    }
+
+    function ownerPanelHasResolvedHtml(id) {
+      const element = document.getElementById(id);
+      if (!element) return false;
+      const html = String(element.innerHTML || "").trim();
+      return Boolean(html) && html !== "—";
     }
 
     function ownerPanelNeedsBootstrapRecovery() {
@@ -4871,6 +4991,7 @@ ${channelsText}`;
       setText("ocrouteHistory", formatHistoryBudget(historyBudget));
       setText("ocrouteOutput", formatOutputBudget(policy));
     }
+
     if (apiKeyInput) {
       apiKeyInput.addEventListener("input", updateTokenStatus);
       updateTokenStatus(); // Initial check
@@ -5024,35 +5145,177 @@ ${channelsText}`;
       }
     }));
 
+    function applyControlCompatTruth(payload) {
+      const root = document.getElementById("ocCompatRuntime");
+      const warnBadge = document.getElementById("ocCompatWarn");
+      const actionText = document.getElementById("ocCompatAction");
+
+      if (root) {
+        const st = payload.runtime_status || "UNKNOWN";
+        if (st === "OK" && payload.impact_level === "ui_only") {
+          root.innerHTML = `<span class="badge ok">OK</span>`;
+        } else {
+          const stClass = st === "OK" ? "ok" : "bad";
+          root.innerHTML = `<span class="badge ${stClass}">${st}</span>`;
+        }
+      }
+      if (warnBadge) {
+        const hasWarn = payload.has_schema_warning;
+        warnBadge.textContent = hasWarn ? "Да" : "Нет";
+        warnBadge.className = hasWarn ? "badge warn" : "badge ok";
+      }
+      if (actionText) actionText.textContent = payload.recommended_action || "-";
+
+      let impactRU = "нет";
+      if (payload.impact_level === "ui_only") impactRU = "только UI";
+      else if (payload.impact_level === "runtime_risk") impactRU = "риск runtime";
+      setText("ocCompatImpact", impactRU);
+    }
+
+    function applyEffectiveRoutingTruth(data) {
+      setText("ocrouteReq", data.requested_mode || "-");
+      setText("ocrouteEff", data.effective_mode || "-");
+      setText("ocrouteActive", data.active_slot_or_model || "-");
+      let fallbackText = data.cloud_fallback ? "Да" : "Нет";
+      if (data.cloud_fallback_state === "standby") fallbackText = "Резерв";
+      else if (data.cloud_fallback_state === "active") fallbackText = "Да";
+      else if (data.cloud_fallback_state === "disabled") fallbackText = "Нет";
+      setText("ocrouteFallback", fallbackText);
+      const routingNotes = Array.isArray(data.decision_notes)
+        ? data.decision_notes.join(" ")
+        : (data.decision_notes || "-");
+      setText("ocrouteNotes", routingNotes);
+    }
+
+    function applyOpenclawCatalogTruth(payload) {
+      setText("ocForceMode", payload.catalog?.force_mode || "auto");
+      setText("ocLocalModel", resolveCatalogLocalLabel(payload.catalog));
+      const slots = Object.keys(payload.catalog?.cloud_slots || {}).length;
+      setText("ocCloudSlots", slots > 0 ? `${slots} active` : "none");
+
+      const mode = payload.catalog?.force_mode || "auto";
+      ["local", "auto", "cloud"].forEach((currentMode) => {
+        const btn = document.getElementById(`ocMode${currentMode.charAt(0).toUpperCase() + currentMode.slice(1)}Btn`);
+        if (btn) btn.className = (mode === currentMode) ? "primary" : "";
+      });
+      setText("opsQueueMode", mode);
+    }
+
+    function applyOpenclawAutoswitchTruth(payload) {
+      const autoswitch = payload.autoswitch || {};
+      const rawStatus = String(autoswitch.status || "unknown").toUpperCase();
+      const isOk = rawStatus === "ACTIVE" || rawStatus === "OK" || rawStatus === "ON";
+      const isBad = rawStatus === "FAIL" || rawStatus === "ERROR";
+      const badgeClass = isOk ? "ok" : (isBad ? "bad" : "warn");
+      const badgeText = isOk ? "OK" : (isBad ? "FAIL" : "WARN");
+      document.getElementById("ocAutoswitchStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
+      setText("ocLastSwitch", autoswitch.last_switch || "-");
+      setText("ocSwitchReason", autoswitch.reason || "-");
+    }
+
+    function applyOpenclawChannelsTruth(payload) {
+      const channels = payload.channels || [];
+      if (channels.length === 0) {
+        document.getElementById("ocChannelsList").innerHTML =
+          '<span class="card-meta">No channels data</span>';
+        return;
+      }
+      document.getElementById("ocChannelsList").innerHTML = channels
+        .map((channel) => {
+          const rawStatus = String(channel.status || "unknown").toUpperCase();
+          const badgeClass = rawStatus === "OK" ? "ok" : (rawStatus === "FAIL" ? "bad" : "warn");
+          const badgeText = rawStatus === "OK" ? "OK" : (rawStatus === "FAIL" ? "FAIL" : "WARN");
+          return `<div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0;">
+                          <span class="card-meta">${channel.name || "channel"}</span>
+                          <span class="badge ${badgeClass}">${badgeText}</span>
+                      </div>`;
+        })
+        .join("");
+    }
+
+    function applyLocalLifecycleTruth(payload) {
+      const rawStatus = String(payload.status || "unknown").toLowerCase();
+      const badgeClass = rawStatus === "loaded" ? "ok" : (rawStatus === "not_loaded" ? "warn" : "bad");
+      const badgeText = rawStatus === "loaded" ? "OK" : (rawStatus === "not_loaded" ? "WARN" : "FAIL");
+      document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
+      document.getElementById("ocLocalLifecycleModel").textContent = resolveLocalLifecycleLabel(payload);
+    }
+
+    function applyOwnerPanelBootstrapCache() {
+      const cached = getCachedOwnerPanelBootstrapPayload();
+      if (!cached || typeof cached !== "object") {
+        return false;
+      }
+      let applied = false;
+      if (cached.dashboardStats) {
+        applyCachedDashboardStatsTruth(cached.dashboardStats);
+        applied = true;
+      }
+      if (cached.openclawCatalog) {
+        applyOpenclawCatalogTruth(cached.openclawCatalog);
+        applied = true;
+      }
+      if (cached.openclawAutoswitch) {
+        applyOpenclawAutoswitchTruth(cached.openclawAutoswitch);
+        applied = true;
+      }
+      if (cached.openclawChannels) {
+        applyOpenclawChannelsTruth(cached.openclawChannels);
+        applied = true;
+      }
+      if (cached.runtimeConfig) {
+        window.__runtimeGatewayTokenPresent = Boolean(cached.runtimeConfig.gateway_token_present);
+        window.__runtimeGatewayTokenMasked = String(cached.runtimeConfig.gateway_token_masked || "");
+        applyRuntimeConfigTruth(cached.runtimeConfig);
+        updateTokenStatus();
+        applied = true;
+      }
+      if (cached.controlCompat) {
+        applyControlCompatTruth(cached.controlCompat);
+        applied = true;
+      }
+      if (cached.effectiveRouting) {
+        applyEffectiveRoutingTruth(cached.effectiveRouting);
+        applied = true;
+      }
+      if (cached.voiceRuntime) {
+        applyVoiceRuntimeTruth(cached.voiceRuntime);
+        setText("ocVoiceMeta", "Показан last-good voice runtime. Обновляю live status...");
+        applied = true;
+      }
+      if (cached.translatorBootstrap) {
+        if (cached.translatorBootstrap.readiness) applyTranslatorReadinessTruth(cached.translatorBootstrap.readiness);
+        if (cached.translatorBootstrap.control_plane) applyTranslatorControlPlaneTruth(cached.translatorBootstrap.control_plane);
+        if (cached.translatorBootstrap.session_inspector) applyTranslatorSessionInspectorTruth(cached.translatorBootstrap.session_inspector);
+        if (cached.translatorBootstrap.mobile_readiness) applyTranslatorMobileReadinessTruth(cached.translatorBootstrap.mobile_readiness);
+        if (cached.translatorBootstrap.delivery_matrix) applyTranslatorDeliveryMatrixTruth(cached.translatorBootstrap.delivery_matrix);
+        if (cached.translatorBootstrap.live_trial_preflight) applyTranslatorLiveTrialPreflightTruth(cached.translatorBootstrap.live_trial_preflight);
+        if (cached.translatorBootstrap.mobile_onboarding) applyTranslatorMobileOnboardingTruth(cached.translatorBootstrap.mobile_onboarding);
+        setText("ocTranslatorMeta", "Показан last-good bootstrap. Догидратирую live runtime...");
+        applied = true;
+      }
+      if (cached.cronStatus) {
+        applyCronTruth(cached.cronStatus);
+        setText("ocCronMeta", "Показан last-good cron snapshot. Обновляю live status...");
+        applied = true;
+      }
+      if (cached.localLifecycle) {
+        applyLocalLifecycleTruth(cached.localLifecycle);
+        applied = true;
+      }
+      if (applied) {
+        setText("ocMeta", "Показан last-good bootstrap. Обновляю live runtime...");
+      }
+      return applied;
+    }
+
     async function loadControlCompatStatus(showStatus = true) {
       try {
         const res = await fetch("/api/openclaw/control-compat/status");
         if (res.ok) {
           const payload = await res.json();
-          const root = document.getElementById("ocCompatRuntime");
-          const warnBadge = document.getElementById("ocCompatWarn");
-          const actionText = document.getElementById("ocCompatAction");
-
-          if (root) {
-            const st = payload.runtime_status || "UNKNOWN";
-            if (st === "OK" && payload.impact_level === "ui_only") {
-              root.innerHTML = `<span class="badge ok">OK</span>`;
-            } else {
-              const stClass = st === 'OK' ? 'ok' : 'bad';
-              root.innerHTML = `<span class="badge ${stClass}">${st}</span>`;
-            }
-          }
-          if (warnBadge) {
-            const hasWarn = payload.has_schema_warning;
-            warnBadge.textContent = hasWarn ? "Да" : "Нет";
-            warnBadge.className = hasWarn ? "badge warn" : "badge ok";
-          }
-          if (actionText) actionText.textContent = payload.recommended_action || "-";
-
-          let impactRU = "нет";
-          if (payload.impact_level === "ui_only") impactRU = "только UI";
-          else if (payload.impact_level === "runtime_risk") impactRU = "риск runtime";
-          setText("ocCompatImpact", impactRU);
+          applyControlCompatTruth(payload);
+          rememberOwnerPanelBootstrapPayload("controlCompat", payload);
         }
       } catch (e) {
         console.error("Control Compat Error:", e);
@@ -5064,18 +5327,8 @@ ${channelsText}`;
         const res = await fetch("/api/openclaw/routing/effective");
         if (res.ok) {
           const data = await res.json();
-          setText("ocrouteReq", data.requested_mode || "-");
-          setText("ocrouteEff", data.effective_mode || "-");
-          setText("ocrouteActive", data.active_slot_or_model || "-");
-          let fallbackText = data.cloud_fallback ? "Да" : "Нет";
-          if (data.cloud_fallback_state === "standby") fallbackText = "Резерв";
-          else if (data.cloud_fallback_state === "active") fallbackText = "Да";
-          else if (data.cloud_fallback_state === "disabled") fallbackText = "Нет";
-          setText("ocrouteFallback", fallbackText);
-          const routingNotes = Array.isArray(data.decision_notes)
-            ? data.decision_notes.join(" ")
-            : (data.decision_notes || "-");
-          setText("ocrouteNotes", routingNotes);
+          applyEffectiveRoutingTruth(data);
+          rememberOwnerPanelBootstrapPayload("effectiveRouting", data);
         }
       } catch (e) {
         console.error("Effective Routing Error:", e);
@@ -5167,8 +5420,9 @@ ${channelsText}`;
           window.__runtimeGatewayTokenPresent = Boolean(runtimeConfig.gateway_token_present);
           window.__runtimeGatewayTokenMasked = String(runtimeConfig.gateway_token_masked || "");
           applyRuntimeConfigTruth(runtimeConfig);
+          rememberOwnerPanelBootstrapPayload("runtimeConfig", runtimeConfig);
           updateTokenStatus();
-        } else {
+        } else if (!ownerPanelHasResolvedValue("ocrouteAuth")) {
           setText("ocrouteAuth", "ERR");
           setText("ocrouteReasoning", "ERR");
           setText("ocrouteHistory", "ERR");
@@ -5178,25 +5432,9 @@ ${channelsText}`;
         // Catalog processing
         if (catalogRes.ok) {
           const payload = await catalogRes.json();
-          setText("ocForceMode", payload.catalog?.force_mode || "auto");
-          setText(
-            "ocLocalModel",
-            resolveCatalogLocalLabel(payload.catalog),
-          );
-          const slots = Object.keys(
-            payload.catalog?.cloud_slots || {},
-          ).length;
-          setText("ocCloudSlots", slots > 0 ? `${slots} active` : "none");
-
-          // Updates for Control UX Buttons
-          const m = payload.catalog?.force_mode || "auto";
-          ["local", "auto", "cloud"].forEach(md => {
-            const btn = document.getElementById(`ocMode${md.charAt(0).toUpperCase() + md.slice(1)}Btn`);
-            if (btn) btn.className = (m === md) ? "primary" : "";
-          });
-          setText("opsQueueMode", m);
-
-        } else {
+          applyOpenclawCatalogTruth(payload);
+          rememberOwnerPanelBootstrapPayload("openclawCatalog", payload);
+        } else if (!ownerPanelHasResolvedValue("ocForceMode")) {
           setText("ocForceMode", "ERR");
           setText("ocLocalModel", "ERR");
           setText("ocCloudSlots", "ERR");
@@ -5206,16 +5444,9 @@ ${channelsText}`;
         // Autoswitch processing
         if (autoswitchRes.ok) {
           const payload = await autoswitchRes.json();
-          const autoswitch = payload.autoswitch || {};
-          const rawSt = String(autoswitch.status || "unknown").toUpperCase();
-          const isOk = rawSt === "ACTIVE" || rawSt === "OK" || rawSt === "ON";
-          const isBad = rawSt === "FAIL" || rawSt === "ERROR";
-          const badgeClass = isOk ? "ok" : (isBad ? "bad" : "warn");
-          const badgeText = isOk ? "OK" : (isBad ? "FAIL" : "WARN");
-          document.getElementById("ocAutoswitchStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
-          setText("ocLastSwitch", autoswitch.last_switch || "-");
-          setText("ocSwitchReason", autoswitch.reason || "-");
-        } else {
+          applyOpenclawAutoswitchTruth(payload);
+          rememberOwnerPanelBootstrapPayload("openclawAutoswitch", payload);
+        } else if (!ownerPanelHasResolvedValue("ocAutoswitchStatus")) {
           const errPayload = autoswitchRes.json ? await autoswitchRes.json().catch(() => ({})) : {};
           const errText = errPayload.detail || autoswitchRes.error || `HTTP ${autoswitchRes.status}`;
           document.getElementById("ocAutoswitchStatus").innerHTML = `<span class="badge bad">FAIL</span> <span style="font-size: 0.8em; color: var(--state-error);">${errText}</span>`;
@@ -5226,24 +5457,9 @@ ${channelsText}`;
         // Channels processing
         if (channelsRes.ok) {
           const payload = await channelsRes.json();
-          const channels = payload.channels || [];
-          if (channels.length === 0) {
-            document.getElementById("ocChannelsList").innerHTML =
-              '<span class="card-meta">No channels data</span>';
-          } else {
-            document.getElementById("ocChannelsList").innerHTML = channels
-              .map((c) => {
-                const rawSt = String(c.status || "unknown").toUpperCase();
-                const badgeClass = rawSt === "OK" ? "ok" : (rawSt === "FAIL" ? "bad" : "warn");
-                const badgeText = rawSt === "OK" ? "OK" : (rawSt === "FAIL" ? "FAIL" : "WARN");
-                return `<div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0;">
-                                <span class="card-meta">${c.name || "channel"}</span>
-                                <span class="badge ${badgeClass}">${badgeText}</span>
-                            </div>`;
-              })
-              .join("");
-          }
-        } else {
+          applyOpenclawChannelsTruth(payload);
+          rememberOwnerPanelBootstrapPayload("openclawChannels", payload);
+        } else if (!ownerPanelHasResolvedHtml("ocChannelsList")) {
           const errPayload = channelsRes.json ? await channelsRes.json().catch(() => ({})) : {};
           const errText = errPayload.detail || channelsRes.error || `HTTP ${channelsRes.status}`;
           document.getElementById("ocChannelsList").innerHTML =
@@ -6485,6 +6701,7 @@ ${channelsText}`;
           throw new Error(payload?.detail || payload?.error || `HTTP ${response.status}`);
         }
         applyCronTruth(payload);
+        rememberOwnerPanelBootstrapPayload("cronStatus", payload);
         if (showStatus) setText("ocCronMeta", "Recurring cron обновлён");
       } catch (error) {
         setText("ocCronMeta", `Cron error: ${error.message}`);
@@ -6556,6 +6773,7 @@ ${channelsText}`;
           throw new Error(payload?.detail || payload?.error || `HTTP ${response.status}`);
         }
         applyVoiceRuntimeTruth(payload.voice || {});
+        rememberOwnerPanelBootstrapPayload("voiceRuntime", payload.voice || {});
         if (showStatus) setText("ocVoiceMeta", "Voice runtime обновлён");
         if (syncTranslator) {
           await loadTranslatorReadinessStatus(false);
@@ -6601,6 +6819,7 @@ ${channelsText}`;
         if (!bootstrapResponse.ok || !bootstrapPayload?.ok) {
           throw new Error(bootstrapPayload?.detail || bootstrapPayload?.error || `HTTP ${bootstrapResponse.status}`);
         }
+        rememberOwnerPanelBootstrapPayload("translatorBootstrap", bootstrapPayload);
         const payload = bootstrapPayload.readiness && typeof bootstrapPayload.readiness === "object"
           ? bootstrapPayload.readiness
           : {};
@@ -7317,17 +7536,16 @@ ${channelsText}`;
           throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
         }
 
-        const rawSt = String(payload.status || "unknown").toLowerCase();
-        const badgeClass = rawSt === "loaded" ? "ok" : (rawSt === "not_loaded" ? "warn" : "bad");
-        const badgeText = rawSt === "loaded" ? "OK" : (rawSt === "not_loaded" ? "WARN" : "FAIL");
-        document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge ${badgeClass}">${badgeText}</span>`;
-        document.getElementById("ocLocalLifecycleModel").textContent = resolveLocalLifecycleLabel(payload);
+        applyLocalLifecycleTruth(payload);
+        rememberOwnerPanelBootstrapPayload("localLifecycle", payload);
 
         if (showStatus) setText("ocMeta", "Статус local model обновлен");
         return payload;
       } catch (error) {
-        document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge bad">FAIL</span>`;
-        document.getElementById("ocLocalLifecycleModel").textContent = "-";
+        if (!ownerPanelHasResolvedValue("ocLocalLifecycleStatus")) {
+          document.getElementById("ocLocalLifecycleStatus").innerHTML = `<span class="badge bad">FAIL</span>`;
+          document.getElementById("ocLocalLifecycleModel").textContent = "-";
+        }
         showApiError("ocMeta", "Local Status", error);
         return null;
       }
@@ -7483,6 +7701,7 @@ ${channelsText}`;
     startPollLeadershipHeartbeat();
     startCoreHealthPolling();
     startDashboardStatsPolling();
+    applyOwnerPanelBootstrapCache();
     document.addEventListener("visibilitychange", () => {
       if (isDashboardTabVisible()) {
         refreshPollLeadership(true);

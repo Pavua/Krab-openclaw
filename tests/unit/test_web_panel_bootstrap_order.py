@@ -59,6 +59,40 @@ def test_owner_panel_schedules_bootstrap_recovery_after_transient_restart_failur
     assert 'refreshAll().catch((error) => console.error("refreshAll_visibility_recovery_failed", error));' in source
 
 
+def test_owner_panel_reuses_last_good_dashboard_bootstrap_on_first_paint() -> None:
+    """First-paint должен брать last-good snapshot для верхних dashboard-карточек до live refresh."""
+
+    source = _index_html_source()
+
+    assert 'const OWNER_PANEL_DASHBOARD_CACHE_IDS = [' in source
+    assert 'function captureOwnerPanelDashboardSnapshot()' in source
+    assert 'function applyCachedDashboardStatsTruth(snapshot)' in source
+    assert 'rememberOwnerPanelBootstrapPayload("dashboardStats", captureOwnerPanelDashboardSnapshot());' in source
+    assert 'if (cached.dashboardStats) {' in source
+    assert 'applyCachedDashboardStatsTruth(cached.dashboardStats);' in source
+    assert "function ownerPanelHasResolvedValue(id)" in source
+    assert "} else if (!ownerPanelHasResolvedValue(\"ocForceMode\")) {" in source
+    assert "} else if (!ownerPanelHasResolvedValue(\"ocAutoswitchStatus\")) {" in source
+    assert 'if (!ownerPanelHasResolvedValue("ocLocalLifecycleStatus")) {' in source
+
+
+def test_owner_panel_reuses_last_good_bootstrap_cache_before_live_refresh() -> None:
+    """Панель должна поднимать last-good state из localStorage до live-гидратации."""
+
+    source = _index_html_source()
+
+    assert 'const OWNER_PANEL_BOOTSTRAP_CACHE_KEY = "krab:owner-panel-bootstrap:v1";' in source
+    assert "function rememberOwnerPanelBootstrapPayload(section, payload)" in source
+    assert "function getCachedOwnerPanelBootstrapPayload(maxAgeMs = OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS)" in source
+    assert "function applyOwnerPanelBootstrapCache()" in source
+    assert 'window.localStorage.setItem(OWNER_PANEL_BOOTSTRAP_CACHE_KEY, JSON.stringify(ownerPanelBootstrapCache));' in source
+    assert "applyOwnerPanelBootstrapCache();" in source
+    assert 'rememberOwnerPanelBootstrapPayload("translatorBootstrap", bootstrapPayload);' in source
+    assert 'rememberOwnerPanelBootstrapPayload("voiceRuntime", payload.voice || {});' in source
+    assert 'rememberOwnerPanelBootstrapPayload("cronStatus", payload);' in source
+    assert 'rememberOwnerPanelBootstrapPayload("localLifecycle", payload);' in source
+
+
 def test_inbox_widget_uses_truthful_summary_and_runtime_statuses() -> None:
     """Inbox-виджет должен брать truthful summary и работать с реальными inbox-статусами."""
 
