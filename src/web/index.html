@@ -4221,6 +4221,10 @@ ${channelsText}`;
       "opsLatencyP95",
       "opsFailFastCount",
     ];
+    const OWNER_PANEL_DASHBOARD_CACHE_HTML_IDS = [
+      "services",
+      "checks",
+    ];
 
     function captureOwnerPanelDashboardSnapshot() {
       const snapshot = {};
@@ -4232,6 +4236,14 @@ ${channelsText}`;
           className: String(element.className || ""),
         };
       });
+      OWNER_PANEL_DASHBOARD_CACHE_HTML_IDS.forEach((id) => {
+        const element = document.getElementById(id);
+        if (!element) return;
+        snapshot[id] = {
+          html: String(element.innerHTML || "").trim(),
+          className: String(element.className || ""),
+        };
+      });
       return snapshot;
     }
 
@@ -4240,6 +4252,14 @@ ${channelsText}`;
       Object.entries(payload).forEach(([id, value]) => {
         const element = document.getElementById(id);
         if (!element || !value || typeof value !== "object") return;
+        const html = String(value.html || "").trim();
+        if (html && html !== "—") {
+          element.innerHTML = html;
+          if (value.className) {
+            element.className = String(value.className);
+          }
+          return;
+        }
         const text = String(value.text || "").trim();
         if (!text || text === "—") return;
         element.textContent = text;

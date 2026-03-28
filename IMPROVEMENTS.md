@@ -80,10 +80,11 @@
 **Статус:** ✅ ПОДТВЕРЖДЕНО — в логах видно `private_text_burst_coalesced absorbed_message_ids=['11127', '11128'] messages_count=3`. Склейка пересланных подряд сообщений работает.
 
 ### 17. Owner Panel: детерминированная initial hydration после рестарта
-**Статус:** ✅ ПОЛНОСТЬЮ ИСПРАВЛЕНО (2026-03-28) — initial hydration теперь трёхслойная:
+**Статус:** ✅ ПОЛНОСТЬЮ ИСПРАВЛЕНО (2026-03-28) — initial hydration теперь четырёхслойная:
 1. `refreshAll()` уже не последовательный.
 2. Translator first-paint идёт через единый `/api/translator/bootstrap`.
 3. Owner panel поднимает last-good runtime sections из `localStorage` (`krab:owner-panel-bootstrap:v1`) до live refresh, поэтому cold reload больше не возвращает ключевые блоки в пустые `—`.
+4. Верхний dashboard snapshot и high-value error-path теперь тоже cache-aware, поэтому transient fetch-failure не стирает уже поднятый first-paint обратно в `ERR/FAIL`.
 
 **Оставшееся наблюдение:** `Browser / MCP Readiness` намеренно остаётся в `LOADING`, а не в cached-ready, потому что это volatile probe. Единичные `browser_action_probe_raw_failed` при зелёном acceptance пока считаем шумом health-probe, а не runtime-регрессией.
 

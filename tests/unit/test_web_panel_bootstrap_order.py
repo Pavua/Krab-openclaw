@@ -65,6 +65,7 @@ def test_owner_panel_reuses_last_good_dashboard_bootstrap_on_first_paint() -> No
     source = _index_html_source()
 
     assert 'const OWNER_PANEL_DASHBOARD_CACHE_IDS = [' in source
+    assert 'const OWNER_PANEL_DASHBOARD_CACHE_HTML_IDS = [' in source
     assert 'function captureOwnerPanelDashboardSnapshot()' in source
     assert 'function applyCachedDashboardStatsTruth(snapshot)' in source
     assert 'rememberOwnerPanelBootstrapPayload("dashboardStats", captureOwnerPanelDashboardSnapshot());' in source
