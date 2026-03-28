@@ -125,6 +125,7 @@ class InboxService:
     _allowed_statuses = _open_statuses | _closed_statuses
     _allowed_severities = {"info", "warning", "error"}
     _stale_processing_after = timedelta(minutes=15)
+    _stale_open_after = timedelta(hours=12)
 
     def __init__(self, *, state_path: Path | None = None, max_items: int = 200) -> None:
         self.state_path = state_path or _default_state_path()
@@ -371,6 +372,39 @@ class InboxService:
             rows.append(payload)
         return rows
 
+    def list_stale_open_items(
+        self,
+        *,
+        kind: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """
+        Возвращает старые `open` item-ы с возрастом, чтобы не смешивать их с fresh inbox.
+
+        Такой список нужен для truthful owner UI и для безопасного remediation
+        legacy-open запросов, которые уже точно не являются "новыми".
+        """
+        normalized_kind = str(kind or "").strip().lower()
+        stale_items: list[tuple[datetime, InboxItem]] = []
+        for item in self._load_items():
+            if normalized_kind and item.kind != normalized_kind:
+                continue
+            if not self._is_open_stale(item):
+                continue
+            activity_at = self._parse_item_activity_at(item)
+            if activity_at is None:
+                continue
+            stale_items.append((activity_at, item))
+
+        stale_items.sort(key=lambda row: row[0])
+        rows: list[dict[str, Any]] = []
+        now_utc = datetime.now(timezone.utc)
+        for activity_at, item in stale_items[: max(1, int(limit or 20))]:
+            payload = item.to_dict()
+            payload["open_age_sec"] = max(0, int((now_utc - activity_at).total_seconds()))
+            rows.append(payload)
+        return rows
+
     def archive_by_kind(
         self,
         *,
@@ -558,7 +592,8 @@ class InboxService:
     def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
         """Собирает owner-facing summary из уже загруженного набора item-ов."""
         open_items = [item for item in items if item.status in self._open_statuses]
-        fresh_open_items = [item for item in open_items if item.status == "open"]
+        fresh_open_items = [item for item in open_items if item.status == "open" and not self._is_open_stale(item)]
+        stale_open_items = [item for item in open_items if item.status == "open" and self._is_open_stale(item)]
         acked_items = [item for item in open_items if item.status == "acked"]
         stale_acked_items = [item for item in acked_items if self._is_processing_stale(item)]
         warning_items = [item for item in open_items if item.severity in {"warning", "error"}]
@@ -568,9 +603,15 @@ class InboxService:
         approval_items = [item for item in open_items if item.kind == "approval_request"]
         owner_request_items = [item for item in open_items if item.kind == "owner_request"]
         owner_mention_items = [item for item in open_items if item.kind == "owner_mention"]
-        new_owner_request_items = [item for item in owner_request_items if item.status == "open"]
+        new_owner_request_items = [item for item in owner_request_items if item.status == "open" and not self._is_open_stale(item)]
+        stale_open_owner_request_items = [
+            item for item in owner_request_items if item.status == "open" and self._is_open_stale(item)
+        ]
         processing_owner_request_items = [item for item in owner_request_items if item.status == "acked"]
-        new_owner_mention_items = [item for item in owner_mention_items if item.status == "open"]
+        new_owner_mention_items = [item for item in owner_mention_items if item.status == "open" and not self._is_open_stale(item)]
+        stale_open_owner_mention_items = [
+            item for item in owner_mention_items if item.status == "open" and self._is_open_stale(item)
+        ]
         processing_owner_mention_items = [item for item in owner_mention_items if item.status == "acked"]
         stale_owner_request_items = [
             item for item in processing_owner_request_items if self._is_processing_stale(item)
@@ -585,6 +626,7 @@ class InboxService:
             "total_items": len(items),
             "open_items": len(open_items),
             "fresh_open_items": len(fresh_open_items),
+            "stale_open_items": len(stale_open_items),
             "acked_items": len(acked_items),
             "stale_processing_items": len(stale_acked_items),
             "attention_items": len(warning_items),
@@ -594,10 +636,12 @@ class InboxService:
             "pending_approvals": len(approval_items),
             "pending_owner_requests": len(owner_request_items),
             "new_owner_requests": len(new_owner_request_items),
+            "stale_open_owner_requests": len(stale_open_owner_request_items),
             "processing_owner_requests": len(processing_owner_request_items),
             "stale_processing_owner_requests": len(stale_owner_request_items),
             "pending_owner_mentions": len(owner_mention_items),
             "new_owner_mentions": len(new_owner_mention_items),
+            "stale_open_owner_mentions": len(stale_open_owner_mention_items),
             "processing_owner_mentions": len(processing_owner_mention_items),
             "stale_processing_owner_mentions": len(stale_owner_mention_items),
             "latest_open_items": [item.to_dict() for item in open_items[:5]],
@@ -635,6 +679,16 @@ class InboxService:
         if activity_at is None:
             return False
         return datetime.now(timezone.utc) - activity_at >= cls._stale_processing_after
+
+    @classmethod
+    def _is_open_stale(cls, item: InboxItem) -> bool:
+        """Определяет, что `open` item уже нельзя считать свежим inbox-сигналом."""
+        if item.status != "open":
+            return False
+        activity_at = cls._parse_item_activity_at(item)
+        if activity_at is None:
+            return False
+        return datetime.now(timezone.utc) - activity_at >= cls._stale_open_after
 
     def get_summary(self) -> dict[str, Any]:
         """Возвращает краткий owner-facing summary inbox."""

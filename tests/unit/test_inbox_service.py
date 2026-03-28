@@ -291,6 +291,48 @@ def test_summary_marks_old_acked_items_as_stale_processing(tmp_path: Path) -> No
     assert summary["stale_processing_owner_mentions"] == 0
 
 
+def test_summary_marks_old_open_items_as_stale_open(tmp_path: Path) -> None:
+    """Summary должен отличать старый `open` item от реально свежего inbox-сигнала."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+
+    stale_request = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Старый open owner request",
+        sender_username="owner",
+        chat_type="private",
+    )
+    service.upsert_incoming_owner_request(
+        chat_id="-100777",
+        message_id="11",
+        text="Свежий owner mention",
+        sender_username="owner",
+        chat_type="group",
+        is_reply_to_me=True,
+        has_trigger=True,
+    )
+
+    state = service._load_state()
+    stale_timestamp = (
+        datetime.now(timezone.utc) - InboxService._stale_open_after - timedelta(minutes=3)
+    ).isoformat(timespec="seconds")
+    for item in state["items"]:
+        if item["item_id"] != stale_request["item"]["item_id"]:
+            continue
+        item["updated_at_utc"] = stale_timestamp
+    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    summary = service.get_summary()
+
+    assert summary["open_items"] == 2
+    assert summary["fresh_open_items"] == 1
+    assert summary["stale_open_items"] == 1
+    assert summary["new_owner_requests"] == 0
+    assert summary["stale_open_owner_requests"] == 1
+    assert summary["new_owner_mentions"] == 1
+    assert summary["stale_open_owner_mentions"] == 0
+
+
 def test_list_stale_processing_items_returns_oldest_acked_items_with_age(tmp_path: Path) -> None:
     """Runbook helper должен возвращать только stale `acked` item-ы и сортировать их по возрасту."""
     service = InboxService(state_path=tmp_path / "inbox.json")
@@ -327,6 +369,41 @@ def test_list_stale_processing_items_returns_oldest_acked_items_with_age(tmp_pat
     assert len(items) == 1
     assert items[0]["item_id"] == first["item"]["item_id"]
     assert items[0]["processing_age_sec"] >= int(InboxService._stale_processing_after.total_seconds())
+
+
+def test_list_stale_open_items_returns_oldest_open_items_with_age(tmp_path: Path) -> None:
+    """Runbook helper должен возвращать только stale-open item-ы и их возраст."""
+    service = InboxService(state_path=tmp_path / "inbox.json")
+    first = service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="10",
+        text="Старый open item",
+        sender_username="owner",
+        chat_type="private",
+    )
+    service.upsert_incoming_owner_request(
+        chat_id="123",
+        message_id="11",
+        text="Свежий open item",
+        sender_username="owner",
+        chat_type="private",
+    )
+
+    state = service._load_state()
+    old_timestamp = (
+        datetime.now(timezone.utc) - InboxService._stale_open_after - timedelta(minutes=7)
+    ).isoformat(timespec="seconds")
+    for item in state["items"]:
+        if item["item_id"] != first["item"]["item_id"]:
+            continue
+        item["updated_at_utc"] = old_timestamp
+    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    items = service.list_stale_open_items(kind="owner_request", limit=10)
+
+    assert len(items) == 1
+    assert items[0]["item_id"] == first["item"]["item_id"]
+    assert items[0]["open_age_sec"] >= int(InboxService._stale_open_after.total_seconds())
 
 
 def test_workflow_snapshot_exposes_trace_index_and_approval_history(tmp_path: Path) -> None:

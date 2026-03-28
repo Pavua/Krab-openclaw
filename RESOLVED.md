@@ -281,3 +281,35 @@
 - Артефакт:
   - [KRAB_EAR_LAUNCHER_READINESS_2026-03-28.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/KRAB_EAR_LAUNCHER_READINESS_2026-03-28.md)
   - [owner-panel-post-ear-launcher-fix-20260328-1430.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/owner-panel-post-ear-launcher-fix-20260328-1430.png)
+
+### Inbox truth теперь отделяет `stale-open` owner_request от реально свежей очереди
+- Причина: legacy-open запрос `incoming:312322764:11427` оставался в summary как обычный `new owner_request`, хотя висел почти сутки. Это смешивало живую очередь с историческим хвостом и давало owner UI ложный сигнал, будто есть новый необработанный запрос.
+- Что сделано:
+  - в [src/core/inbox_service.py](/Users/pablito/Antigravity_AGENTS/Краб/src/core/inbox_service.py) добавлен новый truth bucket `stale_open` c порогом `12h`, summary-поля `stale_open_items`, `stale_open_owner_requests`, `stale_open_owner_mentions` и helper `list_stale_open_items(...)`;
+  - в [src/modules/web_app.py](/Users/pablito/Antigravity_AGENTS/Краб/src/modules/web_app.py) добавлены endpoints:
+    - `GET /api/inbox/stale-open`
+    - `POST /api/inbox/stale-open/remediate`
+  - в [src/web/index.html](/Users/pablito/Antigravity_AGENTS/Краб/src/web/index.html) inbox теперь показывает `stale-open`, маркирует старые `open` карточки как `STALE-OPEN` и даёт отдельные owner-кнопки `Cancel stale open` / `Done stale open`.
+- Проверка:
+  - `./venv/bin/pytest -q tests/unit/test_inbox_service.py tests/unit/test_web_app_runtime_endpoints.py tests/unit/test_web_panel_bootstrap_order.py -q` -> `163 passed`
+  - после controlled restart `GET /api/health/lite` показал truthful summary:
+    - `fresh_open_items=0`
+    - `stale_open_items=1`
+    - `new_owner_requests=0`
+    - `stale_open_owner_requests=1`
+  - `GET /api/inbox/stale-open?kind=owner_request&limit=10` вернул ровно legacy-open item `incoming:312322764:11427`;
+  - через owner UI нажата bulk-кнопка `Cancel stale open`;
+  - после action `GET /api/inbox/status?limit=5` вернул:
+    - `open_items=0`
+    - `fresh_open_items=0`
+    - `stale_open_items=0`
+    - `pending_owner_requests=0`
+    - `stale_open_owner_requests=0`
+  - persisted state для `incoming:312322764:11427` зафиксировал:
+    - `status=cancelled`
+    - `last_action_actor=owner-ui`
+    - `last_action_note=owner_ui_bulk_stale_open_cancelled`
+    - `last_action_status=cancelled`
+- Артефакты:
+  - [INBOX_STALE_OPEN_TRUTH_2026-03-28.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_STALE_OPEN_TRUTH_2026-03-28.md)
+  - [inbox-stale-open-remediation-after-20260328-1448.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/inbox-stale-open-remediation-after-20260328-1448.png)

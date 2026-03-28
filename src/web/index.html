@@ -1684,9 +1684,13 @@
         <div style="display: flex; gap: 8px; align-items: center;">
           <span id="inboxMeta" style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);">—</span>
           <button id="inboxCancelStaleBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.78rem; display: none;"
-            onclick="remediateInboxStale('cancelled')">Cancel stale req</button>
+            onclick="remediateInboxStale('processing', 'cancelled')">Cancel stale req</button>
           <button id="inboxDoneStaleBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.78rem; display: none;"
-            onclick="remediateInboxStale('done')">Done stale req</button>
+            onclick="remediateInboxStale('processing', 'done')">Done stale req</button>
+          <button id="inboxCancelStaleOpenBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.78rem; display: none;"
+            onclick="remediateInboxStale('open', 'cancelled')">Cancel stale open</button>
+          <button id="inboxDoneStaleOpenBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.78rem; display: none;"
+            onclick="remediateInboxStale('open', 'done')">Done stale open</button>
           <button id="inboxRefreshBtn" class="btn-ghost" style="padding: 4px 10px; font-size: 0.8rem;"
             onclick="loadInboxItems()">↻</button>
         </div>
@@ -6789,6 +6793,7 @@ ${channelsText}`;
       proactive_action: "var(--state-error, #f44336)",
     };
     const _INBOX_STALE_PROCESSING_MS = 15 * 60 * 1000;
+    const _INBOX_STALE_OPEN_MS = 12 * 60 * 60 * 1000;
 
     function _inboxStatusLabel(status) {
       const normalized = String(status || "").trim().toLowerCase();
@@ -6807,14 +6812,17 @@ ${channelsText}`;
       const payload = summary && typeof summary === "object" ? summary : {};
       const totalOpen = Number(payload.open_items || 0);
       const freshOpen = Number(payload.fresh_open_items || 0);
+      const staleOpen = Number(payload.stale_open_items || 0);
       const acked = Number(payload.acked_items || 0);
       const staleAcked = Number(payload.stale_processing_items || 0);
       const ownerRequests = Number(payload.pending_owner_requests || 0);
       const newOwnerRequests = Number(payload.new_owner_requests || 0);
+      const staleOpenOwnerRequests = Number(payload.stale_open_owner_requests || 0);
       const processingOwnerRequests = Number(payload.processing_owner_requests || 0);
       const staleOwnerRequests = Number(payload.stale_processing_owner_requests || 0);
       const ownerMentions = Number(payload.pending_owner_mentions || 0);
       const newOwnerMentions = Number(payload.new_owner_mentions || 0);
+      const staleOpenOwnerMentions = Number(payload.stale_open_owner_mentions || 0);
       const processingOwnerMentions = Number(payload.processing_owner_mentions || 0);
       const staleOwnerMentions = Number(payload.stale_processing_owner_mentions || 0);
       const parts = [];
@@ -6825,6 +6833,9 @@ ${channelsText}`;
       }
       if (freshOpen > 0 || acked > 0) {
         parts.push(`${freshOpen} new`);
+        if (staleOpen > 0) {
+          parts.push(`${staleOpen} stale-open`);
+        }
         parts.push(`${acked} processing`);
         if (staleAcked > 0) {
           parts.push(`${staleAcked} stale`);
@@ -6832,6 +6843,9 @@ ${channelsText}`;
       }
       if (ownerRequests > 0) {
         let ownerRequestText = `owner req ${ownerRequests} (${newOwnerRequests}/${processingOwnerRequests})`;
+        if (staleOpenOwnerRequests > 0) {
+          ownerRequestText += ` stale-open ${staleOpenOwnerRequests}`;
+        }
         if (staleOwnerRequests > 0) {
           ownerRequestText += ` stale ${staleOwnerRequests}`;
         }
@@ -6839,6 +6853,9 @@ ${channelsText}`;
       }
       if (ownerMentions > 0) {
         let ownerMentionText = `mentions ${ownerMentions} (${newOwnerMentions}/${processingOwnerMentions})`;
+        if (staleOpenOwnerMentions > 0) {
+          ownerMentionText += ` stale-open ${staleOpenOwnerMentions}`;
+        }
         if (staleOwnerMentions > 0) {
           ownerMentionText += ` stale ${staleOwnerMentions}`;
         }
@@ -6849,11 +6866,15 @@ ${channelsText}`;
 
     function _applyInboxStaleActionState(summary) {
       const payload = summary && typeof summary === "object" ? summary : {};
+      const staleOpenOwnerRequests = Number(payload.stale_open_owner_requests || 0);
       const staleOwnerRequests = Number(payload.stale_processing_owner_requests || 0);
       const cancelBtn = document.getElementById("inboxCancelStaleBtn");
       const doneBtn = document.getElementById("inboxDoneStaleBtn");
+      const cancelOpenBtn = document.getElementById("inboxCancelStaleOpenBtn");
+      const doneOpenBtn = document.getElementById("inboxDoneStaleOpenBtn");
       const actionMeta = document.getElementById("inboxActionMeta");
       const shouldShow = staleOwnerRequests > 0;
+      const shouldShowOpen = staleOpenOwnerRequests > 0;
       [cancelBtn, doneBtn].forEach(function(btn) {
         if (!btn) return;
         btn.style.display = shouldShow ? "inline-flex" : "none";
@@ -6862,8 +6883,16 @@ ${channelsText}`;
           ? `${staleOwnerRequests} stale owner_request ждут remediation`
           : "Stale owner_request сейчас нет";
       });
-      if (actionMeta && !shouldShow) {
-        actionMeta.textContent = "Stale owner_request сейчас нет.";
+      [cancelOpenBtn, doneOpenBtn].forEach(function(btn) {
+        if (!btn) return;
+        btn.style.display = shouldShowOpen ? "inline-flex" : "none";
+        btn.disabled = !shouldShowOpen;
+        btn.title = shouldShowOpen
+          ? `${staleOpenOwnerRequests} stale-open owner_request ждут remediation`
+          : "Stale-open owner_request сейчас нет";
+      });
+      if (actionMeta && !shouldShow && !shouldShowOpen) {
+        actionMeta.textContent = "Stale inbox item-ов сейчас нет.";
       }
     }
 
@@ -6888,12 +6917,25 @@ ${channelsText}`;
       return Date.now() - activityAt >= _INBOX_STALE_PROCESSING_MS;
     }
 
+    function _isInboxItemStaleOpen(item) {
+      if (String(item.status || "").trim().toLowerCase() !== "open") {
+        return false;
+      }
+      const metadata = item && typeof item.metadata === "object" ? item.metadata : {};
+      const activityAt = _parseInboxIso(metadata.last_action_at_utc || item.updated_at_utc || item.created_at_utc);
+      if (activityAt === null) {
+        return false;
+      }
+      return Date.now() - activityAt >= _INBOX_STALE_OPEN_MS;
+    }
+
     function _buildInboxItemEl(item) {
       const kindColor = _INBOX_KIND_COLORS[String(item.kind || "")] || "var(--text-muted)";
       const safeId = String(item.item_id || item.id || "");
       const normalizedKind = String(item.kind || "").trim().toLowerCase();
       const normalizedStatus = String(item.status || "").trim().toLowerCase();
       const isStaleProcessing = _isInboxItemStaleProcessing(item);
+      const isStaleOpen = _isInboxItemStaleOpen(item);
       const isApproval = normalizedKind === "approval_request";
       const isActionable = !!safeId && (
         (isApproval && normalizedStatus === "open")
@@ -6926,7 +6968,9 @@ ${channelsText}`;
       const statusEl = document.createElement("span");
       statusEl.textContent = isStaleProcessing
         ? `${_inboxStatusLabel(item.status || "?")} · STALE`
-        : _inboxStatusLabel(item.status || "?");
+        : isStaleOpen
+          ? `${_inboxStatusLabel(item.status || "?")} · STALE-OPEN`
+          : _inboxStatusLabel(item.status || "?");
       Object.assign(statusEl.style, {
         fontSize: "0.7rem", color: "var(--text-muted)",
         fontFamily: "var(--font-mono)", whiteSpace: "nowrap",
@@ -6953,13 +6997,13 @@ ${channelsText}`;
         const activityAt = item.metadata && item.metadata.last_action_at_utc
           ? String(item.metadata.last_action_at_utc)
           : "";
-        tsEl.textContent = isStaleProcessing && activityAt
+        tsEl.textContent = (isStaleProcessing || isStaleOpen) && activityAt
           ? `stale since ${activityAt}`
           : String(createdAt);
         Object.assign(tsEl.style, {
           fontSize: "0.7rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)",
         });
-        if (isStaleProcessing) {
+        if (isStaleProcessing || isStaleOpen) {
           tsEl.style.color = "var(--state-warn, #ff9800)";
         }
         wrapper.appendChild(tsEl);
@@ -7031,6 +7075,8 @@ ${channelsText}`;
         _applyInboxStaleActionState(summary);
         if (actionMeta && Number(summary.stale_processing_owner_requests || 0) > 0) {
           actionMeta.textContent = `Stale owner_request: ${Number(summary.stale_processing_owner_requests || 0)}. Используй bulk remediation только если фон уже точно не продолжится.`;
+        } else if (actionMeta && Number(summary.stale_open_owner_requests || 0) > 0) {
+          actionMeta.textContent = `Stale-open owner_request: ${Number(summary.stale_open_owner_requests || 0)}. Используй bulk remediation только если это legacy-open, а не реально ожидающий запрос.`;
         }
 
         while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
@@ -7064,33 +7110,43 @@ ${channelsText}`;
       }
     }
 
-    async function remediateInboxStale(status) {
+    async function remediateInboxStale(kind, status) {
       const actionMeta = document.getElementById("inboxActionMeta");
+      const normalizedKind = String(kind || "").trim().toLowerCase();
       const normalizedStatus = String(status || "").trim().toLowerCase();
+      const isOpenRemediation = normalizedKind === "open";
       if (!["done", "cancelled"].includes(normalizedStatus)) {
         if (actionMeta) actionMeta.textContent = "Inbox remediation error: invalid stale status";
         return;
       }
       try {
         if (actionMeta) {
-          actionMeta.textContent = normalizedStatus === "done"
-            ? "Remediating stale owner_request as done..."
-            : "Cancelling stale owner_request...";
+          if (isOpenRemediation) {
+            actionMeta.textContent = normalizedStatus === "done"
+              ? "Remediating stale-open owner_request as done..."
+              : "Cancelling stale-open owner_request...";
+          } else {
+            actionMeta.textContent = normalizedStatus === "done"
+              ? "Remediating stale owner_request as done..."
+              : "Cancelling stale owner_request...";
+          }
         }
-        const payload = await postJson("/api/inbox/stale-processing/remediate", {
+        const payload = await postJson(isOpenRemediation ? "/api/inbox/stale-open/remediate" : "/api/inbox/stale-processing/remediate", {
           kind: "owner_request",
           status: normalizedStatus,
           actor: "owner-ui",
           note: normalizedStatus === "done"
-            ? "owner_ui_bulk_stale_done"
-            : "owner_ui_bulk_stale_cancelled",
+            ? (isOpenRemediation ? "owner_ui_bulk_stale_open_done" : "owner_ui_bulk_stale_done")
+            : (isOpenRemediation ? "owner_ui_bulk_stale_open_cancelled" : "owner_ui_bulk_stale_cancelled"),
           limit: 20,
         });
         const affected = Number(payload.count || 0);
         if (actionMeta) {
           actionMeta.textContent = affected > 0
             ? `Stale remediation complete: ${affected} owner_request -> ${normalizedStatus}.`
-            : "Stale remediation complete: no stale owner_request found.";
+            : isOpenRemediation
+              ? "Stale remediation complete: no stale-open owner_request found."
+              : "Stale remediation complete: no stale owner_request found.";
         }
         await loadInboxItems();
       } catch (error) {

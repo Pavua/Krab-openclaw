@@ -66,12 +66,16 @@ def test_inbox_widget_uses_truthful_summary_and_runtime_statuses() -> None:
 
     assert 'fetch("/api/inbox/status")' in source
     assert 'const pendingCount = Number(summary.fresh_open_items' in source
+    assert 'const staleOpen = Number(payload.stale_open_items || 0);' in source
     assert 'const staleAcked = Number(payload.stale_processing_items || 0);' in source
     assert 'const safeId = String(item.item_id || item.id || "");' in source
     assert 'const isStaleProcessing = _isInboxItemStaleProcessing(item);' in source
+    assert 'const isStaleOpen = _isInboxItemStaleOpen(item);' in source
     assert 'await postJson("/api/inbox/update", { item_id: itemId, status: action });' in source
-    assert 'onclick="remediateInboxStale(\'cancelled\')"' in source
-    assert 'await postJson("/api/inbox/stale-processing/remediate", {' in source
+    assert 'onclick="remediateInboxStale(\'processing\', \'cancelled\')"' in source
+    assert 'onclick="remediateInboxStale(\'open\', \'cancelled\')"' in source
+    assert '"/api/inbox/stale-processing/remediate"' in source
+    assert '"/api/inbox/stale-open/remediate"' in source
     assert '<option value="open">Открытые и в обработке</option>' in source
     assert '<option value="acked">acked</option>' in source
     assert '<option value="owner_request">owner_request</option>' in source

@@ -7078,6 +7078,20 @@ class WebApp:
                 "items": items,
             }
 
+        @self.app.get("/api/inbox/stale-open")
+        async def inbox_stale_open(
+            kind: str = Query(default="owner_request"),
+            limit: int = Query(default=20),
+        ):
+            """Возвращает старые `open` item-ы для owner remediation runbook."""
+            items = inbox_service.list_stale_open_items(kind=kind, limit=limit)
+            return {
+                "ok": True,
+                "kind": str(kind or "").strip().lower(),
+                "count": len(items),
+                "items": items,
+            }
+
         @self.app.post("/api/inbox/stale-processing/remediate")
         async def inbox_stale_processing_remediate(
             payload: dict[str, Any] = Body(default_factory=dict),
@@ -7109,6 +7123,48 @@ class WebApp:
             )
             if not result.get("ok"):
                 error = str(result.get("error") or "inbox_bulk_stale_remediation_failed")
+                raise HTTPException(status_code=400, detail=error)
+            workflow = inbox_service.get_workflow_snapshot()
+            return {
+                "ok": True,
+                "kind": kind,
+                "status": final_status,
+                "count": len(stale_items),
+                "items": stale_items,
+                "result": result,
+                "summary": workflow.get("summary") or {},
+            }
+
+        @self.app.post("/api/inbox/stale-open/remediate")
+        async def inbox_stale_open_remediate(
+            payload: dict[str, Any] = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """
+            Выполняет безопасный bulk-action только по реально старым `open` item-ам.
+
+            Нужен для legacy-open owner_request/mention, которые уже нельзя
+            считать fresh inbox, но которые не ушли в processing.
+            """
+            self._assert_write_access(x_krab_web_key, token)
+            kind = str(payload.get("kind") or "owner_request").strip().lower() or "owner_request"
+            final_status = str(payload.get("status") or "cancelled").strip().lower() or "cancelled"
+            note = str(payload.get("note") or "").strip()
+            actor = str(payload.get("actor") or "owner-ui").strip().lower() or "owner-ui"
+            limit = max(1, min(int(payload.get("limit") or 20), 50))
+            if final_status not in {"done", "cancelled"}:
+                raise HTTPException(status_code=400, detail="inbox_invalid_bulk_stale_open_status")
+
+            stale_items = inbox_service.list_stale_open_items(kind=kind, limit=limit)
+            result = inbox_service.bulk_update_status(
+                item_ids=[str(item.get("item_id") or "").strip() for item in stale_items],
+                status=final_status,
+                actor=actor,
+                note=note or f"bulk_stale_open_{final_status}",
+            )
+            if not result.get("ok"):
+                error = str(result.get("error") or "inbox_bulk_stale_open_remediation_failed")
                 raise HTTPException(status_code=400, detail=error)
             workflow = inbox_service.get_workflow_snapshot()
             return {
