@@ -3892,6 +3892,7 @@ class KraabUserbot:
         prefer_send_message_for_background: bool = False,
     ) -> None:
         """Общий long-path LLM/tool flow для inline и background режима."""
+        _flow_start_ts = time.time()  # Точка отсчёта для auto-inject медиафайлов
         full_response = ""
         full_response_raw = ""
         last_edit_time = 0.0
@@ -4327,6 +4328,35 @@ class KraabUserbot:
                         except OSError:
                             pass
 
+                    # Fallback для скриншотов: агент сохраняет PNG в /tmp/ через puppeteer,
+                    # но никогда не вставляет MEDIA:-строку. Ищем PNG/JPG созданные
+                    # ПОСЛЕ начала текущего flow (_flow_start_ts) — это точно наши файлы.
+                    if not _media_refs:
+                        _screenshot_candidates: list[tuple[float, str]] = []
+                        try:
+                            for _fname in os.listdir("/tmp"):
+                                if _fname.lower().endswith((".png", ".jpg", ".jpeg")):
+                                    _fpath = f"/tmp/{_fname}"
+                                    try:
+                                        _mtime = os.path.getmtime(_fpath)
+                                        # Файл создан/изменён во время текущего LLM flow
+                                        if _mtime >= _flow_start_ts - 30:
+                                            _screenshot_candidates.append((_mtime, _fpath))
+                                    except OSError:
+                                        pass
+                        except OSError:
+                            pass
+                        # Берём до 3 самых свежих скриншотов, от нового к старому
+                        _screenshot_candidates.sort(key=lambda x: x[0], reverse=True)
+                        _injected_screenshots = [p for _, p in _screenshot_candidates[:3]]
+                        if _injected_screenshots:
+                            logger.info(
+                                "screenshot_auto_inject_fallback",
+                                chat_id=chat_id,
+                                paths=_injected_screenshots,
+                            )
+                            _media_refs = _injected_screenshots
+
             full_response = self._apply_deferred_action_guard(full_response)
             self._remember_hidden_reasoning_trace(
                 chat_id=chat_id,
@@ -4588,6 +4618,7 @@ class KraabUserbot:
                 )
             )
 
+        _ai_request_start_ts = time.time()
         logger.info(
             "processing_ai_request",
             chat_id=chat_id,
