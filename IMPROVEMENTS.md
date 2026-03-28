@@ -52,6 +52,7 @@
 **Проблема:** В Telegram не видно, что Краб работает над задачей, кажется, что он завис.
 **Решение:** - Добавить промежуточные статусы в Telegram-транспорт ("Вызываю инструмент...", "Читаю скриншот...").
 - Использовать `sendChatAction` (`typing`), чтобы индикатор набора текста висел всё время, пока ИИ думает.
+**Актуализация 2026-03-28:** базовый UX-контур усилен: во время reasoning/tool-flow userbot теперь держит `typing`, а не ошибочный `record_audio`, и перед фактической отправкой голосового/документа посылает отдельный delivery-action (`upload_audio` / `upload_document`). Live owner roundtrip после правки подтверждён; см. `RESOLVED.md`. Остаётся только более granular tool-stage narration, если она ещё понадобится.
 
 ### 8. Telegram-транспорт: live-smoke голосовых и hygiene ответов
 **Актуализация 2026-03-27:** owner private text+voice roundtrip, mention-gated/group flow и graceful-content после raw fallback уже подтверждены живым E2E через второй Telegram MCP аккаунт `p0lrd`; детали и артефакты перенесены в `RESOLVED.md`.

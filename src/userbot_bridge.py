@@ -3734,6 +3734,20 @@ class KraabUserbot:
             except asyncio.TimeoutError:
                 pass
 
+    @staticmethod
+    async def _send_delivery_chat_action(client: Any, chat_id: int, action: Any) -> None:
+        """
+        Отправляет одноразовый delivery-action перед реальной отправкой вложения.
+
+        Во время reasoning/tool-flow пользователю полезнее видеть `typing`.
+        Отдельный upload-action посылаем только в финале, когда голос или
+        документ уже действительно готов к отправке.
+        """
+        try:
+            await client.send_chat_action(chat_id, action)
+        except Exception:
+            pass
+
     def _mark_incoming_item_background_started(
         self,
         *,
@@ -4388,9 +4402,19 @@ class KraabUserbot:
                 try:
                     _ext = os.path.splitext(_mpath)[1].lower()
                     if _ext in _audio_exts:
+                        await self._send_delivery_chat_action(
+                            self.client,
+                            message.chat.id,
+                            getattr(enums.ChatAction, "UPLOAD_AUDIO", enums.ChatAction.RECORD_AUDIO),
+                        )
                         await self.client.send_voice(message.chat.id, _mpath)
                         _agent_sent_voice = True
                     else:
+                        await self._send_delivery_chat_action(
+                            self.client,
+                            message.chat.id,
+                            getattr(enums.ChatAction, "UPLOAD_DOCUMENT", enums.ChatAction.TYPING),
+                        )
                         await self.client.send_document(message.chat.id, _mpath)
                     logger.info("media_sent", path=_mpath, ext=_ext)
                 except Exception as _me:  # noqa: BLE001
@@ -4411,6 +4435,11 @@ class KraabUserbot:
                     if voice_path:
                         try:
                             logger.info("tts_voice_send_attempt", chat_id=chat_id, path=voice_path)
+                            await self._send_delivery_chat_action(
+                                self.client,
+                                message.chat.id,
+                                getattr(enums.ChatAction, "UPLOAD_AUDIO", enums.ChatAction.RECORD_AUDIO),
+                            )
                             await self.client.send_voice(message.chat.id, voice_path)
                             logger.info("tts_voice_send_ok", chat_id=chat_id, path=voice_path)
                         except Exception as _ve:  # noqa: BLE001
@@ -4552,7 +4581,7 @@ class KraabUserbot:
             has_photo=bool(message.photo),
             has_audio=bool(has_audio_message),
         )
-        action = enums.ChatAction.RECORD_AUDIO if self._should_send_voice_reply() else enums.ChatAction.TYPING
+        action = enums.ChatAction.TYPING
         _typing_stop_event = asyncio.Event()
         _typing_task = asyncio.create_task(
             self._keep_typing_alive(self.client, message.chat.id, action, _typing_stop_event)

@@ -11,6 +11,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -28,6 +31,9 @@ def _make_buffered_bot_stub() -> KraabUserbot:
     bot.me = SimpleNamespace(id=777, username="owner")
     bot.current_role = "default"
     bot.voice_mode = False
+    bot.voice_reply_speed = "+0%"
+    bot.voice_reply_voice = "ru-RU-DmitryNeural"
+    bot.voice_reply_delivery = "text+voice"
     bot._known_commands = set()
     bot._chat_background_tasks = {}
     bot._disclosure_sent_for_chat_ids = set()
@@ -245,6 +251,73 @@ async def test_text_route_emits_tool_progress_notice_before_regular_progress_sch
 
     edited_texts = [call.args[1] for call in bot._safe_edit.await_args_list]
     assert any("Выполняется: browser" in text for text in edited_texts)
+
+
+@pytest.mark.asyncio
+async def test_voice_route_uses_typing_during_processing_and_upload_audio_on_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Voice route должен показывать typing во время обработки и upload_audio перед send_voice."""
+    bot = _make_buffered_bot_stub()
+    bot.voice_mode = True
+    bot._should_send_voice_reply = Mock(return_value=True)
+    incoming = SimpleNamespace(
+        id=12,
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text="Ответь голосом",
+        caption=None,
+        photo=None,
+        voice=None,
+        audio=None,
+        chat=SimpleNamespace(id=125, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=125), text="", caption="")),
+    )
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL,
+        source="unit-test",
+        matched_subject="tester",
+    )
+
+    async def _fake_stream(**kwargs):
+        _ = kwargs
+        yield "Голосовой ответ готов."
+
+    fd, voice_path_raw = tempfile.mkstemp(suffix=".ogg")
+    os.close(fd)
+    Path(voice_path_raw).write_bytes(b"voice")
+
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", _fake_stream)
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client,
+        "get_last_runtime_route",
+        lambda: {"model": "openai-codex/gpt-5.4", "channel": "planning", "status": "ok"},
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "USERBOT_BACKGROUND_LLM_HANDOFF",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module,
+        "text_to_speech",
+        AsyncMock(return_value=voice_path_raw),
+    )
+
+    await bot._process_message_serialized(
+        message=incoming,
+        user=incoming.from_user,
+        access_profile=access_profile,
+        is_allowed_sender=True,
+        chat_id=str(incoming.chat.id),
+    )
+
+    sent_actions = [call.args[1] for call in bot.client.send_chat_action.await_args_list]
+    assert sent_actions
+    assert sent_actions[0] == enums.ChatAction.TYPING
+    assert enums.ChatAction.UPLOAD_AUDIO in sent_actions
+    bot.client.send_voice.assert_awaited()
 
 
 @pytest.mark.asyncio

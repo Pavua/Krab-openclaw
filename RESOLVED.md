@@ -313,3 +313,18 @@
 - Артефакты:
   - [INBOX_STALE_OPEN_TRUTH_2026-03-28.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/INBOX_STALE_OPEN_TRUTH_2026-03-28.md)
   - [inbox-stale-open-remediation-after-20260328-1448.png](/Users/pablito/Antigravity_AGENTS/Краб/output/playwright/inbox-stale-open-remediation-after-20260328-1448.png)
+
+### Telegram UX long-path теперь truthfully показывает `typing`, а delivery-action идёт только перед вложением
+- Причина: при включённом voice reply userbot держал `RECORD_AUDIO` весь цикл reasoning/tool-flow, хотя в этот момент Краб ещё не писал голосовое, а только думал и ждал инструменты. Это давало в Telegram неверный сигнал о фазе работы.
+- Что сделано:
+  - в [src/userbot_bridge.py](/Users/pablito/Antigravity_AGENTS/Краб/src/userbot_bridge.py) processing keepalive переведён на `ChatAction.TYPING` для всех long-path сценариев;
+  - добавлен helper `_send_delivery_chat_action(...)`, который посылает одноразовый `UPLOAD_AUDIO` / `UPLOAD_DOCUMENT` только непосредственно перед `send_voice` / `send_document`;
+  - добавлен unit-тест voice-path в [tests/unit/test_userbot_buffered_stream_flow.py](/Users/pablito/Antigravity_AGENTS/Краб/tests/unit/test_userbot_buffered_stream_flow.py), который проверяет порядок сигналов: сначала `TYPING`, затем `UPLOAD_AUDIO`.
+- Проверка:
+  - `python3 -m py_compile src/userbot_bridge.py tests/unit/test_userbot_buffered_stream_flow.py`
+  - `./venv/bin/pytest -q tests/unit/test_userbot_buffered_stream_flow.py tests/unit/test_userbot_message_batching.py tests/unit/test_userbot_stream_timeouts.py -q` -> `28 passed`
+  - live smoke через второй аккаунт `p0lrd`:
+    - owner получил ack `1302581` на маркер `UXVOICE-1774706160`;
+    - затем пришёл финальный ответ `1302582`: `UXVOICE-1774706160: Краб на связи, голос в норме! 🦀`
+- Артефакт:
+  - [TELEGRAM_CHAT_ACTION_UX_2026-03-28.md](/Users/pablito/Antigravity_AGENTS/Краб/output/reports/TELEGRAM_CHAT_ACTION_UX_2026-03-28.md)
