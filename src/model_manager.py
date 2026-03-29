@@ -779,7 +779,7 @@ class ModelManager:
     async def _do_unload_model(self, model_id: str) -> bool:
         """Внутренняя выгрузка с fallback API v1 (instance_id) -> v0 (model)."""
         unload_endpoints = [
-            ("v1", f"{self.lm_studio_url}/api/v1/models/unload", {"instance_id": model_id}),
+            ("v1", f"{self.lm_studio_url}/api/v1/models/unload", {"identifier": model_id}),
         ]
         if self._legacy_unload_endpoint_supported is not False:
             unload_endpoints.append(("legacy", f"{self.lm_studio_url}/v1/models/unload", {"model": model_id}))
@@ -1007,11 +1007,35 @@ class ModelManager:
                                     grace_sec=grace_sec,
                                 )
                                 continue
-                        logger.info("auto_unload_idle", model=self._current_model)
+                        _unloaded_model = self._current_model
+                        logger.info("auto_unload_idle", model=_unloaded_model)
                         async with self._lock:
                             await self._do_unload_model(self._current_model)
                             self._current_model = None
                         await asyncio.sleep(1.5)
+
+                        # Восстановить основную chat-модель после простоя task/vision-модели.
+                        # Срабатывает только когда выгружалась не сама preferred-модель.
+                        if getattr(config, "RESTORE_PREFERRED_ON_IDLE_UNLOAD", False):
+                            _preferred = str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
+                            if (
+                                _preferred
+                                and _preferred.lower() not in {"auto", "smallest"}
+                                and _unloaded_model != _preferred
+                            ):
+                                try:
+                                    logger.info(
+                                        "auto_restore_preferred_after_idle",
+                                        preferred=_preferred,
+                                        was=_unloaded_model,
+                                    )
+                                    await self.load_model(_preferred)
+                                except Exception as _exc:  # noqa: BLE001
+                                    logger.warning(
+                                        "auto_restore_preferred_failed",
+                                        preferred=_preferred,
+                                        error=str(_exc)[:200],
+                                    )
 
             except asyncio.CancelledError:
                 break

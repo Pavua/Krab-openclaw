@@ -54,7 +54,7 @@ async def test_load_model_uses_v1_endpoint_first(manager: ModelManager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_memory_pressure_triggers_unload_with_instance_id(manager: ModelManager) -> None:
+async def test_memory_pressure_triggers_unload_with_identifier(manager: ModelManager) -> None:
     manager._current_model = "big-model"
     manager._models_cache = {
         "big-model": ModelInfo("big-model", "Big", ModelType.LOCAL_MLX, size_gb=20.0),
@@ -80,7 +80,7 @@ async def test_memory_pressure_triggers_unload_with_instance_id(manager: ModelMa
 
         unload_call = manager._http_client.post.call_args_list[0]
         assert unload_call.args[0].endswith("/api/v1/models/unload")
-        assert unload_call.kwargs["json"].get("instance_id") == "big-model"
+        assert unload_call.kwargs["json"].get("identifier") == "big-model"
 
 
 @pytest.mark.asyncio
@@ -568,4 +568,4 @@ async def test_single_local_mode_unloads_extra_models_when_target_already_loaded
         assert manager._current_model == "nvidia/nemotron-3-nano"
         unload_call = manager._http_client.post.call_args_list[0]
         assert unload_call.args[0].endswith("/api/v1/models/unload")
-        assert unload_call.kwargs["json"].get("instance_id") == "zai-org/glm-4.6v-flash"
+        assert unload_call.kwargs["json"].get("identifier") == "zai-org/glm-4.6v-flash"

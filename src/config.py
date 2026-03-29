@@ -86,6 +86,12 @@ class Config:
     GUARDED_IDLE_UNLOAD_GRACE_SEC: float = float(
         os.getenv("GUARDED_IDLE_UNLOAD_GRACE_SEC", "90")
     )
+    # После idle-unload задачной/vision-модели автоматически загружать LOCAL_PREFERRED_MODEL обратно.
+    # Полезно при активном использовании локальных моделей: после vision-задачи chat-модель
+    # возвращается в память без ручного !model load.
+    RESTORE_PREFERRED_ON_IDLE_UNLOAD: bool = os.getenv(
+        "RESTORE_PREFERRED_ON_IDLE_UNLOAD", "0"
+    ).strip().lower() in ("1", "true", "yes")
     # Таймауты stream-ответа OpenClaw (сек):
     # - CHUNK: ожидание нового чанка стриминга (между порциями данных);
     # - FIRST_CHUNK: ожидание первого чанка для текстового запроса;
@@ -407,6 +413,8 @@ class Config:
                     cls.GUARDED_IDLE_UNLOAD = value.strip().lower() in ("1", "true", "yes")
                 elif key == "GUARDED_IDLE_UNLOAD_GRACE_SEC":
                     cls.GUARDED_IDLE_UNLOAD_GRACE_SEC = float(value)
+                elif key == "RESTORE_PREFERRED_ON_IDLE_UNLOAD":
+                    cls.RESTORE_PREFERRED_ON_IDLE_UNLOAD = value.strip().lower() in ("1", "true", "yes")
                 elif key == "OPENCLAW_CHUNK_TIMEOUT_SEC":
                     cls.OPENCLAW_CHUNK_TIMEOUT_SEC = float(value)
                 elif key == "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC":
