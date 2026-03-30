@@ -100,6 +100,9 @@ class OpenClawClient:
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
+                # OpenClaw v2026.3.28+: скоупы декларируются клиентом per-request,
+                # а не берутся из токена. Нужен operator.write для chat completions.
+                "x-openclaw-scopes": "operator.write,operator.read",
             },
         )
         self._sessions: Dict[str, list] = {}
@@ -112,6 +115,11 @@ class OpenClawClient:
         # Source-of-truth по моделям/ключам OpenClaw (решение проекта: ~/.openclaw)
         self._models_path = default_openclaw_models_path()
         self._openclaw_runtime_config_path = Path.home() / ".openclaw" / "openclaw.json"
+
+        # Сразу подтягиваем актуальный токен из runtime-конфига.
+        # doctor --fix при каждом старте Краба может ротировать gateway token,
+        # поэтому .env может устареть — runtime openclaw.json всегда актуальнее.
+        self._sync_token_from_runtime_on_init()
         self._openclaw_sessions_index_path = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
         self._gateway_log_path = Path(getattr(config, "BASE_DIR", Path.cwd())) / "openclaw.log"
 
@@ -135,6 +143,27 @@ class OpenClawClient:
         self._last_runtime_route: dict[str, Any] = {}
         # Трекинг активных tool calls для отображения в Telegram progress notices.
         self._active_tool_calls: list[dict[str, Any]] = []
+
+    def _sync_token_from_runtime_on_init(self) -> None:
+        """При старте синхронизируем токен из ~/.openclaw/openclaw.json.
+
+        doctor --fix запускается при каждом старте Краба и может ротировать
+        gateway.auth.token. Читаем актуальный токен сразу, не дожидаясь auth-ошибки.
+        """
+        cfg_path = self._openclaw_runtime_config_path
+        try:
+            if not cfg_path.exists():
+                return
+            payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+            gateway = payload.get("gateway", {}) if isinstance(payload, dict) else {}
+            auth = gateway.get("auth", {}) if isinstance(gateway, dict) else {}
+            runtime_token = str(auth.get("token", "") or "").strip() if isinstance(auth, dict) else ""
+            if runtime_token and runtime_token != self.token:
+                self.token = runtime_token
+                self._http_client.headers["Authorization"] = f"Bearer {runtime_token}"
+                logger.info("openclaw_token_synced_from_runtime_on_init", config_path=str(cfg_path))
+        except (OSError, ValueError, TypeError):
+            pass
 
     def get_active_tool_calls_summary(self) -> str:
         """Возвращает краткую сводку активных/завершённых tool calls для Telegram notices."""
