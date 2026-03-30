@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Provider Auth Relogin Coordinator"
+  short_description: "OAuth relogin и auth recovery без путаницы"
+  default_prompt: "Используй $krab-provider-auth-relogin-coordinator, чтобы безопасно пройти auth/relogin recovery по провайдерам Краба без смешивания account-local state."

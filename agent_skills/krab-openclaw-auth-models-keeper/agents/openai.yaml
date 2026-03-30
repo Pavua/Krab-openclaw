@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab OpenClaw Auth Models Keeper"
+  short_description: "Runtime auth/models sync и repair"
+  default_prompt: "Проверь и почини auth-профили, models registry и runtime truth OpenClaw/Krab без ложных статусов."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Acceptance Artifacts Curator"
+  short_description: "Acceptance artifacts, reports и evidence hygiene"
+  default_prompt: "Собери, проверь и приведи в порядок acceptance artifacts и evidence по Крабу без устаревших хвостов."

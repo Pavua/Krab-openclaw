@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Owner UI Smoke"
+  short_description: "Браузерный smoke owner UI на :8080"
+  default_prompt: "Проведи browser smoke owner UI Краба на :8080, прокликай ключевые элементы и проверь DOM."

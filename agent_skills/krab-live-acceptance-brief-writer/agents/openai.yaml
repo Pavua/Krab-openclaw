@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Live Acceptance Brief Writer"
+  short_description: "Короткий truthful brief после smoke и acceptance"
+  default_prompt: "Используй $krab-live-acceptance-brief-writer, чтобы превратить smoke и acceptance-артефакты Краба в короткий truthful handoff brief."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Parallel Agent Orchestrator"
+  short_description: "Параллельная разработка без конфликтов"
+  default_prompt: "Используй $krab-parallel-agent-orchestrator, чтобы безопасно распараллелить задачу по Крабу между несколькими агентами без пересечения write-scope."

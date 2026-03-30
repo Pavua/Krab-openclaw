@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Live Smoke Conductor"
+  short_description: "Оркестрация live smoke и acceptance прогонов"
+  default_prompt: "Запусти live smoke и acceptance-сценарии Краба, собери результат и выдели реальные блокеры."

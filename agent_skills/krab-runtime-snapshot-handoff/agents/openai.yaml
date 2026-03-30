@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Runtime Snapshot Handoff"
+  short_description: "Snapshot, handoff bundle и truthful state capture"
+  default_prompt: "Сними truthful runtime snapshot Краба, собери handoff bundle и оформи состояние без догадок."

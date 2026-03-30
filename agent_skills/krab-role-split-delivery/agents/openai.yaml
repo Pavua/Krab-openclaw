@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Role Split Delivery"
+  short_description: "Ролевой разрез задачи и merge-порядок"
+  default_prompt: "Используй $krab-role-split-delivery, чтобы разрезать задачу по Крабу на backend, UI, runtime, docs и QA роли с явным file ownership."

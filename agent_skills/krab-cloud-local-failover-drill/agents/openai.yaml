@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Cloud Local Failover Drill"
+  short_description: "Cloud/local failover и recovery routing"
+  default_prompt: "Проверь failover между облачными и локальными моделями Краба и подтверди recovery routing."

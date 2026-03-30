@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Shared Repo Permission Keeper"
+  short_description: "Права и ownership shared repo без грубых fixов"
+  default_prompt: "Используй $krab-shared-repo-permission-keeper, чтобы безопасно разобраться с правами и ownership в shared repo Краба без массового chown или reset."

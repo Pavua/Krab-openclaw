@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Dev Session Bootstrapper"
+  short_description: "Безопасный старт новой dev-сессии"
+  default_prompt: "Используй $krab-dev-session-bootstrapper, чтобы безопасно стартовать новую сессию Codex или Claude на нужной учётке и не перепутать dev-layer с runtime."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Channel Policy Auditor"
+  short_description: "Аудит каналов, allowlist и alert routes"
+  default_prompt: "Проверь channel policies, allowlist и alert routes Краба, найди опасные настройки и предложи безопасную конфигурацию."

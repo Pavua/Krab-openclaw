@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Runtime Doctor"
+  short_description: "Диагностика и ремонт runtime OpenClaw/Krab"
+  default_prompt: "Проведи диагностику runtime Краба, найди причину сбоя и безопасно предложи или выполни ремонт."

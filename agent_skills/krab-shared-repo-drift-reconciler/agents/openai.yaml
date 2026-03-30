@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Shared Repo Drift Reconciler"
+  short_description: "Сверка shared repo без опасных reset"
+  default_prompt: "Используй $krab-shared-repo-drift-reconciler, чтобы безопасно проверить drift между локальным и shared repo Краба и выбрать корректный путь выравнивания."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Docs Maintainer"
+  short_description: "Поддержка roadmap, handoff и smoke-отчётов"
+  default_prompt: "Обнови roadmap, handoff и smoke-документацию Краба по факту сделанных изменений и проверок."

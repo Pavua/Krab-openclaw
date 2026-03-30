@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Web Runtime Endpoints Auditor"
+  short_description: "Truthful web runtime endpoints и UI API"
+  default_prompt: "Проверь web runtime endpoints Краба, их truthful payload и соответствие owner UI."

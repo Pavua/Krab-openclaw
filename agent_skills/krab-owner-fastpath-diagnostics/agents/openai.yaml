@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Owner Fastpath Diagnostics"
+  short_description: "Owner fast-path и truthful diagnostic intents"
+  default_prompt: "Проверь owner fast-path Краба для диагностических запросов и подтверди truthful поведение без лишнего LLM."

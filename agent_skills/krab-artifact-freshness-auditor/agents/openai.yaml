@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Artifact Freshness Auditor"
+  short_description: "Свежесть smoke evidence и handoff truth"
+  default_prompt: "Используй $krab-artifact-freshness-auditor, чтобы понять, какие smoke и handoff-артефакты Краба ещё свежие, а какие уже stale."

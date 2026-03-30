@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Incident Runbook Executor"
+  short_description: "Прохождение инцидентного runbook с артефактами"
+  default_prompt: "Пройди incident runbook Краба, собери артефакты, локализуй сбой и оформи результат без догадок."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Photo Route Acceptance"
+  short_description: "Photo/vision route и chrome acceptance"
+  default_prompt: "Проверь photo/vision route Краба, photo-smoke и channels_photo_chrome_acceptance."

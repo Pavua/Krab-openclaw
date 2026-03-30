@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Core Health Watch Operator"
+  short_description: "Health watch, ops guard и watchdog reports"
+  default_prompt: "Проверь health watch и ops guard Краба, собери последние watchdog-отчеты и локализуй деградацию."

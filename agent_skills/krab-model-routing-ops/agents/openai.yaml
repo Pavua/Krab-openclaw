@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Model Routing Ops"
+  short_description: "Управление primary/fallback и compat probe"
+  default_prompt: "Проверь model routing Краба, compat probe, primary/fallback цепочку и предложи безопасные изменения."

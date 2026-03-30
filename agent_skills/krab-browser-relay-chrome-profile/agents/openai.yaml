@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Browser Relay Chrome Profile"
+  short_description: "Browser Relay, chrome-profile и MCP readiness"
+  default_prompt: "Проверь Browser Relay, chrome-profile, MCP readiness и восстанови рабочий браузерный контур Краба."

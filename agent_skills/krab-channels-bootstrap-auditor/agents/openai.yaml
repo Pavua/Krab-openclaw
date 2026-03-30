@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Channels Bootstrap Auditor"
+  short_description: "Channels/skills bootstrap audit и baseline apply"
+  default_prompt: "Проверь channels/skills bootstrap Краба, audit/apply baseline и итоговый отчёт по каналам."

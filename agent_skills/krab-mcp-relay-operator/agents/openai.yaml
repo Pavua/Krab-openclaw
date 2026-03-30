@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab MCP Relay Operator"
+  short_description: "Поднятие и диагностика Browser Relay и MCP"
+  default_prompt: "Проверь Browser Relay и MCP-контур Краба, восстанови readiness и зафиксируй стадию attached/authorized/action probe."

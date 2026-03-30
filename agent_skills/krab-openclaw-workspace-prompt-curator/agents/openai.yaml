@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab OpenClaw Workspace Prompt Curator"
+  short_description: "Синхронизация SOUL USER TOOLS и runtime truth"
+  default_prompt: "Используй $krab-openclaw-workspace-prompt-curator, чтобы аккуратно обновить SOUL/USER/TOOLS Краба без drift относительно runtime truth."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Branch Handoff Governor"
+  short_description: "Ветки, handoff и merge без путаницы"
+  default_prompt: "Используй $krab-branch-handoff-governor, чтобы вести ветки, handoff и merge-порядок между несколькими агентами и учётками без конфликтов."

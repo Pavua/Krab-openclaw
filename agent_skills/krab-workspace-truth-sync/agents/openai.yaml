@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Workspace Truth Sync"
+  short_description: "Сверка repo/docs с runtime source-of-truth"
+  default_prompt: "Сверь репозиторий Краба и документацию с реальным runtime source-of-truth и обнови расхождения."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Dev Env Doctor"
+  short_description: "Диагностика dev-среды и bootstrap"
+  default_prompt: "Используй $krab-dev-env-doctor, чтобы проверить dev-среду текущей учётки, понять чего не хватает и безопасно подготовить Codex/Claude контур для работы с Крабом."

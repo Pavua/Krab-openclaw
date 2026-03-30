@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Restart Recovery Drill"
+  short_description: "Controlled restart и post-restart acceptance"
+  default_prompt: "Проведи controlled restart Краба и подтверди post-restart recovery через runtime, UI и transport."

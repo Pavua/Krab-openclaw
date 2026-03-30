@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Runtime Change Impact Auditor"
+  short_description: "Какие runtime-контуры заденет правка"
+  default_prompt: "Используй $krab-runtime-change-impact-auditor, чтобы перед изменением по Крабу быстро понять, какие runtime, smoke, release и handoff-контуры эта правка потенциально затронет."

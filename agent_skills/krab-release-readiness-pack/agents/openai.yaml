@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Release Readiness Pack"
+  short_description: "Release verdict по truth-checks и evidence"
+  default_prompt: "Используй $krab-release-readiness-pack, чтобы собрать truthful release verdict по Крабу из merge gate, smoke, acceptance и свежих evidence-артефактов."

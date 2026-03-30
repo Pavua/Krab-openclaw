@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Provisioning Drafts Operator"
+  short_description: "Provisioning drafts, preview и apply flow"
+  default_prompt: "Проверь provisioning drafts Краба, preview/apply flow и безопасное применение изменений."

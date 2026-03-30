@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Ops Observability Console"
+  short_description: "Ops usage, alerts, costs и history"
+  default_prompt: "Проверь ops usage, alerts, costs и history Краба и дай truthful operational summary."

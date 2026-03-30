@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Multi-Account Dev Coordinator"
+  short_description: "Разработка между USER2 USER3 и pablito"
+  default_prompt: "Используй $krab-multi-account-dev-coordinator, чтобы безопасно спланировать работу по Крабу между pablito, USER2 и USER3 без смешивания runtime state."

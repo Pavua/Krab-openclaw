@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Telegram Transport Regression Pack"
+  short_description: "Regression pack для Telegram transport и roundtrip"
+  default_prompt: "Используй $krab-telegram-transport-regression-pack, чтобы прогнать focused regression по Telegram transport Краба и собрать truthful evidence."

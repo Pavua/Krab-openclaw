@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab PR Review Triager"
+  short_description: "Триаж review findings и fix-порядка"
+  default_prompt: "Используй $krab-pr-review-triager, чтобы разложить review-комментарии по приоритету, выделить реальные блокеры и выстроить безопасный порядок исправлений по Крабу."

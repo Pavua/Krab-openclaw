@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Reserve Bot Hardening"
+  short_description: "Reserve bot policy и safe fallback"
+  default_prompt: "Проверь reserve bot Краба, переведи его в безопасный режим и подтверди доставку после изменений."

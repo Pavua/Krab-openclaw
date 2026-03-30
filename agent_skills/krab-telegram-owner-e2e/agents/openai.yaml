@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Telegram Owner E2E"
+  short_description: "E2E-проверка owner и reserve Telegram контуров"
+  default_prompt: "Проведи живую E2E-проверку Telegram owner и reserve контуров Краба и зафиксируй результат."

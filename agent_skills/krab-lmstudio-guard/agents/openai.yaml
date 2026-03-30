@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab LM Studio Guard"
+  short_description: "Контроль LM Studio, idle guard и лимитов"
+  default_prompt: "Проверь LM Studio контур Краба, idle guard, лимиты и безопасно восстанови рабочее состояние."

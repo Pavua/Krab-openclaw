@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Transport State Persistence"
+  short_description: "Персистентность transport/runtime state после restart"
+  default_prompt: "Проверь, что transport и runtime state Краба переживают restart и читаются единообразно."

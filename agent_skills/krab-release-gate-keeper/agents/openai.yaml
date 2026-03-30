@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Release Gate Keeper"
+  short_description: "Merge-gate и release verdict для Краба"
+  default_prompt: "Собери release verdict по Крабу: прогони нужные проверки, перечисли блокеры и дай честный merge-gate статус."

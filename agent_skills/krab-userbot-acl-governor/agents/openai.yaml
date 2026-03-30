@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Userbot ACL Governor"
+  short_description: "Owner/full/partial ACL и runtime CRUD"
+  default_prompt: "Проверь и отрегулируй ACL userbot Краба: owner, full, partial, UI и runtime truth."

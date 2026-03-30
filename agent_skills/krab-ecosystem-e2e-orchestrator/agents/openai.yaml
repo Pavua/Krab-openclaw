@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Ecosystem E2E Orchestrator"
+  short_description: "Полный ecosystem e2e и one-click контур"
+  default_prompt: "Оркестрируй полный ecosystem e2e Краба: start, check, smoke, restart и итоговый вердикт."

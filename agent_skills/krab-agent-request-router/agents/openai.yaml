@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Agent Request Router"
+  short_description: "Какой skill и аккаунт брать под задачу"
+  default_prompt: "Используй $krab-agent-request-router, чтобы быстро понять, какой skill, какой аккаунт и какой режим работы лучше выбрать под конкретную задачу по Крабу."

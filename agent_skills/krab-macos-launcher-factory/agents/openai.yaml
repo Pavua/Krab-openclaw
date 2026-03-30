@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab macOS Launcher Factory"
+  short_description: "Создание и ремонт one-click .command лаунчеров"
+  default_prompt: "Создай или исправь macOS .command-лаунчеры для Краба, чтобы запуск и остановка работали безопасно и предсказуемо."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Swarm Smoke Ops"
+  short_description: "Swarm smoke и orchestration проверки"
+  default_prompt: "Прогони swarm smoke сценарии Краба, проверь orchestration и зафиксируй реальные сбои."

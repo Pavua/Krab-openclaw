@@ -1,0 +1,4 @@
+interface:
+  display_name: "Krab Owner Panel Runtime Ops"
+  short_description: "Owner panel :8080 как операционный контур"
+  default_prompt: "Проверь owner panel :8080 как операционный контур Краба и подтверди, что UI отражает живой runtime."
