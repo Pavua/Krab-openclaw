@@ -48,6 +48,38 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     return parser.parse_known_args()
 
 
+def _release_stale_session_lock(session_name: str, session_dir: str) -> None:
+    """Убивает зависшие процессы, держащие SQLite-лок на session-файле.
+
+    При крэше или внезапном завершении Claude Code MCP-процессы остаются живыми
+    и держат открытым sqlite-дескриптор. Следующий старт падает с 'database is locked'.
+    Решение: до execvpe находим и киллим все PIDs, держащие этот файл.
+    """
+    import signal
+    import subprocess
+
+    base = str(session_name or "krab_test").strip() or "krab_test"
+    sdir = Path(str(session_dir or "").strip()) if str(session_dir or "").strip() else Path.home() / ".krab_mcp_sessions"
+    session_path = sdir / f"{base}_mcp.session"
+    if not session_path.exists():
+        return
+    try:
+        result = subprocess.run(
+            ["lsof", "-t", str(session_path)],
+            capture_output=True, text=True, timeout=3,
+        )
+        pids = [int(p) for p in result.stdout.split() if p.strip().isdigit()]
+        own_pid = os.getpid()
+        for pid in pids:
+            if pid != own_pid:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+    except Exception:
+        pass  # lsof недоступен или session-файл ещё не создан — не страшно
+
+
 def main() -> int:
     """Подготавливает env и передаёт управление штатному Telegram MCP server."""
     args, passthrough = parse_args()
@@ -57,6 +89,9 @@ def main() -> int:
     os.environ["TELEGRAM_SESSION_NAME"] = str(args.session_name or "krab_test").strip() or "krab_test"
     if str(args.session_dir or "").strip():
         os.environ["MCP_TELEGRAM_SESSION_DIR"] = str(args.session_dir).strip()
+
+    # Освобождаем stale SQLite-лок до exec, чтобы не получить 'database is locked'
+    _release_stale_session_lock(args.session_name, args.session_dir)
 
     cmd = [sys.executable, str(SERVER_PATH), *passthrough]
     os.execvpe(sys.executable, cmd, os.environ)
