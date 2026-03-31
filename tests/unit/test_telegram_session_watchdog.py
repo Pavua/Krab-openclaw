@@ -64,6 +64,16 @@ def test_is_gateway_ok_accepts_live_payload() -> None:
     assert watchdog._is_gateway_ok({"status": "down"}) is False  # noqa: SLF001
 
 
+def test_is_userbot_ok_requires_client_connected_when_field_present() -> None:
+    """Если health/lite уже знает про `client_connected=false`, watchdog не должен считать transport healthy."""
+    assert watchdog._is_userbot_ok(  # noqa: SLF001
+        {
+            "telegram_userbot_state": "running",
+            "telegram_userbot_client_connected": False,
+        }
+    ) is False
+
+
 def test_try_restart_gateway_skips_when_openclaw_bin_missing(monkeypatch) -> None:
     """Без бинарника OpenClaw watchdog не должен падать и пытаться запускать мусор."""
     monkeypatch.setattr(watchdog, "_resolve_openclaw_bin", lambda: "")

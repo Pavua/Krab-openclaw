@@ -6768,6 +6768,9 @@ class WebApp:
                 "telegram_userbot_state": (
                     (runtime.get("telegram_userbot") or {}).get("startup_state")
                 ),
+                "telegram_userbot_client_connected": (
+                    (runtime.get("telegram_userbot") or {}).get("client_connected")
+                ),
                 "telegram_userbot_error_code": (
                     (runtime.get("telegram_userbot") or {}).get("startup_error_code")
                 ),
@@ -8661,8 +8664,11 @@ class WebApp:
                     before_state = {}
 
             try:
-                await kraab_userbot.stop()
-                await kraab_userbot.start()
+                if hasattr(kraab_userbot, "restart"):
+                    await kraab_userbot.restart(reason="web_api_restart_userbot")
+                else:
+                    await kraab_userbot.stop()
+                    await kraab_userbot.start()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("runtime_restart_userbot_failed", error=str(exc))
                 return {

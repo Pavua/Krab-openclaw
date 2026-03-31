@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import textwrap
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -454,6 +455,8 @@ class KraabUserbot:
         self._proactive_watch_task: Optional[asyncio.Task] = None
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
+        self._telegram_restart_lock = asyncio.Lock()
+        self._telegram_probe_failures = 0
         self._chat_processing_locks: dict[str, asyncio.Lock] = {}
         self._chat_background_tasks: dict[str, asyncio.Task] = {}
         self._batched_followup_message_ids: dict[str, dict[str, float]] = {}
@@ -836,8 +839,15 @@ class KraabUserbot:
         if isinstance(exc, sqlite3.OperationalError):
             low = str(exc).lower()
             return "disk i/o error" in low or "database is locked" in low
+        if isinstance(exc, sqlite3.ProgrammingError):
+            low = str(exc).lower()
+            return "closed database" in low
         low = str(exc).lower()
-        return "disk i/o error" in low or "database is locked" in low
+        return (
+            "disk i/o error" in low
+            or "database is locked" in low
+            or "closed database" in low
+        )
 
     async def _start_client_serialized(self) -> None:
         """
@@ -861,6 +871,8 @@ class KraabUserbot:
             if not self.client.is_connected:
                 return
             try:
+                self._arm_client_session_shutdown_guard()
+                await self._cancel_client_restart_tasks()
                 await self.client.stop()
             except Exception as exc:  # noqa: BLE001
                 if self._is_sqlite_io_error(exc):
@@ -878,6 +890,103 @@ class KraabUserbot:
                     non_fatal=False,
                 )
                 raise
+
+    def _arm_client_session_shutdown_guard(self) -> None:
+        """
+        Ставит guard на `session.restart()` у текущего Pyrogram session.
+
+        Почему это нужно:
+        - Pyrogram создаёт внутренние restart-task'и сам и не отдаёт нам их ссылки;
+        - во время controlled shutdown такие task'и не должны заново открывать transport;
+        - без guard поздний restart иногда лезет в уже закрытую sqlite storage и шумит traceback'ом.
+        """
+        session = getattr(self.client, "session", None) if self.client else None
+        if session is None:
+            return
+
+        setattr(session, "_krab_shutdown_requested", True)
+        if getattr(session, "_krab_restart_guard_installed", False):
+            return
+
+        original_restart = session.restart
+
+        async def _guarded_restart(session_self, *args, **kwargs):
+            if getattr(session_self, "_krab_shutdown_requested", False):
+                logger.info("telegram_session_restart_suppressed", reason="controlled_shutdown")
+                return None
+            try:
+                return await original_restart(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                if (
+                    getattr(session_self, "_krab_shutdown_requested", False)
+                    and self._is_sqlite_io_error(exc)
+                ):
+                    logger.warning(
+                        "telegram_session_restart_ignored_after_shutdown",
+                        error=str(exc),
+                        non_fatal=True,
+                    )
+                    return None
+                raise
+
+        setattr(session, "_krab_original_restart", original_restart)
+        setattr(session, "restart", types.MethodType(_guarded_restart, session))
+        setattr(session, "_krab_restart_guard_installed", True)
+
+    async def _cancel_client_restart_tasks(self) -> None:
+        """
+        Гасит висячие `Session.restart()` задачи Pyrogram для текущего session-объекта.
+
+        Почему это нужно:
+        - Pyrogram создаёт restart-task'и через `loop.create_task(...)` и не хранит на них ссылку;
+        - при нашем `client.stop()` такой task может добежать до закрытой sqlite storage;
+        - это даёт шумные `Task exception was never retrieved` и оставляет ложный след инцидента.
+        """
+        session = getattr(self.client, "session", None) if self.client else None
+        if session is None:
+            return
+
+        current_task = asyncio.current_task()
+        restart_tasks: list[asyncio.Task] = []
+        for task in asyncio.all_tasks():
+            if task is current_task or task.done():
+                continue
+            coro = task.get_coro()
+            frame = getattr(coro, "cr_frame", None)
+            if frame is None:
+                continue
+            if frame.f_locals.get("self") is not session:
+                continue
+            code = getattr(coro, "cr_code", None)
+            if code is None or getattr(code, "co_name", "") != "restart":
+                continue
+            task.cancel()
+            restart_tasks.append(task)
+
+        if restart_tasks:
+            await asyncio.gather(*restart_tasks, return_exceptions=True)
+
+    async def _cancel_background_task(self, attr_name: str) -> None:
+        """
+        Аккуратно отменяет и дожидается завершения фоновой задачи.
+
+        Почему это важно:
+        - простой `cancel()` не гарантирует, что задача уже отпустила Pyrogram transport;
+        - restart без await создаёт окно для гонки между старым probe и новым lifecycle;
+        - после await ссылка обнуляется, чтобы runtime не путал старую задачу с живой.
+        """
+        task = getattr(self, attr_name, None)
+        if not task:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("background_task_cancel_failed", task=attr_name, error=str(exc))
+        finally:
+            setattr(self, attr_name, None)
 
     @staticmethod
     def _is_interactive_login_required_error(exc: Exception) -> bool:
@@ -918,6 +1027,33 @@ class KraabUserbot:
             next_action="run_telegram_relogin_command",
         )
 
+    def _mark_transport_degraded(self, *, reason: str, error: str) -> None:
+        """
+        Помечает Telegram transport деградированным для health/lite и внешнего watchdog.
+
+        Почему это нужно:
+        - broken socket может долго жить с ложным `running`, если не обновить runtime-state;
+        - внешний watchdog читает `/api/health/lite` и должен увидеть, что transport сломан;
+        - `degraded` мягче, чем `login_required`, и не притворяется ручным relogin.
+        """
+        current_state = str(self._startup_state or "").strip().lower()
+        if current_state in {"stopped", "stopping", "login_required"}:
+            return
+        self._set_startup_state(
+            state="degraded",
+            error_code="telegram_transport_degraded",
+            error=error,
+        )
+        logger.warning("telegram_transport_marked_degraded", reason=reason, error=error)
+
+    def _restore_running_state_after_probe(self) -> None:
+        """
+        Возвращает transport в `running`, если heartbeat снова healthy.
+        """
+        if str(self._startup_state or "").strip().lower() == "degraded":
+            self._set_startup_state(state="running")
+            logger.info("telegram_transport_probe_recovered")
+
     async def _auto_export_handoff_snapshot(self, *, reason: str) -> dict[str, Any]:
         """
         Auto-export handoff snapshot before shutdown or session change (Phase 2.2).
@@ -937,7 +1073,7 @@ class KraabUserbot:
             # а не тяжёлый cloud runtime probe, который может жить дольше maintenance-таймаута.
             handoff_url = "http://127.0.0.1:8080/api/runtime/handoff?probe_cloud_runtime=0"
             req = urllib.request.Request(handoff_url, method="GET")
-            with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
                 raw = resp.read()
             data = json.loads(raw)
             dest.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1472,25 +1608,66 @@ class KraabUserbot:
                 reason=reason,
             )
 
+    async def restart(self, *, reason: str = "manual_restart") -> None:
+        """
+        Сериализованный restart Telegram userbot как одна операция.
+
+        Почему нужен отдельный метод:
+        - `stop()` и `start()` по отдельности оставляют окно для конкурирующих probe/recovery;
+        - web endpoint и watchdog должны использовать один и тот же restart-lock;
+        - это минимальный способ убрать гонку без глобального рефакторинга transport-слоя.
+        """
+        async with self._telegram_restart_lock:
+            logger.info("telegram_restart_started", reason=reason)
+            await self.stop()
+            # После transport-сбоя Pyrogram может оставить внутренние restart-task'и
+            # на старом Client. Для чистого restart поднимаем новый экземпляр.
+            self._recreate_client()
+            await self.start()
+            logger.info("telegram_restart_finished", reason=reason)
+
     async def _telegram_session_watchdog(self) -> None:
         """
         Периодически проверяет валидность Telegram-сессии.
         Если auth key протухла, запускает auto-recovery без ручного удаления файлов.
         """
         interval_sec = int(getattr(config, "TELEGRAM_SESSION_HEARTBEAT_SEC", 45))
+        probe_timeout_sec = float(
+            getattr(config, "TELEGRAM_SESSION_PROBE_TIMEOUT_SEC", 15.0) or 15.0
+        )
+        probe_timeout_sec = max(5.0, probe_timeout_sec)
+        failure_limit = int(getattr(config, "TELEGRAM_SESSION_PROBE_FAILURE_LIMIT", 3) or 3)
+        failure_limit = max(1, failure_limit)
         while True:
             try:
                 await asyncio.sleep(max(15, interval_sec))
                 if not self.client.is_connected:
+                    self._telegram_probe_failures += 1
+                    if self._telegram_probe_failures >= failure_limit:
+                        self._mark_transport_degraded(
+                            reason="client_not_connected",
+                            error="Pyrogram client помечен как disconnected",
+                        )
                     continue
-                await self.client.get_me()
+                if self._client_lifecycle_lock.locked() or self._telegram_restart_lock.locked():
+                    continue
+                await asyncio.wait_for(self.client.get_me(), timeout=probe_timeout_sec)
+                self._telegram_probe_failures = 0
+                self._restore_running_state_after_probe()
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
                 if self._is_auth_key_invalid(exc):
                     await self._recover_telegram_session(reason=str(exc))
                 else:
-                    logger.warning("telegram_watchdog_probe_failed", error=str(exc))
+                    self._telegram_probe_failures += 1
+                    if self._telegram_probe_failures >= failure_limit:
+                        self._mark_transport_degraded(reason="watchdog_probe_failed", error=str(exc))
+                    logger.warning(
+                        "telegram_watchdog_probe_failed",
+                        error=str(exc),
+                        consecutive_failures=self._telegram_probe_failures,
+                    )
 
     def _purge_telegram_session_files(self) -> list[str]:
         """
@@ -1593,16 +1770,15 @@ class KraabUserbot:
                 krab_scheduler.stop()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("scheduler_stop_failed", error=str(exc), non_fatal=True)
-        if self._telegram_watchdog_task:
-            self._telegram_watchdog_task.cancel()
-        if self._proactive_watch_task:
-            self._proactive_watch_task.cancel()
+        await self._cancel_background_task("_telegram_watchdog_task")
+        await self._cancel_background_task("_proactive_watch_task")
         try:
             await self._safe_stop_client(reason="runtime_stop")
         except Exception as exc:  # noqa: BLE001
             logger.warning("telegram_stop_failed", error=str(exc), non_fatal=True)
         await model_manager.close()
         await close_search()
+        self._telegram_probe_failures = 0
         self._set_startup_state(state="stopped")
 
     def _is_trigger(self, text: str) -> bool:
@@ -3944,7 +4120,12 @@ class KraabUserbot:
         tool_progress_poll_sec = max(0.01, tool_progress_poll_sec)
         next_tool_progress_sec = tool_progress_poll_sec
         last_tool_summary = ""
+        last_tool_activity_ts = time.monotonic()  # последнее изменение tool_summary или первый чанк
         last_progress_notice_text = ""
+        no_tool_activity_timeout_sec = float(
+            getattr(config, "OPENCLAW_NO_TOOL_ACTIVITY_TIMEOUT_SEC", 300.0) or 300.0
+        )
+        no_tool_activity_timeout_sec = max(60.0, no_tool_activity_timeout_sec)
         startup_route_model = str(
             _current_runtime_primary_model() or getattr(config, "MODEL", "") or ""
         ).strip()
@@ -4069,6 +4250,43 @@ class KraabUserbot:
                             tool_summary = openclaw_client.get_active_tool_calls_summary()
                         except Exception:
                             tool_summary = ""
+
+                    # Отслеживаем последнюю активность инструментов
+                    if tool_summary != last_tool_summary:
+                        last_tool_activity_ts = time.monotonic()
+
+                    # Idle-detection: нет ни чанков, ни активности инструментов слишком долго
+                    idle_sec = time.monotonic() - last_tool_activity_ts
+                    if (
+                        not received_any_chunk
+                        and not tool_summary
+                        and idle_sec >= no_tool_activity_timeout_sec
+                    ):
+                        logger.error(
+                            "openclaw_no_tool_activity_timeout",
+                            chat_id=chat_id,
+                            idle_sec=round(idle_sec, 1),
+                            timeout_sec=no_tool_activity_timeout_sec,
+                        )
+                        full_response = (
+                            f"❌ OpenClaw не проявлял никакой активности {int(idle_sec // 60)} мин "
+                            f"(нет инструментов, нет ответа). Похоже, завис. "
+                            "Попробуй повторить запрос."
+                        )
+                        timeout_error_was_sent = True
+                        if next_chunk_task and not next_chunk_task.done():
+                            next_chunk_task.cancel()
+                            try:
+                                await next_chunk_task
+                            except (asyncio.CancelledError, StopAsyncIteration):
+                                pass
+                            except Exception:
+                                pass
+                        try:
+                            await stream.aclose()
+                        except Exception:
+                            pass
+                        break
 
                     handled_interval = False
 
@@ -4244,6 +4462,7 @@ class KraabUserbot:
 
                 full_response_raw += chunk
                 received_any_chunk = True
+                last_tool_activity_ts = time.monotonic()
                 stream_display = (
                     self._extract_live_stream_text(
                         full_response_raw,

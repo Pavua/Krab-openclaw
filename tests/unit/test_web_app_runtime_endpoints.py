@@ -643,6 +643,7 @@ class _FakeUserbot:
     ) -> None:
         self.start_calls = 0
         self.stop_calls = 0
+        self.restart_calls = 0
         self._payload = {
             "startup_state": startup_state,
             "startup_error_code": startup_error_code,
@@ -691,6 +692,13 @@ class _FakeUserbot:
         self.stop_calls += 1
         self._payload["startup_state"] = "stopped"
         self._payload["client_connected"] = False
+
+    async def restart(self, *, reason: str = "test_restart") -> None:
+        """Имитирует сериализованный restart userbot."""
+        _ = reason
+        self.restart_calls += 1
+        await self.stop()
+        await self.start()
 
 
 def _make_client(*, openclaw_client=None) -> TestClient:
@@ -772,6 +780,7 @@ def test_health_lite_contains_runtime_fields(monkeypatch):
     assert data["ok"] is True
     assert data["status"] == "up"
     assert "telegram_session_state" in data
+    assert "telegram_userbot_client_connected" in data
     assert "lmstudio_model_state" in data
     assert "openclaw_auth_state" in data
     assert "last_runtime_route" in data
@@ -2428,6 +2437,7 @@ def test_restart_userbot_requires_web_key_and_restarts_runtime(monkeypatch):
     assert data["action"] == "restart_userbot"
     assert data["before"]["startup_state"] == "running"
     assert data["after"]["startup_state"] == "running"
+    assert fake_userbot.restart_calls == 1
     assert fake_userbot.stop_calls == 1
     assert fake_userbot.start_calls == 1
 
