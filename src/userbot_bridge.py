@@ -158,7 +158,10 @@ def _resolve_openclaw_stream_timeouts(*, has_photo: bool) -> tuple[float, float]
     - после старта стрима интервалы между чанками обычно заметно меньше.
     """
     chunk_timeout_sec = float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0))
-    default_first = 720.0 if has_photo else 600.0
+    # 1800s (30 мин) для текстовых задач — покрывает агентные loop'ы (Меркадона, VL-турнир),
+    # которые буферизуют все tool-вызовы внутри OpenClaw и шлют первый chunk только по завершении.
+    # До 600s было слишком мало: OpenClaw активно работал в дашборде, но Краб видел "тишину".
+    default_first = 1200.0 if has_photo else 1800.0
     # Для фото-разбора допускаем отдельный override первого чанка:
     # vision-модели/большие контексты стабильно дольше выходят на первый токен.
     if has_photo:
@@ -302,9 +305,17 @@ def _build_openclaw_progress_wait_notice(
     elif tool_calls_summary:
         lead = f"✅ Инструменты отработали — {tool_emoji} собираю итоговый ответ."
     elif notice_index <= 1:
-        lead = "🧩 Запрос принят, собираю контекст и жду первый ответ модели."
+        lead = "🧩 Запрос принят — OpenClaw обрабатывает задачу."
+    elif notice_index <= 3:
+        lead = (
+            f"⚙️ OpenClaw работает в агентном режиме ({elapsed_label}).\n"
+            "Инструменты выполняются внутри цепочки — ответ придёт по завершении."
+        )
     else:
-        lead = f"⏳ Запрос всё ещё в работе ({elapsed_label}). Маршрут жив, не дублируй."
+        lead = (
+            f"🔄 Агентная задача ещё выполняется — {elapsed_label}.\n"
+            "Если интересно что именно — загляни в дашборд :18789 (Chat → текущая сессия)."
+        )
 
     result = (
         f"{lead}\n"
