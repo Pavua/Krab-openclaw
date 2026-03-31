@@ -1,4 +1,4 @@
-# Быстрый старт для нового чата — актуально 31.03.2026
+# Быстрый старт для нового чата — актуально 01.04.2026
 
 ## Минимальный набор файлов для нового чата
 
@@ -21,43 +21,52 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
 
 ---
 
-## Что сделано в сессии 30–31.03.2026
+## Что сделано в сессии 31.03–01.04.2026
 
-### Критический фикс (в main)
-- **OpenClaw v2026.3.28 scope header** — `src/openclaw_client.py`:
-  - Добавлен `x-openclaw-scopes: operator.write,operator.read` в default headers
-  - Добавлен `_sync_token_from_runtime_on_init()` — защита от doctor --fix ротации
-  - Подтверждено: status=200 в логах Краба (23:06 и 23:13, 30.03.2026)
+### Фиксы агентного режима OpenClaw (в main, коммит 0e94030)
+- **`no_tool_activity_timeout`**: убрано условие `not received_any_chunk` — таймаут
+  теперь срабатывает только ПОСЛЕ первого чанка. До него — `first_chunk_timeout_sec`.
+  OpenClaw в агентном режиме буферизует tool-вызовы внутри своей цепочки и шлёт
+  первый chunk только по завершении loop'а.
+- **`first_chunk_timeout_sec`**: 600s → **1800s** (30 мин) для текстовых задач.
+  Аналог для фото: 720s → 1200s (20 мин). Покрывает длинные agentic loop'ы.
+- **Progress notice**: 3 фазы — 1й notice, 2-3й (агентный режим), 4+ (ссылка на дашборд :18789)
+- **❌ сообщение улучшено**: включает имя модели + совет `!reset`
 
-### Agent skills (в main, коммит f1dd4dc)
-- 32 USER2-скилла перенесены в `agent_skills/`
-- `~/.claude/krab-agents/krab_agents.json` = **49 агентов** (было 17)
-- `sync_krab_agent_skills.py --profile full --claude-only` регенерирует их
+### Фиксы PNG auto-inject (в main, коммит 594f9b2)
+- Валидация PNG magic bytes + мин. размер 1KB перед auto-inject из `/tmp/`
+- Fallback `send_photo` → `send_document` при `IMAGE_PROCESS_FAILED`
 
-### Telegram MCP для Claude Code
-- `krab-telegram` (yung_nagato): сессия `kraab_cc_mcp.session`, user-scope
-- `krab-telegram-p0lrd` (p0lrd): сессия `p0lrd_cc_mcp.session`, user-scope
-- Сессии в `~/.krab_mcp_sessions/` — аутентифицированы, не нужно повторять
-- Stale-lock фикс: `run_telegram_mcp_account.py` убивает зависшие PIDs автоматически
+### Из прошлой сессии (30.03.2026)
+- **OpenClaw v2026.3.28 scope header** — `src/openclaw_client.py` ✓
+- **49 agent skills** в `agent_skills/` ✓
+- **Telegram MCP**: `krab-telegram` (yung_nagato) + `krab-telegram-p0lrd` (p0lrd) ✓
 
-### Cleanup
-- Удалён `MCP_DOCKER`, отключены `learning-output-style` и `code-simplifier`
+### Cleanup (01.04.2026)
+- `krab-telegram-test` удалён из `~/.codex/config.toml` — был дубликатом p0lrd
+- `MCP_DOCKER` удалён из `~/.codex/config.toml`
+- `context7@claude-plugins-official` → false в `~/.claude/settings.json`
 
 ---
 
-## Текущее состояние (31.03.2026)
+## Текущее состояние (01.04.2026)
 
 ```
-main = f1dd4dc
+main = 0e94030
 ```
 
-### MCP Claude Code (все должны быть ✓)
+### MCP Claude Code (должны быть ✓)
 ```
-plugin:context7   plugin:github   openclaw-browser
-krab-telegram     krab-telegram-p0lrd
+plugin:github   openclaw-browser
+krab-telegram   krab-telegram-p0lrd
 ```
+⚠️ `krab-telegram-test` удалён из `.codex/config.toml` — вступит в силу после рестарта Claude Code
 
-### Stale-lock quick fix (если один из krab-telegram упал)
+### Config файлы изменены (вне git)
+- `~/.codex/config.toml` — убраны MCP_DOCKER, krab-telegram-test
+- `~/.claude/settings.json` — context7 plugin disabled
+
+### Stale-lock quick fix (если krab-telegram упал)
 ```bash
 kill $(lsof -t ~/.krab_mcp_sessions/kraab_cc_mcp.session 2>/dev/null) 2>/dev/null
 kill $(lsof -t ~/.krab_mcp_sessions/p0lrd_cc_mcp.session 2>/dev/null) 2>/dev/null
@@ -65,19 +74,26 @@ kill $(lsof -t ~/.krab_mcp_sessions/p0lrd_cc_mcp.session 2>/dev/null) 2>/dev/nul
 
 ---
 
-## Бэклог
+## Открытые вопросы / следующая сессия
 
-| Задача | Приоритет |
+| Задача | Статус |
 |---|---|
+| Chrome extension OpenClaw "Off" — расследовать | Medium |
 | Mercadona навигация — поиск не работает в UI | Medium |
 | iMessage фильтрация — пропускает ненужное | Medium |
-| openclaw_no_tool_activity_timeout 5мин | Medium |
-| Call translator — voice-first не в daily-use | Low |
+| `parallel mode` (4 агента / 8 субагентов) — включить/тестировать | Low |
+| Ответ в Telegram когда OpenClaw ответил после ❌ | Future |
+| Переводчик (продвинули в другом диалоге) | Low |
+
+## Важно: параллельный режим OpenClaw
+Кнопка "4 агента / 8 субагентов" в панели `:8080` — это многопользовательский
+режим (обрабатывать несколько чатов одновременно), а НЕ ускорение одного ответа.
+Для одного запроса скорость = скорость модели. Полезно если несколько пользователей.
 
 ---
 
 ## Копипаст для нового чата
 
-> Продолжаем работу с Краб / OpenClaw. Ветка: main (f1dd4dc).
-> Прошлая сессия: OpenClaw scope-header fix, 49 krab skills, Telegram MCP для Claude Code.
+> Продолжаем работу с Краб / OpenClaw. Ветка: main (0e94030).
+> Прошлая сессия: фиксы агентного режима (first_chunk_timeout 30мин, no_tool_activity_timeout только post-first-chunk), PNG auto-inject, прогресс-нотисы, cleanup MCP.
 > Файлы: CLAUDE.md + docs/handoff/SESSION_HANDOFF.md + docs/handoff/QUICK_START_NEXT_SESSION.md
