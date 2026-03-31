@@ -4258,8 +4258,8 @@ class KraabUserbot:
                     # Idle-detection: нет ни чанков, ни активности инструментов слишком долго
                     idle_sec = time.monotonic() - last_tool_activity_ts
                     if (
-                        not received_any_chunk
-                        and not tool_summary
+                        received_any_chunk  # ответ начался — ждём активности дальше
+                        and not tool_summary  # нет активных tool-вызовов
                         and idle_sec >= no_tool_activity_timeout_sec
                     ):
                         logger.error(
@@ -4268,10 +4268,11 @@ class KraabUserbot:
                             idle_sec=round(idle_sec, 1),
                             timeout_sec=no_tool_activity_timeout_sec,
                         )
+                        _hung_model = startup_route_model or "неизвестная модель"
                         full_response = (
-                            f"❌ OpenClaw не проявлял никакой активности {int(idle_sec // 60)} мин "
-                            f"(нет инструментов, нет ответа). Похоже, завис. "
-                            "Попробуй повторить запрос."
+                            f"❌ OpenClaw начал отвечать, но застрял на {int(idle_sec // 60)} мин "
+                            f"(нет новых данных, нет инструментов; модель: `{_hung_model}`). "
+                            "Попробуй `!reset` и повтори запрос."
                         )
                         timeout_error_was_sent = True
                         if next_chunk_task and not next_chunk_task.done():
@@ -4552,6 +4553,8 @@ class KraabUserbot:
                     # ПОСЛЕ начала текущего flow (_flow_start_ts) — это точно наши файлы.
                     if not _media_refs:
                         _screenshot_candidates: list[tuple[float, str]] = []
+                        _png_magic = b"\x89PNG\r\n\x1a\n"
+                        _min_image_bytes = 1024  # < 1 KB — явно не screenshot
                         try:
                             for _fname in os.listdir("/tmp"):
                                 if _fname.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -4559,8 +4562,27 @@ class KraabUserbot:
                                     try:
                                         _mtime = os.path.getmtime(_fpath)
                                         # Файл создан/изменён во время текущего LLM flow
-                                        if _mtime >= _flow_start_ts - 30:
-                                            _screenshot_candidates.append((_mtime, _fpath))
+                                        if _mtime < _flow_start_ts - 30:
+                                            continue
+                                        _fsize = os.path.getsize(_fpath)
+                                        if _fsize < _min_image_bytes:
+                                            logger.debug(
+                                                "screenshot_auto_inject_skip_too_small",
+                                                path=_fpath,
+                                                size=_fsize,
+                                            )
+                                            continue
+                                        # Проверяем magic bytes для PNG — защита от test-артефактов
+                                        if _fname.lower().endswith(".png"):
+                                            with open(_fpath, "rb") as _f:
+                                                _header = _f.read(8)
+                                            if _header != _png_magic:
+                                                logger.debug(
+                                                    "screenshot_auto_inject_skip_bad_magic",
+                                                    path=_fpath,
+                                                )
+                                                continue
+                                        _screenshot_candidates.append((_mtime, _fpath))
                                     except OSError:
                                         pass
                         except OSError:
@@ -4668,7 +4690,19 @@ class KraabUserbot:
                             message.chat.id,
                             getattr(enums.ChatAction, "UPLOAD_PHOTO", enums.ChatAction.TYPING),
                         )
-                        await self.client.send_photo(message.chat.id, _mpath)
+                        try:
+                            await self.client.send_photo(message.chat.id, _mpath)
+                        except Exception as _photo_err:  # noqa: BLE001
+                            _err_str = str(_photo_err)
+                            if "IMAGE_PROCESS_FAILED" in _err_str or "PHOTO_INVALID" in _err_str:
+                                logger.warning(
+                                    "send_photo_fallback_to_document",
+                                    path=_mpath,
+                                    error=_err_str,
+                                )
+                                await self.client.send_document(message.chat.id, _mpath)
+                            else:
+                                raise
                     else:
                         await self._send_delivery_chat_action(
                             self.client,
