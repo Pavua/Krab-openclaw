@@ -169,6 +169,15 @@ Addendum 01.04.2026 поздний fix-pass:
 - визуальный эффект «вкладка открылась и закрылась» на этом fix-pass больше не подтверждён;
 - соседний owner-facing capability layer тоже переведён на owner-contour truth.
 
+Live state check того же вечера:
+
+- живой runtime на `http://127.0.0.1:8080` и gateway на `:18789` остаются подняты;
+- но `/api/runtime/handoff?probe_cloud_runtime=0` показал, что runtime всё ещё работает из ветки
+  `codex/openclaw-apr1-recovery` на коммите `ca96027`;
+- поэтому timeout на живом `/api/openclaw/browser-mcp-readiness` в этом контуре
+  пока трактуется как отсутствие rollout browser-fix ветки в боевой runtime,
+  а не как опровержение новых правок.
+
 ## Что осталось сделать
 
 ### Высокий приоритет
@@ -178,6 +187,8 @@ Addendum 01.04.2026 поздний fix-pass:
   - решить судьбу legacy `/api/browser/*`: либо честно пометить их как runtime/debug-only,
     либо вынести на отдельный owner-bridge contour;
   - при желании усилить контракт `BrowserBridge`, чтобы `explicit_cdp_http_urls` автоматически отключал websocket/file fallback без необходимости передавать пустой список путей вручную.
+- отдельно выполнить rollout ветки `codex/owner-browser-passive-truth` в живой `pablito` runtime
+  и повторить live browser/owner verification уже на новом коде.
 
 ### Средний приоритет
 

@@ -84,6 +84,11 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
   временный UI новой ветки на `:18081` открылся в браузере;
   после `Синхронизировать данные` owner Chrome tab-list не изменился (`9222` = 3 page-target, `9223` = 0).
   Дополнительный таргетный набор на owner/browser registry layer: `4 passed`.
+- Важный operational state:
+  живой `pablito` runtime на `:8080` вечером всё ещё был на `ca96027`
+  (`codex/openclaw-apr1-recovery`), поэтому timeout живого
+  `/api/openclaw/browser-mcp-readiness` пока считается не новой загадкой,
+  а отсутствием rollout этой ветки в боевой контур.
 
 ---
 
