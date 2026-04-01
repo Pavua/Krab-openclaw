@@ -2,8 +2,11 @@
 """
 Browser Bridge — подключение к существующему Chrome через CDP (Playwright).
 
-Не запускает отдельный браузер; требует, чтобы Chrome был запущен с
---remote-debugging-port=9222 (через "new Enable Chrome Remote Debugging.command").
+Не запускает отдельный браузер сам. Важный нюанс после нескольких итераций
+launcher-ов и OpenClaw update: source-of-truth по CDP endpoint может жить не
+только в старом `9222`, но и в runtime-конфиге workspace (`mcporter.json`) или
+в отдельном debug-профиле. Поэтому bridge должен уметь читать живой endpoint,
+а не полагаться на один хардкод.
 """
 
 from __future__ import annotations
@@ -90,9 +93,15 @@ class RawCDPConnection:
 class BrowserBridge:
     """Async-клиент для управления Chrome через Chrome DevTools Protocol."""
 
-    CDP_URL = "http://127.0.0.1:9222"
+    DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+    CDP_URL = DEFAULT_CDP_URL
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        explicit_cdp_http_urls: list[str] | None = None,
+        explicit_devtools_active_port_paths: list[str | Path] | None = None,
+    ) -> None:
         self._playwright = None
         self._browser = None
         self._lock = asyncio.Lock()
@@ -100,6 +109,127 @@ class BrowserBridge:
         self._raw_cdp_timeout_sec = 8.0
         self._prefer_raw_cdp = False
         self._cached_ws_endpoint: str | None = None  # кешируется после первого HTTP resolve
+        # Позволяет создавать изолированные probe-инстансы bridge, которые не
+        # смешивают owner Chrome (`9222`) с runtime mcporter truth (`9223`/иным).
+        self._explicit_cdp_http_urls = self._dedupe_strings(list(explicit_cdp_http_urls or []))
+        self._explicit_devtools_active_port_paths = (
+            [Path(item).expanduser() for item in explicit_devtools_active_port_paths]
+            if explicit_devtools_active_port_paths is not None
+            else None
+        )
+
+    @staticmethod
+    def _dedupe_strings(values: list[str]) -> list[str]:
+        """Удаляет дубликаты строк, сохраняя порядок."""
+        result: list[str] = []
+        for value in values:
+            normalized = str(value or "").strip()
+            if not normalized or normalized in result:
+                continue
+            result.append(normalized)
+        return result
+
+    @staticmethod
+    def _extract_cdp_http_url_from_mcporter(payload: dict[str, Any]) -> str | None:
+        """Достаёт CDP HTTP endpoint из mcporter-конфига workspace."""
+        if not isinstance(payload, dict):
+            return None
+        servers = payload.get("mcpServers")
+        if not isinstance(servers, dict):
+            return None
+        server = servers.get("my-chrome")
+        if not isinstance(server, dict):
+            return None
+        args = server.get("args")
+        if not isinstance(args, list):
+            return None
+
+        for index, raw_arg in enumerate(args):
+            arg = str(raw_arg or "").strip()
+            if arg in {"-u", "--url"} and index + 1 < len(args):
+                candidate = str(args[index + 1] or "").strip().rstrip("/")
+                if candidate.startswith(("http://", "https://")):
+                    return candidate
+            if arg.startswith(("http://", "https://")):
+                return arg.rstrip("/")
+        return None
+
+    def _home_candidates(self) -> list[Path]:
+        """Возвращает уникальные home-каталоги, которые могут держать runtime truth."""
+        homes: list[Path] = []
+        for raw in (os.getenv("KRAB_OPERATOR_HOME", ""), os.getenv("HOME", ""), str(Path.home())):
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            candidate_home = Path(value).expanduser()
+            if candidate_home not in homes:
+                homes.append(candidate_home)
+        return homes
+
+    def _workspace_root_candidates(self) -> list[Path]:
+        """Возвращает возможные workspace-root каталоги OpenClaw текущего аккаунта."""
+        return [home / ".openclaw" / "workspace-main-messaging" for home in self._home_candidates()]
+
+    def _port_state_http_candidates(self) -> list[str]:
+        """
+        Возвращает HTTP endpoint-ы из `remote_debugging_port.txt`.
+
+        Это не абсолютная истина, но полезный fallback, когда `mcporter.json`
+        ещё stale, а launcher уже успел записать новый порт.
+        """
+        endpoints: list[str] = []
+        for workspace_root in self._workspace_root_candidates():
+            state_path = workspace_root / "browser_data" / "remote_debugging_port.txt"
+            try:
+                port = state_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if port.isdigit():
+                endpoints.append(f"http://127.0.0.1:{port}")
+        return self._dedupe_strings(endpoints)
+
+    def _read_mcporter_cdp_http_url(self) -> str | None:
+        """Читает runtime CDP endpoint из workspace `config/mcporter.json`."""
+        for workspace_root in self._workspace_root_candidates():
+            config_path = workspace_root / "config" / "mcporter.json"
+            try:
+                payload = json.loads(config_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            candidate = self._extract_cdp_http_url_from_mcporter(payload)
+            if candidate:
+                return candidate
+        return None
+
+    def _cdp_http_candidates(self) -> list[str]:
+        """Собирает CDP HTTP endpoint-ы в порядке доверия."""
+        if self._explicit_cdp_http_urls:
+            return list(self._explicit_cdp_http_urls)
+
+        candidates: list[str] = []
+        runtime_url = self._read_mcporter_cdp_http_url()
+        if runtime_url:
+            candidates.append(runtime_url)
+        candidates.extend(self._port_state_http_candidates())
+
+        # Если runtime уже объявил workspace endpoint, legacy 9222 больше не
+        # должен молча подменять source-of-truth. Иначе bridge цепляется к
+        # случайному пользовательскому Chrome и маскирует сломанный workspace.
+        if not candidates:
+            candidates.append(self.CDP_URL)
+        return self._dedupe_strings(candidates)
+
+    def _reported_cdp_url(self) -> str:
+        """
+        Возвращает endpoint, который bridge считает текущим источником истины.
+
+        Нужен для health/status payload: `self.CDP_URL` — это только legacy
+        дефолт, а не обязательно реальный runtime endpoint.
+        """
+        candidates = self._cdp_http_candidates()
+        if candidates:
+            return candidates[0]
+        return self.CDP_URL
 
     async def _resolve_ws_endpoint(self) -> str | None:
         """
@@ -144,17 +274,19 @@ class BrowserBridge:
         - в таком случае безопаснее взять browser websocket endpoint из файла,
           который Chrome кладёт в профиль пользователя.
         """
-        homes: list[Path] = []
-        for raw in (os.getenv("KRAB_OPERATOR_HOME", ""), os.getenv("HOME", ""), str(Path.home())):
-            value = str(raw or "").strip()
-            if not value:
-                continue
-            candidate_home = Path(value).expanduser()
-            if candidate_home not in homes:
-                homes.append(candidate_home)
+        if self._explicit_devtools_active_port_paths is not None:
+            return list(self._explicit_devtools_active_port_paths)
 
         candidates: list[Path] = []
-        for home in homes:
+        for home in self._home_candidates():
+            workspace_root = home / ".openclaw" / "workspace-main-messaging"
+            candidates.append(workspace_root / "browser_data" / "DevToolsActivePort")
+            candidates.append(workspace_root / "browser_data" / "Default" / "DevToolsActivePort")
+
+            chrome_debug_profile = home / "Library" / "Application Support" / "ChromeDebugProfile"
+            candidates.append(chrome_debug_profile / "DevToolsActivePort")
+            candidates.append(chrome_debug_profile / "Default" / "DevToolsActivePort")
+
             # Krab debug profile (non-default, обходит Chrome 146 policy block)
             # Проверяем первым — он точно совместим с CDP и используется хелпером
             krab_debug = home / ".openclaw" / "chrome-debug-profile"
@@ -245,15 +377,16 @@ class BrowserBridge:
 
         Выполняется через asyncio.to_thread чтобы не блокировать event loop.
         """
-        cdp_http = self.CDP_URL.rstrip("/") + "/json/version"
-        try:
-            ws_url = await asyncio.to_thread(self._fetch_ws_from_json_version_sync, cdp_http)
-            if ws_url:
-                logger.info("browser_bridge_ws_from_json_version", ws_url=ws_url)
-            return ws_url
-        except Exception as exc:
-            logger.debug("browser_bridge_ws_from_json_version_failed", error=repr(exc))
-            return None
+        for cdp_root in self._cdp_http_candidates():
+            cdp_http = cdp_root.rstrip("/") + "/json/version"
+            try:
+                ws_url = await asyncio.to_thread(self._fetch_ws_from_json_version_sync, cdp_http)
+                if ws_url:
+                    logger.info("browser_bridge_ws_from_json_version", cdp_http=cdp_root, ws_url=ws_url)
+                    return ws_url
+            except Exception as exc:
+                logger.debug("browser_bridge_ws_from_json_version_failed", cdp_http=cdp_root, error=repr(exc))
+        return None
 
     async def _open_raw_cdp(self, ws_endpoint: str) -> RawCDPConnection:
         """Открывает прямое websocket CDP-соединение к browser endpoint."""
@@ -398,6 +531,40 @@ class BrowserBridge:
                 "final_url": "",
             }
 
+    async def _passive_probe_via_raw_cdp(self, ws_endpoint: str) -> dict[str, Any]:
+        """Снимает URL/title текущей активной вкладки без создания временных target-ов."""
+
+        async def _handler(conn: RawCDPConnection, session_id: str, _target_id: str) -> dict[str, Any]:
+            href_payload = await conn.call(
+                "Runtime.evaluate",
+                {"expression": "window.location.href", "returnByValue": True},
+                session_id=session_id,
+            )
+            title_payload = await conn.call(
+                "Runtime.evaluate",
+                {"expression": "document.title", "returnByValue": True},
+                session_id=session_id,
+            )
+            final_url = str(((href_payload.get("result") or {}).get("value")) or "")
+            title = str(((title_payload.get("result") or {}).get("value")) or "")
+            return {
+                "ok": bool(final_url),
+                "state": "passive_probe_ok" if final_url else "passive_probe_empty",
+                "final_url": final_url,
+                "title": title[:200],
+            }
+
+        try:
+            return await self._with_page_session_via_raw_cdp(ws_endpoint, _handler, create_new_target=False)
+        except Exception as exc:
+            logger.warning("browser_passive_probe_raw_failed", error=repr(exc))
+            return {
+                "ok": False,
+                "state": "passive_probe_failed",
+                "detail": str(exc),
+                "final_url": "",
+            }
+
     async def _navigate_via_raw_cdp(self, ws_endpoint: str, url: str) -> str:
         """Навигирует последнюю вкладку через raw CDP."""
 
@@ -467,7 +634,7 @@ class BrowserBridge:
         if self._playwright is None:
             self._playwright = await async_playwright().start()
 
-        endpoints = [self.CDP_URL]
+        endpoints = self._cdp_http_candidates()
         ws_endpoint = self._read_devtools_ws_endpoint()
         if ws_endpoint and ws_endpoint not in endpoints:
             endpoints.append(ws_endpoint)
@@ -556,6 +723,20 @@ class BrowserBridge:
         if not pages:
             return await contexts[0].new_page()
         return pages[-1]
+
+    async def _existing_page_or_none(self):
+        """
+        Возвращает уже существующую вкладку без создания новой.
+
+        Это отдельный helper для пассивных readiness-проверок: они не должны
+        сами порождать `about:blank`, если в браузере сейчас нет открытых страниц.
+        """
+        browser = await self._get_browser()
+        for context in reversed(browser.contexts):
+            pages = list(context.pages or [])
+            if pages:
+                return pages[-1]
+        return None
 
     async def list_tabs(self) -> list[dict]:
         """Возвращает список вкладок: [{title, url, id}]."""
@@ -760,6 +941,52 @@ class BrowserBridge:
                         return await self._action_probe_via_raw_cdp(fresh, url)
                 raise
 
+    async def passive_probe(self) -> dict[str, Any]:
+        """
+        Делает неинвазивный probe текущей вкладки без открытия `about:blank`.
+
+        Нужен для owner-readiness и периодических UI-refresh, чтобы не плодить
+        временные вкладки и не создавать ощущение, что агент "дёргает" Chrome.
+        """
+        prefer_raw, ws_endpoint = self._should_prefer_raw_cdp()
+        try:
+            if self._prefer_raw_cdp or prefer_raw:
+                raise RuntimeError("prefer_raw_cdp")
+            page = await self._existing_page_or_none()
+            if page is None:
+                return {
+                    "ok": False,
+                    "state": "passive_probe_empty",
+                    "detail": "no_existing_page",
+                    "final_url": "",
+                }
+            title = await page.title()
+            return {
+                "ok": bool(page.url),
+                "state": "passive_probe_ok" if page.url else "passive_probe_empty",
+                "final_url": page.url,
+                "title": title[:200],
+            }
+        except Exception as exc:
+            ws_endpoint = ws_endpoint or await self._resolve_ws_endpoint()
+            if not ws_endpoint:
+                logger.warning("browser_passive_probe_failed", error=repr(exc))
+                return {
+                    "ok": False,
+                    "state": "passive_probe_failed",
+                    "detail": str(exc),
+                    "final_url": "",
+                }
+            self._prefer_raw_cdp = True
+            try:
+                return await self._passive_probe_via_raw_cdp(ws_endpoint)
+            except Exception as raw_exc:
+                if self._is_stale_ws_error(raw_exc):
+                    fresh = await self._refresh_ws_endpoint()
+                    if fresh and fresh != ws_endpoint:
+                        return await self._passive_probe_via_raw_cdp(fresh)
+                raise
+
     async def screenshot_base64(self) -> str | None:
         """Returns base64-encoded PNG screenshot."""
         data = await self.screenshot()
@@ -893,12 +1120,30 @@ class BrowserBridge:
         try:
             attached = await asyncio.wait_for(self.is_attached(), timeout=timeout_sec)
         except asyncio.TimeoutError:
-            return {"ok": False, "blocked": False, "error": f"health_check timeout {timeout_sec}s", "tab_count": 0, "cdp_url": self.CDP_URL}
+            return {
+                "ok": False,
+                "blocked": False,
+                "error": f"health_check timeout {timeout_sec}s",
+                "tab_count": 0,
+                "cdp_url": self._reported_cdp_url(),
+            }
         except Exception as exc:
-            return {"ok": False, "blocked": False, "error": repr(exc), "tab_count": 0, "cdp_url": self.CDP_URL}
+            return {
+                "ok": False,
+                "blocked": False,
+                "error": repr(exc),
+                "tab_count": 0,
+                "cdp_url": self._reported_cdp_url(),
+            }
 
         if not attached:
-            return {"ok": False, "blocked": True, "error": "CDP not reachable", "tab_count": 0, "cdp_url": self.CDP_URL}
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": "CDP not reachable",
+                "tab_count": 0,
+                "cdp_url": self._reported_cdp_url(),
+            }
 
         tab_count = 0
         try:
@@ -907,7 +1152,7 @@ class BrowserBridge:
         except Exception:
             pass
 
-        return {"ok": True, "blocked": False, "error": "", "tab_count": tab_count, "cdp_url": self.CDP_URL}
+        return {"ok": True, "blocked": False, "error": "", "tab_count": tab_count, "cdp_url": self._reported_cdp_url()}
 
 
 browser_bridge = BrowserBridge()

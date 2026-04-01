@@ -52,6 +52,7 @@ from src.core.capability_registry import (  # noqa: E402
 )
 from src.core.ecosystem_health import EcosystemHealthService  # noqa: E402
 from src.core.inbox_service import inbox_service  # noqa: E402
+from src.integrations.browser_bridge import BrowserBridge  # noqa: E402
 from src.core.lm_studio_auth import build_lm_studio_auth_headers  # noqa: E402
 from src.core.mcp_registry import (  # noqa: E402
     LMSTUDIO_MCP_PATH,
@@ -6073,16 +6074,22 @@ class WebApp:
         - для пользователя важно различать "helper только открыт" и
           "обычный Chrome уже usable для DevTools/MCP сценариев".
         """
-        from ..integrations.browser_bridge import browser_bridge as _browser_bridge
+        # Важно: probe owner Chrome не должен читать runtime mcporter truth.
+        # Иначе панель начнёт проверять debug browser (`9223`) вместо обычного
+        # Chrome владельца (`9222`) и сама же породит ложные `about:blank` flow.
+        _browser_bridge = BrowserBridge(
+            explicit_cdp_http_urls=[BrowserBridge.DEFAULT_CDP_URL],
+            explicit_devtools_active_port_paths=[],
+        )
 
         try:
-            attached = await _browser_bridge.is_attached()
+            attached = await asyncio.wait_for(_browser_bridge.is_attached(), timeout=4.0)
         except Exception as exc:
             return {
                 "readiness": "blocked",
                 "state": "bridge_error",
                 "detail": f"Chrome DevTools bridge недоступен: {exc}",
-                "next_step": "Проверь обычный Chrome, Remote Debugging на порту 9222 и повтори probe.",
+                "next_step": "Проверь обычный Chrome и текущий CDP endpoint, затем повтори probe.",
                 "attached": False,
                 "confirmed": False,
                 "tab_count": 0,
@@ -6093,7 +6100,7 @@ class WebApp:
                 },
             }
 
-        tabs = await _browser_bridge.list_tabs() if attached else []
+        tabs = await asyncio.wait_for(_browser_bridge.list_tabs(), timeout=4.0) if attached else []
         tab_count = len(tabs)
         if not attached:
             helper_log = self._inspect_owner_chrome_remote_debugging_log()
@@ -6119,7 +6126,7 @@ class WebApp:
             return {
                 "readiness": "attention",
                 "state": "manual_setup_required",
-                "detail": "Обычный Chrome ещё не attach-нут по CDP на порту 9222.",
+                "detail": "Обычный Chrome ещё не attach-нут по текущему CDP endpoint.",
                 "next_step": "Запусти helper для обычного Chrome, дождись relaunch и затем обнови Browser / MCP Readiness.",
                 "attached": False,
                 "confirmed": False,
@@ -6131,16 +6138,24 @@ class WebApp:
                 },
             }
 
-        action_probe = await _browser_bridge.action_probe(url)
+        try:
+            action_probe = await asyncio.wait_for(_browser_bridge.passive_probe(), timeout=4.0)
+        except asyncio.TimeoutError:
+            action_probe = {
+                "ok": False,
+                "state": "passive_probe_timeout",
+                "detail": "Owner Chrome passive probe превысил лимит ожидания.",
+                "final_url": "",
+            }
         if bool(action_probe.get("ok")):
             final_url = str(action_probe.get("final_url") or url)
             title = str(action_probe.get("title") or "").strip()
-            detail = f"Chrome DevTools action probe выполнен: {final_url}"
+            detail = f"Chrome DevTools passive probe подтвердил текущую вкладку: {final_url}"
             if title:
                 detail += f" ({title})"
             return {
                 "readiness": "ready",
-                "state": "action_probe_ok",
+                "state": str(action_probe.get("state") or "passive_probe_ok"),
                 "detail": detail,
                 "next_step": "Обычный Chrome владельца готов для DevTools/MCP сценариев.",
                 "attached": True,
@@ -6151,8 +6166,8 @@ class WebApp:
 
         return {
             "readiness": "attention",
-            "state": str(action_probe.get("state") or "action_probe_failed"),
-            "detail": str(action_probe.get("detail") or "Chrome attach есть, но action probe не завершился."),
+            "state": str(action_probe.get("state") or "passive_probe_failed"),
+            "detail": str(action_probe.get("detail") or "Chrome attach есть, но passive probe не завершился."),
             "next_step": "Повтори helper для обычного Chrome и затем обнови Browser / MCP Readiness.",
             "attached": True,
             "confirmed": False,
@@ -10769,9 +10784,14 @@ class WebApp:
             browser["paths"] = self._build_browser_access_paths(browser, mcp)
 
             overall = "ready"
-            if "blocked" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
+            overall_states = {
+                str(browser.get("readiness") or ""),
+                str(mcp.get("readiness") or ""),
+                str((owner_chrome or {}).get("readiness") or ""),
+            }
+            if "blocked" in overall_states:
                 overall = "blocked"
-            elif "attention" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
+            elif "attention" in overall_states:
                 overall = "attention"
 
             return {

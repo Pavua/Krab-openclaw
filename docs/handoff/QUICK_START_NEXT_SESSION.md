@@ -62,6 +62,22 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
 - Детальный разбор и остаточные риски вынесены в
   `docs/handoff/OPENCLAW_INCIDENT_2026-04-01.md`.
 
+### Addendum 01.04.2026 поздний browser fix-pass
+- Ветка helper-worktree: `codex/owner-browser-passive-truth`
+- `src/integrations/browser_bridge.py`:
+  bridge теперь читает runtime CDP truth из `mcporter.json` / `remote_debugging_port.txt`
+  и больше не подмешивает legacy `9222`, если runtime уже объявил другой endpoint.
+- `src/modules/web_app.py`:
+  owner Chrome readiness переведён на изолированный ordinary-contour probe
+  + неинвазивный `passive_probe()` вместо `action_probe()`.
+- Truthful overall:
+  `/api/openclaw/browser-mcp-readiness` теперь учитывает и `owner_chrome.readiness`,
+  чтобы зелёный debug browser не маскировал сломанный ordinary Chrome.
+- Проверка:
+  таргетные unit: `148 passed`, `2 failed` baseline-only;
+  временный UI новой ветки на `:18081` открылся в браузере;
+  после `Синхронизировать данные` owner Chrome tab-list не изменился (`9222` = 3 page-target, `9223` = 0).
+
 ---
 
 ## Текущее состояние (01.04.2026)
@@ -94,7 +110,7 @@ kill $(lsof -t ~/.krab_mcp_sessions/p0lrd_cc_mcp.session 2>/dev/null) 2>/dev/nul
 | Задача | Статус |
 |---|---|
 | Chrome extension OpenClaw "Off" — расследовать | Medium |
-| Browser/CDP drift `9223` vs `9222` vs `18800` — довести до одного source-of-truth | High |
+| Browser/CDP drift `9223` vs `9222` vs `18800` — довести до одного source-of-truth | High, но owner-readiness side effect уже ослаблен |
 | Mercadona навигация — поиск не работает в UI | Medium |
 | iMessage фильтрация — пропускает ненужное | Medium |
 | `parallel mode` (4 агента / 8 субагентов) — включить/тестировать | Low |

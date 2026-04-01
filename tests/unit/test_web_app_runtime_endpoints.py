@@ -5346,6 +5346,52 @@ Local loopback ws://127.0.0.1:18789
     assert devtools_path["state"] == "action_probe_ok"
 
 
+@pytest.mark.asyncio
+async def test_probe_owner_chrome_devtools_uses_passive_probe_without_navigation(monkeypatch):
+    """Owner probe не должен открывать временные вкладки при периодическом readiness-refresh."""
+
+    calls = {"passive": 0, "action": 0, "tabs": 0}
+
+    class _FakeBridge:
+        DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+
+        def __init__(self, *, explicit_cdp_http_urls=None, explicit_devtools_active_port_paths=None):
+            assert explicit_cdp_http_urls == [self.DEFAULT_CDP_URL]
+            assert explicit_devtools_active_port_paths == []
+
+        async def is_attached(self):
+            return True
+
+        async def list_tabs(self):
+            calls["tabs"] += 1
+            return [{"title": "Telegram", "url": "https://web.telegram.org/", "id": "tab-1"}]
+
+        async def passive_probe(self):
+            calls["passive"] += 1
+            return {
+                "ok": True,
+                "state": "passive_probe_ok",
+                "final_url": "https://web.telegram.org/",
+                "title": "Telegram",
+            }
+
+        async def action_probe(self, _url: str):
+            calls["action"] += 1
+            raise AssertionError("action_probe не должен вызываться в owner readiness")
+
+    monkeypatch.setattr("src.modules.web_app.BrowserBridge", _FakeBridge, raising=False)
+    app = _make_app(openclaw_client=_FakeOpenClaw())
+
+    payload = await app._probe_owner_chrome_devtools("https://example.com")
+
+    assert payload["readiness"] == "ready"
+    assert payload["state"] == "passive_probe_ok"
+    assert payload["confirmed"] is True
+    assert payload["tab_count"] == 1
+    assert "web.telegram.org" in payload["detail"]
+    assert calls == {"passive": 1, "action": 0, "tabs": 1}
+
+
 def test_browser_mcp_readiness_marks_owner_chrome_blocked_when_chrome_policy_rejects_default_profile(
     monkeypatch,
     tmp_path: Path,
@@ -5479,6 +5525,7 @@ Local loopback ws://127.0.0.1:18789
     resp = client.get("/api/openclaw/browser-mcp-readiness")
     assert resp.status_code == 200
     data = resp.json()
+    assert data["overall"]["readiness"] == "blocked"
     chrome_profile = next(item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile")
     devtools_path = next(item for item in data["browser"]["paths"] if item["kind"] == "chrome_devtools")
     assert chrome_profile["readiness"] == "blocked"

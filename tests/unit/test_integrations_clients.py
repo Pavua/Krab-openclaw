@@ -157,6 +157,7 @@ async def test_browser_bridge_falls_back_to_ws_endpoint_when_http_cdp_returns_40
             return _FakePlaywright()
 
     monkeypatch.setattr("playwright.async_api.async_playwright", lambda: _FakeAsyncPlaywrightFactory())
+    monkeypatch.setattr(bridge, "_cdp_http_candidates", lambda: [bridge.CDP_URL])
     monkeypatch.setattr(bridge, "_read_devtools_ws_endpoint", lambda: "ws://127.0.0.1:9222/devtools/browser/test-browser-id")
 
     browser = await bridge._get_browser()
@@ -178,7 +179,63 @@ async def test_browser_bridge_candidate_paths_include_operator_home(monkeypatch)
     candidates = [str(path) for path in bridge._devtools_active_port_candidates()]
 
     assert candidates[0].startswith("/Users/pablito/")
+    assert any(path.endswith(".openclaw/workspace-main-messaging/browser_data/DevToolsActivePort") for path in candidates)
     assert any(path.startswith("/Users/USER2/") for path in candidates)
+
+
+def test_browser_bridge_reads_cdp_url_from_runtime_mcporter(tmp_path: Path, monkeypatch) -> None:
+    """Runtime mcporter.json должен иметь приоритет над legacy `9222` хардкодом."""
+    operator_home = tmp_path / "operator"
+    config_dir = operator_home / ".openclaw" / "workspace-main-messaging" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "mcporter.json").write_text(
+        """
+{
+  "mcpServers": {
+    "my-chrome": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest", "-u", "http://localhost:9223"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KRAB_OPERATOR_HOME", str(operator_home))
+    monkeypatch.delenv("HOME", raising=False)
+
+    bridge = BrowserBridge()
+
+    assert bridge._read_mcporter_cdp_http_url() == "http://localhost:9223"
+    assert bridge._cdp_http_candidates()[0] == "http://localhost:9223"
+
+
+def test_browser_bridge_runtime_truth_disables_legacy_9222_fallback(tmp_path: Path, monkeypatch) -> None:
+    """Если runtime уже объявил workspace endpoint, bridge не должен тихо добавлять legacy 9222."""
+    operator_home = tmp_path / "operator"
+    config_dir = operator_home / ".openclaw" / "workspace-main-messaging" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "mcporter.json").write_text(
+        """
+{
+  "mcpServers": {
+    "my-chrome": {
+      "args": ["-u", "http://localhost:9223"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KRAB_OPERATOR_HOME", str(operator_home))
+    monkeypatch.delenv("HOME", raising=False)
+
+    bridge = BrowserBridge()
+    candidates = bridge._cdp_http_candidates()
+
+    assert candidates[0] == "http://localhost:9223"
+    assert "http://127.0.0.1:9222" not in candidates
+    assert bridge._reported_cdp_url() == "http://localhost:9223"
 
 
 @pytest.mark.asyncio
@@ -256,3 +313,28 @@ async def test_browser_bridge_action_probe_falls_back_to_raw_cdp(monkeypatch) ->
     assert result["state"] == "action_probe_ok"
     assert result["final_url"] == "https://example.com/"
     assert bridge._prefer_raw_cdp is True
+
+
+@pytest.mark.asyncio
+async def test_browser_bridge_passive_probe_does_not_create_tab_when_no_pages(monkeypatch) -> None:
+    """Пассивный probe не должен открывать новую вкладку, если страниц ещё нет."""
+    bridge = BrowserBridge()
+
+    class _FakeBrowser:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        async def new_context(self):
+            raise AssertionError("passive_probe не должен создавать новый context")
+
+    async def _fake_get_browser():
+        return _FakeBrowser()
+
+    monkeypatch.setattr(bridge, "_get_browser", _fake_get_browser)
+
+    result = await bridge.passive_probe()
+
+    assert result["ok"] is False
+    assert result["state"] == "passive_probe_empty"
+    assert result["detail"] == "no_existing_page"
+    assert result["final_url"] == ""

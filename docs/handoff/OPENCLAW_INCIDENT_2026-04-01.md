@@ -55,6 +55,13 @@
 - action probe на `https://example.com` создаёт ощущение «вкладка открылась и сразу закрылась»;
 - `9223` vs `9222` сейчас всё ещё не доведён до единого source-of-truth.
 
+Addendum 01.04.2026 поздний fix-pass:
+
+- owner-readiness в web-панели больше не должен сам создавать временную вкладку для ordinary Chrome;
+- ordinary owner path теперь изолирован от runtime `mcporter.json` truth и не должен тихо скатываться в `9223`;
+- `overall.readiness` в `/api/openclaw/browser-mcp-readiness` теперь учитывает и `owner_chrome.readiness`,
+  чтобы успешный debug browser не маскировал сломанный ordinary Chrome.
+
 ### 4. Crash-loop `USER_BANNED_IN_CHANNEL`
 
 Диагностика показала:
@@ -101,6 +108,23 @@
 - provider shape seeding для `codex-cli`;
 - multi-step cloud quality retry после `provider_timeout` и `thinking_budget to 0`.
 
+### 4. Browser / owner-readiness fix-pass
+
+Изменены файлы:
+- `src/integrations/browser_bridge.py`
+- `src/modules/web_app.py`
+- `tests/unit/test_integrations_clients.py`
+- `tests/unit/test_web_app_runtime_endpoints.py`
+
+Что сделано:
+- `BrowserBridge` научен читать runtime CDP truth из `mcporter.json` и `remote_debugging_port.txt`;
+- если runtime уже объявил свой HTTP CDP endpoint, legacy `9222` больше не подмешивается молча как source-of-truth;
+- для owner Chrome web-панель создаёт отдельный изолированный `BrowserBridge`,
+  жёстко привязанный к ordinary contour (`9222`);
+- owner-readiness переведён с активного `action_probe()` на неинвазивный `passive_probe()`;
+- сам `passive_probe()` теперь не создаёт новую вкладку, если в браузере нет открытых страниц;
+- `overall.readiness` теперь честно падает в `attention/blocked`, если именно owner Chrome не готов.
+
 ## Что проверено live
 
 1 апреля 2026 после правок:
@@ -119,13 +143,35 @@
   - `OK-CODEX`
   - `OK-CODEX-2`
 
+Поздний browser fix-pass 01.04.2026:
+
+- таргетный набор unit-тестов
+  `tests/unit/test_integrations_clients.py` +
+  `tests/unit/test_web_app_runtime_endpoints.py`
+  дал `148 passed`;
+- оставшиеся `2 failed` подтверждены отдельно на чистом baseline `ca96027`
+  и не относятся к browser-fix:
+  - `test_model_compat_probe_passes_model_and_reasoning`
+  - `test_runtime_chat_session_clear_calls_openclaw_client`
+- временный web-контур новой ветки на `http://127.0.0.1:18081/`
+  отдал `200 OK` на `/api/openclaw/browser-mcp-readiness`;
+- после загрузки панели и ручного `Синхронизировать данные`
+  owner Chrome tab-list не изменился:
+  - `9222`: те же 3 page-target (`about:blank`, `chrome://newtab/`, `chrome://newtab-footer/`)
+  - `9223`: `0` page-target
+
+Вывод:
+- новый owner-readiness path не воспроизвёл лишнее создание вкладок;
+- визуальный эффект «вкладка открылась и закрылась» на этом fix-pass больше не подтверждён.
+
 ## Что осталось сделать
 
 ### Высокий приоритет
 
 - починить browser source-of-truth:
   - не писать stale `9223` truth до фактической готовности workspace Chrome;
-  - убрать или ослабить silent fallback на `9222`, если runtime уже объявил свой workspace endpoint.
+  - отдельно добить соседние owner-facing endpoints, которые всё ещё читают singleton runtime browser contour;
+  - при желании усилить контракт `BrowserBridge`, чтобы `explicit_cdp_http_urls` автоматически отключал websocket/file fallback без необходимости передавать пустой список путей вручную.
 
 ### Средний приоритет
 
