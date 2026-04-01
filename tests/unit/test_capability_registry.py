@@ -15,7 +15,10 @@ from src.core.capability_registry import (
     build_capability_registry,
     build_channel_capability_snapshot,
     build_policy_matrix,
+    clear_capability_overrides,
+    get_capability_overrides,
     resolve_access_mode,
+    set_capability_override,
 )
 
 
@@ -54,6 +57,36 @@ def test_build_policy_matrix_exposes_role_capabilities_and_guardrails() -> None:
     assert matrix["guardrails"]["web_write_requires_key"] is True
     assert matrix["guardrails"]["current_route_model"] == "google/gemini-3.1-pro-preview"
     assert matrix["summary"]["partial_subjects"] == 2
+
+
+def test_capability_overrides_apply_over_base_policy_matrix() -> None:
+    """Runtime override должен временно менять capability у всех ролей поверх дефолтов."""
+    clear_capability_overrides()
+    try:
+        result = set_capability_override("browser_control", True)
+        assert result["ok"] == "1"
+        assert get_capability_overrides()["browser_control"] is True
+
+        matrix = build_policy_matrix(
+            operator_id="USER2",
+            account_id="abc123def456",
+            acl_state={},
+            web_write_requires_key=False,
+            runtime_lite={},
+        )
+
+        assert matrix["roles"]["partial"]["capabilities"]["browser_control"] is True
+        assert matrix["roles"]["guest"]["capabilities"]["browser_control"] is True
+    finally:
+        clear_capability_overrides()
+
+
+def test_capability_override_rejects_unknown_capability() -> None:
+    """Неизвестная capability не должна записываться в runtime overrides."""
+    clear_capability_overrides()
+    result = set_capability_override("nonexistent_capability", True)
+    assert "error" in result
+    assert get_capability_overrides() == {}
 
 
 def test_build_capability_registry_aggregates_truthful_contours() -> None:

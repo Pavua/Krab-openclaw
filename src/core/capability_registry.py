@@ -110,6 +110,39 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
     },
 }
 
+# Runtime overrides для capability — изменяются через `!cap` команду.
+# Формат: {capability_name: bool}. Применяются поверх `_ROLE_CAPABILITIES`.
+_CAPABILITY_OVERRIDES: dict[str, bool] = {}
+
+_VALID_CAPABILITIES: frozenset[str] = frozenset({
+    "browser_control", "macos_control", "screenshots", "ocr",
+    "ui_automation", "clipboard_read", "clipboard_write",
+    "web_search", "file_ops", "tor_proxy",
+})
+
+
+def set_capability_override(capability: str, enabled: bool) -> dict[str, str]:
+    """Устанавливает runtime override для capability."""
+    cap = str(capability or "").strip().lower()
+    if cap not in _VALID_CAPABILITIES:
+        return {
+            "error": f"unknown capability '{cap}'",
+            "valid": sorted(_VALID_CAPABILITIES),
+        }
+    _CAPABILITY_OVERRIDES[cap] = bool(enabled)
+    return {"ok": str(int(enabled)), "capability": cap, "enabled": str(enabled)}
+
+
+def get_capability_overrides() -> dict[str, bool]:
+    """Возвращает копию текущих runtime overrides."""
+    return dict(_CAPABILITY_OVERRIDES)
+
+
+def clear_capability_overrides() -> None:
+    """Сбрасывает все runtime overrides к дефолтным значениям policy matrix."""
+    _CAPABILITY_OVERRIDES.clear()
+
+
 _ROLE_NOTES: dict[str, list[str]] = {
     AccessLevel.OWNER.value: [
         "Владелец видит и управляет полным runtime/tool-контуром.",
@@ -168,11 +201,16 @@ def build_policy_matrix(
         AccessLevel.PARTIAL.value,
         AccessLevel.GUEST.value,
     ):
+        # Применяем runtime overrides поверх базовой policy matrix.
+        merged_caps = dict(_ROLE_CAPABILITIES[role])
+        for cap, val in _CAPABILITY_OVERRIDES.items():
+            if cap in merged_caps:
+                merged_caps[cap] = val
         roles[role] = {
             "label": role.upper(),
             "trusted": role in {AccessLevel.OWNER.value, AccessLevel.FULL.value},
             "subjects": sorted({str(item).strip() for item in acl_payload.get(role, []) if str(item).strip()}),
-            "capabilities": dict(_ROLE_CAPABILITIES[role]),
+            "capabilities": merged_caps,
             "commands": dict((command_access.get("roles") or {}).get(role) or {}),
             "notes": list(_ROLE_NOTES[role]),
         }
@@ -690,5 +728,8 @@ __all__ = [
     "build_channel_capability_snapshot",
     "build_policy_matrix",
     "build_system_control_snapshot",
+    "clear_capability_overrides",
+    "get_capability_overrides",
     "resolve_access_mode",
+    "set_capability_override",
 ]

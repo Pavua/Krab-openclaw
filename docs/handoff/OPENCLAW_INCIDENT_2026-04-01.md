@@ -179,6 +179,8 @@ Live state check того же вечера:
 - при этом после restart live `/api/openclaw/browser-mcp-readiness`
   уже вернул новый payload с `Chrome DevTools passive probe` и `state=passive_probe_ok`,
   а debug contour честно показан как `debug_attached`;
+- из live `pablito`-diff отдельно сохранён и втянут в чистую ветку только осмысленный runtime delta:
+  `!cap` / capability overrides в `src/core/capability_registry.py`;
 - практический вывод: browser-fix код уже оказался в исполняемом dirty worktree `pablito`,
   хотя git provenance там всё ещё неаккуратный (`HEAD=ca96027`, branch mismatch).
 

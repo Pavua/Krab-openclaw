@@ -90,6 +90,9 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
   `/api/openclaw/browser-mcp-readiness` уже отдал новый browser-fix payload
   с `passive_probe_ok` и `debug_attached`.
   Значит код фактически исполняется из dirty worktree, а не из чисто оформленного rollout.
+- Из живого diff на `pablito` в helper-ветку отдельно втянут
+  runtime capability overrides для команды `!cap`, чтобы не потерять этот слой
+  при будущей нормализации rollout/provenance.
 
 ---
 
