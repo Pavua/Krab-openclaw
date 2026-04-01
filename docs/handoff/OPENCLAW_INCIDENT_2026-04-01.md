@@ -125,7 +125,9 @@ Addendum 01.04.2026 поздний fix-pass:
 - сам `passive_probe()` теперь не создаёт новую вкладку, если в браузере нет открытых страниц;
 - `overall.readiness` теперь честно падает в `attention/blocked`, если именно owner Chrome не готов;
 - `capability_registry` и его `system_control.browser_control` больше не читают runtime singleton bridge,
-  а нормализуют тот же owner Chrome probe, что и Browser / MCP Readiness.
+  а нормализуют тот же owner Chrome probe, что и Browser / MCP Readiness;
+- legacy `/api/browser/*` теперь явно маркируются как `runtime_debug_browser`,
+  чтобы их не путали с ordinary owner Chrome API.
 
 ## Что проверено live
 

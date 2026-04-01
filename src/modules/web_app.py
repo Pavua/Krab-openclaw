@@ -6832,6 +6832,8 @@ class WebApp:
             }
 
         # ── Browser Bridge API ──────────────────────────────────────────────
+        # Это legacy/runtime API для debug-contour и команд вроде `!browser`.
+        # Owner UI больше не должен трактовать его как truth про ordinary Chrome.
         from ..integrations.browser_bridge import browser_bridge as _browser_bridge
 
         browser_bridge_timeout_sec = 8.0
@@ -6842,17 +6844,37 @@ class WebApp:
                 attached = await asyncio.wait_for(_browser_bridge.is_attached(), timeout=browser_bridge_timeout_sec)
                 tabs = await asyncio.wait_for(_browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec) if attached else []
             except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "attached": False, "tab_count": 0, "active_url": None}
+                return {
+                    "ok": False,
+                    "error": "browser_timeout",
+                    "detail": str(exc),
+                    "attached": False,
+                    "tab_count": 0,
+                    "active_url": None,
+                    "contour": "runtime_debug_browser",
+                }
             active_url = tabs[-1]["url"] if tabs else None
-            return {"ok": True, "attached": attached, "tab_count": len(tabs), "active_url": active_url}
+            return {
+                "ok": True,
+                "attached": attached,
+                "tab_count": len(tabs),
+                "active_url": active_url,
+                "contour": "runtime_debug_browser",
+            }
 
         @self.app.get("/api/browser/tabs")
         async def browser_tabs():
             try:
                 tabs = await asyncio.wait_for(_browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec)
             except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "tabs": []}
-            return tabs
+                return {
+                    "ok": False,
+                    "error": "browser_timeout",
+                    "detail": str(exc),
+                    "tabs": [],
+                    "contour": "runtime_debug_browser",
+                }
+            return {"ok": True, "tabs": tabs, "contour": "runtime_debug_browser"}
 
         @self.app.post("/api/browser/navigate")
         async def browser_navigate(body: dict = Body(...)):
@@ -6862,26 +6884,26 @@ class WebApp:
             try:
                 current_url = await asyncio.wait_for(_browser_bridge.navigate(url), timeout=browser_bridge_timeout_sec)
             except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            return {"ok": True, "current_url": current_url}
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "contour": "runtime_debug_browser"}
+            return {"ok": True, "current_url": current_url, "contour": "runtime_debug_browser"}
 
         @self.app.post("/api/browser/screenshot")
         async def browser_screenshot():
             try:
                 data = await asyncio.wait_for(_browser_bridge.screenshot_base64(), timeout=browser_bridge_timeout_sec)
             except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "contour": "runtime_debug_browser"}
             if data is None:
-                return {"ok": False, "error": "screenshot_failed"}
-            return {"ok": True, "data": data}
+                return {"ok": False, "error": "screenshot_failed", "contour": "runtime_debug_browser"}
+            return {"ok": True, "data": data, "contour": "runtime_debug_browser"}
 
         @self.app.post("/api/browser/read")
         async def browser_read():
             try:
                 text = await asyncio.wait_for(_browser_bridge.get_page_text(), timeout=browser_bridge_timeout_sec)
             except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "text": ""}
-            return {"ok": True, "text": text}
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "text": "", "contour": "runtime_debug_browser"}
+            return {"ok": True, "text": text, "contour": "runtime_debug_browser"}
 
         @self.app.post("/api/browser/js")
         async def browser_js(body: dict = Body(...)):
@@ -6891,8 +6913,8 @@ class WebApp:
             try:
                 result = await asyncio.wait_for(_browser_bridge.execute_js(code), timeout=browser_bridge_timeout_sec)
             except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
-            return {"ok": True, "result": result}
+                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "contour": "runtime_debug_browser"}
+            return {"ok": True, "result": result, "contour": "runtime_debug_browser"}
 
         # ────────────────────────────────────────────────────────────────────
 

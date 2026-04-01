@@ -73,6 +73,9 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
 - `capability_registry` / `runtime_handoff`:
   system-control browser truth теперь тоже собирается через owner Chrome probe,
   а не через runtime singleton bridge.
+- legacy `/api/browser/*`:
+  ответы теперь явно помечены как `runtime_debug_browser`, то есть это debug/runtime contour,
+  а не owner Chrome readiness API.
 - Truthful overall:
   `/api/openclaw/browser-mcp-readiness` теперь учитывает и `owner_chrome.readiness`,
   чтобы зелёный debug browser не маскировал сломанный ordinary Chrome.

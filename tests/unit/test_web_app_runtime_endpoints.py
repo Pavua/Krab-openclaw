@@ -1711,6 +1711,28 @@ def test_capability_registry_snapshot_carries_owner_chrome_system_control_probe(
     assert data["contours"]["system"]["control"]["probes"]["browser_probed"] is True
 
 
+def test_browser_status_marks_runtime_debug_contour(monkeypatch):
+    """Legacy `/api/browser/status` должен явно маркироваться как runtime/debug contour."""
+
+    class _FakeBrowserBridge:
+        async def is_attached(self):
+            return True
+
+        async def list_tabs(self):
+            return [{"url": "https://example.com/", "title": "Example Domain", "id": "tab-1"}]
+
+    monkeypatch.setattr("src.integrations.browser_bridge.browser_bridge", _FakeBrowserBridge())
+    client = _make_client()
+
+    resp = client.get("/api/browser/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["attached"] is True
+    assert data["active_url"] == "https://example.com/"
+    assert data["contour"] == "runtime_debug_browser"
+
+
 def test_runtime_operator_profile_returns_machine_readable_state() -> None:
     """Профиль учётки должен явно фиксировать split-runtime стратегию и ключевые пути."""
     client = _make_client()
