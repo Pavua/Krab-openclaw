@@ -1646,6 +1646,71 @@ def test_runtime_handoff_can_skip_cloud_probe_for_fast_auto_exports(monkeypatch)
     assert data["cloud_runtime"]["reason"] == "probe_disabled"
 
 
+def test_capability_registry_uses_owner_chrome_probe_for_system_control(monkeypatch):
+    """`/api/capabilities/registry` должен отражать ordinary owner Chrome, а не runtime singleton contour."""
+
+    async def _fake_owner_probe(self, url: str = "https://example.com"):
+        assert url == "https://example.com"
+        return {
+            "readiness": "ready",
+            "state": "passive_probe_ok",
+            "detail": "Chrome DevTools passive probe подтвердил текущую вкладку: https://web.telegram.org/",
+            "next_step": "Обычный Chrome владельца готов для DevTools/MCP сценариев.",
+            "attached": True,
+            "confirmed": True,
+            "tab_count": 1,
+            "action_probe": {
+                "ok": True,
+                "state": "passive_probe_ok",
+                "final_url": "https://web.telegram.org/",
+                "title": "Telegram",
+            },
+        }
+
+    monkeypatch.setattr(WebApp, "_probe_owner_chrome_devtools", _fake_owner_probe)
+    client = _make_client()
+
+    resp = client.get("/api/capabilities/registry")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    browser_control = data["contours"]["system"]["control"]["capabilities"]["browser_control"]
+    assert browser_control["status"] == "ready"
+    assert browser_control["note"] == "Ordinary Chrome owner-probe через BrowserBridge/system-control snapshot."
+    assert data["contours"]["system"]["control"]["probes"]["browser_probed"] is True
+
+
+def test_capability_registry_snapshot_carries_owner_chrome_system_control_probe(monkeypatch):
+    """Внутренний capability registry snapshot должен нормализовать owner Chrome probe в system control."""
+
+    async def _fake_owner_probe(self, url: str = "https://example.com"):
+        assert url == "https://example.com"
+        return {
+            "readiness": "attention",
+            "state": "passive_probe_empty",
+            "detail": "no_existing_page",
+            "next_step": "Открой вкладку в ordinary Chrome и повтори проверку.",
+            "attached": True,
+            "confirmed": False,
+            "tab_count": 0,
+            "action_probe": {
+                "ok": False,
+                "state": "passive_probe_empty",
+                "final_url": "",
+                "title": "",
+            },
+        }
+
+    monkeypatch.setattr(WebApp, "_probe_owner_chrome_devtools", _fake_owner_probe)
+    app = _make_app()
+
+    data = asyncio.run(app._capability_registry_snapshot(runtime_lite={"openclaw_auth_state": "ok"}))
+    browser_control = data["contours"]["system"]["control"]["capabilities"]["browser_control"]
+    assert browser_control["status"] == "degraded"
+    assert browser_control["error"] == "no_existing_page"
+    assert data["contours"]["system"]["control"]["probes"]["browser_probed"] is True
+
+
 def test_runtime_operator_profile_returns_machine_readable_state() -> None:
     """Профиль учётки должен явно фиксировать split-runtime стратегию и ключевые пути."""
     client = _make_client()

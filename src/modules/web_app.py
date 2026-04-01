@@ -3234,12 +3234,16 @@ class WebApp:
             self._ecosystem_capabilities_snapshot(),
             self._translator_readiness_snapshot(runtime_lite=runtime_state),
         )
-        # Phase 3 Шаг 2: live health checks для browser и macos
+        # Для owner-facing registry важно использовать тот же ordinary Chrome
+        # probe, что и Browser / MCP Readiness, а не singleton runtime bridge.
         browser_probe: dict | None = None
         macos_probe: dict | None = None
         try:
-            from ..integrations.browser_bridge import browser_bridge as _bb
-            browser_probe = await asyncio.wait_for(_bb.health_check(), timeout=5.0)
+            owner_browser_probe = await asyncio.wait_for(
+                self._probe_owner_chrome_devtools(),
+                timeout=5.0,
+            )
+            browser_probe = self._normalize_owner_browser_probe_for_system_control(owner_browser_probe)
         except Exception:
             pass
         try:
@@ -6051,6 +6055,36 @@ class WebApp:
                 "detail": str(smoke.get("detail") or ""),
             },
         }
+
+    @staticmethod
+    def _normalize_owner_browser_probe_for_system_control(owner_probe: dict[str, Any] | None) -> dict[str, Any]:
+        """
+        Нормализует owner Chrome readiness в формат `build_system_control_snapshot()`.
+
+        Этот слой нужен, чтобы capability registry и runtime handoff не
+        подмешивали runtime/debug contour туда, где пользователь ожидает truth
+        именно про ordinary Chrome владельца.
+        """
+        payload = owner_probe if isinstance(owner_probe, dict) else {}
+        readiness = str(payload.get("readiness") or "").strip().lower()
+        detail = str(payload.get("detail") or payload.get("next_step") or "").strip()
+        state = str(payload.get("state") or "").strip()
+        tab_count = int(payload.get("tab_count") or 0)
+
+        normalized = {
+            "ok": readiness == "ready",
+            "blocked": readiness == "blocked",
+            "error": "" if readiness == "ready" else (detail or state or "owner_browser_unavailable"),
+            "tab_count": tab_count,
+            "cdp_url": BrowserBridge.DEFAULT_CDP_URL,
+            "contour": "owner_chrome",
+            "state": state,
+            "detail": detail,
+        }
+        action_probe = payload.get("action_probe")
+        if isinstance(action_probe, dict):
+            normalized["final_url"] = str(action_probe.get("final_url") or "")
+        return normalized
 
     @staticmethod
     def _managed_mcp_category(name: str) -> str:

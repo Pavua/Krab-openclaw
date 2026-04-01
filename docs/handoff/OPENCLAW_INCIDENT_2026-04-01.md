@@ -123,7 +123,9 @@ Addendum 01.04.2026 поздний fix-pass:
   жёстко привязанный к ordinary contour (`9222`);
 - owner-readiness переведён с активного `action_probe()` на неинвазивный `passive_probe()`;
 - сам `passive_probe()` теперь не создаёт новую вкладку, если в браузере нет открытых страниц;
-- `overall.readiness` теперь честно падает в `attention/blocked`, если именно owner Chrome не готов.
+- `overall.readiness` теперь честно падает в `attention/blocked`, если именно owner Chrome не готов;
+- `capability_registry` и его `system_control.browser_control` больше не читают runtime singleton bridge,
+  а нормализуют тот же owner Chrome probe, что и Browser / MCP Readiness.
 
 ## Что проверено live
 
@@ -162,7 +164,8 @@ Addendum 01.04.2026 поздний fix-pass:
 
 Вывод:
 - новый owner-readiness path не воспроизвёл лишнее создание вкладок;
-- визуальный эффект «вкладка открылась и закрылась» на этом fix-pass больше не подтверждён.
+- визуальный эффект «вкладка открылась и закрылась» на этом fix-pass больше не подтверждён;
+- соседний owner-facing capability layer тоже переведён на owner-contour truth.
 
 ## Что осталось сделать
 
@@ -170,7 +173,8 @@ Addendum 01.04.2026 поздний fix-pass:
 
 - починить browser source-of-truth:
   - не писать stale `9223` truth до фактической готовности workspace Chrome;
-  - отдельно добить соседние owner-facing endpoints, которые всё ещё читают singleton runtime browser contour;
+  - решить судьбу legacy `/api/browser/*`: либо честно пометить их как runtime/debug-only,
+    либо вынести на отдельный owner-bridge contour;
   - при желании усилить контракт `BrowserBridge`, чтобы `explicit_cdp_http_urls` автоматически отключал websocket/file fallback без необходимости передавать пустой список путей вручную.
 
 ### Средний приоритет

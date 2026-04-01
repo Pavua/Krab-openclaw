@@ -467,7 +467,7 @@ def build_system_control_snapshot(
             "status": browser_status,
             "error": browser_error,
             "role_requirement": "owner_or_full",
-            "note": "CDP через port 9222; Шаг 2 добавит BrowserBridge.health_check()",
+            "note": "Ordinary Chrome owner-probe через BrowserBridge/system-control snapshot.",
         },
         "screenshots": {
             "status": _derived(browser_status),

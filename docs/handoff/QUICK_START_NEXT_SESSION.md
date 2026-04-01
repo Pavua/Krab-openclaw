@@ -70,6 +70,9 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
 - `src/modules/web_app.py`:
   owner Chrome readiness переведён на изолированный ordinary-contour probe
   + неинвазивный `passive_probe()` вместо `action_probe()`.
+- `capability_registry` / `runtime_handoff`:
+  system-control browser truth теперь тоже собирается через owner Chrome probe,
+  а не через runtime singleton bridge.
 - Truthful overall:
   `/api/openclaw/browser-mcp-readiness` теперь учитывает и `owner_chrome.readiness`,
   чтобы зелёный debug browser не маскировал сломанный ordinary Chrome.
@@ -77,6 +80,7 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
   таргетные unit: `148 passed`, `2 failed` baseline-only;
   временный UI новой ветки на `:18081` открылся в браузере;
   после `Синхронизировать данные` owner Chrome tab-list не изменился (`9222` = 3 page-target, `9223` = 0).
+  Дополнительный таргетный набор на owner/browser registry layer: `4 passed`.
 
 ---
 
