@@ -1112,6 +1112,16 @@ class OpenClawClient:
             ("forbidden", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
             ("unauthorized", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
             ("401", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
+            (
+                "thinking_budget to 0",
+                "provider_error",
+                "Текущая Gemini-модель несовместима с thinking budget этого маршрута",
+            ),
+            (
+                "cloud code assist api error (400)",
+                "provider_error",
+                "Облачный провайдер вернул несовместимый запрос",
+            ),
             ("timeout", "provider_timeout", "Таймаут облачного провайдера"),
         ]
         for pattern, code, message in semantic_patterns:
@@ -1981,8 +1991,14 @@ class OpenClawClient:
         model_manager: Any,
         current_model: str,
         has_photo: bool,
+        exclude_models: set[str] | None = None,
     ) -> str:
         """Возвращает облачный retry-кандидат (или пустую строку, если кандидата нет)."""
+        excluded = {
+            str(item or "").strip().lower()
+            for item in (exclude_models or set())
+            if str(item or "").strip()
+        }
         runtime_chain: list[str] = []
         runtime_primary = str(get_runtime_primary_model() or "").strip()
         if runtime_primary:
@@ -1990,14 +2006,22 @@ class OpenClawClient:
         runtime_chain.extend(get_runtime_fallback_models())
         for candidate in runtime_chain:
             normalized = str(candidate or "").strip()
-            if not normalized or normalized == str(current_model or "").strip():
+            if (
+                not normalized
+                or normalized == str(current_model or "").strip()
+                or normalized.lower() in excluded
+            ):
                 continue
             if self._is_cloud_candidate_usable(normalized, model_manager):
                 return normalized
         if not hasattr(model_manager, "get_best_cloud_model"):
             return ""
         candidate = str(await model_manager.get_best_cloud_model(has_photo=has_photo) or "").strip()
-        if not candidate or candidate == str(current_model or "").strip():
+        if (
+            not candidate
+            or candidate == str(current_model or "").strip()
+            or candidate.lower() in excluded
+        ):
             return ""
         if not self._is_cloud_candidate_usable(candidate, model_manager):
             return ""
@@ -2456,20 +2480,30 @@ class OpenClawClient:
 
             tried_paid = False
             tried_cloud_auth_recovery = False
-            tried_cloud_quality_recovery = False
             tried_local = False
             tried_cloud_after_local = False
             tried_semantic_retry = False
             final_response = ""
             last_semantic: dict[str, str] | None = None
+            attempted_cloud_models: set[str] = set()
+            runtime_chain_size = len(
+                {
+                    str(model_id or "").strip().lower()
+                    for model_id in [get_runtime_primary_model(), *get_runtime_fallback_models()]
+                    if str(model_id or "").strip()
+                }
+            )
+            max_attempts = max(4, runtime_chain_size + 2)
 
-            for attempt in range(4):
+            for attempt in range(max_attempts):
                 logger.info("openclaw_attempt", attempt=attempt + 1, model=attempt_model)
                 route_channel = (
                     "openclaw_local"
                     if model_manager.is_local_model(attempt_model)
                     else "openclaw_cloud"
                 )
+                if route_channel == "openclaw_cloud":
+                    attempted_cloud_models.add(str(attempt_model or "").strip().lower())
                 self._set_last_runtime_route(
                     channel=route_channel,
                     model=attempt_model,
@@ -2543,6 +2577,7 @@ class OpenClawClient:
                         model_manager=model_manager,
                         current_model=attempt_model,
                         has_photo=has_photo,
+                        exclude_models=attempted_cloud_models,
                     )
                     if cloud_retry:
                         attempt_model = cloud_retry
@@ -2554,14 +2589,13 @@ class OpenClawClient:
                 # не переключаясь в local.
                 if (
                     semantic["code"] in {"lm_empty_stream", "lm_malformed_response", "provider_timeout", "provider_error"}
-                    and not tried_cloud_quality_recovery
                     and not model_manager.is_local_model(attempt_model)
                 ):
-                    tried_cloud_quality_recovery = True
                     cloud_retry = await self._pick_cloud_retry_model(
                         model_manager=model_manager,
                         current_model=attempt_model,
                         has_photo=has_photo,
+                        exclude_models=attempted_cloud_models,
                     )
                     if cloud_retry:
                         attempt_model = cloud_retry
@@ -2621,6 +2655,7 @@ class OpenClawClient:
                         model_manager=model_manager,
                         current_model=attempt_model,
                         has_photo=True,
+                        exclude_models=attempted_cloud_models,
                     )
                     if cloud_candidate:
                         attempt_model = cloud_candidate
@@ -2671,6 +2706,7 @@ class OpenClawClient:
                             model_manager=model_manager,
                             current_model=attempt_model,
                             has_photo=has_photo,
+                            exclude_models=attempted_cloud_models,
                         )
                         if cloud_candidate:
                             attempt_model = cloud_candidate

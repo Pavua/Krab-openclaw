@@ -17,6 +17,7 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
 | `src/core/access_control.py` | Права команд |
 | `~/.openclaw/openclaw.json` | Routing/провайдеры |
 | `docs/handoff/PROVIDER_STATUS.md` | Диагностика провайдеров |
+| `docs/handoff/OPENCLAW_INCIDENT_2026-04-01.md` | Апрельский incident recovery: `codex-cli`, browser drift, Telegram delivery |
 | `agent_skills/<skill>/SKILL.md` | Конкретный krab-агент |
 
 ---
@@ -46,6 +47,20 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
 - `krab-telegram-test` удалён из `~/.codex/config.toml` — был дубликатом p0lrd
 - `MCP_DOCKER` удалён из `~/.codex/config.toml`
 - `context7@claude-plugins-official` → false в `~/.claude/settings.json`
+
+### Addendum 01.04.2026 21:30+ — incident recovery после апдейта OpenClaw
+- Исправлен drift runtime registry для `codex-cli/gpt-5.4`:
+  `scripts/openclaw_model_registry_sync.py` теперь досеивает provider-shape (`baseUrl`, `api`) для alias-провайдеров.
+- Исправлена cloud retry-логика в `src/openclaw_client.py`:
+  после `provider_timeout` / `provider_error` клиент идёт дальше по runtime fallback chain,
+  а не сдаётся после первого cloud fallback.
+- Live-подтверждение после последовательного restart gateway:
+  два прямых запроса к `http://127.0.0.1:18789/v1/chat/completions`
+  вернули `200 OK` и ответы `OK-CODEX` / `OK-CODEX-2`.
+- Browser incident пока не закрыт полностью:
+  workspace truth всё ещё расходится между `9223`, legacy `9222` и OpenClaw browser `18800`.
+- Детальный разбор и остаточные риски вынесены в
+  `docs/handoff/OPENCLAW_INCIDENT_2026-04-01.md`.
 
 ---
 
@@ -79,6 +94,7 @@ kill $(lsof -t ~/.krab_mcp_sessions/p0lrd_cc_mcp.session 2>/dev/null) 2>/dev/nul
 | Задача | Статус |
 |---|---|
 | Chrome extension OpenClaw "Off" — расследовать | Medium |
+| Browser/CDP drift `9223` vs `9222` vs `18800` — довести до одного source-of-truth | High |
 | Mercadona навигация — поиск не работает в UI | Medium |
 | iMessage фильтрация — пропускает ненужное | Medium |
 | `parallel mode` (4 агента / 8 субагентов) — включить/тестировать | Low |

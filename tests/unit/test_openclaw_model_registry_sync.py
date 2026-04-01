@@ -156,3 +156,48 @@ def test_sync_registry_rejects_invalid_target_model(tmp_path: Path) -> None:
     )
     assert report["ok"] is False
     assert report["error"] == "invalid_target_model"
+
+
+def test_sync_registry_seeds_codex_cli_provider_shape_from_openai_codex(tmp_path: Path) -> None:
+    mod = _load_script_module()
+    models_json = tmp_path / "models.json"
+    openclaw_json = tmp_path / "openclaw.json"
+
+    provider_payload = {
+        "openai-codex": {
+            "baseUrl": "https://api.openai.com/v1",
+            "auth": "oauth",
+            "api": "openai-completions",
+            "models": [{"id": "gpt-4.5-preview", "name": "ChatGPT 4.5 Preview"}],
+        }
+    }
+    models_json.write_text(
+        json.dumps({"providers": provider_payload}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    openclaw_json.write_text(
+        json.dumps({"models": {"providers": provider_payload}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report = mod.sync_registry(
+        target_model="codex-cli/gpt-5.4",
+        reasoning=True,
+        models_json=models_json,
+        openclaw_json=openclaw_json,
+    )
+
+    assert report["ok"] is True
+
+    models_payload = json.loads(models_json.read_text(encoding="utf-8"))
+    codex_cli_models = models_payload["providers"]["codex-cli"]
+    assert codex_cli_models["baseUrl"] == "https://api.openai.com/v1"
+    assert codex_cli_models["api"] == "openai-completions"
+    assert "auth" not in codex_cli_models
+    assert codex_cli_models["models"][0]["id"] == "gpt-5.4"
+
+    openclaw_payload = json.loads(openclaw_json.read_text(encoding="utf-8"))
+    codex_cli_runtime = openclaw_payload["models"]["providers"]["codex-cli"]
+    assert codex_cli_runtime["baseUrl"] == "https://api.openai.com/v1"
+    assert codex_cli_runtime["api"] == "openai-completions"
+    assert "auth" not in codex_cli_runtime

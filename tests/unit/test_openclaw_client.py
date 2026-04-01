@@ -859,6 +859,60 @@ async def test_cloud_retry_updates_runtime_route_to_current_attempt(client: Open
 
 
 @pytest.mark.asyncio
+async def test_cloud_quality_retry_walks_runtime_chain_until_success(client: OpenClawClient) -> None:
+    """
+    Если несколько cloud-кандидатов подряд дают timeout/semantic error,
+    retry должен пройти по runtime-цепочке дальше, а не остановиться
+    после первого fallback.
+    """
+    from src.model_manager import model_manager
+
+    seen_models: list[str] = []
+
+    async def _fake_completion(*, model_id, **kwargs):
+        _ = kwargs
+        seen_models.append(str(model_id))
+        if model_id == "codex-cli/gpt-5.4":
+            return "provider timeout"
+        if model_id == "google-gemini-cli/gemini-3-flash-preview":
+            return (
+                "Cloud Code Assist API error (400): Unable to submit request because "
+                "The model does not support setting thinking_budget to 0."
+            )
+        return "Cloud retry recovered"
+
+    with patch("src.openclaw_client.get_runtime_primary_model", return_value="codex-cli/gpt-5.4"):
+        with patch(
+            "src.openclaw_client.get_runtime_fallback_models",
+            return_value=[
+                "google-gemini-cli/gemini-3-flash-preview",
+                "google-gemini-cli/gemini-2.5-pro",
+                "google-gemini-cli/gemini-3-pro-preview",
+            ],
+        ):
+            with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="codex-cli/gpt-5.4")):
+                with patch.object(model_manager, "is_local_model", return_value=False):
+                    with patch.object(client, "_openclaw_completion_once", new=_fake_completion):
+                        chunks = []
+                        async for chunk in client.send_message_stream(
+                            "Hi",
+                            "chat-cloud-multi-retry",
+                            force_cloud=True,
+                        ):
+                            chunks.append(chunk)
+
+    assert "".join(chunks) == "Cloud retry recovered"
+    assert seen_models == [
+        "codex-cli/gpt-5.4",
+        "google-gemini-cli/gemini-3-flash-preview",
+        "google-gemini-cli/gemini-2.5-pro",
+    ]
+    route = client.get_last_runtime_route()
+    assert route.get("status") == "ok"
+    assert route.get("model") == "google-gemini-cli/gemini-2.5-pro"
+
+
+@pytest.mark.asyncio
 async def test_tier_export_contains_required_fields(client: OpenClawClient) -> None:
     with patch("src.openclaw_client.get_openclaw_cli_runtime_status", return_value={"can_reload": True, "error": ""}):
         export = client.get_tier_state_export()
@@ -1095,6 +1149,14 @@ def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenC
     semantic = client._detect_semantic_error("401 Unauthorized: invalid api key")
     assert semantic is not None
     assert semantic["code"] == "openclaw_auth_unauthorized"
+
+
+def test_detect_semantic_error_thinking_budget_incompatibility(client: OpenClawClient) -> None:
+    semantic = client._detect_semantic_error(
+        "Cloud Code Assist API error (400): Unable to submit request because The model does not support setting thinking_budget to 0."
+    )
+    assert semantic is not None
+    assert semantic["code"] == "provider_error"
 
 
 def test_semantic_from_provider_auth_exception_uses_canonical_code(client: OpenClawClient) -> None:
