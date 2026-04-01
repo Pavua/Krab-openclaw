@@ -85,10 +85,11 @@ docs/handoff/QUICK_START_NEXT_SESSION.md
   после `Синхронизировать данные` owner Chrome tab-list не изменился (`9222` = 3 page-target, `9223` = 0).
   Дополнительный таргетный набор на owner/browser registry layer: `4 passed`.
 - Важный operational state:
-  живой `pablito` runtime на `:8080` вечером всё ещё был на `ca96027`
-  (`codex/openclaw-apr1-recovery`), поэтому timeout живого
-  `/api/openclaw/browser-mcp-readiness` пока считается не новой загадкой,
-  а отсутствием rollout этой ветки в боевой контур.
+  `runtime_handoff` на `pablito` всё ещё показывает `ca96027`
+  (`codex/openclaw-apr1-recovery`), но после restart live
+  `/api/openclaw/browser-mcp-readiness` уже отдал новый browser-fix payload
+  с `passive_probe_ok` и `debug_attached`.
+  Значит код фактически исполняется из dirty worktree, а не из чисто оформленного rollout.
 
 ---
 

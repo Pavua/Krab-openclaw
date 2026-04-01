@@ -174,9 +174,13 @@ Live state check того же вечера:
 - живой runtime на `http://127.0.0.1:8080` и gateway на `:18789` остаются подняты;
 - но `/api/runtime/handoff?probe_cloud_runtime=0` показал, что runtime всё ещё работает из ветки
   `codex/openclaw-apr1-recovery` на коммите `ca96027`;
-- поэтому timeout на живом `/api/openclaw/browser-mcp-readiness` в этом контуре
-  пока трактуется как отсутствие rollout browser-fix ветки в боевой runtime,
-  а не как опровержение новых правок.
+- попытка `git checkout codex/owner-browser-passive-truth` на `pablito` не удалась:
+  ветка уже занята helper-worktree на `USER2`, а в основном дереве есть несохранённые изменения;
+- при этом после restart live `/api/openclaw/browser-mcp-readiness`
+  уже вернул новый payload с `Chrome DevTools passive probe` и `state=passive_probe_ok`,
+  а debug contour честно показан как `debug_attached`;
+- практический вывод: browser-fix код уже оказался в исполняемом dirty worktree `pablito`,
+  хотя git provenance там всё ещё неаккуратный (`HEAD=ca96027`, branch mismatch).
 
 ## Что осталось сделать
 
@@ -188,7 +192,8 @@ Live state check того же вечера:
     либо вынести на отдельный owner-bridge contour;
   - при желании усилить контракт `BrowserBridge`, чтобы `explicit_cdp_http_urls` автоматически отключал websocket/file fallback без необходимости передавать пустой список путей вручную.
 - отдельно выполнить rollout ветки `codex/owner-browser-passive-truth` в живой `pablito` runtime
-  и повторить live browser/owner verification уже на новом коде.
+  или безопасно нормализовать dirty worktree `pablito`, чтобы live runtime был привязан
+  к явному commit/branch, а не к незафиксированному состоянию файлов.
 
 ### Средний приоритет
 
