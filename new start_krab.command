@@ -22,8 +22,10 @@ LEGACY_OPENCLAW_OWNER_FILE="$DIR/.openclaw.owner"
 LEGACY_STOP_FLAG_FILE="$DIR/.stop_krab"
 GATEWAY_OWNED_BY_THIS=0
 GATEWAY_JUST_RESTARTED=0
+GATEWAY_WATCHDOG_PID_FILE="$RUNTIME_STATE_DIR/openclaw_gateway_watchdog.pid"
 KRAB_PROC_PATTERN="[Pp]ython.*src\\.main"
 OPENCLAW_REPAIR_RESTART_RECOMMENDED=0
+OPENCLAW_GOD_MODE_CHANGED=0
 
 EAR_DIR="${KRAB_EAR_DIR:-${_LAUNCHER_DIR}/Krab Ear}"
 EAR_START="${EAR_DIR}/scripts/start_agent.command"
@@ -475,7 +477,71 @@ cleanup_gateway_if_owned() {
     rm -f "$OPENCLAW_PID_FILE" "$OPENCLAW_OWNER_FILE"
 }
 
+stop_gateway_watchdog() {
+    if [ -f "$GATEWAY_WATCHDOG_PID_FILE" ]; then
+        local wpid
+        wpid="$(cat "$GATEWAY_WATCHDOG_PID_FILE" 2>/dev/null || true)"
+        if is_pid_alive "$wpid"; then
+            kill "$wpid" >/dev/null 2>&1 || true
+        fi
+        rm -f "$GATEWAY_WATCHDOG_PID_FILE"
+    fi
+}
+
+start_manual_gateway_process() {
+    [ -n "${OPENCLAW_BIN:-}" ] || return 1
+    echo "🦞 Starting OpenClaw Gateway..."
+    nohup "$OPENCLAW_BIN" gateway run --port 18789 > openclaw.log 2>&1 &
+    NEW_GATEWAY_PID=$!
+    write_runtime_state_file "$OPENCLAW_PID_FILE" "$NEW_GATEWAY_PID" || true
+    write_runtime_state_file "$OPENCLAW_OWNER_FILE" "$$" || true
+    GATEWAY_OWNED_BY_THIS=1
+    echo "✅ OpenClaw старт-команда отправлена (PID $NEW_GATEWAY_PID)"
+    return 0
+}
+
+start_gateway_watchdog() {
+    [ -n "${OPENCLAW_BIN:-}" ] || return 0
+
+    stop_gateway_watchdog
+
+    # В ручном foreground fallback режиме у gateway нет KeepAlive.
+    # Если он получает SIGTERM из-за reload/переконфига, watchdog поднимет его снова.
+    (
+        while true; do
+            sleep 5
+
+            if has_stop_flag; then
+                exit 0
+            fi
+
+            if ! is_pid_alive "$PPID"; then
+                exit 0
+            fi
+
+            if probe_gateway_health; then
+                continue
+            fi
+
+            if is_gateway_listening; then
+                continue
+            fi
+
+            echo "♻️ Gateway watchdog: gateway недоступен, выполняю восстановление..."
+            pkill -f "openclaw( |$).*gateway( |$)|openclaw-gateway" >/dev/null 2>&1 || true
+            sleep 1
+            start_manual_gateway_process >/dev/null 2>&1 || true
+            wait_gateway_listening 20 >/dev/null 2>&1 || true
+            wait_gateway_healthy 120 >/dev/null 2>&1 || true
+        done
+    ) >/tmp/krab_openclaw_gateway_watchdog.log 2>&1 &
+
+    write_runtime_state_file "$GATEWAY_WATCHDOG_PID_FILE" "$!" || true
+    echo "🛡️ OpenClaw Gateway Watchdog PID: $(cat "$GATEWAY_WATCHDOG_PID_FILE" 2>/dev/null || true) (log: /tmp/krab_openclaw_gateway_watchdog.log)"
+}
+
 cleanup_on_exit() {
+    stop_gateway_watchdog
     cleanup_gateway_if_owned
     release_launcher_lock
     # Останавливаем watchdog, если он был запущен этим launcher
@@ -714,6 +780,34 @@ if [ -n "${OPENCLAW_BIN:-}" ]; then
     "$OPENCLAW_BIN" doctor --fix >/dev/null 2>&1 || true
 fi
 
+# === OpenClaw God Mode sync (exec policy + host approvals) ===
+# После OpenClaw 2026.4.x unrestricted exec собирается из двух файлов:
+# `openclaw.json` и `exec-approvals.json`. Если править только один слой,
+# агент продолжает ловить `allowlist miss` даже при `tools.exec.security=full`.
+if [ -f "scripts/openclaw_god_mode_sync.py" ]; then
+    echo "👑 Syncing OpenClaw God Mode..."
+    OPENCLAW_GOD_MODE_JSON="$("$KRAB_PYTHON_BIN" scripts/openclaw_god_mode_sync.py 2>/dev/null || true)"
+    if [ -n "${OPENCLAW_GOD_MODE_JSON:-}" ]; then
+        export OPENCLAW_GOD_MODE_JSON
+        OPENCLAW_GOD_MODE_CHANGED="$("$KRAB_PYTHON_BIN" - <<'PY'
+import json
+import os
+
+raw = str(os.environ.get("OPENCLAW_GOD_MODE_JSON", "") or "").strip()
+changed = 0
+if raw:
+    try:
+        payload = json.loads(raw)
+        changed = 1 if bool(payload.get("changed", False)) else 0
+    except Exception:
+        changed = 0
+print(changed)
+PY
+)"
+        unset OPENCLAW_GOD_MODE_JSON
+    fi
+fi
+
 # === Runtime repair OpenClaw (безопасная автопочинка перед стартом) ===
 if [ -f "scripts/openclaw_runtime_repair.py" ]; then
     echo "🛠️ Repairing OpenClaw runtime config..."
@@ -751,6 +845,10 @@ if [ -n "$OPENCLAW_BIN" ]; then
     # иначе он может вернуть старые in-memory sessions и откатить fix.
     if is_gateway_listening && [ "${OPENCLAW_REPAIR_RESTART_RECOMMENDED:-0}" = "1" ]; then
         restart_stale_gateway "repair изменил runtime-состояние"
+    fi
+
+    if is_gateway_listening && [ "${OPENCLAW_GOD_MODE_CHANGED:-0}" = "1" ]; then
+        restart_stale_gateway "god mode sync изменил exec policy"
     fi
 
     # Открытый порт ещё не означает живой gateway: stale-процесс может
@@ -848,20 +946,15 @@ if [ -n "$OPENCLAW_BIN" ]; then
             pkill -f "openclaw( |$).*gateway( |$)|openclaw-gateway" >/dev/null 2>&1 || true
         fi
 
-        echo "🦞 Starting OpenClaw Gateway..."
         # Начиная с OpenClaw 2026.3.x foreground-gateway поднимается через
         # `openclaw gateway run`. Вызов без `run` лишь печатает help и сразу
         # завершает процесс, из-за чего launcher видел "старт", но порт 18789
         # так и не начинал слушать.
-        nohup "$OPENCLAW_BIN" gateway run --port 18789 > openclaw.log 2>&1 &
-        NEW_GATEWAY_PID=$!
-        write_runtime_state_file "$OPENCLAW_PID_FILE" "$NEW_GATEWAY_PID" || true
-        write_runtime_state_file "$OPENCLAW_OWNER_FILE" "$$" || true
-        GATEWAY_OWNED_BY_THIS=1
-        echo "✅ OpenClaw старт-команда отправлена (PID $NEW_GATEWAY_PID)"
+        start_manual_gateway_process
 
         if wait_gateway_listening 20 && wait_gateway_healthy 120; then
             echo "✅ OpenClaw gateway слушает порт 18789 и проходит health-check."
+            start_gateway_watchdog
         else
             # OpenClaw 2026.3.x иногда успевает открыть сокет раньше, чем
             # CLI `status` начинает стабильно отвечать. Не объявляем жёсткий
@@ -869,6 +962,7 @@ if [ -n "$OPENCLAW_BIN" ]; then
             # здоровье gateway своим HTTP/WebSocket контуром.
             if is_gateway_listening; then
                 echo "⚠️ OpenClaw gateway уже слушает 18789, но CLI health-check ещё не стабилизировался."
+                start_gateway_watchdog
             else
                 echo "❌ OpenClaw gateway не прошёл health-check после старта. Проверь openclaw.log."
             fi
