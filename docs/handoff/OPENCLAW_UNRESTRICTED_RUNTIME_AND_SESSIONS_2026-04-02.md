@@ -81,12 +81,20 @@
   - `/opt/homebrew/lib/node_modules/openclaw/dist/session-utils-Jgzk2Bo-.js`
 - backup файла:
   - `/opt/homebrew/lib/node_modules/openclaw/dist/session-utils-Jgzk2Bo-.js.bak_20260402_150556Z`
+- добавлен one-click reapply helper:
+  - `scripts/reapply_openclaw_sessions_patch.py`
+  - `Reapply OpenClaw Sessions Patch.command`
 
 Смысл патча:
 
 - list/detail/title/preview теперь ищут существующий transcript через единый helper;
 - если основной `.jsonl` уже уехал в `.deleted` / `.reset`, detail может взять архив;
 - `sessions.list` фильтрует записи, у которых нет ни живого transcript, ни архивного fallback.
+
+Практика эксплуатации:
+
+- после следующего обновления OpenClaw локальный `dist` может перезаписаться;
+- в таком случае patch возвращается одним двойным кликом по `Reapply OpenClaw Sessions Patch.command`.
 
 Факт после рестарта:
 
