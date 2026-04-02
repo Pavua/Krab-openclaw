@@ -1073,6 +1073,44 @@ class OpenClawClient:
                 "message": "Локальная модель вернула служебный/битый ответ",
             }
 
+        # Auth/quota/provider-паттерны нельзя искать по любому успешному ответу модели.
+        # Иначе обычный длинный текст, где агент обсуждает "401" или "invalid api key",
+        # превращается в ложный auth-fail и срывает маршрут на fallback.
+        looks_like_transport_error = False
+        if any(
+            marker in low
+            for marker in (
+                '{"error"',
+                '"error":',
+                '"status":"error"',
+                '"status": "error"',
+                "providerautherror",
+                "providererror",
+                "traceback",
+                "exception:",
+                "error:",
+                "http error",
+                "status code",
+                "cloud code assist api error",
+            )
+        ):
+            looks_like_transport_error = True
+        elif re.match(r"^\s*(401|403|404|408|409|429|500|502|503)\b", low):
+            looks_like_transport_error = True
+        elif len(payload) <= 220 and any(
+            token in low
+            for token in (
+                "unauthenticated",
+                "invalid api key",
+                "forbidden",
+                "unauthorized",
+                "quota",
+                "timeout",
+                "api keys are not supported",
+            )
+        ):
+            looks_like_transport_error = True
+
         semantic_patterns = [
             ("no models loaded", "model_not_loaded", "Локальная модель не загружена"),
             ("model unloaded", "model_not_loaded", "Локальная модель выгружена"),
@@ -1126,6 +1164,14 @@ class OpenClawClient:
         ]
         for pattern, code, message in semantic_patterns:
             if pattern in low:
+                if code in {
+                    "quota_exceeded",
+                    "unsupported_key_type",
+                    AUTH_UNAUTHORIZED_CODE,
+                    "provider_error",
+                    "provider_timeout",
+                } and not looks_like_transport_error:
+                    continue
                 return {"code": code, "message": message}
         return None
 

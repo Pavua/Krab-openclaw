@@ -56,6 +56,23 @@ def test_bootstrap_runs_onboard_and_creates_missing_json(monkeypatch: pytest.Mon
         "openai/gpt-4o-mini",
     ]
     assert config_payload["agents"]["defaults"]["subagents"]["model"] == "google/gemini-2.5-flash"
+    assert config_payload["agents"]["defaults"]["cliBackends"]["codex-cli"]["command"] == "/opt/homebrew/bin/codex"
+    assert config_payload["agents"]["defaults"]["cliBackends"]["codex-cli"]["args"] == [
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--json",
+        "--color",
+        "never",
+        "--skip-git-repo-check",
+    ]
+    assert config_payload["agents"]["defaults"]["cliBackends"]["codex-cli"]["resumeArgs"] == [
+        "exec",
+        "resume",
+        "{sessionId}",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--json",
+        "--skip-git-repo-check",
+    ]
     assert config_payload["agents"]["list"][0]["model"] == "google/gemini-2.5-flash"
     assert agent_payload == {"id": "main", "model": "google/gemini-2.5-flash"}
 
@@ -141,5 +158,6 @@ def test_bootstrap_normalizes_existing_openclaw_config(monkeypatch: pytest.Monke
         "openai/gpt-4o-mini",
     ]
     assert payload["agents"]["defaults"]["subagents"]["model"] == "google/gemini-2.5-flash"
+    assert "--dangerously-bypass-approvals-and-sandbox" in payload["agents"]["defaults"]["cliBackends"]["codex-cli"]["args"]
     assert payload["agents"]["list"][0]["model"] == "google/gemini-2.5-flash"
     assert agent_payload == {"id": "main", "model": "google/gemini-2.5-flash"}

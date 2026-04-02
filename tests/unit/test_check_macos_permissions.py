@@ -67,6 +67,61 @@ def test_probe_path_readability_reads_existing_file(tmp_path: Path) -> None:
     assert result["error"] == ""
 
 
+def test_query_tcc_service_builds_inline_sql_and_parses_rows(monkeypatch) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, "_tcc_db_candidates", lambda: [Path("/tmp/TCC.db")])
+    monkeypatch.setattr(module, "_probe_path_readability", lambda path: {"exists": True, "readable": True, "error": ""})
+    monkeypatch.setattr(module.shutil, "which", lambda name: "/usr/bin/sqlite3" if name == "sqlite3" else None)
+
+    captured: list[list[str]] = []
+
+    def _fake_run(command: list[str], *, timeout_sec: float = 6.0):
+        captured.append(command)
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": '[{"client":"com.apple.Terminal","auth_value":"2","auth_reason":"4","auth_version":"1"}]',
+            "stderr": "",
+            "error": "",
+        }
+
+    monkeypatch.setattr(module, "_run_command", _fake_run)
+
+    result = module._query_tcc_service("kTCCServiceSystemPolicyAllFiles")
+
+    assert result["db_accessible"] is True
+    assert result["rows"][0]["client"] == "com.apple.Terminal"
+    assert "service = 'kTCCServiceSystemPolicyAllFiles'" in captured[0][3]
+
+
+def test_probe_quarantine_does_not_treat_unsigned_script_as_quarantine(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module()
+    launcher = tmp_path / "start.command"
+    launcher.write_text("#!/bin/bash\n", encoding="utf-8")
+
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def _fake_run(command: list[str], *, timeout_sec: float = 6.0):
+        if command[0].endswith("xattr"):
+            return {"ok": True, "returncode": 0, "stdout": "com.apple.provenance\n", "stderr": "", "error": ""}
+        if command[0].endswith("spctl"):
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": f"{launcher}: rejected\nsource=no usable signature",
+                "error": "rejected",
+            }
+        raise AssertionError(command)
+
+    monkeypatch.setattr(module, "_run_command", _fake_run)
+
+    result = module._probe_quarantine([launcher])
+
+    assert result["quarantine"][0]["quarantined"] is False
+    assert result["quarantine"][0]["assessment_rejected"] is True
+
+
 def test_build_readiness_summary_reports_blockers() -> None:
     module = _load_module()
     report = {

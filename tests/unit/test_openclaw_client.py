@@ -1151,6 +1151,15 @@ def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenC
     assert semantic["code"] == "openclaw_auth_unauthorized"
 
 
+def test_detect_semantic_error_does_not_treat_long_explanatory_text_as_auth_failure(client: OpenClawClient) -> None:
+    semantic = client._detect_semantic_error(
+        "Я вижу в логах строку `401 Unauthorized: invalid api key`, но это часть объяснения пользователю, "
+        "а не ответ backend-а. Сама модель продолжает рассуждать дальше обычным текстом и не должна "
+        "провоцировать ложный auth fallback."
+    )
+    assert semantic is None
+
+
 def test_detect_semantic_error_thinking_budget_incompatibility(client: OpenClawClient) -> None:
     semantic = client._detect_semantic_error(
         "Cloud Code Assist API error (400): Unable to submit request because The model does not support setting thinking_budget to 0."
