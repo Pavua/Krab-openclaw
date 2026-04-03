@@ -57,6 +57,7 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "remember",
         "recall",
         "ls",
+        "probe",
         "read",
         "write",
         "agent",

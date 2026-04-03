@@ -16,6 +16,10 @@ LAUNCHER_LOCK_FILE="$RUNTIME_STATE_DIR/launcher.lock"
 OPENCLAW_PID_FILE="$RUNTIME_STATE_DIR/openclaw.pid"
 OPENCLAW_OWNER_FILE="$RUNTIME_STATE_DIR/openclaw.owner"
 STOP_FLAG_FILE="$RUNTIME_STATE_DIR/stop_krab"
+KRAB_MAIN_PID_FILE="$RUNTIME_STATE_DIR/krab_main.pid"
+KRAB_MAIN_WRAPPER_PID_FILE="$RUNTIME_STATE_DIR/krab_main_wrapper.pid"
+KRAB_MAIN_EXIT_CODE_FILE="$RUNTIME_STATE_DIR/krab_main.exit"
+KRAB_MAIN_LOG_FILE="$RUNTIME_STATE_DIR/krab_main.log"
 LEGACY_LAUNCHER_LOCK_FILE="$DIR/.krab_launcher.lock"
 LEGACY_OPENCLAW_PID_FILE="$DIR/.openclaw.pid"
 LEGACY_OPENCLAW_OWNER_FILE="$DIR/.openclaw.owner"
@@ -26,6 +30,8 @@ GATEWAY_WATCHDOG_PID_FILE="$RUNTIME_STATE_DIR/openclaw_gateway_watchdog.pid"
 KRAB_PROC_PATTERN="[Pp]ython.*src\\.main"
 OPENCLAW_REPAIR_RESTART_RECOMMENDED=0
 OPENCLAW_GOD_MODE_CHANGED=0
+LAUNCHER_SIGNAL_REASON=""
+LAUNCHER_INTENTIONAL_STOP=0
 
 EAR_DIR="${KRAB_EAR_DIR:-${_LAUNCHER_DIR}/Krab Ear}"
 EAR_START="${EAR_DIR}/scripts/start_agent.command"
@@ -245,6 +251,13 @@ clear_stop_flag() {
 
 has_stop_flag() {
     [ -f "$STOP_FLAG_FILE" ] || [ -f "$LEGACY_STOP_FLAG_FILE" ]
+}
+
+clear_krab_main_state() {
+    rm -f \
+        "$KRAB_MAIN_PID_FILE" \
+        "$KRAB_MAIN_WRAPPER_PID_FILE" \
+        "$KRAB_MAIN_EXIT_CODE_FILE" >/dev/null 2>&1 || true
 }
 
 remove_legacy_runtime_state() {
@@ -541,19 +554,36 @@ start_gateway_watchdog() {
 }
 
 cleanup_on_exit() {
-    stop_gateway_watchdog
-    cleanup_gateway_if_owned
+    if [ "$LAUNCHER_INTENTIONAL_STOP" -eq 1 ] || has_stop_flag; then
+        stop_gateway_watchdog
+        cleanup_gateway_if_owned
+    else
+        if [ -n "$LAUNCHER_SIGNAL_REASON" ]; then
+            echo "ℹ️ Launcher получил $LAUNCHER_SIGNAL_REASON и завершает только управляющую оболочку."
+            echo "ℹ️ Detached Krab runtime и watchdog не трогаю: это защита от ложного 'падения' из-за Terminal/session."
+        fi
+    fi
     release_launcher_lock
-    # Останавливаем watchdog, если он был запущен этим launcher
-    local wpid
-    WATCHDOG_PID_FILE="${RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}/watchdog.pid"
-    wpid="$(cat "$WATCHDOG_PID_FILE" 2>/dev/null || true)"
-    if [ -n "$wpid" ] && kill -0 "$wpid" >/dev/null 2>&1; then
-        kill "$wpid" >/dev/null 2>&1 || true
+    if [ "$LAUNCHER_INTENTIONAL_STOP" -eq 1 ] || has_stop_flag; then
+        # Останавливаем watchdog только при осознанном stop/restart сценарии.
+        local wpid
+        WATCHDOG_PID_FILE="${RUNTIME_STATE_DIR:-$HOME/.openclaw/krab_runtime_state}/watchdog.pid"
+        wpid="$(cat "$WATCHDOG_PID_FILE" 2>/dev/null || true)"
+        if [ -n "$wpid" ] && kill -0 "$wpid" >/dev/null 2>&1; then
+            kill "$wpid" >/dev/null 2>&1 || true
+        fi
     fi
 }
 
-trap cleanup_on_exit EXIT INT TERM
+handle_launcher_signal() {
+    local reason="$1"
+    LAUNCHER_SIGNAL_REASON="$reason"
+    echo "⚠️ Launcher получил сигнал $reason."
+}
+
+trap cleanup_on_exit EXIT
+trap 'handle_launcher_signal INT; exit 130' INT
+trap 'handle_launcher_signal TERM; exit 143' TERM
 
 # === 0. Сброс флага остановки и зачистка конкурентов ===
 if ! acquire_launcher_lock; then
@@ -1111,6 +1141,86 @@ start_watchdog() {
 
 start_watchdog
 
+start_krab_main_detached() {
+    ensure_runtime_state_dir || return 1
+    clear_krab_main_state
+    {
+        echo
+        echo "==== Krab detached start $(date '+%Y-%m-%d %H:%M:%S') ===="
+    } >> "$KRAB_MAIN_LOG_FILE"
+
+    "$KRAB_PYTHON_BIN" - "$KRAB_PYTHON_BIN" "$DIR" "$KRAB_MAIN_LOG_FILE" "$KRAB_MAIN_PID_FILE" "$KRAB_MAIN_EXIT_CODE_FILE" <<'PY' &
+import os
+import subprocess
+import sys
+import time
+
+python_bin, workdir, log_path, pid_path, exit_path = sys.argv[1:6]
+
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
+os.setsid()
+
+with open(log_path, "a", buffering=1, encoding="utf-8") as log_fp:
+    log_fp.write(f"[launcher] detached_wrapper_started pid={os.getpid()} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    log_fp.flush()
+    proc = subprocess.Popen(
+        [python_bin, "-m", "src.main"],
+        cwd=workdir,
+        stdin=subprocess.DEVNULL,
+        stdout=log_fp,
+        stderr=subprocess.STDOUT,
+    )
+    with open(pid_path, "w", encoding="utf-8") as pid_fp:
+        pid_fp.write(str(proc.pid))
+    rc = proc.wait()
+    with open(exit_path, "w", encoding="utf-8") as exit_fp:
+        exit_fp.write(str(rc))
+    log_fp.write(f"[launcher] detached_wrapper_finished pid={os.getpid()} child_pid={proc.pid} rc={rc} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    log_fp.flush()
+PY
+    local wrapper_pid=$!
+    write_runtime_state_file "$KRAB_MAIN_WRAPPER_PID_FILE" "$wrapper_pid" || true
+    echo "$wrapper_pid"
+}
+
+stop_krab_main_detached() {
+    local wrapper_pid="$1"
+    if [ -z "$wrapper_pid" ] && [ -f "$KRAB_MAIN_WRAPPER_PID_FILE" ]; then
+        wrapper_pid="$(cat "$KRAB_MAIN_WRAPPER_PID_FILE" 2>/dev/null || true)"
+    fi
+    if [ -n "$wrapper_pid" ] && kill -0 "$wrapper_pid" >/dev/null 2>&1; then
+        echo "🛑 Останавливаю detached Krab session (wrapper PID $wrapper_pid)..."
+        kill -TERM -- "-$wrapper_pid" >/dev/null 2>&1 || kill -TERM "$wrapper_pid" >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            if ! kill -0 "$wrapper_pid" >/dev/null 2>&1; then
+                break
+            fi
+        done
+        if kill -0 "$wrapper_pid" >/dev/null 2>&1; then
+            echo "⚠️ Detached wrapper не завершился мягко, применяю SIGKILL."
+            kill -KILL -- "-$wrapper_pid" >/dev/null 2>&1 || kill -KILL "$wrapper_pid" >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
+wait_for_krab_main_detached() {
+    local wrapper_pid="$1"
+    while kill -0 "$wrapper_pid" >/dev/null 2>&1; do
+        if has_stop_flag; then
+            stop_krab_main_detached "$wrapper_pid"
+            LAUNCHER_INTENTIONAL_STOP=1
+            wait "$wrapper_pid" >/dev/null 2>&1 || true
+            clear_krab_main_state
+            return 0
+        fi
+        sleep 1
+    done
+
+    wait "$wrapper_pid"
+    return $?
+}
+
 # === Запуск бота с авто-рестартом ===
 while true; do
     # Проверяем, не нажал ли пользователь Стоп
@@ -1129,12 +1239,17 @@ while true; do
     fi
 
     echo "🚀 Starting Krab..."
-    "$KRAB_PYTHON_BIN" -m src.main
+    echo "🧾 Лог detached runtime: $KRAB_MAIN_LOG_FILE"
+    WRAPPER_PID="$(start_krab_main_detached)"
+    echo "🧠 Detached wrapper PID: $WRAPPER_PID"
+    wait_for_krab_main_detached "$WRAPPER_PID"
     EXIT_CODE=$?
+    clear_krab_main_state
 
     # Повторная проверка после падения
     if has_stop_flag; then
         echo "🛑 Stop flag detected. Exiting..."
+        LAUNCHER_INTENTIONAL_STOP=1
         clear_stop_flag
         break
     fi
@@ -1144,10 +1259,13 @@ while true; do
         sleep 1
         continue
     elif [ $EXIT_CODE -eq 0 ]; then
+        LAUNCHER_INTENTIONAL_STOP=1
         echo "✅ Bot stopped cleanly."
         break
     else
         echo "⚠️ Bot crashed (Code $EXIT_CODE). Restarting in 5 seconds..."
+        echo "📄 Последние строки runtime-лога:"
+        tail -n 20 "$KRAB_MAIN_LOG_FILE" 2>/dev/null || true
         sleep 5
     fi
 done

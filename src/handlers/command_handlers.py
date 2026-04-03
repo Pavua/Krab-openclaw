@@ -55,6 +55,27 @@ if TYPE_CHECKING:
     from ..userbot_bridge import KraabUserbot
 
 
+def _get_message_command_tail(message: Message) -> str:
+    """
+    Возвращает сырой хвост команды после первого пробела.
+
+    Почему нужен отдельный helper:
+    - `!probe` часто работает с абсолютными путями, где внутри есть пробелы
+      (`Library/Group Containers/...`);
+    - token-based разбор аргументов режет такие пути на первом whitespace и даёт
+      ложный verdict `not_found`;
+    - для truthful probe нужен именно полный хвост сообщения, без потери
+      пробелов внутри пути.
+    """
+    raw_text = str(getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    if not raw_text:
+        return ""
+    parts = raw_text.split(maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    return str(parts[1] or "").strip()
+
+
 def _render_voice_profile(profile: dict[str, Any]) -> str:
     """Форматирует runtime voice-профиль для Telegram-ответа."""
     enabled = bool(profile.get("enabled"))
@@ -405,6 +426,27 @@ async def handle_read(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"📂 **Content of {os.path.basename(path)}:**\n\n```\n{content}\n```")
     except (httpx.HTTPError, OSError, ValueError, KeyError, AttributeError) as e:
         await msg.edit(f"❌ Reading error: {e}")
+
+
+async def handle_probe(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Truthful probe конкретного пути.
+
+    Зачем:
+    - даёт детерминированный verdict по доступу к файлу/каталогу;
+    - не опирается на LLM-рассуждения про sandbox/FDA/workspace;
+    - использует тот же factual код, что и natural-language truth fast-path.
+    """
+    query = _get_message_command_tail(message)
+    if not query:
+        raise UserInputError(user_message="📂 Какой путь проверить? `!probe <absolute_path>`")
+
+    verdict = await bot._build_file_access_truth_status(
+        query=query,
+        is_allowed_sender=True,
+        access_level="full",
+    )
+    await message.reply(verdict)
 
 
 async def handle_write(bot: "KraabUserbot", message: Message) -> None:
@@ -1621,6 +1663,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 **System**
 `!ls [path]` — список файлов
 `!read <path>` — чтение файла
+`!probe <absolute_path>` — factual probe доступа к файлу/папке
 `!write <file> <content>` — запись файла
 `!sysinfo` — информация о хосте
 `!mac ...` — управление macOS (clipboard / notify / apps / Finder / Notes / Reminders / Calendar)

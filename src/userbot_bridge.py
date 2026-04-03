@@ -80,6 +80,7 @@ from .handlers import (
     handle_memory,
     handle_model,
     handle_panel,
+    handle_probe,
     handle_read,
     handle_reasoning,
     handle_recall,
@@ -751,6 +752,10 @@ class KraabUserbot:
         @self.client.on_message(filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1)
         async def wrap_ls(c, m):
             await run_cmd(handle_ls, m)
+
+        @self.client.on_message(filters.command("probe", prefixes=prefixes) & _make_command_filter("probe"), group=-1)
+        async def wrap_probe(c, m):
+            await run_cmd(handle_probe, m)
 
         @self.client.on_message(filters.command("read", prefixes=prefixes) & _make_command_filter("read"), group=-1)
         async def wrap_read(c, m):
@@ -2488,6 +2493,175 @@ class KraabUserbot:
         return any(pattern in low for pattern in patterns)
 
     @staticmethod
+    def _extract_probeable_absolute_path(text: str) -> str:
+        """
+        Извлекает абсолютный путь из произвольного текста.
+
+        Важно:
+        - сначала ищем пути в backticks/кавычках, потому что именно там чаще
+          встречаются пробелы (`Group Containers`, `Telegram Desktop`);
+        - fallback без кавычек допускает только пути без пробелов.
+        """
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+
+        wrapped_patterns = [
+            r"`(/[^`]+)`",
+            r'"(/[^"\n]+)"',
+            r"'(/[^'\n]+)'",
+        ]
+        for pattern in wrapped_patterns:
+            match = re.search(pattern, raw)
+            if match:
+                return str(match.group(1) or "").strip()
+
+        plain_match = re.search(
+            r"(/(?:Users|tmp|private|Volumes|Applications|Library)[^\s\"'`<>]+)",
+            raw,
+        )
+        if not plain_match:
+            return ""
+
+        candidate = str(plain_match.group(1) or "").strip()
+        return candidate.rstrip(".,:;!?)]}")
+
+    @classmethod
+    def _looks_like_file_access_truth_question(cls, text: str) -> bool:
+        """
+        Узкий truthful fast-path только для вопросов о доступе к файлам/путям.
+
+        Не возвращаем общий capability-fast-path обратно: этот хук нужен только
+        для самого токсичного кейса, где LLM любит фантазировать про sandbox,
+        workspace-only ограничения и Full Disk Access.
+        """
+        low = str(text or "").strip().lower()
+        if not low:
+            return False
+
+        path_present = bool(cls._extract_probeable_absolute_path(text))
+        access_markers = (
+            "доступ к фай",
+            "читать файл",
+            "прочитать файл",
+            "видишь файл",
+            "видишь путь",
+            "есть ли доступ",
+            "можешь читать",
+            "можешь открыть",
+            "вне workspace",
+            "вне воркспейса",
+            "вне своей папки",
+            "только в workspace",
+            "только в воркспейсе",
+            "полный доступ к диску",
+            "full disk access",
+        )
+        return path_present or any(marker in low for marker in access_markers)
+
+    async def _build_file_access_truth_status(
+        self,
+        *,
+        query: str,
+        is_allowed_sender: bool,
+        access_level: str | AccessLevel | None = None,
+    ) -> str:
+        """
+        Возвращает truthful verdict по файловому доступу без участия LLM.
+
+        Принципы:
+        - не делаем общих заявлений "весь диск доступен" или "вне workspace нельзя";
+        - если конкретного пути нет, просим именно путь вместо гадания;
+        - verdict строим только на реальном probe текущего runtime.
+        """
+        access_mode = self._resolve_runtime_access_mode(
+            is_allowed_sender=is_allowed_sender,
+            access_level=access_level,
+        )
+        if access_mode not in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
+            return (
+                "🔒 **Truthful file-access verdict**\n"
+                "- В этом чате файловый контур не раскрыт.\n"
+                "- Я не имею права утверждать доступ к путям или чтение файлов вне owner/full контура."
+            )
+
+        candidate_path = self._extract_probeable_absolute_path(query)
+        if not candidate_path:
+            return (
+                "🧭 **Truthful file-access verdict**\n"
+                "- Я не должен заявлять, что могу или не могу читать файлы вне workspace без конкретного пути.\n"
+                "- Пришли абсолютный путь, и я дам verdict только после реального probe.\n"
+                "- Формат: `проверь доступ к /абсолютному/пути` или команда `!read <path>` / `!ls <path>`."
+            )
+
+        target = Path(candidate_path).expanduser()
+        is_workspace_path = str(target).startswith(str(Path.home() / ".openclaw" / "workspace-main-messaging"))
+        scope_note = (
+            "- Путь внутри workspace."
+            if is_workspace_path
+            else "- Путь вне workspace: это прямой тест против гипотезы `могу работать только в workspace`."
+        )
+
+        if not target.exists():
+            return (
+                "🧭 **Truthful file-access verdict**\n"
+                f"- Путь: `{target}`\n"
+                f"{scope_note}\n"
+                "- Verdict: `not_found`.\n"
+                "- Я не подтверждаю никаких ограничений по правам: по этому probe файл/папка просто не существует."
+            )
+
+        if target.is_dir():
+            try:
+                entries: list[str] = []
+                with os.scandir(target) as iterator:
+                    for idx, entry in enumerate(iterator):
+                        if idx >= 3:
+                            break
+                        entries.append(entry.name)
+                sample = ", ".join(f"`{name}`" for name in entries) if entries else "каталог читается, но сейчас пуст"
+                return (
+                    "🧭 **Truthful file-access verdict**\n"
+                    f"- Путь: `{target}`\n"
+                    f"{scope_note}\n"
+                    "- Тип: `directory`\n"
+                    "- Verdict: `directory_access_confirmed`.\n"
+                    f"- Probe: `os.scandir()` прошёл. Sample: {sample}."
+                )
+            except Exception as exc:
+                return (
+                    "🧭 **Truthful file-access verdict**\n"
+                    f"- Путь: `{target}`\n"
+                    f"{scope_note}\n"
+                    "- Тип: `directory`\n"
+                    "- Verdict: `directory_access_not_confirmed`.\n"
+                    f"- Probe error: `{type(exc).__name__}: {exc}`"
+                )
+
+        try:
+            size_bytes = target.stat().st_size
+            with target.open("rb") as fh:
+                first_byte = fh.read(1)
+            byte_note = "прочитал первый байт" if first_byte else "файл пустой, но открывается на чтение"
+            return (
+                "🧭 **Truthful file-access verdict**\n"
+                f"- Путь: `{target}`\n"
+                f"{scope_note}\n"
+                "- Тип: `file`\n"
+                "- Verdict: `file_read_confirmed`.\n"
+                f"- Probe: `{byte_note}`; размер `{size_bytes}` байт."
+            )
+        except Exception as exc:
+            return (
+                "🧭 **Truthful file-access verdict**\n"
+                f"- Путь: `{target}`\n"
+                f"{scope_note}\n"
+                "- Тип: `file`\n"
+                "- Verdict: `file_read_not_confirmed`.\n"
+                f"- Probe error: `{type(exc).__name__}: {exc}`"
+            )
+
+    @staticmethod
     def _build_runtime_model_status(route: dict) -> str:
         """Формирует детерминированный статус маршрута по фактическим runtime-метаданным."""
         channel = str(route.get("channel", "unknown"))
@@ -2567,7 +2741,7 @@ class KraabUserbot:
                     "- Искать информацию в вебе по команде `!search`.",
                     "- Запоминать и вспоминать факты по командам `!remember` и `!recall`.",
                     "- Снимать owner-digest, читать последние записи общей памяти и вести owner-visible inbox через `!watch`, `!memory recent`, `!inbox`.",
-                    "- Работать с файлами по путям через `!ls`, `!read`, `!write`.",
+                    "- Работать с файлами по путям через `!ls`, `!read`, `!probe`, `!write`.",
                     "- Выполнять базовые действия в macOS через `!mac` (clipboard, notifications, apps, Finder/open, Notes, Reminders, Calendar).",
                     "- Управлять браузерным/веб-контуром через `!web` и открывать панель через `!panel`.",
                     "- Управлять voice-профилем ответов через `!voice` (вкл/выкл, скорость, голос, delivery).",
@@ -2676,7 +2850,7 @@ class KraabUserbot:
             "`!search <запрос>`, `!remember <текст>`, `!recall <запрос>`, `!watch status|now`, `!memory recent [source]`, `!inbox [list|status|ack|done|cancel]`, `!role`, `!agent ...`",
         ]
         system_commands = [
-            "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice ...`, `!translator ...`, `!mac ...`",
+            "`!ls [path]`, `!read <path>`, `!probe <absolute_path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice ...`, `!translator ...`, `!mac ...`",
         ]
         if bool(getattr(config, "SCHEDULER_ENABLED", False)):
             tool_commands.append("`!remind <время> | <текст>`, `!reminders`, `!rm_remind <id>`, `!cronstatus`")
@@ -4938,6 +5112,34 @@ class KraabUserbot:
                 message,
                 f"🦀 {query}\n\n🛠️ Собираю контекст и запускаю маршрут...",
             )
+
+        if self._looks_like_file_access_truth_question(query):
+            file_access_text = await self._build_file_access_truth_status(
+                query=query,
+                is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
+            )
+            file_access_text = self._apply_optional_disclosure(
+                chat_id=chat_id,
+                text=file_access_text,
+            )
+            delivery_result = await self._deliver_response_parts(
+                source_message=message,
+                temp_message=temp_msg,
+                is_self=is_self,
+                query=query,
+                full_response=file_access_text,
+            )
+            self._record_incoming_reply_to_inbox(
+                incoming_item_result=incoming_item_result,
+                response_text=file_access_text,
+                delivery_result=delivery_result,
+                note="file_access_truth_fastpath",
+            )
+            _typing_stop_event.set()
+            _typing_task.cancel()
+            await asyncio.gather(_typing_task, return_exceptions=True)
+            return
 
         if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
             runtime_text = await self._build_runtime_truth_status(

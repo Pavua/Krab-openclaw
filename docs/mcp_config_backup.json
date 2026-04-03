@@ -1,0 +1,37 @@
+{
+  "mcpServers": {
+    "krab-yung-nagato": {
+      "command": "/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python",
+      "args": [
+        "/Users/pablito/Antigravity_AGENTS/Краб/mcp-servers/telegram/server.py",
+        "--transport",
+        "stdio"
+      ]
+    },
+    "krab-p0lrd": {
+      "command": "/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python",
+      "args": [
+        "/Users/pablito/Antigravity_AGENTS/Краб/scripts/run_telegram_mcp_account.py",
+        "--session-name",
+        "p0lrd_cc",
+        "--transport",
+        "stdio"
+      ]
+    }
+  },
+  "preferences": {
+    "launchPreviewPersistSession": true,
+    "allowAllBrowserActions": true,
+    "coworkScheduledTasksEnabled": true,
+    "ccdScheduledTasksEnabled": true,
+    "sidebarMode": "code",
+    "bypassPermissionsModeEnabled": true,
+    "dockBounceEnabled": true,
+    "coworkWebSearchEnabled": true,
+    "keepAwakeEnabled": true,
+    "chromeExtension": {
+      "pairedDeviceId": "d1a51485-4faa-4abb-a714-6ebdbfca19bd",
+      "pairedDeviceName": "Chrome main"
+    }
+  }
+}

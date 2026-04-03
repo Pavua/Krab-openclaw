@@ -90,6 +90,25 @@ def test_looks_like_runtime_truth_question_detects_full_diagnostics_intent() -> 
     ) is False
 
 
+def test_looks_like_file_access_truth_question_detects_path_and_workspace_claims() -> None:
+    """Файловый truth fast-path должен ловить path/access кейсы."""
+    assert KraabUserbot._looks_like_file_access_truth_question(
+        "Можешь прочитать `/Users/pablito/Documents/test.txt`?"
+    ) is True
+    assert KraabUserbot._looks_like_file_access_truth_question(
+        "Ты опять можешь работать только вне воркспейса?"
+    ) is True
+    assert KraabUserbot._looks_like_file_access_truth_question("Расскажи шутку") is False
+
+
+def test_extract_probeable_absolute_path_supports_wrapped_paths_with_spaces() -> None:
+    """Из текста должны извлекаться пути в кавычках/backticks вместе с пробелами."""
+    path = KraabUserbot._extract_probeable_absolute_path(
+        'Проверь путь "/Users/pablito/Library/Group Containers/example file.txt"'
+    )
+    assert path == "/Users/pablito/Library/Group Containers/example file.txt"
+
+
 def test_build_runtime_capability_status_owner_includes_real_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     """Для доверенного контура summary должен отражать реальные owner-инструменты."""
     bot = _make_bot_stub()
@@ -107,7 +126,7 @@ def test_build_runtime_capability_status_owner_includes_real_tools(monkeypatch: 
     assert "Что я уже умею сейчас" in text
     assert "`!search`" in text
     assert "`!remember`" in text
-    assert "`!ls`, `!read`, `!write`" in text
+    assert "`!ls`, `!read`, `!probe`, `!write`" in text
     assert "`nvidia/nemotron-3-nano`" in text
     assert "Не запоминаю всю переписку навсегда автоматически" in text
 
@@ -139,6 +158,7 @@ def test_build_runtime_commands_status_owner_includes_live_command_groups() -> N
     assert "Команды, которые реально доступны сейчас" in text
     assert "`!model local`" in text
     assert "`!search <запрос>`" in text
+    assert "`!probe <absolute_path>`" in text
     assert "`!acl ...`" in text
     assert "`!web`" in text
 
@@ -197,6 +217,75 @@ async def test_build_runtime_integrations_status_guest_hides_owner_tools(
     assert "LM Studio local: IDLE" in text
     assert "MCP" not in text
     assert "скрыты в этом чате" in text
+
+
+@pytest.mark.asyncio
+async def test_build_file_access_truth_status_requires_concrete_path() -> None:
+    """Без пути нельзя делать общий вывод про доступ вне workspace."""
+    bot = _make_bot_stub()
+
+    text = await bot._build_file_access_truth_status(
+        query="У тебя есть доступ вне workspace или только в своей папке?",
+        is_allowed_sender=True,
+        access_level="owner",
+    )
+
+    assert "не должен заявлять" in text
+    assert "Пришли абсолютный путь" in text
+
+
+@pytest.mark.asyncio
+async def test_build_file_access_truth_status_confirms_external_file_read(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Для конкретного внешнего пути verdict должен строиться на реальном probe."""
+    bot = _make_bot_stub()
+    target = tmp_path / "outside workspace.bin"
+    target.write_bytes(b"ok")
+
+    text = await bot._build_file_access_truth_status(
+        query=f'Проверь доступ к "{target}"',
+        is_allowed_sender=True,
+        access_level="owner",
+    )
+
+    assert "file_read_confirmed" in text
+    assert "вне workspace" in text
+    assert str(target) in text
+
+
+@pytest.mark.asyncio
+async def test_process_message_file_access_question_uses_truth_fast_path_without_llm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pytest.TempPathFactory,
+) -> None:
+    """Вопрос о доступе к файлу должен обходить LLM и отвечать factual probe."""
+    bot = _make_bot_stub()
+    bot._is_allowed_sender = Mock(return_value=True)
+    target = tmp_path / "evidence.txt"
+    target.write_text("hello", encoding="utf-8")
+
+    incoming = SimpleNamespace(
+        from_user=SimpleNamespace(id=42, username="tester", is_bot=False),
+        text=f'Можешь прочитать "{target}" или ты опять только в workspace?',
+        caption=None,
+        photo=None,
+        voice=None,
+        chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
+        reply_to_message=None,
+        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+    )
+
+    send_stream_mock = Mock()
+    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
+
+    await bot._process_message(incoming)
+
+    send_stream_mock.assert_not_called()
+    delivered_text = bot._safe_edit.await_args_list[-1].args[1]
+    assert "Truthful file-access verdict" in delivered_text
+    assert "file_read_confirmed" in delivered_text
+    assert str(target) in delivered_text
 
 
 @pytest.mark.skip(reason="capability fast-path disabled per user request — все вопросы уходят в LLM")

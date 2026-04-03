@@ -1,4 +1,4 @@
-# Быстрый старт для нового чата — актуально 01.04.2026
+# Быстрый старт для нового чата — актуально 03.04.2026
 
 ## Минимальный набор файлов для нового чата
 
@@ -7,6 +7,21 @@ CLAUDE.md
 docs/handoff/SESSION_HANDOFF.md
 docs/handoff/QUICK_START_NEXT_SESSION.md
 ```
+
+## Если закончилась квота или меняется контекст
+
+- Если у основной Codex-учётки закончилась недельная квота, новый диалог обязателен. Старый чат не подходит для честного продолжения после quota-exhausted состояния.
+- Если продолжаешь на другой Codex-учётке, считай это новым runtime-контуром: сначала открой новый чат, потом прочитай handoff-файлы ниже, и только после этого продолжай проверку или разработку.
+- Если продолжаешь на той же учётке через Claude, тоже открывай новый диалог. Разница только в клиенте, а не в необходимости обновить контекст.
+- Не пытайся «доехать» на старом approval modal / stale session: для чистой проверки после фикса всегда нужен свежий чат.
+- Если задача ещё горит и всплывает `Allow once`, используй его только как временный обход, чтобы добить текущий шаг, а затем сразу уходи в новый диалог для чистого retest.
+
+### Что читать первым в новой сессии
+
+1. [CLAUDE.md](/Users/pablito/Antigravity_AGENTS/Краб/CLAUDE.md)
+2. [docs/handoff/SESSION_HANDOFF.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/SESSION_HANDOFF.md)
+3. [docs/handoff/OPENCLAW_GOD_MODE_AND_GEMINI_SETUP_2026-04-02.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/OPENCLAW_GOD_MODE_AND_GEMINI_SETUP_2026-04-02.md)
+4. [docs/handoff/QUICK_START_NEXT_SESSION.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/QUICK_START_NEXT_SESSION.md)
 
 Добавляй только если тема сессии касается этого:
 
@@ -111,5 +126,5 @@ kill $(lsof -t ~/.krab_mcp_sessions/p0lrd_cc_mcp.session 2>/dev/null) 2>/dev/nul
 ## Копипаст для нового чата
 
 > Продолжаем работу с Краб / OpenClaw. Ветка: main (0e94030).
-> Прошлая сессия: фиксы агентного режима (first_chunk_timeout 30мин, no_tool_activity_timeout только post-first-chunk), PNG auto-inject, прогресс-нотисы, cleanup MCP.
+> Прошлая сессия: фиксы агентного режима (first_chunk_timeout 30мин, no_tool_activity_timeout только post-first-chunk), PNG auto-inject, прогресс-нотисы, cleanup MCP, truthfully updated handoff for quota/account switching.
 > Файлы: CLAUDE.md + docs/handoff/SESSION_HANDOFF.md + docs/handoff/QUICK_START_NEXT_SESSION.md
