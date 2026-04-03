@@ -1,5 +1,50 @@
 # Session Handoff — Краб 23.03.2026
 
+## Addendum 03.04.2026 (вечер) — God Mode полностью починен, MCP стабилизированы
+
+### Статус OpenClaw God Mode
+
+**РЕШЕНО ОКОНЧАТЕЛЬНО.** Approval modal больше не появляется.
+
+Финальный фикс: добавлен `ask: "off"` в `~/.openclaw/exec-approvals.json` для `defaults`,
+`agents.main` и `agents.*`. Это ключевое поле, которое упускалось во всех предыдущих итерациях.
+
+- `openclaw approvals get --gateway` показывает `effective ask = "off"` из exec-approvals.json
+- `always allow` был сломан как UI-баг — теперь модал не появляется вообще
+- `scripts/openclaw_god_mode_sync.py` обновлён: гарантирует `ask:off` агентам при каждом запуске
+
+Подробности: [OPENCLAW_GOD_MODE_AND_GEMINI_SETUP_2026-04-02.md](./OPENCLAW_GOD_MODE_AND_GEMINI_SETUP_2026-04-02.md) → раздел "Дополнение 03.04.2026 (вечер)"
+
+### Статус MCP
+
+**MCP kill-loop устранён.** Причина: Desktop и Code оба открывали `p0lrd_cc_mcp.session`.
+
+Конфиги разделены на неконфликтующие сессии:
+- Desktop: `kraab_mcp.session` + `p0lrd_desktop_mcp.session`
+- Code: `kraab_cc_mcp.session` + `p0lrd_cc_mcp.session`
+
+### Если в следующей сессии модалы вернутся
+
+1. Запустить `python scripts/openclaw_god_mode_sync.py --openclaw-bin /opt/homebrew/bin/openclaw`
+2. Убедиться что `gateway_apply.applied = true`
+3. Проверить `exec-approvals.json` — должно быть `agents.main.ask = "off"`
+4. НЕ тратить время на переделку `openclaw.json` или allowlist — они уже правильные
+
+---
+
+## Addendum 03.04.2026 — quota checkpoint и маршрут продолжения
+
+- На основной Codex-учётке недельная квота для этого диалога фактически исчерпана.
+- Для следующего захода новый диалог обязателен, иначе мы снова упрёмся в stale context и не поймём, что именно сломалось в runtime vs session.
+- Если продолжать через другую Codex-учётку, это должен быть отдельный новый диалог с тем же handoff-пакетом, а не перенос старой сессии.
+- Если продолжать на этой же учётке через Claude, тоже нужен новый диалог. Меняется клиент, но не правило: свежий чат и сначала handoff, потом работа.
+- Документация, которую нужно читать первой:
+  - [CLAUDE.md](/Users/pablito/Antigravity_AGENTS/Краб/CLAUDE.md)
+  - [docs/handoff/QUICK_START_NEXT_SESSION.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/QUICK_START_NEXT_SESSION.md)
+  - [docs/handoff/OPENCLAW_GOD_MODE_AND_GEMINI_SETUP_2026-04-02.md](/Users/pablito/Antigravity_AGENTS/Краб/docs/handoff/OPENCLAW_GOD_MODE_AND_GEMINI_SETUP_2026-04-02.md)
+- ~~Текущая техническая развязка по OpenClaw: `Allow once` проходит, `Always allow` регрессит~~ → **УСТАРЕЛО: God Mode полностью починен 03.04 вечером**
+- Практическое правило: в старом чате добиваем только то, что уже начато; для любого чистого retest или новой ветки работы открываем новый диалог сразу.
+
 ## Addendum 23.03.2026 — audit status после multi-account smoke и USER3 fixes
 
 - Собран короткий truthful audit:

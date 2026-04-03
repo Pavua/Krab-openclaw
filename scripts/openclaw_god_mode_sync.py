@@ -18,8 +18,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import secrets
+import shutil
+import subprocess
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -180,6 +184,43 @@ def _ensure_wildcard_allowlist(agent_payload: dict[str, Any]) -> bool:
     return True
 
 
+def _sanitize_approvals_payload_for_gateway(payload: dict[str, Any]) -> dict[str, Any]:
+    """Очищает approval-store до схемы, которую принимает `approvals set --gateway`.
+
+    На диске OpenClaw терпит более богатые записи allowlist, но upload API gateway
+    валидирует JSON строже и режет, например, `source`. Поэтому для live apply
+    формируем отдельный временный payload без лишних полей, не ломая локальный
+    persistent store.
+    """
+    sanitized = json.loads(json.dumps(payload))
+    agents = sanitized.get("agents")
+    if not isinstance(agents, dict):
+        return sanitized
+
+    for agent_payload in agents.values():
+        if not isinstance(agent_payload, dict):
+            continue
+        allowlist = agent_payload.get("allowlist")
+        if not isinstance(allowlist, list):
+            continue
+        cleaned_entries: list[dict[str, Any]] = []
+        for raw_entry in allowlist:
+            normalized = _normalize_allowlist_entry(raw_entry)
+            if normalized is None:
+                continue
+            cleaned_entry = {"pattern": normalized["pattern"]}
+            entry_id = str(normalized.get("id") or "").strip()
+            if entry_id:
+                cleaned_entry["id"] = entry_id
+            last_used_at = normalized.get("lastUsedAt")
+            if isinstance(last_used_at, int):
+                cleaned_entry["lastUsedAt"] = last_used_at
+            cleaned_entries.append(cleaned_entry)
+        agent_payload["allowlist"] = cleaned_entries
+
+    return sanitized
+
+
 def sync_exec_approvals(approvals_path: Path, *, agent_ids: tuple[str, ...] = ("main", "*")) -> dict[str, Any]:
     """Гарантирует wildcard allowlist в `exec-approvals.json`."""
     payload = _read_json(approvals_path)
@@ -195,6 +236,10 @@ def sync_exec_approvals(approvals_path: Path, *, agent_ids: tuple[str, ...] = ("
         defaults["autoAllowSkills"] = True
         changed_agents.append("defaults.autoAllowSkills")
 
+    if defaults.get("ask") != "off":
+        defaults["ask"] = "off"
+        changed_agents.append("defaults.ask")
+
     agents = _ensure_dict(payload, "agents")
     for agent_id in agent_ids:
         agent_payload = agents.get(agent_id)
@@ -203,6 +248,9 @@ def sync_exec_approvals(approvals_path: Path, *, agent_ids: tuple[str, ...] = ("
             agents[agent_id] = agent_payload
         if _ensure_wildcard_allowlist(agent_payload):
             changed_agents.append(agent_id)
+        if agent_payload.get("ask") != "off":
+            agent_payload["ask"] = "off"
+            changed_agents.append(f"{agent_id}.ask")
 
     if changed_agents:
         _write_json(approvals_path, payload)
@@ -214,19 +262,132 @@ def sync_exec_approvals(approvals_path: Path, *, agent_ids: tuple[str, ...] = ("
     }
 
 
+def apply_exec_approvals_to_gateway(
+    approvals_path: Path,
+    *,
+    openclaw_bin: str | None = None,
+    timeout_ms: int = 10000,
+) -> dict[str, Any]:
+    """Применяет approval-store в live gateway, чтобы host сразу перечитал policy.
+
+    Почему это нужно:
+    - начиная с OpenClaw 2026.4.x одного обновления файла на диске недостаточно;
+    - host approvals слой может продолжать жить со stale snapshot до ручного approve
+      в dashboard или до отдельного reload;
+    - штатный `openclaw approvals set --gateway` синхронизирует live состояние без
+      ручного клика по `Always allow`.
+    """
+    resolved_bin = str(openclaw_bin or "").strip() or shutil.which("openclaw") or ""
+    if not resolved_bin:
+        return {
+            "attempted": False,
+            "applied": False,
+            "reason": "openclaw_cli_not_found",
+        }
+
+    # Homebrew openclaw uses `#!/usr/bin/env node` shebang which may fail when node
+    # is not in the restricted PATH of the launcher environment. Fall back to invoking
+    # node + openclaw.mjs directly when the binary is a symlink into node_modules.
+    node_bin = shutil.which("node") or "/opt/homebrew/bin/node"
+    _resolved = Path(resolved_bin).resolve()
+    # After symlink resolution, /opt/homebrew/bin/openclaw → .../openclaw/openclaw.mjs
+    openclaw_mjs = _resolved if _resolved.suffix == ".mjs" else _resolved.parent / "openclaw.mjs"
+    use_node_direct = (
+        bool(node_bin)
+        and Path(node_bin).exists()
+        and openclaw_mjs.exists()
+    )
+
+    raw_payload = _read_json(approvals_path)
+    upload_payload = _sanitize_approvals_payload_for_gateway(raw_payload)
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as temp_file:
+        temp_path = Path(temp_file.name)
+        json.dump(upload_payload, temp_file, ensure_ascii=False, indent=2)
+        temp_file.write("\n")
+
+    openclaw_args = [
+        "approvals",
+        "set",
+        "--gateway",
+        "--file",
+        str(temp_path),
+        "--timeout",
+        str(int(timeout_ms)),
+        "--json",
+    ]
+    command = (
+        [node_bin, str(openclaw_mjs)] + openclaw_args
+        if use_node_direct
+        else [resolved_bin] + openclaw_args
+    )
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return {
+            "attempted": True,
+            "applied": False,
+            "reason": "spawn_failed",
+            "error": str(exc),
+        }
+    finally:
+        with contextlib.suppress(OSError):
+            temp_path.unlink()
+
+    stdout = str(result.stdout or "").strip()
+    stderr = str(result.stderr or "").strip()
+    payload: dict[str, Any] | None = None
+    if stdout:
+        try:
+            raw_payload = json.loads(stdout)
+        except ValueError:
+            raw_payload = None
+        if isinstance(raw_payload, dict):
+            payload = raw_payload
+
+    applied = result.returncode == 0
+    return {
+        "attempted": True,
+        "applied": applied,
+        "returncode": result.returncode,
+        "command": command,
+        "stdout": stdout,
+        "stderr": stderr,
+        "payload": payload,
+    }
+
+
 def sync_god_mode(
     openclaw_path: Path,
     approvals_path: Path,
     *,
     agent_id: str = "main",
+    apply_gateway: bool = True,
+    openclaw_bin: str | None = None,
 ) -> dict[str, Any]:
     """Синхронизирует оба runtime-файла и возвращает краткий отчёт."""
     openclaw_report = sync_openclaw_json(openclaw_path, agent_id=agent_id)
     approvals_report = sync_exec_approvals(approvals_path, agent_ids=(agent_id, "*"))
+    gateway_report = {
+        "attempted": False,
+        "applied": False,
+        "reason": "disabled",
+    }
+    if apply_gateway:
+        gateway_report = apply_exec_approvals_to_gateway(
+            approvals_path,
+            openclaw_bin=openclaw_bin,
+        )
     return {
         "ok": True,
         "openclaw": openclaw_report,
         "approvals": approvals_report,
+        "gateway_apply": gateway_report,
         "changed": bool(openclaw_report["changed"] or approvals_report["changed"]),
     }
 
@@ -249,6 +410,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default="main",
         help="ID агента, для которого нужно закрепить full profile и wildcard allowlist",
     )
+    parser.add_argument(
+        "--skip-gateway-apply",
+        action="store_true",
+        help="Не отправлять approval-store в live gateway после записи файла",
+    )
+    parser.add_argument(
+        "--openclaw-bin",
+        default="",
+        help="Явный путь к CLI openclaw для live apply approval-store",
+    )
     return parser
 
 
@@ -261,6 +432,8 @@ def main() -> int:
         Path(args.openclaw_path).expanduser(),
         Path(args.approvals_path).expanduser(),
         agent_id=str(args.agent_id or "main").strip() or "main",
+        apply_gateway=not bool(args.skip_gateway_apply),
+        openclaw_bin=str(args.openclaw_bin or "").strip() or None,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
