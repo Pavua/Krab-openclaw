@@ -42,6 +42,7 @@ from .core.operator_identity import build_trace_id
 from .core.logger import get_logger
 from .core.mcp_registry import resolve_managed_server_launch
 from .core.proactive_watch import proactive_watch
+from .reserve_bot import reserve_bot
 from .core.openclaw_workspace import load_workspace_prompt_bundle
 from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.routing_errors import RouterError, user_message_for_surface
@@ -1253,14 +1254,20 @@ class KraabUserbot:
 
     async def _send_proactive_watch_alert(self, text: str) -> None:
         """
-        Отправляет watch-alert в Saved Messages владельца.
-
-        Это даёт владельцу фоновую проактивность без шума в рабочих чатах.
+        Отправляет watch-alert в Saved Messages владельца через userbot.
+        Fallback: если userbot offline — пробует reserve bot (Phase 2.1).
         """
-        if not self.client or not self.client.is_connected:
-            raise RuntimeError("telegram_client_not_ready")
-        for part in self._split_message(str(text or "").strip()):
-            await self.client.send_message("me", part)
+        clean_text = str(text or "").strip()
+        if self.client and self.client.is_connected:
+            for part in self._split_message(clean_text):
+                await self.client.send_message("me", part)
+            return
+        # userbot недоступен — пробуем reserve bot
+        if reserve_bot.is_running:
+            logger.info("proactive_watch_alert_via_reserve_bot")
+            await reserve_bot.send_to_owner(f"[reserve] {clean_text}")
+            return
+        raise RuntimeError("telegram_client_not_ready")
 
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
@@ -1707,6 +1714,12 @@ class KraabUserbot:
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
         self._ensure_proactive_watch_started()
 
+        # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
+        try:
+            await reserve_bot.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reserve_bot_start_error", error=str(exc))
+
     @staticmethod
     def _is_auth_key_invalid(exc: Exception) -> bool:
         """True, если исключение связано с протухшей Telegram auth key."""
@@ -1888,7 +1901,13 @@ class KraabUserbot:
     async def stop(self):
         """Остановка юзербота"""
         self._set_startup_state(state="stopping")
-        
+
+        # Reserve bot (Phase 2.1) — останавливаем до userbot
+        try:
+            await reserve_bot.stop()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reserve_bot_stop_error", error=str(exc))
+
         # Auto-export handoff snapshot before shutdown (Phase 2.2)
         try:
             await self._auto_export_handoff_snapshot(reason="userbot_stop")

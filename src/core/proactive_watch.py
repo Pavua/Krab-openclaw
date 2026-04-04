@@ -59,6 +59,35 @@ def _legacy_state_path() -> Path:
     return config.BASE_DIR / "data" / "proactive_watch" / "state.json"
 
 
+async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
+    """
+    Получает список cron jobs из OpenClaw CLI (openclaw cron list --json --all).
+
+    Возвращает пустой список при любой ошибке — не должна ронять proactive_watch.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "openclaw", "cron", "list", "--json", "--all",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
+        except asyncio.TimeoutError:
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+            return []
+        raw = stdout.decode("utf-8", errors="replace").strip()
+        payload = json.loads(raw)
+        jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
+        return [j for j in jobs if isinstance(j, dict)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 @dataclass
 class ProactiveWatchSnapshot:
     """Компактный снимок живого состояния runtime для owner-digest."""
@@ -265,6 +294,75 @@ class ProactiveWatchService:
             f"front={snapshot.macos_frontmost_app or 'n/a'}"
         )
 
+    async def _check_and_trace_cron_executions(
+        self, state: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Детектирует новые выполнения OpenClaw cron jobs и создаёт inbox traces.
+
+        Сравнивает last_run_at_ms каждой job с сохранённым значением в state.
+        Возвращает обновлённый словарь last_cron_runs для записи в persisted state.
+        Не бросает исключений — деградирует тихо при любых ошибках CLI/inbox.
+        """
+        jobs = await _fetch_openclaw_cron_jobs()
+        if not jobs:
+            return dict(state.get("last_cron_runs") or {})
+
+        last_cron_runs: dict[str, dict[str, Any]] = dict(state.get("last_cron_runs") or {})
+        updated: dict[str, dict[str, Any]] = {}
+
+        for job in jobs:
+            state_block = job.get("state") if isinstance(job.get("state"), dict) else {}
+            job_id = str(job.get("id") or "").strip()
+            if not job_id:
+                continue
+            job_name = str(job.get("name") or job_id).strip()
+            last_run_at_ms = int(state_block.get("lastRunAtMs") or 0)
+            last_status = str(
+                state_block.get("lastStatus") or state_block.get("lastRunStatus") or "unknown"
+            ).strip()
+
+            updated[job_id] = {"last_run_at_ms": last_run_at_ms, "last_status": last_status}
+
+            prev_run_at = int((last_cron_runs.get(job_id) or {}).get("last_run_at_ms") or 0)
+            if last_run_at_ms <= 0 or last_run_at_ms == prev_run_at:
+                continue  # нет нового выполнения
+
+            severity = "warning" if last_status in ("error", "failed", "failure") else "info"
+            run_ts = datetime.fromtimestamp(
+                last_run_at_ms / 1000, tz=timezone.utc
+            ).isoformat(timespec="seconds")
+            try:
+                inbox_service.upsert_item(
+                    dedupe_key=f"proactive:cron_run:{job_id}:{last_run_at_ms}",
+                    kind="proactive_action",
+                    source="krab-internal",
+                    title=f"Cron job выполнен: {job_name}",
+                    body=(
+                        f"Job `{job_name}` (id={job_id}) выполнен в {run_ts}. "
+                        f"Статус: `{last_status}`."
+                    ),
+                    severity=severity,
+                    status="open",
+                    identity=inbox_service.build_identity(
+                        channel_id="system",
+                        team_id="owner",
+                        trace_id=f"cron:{job_id}",
+                        approval_scope="owner",
+                    ),
+                    metadata={
+                        "action_type": "cron_execution",
+                        "job_id": job_id,
+                        "job_name": job_name,
+                        "last_run_at_ms": last_run_at_ms,
+                        "last_status": last_status,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("cron_trace_upsert_failed", job_id=job_id, error=str(exc))
+
+        return updated
+
     async def capture(
         self,
         *,
@@ -293,6 +391,13 @@ class ProactiveWatchService:
         digest = self.render_digest(snapshot, reason=reason, manual=manual)
         wrote_memory = False
         alerted = False
+
+        # Трейс выполнений OpenClaw cron jobs (Phase 2.3)
+        try:
+            updated_cron_runs = await self._check_and_trace_cron_executions(state)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cron_trace_check_failed", error=str(exc))
+            updated_cron_runs = dict(state.get("last_cron_runs") or {})
 
         if persist_memory and (manual or bool(reason)):
             wrote_memory = append_workspace_memory_entry(
@@ -323,6 +428,7 @@ class ProactiveWatchService:
             "last_digest_ts": snapshot.ts_utc if (manual or reason) else str(state.get("last_digest_ts") or ""),
             "last_alert_ts": snapshot.ts_utc if alerted else last_alert_ts,
             "last_alerted_reason": reason if alerted else str(state.get("last_alerted_reason") or ""),
+            "last_cron_runs": updated_cron_runs,
         }
         self._save_state(payload)
         if reason:
