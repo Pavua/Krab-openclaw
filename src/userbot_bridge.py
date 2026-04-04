@@ -407,15 +407,18 @@ def _build_openclaw_progress_wait_notice(
             if key in summary_lower:
                 tool_emoji = emoji
                 break
-        # Пытаемся извлечь имя инструмента из summary
-        import re
-        m = re.search(r"(?:выполняется|вызываю|running)[:\s]+([^\n,;]{1,40})", tool_calls_summary, re.I)
-        if m:
-            tool_name_display = m.group(1).strip()
+        # Извлекаем первую narration-строку (например "🌐 Открываю браузер...")
+        first_line = tool_calls_summary.split("\n", 1)[0].strip()
+        if first_line and not first_line.startswith("✅") and not first_line.startswith("Инструментов"):
+            tool_name_display = first_line
 
-    if tool_calls_summary and "🔧 Выполняется:" in tool_calls_summary:
+    # Определяем есть ли running tools по счётчику "Инструментов: done/total"
+    _tc_m = re.search(r"Инструментов:\s*(\d+)/(\d+)", tool_calls_summary) if tool_calls_summary else None
+    _has_running = _tc_m and int(_tc_m.group(1)) < int(_tc_m.group(2))
+
+    if tool_calls_summary and _has_running:
         if tool_name_display:
-            lead = f"{tool_emoji} Использую инструмент: **{tool_name_display}**"
+            lead = f"{tool_name_display}"
         else:
             lead = f"{tool_emoji} Вызов инструмента — жду результат."
     elif tool_calls_summary:
