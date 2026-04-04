@@ -7,18 +7,27 @@ src/core/swarm.py
 Зачем нужен модуль:
 - сохранить совместимость с R17-тестами и утраченной функциональностью после рефакторинга;
 - дать стабильный контур «аналитик -> критик -> интегратор» для сложных запросов;
-- изолировать логику роя от transport/runtime-слоя (router передается извне).
+- изолировать логику роя от transport/runtime-слоя (router передается извне);
+- поддерживать межкомандное делегирование через SwarmBus ([DELEGATE: team]).
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 from typing import Any, Callable
 
 from .logger import get_logger
 
 logger = get_logger(__name__)
+
+# Паттерн для детектирования директив делегирования в ответе роли.
+# Форматы: [DELEGATE: coders], [DELEGATE:traders], [DELEGATE: аналитика]
+_DELEGATE_PATTERN = re.compile(
+    r"\[DELEGATE:\s*([a-zA-Zа-яА-Я_\-]+)\]",
+    re.IGNORECASE,
+)
 
 
 class SwarmTask:
@@ -67,7 +76,7 @@ class SwarmOrchestrator:
 
 
 # ---------------------------------------------------------------------------
-# R17: Multi-Agent Room MVP
+# R17: Multi-Agent Room MVP  |  R18: delegation support via SwarmBus
 # ---------------------------------------------------------------------------
 
 DEFAULT_AGENT_ROLES = [
@@ -108,6 +117,10 @@ class AgentRoom:
     Контракт с роутером:
     - должен поддерживать `await route_query(prompt, skip_swarm=True)`.
     - сам роутер отвечает за transport, модель и retry policy.
+
+    R18: Если ответ роли содержит [DELEGATE: <team>], AgentRoom диспатчит
+    подзадачу в указанную команду через SwarmBus и инжектирует результат
+    в контекст следующей роли.
     """
 
     def __init__(self, roles: list[dict[str, str]] | None = None, *, role_context_clip: int = 1200) -> None:
@@ -115,19 +128,28 @@ class AgentRoom:
         self.role_context_clip = max(200, int(role_context_clip))
         logger.info("agent_room_initialized", roles=[r.get("name", "agent") for r in self.roles])
 
-    async def run_round(self, topic: str, router: Any) -> str:
+    async def run_round(
+        self,
+        topic: str,
+        router: Any,
+        *,
+        _bus: Any = None,
+        _depth: int = 0,
+        _router_factory: Any = None,
+        _team_name: str = "",
+    ) -> str:
         """
         Запускает полный роевой раунд по теме `topic`.
 
-        Порядок ролей:
-        1) Аналитик
-        2) Критик (видит результат аналитика)
-        3) Интегратор (видит результаты аналитика и критика)
+        Если роль возвращает [DELEGATE: <team>] и предоставлен _bus (SwarmBus),
+        задача диспатчится в указанную команду. Результат инжектируется в
+        накопленный контекст для следующих ролей.
         """
         accumulated_context = ""
         round_results: list[dict[str, str]] = []
+        delegation_results: list[str] = []
 
-        logger.info("agent_room_round_started", topic=topic, roles=len(self.roles))
+        logger.info("agent_room_round_started", topic=topic, roles=len(self.roles), depth=_depth)
 
         for role in self.roles:
             name = str(role.get("name", "agent"))
@@ -154,6 +176,35 @@ class AgentRoom:
             if not clipped:
                 clipped = "[Пустой ответ роли: проверьте контекст, лимиты или состояние модели]"
                 logger.warning("agent_room_role_empty_response", role=name, topic=topic)
+
+            # R18: Детектируем директиву делегирования [DELEGATE: team]
+            if _bus is not None and _router_factory is not None:
+                m = _DELEGATE_PATTERN.search(clipped)
+                if m:
+                    delegate_team = m.group(1).strip()
+                    # Извлекаем задачу: текст после [DELEGATE: team] или весь ответ
+                    delegate_topic = _DELEGATE_PATTERN.sub("", clipped).strip() or topic
+                    logger.info(
+                        "agent_room_delegation_detected",
+                        role=name,
+                        target_team=delegate_team,
+                        depth=_depth,
+                    )
+                    delegate_result = await _bus.dispatch(
+                        source_team=_team_name or "default",
+                        target_team=delegate_team,
+                        topic=delegate_topic,
+                        router_factory=_router_factory,
+                        depth=_depth,
+                    )
+                    # Инжектируем результат делегирования в контекст
+                    delegation_summary = (
+                        f"\n\n📬 **Результат от команды {delegate_team}:**\n{delegate_result[:800]}"
+                    )
+                    clipped += delegation_summary
+                    delegation_results.append(f"→ {delegate_team}: задача выполнена")
+                    logger.info("agent_room_delegation_injected", role=name, target=delegate_team)
+
             round_results.append({"role": name, "emoji": emoji, "title": title, "text": clipped})
             accumulated_context += f"[{emoji} {title}]:\n{clipped}\n\n"
 
@@ -162,7 +213,10 @@ class AgentRoom:
         for result in round_results:
             body += f"**{result['emoji']} {result['title']}:**\n{result['text']}\n\n"
 
-        logger.info("agent_room_round_completed", topic=topic)
+        if delegation_results:
+            body += f"📡 **Делегирование:** {', '.join(delegation_results)}\n"
+
+        logger.info("agent_room_round_completed", topic=topic, delegations=len(delegation_results))
         return header + body.strip()
 
     async def run_loop(
@@ -173,6 +227,9 @@ class AgentRoom:
         rounds: int = 2,
         max_rounds: int = 3,
         next_round_clip: int = 4000,
+        _bus: Any = None,
+        _router_factory: Any = None,
+        _team_name: str = "",
     ) -> str:
         """
         Запускает несколько раундов роя с итеративной доработкой результата.
@@ -198,7 +255,14 @@ class AgentRoom:
 
         for idx in range(safe_rounds):
             round_no = idx + 1
-            round_result = await self.run_round(current_topic, router)
+            round_result = await self.run_round(
+                current_topic,
+                router,
+                _bus=_bus,
+                _depth=0,
+                _router_factory=_router_factory,
+                _team_name=_team_name,
+            )
             sections.append(f"## Раунд {round_no}/{safe_rounds}\n{round_result}")
 
             if round_no >= safe_rounds:
@@ -215,3 +279,4 @@ class AgentRoom:
 
         logger.info("agent_room_loop_completed", topic=topic, rounds=safe_rounds)
         return f"🐝 **Swarm Loop: {base_topic}**\n\n" + "\n\n".join(sections)
+

@@ -274,17 +274,66 @@ async def handle_search(bot: "KraabUserbot", message: Message) -> None:
 
 async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     """
-    Запуск роевого обсуждения (аналитик -> критик -> интегратор).
-    Использование: !swarm <тема>
+    Запуск роевого обсуждения с поддержкой именованных команд и делегирования.
+
+    Формат:
+      !swarm <тема>                   — дефолтный room (аналитик→критик→интегратор)
+      !swarm <команда> <тема>         — именованная команда (traders/coders/analysts/creative)
+      !swarm teams                    — список доступных команд
+      !swarm loop [N] <тема>          — итеративный режим (дефолтная команда)
+      !swarm <команда> loop [N] <тема>— итеративный режим для команды
     """
     from ..core.swarm import AgentRoom
-    
-    topic = bot._get_command_args(message)
-    if not topic:
-        raise UserInputError(user_message="🐝 О чем поговорить роем? Напиши: `!swarm <тема>`")
+    from ..core.swarm_bus import (
+        TEAM_REGISTRY,
+        list_teams,
+        resolve_team_name,
+        swarm_bus,
+    )
 
-    msg = await message.reply(f"🐝 **Запуск Swarm Room...**\nТема: `{topic}`")
-    
+    args = bot._get_command_args(message).strip()
+    if not args:
+        raise UserInputError(user_message=(
+            "🐝 Как использовать Swarm:\n"
+            "`!swarm <тема>` — базовый room\n"
+            "`!swarm traders BTC анализ` — команда трейдеров\n"
+            "`!swarm coders написать бота` — команда кодеров\n"
+            "`!swarm teams` — список команд"
+        ))
+
+    # !swarm teams — справка
+    if args.lower() in {"teams", "команды", "help"}:
+        await message.reply(list_teams())
+        return
+
+    # Парсим: [team_name] [loop [N]] <topic>
+    tokens = args.split()
+    team_key: str | None = None
+    loop_mode = False
+    loop_rounds = 2
+
+    # Проверяем первый токен на имя команды
+    maybe_team = resolve_team_name(tokens[0])
+    if maybe_team:
+        team_key = maybe_team
+        tokens = tokens[1:]
+
+    # Проверяем loop
+    if tokens and tokens[0].lower() == "loop":
+        loop_mode = True
+        tokens = tokens[1:]
+        if tokens and tokens[0].isdigit():
+            loop_rounds = min(int(tokens[0]), int(getattr(config, "SWARM_LOOP_MAX_ROUNDS", 3) or 3))
+            tokens = tokens[1:]
+
+    topic = " ".join(tokens).strip()
+    if not topic:
+        raise UserInputError(user_message="🐝 Укажи тему! Пример: `!swarm traders анализируй BTC`")
+
+    team_label = f" [{team_key}]" if team_key else ""
+    mode_label = f" loop×{loop_rounds}" if loop_mode else ""
+    msg = await message.reply(f"🐝 **Запуск Swarm{team_label}{mode_label}...**\nТема: `{topic}`")
+
     try:
         chat_id = str(message.chat.id)
         user = message.from_user
@@ -294,23 +343,43 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             is_allowed_sender=is_allowed_sender,
             access_level=access_profile.level,
         )
-        
-        router_adapter = _AgentRoomRouterAdapter(
-            chat_id=chat_id,
-            system_prompt=system_prompt,
-        )
-        
-        room = AgentRoom()
-        result_text = await room.run_round(topic, router_adapter)
-        
-        if len(result_text) > 4000:
-            chunks = _split_text_for_telegram(result_text)
-            await msg.edit(chunks[0])
-            for part in chunks[1:]:
-                await message.reply(part)
+
+        def router_factory(team_name: str) -> "_AgentRoomRouterAdapter":
+            """Создаёт адаптер роутера для указанной команды."""
+            return _AgentRoomRouterAdapter(
+                chat_id=f"swarm:{chat_id}:{team_name}",
+                system_prompt=system_prompt,
+            )
+
+        roles = TEAM_REGISTRY.get(team_key) if team_key else None
+        room = AgentRoom(roles=roles)
+        router = router_factory(team_key or "default")
+
+        if loop_mode:
+            result_text = await room.run_loop(
+                topic,
+                router,
+                rounds=loop_rounds,
+                max_rounds=int(getattr(config, "SWARM_LOOP_MAX_ROUNDS", 3) or 3),
+                next_round_clip=int(getattr(config, "SWARM_LOOP_NEXT_ROUND_CLIP", 4000) or 4000),
+                _bus=swarm_bus,
+                _router_factory=router_factory,
+                _team_name=team_key or "default",
+            )
         else:
-            await msg.edit(result_text)
-            
+            result_text = await room.run_round(
+                topic,
+                router,
+                _bus=swarm_bus,
+                _router_factory=router_factory,
+                _team_name=team_key or "default",
+            )
+
+        chunks = _split_text_for_telegram(result_text)
+        await msg.edit(chunks[0])
+        for part in chunks[1:]:
+            await message.reply(part)
+
     except Exception as e:
         logger.error("swarm_error", error=str(e))
         await msg.edit(f"❌ Ошибка Swarm: {str(e)[:500]}")
