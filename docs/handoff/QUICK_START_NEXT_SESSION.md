@@ -1,99 +1,106 @@
-# Быстрый старт для нового чата — актуально 01.04.2026
+# Quick Start — Следующая сессия
 
-## Минимальный набор файлов для нового чата
-
-```
-CLAUDE.md
-docs/handoff/SESSION_HANDOFF.md
-docs/handoff/QUICK_START_NEXT_SESSION.md
-```
-
-Добавляй только если тема сессии касается этого:
-
-| Файл | Когда нужен |
-|------|-------------|
-| `src/openclaw_client.py` | OpenClaw HTTP-клиент, scope-header fix |
-| `src/userbot_bridge.py` | MEDIA:/flow/transport |
-| `src/core/access_control.py` | Права команд |
-| `~/.openclaw/openclaw.json` | Routing/провайдеры |
-| `docs/handoff/PROVIDER_STATUS.md` | Диагностика провайдеров |
-| `agent_skills/<skill>/SKILL.md` | Конкретный krab-агент |
+> Обновлено: 2026-04-04  
+> Ветка: `claude/sweet-chatterjee-r44QI`  
+> Последний коммит: `dbe3a4e`
 
 ---
 
-## Что сделано в сессии 31.03–01.04.2026
+## Что сделано в сессии 2026-04-04
 
-### Фиксы агентного режима OpenClaw (в main, коммит 0e94030)
-- **`no_tool_activity_timeout`**: убрано условие `not received_any_chunk` — таймаут
-  теперь срабатывает только ПОСЛЕ первого чанка. До него — `first_chunk_timeout_sec`.
-  OpenClaw в агентном режиме буферизует tool-вызовы внутри своей цепочки и шлёт
-  первый chunk только по завершении loop'а.
-- **`first_chunk_timeout_sec`**: 600s → **1800s** (30 мин) для текстовых задач.
-  Аналог для фото: 720s → 1200s (20 мин). Покрывает длинные agentic loop'ы.
-- **Progress notice**: 3 фазы — 1й notice, 2-3й (агентный режим), 4+ (ссылка на дашборд :18789)
-- **❌ сообщение улучшено**: включает имя модели + совет `!reset`
+### #6 — Async SendMessage Queue ✅
+**Файл:** `src/userbot_bridge.py`  
+**Что:** `_TelegramSendQueue` — per-chat async очередь с exponential backoff (0.5→1→2с, max 3 retry) для всех исходящих Telegram API вызовов.  
+**Зачем:** Защита от потери сообщений при FLOOD_WAIT/timeout во время долгих tool-chain задач.  
+**Покрыто:** `_safe_edit()`, `_safe_reply_or_send_new()`, voice/document send, cleanup при shutdown.
 
-### Фиксы PNG auto-inject (в main, коммит 594f9b2)
-- Валидация PNG magic bytes + мин. размер 1KB перед auto-inject из `/tmp/`
-- Fallback `send_photo` → `send_document` при `IMAGE_PROCESS_FAILED`
+### #7 — Granular Tool-Stage Narration ✅
+**Файлы:** `src/openclaw_client.py`, `src/userbot_bridge.py`  
+**Что:** `_TOOL_NARRATIONS` dict (25 инструментов) + `_narrate_tool()` — вместо "🔧 Выполняется: browser" теперь "🌐 Открываю браузер...", "📸 Делаю скриншот..." и т.д.  
+**Как работает:** polling каждые 4 сек в streaming loop → edit temp_msg с narration из `get_active_tool_calls_summary()`.
 
-### Из прошлой сессии (30.03.2026)
-- **OpenClaw v2026.3.28 scope header** — `src/openclaw_client.py` ✓
-- **49 agent skills** в `agent_skills/` ✓
-- **Telegram MCP**: `krab-telegram` (yung_nagato) + `krab-telegram-p0lrd` (p0lrd) ✓
+### Swarm R18 — Multi-Agent Teams ✅
+**Файлы:** `src/core/swarm_bus.py` (новый), `src/core/swarm.py`, `src/handlers/command_handlers.py`
 
-### Cleanup (01.04.2026)
-- `krab-telegram-test` удалён из `~/.codex/config.toml` — был дубликатом p0lrd
-- `MCP_DOCKER` удалён из `~/.codex/config.toml`
-- `context7@claude-plugins-official` → false в `~/.claude/settings.json`
+**Новые команды:**
+```
+!swarm teams                        — список команд
+!swarm traders <тема>               — 📊→⚖️→💰 (рыночный анализ)
+!swarm coders <тема>                — 🏗️→💻→🔍 (разработка)
+!swarm analysts <тема>              — 🔭→📈→📝 (исследование)
+!swarm creative <тема>              — 💡→🎯→🚀 (генерация идей)
+!swarm <команда> loop N <тема>      — итеративный режим
+```
+
+**Автоделегирование:** Если роль пишет `[DELEGATE: coders]` — SwarmBus автоматически запускает команду кодеров и инжектирует результат. Глубина делегирования ≤ 2.
 
 ---
 
-## Текущее состояние (01.04.2026)
+## Как смержить на MacBook
 
-```
-main = 0e94030
-```
-
-### MCP Claude Code (должны быть ✓)
-```
-plugin:github   openclaw-browser
-krab-telegram   krab-telegram-p0lrd
-```
-⚠️ `krab-telegram-test` удалён из `.codex/config.toml` — вступит в силу после рестарта Claude Code
-
-### Config файлы изменены (вне git)
-- `~/.codex/config.toml` — убраны MCP_DOCKER, krab-telegram-test
-- `~/.claude/settings.json` — context7 plugin disabled
-
-### Stale-lock quick fix (если krab-telegram упал)
 ```bash
-kill $(lsof -t ~/.krab_mcp_sessions/kraab_cc_mcp.session 2>/dev/null) 2>/dev/null
-kill $(lsof -t ~/.krab_mcp_sessions/p0lrd_cc_mcp.session 2>/dev/null) 2>/dev/null
+cd /Users/pablito/Antigravity_AGENTS/Краб
+git fetch origin
+git checkout claude/sweet-chatterjee-r44QI
+git pull origin claude/sweet-chatterjee-r44QI
+
+# Проверить что всё OK
+git log --oneline -6
+
+# Смержить в main:
+git checkout main
+git merge claude/sweet-chatterjee-r44QI --no-ff -m "merge: сессия 2026-04-04 (#6 #7 swarm-R18)"
+git push origin main
 ```
 
 ---
 
-## Открытые вопросы / следующая сессия
+## Текущее состояние бэклога
 
-| Задача | Статус |
-|---|---|
-| Chrome extension OpenClaw "Off" — расследовать | Medium |
-| Mercadona навигация — поиск не работает в UI | Medium |
-| iMessage фильтрация — пропускает ненужное | Medium |
-| `parallel mode` (4 агента / 8 субагентов) — включить/тестировать | Low |
-| Ответ в Telegram когда OpenClaw ответил после ❌ | Future |
-| Переводчик (продвинули в другом диалоге) | Low |
-
-## Важно: параллельный режим OpenClaw
-Кнопка "4 агента / 8 субагентов" в панели `:8080` — это многопользовательский
-режим (обрабатывать несколько чатов одновременно), а НЕ ускорение одного ответа.
-Для одного запроса скорость = скорость модели. Полезно если несколько пользователей.
+| # | Задача | Статус |
+|---|--------|--------|
+| 4 | OOM Whisper | ✅ |
+| 5 | Self-healing gateway | ✅ |
+| 6 | Async sendMessage queue | ✅ 2026-04-04 |
+| 7 | Tool-stage narration | ✅ 2026-04-04 |
+| 9 | Vision API | ✅ |
+| Swarm R18 | Named teams + delegation | ✅ 2026-04-04 |
+| 10 | Mercadona anti-bot | ⏳ бэклог |
+| 11 | ~/Krab_Inbox watcher | ⏳ нужна локальная сессия |
+| 12 | Global macOS hotkey | ⏳ нужна локальная сессия |
+| 13 | Hammerspoon window mgmt | ⏳ нужна локальная сессия |
+| Swarm next | Persistent agent memory | ⏳ следующий этап |
+| Swarm next | Autonomous scheduling | ⏳ следующий этап |
 
 ---
 
-## Копипаст для нового чата
+## MCP статус
 
-> Продолжаем работу с Краб / OpenClaw. Ветка: main (0e94030).
-> Прошлая сессия: фиксы агентного режима (first_chunk_timeout 30мин, no_tool_activity_timeout только post-first-chunk), PNG auto-inject, прогресс-нотисы, cleanup MCP.
-> Файлы: CLAUDE.md + docs/handoff/SESSION_HANDOFF.md + docs/handoff/QUICK_START_NEXT_SESSION.md
+- `krab-telegram` → `@yung_nagato` (основной Краб)
+- `krab-telegram-p0lrd` → `@p0lrd` (тестовый)
+- Telegram MCP **не подключён** к облачной Claude Code сессии — нужна локальная
+
+---
+
+## Для следующей сессии: быстрый старт
+
+```
+Продолжаем разработку Krab-openclaw.
+Ветка: claude/sweet-chatterjee-r44QI
+Последние изменения: #6 async queue, #7 narration, Swarm R18
+
+Приоритеты:
+1. Протестировать swarm команды live (нужна локальная сессия + Telegram MCP)
+2. Mercadona anti-bot #10 (puppeteer-stealth + XHR interception)
+3. macOS интеграция #11-13 (только локальная сессия)
+4. Swarm следующий этап: persistent memory + auto-scheduling
+```
+
+---
+
+## Открытые вопросы
+
+- Chrome extension "Off" — поведение при отключённом расширении
+- Mercadona nav: новый search UI vs старый DOM
+- iMessage OTP filtering — отфильтровывать одноразовые коды
+- Parallel mode (4 agents / 8 subagents) — активировать?
