@@ -41,8 +41,9 @@
 ### 6. Таймауты Telegram API при долгих задачах
 **Симптом:** При вызове множества инструментов вебхук Telegram отваливается.
 **Решение:** Перевести долгие задачи на асинхронную очередь (`sendMessage`) и увеличить таймаут в конфигурации OpenClaw.
-**Статус:** ЧАСТИЧНО ИСПРАВЛЕНО (2026-03-23) — увеличены таймауты в `~/.openclaw/openclaw.json`: `channels.telegram.timeoutSeconds: 180` (таймаут API-клиента grammY, был не задан — default), `channels.telegram.retry: { attempts: 5, minDelayMs: 500, maxDelayMs: 60000, jitter: 0.2 }` (retry-политика для исходящих Telegram API-вызовов). Ключи задокументированы в `types.telegram.d.ts` SDK OpenClaw.
-Асинхронная очередь (sendMessage) — в бэклоге.
+**Статус:** ✅ ПОЛНОСТЬЮ ИСПРАВЛЕНО (2026-04-04) — два уровня:
+1. (2026-03-23) Увеличены таймауты в `~/.openclaw/openclaw.json`: `channels.telegram.timeoutSeconds: 180`, retry-политика `{attempts: 5, minDelayMs: 500, maxDelayMs: 60000, jitter: 0.2}`.
+2. (2026-04-04) Добавлена `_TelegramSendQueue` — per-chat async queue с exponential backoff (0.5→1→2с, до 3 попыток) для всех исходящих Telegram API вызовов (`_safe_edit`, `_safe_reply_or_send_new`, voice/document send). Ленивые воркеры, автостоп через 30с простоя. Cleanup при shutdown.
 
 ---
 
@@ -52,7 +53,9 @@
 **Проблема:** В Telegram не видно, что Краб работает над задачей, кажется, что он завис.
 **Решение:** - Добавить промежуточные статусы в Telegram-транспорт ("Вызываю инструмент...", "Читаю скриншот...").
 - Использовать `sendChatAction` (`typing`), чтобы индикатор набора текста висел всё время, пока ИИ думает.
-**Актуализация 2026-03-28:** базовый UX-контур усилен: во время reasoning/tool-flow userbot теперь держит `typing`, а не ошибочный `record_audio`, и перед фактической отправкой голосового/документа посылает отдельный delivery-action (`upload_audio` / `upload_document`). Live owner roundtrip после правки подтверждён; см. `RESOLVED.md`. Остаётся только более granular tool-stage narration, если она ещё понадобится.
+**Статус:** ✅ ПОЛНОСТЬЮ ИСПРАВЛЕНО (2026-04-04) — три уровня:
+1. (2026-03-28) Базовый UX-контур: `typing` во время reasoning/tool-flow, delivery-actions перед отправкой вложений.
+2. (2026-04-04) Granular tool-stage narration: `_TOOL_NARRATIONS` dict (25 инструментов) в `openclaw_client.py` + `_narrate_tool()` с fallback по подстроке. Вместо "🔧 Выполняется: browser" теперь "🌐 Открываю браузер...", "📸 Делаю скриншот..." и т.д. Polling каждые 4 сек, автоматическое обновление temp_msg.
 
 ### 8. Telegram-транспорт: live-smoke голосовых и hygiene ответов
 **Актуализация 2026-03-27:** owner private text+voice roundtrip, mention-gated/group flow и graceful-content после raw fallback уже подтверждены живым E2E через второй Telegram MCP аккаунт `p0lrd`; детали и артефакты перенесены в `RESOLVED.md`.
