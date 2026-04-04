@@ -6702,6 +6702,30 @@ class WebApp:
                 )
             raise HTTPException(status_code=404, detail="nano_theme_css_not_found")
 
+        @self.app.post("/api/notify")
+        async def notify(
+            payload: dict[str, Any] = Body(default_factory=dict),
+        ):
+            """Отправляет Telegram-сообщение от Краба владельцу.
+
+            Используется внутренними сервисами (inbox watcher, hotkey) для уведомлений.
+            Localhost-only, без auth (rate-limited через ThrottleInterval LaunchAgent).
+            """
+            text = str(payload.get("text") or "").strip()
+            if not text:
+                raise HTTPException(status_code=400, detail="text_required")
+            chat_id = str(payload.get("chat_id") or "").strip() or os.getenv("OPENCLAW_ALERT_TARGET", "")
+            if not chat_id:
+                raise HTTPException(status_code=400, detail="chat_id_required")
+            userbot = self.deps.get("kraab_userbot")
+            if userbot is None or not getattr(userbot, "client", None):
+                raise HTTPException(status_code=503, detail="userbot_not_ready")
+            try:
+                await userbot.client.send_message(chat_id, text)
+                return {"ok": True, "chat_id": chat_id}
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+
         @self.app.get("/api/stats")
         async def get_stats():
             router = self.deps["router"]
