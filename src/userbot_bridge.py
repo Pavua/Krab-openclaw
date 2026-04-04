@@ -136,6 +136,122 @@ _RELAY_PROMISE_IN_RESPONSE: frozenset[str] = frozenset({
 })
 
 
+class _TelegramSendQueue:
+    """
+    Per-chat serialised queue with exponential-backoff retry for outgoing
+    Telegram API calls (send_message, edit, reply).
+
+    Зачем нужна очередь:
+    - При долгих tool-chain задачах Telegram API может вернуть FLOOD_WAIT или
+      временный timeout; без retry сообщение теряется бесследно.
+    - Per-chat воркер гарантирует порядок доставки внутри одного чата и изолирует
+      медленные чаты от быстрых.
+    - Воркер ленив: стартует при первом вызове, самоостанавливается через 30 с простоя.
+    """
+
+    _MAX_RETRIES: int = 3
+    _BASE_BACKOFF_SEC: float = 0.5
+
+    def __init__(self) -> None:
+        self._queues: dict[int, asyncio.Queue] = {}
+        self._workers: dict[int, asyncio.Task] = {}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def run(self, chat_id: int, coro_factory: Any) -> Any:
+        """
+        Ставит вызов Telegram API в очередь чата и ждёт результата.
+
+        coro_factory — callable без аргументов, возвращающий корутину:
+            lambda: client.send_message(chat_id, text)
+
+        При FLOOD_WAIT или TimeoutError выполняет до _MAX_RETRIES попыток
+        с экспоненциальным откатом. Остальные исключения пробрасываются.
+        """
+        queue = self._get_or_create_queue(chat_id)
+        self._ensure_worker_running(chat_id)
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        await queue.put((coro_factory, fut))
+        return await fut
+
+    async def stop_all(self) -> None:
+        """Останавливает всех воркеров (вызывать при shutdown юзербота)."""
+        for task in list(self._workers.values()):
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        self._workers.clear()
+        self._queues.clear()
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _get_or_create_queue(self, chat_id: int) -> asyncio.Queue:
+        if chat_id not in self._queues:
+            self._queues[chat_id] = asyncio.Queue()
+        return self._queues[chat_id]
+
+    def _ensure_worker_running(self, chat_id: int) -> None:
+        task = self._workers.get(chat_id)
+        if task is None or task.done():
+            self._workers[chat_id] = asyncio.create_task(
+                self._worker(chat_id), name=f"tg-send-{chat_id}"
+            )
+
+    async def _worker(self, chat_id: int) -> None:
+        queue = self._queues.get(chat_id)
+        if queue is None:
+            return
+        while True:
+            try:
+                coro_factory, fut = await asyncio.wait_for(queue.get(), timeout=30.0)
+            except asyncio.TimeoutError:
+                # Очередь пустовала 30 с — воркер самоостанавливается.
+                self._workers.pop(chat_id, None)
+                return
+
+            result_exc: BaseException | None = None
+            result_val: Any = None
+
+            for attempt in range(self._MAX_RETRIES):
+                try:
+                    result_val = await coro_factory()
+                    result_exc = None
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    err_upper = str(exc).upper()
+                    is_flood = "FLOOD" in err_upper
+                    is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+                    if (is_flood or is_timeout) and attempt < self._MAX_RETRIES - 1:
+                        delay = self._BASE_BACKOFF_SEC * (2 ** attempt)
+                        if is_flood:
+                            m = re.search(r"A wait of (\d+) seconds", str(exc), re.I)
+                            if m:
+                                delay = max(delay, float(m.group(1)))
+                        await asyncio.sleep(delay)
+                        continue
+                    result_exc = exc
+                    break
+
+            if not fut.done():
+                if result_exc is not None:
+                    fut.set_exception(result_exc)
+                else:
+                    fut.set_result(result_val)
+            queue.task_done()
+
+
+# Singleton — один на весь процесс юзербота.
+_telegram_send_queue = _TelegramSendQueue()
+
+
 def _current_runtime_primary_model() -> str:
     """
     Возвращает primary-модель из живого OpenClaw runtime.
@@ -291,15 +407,18 @@ def _build_openclaw_progress_wait_notice(
             if key in summary_lower:
                 tool_emoji = emoji
                 break
-        # Пытаемся извлечь имя инструмента из summary
-        import re
-        m = re.search(r"(?:выполняется|вызываю|running)[:\s]+([^\n,;]{1,40})", tool_calls_summary, re.I)
-        if m:
-            tool_name_display = m.group(1).strip()
+        # Извлекаем первую narration-строку (например "🌐 Открываю браузер...")
+        first_line = tool_calls_summary.split("\n", 1)[0].strip()
+        if first_line and not first_line.startswith("✅") and not first_line.startswith("Инструментов"):
+            tool_name_display = first_line
 
-    if tool_calls_summary and "🔧 Выполняется:" in tool_calls_summary:
+    # Определяем есть ли running tools по счётчику "Инструментов: done/total"
+    _tc_m = re.search(r"Инструментов:\s*(\d+)/(\d+)", tool_calls_summary) if tool_calls_summary else None
+    _has_running = _tc_m and int(_tc_m.group(1)) < int(_tc_m.group(2))
+
+    if tool_calls_summary and _has_running:
         if tool_name_display:
-            lead = f"{tool_emoji} Использую инструмент: **{tool_name_display}**"
+            lead = f"{tool_name_display}"
         else:
             lead = f"{tool_emoji} Вызов инструмента — жду результат."
     elif tool_calls_summary:
@@ -1789,6 +1908,10 @@ class KraabUserbot:
             logger.warning("telegram_stop_failed", error=str(exc), non_fatal=True)
         await model_manager.close()
         await close_search()
+        try:
+            await _telegram_send_queue.stop_all()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("send_queue_stop_failed", error=str(exc), non_fatal=True)
         self._telegram_probe_failures = 0
         self._set_startup_state(state="stopped")
 
@@ -2936,11 +3059,12 @@ class KraabUserbot:
             # визуально, а send_message даёт надёжный финальный event доставки.
             # В background-handoff это ещё и разрывает зависимость от старого
             # placeholder-сообщения, которое могло уже устареть к моменту ответа.
-            sent = await self.client.send_message(source_message.chat.id, parts[0])
-            if getattr(sent, "id", None):
-                delivered_ids.append(str(sent.id))
-            for part in parts[1:]:
-                sent = await self.client.send_message(source_message.chat.id, part)
+            _cid = source_message.chat.id
+            for _part in parts:
+                _p = _part  # захват переменной для lambda
+                sent = await _telegram_send_queue.run(
+                    _cid, lambda: self.client.send_message(_cid, _p)
+                )
                 if getattr(sent, "id", None):
                     delivered_ids.append(str(sent.id))
             try:
@@ -3568,7 +3692,7 @@ class KraabUserbot:
 
     async def _safe_edit(self, msg: Message, text: str) -> Message:
         """
-        Безопасно редактирует сообщение.
+        Безопасно редактирует сообщение через _telegram_send_queue (с retry).
         Возвращает актуальный Message:
         - исходный, если edit не потребовался;
         - результат edit;
@@ -3581,19 +3705,26 @@ class KraabUserbot:
             target_text = "…"
         if current_text == target_text:
             return msg
+        chat_id: int = msg.chat.id
+        _text = target_text  # захват для lambda
         try:
-            edited = await msg.edit(target_text)
+            edited = await _telegram_send_queue.run(chat_id, lambda: msg.edit(_text))
             return edited or msg
         except Exception as exc:  # noqa: BLE001 - фильтруем MESSAGE_NOT_MODIFIED
             if self._is_message_not_modified_error(exc):
                 return msg
             if self._is_message_id_invalid_error(exc) or self._is_message_empty_error(exc):
                 logger.warning("telegram_edit_fallback_send_new", error=str(exc))
-                return await self.client.send_message(msg.chat.id, target_text)
+                return await _telegram_send_queue.run(
+                    chat_id, lambda: self.client.send_message(chat_id, _text)
+                )
             if self._is_message_too_long_error(exc):
                 # Текст превысил лимит Telegram (4096). Отрезаем и отправляем новым сообщением.
                 logger.warning("telegram_edit_too_long_fallback_send_new", error=str(exc))
-                return await self.client.send_message(msg.chat.id, target_text[:4000])
+                _truncated = _text[:4000]
+                return await _telegram_send_queue.run(
+                    chat_id, lambda: self.client.send_message(chat_id, _truncated)
+                )
             raise
 
     async def _safe_reply_or_send_new(self, msg: Message, text: str) -> Message:
@@ -3602,19 +3733,24 @@ class KraabUserbot:
 
         Это защищает private owner-path от silent-drop, когда Telegram принимает
         обычную отправку в чат, но валит именно reply на конкретный message id.
+        Оба вызова идут через _telegram_send_queue (с retry при FLOOD_WAIT/timeout).
         """
         target_text = (text or "").strip() or "…"
+        chat_id: int = msg.chat.id
+        _text = target_text  # захват для lambda
         try:
-            sent = await msg.reply(target_text)
+            sent = await _telegram_send_queue.run(chat_id, lambda: msg.reply(_text))
             return sent or msg
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "telegram_reply_fallback_send_new",
-                chat_id=str(getattr(getattr(msg, "chat", None), "id", "") or ""),
+                chat_id=str(chat_id),
                 message_id=str(getattr(msg, "id", "") or ""),
                 error=str(exc),
             )
-            return await self.client.send_message(msg.chat.id, target_text)
+            return await _telegram_send_queue.run(
+                chat_id, lambda: self.client.send_message(chat_id, _text)
+            )
 
     def _get_command_args(self, message: Message) -> str:
         """Извлекает аргументы команды, убирая саму команду"""

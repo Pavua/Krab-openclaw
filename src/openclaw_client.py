@@ -165,17 +165,58 @@ class OpenClawClient:
         except (OSError, ValueError, TypeError):
             pass
 
+    # Granular per-tool narration для Telegram progress notices.
+    _TOOL_NARRATIONS: dict[str, str] = {
+        "browser": "🌐 Открываю браузер...",
+        "browse": "🌐 Открываю страницу...",
+        "screenshot": "📸 Делаю скриншот...",
+        "read_file": "📖 Читаю файл...",
+        "read": "📖 Читаю данные...",
+        "write_file": "✏️ Записываю файл...",
+        "write": "✏️ Записываю...",
+        "search": "🔍 Ищу информацию...",
+        "web_search": "🔍 Ищу в интернете...",
+        "bash": "⚙️ Выполняю команду...",
+        "shell": "⚙️ Выполняю в терминале...",
+        "python": "🐍 Запускаю Python...",
+        "fetch": "📡 Загружаю данные...",
+        "http": "📡 Отправляю HTTP-запрос...",
+        "telegram": "📱 Работаю с Telegram...",
+        "send_message": "📱 Отправляю сообщение...",
+        "memory": "🧠 Обращаюсь к памяти...",
+        "recall": "🧠 Вспоминаю...",
+        "vision": "👁️ Анализирую изображение...",
+        "code": "💻 Работаю с кодом...",
+        "mercadona": "🛒 Проверяю Mercadona...",
+        "shop": "🛒 Проверяю магазин...",
+        "crypto": "📊 Проверяю криптовалюту...",
+        "imessage": "💬 Работаю с iMessage...",
+    }
+
+    def _narrate_tool(self, name: str) -> str:
+        """Возвращает human-readable narration для tool по имени."""
+        narrations = self._TOOL_NARRATIONS
+        # Точное совпадение
+        if name in narrations:
+            return narrations[name]
+        # Совпадение по подстроке (browser_action → browser)
+        name_lower = name.lower()
+        for key, msg in narrations.items():
+            if key in name_lower:
+                return msg
+        return f"🔧 Выполняю: {name}..."
+
     def get_active_tool_calls_summary(self) -> str:
-        """Возвращает краткую сводку активных/завершённых tool calls для Telegram notices."""
+        """Возвращает granular сводку активных/завершённых tool calls для Telegram notices."""
         if not self._active_tool_calls:
             return ""
-        running = [tc["name"] for tc in self._active_tool_calls if tc.get("status") == "running"]
-        done = [tc["name"] for tc in self._active_tool_calls if tc.get("status") == "done"]
+        running = [tc for tc in self._active_tool_calls if tc.get("status") == "running"]
+        done = [tc for tc in self._active_tool_calls if tc.get("status") == "done"]
         parts: list[str] = []
-        if running:
-            parts.append(f"🔧 Выполняется: {', '.join(running)}")
+        for tc in running:
+            parts.append(self._narrate_tool(tc["name"]))
         if done:
-            parts.append(f"✅ Готово: {', '.join(done)}")
+            parts.append(f"✅ Готово: {', '.join(tc['name'] for tc in done)}")
         total = len(self._active_tool_calls)
         if total > 0:
             parts.append(f"Инструментов: {len(done)}/{total}")
