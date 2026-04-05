@@ -172,7 +172,7 @@ class Config:
         os.getenv("TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", "1.4")
     )
     TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES: int = int(
-        os.getenv("TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", "6")
+        os.getenv("TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", "12")
     )
     TELEGRAM_MESSAGE_BATCH_MAX_CHARS: int = int(
         os.getenv("TELEGRAM_MESSAGE_BATCH_MAX_CHARS", "12000")

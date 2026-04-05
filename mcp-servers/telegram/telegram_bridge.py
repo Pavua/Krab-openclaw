@@ -55,6 +55,9 @@ def _make_client() -> Client:
         name=session_path,
         api_id=int(api_id_raw),
         api_hash=api_hash,
+        no_updates=True,  # MCP сервер делает только pull-операции; push-апдейты не нужны
+                          # и вызывают ValueError("Peer id invalid") на неизвестных peer-ах,
+                          # что роняет весь процесс.
     )
 
 
