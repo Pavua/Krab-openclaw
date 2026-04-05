@@ -594,20 +594,26 @@ class BrowserBridge:
 
     async def navigate(self, url: str) -> str:
         """Navigates active tab to url. Returns final URL."""
+        logger.info("browser_navigate_start", url=url)
         prefer_raw, ws_endpoint = self._should_prefer_raw_cdp()
         try:
             if self._prefer_raw_cdp or prefer_raw:
                 raise RuntimeError("prefer_raw_cdp")
             page = await self._active_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
-            return page.url
-        except Exception:
+            final_url = page.url
+            logger.info("browser_navigate_ok", requested=url, final=final_url)
+            return final_url
+        except Exception as exc:
+            logger.warning("browser_navigate_playwright_failed", url=url, error=repr(exc))
             ws_endpoint = ws_endpoint or await self._resolve_ws_endpoint()
             if not ws_endpoint:
                 raise
             self._prefer_raw_cdp = True
             try:
-                return await self._navigate_via_raw_cdp(ws_endpoint, url)
+                final = await self._navigate_via_raw_cdp(ws_endpoint, url)
+                logger.info("browser_navigate_cdp_ok", requested=url, final=final)
+                return final
             except Exception as raw_exc:
                 if self._is_stale_ws_error(raw_exc):
                     fresh = await self._refresh_ws_endpoint()

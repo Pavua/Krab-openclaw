@@ -425,6 +425,7 @@ def build_system_control_snapshot(
     browser_probe: dict[str, Any] | None = None,
     macos_probe: dict[str, Any] | None = None,
     mcp_probe: dict[str, Any] | None = None,
+    tor_probe: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Строит truthful System Control v2 capability snapshot (Phase 3).
 
@@ -439,6 +440,7 @@ def build_system_control_snapshot(
     browser_payload = browser_probe if isinstance(browser_probe, dict) else {}
     macos_payload = macos_probe if isinstance(macos_probe, dict) else {}
     mcp_payload = mcp_probe if isinstance(mcp_probe, dict) else {}
+    tor_payload = tor_probe if isinstance(tor_probe, dict) else {}
 
     def _probe_status(payload: dict[str, Any]) -> tuple[str, str]:
         """Returns (status, error) from a probe result dict."""
@@ -453,6 +455,7 @@ def build_system_control_snapshot(
     browser_status, browser_error = _probe_status(browser_payload)
     macos_status, macos_error = _probe_status(macos_payload)
     mcp_status, mcp_error = _probe_status(mcp_payload)
+    tor_status, tor_error = _probe_status(tor_payload)
 
     def _derived(base_status: str) -> str:
         """Derives a capability status from its required base status."""
@@ -512,9 +515,10 @@ def build_system_control_snapshot(
             "note": "tesseract CLI — brew install tesseract; Шаг 5",
         },
         "tor_proxy": {
-            "status": "not_implemented",
+            "status": tor_status,
+            "error": tor_error,
             "role_requirement": "owner_only",
-            "note": "SOCKS5 :9050 — wishlist / Шаг 7",
+            "note": "SOCKS5 :9050 через tor_bridge; TOR_ENABLED в .env",
         },
     }
 
@@ -539,6 +543,7 @@ def build_system_control_snapshot(
             "browser_probed": bool(browser_payload),
             "macos_probed": bool(macos_payload),
             "mcp_probed": bool(mcp_payload),
+            "tor_probed": bool(tor_payload),
         },
         "summary": {
             "total": len(capabilities),

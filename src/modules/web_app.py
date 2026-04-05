@@ -3254,10 +3254,21 @@ class WebApp:
             mcp_probe = await asyncio.wait_for(_mcp.health_check(), timeout=3.0)
         except Exception:
             pass
+        tor_probe: dict | None = None
+        try:
+            if bool(getattr(config, "TOR_ENABLED", False)):
+                from ..integrations.tor_bridge import health_check as _tor_hc
+                tor_probe = await asyncio.wait_for(
+                    _tor_hc(socks_port=int(getattr(config, "TOR_SOCKS_PORT", 9050))),
+                    timeout=15.0,
+                )
+        except Exception:
+            pass
         system_control = build_system_control_snapshot(
             browser_probe=browser_probe,
             macos_probe=macos_probe,
             mcp_probe=mcp_probe,
+            tor_probe=tor_probe,
         )
         return build_capability_registry(
             operator_profile=operator_profile,

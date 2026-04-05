@@ -246,6 +246,11 @@ class Config:
         "1",
     ).strip().lower() in ("1", "true", "yes")
 
+    # Tor SOCKS5 proxy (опционально, для анонимных запросов через Tor)
+    TOR_ENABLED: bool = os.getenv("TOR_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+    TOR_SOCKS_PORT: int = int(os.getenv("TOR_SOCKS_PORT", "9050"))
+    TOR_CONTROL_PORT: int = int(os.getenv("TOR_CONTROL_PORT", "9051"))
+
     # User settings
     OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "@yung_nagato")
     ALLOWED_USERS: list[str] = [u.strip().lstrip("@") for u in os.getenv("ALLOWED_USERS", "pablito,admin").split(",") if u.strip()]
