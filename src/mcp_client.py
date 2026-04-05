@@ -222,6 +222,38 @@ class MCPClientManager:
                 }
             }
         })
+        # web_search: поиск в интернете через Brave / Firecrawl
+        manifest.append({
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Поиск информации в интернете. Используй для актуальных данных: цены, новости, факты, документация.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Поисковый запрос"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        })
+        # tor_fetch: анонимный HTTP запрос через Tor (если включён)
+        from . import config as _cfg
+        if getattr(_cfg, "TOR_ENABLED", False):
+            manifest.append({
+                "type": "function",
+                "function": {
+                    "name": "tor_fetch",
+                    "description": "Анонимный HTTP GET запрос через Tor SOCKS5 proxy. Для .onion сайтов и анонимного доступа.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string", "description": "URL для запроса"},
+                        },
+                        "required": ["url"]
+                    }
+                }
+            })
         return manifest
 
     async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -230,6 +262,12 @@ class MCPClientManager:
         """
         if full_tool_name == "peekaboo":
             return await self._peekaboo_impl(arguments)
+
+        if full_tool_name == "web_search":
+            return await self._web_search_impl(arguments)
+
+        if full_tool_name == "tor_fetch":
+            return await self._tor_fetch_impl(arguments)
 
         if "__" not in full_tool_name:
             return f"❌ Неизвестный формат инструмента: {full_tool_name}"
@@ -256,6 +294,34 @@ class MCPClientManager:
                 return f"❌ Ошибка KrabEarAgent: {resp.status_code}"
         except Exception as e:
             return f"❌ Ошибка peekaboo: {str(e)}"
+
+    async def _web_search_impl(self, arguments: Dict[str, Any]) -> str:
+        """Реализация web_search через search_web (Brave/Firecrawl)."""
+        query = str(arguments.get("query", "")).strip()
+        if not query:
+            return "❌ Пустой по��сковый запрос"
+        try:
+            results = await self.search_web(query)
+            return results or "Ничего не найдено."
+        except Exception as e:
+            logger.error("web_search_tool_failed", query=query, error=repr(e))
+            return f"❌ ��шибка поиска: {e}"
+
+    async def _tor_fetch_impl(self, arguments: Dict[str, Any]) -> str:
+        """Реализация tor_fetch через tor_bridge."""
+        url = str(arguments.get("url", "")).strip()
+        if not url:
+            return "❌ URL не указан"
+        try:
+            from .integrations.tor_bridge import tor_fetch
+            result = await tor_fetch(url, timeout=30.0)
+            if result.get("ok"):
+                text = str(result.get("text", ""))
+                return text[:8000] if len(text) > 8000 else text
+            return f"❌ Tor fetch error: {result.get('error', 'unknown')}"
+        except Exception as e:
+            logger.error("tor_fetch_tool_failed", url=url, error=repr(e))
+            return f"❌ Ошибка tor_fetch: {e}"
 
     async def health_check(self) -> dict:
         """Возвращает статус MCP relay для capability_registry._probe_status().

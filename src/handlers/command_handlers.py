@@ -245,7 +245,9 @@ class _AgentRoomRouterAdapter:
         """
         del skip_swarm
         chunks: list[str] = []
-        max_output_tokens = int(getattr(config, "SWARM_ROLE_MAX_OUTPUT_TOKENS", 700) or 700)
+        # Увеличенный лимит: модели нужен бюджет на tool_calls JSON + финальный ответ.
+        # 700 токенов слишком мало для tool call (200+ токенов на JSON аргументы).
+        max_output_tokens = int(getattr(config, "SWARM_ROLE_MAX_OUTPUT_TOKENS", 4096) or 4096)
         async for chunk in openclaw_client.send_message_stream(
             message=prompt,
             chat_id=self.chat_id,

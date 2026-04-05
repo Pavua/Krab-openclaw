@@ -90,15 +90,21 @@ async def search_mercadona(query: str, max_results: int = 10) -> str:
             logger.debug("mercadona_response_parse_error", url=url, error=repr(exc))
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=[
+        # Tor proxy: если TOR_ENABLED=True, все запросы идут через SOCKS5
+        from ..config import config as _app_cfg
+        _launch_kwargs: dict = {
+            "headless": True,
+            "args": [
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-web-security",
                 "--lang=es-ES",
             ],
-        )
+        }
+        if getattr(_app_cfg, "TOR_ENABLED", False):
+            _tor_port = int(getattr(_app_cfg, "TOR_SOCKS_PORT", 9050))
+            _launch_kwargs["proxy"] = {"server": f"socks5://127.0.0.1:{_tor_port}"}
+        browser = await pw.chromium.launch(**_launch_kwargs)
         context = await browser.new_context(
             locale="es-ES",
             timezone_id="Europe/Madrid",

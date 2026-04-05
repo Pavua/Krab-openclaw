@@ -26,12 +26,21 @@ class WebSessionManager:
         try:
             self.playwright = await async_playwright().start()
             # Launch persistent context
-            self.context = await self.playwright.chromium.launch_persistent_context(
-                user_data_dir=USER_DATA_DIR,
-                headless=headless,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            # Tor proxy: если TOR_ENABLED=True, все запросы идут через SOCKS5
+            _launch_kwargs: dict = {
+                "user_data_dir": USER_DATA_DIR,
+                "headless": headless,
+                "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+            try:
+                from .config import config as _app_cfg
+                if getattr(_app_cfg, "TOR_ENABLED", False):
+                    _tor_port = int(getattr(_app_cfg, "TOR_SOCKS_PORT", 9050))
+                    _launch_kwargs["proxy"] = {"server": f"socks5://127.0.0.1:{_tor_port}"}
+            except ImportError:
+                pass
+            self.context = await self.playwright.chromium.launch_persistent_context(**_launch_kwargs)
             self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
             self.is_active = True
             logger.info("web_session_started", headless=headless)

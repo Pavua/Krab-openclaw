@@ -126,7 +126,7 @@ class AgentRoom:
     в контекст следующей роли.
     """
 
-    def __init__(self, roles: list[dict[str, str]] | None = None, *, role_context_clip: int = 1200) -> None:
+    def __init__(self, roles: list[dict[str, str]] | None = None, *, role_context_clip: int = 3000) -> None:
         self.roles = roles or DEFAULT_AGENT_ROLES
         self.role_context_clip = max(200, int(role_context_clip))
         logger.info("agent_room_initialized", roles=[r.get("name", "agent") for r in self.roles])
@@ -182,14 +182,22 @@ class AgentRoom:
                     accumulated_context += intervention
                     logger.info("agent_room_intervention_applied", team=_team_name, role=name)
 
+            # Tool awareness: сообщаем модели что она может использовать инструменты
+            tool_hint = (
+                "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
+                "peekaboo (скриншот экрана). Используй web_search для получения актуальных данных "
+                "(цены, новости, факты). Не стесняйся вызывать инструменты — это даёт реальные данные "
+                "вместо устаревших знаний."
+            )
+
             if accumulated_context:
                 prompt = (
-                    f"{hint}\n\n"
+                    f"{hint}{tool_hint}\n\n"
                     f"--- Контекст предыдущих ролей ---\n{accumulated_context}\n"
                     f"---\n\nТема: {topic}"
                 )
             else:
-                prompt = f"{hint}\n\nТема: {topic}"
+                prompt = f"{hint}{tool_hint}\n\nТема: {topic}"
 
             try:
                 response = await router.route_query(prompt, skip_swarm=True)
