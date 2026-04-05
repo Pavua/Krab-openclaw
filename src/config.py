@@ -264,6 +264,13 @@ class Config:
         for u in os.getenv("PARTIAL_ACCESS_USERS", "").split(",")
         if u.strip()
     ]
+    # Ручной чёрный список: username-ы или числовые ID, которым Краб не отвечает автоматически.
+    # Формат: "username1,@username2,123456" (@ необязателен, нормализуется к lower-case).
+    MANUAL_BLOCKLIST: frozenset[str] = frozenset(
+        u.strip().lstrip("@").lower()
+        for u in os.getenv("MANUAL_BLOCKLIST", "").split(",")
+        if u.strip()
+    )
     USERBOT_ACL_FILE: Path = Path(
         os.getenv(
             "USERBOT_ACL_FILE",
@@ -389,6 +396,10 @@ class Config:
                     cls.PARTIAL_ACCESS_USERS = [u.strip().lstrip("@") for u in value.split(",") if u.strip()]
                 elif key == "OWNER_USER_IDS":
                     cls.OWNER_USER_IDS = [u.strip() for u in value.split(",") if u.strip()]
+                elif key == "MANUAL_BLOCKLIST":
+                    cls.MANUAL_BLOCKLIST = frozenset(
+                        u.strip().lstrip("@").lower() for u in value.split(",") if u.strip()
+                    )
                 elif key == "TRIGGER_PREFIXES":
                     cls.TRIGGER_PREFIXES = [p.strip() for p in value.split(",") if p.strip()]
                 elif key == "MAX_RAM_GB":

@@ -174,6 +174,9 @@ async def discover_models(
                 "vl" in model_id.lower()
                 or "vision" in model_id.lower()
                 or "glm-4" in model_id.lower()
+                or "gemma-3n" in model_id.lower()
+                or "image-edit" in model_id.lower()
+                or "image_edit" in model_id.lower()
             )
             model = ModelInfo(
                 id=model_id,

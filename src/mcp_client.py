@@ -257,6 +257,20 @@ class MCPClientManager:
         except Exception as e:
             return f"❌ Ошибка peekaboo: {str(e)}"
 
+    async def health_check(self) -> dict:
+        """Возвращает статус MCP relay для capability_registry._probe_status().
+
+        Формат: {"ok": bool, "count": int, "error": str}
+        - ok=True  → is_running и есть хотя бы одна активная сессия
+        - ok=False → не запущен или нет активных сессий
+        """
+        if not self.is_running:
+            return {"ok": False, "count": 0, "error": "not_started"}
+        count = len(self.sessions)
+        if count == 0:
+            return {"ok": False, "count": 0, "error": "no_active_sessions"}
+        return {"ok": True, "count": count, "error": ""}
+
     async def stop_all(self):
         """Остановка всех серверов"""
         await self.exit_stack.aclose()

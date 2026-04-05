@@ -1973,6 +1973,27 @@ class KraabUserbot:
         """
         return self._get_access_profile(user).is_trusted
 
+    @staticmethod
+    def _is_notification_sender(user: object) -> bool:
+        """Определяет, является ли отправитель SMS/iMessage shortcode (≤ 5 цифр).
+
+        Shortcode-номера (банки, аптеки, сервисы) используются для OTP и уведомлений.
+        Отвечать им бессмысленно — они не принимают входящие.
+        """
+        username = str(getattr(user, "username", "") or "").strip().lstrip("@")
+        phone = str(getattr(user, "phone", "") or "").strip().lstrip("+").replace(" ", "").replace("-", "")
+        for candidate in (username, phone):
+            if candidate and candidate.isdigit() and len(candidate) <= 5:
+                return True
+        return False
+
+    def _is_manually_blocked(self, user: object) -> bool:
+        """Проверяет наличие отправителя в MANUAL_BLOCKLIST (config или .env)."""
+        username = str(getattr(user, "username", "") or "").strip().lstrip("@").lower()
+        user_id = str(getattr(user, "id", "") or "").strip()
+        blocked: frozenset[str] = getattr(config, "MANUAL_BLOCKLIST", frozenset())
+        return bool(blocked and (username in blocked or user_id in blocked))
+
     def _has_command_access(self, user: object, command_name: str) -> bool:
         """Проверяет доступ пользователя к конкретной Telegram-команде."""
         access_profile = self._get_access_profile(user)
@@ -4395,6 +4416,7 @@ class KraabUserbot:
                             has_photo=bool(images),
                         )
                         full_response = "❌ Модель слишком долго пишет ответ (оборвано на полуслове)."
+                        timeout_error_was_sent = True  # → force_new_message, не тихий edit
                         if next_chunk_task and not next_chunk_task.done():
                             next_chunk_task.cancel()
                             try:
@@ -5025,6 +5047,21 @@ class KraabUserbot:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("incoming_message_inbox_sync_failed", chat_id=chat_id, error=str(exc))
+
+        # Фильтр OTP/уведомлений: не отвечать на SMS-shortcode отправителей (≤5 цифр)
+        # и на ручной MANUAL_BLOCKLIST. Входящее всё равно форвардится owner-у.
+        if not is_self and (self._is_notification_sender(user) or self._is_manually_blocked(user)):
+            _block_reason = "manual_blocklist" if self._is_manually_blocked(user) else "notification_sender"
+            logger.info("auto_reply_skipped_blocked_sender", chat_id=chat_id, reason=_block_reason)
+            if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
+                asyncio.create_task(
+                    self._forward_guest_incoming_to_owner(
+                        message=message,
+                        query=query or text or "",
+                        krab_response="[автоответ пропущен: уведомление/заблокированный отправитель]",
+                    )
+                )
+            return
 
         if not is_self and query and self._detect_relay_intent(query):
             chat_type_raw = getattr(getattr(message, "chat", None), "type", "")

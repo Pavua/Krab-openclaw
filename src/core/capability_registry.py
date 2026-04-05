@@ -479,7 +479,7 @@ def build_system_control_snapshot(
             "status": mcp_status,
             "error": mcp_error,
             "role_requirement": "owner_or_full",
-            "note": "MCP клиент через OpenClaw; Шаг 2 добавит health_check()",
+            "note": "MCP клиент через OpenClaw; health_check() активен",
         },
         "macos_control": {
             "status": macos_status,
@@ -548,9 +548,9 @@ def build_system_control_snapshot(
             "not_implemented": not_impl_count,
         },
         "notes": [
-            "Phase 3 Шаг 1: capability matrix зарегистрирована. Статус 'unknown' пока health_check() не добавлен.",
-            "Phase 3 Шаг 2: добавить BrowserBridge.health_check() и MCPClient.health_check().",
-            "Phase 3 Шаг 4: добавить MacOSAutomation.health_check() для ui_automation/clipboard.",
+            "Phase 3 Шаг 1: capability matrix зарегистрирована.",
+            "Phase 3 Шаг 2: BrowserBridge.health_check() и MCPClient.health_check() — активны.",
+            "Phase 3 Шаг 4: MacOSAutomation.health_check() — активен.",
         ],
     }
 
