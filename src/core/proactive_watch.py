@@ -32,6 +32,7 @@ from .logger import get_logger
 from .inbox_service import inbox_service
 from .openclaw_runtime_models import get_runtime_primary_model
 from .openclaw_workspace import append_workspace_memory_entry
+from .subprocess_env import clean_subprocess_env
 from .scheduler import krab_scheduler
 
 
@@ -70,6 +71,7 @@ async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
             "openclaw", "cron", "list", "--json", "--all",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env=clean_subprocess_env(),
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)

@@ -22,6 +22,8 @@ from typing import Any
 
 import structlog
 
+from ..core.subprocess_env import clean_subprocess_env
+
 logger = structlog.get_logger(__name__)
 
 
@@ -60,6 +62,7 @@ class MacOSAutomationService:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=clean_subprocess_env(),
             )
             try:
                 stdout, stderr = await asyncio.wait_for(
@@ -173,6 +176,7 @@ class MacOSAutomationService:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=clean_subprocess_env(),
         )
         await proc.communicate(input=text.encode("utf-8"))
         return ""

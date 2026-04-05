@@ -1154,6 +1154,7 @@ class OpenClawClient:
             ("unauthorized", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
             ("401", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
             ("timeout", "provider_timeout", "Таймаут облачного провайдера"),
+            ("an unknown error occurred", "gateway_unknown_error", "OpenClaw вернул неизвестную ошибку"),
         ]
         for pattern, code, message in semantic_patterns:
             if pattern in low:
@@ -2778,6 +2779,8 @@ class OpenClawClient:
                     user_text = "❌ Локальная модель вернула служебный/повреждённый ответ. Повтори запрос или переключись на !model cloud."
                 elif code == "vision_addon_missing":
                     user_text = "❌ Локальная модель не поддерживает обработку фото в текущей конфигурации. Переключи vision-модель или попробуй !model cloud."
+                elif code == "gateway_unknown_error":
+                    user_text = "⚠️ OpenClaw вернул неизвестную ошибку. Попробуй повторить запрос."
                 else:
                     user_text = "❌ Облачный сервис временно недоступен. Попробуй позже или !model local."
                 yield user_text

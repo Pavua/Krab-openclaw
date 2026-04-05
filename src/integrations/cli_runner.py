@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from ..core.logger import get_logger
+from ..core.subprocess_env import clean_subprocess_env
 
 logger = get_logger(__name__)
 
@@ -89,6 +90,7 @@ async def run_cli(
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd_path,
             limit=_MAX_OUTPUT_BYTES,
+            env=clean_subprocess_env(),
         )
         try:
             stdout_bytes, _ = await asyncio.wait_for(

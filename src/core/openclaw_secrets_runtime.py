@@ -18,6 +18,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .subprocess_env import clean_subprocess_env
+
 
 _DEFAULT_OPENCLAW_BIN_CANDIDATES = (
     "/opt/homebrew/bin/openclaw",
@@ -147,6 +149,7 @@ async def reload_openclaw_secrets(timeout_sec: float = 25.0) -> dict[str, Any]:
             "reload",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=clean_subprocess_env(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
         output = stdout.decode("utf-8", errors="replace").strip()

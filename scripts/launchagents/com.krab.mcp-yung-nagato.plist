@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.krab.mcp-yung-nagato</string>
+
+    <key>Comment</key>
+    <string>Krab Telegram MCP (kraab account) — SSE on :8011</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python</string>
+      <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/run_telegram_mcp_account.py</string>
+      <string>--session-name</string>
+      <string>kraab</string>
+      <string>--transport</string>
+      <string>sse</string>
+      <string>--port</string>
+      <string>8011</string>
+      <string>--host</string>
+      <string>127.0.0.1</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab-mcp-yung-nagato.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab-mcp-yung-nagato.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HOME</key>
+      <string>/Users/pablito</string>
+      <key>PATH</key>
+      <string>/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+  </dict>
+</plist>

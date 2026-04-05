@@ -585,6 +585,7 @@ class KraabUserbot:
         self.perceptor = perceptor
         self.maintenance_task: Optional[asyncio.Task] = None
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
+        self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -1742,6 +1743,7 @@ class KraabUserbot:
         # Запуск фоновых задач (Safe Start)
         self._ensure_maintenance_started()
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
+        self._background_task_reaper_task = asyncio.create_task(self._background_task_reaper())
         self._ensure_proactive_watch_started()
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
@@ -1838,7 +1840,7 @@ class KraabUserbot:
                         self._mark_transport_degraded(reason="watchdog_probe_failed", error=str(exc))
                     logger.warning(
                         "telegram_watchdog_probe_failed",
-                        error=str(exc),
+                        error=repr(exc),
                         consecutive_failures=self._telegram_probe_failures,
                     )
 
@@ -1955,6 +1957,7 @@ class KraabUserbot:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("swarm_scheduler_stop_failed", error=str(exc), non_fatal=True)
         await self._cancel_background_task("_telegram_watchdog_task")
+        await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
         try:
             await self._safe_stop_client(reason="runtime_stop")
@@ -4229,6 +4232,46 @@ class KraabUserbot:
                 return None
         return task
         return None
+
+    async def _background_task_reaper(self) -> None:
+        """Периодически отменяет зависшие background tasks без ожидания нового сообщения."""
+        reaper_interval = 60.0
+        while True:
+            try:
+                await asyncio.sleep(reaper_interval)
+                tasks = getattr(self, "_chat_background_tasks", None) or {}
+                started_at_rows = getattr(self, "_chat_background_task_started_at", None) or {}
+                if not tasks:
+                    continue
+                stale_timeout_sec = max(
+                    60.0,
+                    float(getattr(config, "USERBOT_BACKGROUND_TASK_STALE_TIMEOUT_SEC", 900.0) or 900.0),
+                )
+                now = time.monotonic()
+                stale_keys = []
+                for chat_key, task in list(tasks.items()):
+                    if task.done():
+                        continue
+                    started_at = float(started_at_rows.get(chat_key) or 0.0)
+                    if started_at <= 0.0:
+                        continue
+                    age_sec = now - started_at
+                    if age_sec > stale_timeout_sec:
+                        stale_keys.append((chat_key, age_sec, task))
+                for chat_key, age_sec, task in stale_keys:
+                    logger.warning(
+                        "background_task_reaper_cancelled",
+                        chat_id=chat_key,
+                        age_sec=round(age_sec, 1),
+                        stale_timeout_sec=stale_timeout_sec,
+                    )
+                    task.cancel()
+                    tasks.pop(chat_key, None)
+                    started_at_rows.pop(chat_key, None)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("background_task_reaper_error", error=repr(exc))
 
     async def _finish_ai_request_background_after_previous(
         self,

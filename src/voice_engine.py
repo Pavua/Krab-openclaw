@@ -21,6 +21,8 @@ from uuid import uuid4
 import edge_tts
 from structlog import get_logger
 
+from src.core.subprocess_env import clean_subprocess_env
+
 logger = get_logger(__name__)
 
 VOICE_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "voice_cache")
@@ -86,7 +88,8 @@ async def text_to_speech(
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            env=clean_subprocess_env(),
         )
         await process.wait()
 
