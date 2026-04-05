@@ -1,0 +1,109 @@
+# CLAUDE.md
+
+Контекст для Claude Code при работе с Krab (Краб).
+Если этот файл расходится с runtime — верить runtime.
+
+## Что это
+
+Краб — персональный Telegram userbot на MTProto (Pyrogram), связанный с OpenClaw Gateway,
+owner-панелью на `:8080`, голосовым и browser-контуром, мультиагентным свёрмом,
+и набором локальных/облачных AI-провайдеров.
+
+Три контура с разным уровнем полномочий:
+- **Telegram userbot** — боевой канал доставки, userbot-команды, ACL
+- **Owner panel** `http://127.0.0.1:8080` — health/runtime/routing/ops
+- **OpenClaw dashboard** `http://127.0.0.1:18789` — нативный chat/tool/agent
+
+## Язык
+
+Общение с пользователем — **на русском**. Комментарии в коде — на русском (краткие).
+
+## Запуск и остановка
+
+```bash
+# Канонические лаунчеры (НЕ Restart Krab.command!)
+/Users/pablito/Antigravity_AGENTS/new\ start_krab.command
+/Users/pablito/Antigravity_AGENTS/new\ Stop\ Krab.command
+
+# Gateway — НЕ SIGHUP! Использовать:
+openclaw gateway
+
+# Тесты
+pytest tests/ -q
+pytest tests/unit/test_openclaw_client.py -q
+ruff check src/ && ruff format src/
+```
+
+## Архитектура (ключевые модули)
+
+```
+src/
+  userbot_bridge.py     — ядро: Pyrogram MTProto, message processing, background tasks
+  openclaw_client.py    — OpenClaw API клиент, tool execution loop, model routing
+  mcp_client.py         — MCP relay: tool manifest, call_tool_unified, native tools
+  config.py             — все env-переменные и конфигурация
+  core/
+    swarm.py            — AgentRoom: мультиагентные роли, delegation
+    swarm_bus.py        — SwarmBus + TEAM_REGISTRY (traders/coders/analysts/creative)
+    swarm_memory.py     — персистентная память свёрма (JSON, FIFO 50/team)
+    swarm_scheduler.py  — рекуррентный планировщик (!swarm schedule)
+    swarm_channels.py   — live broadcast в Telegram группы
+    subprocess_env.py   — clean_subprocess_env() (MallocStackLogging cleanup)
+    proactive_watch.py  — фоновый мониторинг runtime state
+  handlers/
+    command_handlers.py — !swarm, !search, _AgentRoomRouterAdapter
+  integrations/
+    tor_bridge.py       — Tor SOCKS5 proxy (httpx + Playwright)
+    browser_bridge.py   — CDP подключение к Chrome
+    hammerspoon_bridge.py — HTTP bridge к Hammerspoon :10101
+    macos_automation.py — AppleScript/osascript автоматизация
+  skills/
+    mercadona.py        — Playwright scraper со stealth
+  modules/
+    web_app.py          — Owner panel FastAPI (:8080)
+```
+
+## Инфраструктура (LaunchAgents)
+
+| Service | Port | Label |
+|---------|------|-------|
+| OpenClaw gateway | 18789 | `ai.openclaw.gateway` |
+| MCP yung-nagato (kraab) | 8011 | `com.krab.mcp-yung-nagato` |
+| MCP p0lrd | 8012 | `com.krab.mcp-p0lrd` |
+| Inbox watcher | — | `ai.krab.inbox-watcher` |
+
+MCP серверы — SSE транспорт. Claude Desktop подключается через `npx mcp-remote` proxy.
+Plists: `scripts/launchagents/`
+
+## Модели и routing
+
+Runtime truth: `~/.openclaw/agents/main/agent/models.json`
+
+Текущий routing (06.04.2026):
+- Primary: `google/gemini-3.1-pro-preview`
+- Fallbacks: `gemini-2.5-pro-preview`, `gemini-2.5-flash`, `gemini-3-flash-preview`
+- `google-antigravity` — НЕ использовать (квота/бан)
+- LM Studio local — автоматический fallback при cloud-failure
+
+## Свёрм (Multi-Agent)
+
+Команды в Telegram: `!swarm <team> <topic>`, `!swarm teams`, `!swarm schedule`, `!swarm memory`
+Teams: `traders`, `coders`, `analysts`, `creative`
+
+Tool access: web_search, tor_fetch (если TOR_ENABLED), peekaboo, все MCP tools.
+`SWARM_ROLE_MAX_OUTPUT_TOKENS` default 4096. Role context clip 3000 chars.
+
+## Правила
+
+- **Не дублируй нативный функционал OpenClaw** если он уже есть
+- **Не SIGHUP openclaw** — только `openclaw gateway` для рестарта
+- **LM Studio модели** — тестировать ONE AT A TIME (RAM overflow на 36GB M4 Max)
+- **Subprocess** — всегда `env=clean_subprocess_env()` для subprocess'ов
+- **Handoff** — после изменений обновляй memory и IMPROVEMENTS.md
+- **Проверяй после правок**: `pytest tests/ -q`, `ruff check src/`
+
+## Ссылки
+
+- `IMPROVEMENTS.md` — архитектурный бэклог и глобальное видение
+- `docs/MASTER_PLAN_VNEXT_RU.md` — мастер-план проекта
+- Memory: `~/.claude/projects/-Users-pablito-Antigravity-AGENTS-----/memory/`
