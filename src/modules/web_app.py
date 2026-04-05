@@ -89,6 +89,7 @@ from src.core.translator_live_trial_preflight import (  # noqa: E402
     build_translator_live_trial_preflight,
 )
 from src.core.voice_gateway_control_plane import VoiceGatewayControlPlane  # noqa: E402
+from src.integrations.voice_gateway_subscriber import VoiceGatewayEventSubscriber  # noqa: E402
 
 logger = structlog.get_logger("WebApp")
 
@@ -121,6 +122,7 @@ class WebApp:
         # Catalog моделей может собираться заметно дольше health/status endpoints,
         # поэтому write-path панели использует отдельный короткий cache.
         self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
+        self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
         self._setup_routes()
 
     def _public_base_url(self) -> str:
@@ -6516,6 +6518,50 @@ class WebApp:
             return 503, "translator_gateway_unavailable"
         return 503, detail
 
+    async def _start_vg_subscriber(self, session_id: str, voice_gateway: VoiceGatewayControlPlane) -> None:
+        """Запускает WS-подписчик на поток сессии Voice Gateway для LLM reasoning."""
+        await self._stop_vg_subscriber()
+        try:
+            from src.integrations.voice_gateway_client import VoiceGatewayClient
+            if not isinstance(voice_gateway, VoiceGatewayClient):
+                return
+            subscriber = VoiceGatewayEventSubscriber(
+                base_url=voice_gateway.base_url,
+                api_key=voice_gateway.api_key,
+            )
+
+            async def _on_stt_final(event_type: str, data: dict[str, Any]) -> None:
+                """Обработчик stt.final — отправляет reasoning.context в сессию."""
+                text = str(data.get("text") or "").strip()
+                if not text or len(text) < 3:
+                    return
+                try:
+                    await voice_gateway.push_event(
+                        session_id,
+                        event_type="reasoning.context",
+                        data={
+                            "text": f"STT получен: {text[:100]}",
+                            "category": "stt_received",
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning("reasoning push failed: %s", exc)
+
+            subscriber.on_stt_final = _on_stt_final
+            await subscriber.start(session_id)
+            self._vg_subscriber = subscriber
+        except Exception as exc:
+            logger.warning("Не удалось запустить VG subscriber: %s", exc)
+
+    async def _stop_vg_subscriber(self) -> None:
+        """Останавливает WS-подписчик Voice Gateway."""
+        if self._vg_subscriber:
+            try:
+                await self._vg_subscriber.stop()
+            except Exception:
+                pass
+            self._vg_subscriber = None
+
     def _translator_gateway_client_or_raise(self) -> VoiceGatewayControlPlane:
         """Возвращает Voice Gateway control-plane или бросает 503 при неполном контракте."""
         client = self.deps.get("voice_gateway_client")
@@ -7999,6 +8045,12 @@ class WebApp:
                     fallback="translator_session_start_failed",
                 )
                 raise HTTPException(status_code=status_code, detail=detail)
+
+            # E4.2: Запускаем WS-подписчик для LLM reasoning
+            new_session_id = str(result.get("session_id") or "").strip()
+            if new_session_id:
+                await self._start_vg_subscriber(new_session_id, voice_gateway)
+
             return await self._translator_action_response(action="start_session", gateway_result=result)
 
         @self.app.post("/api/translator/session/policy")
@@ -8061,6 +8113,7 @@ class WebApp:
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             if action == "stop":
+                await self._stop_vg_subscriber()
                 result = await voice_gateway.stop_session(session_id)
             else:
                 target_status = "paused" if action == "pause" else "running"

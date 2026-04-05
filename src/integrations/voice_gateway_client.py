@@ -465,3 +465,37 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
             "device_id": normalized_device_id,
             "result": dict(payload.get("result") or payload),
         }
+
+    async def push_event(self, session_id: str, *, event_type: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Публикует произвольное событие в realtime-поток сессии.
+
+        Используется для отправки reasoning.suggestion / reasoning.context
+        от Krab Core в активную звонковую сессию Voice Gateway.
+        """
+        payload = {"type": str(event_type).strip(), "data": dict(data or {})}
+        status_code, response_payload, error = await self._request_json(
+            "POST",
+            f"/v1/sessions/{session_id}/events",
+            json_payload=payload,
+            timeout_sec=max(5.0, self.timeout_sec),
+        )
+        if error or status_code != 200 or not isinstance(response_payload, dict):
+            return self._error_payload(status_code, error, detail=response_payload)
+        return {"ok": True, "session_id": session_id, "result": dict(response_payload.get("result") or response_payload)}
+
+    async def session_tts(self, session_id: str, *, text: str, voice: str = "default", style: str = "neutral") -> dict[str, Any]:
+        """Генерирует речь и публикует tts.ready в поток сессии.
+
+        Используется для озвучки LLM-подсказок (reasoning.suggestion)
+        непосредственно в активную звонковую сессию.
+        """
+        payload = {"text": str(text).strip(), "voice": str(voice).strip(), "style": str(style).strip()}
+        status_code, response_payload, error = await self._request_json(
+            "POST",
+            f"/v1/sessions/{session_id}/tts",
+            json_payload=payload,
+            timeout_sec=max(10.0, self.timeout_sec),
+        )
+        if error or status_code != 200 or not isinstance(response_payload, dict):
+            return self._error_payload(status_code, error, detail=response_payload)
+        return {"ok": True, "session_id": session_id, "result": dict(response_payload.get("result") or response_payload)}
