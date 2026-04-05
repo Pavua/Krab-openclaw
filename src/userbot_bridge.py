@@ -47,6 +47,8 @@ from .core.openclaw_workspace import load_workspace_prompt_bundle
 from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
+from .core.swarm_channels import swarm_channels
+from .core.swarm_scheduler import swarm_scheduler
 from .core.translator_runtime_profile import (
     default_translator_runtime_profile,
     load_translator_runtime_profile,
@@ -1328,6 +1330,34 @@ class KraabUserbot:
             if not krab_scheduler.is_started:
                 krab_scheduler.start()
                 logger.info("scheduler_runtime_started")
+
+            # Swarm scheduler — рекуррентные автономные прогоны
+            if config.SWARM_AUTONOMOUS_ENABLED and self.me:
+                owner_chat_id = str(self.me.id)
+                system_prompt = self._build_system_prompt_for_sender(
+                    is_allowed_sender=True, access_level="owner",
+                )
+
+                def _swarm_router_factory(team_name: str):
+                    from .handlers.command_handlers import _AgentRoomRouterAdapter
+                    return _AgentRoomRouterAdapter(
+                        chat_id=f"swarm:scheduled:{team_name}",
+                        system_prompt=system_prompt,
+                    )
+
+                swarm_scheduler.bind(
+                    sender=self._send_scheduled_message,
+                    router_factory=_swarm_router_factory,
+                    owner_chat_id=owner_chat_id,
+                )
+                if not swarm_scheduler._started:
+                    swarm_scheduler.start()
+                    logger.info("swarm_scheduler_runtime_started")
+
+            # Swarm channels — live broadcast в Telegram-группы
+            if self.me and self.client:
+                swarm_channels.bind(client=self.client, owner_id=self.me.id)
+                logger.info("swarm_channels_bound", teams=list(swarm_channels.get_all_team_chats()))
             return
 
         if krab_scheduler.is_started:
@@ -1919,6 +1949,11 @@ class KraabUserbot:
                 krab_scheduler.stop()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("scheduler_stop_failed", error=str(exc), non_fatal=True)
+        if swarm_scheduler._started:
+            try:
+                swarm_scheduler.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("swarm_scheduler_stop_failed", error=str(exc), non_fatal=True)
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_proactive_watch_task")
         try:
@@ -5410,6 +5445,20 @@ class KraabUserbot:
             user = message.from_user
             if not user or user.is_bot:
                 return
+
+            # Swarm intervention: если owner пишет в swarm-группу — перехватываем
+            if (
+                self.me
+                and user.id == self.me.id
+                and message.chat
+                and message.text
+            ):
+                swarm_team = swarm_channels.is_swarm_chat(message.chat.id)
+                if swarm_team and swarm_channels.is_round_active(swarm_team):
+                    swarm_channels.add_intervention(swarm_team, message.text)
+                    await message.reply(f"👑 Директива принята для **{swarm_team}**")
+                    return
+
             access_profile = self._get_access_profile(user)
             is_allowed_sender = self._is_allowed_sender(user)
             if is_allowed_sender and not access_profile.is_trusted:

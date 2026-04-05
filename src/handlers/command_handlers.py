@@ -290,6 +290,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         resolve_team_name,
         swarm_bus,
     )
+    from ..core.swarm_memory import swarm_memory
 
     args = bot._get_command_args(message).strip()
     if not args:
@@ -297,13 +298,126 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "🐝 Как использовать Swarm:\n"
             "`!swarm <тема>` — базовый room\n"
             "`!swarm traders BTC анализ` — команда трейдеров\n"
-            "`!swarm coders написать бота` — команда кодеров\n"
-            "`!swarm teams` — список команд"
+            "`!swarm teams` — список команд\n"
+            "`!swarm memory [команда]` — история прогонов\n"
+            "`!swarm schedule traders 4h BTC` — автозапуск\n"
+            "`!swarm jobs` — список задач\n"
+            "`!swarm unschedule <id>` — удалить задачу"
         ))
 
     # !swarm teams — справка
     if args.lower() in {"teams", "команды", "help"}:
         await message.reply(list_teams())
+        return
+
+    # !swarm memory [team] — история прогонов
+    if args.lower().startswith("memory") or args.lower().startswith("память"):
+        mem_tokens = args.split(maxsplit=1)
+        if len(mem_tokens) > 1:
+            mem_arg = mem_tokens[1].strip().lower()
+            if mem_arg == "clear":
+                teams = swarm_memory.all_teams()
+                total = sum(swarm_memory.clear_team(t) for t in teams)
+                await message.reply(f"🧹 Очищена память всех команд ({total} записей)")
+            else:
+                team = resolve_team_name(mem_arg) or mem_arg
+                await message.reply(swarm_memory.format_history(team, count=7))
+        else:
+            # Показать сводку по всем командам
+            teams = swarm_memory.all_teams()
+            if not teams:
+                await message.reply("🧠 Память свёрма пуста — ещё не было прогонов.")
+            else:
+                lines = ["🧠 **Память свёрма:**\n"]
+                for t in teams:
+                    stats = swarm_memory.get_team_stats(t)
+                    lines.append(
+                        f"**{t}** — {stats['total_runs']} прогонов, "
+                        f"последний: {stats.get('last_run', '—')}"
+                    )
+                lines.append("\n`!swarm memory <команда>` — подробная история")
+                await message.reply("\n".join(lines))
+        return
+
+    # !swarm schedule <team> <topic> <interval> — создание рекуррентной задачи
+    if args.lower().startswith("schedule") or args.lower().startswith("расписание"):
+        from ..core.swarm_scheduler import parse_interval, swarm_scheduler
+        sched_tokens = args.split(maxsplit=3)  # schedule traders "BTC" 4h
+        if len(sched_tokens) < 4:
+            await message.reply(
+                "📅 Формат: `!swarm schedule <команда> <интервал> <тема>`\n"
+                "Пример: `!swarm schedule traders 4h анализ BTC`\n"
+                "Интервалы: `30m`, `1h`, `4h`, `1d`"
+            )
+            return
+        sched_team = resolve_team_name(sched_tokens[1])
+        if not sched_team:
+            await message.reply(f"❌ Команда '{sched_tokens[1]}' не найдена. Доступны: {', '.join(TEAM_REGISTRY)}")
+            return
+        try:
+            interval = parse_interval(sched_tokens[2])
+        except ValueError as e:
+            await message.reply(f"❌ {e}")
+            return
+        sched_topic = sched_tokens[3] if len(sched_tokens) > 3 else "общий анализ"
+        try:
+            job = swarm_scheduler.add_job(team=sched_team, topic=sched_topic, interval_sec=interval)
+            interval_h = interval / 3600
+            interval_str = f"{interval_h:.1f}ч" if interval_h >= 1 else f"{interval // 60}мин"
+            await message.reply(
+                f"📅 Задача создана!\n"
+                f"ID: `{job.job_id}`\n"
+                f"Команда: **{sched_team}** каждые {interval_str}\n"
+                f"Тема: _{sched_topic}_"
+            )
+        except RuntimeError as e:
+            await message.reply(f"❌ {e}")
+        return
+
+    # !swarm unschedule <id> — удаление задачи
+    if args.lower().startswith("unschedule") or args.lower().startswith("отмена"):
+        from ..core.swarm_scheduler import swarm_scheduler
+        unsched_tokens = args.split(maxsplit=1)
+        if len(unsched_tokens) < 2:
+            await message.reply("❌ Укажи ID задачи: `!swarm unschedule <id>`")
+            return
+        job_id = unsched_tokens[1].strip()
+        if swarm_scheduler.remove_job(job_id):
+            await message.reply(f"✅ Задача `{job_id}` удалена")
+        else:
+            await message.reply(f"❌ Задача `{job_id}` не найдена")
+        return
+
+    # !swarm jobs — список рекуррентных задач
+    if args.lower() in {"jobs", "задачи", "schedule"}:
+        from ..core.swarm_scheduler import swarm_scheduler
+        await message.reply(swarm_scheduler.format_jobs())
+        return
+
+    # !swarm channels — статус swarm-групп
+    if args.lower() in {"channels", "группы", "каналы"}:
+        from ..core.swarm_channels import swarm_channels
+        await message.reply(swarm_channels.format_status())
+        return
+
+    # !swarm setchat <team> — привязать текущую группу к команде
+    if args.lower().startswith("setchat") or args.lower().startswith("привязать"):
+        from ..core.swarm_channels import swarm_channels
+        setchat_tokens = args.split(maxsplit=1)
+        if len(setchat_tokens) < 2:
+            await message.reply(
+                "📡 Формат: `!swarm setchat <команда>`\n"
+                "Вызывай эту команду **в группе**, которую хочешь привязать.\n"
+                "Пример: в группе «Трейдеры» напиши `!swarm setchat traders`"
+            )
+            return
+        team = resolve_team_name(setchat_tokens[1].strip())
+        if not team:
+            await message.reply(f"❌ Команда '{setchat_tokens[1]}' не найдена. Доступны: {', '.join(TEAM_REGISTRY)}")
+            return
+        chat_id = message.chat.id
+        swarm_channels.register_team_chat(team, chat_id)
+        await message.reply(f"📡 Группа привязана к команде **{team}**\nChat ID: `{chat_id}`")
         return
 
     # Парсим: [team_name] [loop [N]] <topic>

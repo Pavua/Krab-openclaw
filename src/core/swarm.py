@@ -16,9 +16,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import time
 from typing import Any, Callable
 
 from .logger import get_logger
+from .swarm_channels import swarm_channels
+from .swarm_memory import swarm_memory
 
 logger = get_logger(__name__)
 
@@ -145,17 +148,39 @@ class AgentRoom:
         задача диспатчится в указанную команду. Результат инжектируется в
         накопленный контекст для следующих ролей.
         """
+        t0 = time.monotonic()
         accumulated_context = ""
         round_results: list[dict[str, str]] = []
         delegation_results: list[str] = []
 
+        # Inject контекста из памяти предыдущих прогонов
+        memory_context = ""
+        if _team_name:
+            memory_context = swarm_memory.get_context_for_injection(_team_name)
+            if memory_context:
+                accumulated_context = memory_context + "\n\n"
+                logger.info("agent_room_memory_injected", team=_team_name,
+                            context_len=len(memory_context))
+
         logger.info("agent_room_round_started", topic=topic, roles=len(self.roles), depth=_depth)
+
+        # Live broadcast: анонс начала раунда в swarm-группу
+        if _team_name and _depth == 0:
+            swarm_channels.mark_round_active(_team_name)
+            await swarm_channels.broadcast_round_start(team=_team_name, topic=topic)
 
         for role in self.roles:
             name = str(role.get("name", "agent"))
             emoji = str(role.get("emoji", "🤖"))
             title = str(role.get("title", name))
             hint = str(role.get("system_hint", "")).strip()
+
+            # Проверяем intervention от владельца перед каждой ролью
+            if _team_name:
+                intervention = swarm_channels.get_pending_intervention(_team_name)
+                if intervention:
+                    accumulated_context += intervention
+                    logger.info("agent_room_intervention_applied", team=_team_name, role=name)
 
             if accumulated_context:
                 prompt = (
@@ -176,6 +201,13 @@ class AgentRoom:
             if not clipped:
                 clipped = "[Пустой ответ роли: проверьте контекст, лимиты или состояние модели]"
                 logger.warning("agent_room_role_empty_response", role=name, topic=topic)
+
+            # Live broadcast: публикуем ответ роли в swarm-группу
+            if _team_name and _depth == 0:
+                await swarm_channels.broadcast_role_step(
+                    team=_team_name, role_name=name, role_emoji=emoji,
+                    role_title=title, text=clipped,
+                )
 
             # R18: Детектируем директиву делегирования [DELEGATE: team]
             if _bus is not None and _router_factory is not None:
@@ -216,8 +248,27 @@ class AgentRoom:
         if delegation_results:
             body += f"📡 **Делегирование:** {', '.join(delegation_results)}\n"
 
+        full_result = header + body.strip()
+
+        # Live broadcast: итог раунда + снимаем active
+        if _team_name and _depth == 0:
+            last_role_text = round_results[-1]["text"] if round_results else ""
+            await swarm_channels.broadcast_round_end(team=_team_name, summary=last_role_text)
+            swarm_channels.mark_round_done(_team_name)
+
+        # Сохраняем результат в персистентную память (только top-level раунды)
+        if _team_name and _depth == 0:
+            duration = time.monotonic() - t0
+            swarm_memory.save_run(
+                team=_team_name,
+                topic=topic,
+                result=full_result,
+                delegations=delegation_results,
+                duration_sec=duration,
+            )
+
         logger.info("agent_room_round_completed", topic=topic, delegations=len(delegation_results))
-        return header + body.strip()
+        return full_result
 
     async def run_loop(
         self,

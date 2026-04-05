@@ -344,6 +344,13 @@ class Config:
         "DEFERRED_ACTION_GUARD_ENABLED",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+
+    # Автономные рекуррентные задачи свёрма (scheduled swarm runs).
+    # По умолчанию ВЫКЛЮЧЕНО — включать только после стабилизации.
+    SWARM_AUTONOMOUS_ENABLED: bool = os.getenv(
+        "SWARM_AUTONOMOUS_ENABLED",
+        "0",
+    ).strip().lower() in ("1", "true", "yes")
     # Разрешить voice-сообщения в группах как триггер для бота (только от allowed пользователей),
     # даже если нет текстового упоминания "Краб".
     GROUP_VOICE_FALLBACK_TRIGGER: bool = os.getenv(
