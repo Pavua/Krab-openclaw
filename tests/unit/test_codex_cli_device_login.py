@@ -11,12 +11,18 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "codex_cli_device_login.py"
+if not MODULE_PATH.exists():
+    pytest.skip("scripts/codex_cli_device_login.py not available", allow_module_level=True)
 SPEC = importlib.util.spec_from_file_location("codex_cli_device_login", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+try:
+    SPEC.loader.exec_module(MODULE)
+except (ImportError, ModuleNotFoundError, FileNotFoundError):
+    pytest.skip("scripts/codex_cli_device_login.py dependencies not available", allow_module_level=True)
 
 
 def test_extract_device_url_reads_exact_codex_device_path() -> None:

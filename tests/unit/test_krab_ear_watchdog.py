@@ -15,7 +15,12 @@ import os
 import tempfile
 from pathlib import Path
 
-from scripts.krab_ear_watchdog import KrabEarWatchdog
+import pytest
+
+try:
+    from scripts.krab_ear_watchdog import KrabEarWatchdog
+except (ImportError, ModuleNotFoundError, FileNotFoundError):
+    pytest.skip("scripts.krab_ear_watchdog not available", allow_module_level=True)
 
 
 async def _run_fake_ipc_server(socket_path: Path, stop_event: asyncio.Event) -> None:

@@ -12,14 +12,17 @@
 **Цель:** Создание независимых виртуальных команд (трейдеры, кодеры, аналитики), которые могут общаться между собой. Например, команда трейдеров анализирует рынок и ставит задачу команде кодеров на написание/корректировку крипто-бота. Главный фокус — окупаемость и автономный заработок.
 
 **Статус:** 🚧 В РАЗРАБОТКЕ (R18→R20, 2026-04-06) — инфраструктура + память + расписание + инструменты:
-- `src/core/swarm_bus.py`: TeamRegistry (4 команды: traders/coders/analysts/creative) + SwarmBus (межкомандное делегирование через `[DELEGATE: team]`, max_depth=2)
+- `src/core/swarm_bus.py`: TeamRegistry (4 команды: traders/coders/analysts/creative) + SwarmBus (межкомандное делегирование через `[DELEGATE: team]`, max_depth=1)
 - `src/core/swarm.py`: AgentRoom R18 — детектирует директивы делегирования, инжектирует результат в контекст
 - `src/core/swarm_memory.py`: ✅ (2026-04-05) Персистентная память между сессиями — JSON в `~/.openclaw/krab_runtime_state/swarm_memory.json`, FIFO 50 записей/команда, auto-inject в system_hint ролей
 - `src/core/swarm_scheduler.py`: ✅ (2026-04-05) Рекуррентный планировщик — `!swarm schedule traders 4h BTC`, `!swarm jobs`, `!swarm unschedule <id>`, гейт `SWARM_AUTONOMOUS_ENABLED`
 - ✅ (2026-04-06) **Tool access**: web_search, tor_fetch (TOR_ENABLED), peekaboo, все MCP tools. Tool awareness hint инжектируется в промпт каждой роли. `SWARM_ROLE_MAX_OUTPUT_TOKENS`=4096, `role_context_clip`=3000.
+- ✅ (2026-04-06) **Forum Topics**: Одна supergroup "🐝 Krab Swarm" (chat_id `-1003703978531`) с 5 топиками (traders/coders/analysts/creative/crossteam). Live broadcast каждой роли в соответствующий топик. Делегирование → crossteam topic. `!swarm setup` для автоматического создания.
+- ✅ (2026-04-06) **Broadcast for delegated rounds**: Убран фильтр `_depth==0` — delegated rounds (coders при делегировании от traders) теперь тоже транслируются в свой топик. `_MAX_DEPTH` снижен 2→1 для предотвращения каскадных делегаций.
+- ✅ (2026-04-06) **Swarm channels tests**: 31 тест (broadcast routing, delegation, resolve_destination, is_forum_mode, resolve_team_from_topic). Мокают `_send_message` для изоляции от Pyrogram transport.
 - Команды в Telegram: `!swarm traders <тема>`, `!swarm teams`, `!swarm memory [команда]`, `!swarm schedule/jobs/unschedule`
 
-**Следующий шаг:** E2E тест tools (web_search реально вызывается и возвращает данные), затем cross-team delegation E2E (traders → coders).
+**Следующий шаг:** Миграция на pyrofork (объединение dual venv), затем отдельные TG аккаунты для команд свёрма.
 
 ### 2. Максимальный доступ к macOS (Permission Audit)
 **Цель:** Дать Крабу возможность полностью управлять файловой системой, окнами и процессами без ручного вмешательства.
