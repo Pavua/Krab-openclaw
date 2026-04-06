@@ -1,6 +1,6 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-06
+> Составлен: 2026-03-23 | Обновлён: 2026-04-06 (batch 6)
 > Статус: Активная разработка
 > Владелец: По
 
@@ -80,6 +80,28 @@
 - При `message.photo` фото скачивается через `client.download_media()` → конвертируется в base64 → передаётся в `send_message_stream(..., images=[b64_img])` напрямую в OpenClaw.
 - `vision_read.py` как subprocess нигде не вызывается (файл отсутствует в `src/`).
 - Для фото-маршрута автоматически применяются увеличенные таймауты (`_resolve_openclaw_stream_timeouts(has_photo=True)`) и принудительный cloud-роутинг (`_should_force_cloud_for_photo_route`).
+
+### 18. ACL — Silence mode, Guest tools, Spam filter
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-06, batch 6)
+
+**SilenceManager** (`src/core/silence_mode.py`):
+- Per-chat и глобальный mute, in-memory, monotonic expiry
+- `!тишина [N]` — mute чата на N минут (default 30), `!тишина стоп`, `!тишина глобально [N]`, `!тишина статус`
+- Auto-silence: если owner пишет в чат сам → Краб молчит 5 мин (OWNER_AUTO_SILENCE_MINUTES)
+- Silence check в pipeline — после trigger conditions, перед AI запросом. Команды (!/.) проходят всегда.
+- Доступна FULL access (не только OWNER — т.к. OWNER=yung_nagato, оператор p0lrd имеет FULL)
+
+**Guest mode** (`src/openclaw_client.py`):
+- AccessLevel.GUEST → `disable_tools=True` в send_message_stream → tools=[] в payload
+- NON_OWNER_SAFE_PROMPT обновлён: "живой помощник", не представляется ботом
+- Контролируется `GUEST_TOOLS_DISABLED=1` (env)
+
+**Расширенный спам-фильтр** (`src/core/spam_filter.py`):
+- `is_notification_sender()` — shortcodes ≤5 цифр (iMessage)
+- `is_bulk_sender()` — scam/fake флаги, verified+no-username (банки/сервисы), OTP-паттерны в first_name
+- `should_skip_auto_reply()` — combined check, вызывается из userbot_bridge
+
+**Тесты:** 36 новых (test_silence_mode.py × 22, test_spam_filter.py × 14). E2E подтверждено через MCP.
 
 ### 10. Парсинг Mercadona (Anti-bot)
 **Решение:** Добавить `puppeteer-extra-plugin-stealth` и перехватывать XHR/Fetch запросы API через `page.on('response')` вместо нестабильного парсинга DOM-элементов.
