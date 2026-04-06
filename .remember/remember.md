@@ -1,73 +1,148 @@
 # Handoff для новой сессии
 
-## State (2026-04-06, session batch 7-8)
+## State (2026-04-06, session batch 9)
 Коммиты на `main` за эту сессию:
-- `6306885` — fix(swarm): warm-up peer cache for team clients via get_dialogs
-- `876f3a5` — feat(swarm): per-team Telegram accounts for swarm broadcasts (357 lines)
-- `00d6a41` — refactor(pyrofork): unify venv, remove dual-Pyrogram workarounds
+- `0cad624` — fix(logger): write structlog output to runtime log file
+- `3ba6d93` — refactor(venv): prefer unified venv/ over legacy .venv/ in all paths
+- `75d9bba` — fix(userbot): safe _stop_swarm_team_clients when not initialized
 
-## Что сделано этой сессией
+## Итоги сессии batch 9 (продолжение batch 7-8)
 
-### 1. Pyrofork унификация — ✅ DEPLOYED
-- Убрали 4 `getattr`-костыля (send_reaction, CreateForumTopic×2, inspect.signature)
-- Единый `venv/` (pyrofork 2.3.69, Python 3.13) для runtime + MCP + тестов
-- MCP LaunchAgents переустановлены (`.venv/` → `venv/`)
-- CLAUDE.md обновлён
-- 31/31 тестов swarm_channels проходят
+### ✅ Warm-up team clients ВЕРИФИЦИРОВАН В RUNTIME
+Фикс из коммита `6306885` работает: после рестарта в `krab_main.log`
+видны все 4 события для каждой команды:
+```
+swarm_team_client_started (traders/coders/analysts/creative)
+swarm_team_client_warmed_up (все 4)
+swarm_team_client_bound (все 4)
+swarm_team_clients_ready
+```
+`get_dialogs(limit=50)` прогревает peer cache для каждого team client,
+CHAT_ID_INVALID больше не возникает.
 
-### 2. Per-team Telegram аккаунты для свёрма — ✅ DEPLOYED, но E2E failed
-- SwarmChannels: `_team_clients` dict + `_resolve_client()` + fallback на main
-- Userbot lifecycle: background start/stop team clients
-- Config: `SWARM_TEAM_ACCOUNTS_PATH` → JSON loader
-- Новый скрипт: `scripts/auth_swarm_account.py`
-- +10 новых тестов (41/41 pass)
-- 4 аккаунта авторизованы и добавлены в Forum группу через yung_nagato
-- **Текущая проблема**: peer cache на team clients пуст → CHAT_ID_INVALID при send_message
-- **Фикс уже в коде** (коммит `6306885`): `get_dialogs(limit=50)` warm-up при старте
-- **Нужен рестарт Краба** чтобы warm-up сработал
+### ✅ Signal gateway — угашен
+Два LaunchAgent висели в infinite restart loop:
+- `ai.openclaw.signal-cli` — телефон `+34603834299` не зарегистрирован
+  в Signal, daemon падал с exit 1, накопил 2.1MB err лога
+- `ai.krab.signal-ops-guard` — ссылался на удалённый
+  `scripts/signal_ops_guard.py`, exit 2 каждую минуту
 
-## Team accounts mapping
-| Команда | Username | User ID | Телефон | Session file |
-|---------|----------|---------|---------|--------------|
-| traders | @p0lrdp_AI | 1861168302 | +40724455794 | swarm_traders.session |
-| coders | @p0lrdp_worldwide | 5929474128 | +66959272975 | swarm_coders.session |
-| analysts | @hard2boof | 6539946601 | +6282280748457 | swarm_analysts.session |
-| creative | @opiodimeo | 5920778135 | +639355619567 | swarm_creative.session |
+Действия: `launchctl bootout gui/$UID/ai.openclaw.signal-cli`
+и `ai.krab.signal-ops-guard`. Plist оставлены для восстановления
+когда/если будет зарегистрирован Signal-аккаунт.
 
-Конфиг: `~/.openclaw/krab_runtime_state/swarm_team_accounts.json`
-Сессии: `data/sessions/swarm_*.session`
-Forum группа: 🐝 Krab Swarm (chat_id: -1003703978531)
+Logs очищены: `signal-daemon.err.log`, `signal-ops-guard.*.log`.
 
-## ACL архитектурная особенность
-OWNER в Krab = **yung_nagato** (userbot, session: `kraab.session`).
-Оператор **p0lrd** (id: 312322764) имеет **FULL** доступ (не OWNER).
-Команды для p0lrd: в чат с @yung_nagato (id: 6435872621), не в Saved Messages.
+### ✅ krab_main.log пишется снова
+Root cause: `src/core/logger.py` использовал `structlog.PrintLoggerFactory`,
+писал только в stdout. Старый launcher делал `tee -a krab_main.log`,
+новый `new start_krab.command` — нет. Все runtime логи уходили в pipe
+wrapper'а и терялись.
 
-## Следующие шаги (приоритет)
-1. **Рестарт Краба** → проверить warm-up team clients → E2E тест `!swarm traders`
-   - Должны увидеть в логах: `swarm_team_client_warmed_up` для всех 4 команд
-   - Сообщения в Forum должны приходить от @p0lrdp_AI / @p0lrdp_worldwide / @hard2boof / @opiodimeo
-2. **Signal gateway**: SSE `fetch failed`, LaunchAgent `ai.openclaw.signal-cli` exit code 1 — диагностировать
-3. **Mercadona навигация**: нужны логи терминала при воспроизведении
-4. **Удалить `.venv/`** после проверки что всё работает на едином `venv/`
+Фикс: `structlog.stdlib.LoggerFactory` + stdlib handlers (stdout +
+FileHandler на `krab_main.log`). Путь через env:
+- `KRAB_LOG_FILE=...` — переопределение
+- `KRAB_LOG_FILE=""` / `none` — отключить файл
+- Default: `$KRAB_RUNTIME_STATE_DIR/krab_main.log` или
+  `~/.openclaw/krab_runtime_state/krab_main.log`
 
-## Проверки после рестарта
+### ✅ Venv унификация добита
+Из batch 7 остались хардкоды `.venv/bin/python` в 5 местах:
+- `mcp-servers/telegram/server.py:613` (krab_run_tests MCP)
+- `src/core/mcp_registry.py:64` (LM Studio launcher)
+- `src/core/translator_finish_gate.py:30` (python bin picker)
+- `src/modules/web_app.py:2855, 11039, 11097` (subprocess launchers)
+
+Все пути теперь резолвятся в порядке `venv → .venv → fallback`.
+После рестарта MCP серверов warning от pytest указывает на
+`venv/lib/python3.13/site-packages/pyrogram/sync.py:33` — значит единый
+venv реально используется везде.
+
+`.venv/` (1.5GB, Python 3.12 anaconda, old pyrogram) переименован в
+`.venv.OLD_DELETE_ME_SAFELY`. Физически не удалён — пусть полежит
+сутки, потом можно `rm -rf /Users/pablito/Antigravity_AGENTS/Краб/.venv.OLD_DELETE_ME_SAFELY`.
+
+### ✅ primary модель: gemini-3.1-pro-preview → gemini-pro-latest
+Gemini 3.1 pro-preview стабильно возвращал "An unknown error occurred"
+(retry loop в gateway.err.log с 2026-04-06 02:02 — уже сутки).
+После рестарта Краб грелся на старом primary и swarm commands уходили
+в retry бесконечно.
+
+Фикс: `~/.openclaw/openclaw.json.agents.defaults.model`:
+```
+OLD primary: google/gemini-3.1-pro-preview
+NEW primary: google/gemini-pro-latest
+fallbacks: gemini-2.5-pro-preview-06-05 → gemini-3-pro-preview →
+           gemini-3-flash-preview → gemini-2.5-pro → gemini-flash-latest
+           → gemini-3.1-pro-preview (в конце, как последний фолбек)
+```
+Бэкап: `~/.openclaw/openclaw.json.bak_pre_gemini_swap_20260406_234544`
+
+Этот конфиг НЕ в git (runtime state). Если нужно откатить — `cp` бэкап.
+
+### ✅ Bugfix: _stop_swarm_team_clients AttributeError
+Регрессия из `876f3a5`: метод обращался к `self._swarm_team_clients`
+без `getattr`. Test fixture, вызывающий `stop()` без `start()`, падал
+`AttributeError`. Фикс: `getattr(self, "_swarm_team_clients", None)`
+с early return если пусто. Test `test_stop_awaits_background_tasks_...`
+теперь зелёный.
+
+## Нерешённое (следующая сессия)
+
+### ⚠️ Forum topics в swarm_channels.json не конфигурированы
+`~/.openclaw/krab_runtime_state/swarm_channels.json`:
+```json
+{"forum_chat_id": null, "team_topics": {}, "team_chats": {"traders": -100, "coders": -200}}
+```
+`swarm_channels.configured()` возвращает False → Forum broadcast молча
+скипается. Warm-up верифицирован через логи, но полный E2E
+(сообщение от @p0lrdp_AI в топик Forum группы) пока не прошёл.
+
+Fix: запустить `!swarm setup` от yung_nagato в группе 🐝 Krab Swarm
+(chat_id `-1003703978531`) с включёнными Topics. Либо заполнить
+`forum_chat_id` + `team_topics` вручную через Owner panel.
+
+### ⚠️ Pre-existing test failures (не блокер, но раздражает)
+44 тестов в `tests/unit/` падают из-за drift между тестами и кодом:
+- `test_access_control`: `cap` добавлен в OWNER_ONLY_COMMANDS без обновления теста
+- `test_userbot_stream_timeouts`: ожидает "Использую инструмент", код — "Выполняется"
+- `test_openclaw_model_registry_sync`: 2 теста по reasoning
+- `test_web_app_runtime_endpoints`: 13 translator тестов (config drift)
+
+Все 137 тестов по изменённым/критичным модулям — зелёные.
+
+### ⚠️ Mercadona навигация — блокер user (не мой)
+Нужны логи терминала при воспроизведении. Без логов диагностировать нельзя.
+
+## Canonical runtime commands
 ```bash
-# 1. Грепнуть warm-up логи
+# Запуск / стоп Krab (НЕ Restart Krab.command!)
+"/Users/pablito/Antigravity_AGENTS/new start_krab.command"
+"/Users/pablito/Antigravity_AGENTS/new Stop Krab.command"
+
+# Gateway — через openclaw binary, НЕ SIGHUP
+PATH=/opt/homebrew/bin:$PATH openclaw gateway start
+
+# Проверка warm-up в логах
 grep swarm_team_client_warmed_up ~/.openclaw/krab_runtime_state/krab_main.log
 
-# 2. Послать тест через MCP
-# (через telegram_send_message на @yung_nagato)
-!swarm traders тест: BTC тренд, одно предложение
-
-# 3. Проверить что сообщения в Forum
-# приходят от @p0lrdp_AI, а не от @yung_nagato
+# Тесты через единый venv
+/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python -m pytest tests/unit/test_swarm_channels.py -q
 ```
 
-## Известные особенности runtime
-- OpenClaw gateway после рестарта Краба нужно стартовать вручную:
-  `PATH=/opt/homebrew/bin:$PATH openclaw gateway start`
-- Crash при stop (`CancelledError` в `session.ping_task`) — pre-existing pyrofork issue, не блокер
-- Канонические лаунчеры: `new start_krab.command` / `new Stop Krab.command`
-- Krab logs runtime: `~/.openclaw/krab_runtime_state/krab_main.log`
-- Единый venv: `venv/` (pyrofork 2.3.69, Python 3.13)
+## Team accounts mapping (как было)
+| Команда | Username | User ID | Session |
+|---------|----------|---------|---------|
+| traders | @p0lrdp_AI | 1861168302 | swarm_traders.session |
+| coders | @p0lrdp_worldwide | 5929474128 | swarm_coders.session |
+| analysts | @hard2boof | 6539946601 | swarm_analysts.session |
+| creative | @opiodimeo | 5920778135 | swarm_creative.session |
+
+Конфиг: `~/.openclaw/krab_runtime_state/swarm_team_accounts.json`
+Forum группа: 🐝 Krab Swarm (`-1003703978531`) — в handoff помечена как
+готовая, но `swarm_channels.json` этого не знает.
+
+## ACL (напоминание)
+OWNER = **yung_nagato** (userbot, session `kraab.session`, id 6435872621).
+Оператор **p0lrd** (id 312322764) имеет FULL, но НЕ OWNER.
+Команды от p0lrd — в ЛС `@yung_nagato`, не в Saved Messages.
