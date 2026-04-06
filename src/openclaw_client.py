@@ -1778,6 +1778,7 @@ class OpenClawClient:
         max_output_tokens: int | None = None,
         has_photo: bool = False,
         allow_auth_retry: bool = True,
+        disable_tools: bool = False,
     ) -> str:
         """Один запрос к OpenClaw (stream=false) с буферизацией ответа.
 
@@ -1786,8 +1787,9 @@ class OpenClawClient:
         stream=False, напротив, работает корректно и возвращает полный JSON-ответ.
         """
         from .mcp_client import mcp_manager  # lazy import
-        tools = await mcp_manager.get_tool_manifest()
-        
+        _dt = disable_tools or getattr(self, "_request_disable_tools", False)
+        tools = [] if _dt else await mcp_manager.get_tool_manifest()
+
         # ФИКС 2026.3.x: новый OpenClaw gateway требует "openclaw" или "openclaw/<agentId>"
         # вместо прямого имени провайдер/модель. Gateway сам маршрутизирует запрос
         # через агентскую конфигурацию (agents.defaults.model.primary + fallbacks).
@@ -2275,6 +2277,7 @@ class OpenClawClient:
         force_cloud: bool = False,
         preferred_model: Optional[str] = None,
         max_output_tokens: int | None = None,
+        disable_tools: bool = False,
     ) -> AsyncIterator[str]:
         """
         Отправляет сообщение в OpenClaw с recovery policy.
@@ -2286,6 +2289,7 @@ class OpenClawClient:
         4) fallback на локальную модель,
         5) прямой LM Studio fallback (если force_cloud=False).
         """
+        self._request_disable_tools = disable_tools
         self._active_tool_calls.clear()
         if chat_id not in self._sessions:
             cached = history_cache.get(f"chat_history:{chat_id}")

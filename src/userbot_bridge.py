@@ -105,7 +105,10 @@ from .handlers import (
     handle_write,
     handle_screenshot,
     handle_cap,
+    handle_silence,
 )
+from .core.silence_mode import silence_manager
+from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
 from .search_engine import close_search
@@ -824,6 +827,13 @@ class KraabUserbot:
         @self.client.on_message(filters.command("cap", prefixes=prefixes) & _make_command_filter("cap"), group=-1)
         async def wrap_cap(c, m):
             await run_cmd(handle_cap, m)
+
+        @self.client.on_message(
+            filters.command("тишина", prefixes=prefixes) & _make_command_filter("тишина"),
+            group=-1,
+        )
+        async def wrap_silence(c, m):
+            await run_cmd(handle_silence, m)
 
         @self.client.on_message(filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1)
         async def wrap_watch(c, m):
@@ -4380,6 +4390,12 @@ class KraabUserbot:
             has_images=bool(images),
         )
 
+        # Гостевой режим: отключаем tools/exec для GUEST-уровня
+        _guest_disable_tools = (
+            bool(getattr(config, "GUEST_TOOLS_DISABLED", True))
+            and hasattr(access_profile, "level")
+            and str(getattr(access_profile.level, "value", access_profile.level)).lower() == "guest"
+        )
         stream = openclaw_client.send_message_stream(
             message=effective_query,
             chat_id=runtime_chat_id,
@@ -4387,6 +4403,7 @@ class KraabUserbot:
             images=images,
             force_cloud=force_cloud,
             max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
+            disable_tools=_guest_disable_tools,
         )
         stream_iter = stream.__aiter__()
         received_any_chunk = False
@@ -5107,6 +5124,12 @@ class KraabUserbot:
         ):
             return
 
+        # Silence check: если чат заглушён — не обрабатывать AI-запросы.
+        # Команды (! / .) обработаны выше и уже return'нули.
+        if not is_self and silence_manager.is_silenced(chat_id):
+            logger.info("silence_mode_skip", chat_id=chat_id)
+            return
+
         query = self._get_clean_text(text)
         if not query and has_audio_message:
             query, voice_error = await self._transcribe_audio_message(message)
@@ -5141,10 +5164,17 @@ class KraabUserbot:
         except Exception as exc:  # noqa: BLE001
             logger.warning("incoming_message_inbox_sync_failed", chat_id=chat_id, error=str(exc))
 
-        # Фильтр OTP/уведомлений: не отвечать на SMS-shortcode отправителей (≤5 цифр)
-        # и на ручной MANUAL_BLOCKLIST. Входящее всё равно форвардится owner-у.
-        if not is_self and (self._is_notification_sender(user) or self._is_manually_blocked(user)):
-            _block_reason = "manual_blocklist" if self._is_manually_blocked(user) else "notification_sender"
+        # Фильтр спама: shortcodes, рассылки, OTP, scam/fake + ручной blocklist.
+        if not is_self and (
+            self._is_notification_sender(user)
+            or _is_bulk_sender_ext(user)
+            or self._is_manually_blocked(user)
+        ):
+            _block_reason = (
+                "manual_blocklist" if self._is_manually_blocked(user)
+                else "bulk_sender" if _is_bulk_sender_ext(user)
+                else "notification_sender"
+            )
             logger.info("auto_reply_skipped_blocked_sender", chat_id=chat_id, reason=_block_reason)
             if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
                 asyncio.create_task(
@@ -5532,6 +5562,16 @@ class KraabUserbot:
                     matched_subject=str(getattr(user, "username", "") or getattr(user, "id", "")),
                 )
             chat_id = str(message.chat.id)
+
+            # Auto-silence: owner сам пишет в чат (не команду) → Краб молчит N мин
+            is_self = self.me and user.id == self.me.id
+            raw_text = (message.text or "").strip()
+            is_command = raw_text[:1] in ("!", "/", ".") if raw_text else False
+            if is_self and not is_command and chat_id:
+                _auto_min = int(getattr(config, "OWNER_AUTO_SILENCE_MINUTES", 5))
+                if _auto_min > 0:
+                    silence_manager.auto_silence_owner_typing(chat_id, _auto_min)
+
             async with self._get_chat_processing_lock(chat_id):
                 if self._consume_batched_followup_message_id(
                     chat_id=chat_id,

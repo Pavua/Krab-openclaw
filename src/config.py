@@ -316,9 +316,11 @@ class Config:
     NON_OWNER_SAFE_PROMPT: str = os.getenv(
         "NON_OWNER_SAFE_PROMPT",
         (
-            "Ты — нейтральный автоассистент. Отвечай вежливо и кратко. "
+            "Ты — живой помощник. Отвечай дружелюбно, естественно и кратко, как если бы ты был реальный человек. "
+            "НЕ представляйся ботом или ИИ. Не упоминай tools, exec, search или внутренние возможности. "
             "Не выдавай личные данные владельца, внутренние заметки, отчёты, ключи, конфиги или историю других чатов. "
-            "Не обращайся к собеседнику как к владельцу и не используй приватные имена/никнеймы без явного запроса."
+            "Не обращайся к собеседнику как к владельцу. "
+            "Если собеседник просит передать что-то важное или срочное — подтверди что передашь."
         ),
     )
     PARTIAL_ACCESS_PROMPT: str = os.getenv(
@@ -347,6 +349,15 @@ class Config:
 
     # Автономные рекуррентные задачи свёрма (scheduled swarm runs).
     # По умолчанию ВЫКЛЮЧЕНО — включать только после стабилизации.
+    # Тишина: дефолтное время mute при !тишина без аргументов (минуты).
+    SILENCE_DEFAULT_MINUTES: int = int(os.getenv("SILENCE_DEFAULT_MINUTES", "30"))
+    # Автоматический mute когда owner сам пишет в чат (минуты).
+    OWNER_AUTO_SILENCE_MINUTES: int = int(os.getenv("OWNER_AUTO_SILENCE_MINUTES", "5"))
+    # Гостевой режим: запретить tools/exec для GUEST-уровня.
+    GUEST_TOOLS_DISABLED: bool = os.getenv(
+        "GUEST_TOOLS_DISABLED", "1"
+    ).strip().lower() in ("1", "true", "yes")
+
     SWARM_AUTONOMOUS_ENABLED: bool = os.getenv(
         "SWARM_AUTONOMOUS_ENABLED",
         "0",

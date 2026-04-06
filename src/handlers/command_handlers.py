@@ -17,8 +17,8 @@ from pyrogram.types import Message
 
 from ..config import config
 from ..core.access_control import (
-    AccessLevel,
     PARTIAL_ACCESS_COMMANDS,
+    AccessLevel,
     get_effective_owner_label,
     load_acl_runtime_state,
     update_acl_subject,
@@ -29,8 +29,11 @@ from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
 from ..core.openclaw_runtime_models import get_runtime_primary_model
-from ..core.openclaw_workspace import append_workspace_memory_entry, recall_workspace_memory
-from ..core.openclaw_workspace import list_workspace_memory_entries
+from ..core.openclaw_workspace import (
+    append_workspace_memory_entry,
+    list_workspace_memory_entries,
+    recall_workspace_memory,
+)
 from ..core.proactive_watch import proactive_watch
 from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
 from ..core.swarm import AgentRoom
@@ -2693,7 +2696,6 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
       !screenshot ocr      — снимок + OCR (tesseract, brew install tesseract)
       !screenshot ocr rus  — OCR с указанием языка
     """
-    import io
     del bot
     from ..integrations.browser_bridge import browser_bridge as _bb
 
@@ -2797,11 +2799,11 @@ async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
     """
     del bot
     from ..core.capability_registry import (
+        _VALID_CAPABILITIES,  # type: ignore[attr-defined]
         clear_capability_overrides,
         get_capability_overrides,
         set_capability_override,
     )
-    from ..core.capability_registry import _VALID_CAPABILITIES  # type: ignore[attr-defined]
 
     raw_parts = str(message.text or "").split()
     sub = raw_parts[1].lower().strip() if len(raw_parts) > 1 else ""
@@ -2850,3 +2852,53 @@ async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
 
     icon = "✅" if action == "on" else "🚫"
     await message.reply(f"{icon} `{cap_name}` → **{action.upper()}** (все роли)")
+
+
+async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
+    """!тишина — управление режимом тишины.
+
+    Синтаксис:
+      !тишина           — toggle текущего чата (30 мин)
+      !тишина 15        — mute текущего чата на 15 минут
+      !тишина стоп      — снять mute текущего чата
+      !тишина глобально — глобальный mute (60 мин)
+      !тишина глобально 30 — глобальный mute на 30 мин
+      !тишина статус    — показать все активные mutes
+    """
+    from ..core.silence_mode import silence_manager
+
+    chat_id = str(message.chat.id)
+    raw = (message.text or "").strip()
+    # Убираем префикс команды
+    parts = raw.split(maxsplit=1)
+    args = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    if args == "статус":
+        await message.reply(silence_manager.format_status())
+        return
+
+    if args.startswith("стоп"):
+        was_chat = silence_manager.unmute_chat(chat_id)
+        was_global = silence_manager.unmute_global()
+        if was_chat or was_global:
+            await message.reply("🔊 Тишина снята.")
+        else:
+            await message.reply("ℹ️ Тишина не была активна.")
+        return
+
+    if args.startswith("глобально"):
+        rest = args.replace("глобально", "").strip()
+        minutes = int(rest) if rest.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 60))
+        silence_manager.mute_global(minutes)
+        await message.reply(f"🤫 Глобальная тишина на **{minutes}** мин.")
+        return
+
+    # Per-chat: toggle или с указанием минут
+    if silence_manager.is_chat_muted(chat_id):
+        silence_manager.unmute_chat(chat_id)
+        await message.reply("🔊 Тишина в этом чате снята.")
+        return
+
+    minutes = int(args) if args.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 30))
+    silence_manager.mute_chat(chat_id, minutes)
+    await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.\n`!тишина стоп` чтобы снять.")
