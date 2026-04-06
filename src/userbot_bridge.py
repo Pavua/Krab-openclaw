@@ -1823,15 +1823,22 @@ class KraabUserbot:
         return started
 
     async def _stop_swarm_team_clients(self) -> None:
-        """Останавливает все per-team swarm clients."""
-        for team, cl in list(self._swarm_team_clients.items()):
+        """Останавливает все per-team swarm clients.
+
+        Безопасно вызывать даже если `_init_swarm_team_clients` не отработал
+        (например, в тестовых фикстурах или при раннем сбое старта).
+        """
+        clients = getattr(self, "_swarm_team_clients", None)
+        if not clients:
+            return
+        for team, cl in list(clients.items()):
             try:
                 if cl.is_connected:
                     await cl.stop()
                 logger.info("swarm_team_client_stopped", team=team)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("swarm_team_client_stop_failed", team=team, error=str(exc))
-        self._swarm_team_clients.clear()
+        clients.clear()
 
     async def _init_swarm_team_clients(self) -> None:
         """Background init per-team swarm clients (не блокирует основной бот)."""
