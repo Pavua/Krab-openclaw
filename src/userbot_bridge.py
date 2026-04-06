@@ -1801,6 +1801,18 @@ class KraabUserbot:
                     username=getattr(me, "username", None),
                     user_id=getattr(me, "id", None),
                 )
+                # Warm-up peer cache: get_dialogs загружает все чаты включая недавно
+                # добавленные группы (иначе send_message → CHAT_ID_INVALID).
+                try:
+                    async for _ in cl.get_dialogs(limit=50):
+                        pass
+                    logger.info("swarm_team_client_warmed_up", team=team)
+                except Exception as warm_exc:  # noqa: BLE001
+                    logger.warning(
+                        "swarm_team_client_warmup_failed",
+                        team=team,
+                        error=str(warm_exc),
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "swarm_team_client_start_failed",
