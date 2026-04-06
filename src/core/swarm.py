@@ -165,7 +165,9 @@ class AgentRoom:
         logger.info("agent_room_round_started", topic=topic, roles=len(self.roles), depth=_depth)
 
         # Live broadcast: анонс начала раунда в swarm-группу
-        if _team_name and _depth == 0:
+        # Для delegated rounds (depth>0) используем target_team для broadcast в его топик
+        broadcast_team = _team_name
+        if _team_name:
             swarm_channels.mark_round_active(_team_name)
             await swarm_channels.broadcast_round_start(team=_team_name, topic=topic)
 
@@ -218,10 +220,10 @@ class AgentRoom:
                 clipped = "[Пустой ответ роли: проверьте контекст, лимиты или состояние модели]"
                 logger.warning("agent_room_role_empty_response", role=name, topic=topic)
 
-            # Live broadcast: публикуем ответ роли в swarm-группу
-            if _team_name and _depth == 0:
+            # Live broadcast: публикуем ответ роли в swarm-группу (все уровни depth)
+            if broadcast_team:
                 await swarm_channels.broadcast_role_step(
-                    team=_team_name, role_name=name, role_emoji=emoji,
+                    team=broadcast_team, role_name=name, role_emoji=emoji,
                     role_title=title, text=clipped,
                 )
 
@@ -238,10 +240,10 @@ class AgentRoom:
                         target_team=delegate_team,
                         depth=_depth,
                     )
-                    # Live broadcast: уведомление о делегировании
-                    if _team_name and _depth == 0:
+                    # Live broadcast: уведомление о делегировании (все уровни depth)
+                    if broadcast_team:
                         await swarm_channels.broadcast_delegation(
-                            source_team=_team_name,
+                            source_team=broadcast_team,
                             target_team=delegate_team,
                             topic=delegate_topic,
                         )
@@ -274,10 +276,10 @@ class AgentRoom:
         full_result = header + body.strip()
 
         # Live broadcast: итог раунда + снимаем active
-        if _team_name and _depth == 0:
+        if broadcast_team:
             last_role_text = round_results[-1]["text"] if round_results else ""
-            await swarm_channels.broadcast_round_end(team=_team_name, summary=last_role_text)
-            swarm_channels.mark_round_done(_team_name)
+            await swarm_channels.broadcast_round_end(team=broadcast_team, summary=last_role_text)
+            swarm_channels.mark_round_done(broadcast_team)
 
         # Сохраняем результат в персистентную память (только top-level раунды)
         if _team_name and _depth == 0:

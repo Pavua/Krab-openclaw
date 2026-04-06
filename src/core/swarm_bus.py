@@ -247,7 +247,7 @@ class SwarmBus:
     - Результат делегирования инжектируется в контекст вызывающей команды
     """
 
-    _MAX_DEPTH: int = 2
+    _MAX_DEPTH: int = 1  # одна делегация, без каскадов (экономия времени и токенов)
 
     def __init__(self) -> None:
         self._active_tasks: dict[str, SwarmBusTask] = {}
@@ -302,7 +302,7 @@ class SwarmBus:
             roles = TEAM_REGISTRY[resolved]
             room = AgentRoom(roles=roles)
             router = router_factory(resolved)
-            result = await room.run_round(topic, router, _bus=self, _depth=depth + 1, _router_factory=router_factory)
+            result = await room.run_round(topic, router, _bus=self, _depth=depth + 1, _team_name=resolved, _router_factory=router_factory)
             task.result = result
             logger.info("swarm_bus_dispatch_done", task_id=task.task_id)
             return result
