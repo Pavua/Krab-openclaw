@@ -4122,18 +4122,16 @@ class KraabUserbot:
 
         # Ставим реакцию 👀 на absorbed сообщения чтобы пользователь видел,
         # что они включены в batch и не "висят" без ответа.
-        send_reaction = getattr(self.client, "send_reaction", None)
-        if callable(send_reaction):
-            chat_id_int = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
-            for absorbed_msg in combined_messages[1:]:
-                try:
-                    await send_reaction(
-                        chat_id=chat_id_int,
-                        message_id=int(getattr(absorbed_msg, "id", 0) or 0),
-                        emoji="👀",
-                    )
-                except Exception:  # noqa: BLE001
-                    pass  # не все чаты поддерживают реакции
+        chat_id_int = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+        for absorbed_msg in combined_messages[1:]:
+            try:
+                await self.client.send_reaction(
+                    chat_id=chat_id_int,
+                    message_id=int(getattr(absorbed_msg, "id", 0) or 0),
+                    emoji="👀",
+                )
+            except Exception:  # noqa: BLE001
+                pass  # не все чаты поддерживают реакции
 
         combined_query = "\n\n".join(part for part in combined_parts if part).strip()
         anchor_message = combined_messages[-1]

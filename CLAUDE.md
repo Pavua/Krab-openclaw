@@ -5,7 +5,7 @@
 
 ## Что это
 
-Краб — персональный Telegram userbot на MTProto (Pyrogram), связанный с OpenClaw Gateway,
+Краб — персональный Telegram userbot на MTProto (pyrofork), связанный с OpenClaw Gateway,
 owner-панелью на `:8080`, голосовым и browser-контуром, мультиагентным свёрмом,
 и набором локальных/облачных AI-провайдеров.
 
@@ -99,14 +99,16 @@ Forum-группа: **🐝 Krab Swarm** (chat_id: `-1003703978531`)
 Setup: `!swarm setup` в группе с включёнными Topics.
 Intervention: пиши в топик во время раунда — Краб подхватит как директиву.
 
-## Виртуальные окружения
+## Виртуальное окружение
+
+Единый venv для всего: runtime, MCP серверы, тесты.
 
 | Путь | Python | Pyrogram | Назначение |
 |------|--------|----------|-----------|
-| `venv/` | 3.13 | 2.3.69 | Runtime userbot (выбирается `start_krab.command`) |
-| `.venv/` | 3.12 | 2.0.106 | MCP серверы, ruff, тесты |
+| `venv/` | 3.13 | pyrofork 2.3.69 | Runtime, MCP, тесты |
 
-Код совместим с обоими через `getattr` imports (Forum Topics API различается).
+Pyrofork — форк Pyrogram с нативной поддержкой Forum Topics (`message_thread_id`),
+`send_reaction()`, stories. Импорты: `from pyrogram import ...` (namespace совместим).
 
 ## Правила
 

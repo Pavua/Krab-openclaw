@@ -5,8 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if [ -x ".venv/bin/python" ]; then
-  PYTHON_BIN=".venv/bin/python"
+if [ -x "venv/bin/python" ]; then
+  PYTHON_BIN="venv/bin/python"
 else
   PYTHON_BIN="$(command -v python3 || command -v python)"
 fi

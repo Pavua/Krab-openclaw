@@ -313,55 +313,32 @@ class SwarmChannels:
     async def _invoke_create_topic(
         self, peer: Any, title: str, icon_color: int | None,
     ) -> Any:
-        """
-        Создаёт топик через raw API.
-
-        Pyrogram 2.0.106: raw.functions.channels.CreateForumTopic
-        Pyrogram 2.3+:    raw.functions.messages.CreateForumTopic
-        """
+        """Создаёт топик через raw API (pyrofork 2.3+)."""
         from pyrogram import raw  # noqa: PLC0415
 
         kwargs: dict[str, Any] = {
             "title": title,
             "random_id": self._client.rnd_id(),
+            "peer": peer,
         }
         if icon_color is not None:
             kwargs["icon_color"] = icon_color
 
-        # Pyrogram 2.3+ (pyrofork): CreateForumTopic в messages, peer вместо channel
-        create_cls = getattr(raw.functions.messages, "CreateForumTopic", None)
-        if create_cls is not None:
-            kwargs["peer"] = peer
-            return await self._client.invoke(create_cls(**kwargs))
-
-        # Pyrogram 2.0.x: CreateForumTopic в channels, channel вместо peer
-        create_cls = getattr(raw.functions.channels, "CreateForumTopic", None)
-        if create_cls is not None:
-            kwargs["channel"] = peer
-            return await self._client.invoke(create_cls(**kwargs))
-
-        raise RuntimeError("CreateForumTopic не найден ни в channels, ни в messages")
+        return await self._client.invoke(
+            raw.functions.messages.CreateForumTopic(**kwargs)
+        )
 
     async def _get_existing_topics(self, chat_id: int) -> list[dict[str, Any]]:
-        """Получает список существующих топиков в Forum-группе."""
+        """Получает список существующих топиков в Forum-группе (pyrofork 2.3+)."""
         from pyrogram import raw  # noqa: PLC0415
 
         try:
             peer = await self._client.resolve_peer(chat_id)
-            # Pyrogram 2.3+: GetForumTopics в messages с peer
-            # Pyrogram 2.0.x: GetForumTopics в channels с channel
-            get_cls = getattr(raw.functions.messages, "GetForumTopics", None)
-            if get_cls is not None:
-                result = await self._client.invoke(
-                    get_cls(peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100)
+            result = await self._client.invoke(
+                raw.functions.messages.GetForumTopics(
+                    peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100,
                 )
-            else:
-                get_cls = getattr(raw.functions.channels, "GetForumTopics", None)
-                if get_cls is None:
-                    return []
-                result = await self._client.invoke(
-                    get_cls(channel=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100)
-                )
+            )
             topics = []
             for t in getattr(result, "topics", []):
                 topics.append({
@@ -382,12 +359,7 @@ class SwarmChannels:
         text: str,
         topic_id: int | None = None,
     ) -> None:
-        """
-        Отправляет сообщение в чат, опционально в конкретный топик форума.
-
-        Pyrogram 2.3+: send_message(message_thread_id=topic_id)
-        Pyrogram 2.0.x: raw API с top_msg_id или reply_to_message_id
-        """
+        """Отправляет сообщение в чат, опционально в конкретный топик форума (pyrofork 2.3+)."""
         if not self._client:
             return
 
@@ -395,35 +367,31 @@ class SwarmChannels:
             text = text[:3950] + "\n\n[...обрезано]"
 
         if topic_id:
-            # Способ 1: message_thread_id (Pyrogram 2.3+ / pyrofork)
-            import inspect  # noqa: PLC0415
-            if "message_thread_id" in inspect.signature(self._client.send_message).parameters:
-                try:
-                    await self._client.send_message(
-                        chat_id, text, message_thread_id=topic_id
-                    )
-                    return
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("swarm_channels_thread_send_failed", error=str(exc))
-
-            # Способ 2: raw API с top_msg_id
             try:
-                from pyrogram import raw  # noqa: PLC0415
-
-                peer = await self._client.resolve_peer(chat_id)
-                await self._client.invoke(
-                    raw.functions.messages.SendMessage(
-                        peer=peer,
-                        message=text,
-                        random_id=self._client.rnd_id(),
-                        top_msg_id=topic_id,
-                    )
+                await self._client.send_message(
+                    chat_id, text, message_thread_id=topic_id,
                 )
                 return
             except Exception as exc:  # noqa: BLE001
-                logger.warning("swarm_channels_raw_send_failed", error=str(exc))
+                logger.warning("swarm_channels_thread_send_failed", error=str(exc))
+                # fallback: raw API с top_msg_id
+                try:
+                    from pyrogram import raw  # noqa: PLC0415
 
-        # Обычная отправка
+                    peer = await self._client.resolve_peer(chat_id)
+                    await self._client.invoke(
+                        raw.functions.messages.SendMessage(
+                            peer=peer,
+                            message=text,
+                            random_id=self._client.rnd_id(),
+                            top_msg_id=topic_id,
+                        )
+                    )
+                    return
+                except Exception as raw_exc:  # noqa: BLE001
+                    logger.warning("swarm_channels_raw_send_failed", error=str(raw_exc))
+
+        # Обычная отправка (без топика или оба способа с топиком не сработали)
         await self._client.send_message(chat_id, text)
 
     def _resolve_destination(self, team: str) -> tuple[int | None, int | None]:

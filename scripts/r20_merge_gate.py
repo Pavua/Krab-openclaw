@@ -42,7 +42,7 @@ def _now_utc() -> str:
 
 
 def _python_bin() -> str:
-    local = ROOT / ".venv" / "bin" / "python"
+    local = ROOT / "venv" / "bin" / "python"
     if local.exists():
         return str(local)
     return "python3"
