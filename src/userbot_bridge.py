@@ -5497,10 +5497,16 @@ class KraabUserbot:
                 and message.text
             ):
                 swarm_team = swarm_channels.is_swarm_chat(message.chat.id)
-                if swarm_team and swarm_channels.is_round_active(swarm_team):
-                    swarm_channels.add_intervention(swarm_team, message.text)
-                    await message.reply(f"👑 Директива принята для **{swarm_team}**")
-                    return
+                if swarm_team:
+                    # Forum mode: определяем команду по topic_id
+                    if swarm_team == "_forum":
+                        topic_id = getattr(message, "message_thread_id", None) or getattr(message, "reply_to_top_message_id", None)
+                        if topic_id:
+                            swarm_team = swarm_channels.resolve_team_from_topic(topic_id)
+                    if swarm_team and swarm_team != "_forum" and swarm_channels.is_round_active(swarm_team):
+                        swarm_channels.add_intervention(swarm_team, message.text)
+                        await message.reply(f"👑 Директива принята для **{swarm_team}**")
+                        return
 
             access_profile = self._get_access_profile(user)
             is_allowed_sender = self._is_allowed_sender(user)

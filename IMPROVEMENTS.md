@@ -1,7 +1,7 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-04
-> Статус: Активная разработка — ветка `claude/sweet-chatterjee-r44QI`
+> Составлен: 2026-03-23 | Обновлён: 2026-04-06
+> Статус: Активная разработка
 > Владелец: По
 
 ---
@@ -11,18 +11,19 @@
 ### 1. Рой автономных агентов (Multi-Agent Swarm)
 **Цель:** Создание независимых виртуальных команд (трейдеры, кодеры, аналитики), которые могут общаться между собой. Например, команда трейдеров анализирует рынок и ставит задачу команде кодеров на написание/корректировку крипто-бота. Главный фокус — окупаемость и автономный заработок.
 
-**Статус:** 🚧 В РАЗРАБОТКЕ (R18→R19, 2026-04-05) — инфраструктура + память + расписание:
+**Статус:** 🚧 В РАЗРАБОТКЕ (R18→R20, 2026-04-06) — инфраструктура + память + расписание + инструменты:
 - `src/core/swarm_bus.py`: TeamRegistry (4 команды: traders/coders/analysts/creative) + SwarmBus (межкомандное делегирование через `[DELEGATE: team]`, max_depth=2)
 - `src/core/swarm.py`: AgentRoom R18 — детектирует директивы делегирования, инжектирует результат в контекст
 - `src/core/swarm_memory.py`: ✅ (2026-04-05) Персистентная память между сессиями — JSON в `~/.openclaw/krab_runtime_state/swarm_memory.json`, FIFO 50 записей/команда, auto-inject в system_hint ролей
 - `src/core/swarm_scheduler.py`: ✅ (2026-04-05) Рекуррентный планировщик — `!swarm schedule traders 4h BTC`, `!swarm jobs`, `!swarm unschedule <id>`, гейт `SWARM_AUTONOMOUS_ENABLED`
+- ✅ (2026-04-06) **Tool access**: web_search, tor_fetch (TOR_ENABLED), peekaboo, все MCP tools. Tool awareness hint инжектируется в промпт каждой роли. `SWARM_ROLE_MAX_OUTPUT_TOKENS`=4096, `role_context_clip`=3000.
 - Команды в Telegram: `!swarm traders <тема>`, `!swarm teams`, `!swarm memory [команда]`, `!swarm schedule/jobs/unschedule`
 
-**Следующий шаг:** Дать свёрму доступ к инструментам (web_search, browser, crypto API) — сейчас команды только разговаривают, но не могут действовать.
+**Следующий шаг:** E2E тест tools (web_search реально вызывается и возвращает данные), затем cross-team delegation E2E (traders → coders).
 
 ### 2. Максимальный доступ к macOS (Permission Audit)
 **Цель:** Дать Крабу возможность полностью управлять файловой системой, окнами и процессами без ручного вмешательства.
-**Задача:** Провести полный аудит разрешений macOS (Full Disk Access, Accessibility для Puppeteer, System Events, Screen Recording). Написать скрипт, который проверяет, выданы ли Крабу все нужные права, и не блокирует ли его Gatekeeper.
+**Статус:** ✅ ВЫПОЛНЕНО (2026-04-05) — полный аудит `artifacts/ops/macos_permission_audit_pablito_latest.json`, `overall_ready=true`. Full Disk Access, Accessibility, Screen Recording — всё выдано.
 
 ### 3. Интеграция с умным домом (HomePod mini)
 **Цель:** В будущем подключить управление HomePod mini и другими устройствами Apple прямо из контекста диалога с Крабом. (Приоритет: низкий, ждет стабилизации ядра).
@@ -102,13 +103,13 @@
 
 ---
 
-## 🔵 Глубокая интеграция в macOS (Бэклог)
+## 🔵 Глубокая интеграция в macOS
 
 ### 11. Локальная папка-шлюз "Inbox"
-**Идея:** Создать директорию `~/Krab_Inbox`. Использовать Folder Actions: любой закинутый туда файл автоматически улетает Крабу на анализ.
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-06) — LaunchAgent `ai.krab.inbox-watcher` мониторит `~/Krab_Inbox` через watchdog (FSEvents). Файлы пересылаются Крабу через `/api/notify`. Plist: `scripts/launchagents/ai.krab.inbox-watcher.plist`.
 
 ### 12. Глобальный macOS Hotkey
-**Идея:** Настроить Apple Shortcuts на глобальное сочетание клавиш для быстрого аудио/текстового ввода задач напрямую в OpenClaw.
+**Статус:** ✅ РЕАЛИЗОВАНО — Hammerspoon ⌘⇧K → текстовый ввод → Krab `/api/notify`. Apple Shortcut тоже настроен.
 
 ### 13. Управление окнами через Hammerspoon
-**Идея:** Настроить скрипты Hammerspoon (Lua), чтобы Краб мог управлять расположением окон на Mac по голосовой/текстовой команде.
+**Статус:** ✅ РЕАЛИЗОВАНО — HTTP bridge на `localhost:10101`, Python bridge `src/integrations/hammerspoon_bridge.py`. POST `/window` с командами `left|right|maximize|...`.

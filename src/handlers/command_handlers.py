@@ -304,7 +304,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "`!swarm memory [команда]` — история прогонов\n"
             "`!swarm schedule traders 4h BTC` — автозапуск\n"
             "`!swarm jobs` — список задач\n"
-            "`!swarm unschedule <id>` — удалить задачу"
+            "`!swarm unschedule <id>` — удалить задачу\n"
+            "`!swarm setup` — создать Forum-группу с топиками\n"
+            "`!swarm channels` — статус групп/топиков"
         ))
 
     # !swarm teams — справка
@@ -400,6 +402,64 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     if args.lower() in {"channels", "группы", "каналы"}:
         from ..core.swarm_channels import swarm_channels
         await message.reply(swarm_channels.format_status())
+        return
+
+    # !swarm setup — создание Forum-группы с топиками
+    if args.lower() in {"setup", "настройка", "форум"}:
+        from ..core.swarm_channels import swarm_channels
+
+        chat = message.chat
+        # Группы/супергруппы всегда имеют отрицательный chat_id
+        is_group = chat.id < 0
+
+        if is_group:
+            # Вызвано в группе — пробуем создать топики напрямую
+            msg = await message.reply("📡 Создаю топики...")
+            try:
+                topic_ids = await swarm_channels.setup_topics_in_existing(chat.id)
+                if topic_ids:
+                    topics_text = "\n".join(
+                        f"  **{team}** → topic `{tid}`" for team, tid in topic_ids.items()
+                    )
+                    await msg.edit_text(
+                        f"✅ **Forum Topics настроены!**\n\n{topics_text}\n\n"
+                        f"Свёрм транслирует раунды в топики.\n"
+                        f"Пиши в топик во время раунда — Краб подхватит как директиву."
+                    )
+                else:
+                    await msg.edit_text(
+                        "⚠️ Не удалось создать топики.\n"
+                        "Убедись что **Topics** включены: Group Info → Edit → Topics.\n"
+                        "После включения повтори `!swarm setup`."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await msg.edit_text(
+                    f"⚠️ Ошибка создания топиков: `{exc}`\n\n"
+                    f"Включи **Topics** в настройках группы и повтори."
+                )
+        else:
+            # Вызвано в личке — создаём новую группу
+            msg = await message.reply("📡 Создаю группу **🐝 Krab Swarm**...")
+            try:
+                result = await swarm_channels.setup_forum()
+                if result.get("topic_ids"):
+                    topics_text = "\n".join(
+                        f"  **{team}** → topic `{tid}`"
+                        for team, tid in result["topic_ids"].items()
+                    )
+                    await msg.edit_text(
+                        f"✅ **Krab Swarm Forum создан!**\n\n"
+                        f"Chat ID: `{result['chat_id']}`\n{topics_text}\n\n"
+                        f"Свёрм транслирует раунды в топики."
+                    )
+                else:
+                    await msg.edit_text(
+                        f"⚠️ **Группа создана** (Chat ID: `{result['chat_id']}`)\n\n"
+                        f"Включи **Topics**: Group Info → Edit → Topics\n"
+                        f"Затем набери `!swarm setup` **в этой группе**."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await msg.edit_text(f"❌ Ошибка: {exc}")
         return
 
     # !swarm setchat <team> — привязать текущую группу к команде

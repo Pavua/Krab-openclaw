@@ -169,7 +169,7 @@ class AgentRoom:
             swarm_channels.mark_round_active(_team_name)
             await swarm_channels.broadcast_round_start(team=_team_name, topic=topic)
 
-        for role in self.roles:
+        for role_idx, role in enumerate(self.roles):
             name = str(role.get("name", "agent"))
             emoji = str(role.get("emoji", "🤖"))
             title = str(role.get("title", name))
@@ -182,13 +182,21 @@ class AgentRoom:
                     accumulated_context += intervention
                     logger.info("agent_room_intervention_applied", team=_team_name, role=name)
 
-            # Tool awareness: сообщаем модели что она может использовать инструменты
-            tool_hint = (
-                "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
-                "peekaboo (скриншот экрана). Используй web_search для получения актуальных данных "
-                "(цены, новости, факты). Не стесняйся вызывать инструменты — это даёт реальные данные "
-                "вместо устаревших знаний."
-            )
+            # Tool awareness: первая роль ОБЯЗАНА использовать web_search для актуальных данных,
+            # остальные роли могут использовать по необходимости
+            if role_idx == 0:
+                tool_hint = (
+                    "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
+                    "peekaboo (скриншот экрана). "
+                    "ВАЖНО: ты ОБЯЗАН начать с вызова web_search чтобы получить актуальные данные "
+                    "(цены, курсы, новости, факты). Твои знания устарели — без web_search твой анализ "
+                    "будет основан на старых данных и бесполезен. Сначала поиск, потом анализ."
+                )
+            else:
+                tool_hint = (
+                    "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
+                    "peekaboo (скриншот экрана). Используй web_search если нужны дополнительные данные."
+                )
 
             if accumulated_context:
                 prompt = (
@@ -230,6 +238,13 @@ class AgentRoom:
                         target_team=delegate_team,
                         depth=_depth,
                     )
+                    # Live broadcast: уведомление о делегировании
+                    if _team_name and _depth == 0:
+                        await swarm_channels.broadcast_delegation(
+                            source_team=_team_name,
+                            target_team=delegate_team,
+                            topic=delegate_topic,
+                        )
                     delegate_result = await _bus.dispatch(
                         source_team=_team_name or "default",
                         target_team=delegate_team,
