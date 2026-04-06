@@ -93,6 +93,21 @@ Teams: `traders`, `coders`, `analysts`, `creative`
 Tool access: web_search, tor_fetch (если TOR_ENABLED), peekaboo, все MCP tools.
 `SWARM_ROLE_MAX_OUTPUT_TOKENS` default 4096. Role context clip 3000 chars.
 
+### Forum Topics (live broadcast)
+Forum-группа: **🐝 Krab Swarm** (chat_id: `-1003703978531`)
+Каждая команда пишет в свой топик. Конфиг: `~/.openclaw/krab_runtime_state/swarm_channels.json`
+Setup: `!swarm setup` в группе с включёнными Topics.
+Intervention: пиши в топик во время раунда — Краб подхватит как директиву.
+
+## Виртуальные окружения
+
+| Путь | Python | Pyrogram | Назначение |
+|------|--------|----------|-----------|
+| `venv/` | 3.13 | 2.3.69 | Runtime userbot (выбирается `start_krab.command`) |
+| `.venv/` | 3.12 | 2.0.106 | MCP серверы, ruff, тесты |
+
+Код совместим с обоими через `getattr` imports (Forum Topics API различается).
+
 ## Правила
 
 - **Не дублируй нативный функционал OpenClaw** если он уже есть
