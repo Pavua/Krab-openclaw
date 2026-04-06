@@ -26,9 +26,10 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 def pick_python_bin(project_root: Path) -> str:
     """Выбирает python-бинарь локального проекта без догадок по чужим окружениям."""
+    # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
     candidates = (
-        project_root / ".venv" / "bin" / "python",
         project_root / "venv" / "bin" / "python",
+        project_root / ".venv" / "bin" / "python",
     )
     for candidate in candidates:
         if candidate.exists():
@@ -111,7 +112,11 @@ def classify_launch_attempt(*, returncode: int, stdout: str, stderr: str) -> dic
             "summary": "CLI-launch упёрся в блокировку устройства, а не в кодовый регресс.",
             "detail": trim_command_output(combined),
         }
-    if "not installed" in lowered or "application failed to launch" in lowered and "bundleidentifier" in lowered:
+    if (
+        "not installed" in lowered
+        or "application failed to launch" in lowered
+        and "bundleidentifier" in lowered
+    ):
         return {
             "status": "launch_failed",
             "blocked_by_device_lock": False,
@@ -147,9 +152,13 @@ def build_translator_finish_gate_snapshot(
 ) -> dict[str, Any]:
     """Собирает единый truthful snapshot для translator finish gate."""
     runtime_payload = dict(runtime_lite or {}) if isinstance(runtime_lite, dict) else {}
-    readiness_payload = dict(translator_readiness or {}) if isinstance(translator_readiness, dict) else {}
+    readiness_payload = (
+        dict(translator_readiness or {}) if isinstance(translator_readiness, dict) else {}
+    )
     runtime_state = dict(runtime_snapshot or {}) if isinstance(runtime_snapshot, dict) else {}
-    previous_status = dict(previous_device_status or {}) if isinstance(previous_device_status, dict) else {}
+    previous_status = (
+        dict(previous_device_status or {}) if isinstance(previous_device_status, dict) else {}
+    )
     pytest_payload = dict(pytest_result or {}) if isinstance(pytest_result, dict) else {}
     build_payload = dict(build_result or {}) if isinstance(build_result, dict) else {}
     install_payload = dict(install_result or {}) if isinstance(install_result, dict) else {}
@@ -166,7 +175,11 @@ def build_translator_finish_gate_snapshot(
         if isinstance(readiness_payload.get("account_runtime"), dict)
         else {}
     )
-    runtime_truth = dict(readiness_payload.get("runtime") or {}) if isinstance(readiness_payload.get("runtime"), dict) else {}
+    runtime_truth = (
+        dict(readiness_payload.get("runtime") or {})
+        if isinstance(readiness_payload.get("runtime"), dict)
+        else {}
+    )
     telegram_runtime = (
         dict((runtime_truth.get("telegram_userbot_state") or {}))
         if isinstance(runtime_truth.get("telegram_userbot_state"), dict)
@@ -188,7 +201,8 @@ def build_translator_finish_gate_snapshot(
         and build_ok
         and bool(runtime_payload.get("ok"))
         and bool(readiness_payload.get("ok"))
-        and str(account_runtime.get("current_route_model") or route.get("model") or "").strip() == "openai-codex/gpt-5.4"
+        and str(account_runtime.get("current_route_model") or route.get("model") or "").strip()
+        == "openai-codex/gpt-5.4"
         and app_installed
     )
 
@@ -222,8 +236,12 @@ def build_translator_finish_gate_snapshot(
         "runtime": {
             "health_ok": bool(runtime_payload.get("ok")),
             "translator_readiness_ok": bool(readiness_payload.get("ok")),
-            "current_route_model": str(account_runtime.get("current_route_model") or route.get("model") or "").strip(),
-            "current_route_channel": str(account_runtime.get("current_route_channel") or route.get("channel") or "").strip(),
+            "current_route_model": str(
+                account_runtime.get("current_route_model") or route.get("model") or ""
+            ).strip(),
+            "current_route_channel": str(
+                account_runtime.get("current_route_channel") or route.get("channel") or ""
+            ).strip(),
             "voice_gateway_configured": bool(runtime_payload.get("voice_gateway_configured")),
             "scheduler_enabled": bool(runtime_payload.get("scheduler_enabled")),
             "translator_language_pair": str(translator_runtime.get("language_pair") or ""),
@@ -247,9 +265,13 @@ def build_translator_finish_gate_snapshot(
             "previous_on_device_truth": {
                 "session_id": str(previous_status.get("session_id") or ""),
                 "translation_mode": str(previous_status.get("translation_mode") or ""),
-                "health_check_visible_status": str(previous_status.get("health_check_visible_status") or ""),
+                "health_check_visible_status": str(
+                    previous_status.get("health_check_visible_status") or ""
+                ),
                 "notes_ru": str(previous_status.get("notes_ru") or ""),
-                "followup_gateway_commit": str(previous_status.get("followup_gateway_commit") or ""),
+                "followup_gateway_commit": str(
+                    previous_status.get("followup_gateway_commit") or ""
+                ),
             },
         },
         "manual_retest": {
@@ -265,7 +287,10 @@ def build_translator_finish_gate_snapshot(
         },
         "artifacts": {
             "previous_device_status_path": str(
-                project_root / "artifacts" / "ops" / "iphone_companion_on_device_status_user3_latest.json"
+                project_root
+                / "artifacts"
+                / "ops"
+                / "iphone_companion_on_device_status_user3_latest.json"
             ),
             "recommended_output_path": str(
                 project_root / "artifacts" / "ops" / "translator_finish_gate_user3_latest.json"
