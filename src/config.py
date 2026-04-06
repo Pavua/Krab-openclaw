@@ -1,9 +1,10 @@
 """
 Конфигурация проекта Краб
 """
+import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
@@ -358,6 +359,15 @@ class Config:
         "GUEST_TOOLS_DISABLED", "1"
     ).strip().lower() in ("1", "true", "yes")
 
+    # JSON-файл с настройками per-team Telegram аккаунтов для свёрма.
+    # Формат: {"traders": {"session_name": "swarm_traders", "phone": "+34..."}, ...}
+    SWARM_TEAM_ACCOUNTS_PATH: Path = Path(
+        os.getenv(
+            "SWARM_TEAM_ACCOUNTS_PATH",
+            str(Path.home() / ".openclaw" / "krab_runtime_state" / "swarm_team_accounts.json"),
+        )
+    )
+
     SWARM_AUTONOMOUS_ENABLED: bool = os.getenv(
         "SWARM_AUTONOMOUS_ENABLED",
         "0",
@@ -537,6 +547,23 @@ class Config:
         except Exception as e:
             print(f"Error updating config: {e}")
             return False
+
+    @classmethod
+    def load_swarm_team_accounts(cls) -> dict[str, dict[str, Any]]:
+        """Загружает конфиг per-team Telegram аккаунтов для свёрма.
+
+        Возвращает пустой dict если файл отсутствует или повреждён.
+        """
+        p = cls.SWARM_TEAM_ACCOUNTS_PATH
+        if not p.exists():
+            return {}
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {}
+            return data
+        except Exception:
+            return {}
 
 
 # Синглтон для удобства

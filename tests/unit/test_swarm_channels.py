@@ -290,3 +290,114 @@ class TestResolveTeamFromTopic:
         ch = SwarmChannels()
         ch._team_topics = {"traders": 19}
         assert ch.resolve_team_from_topic(999) is None
+
+
+# -- per-team client tests ---------------------------------------------------
+
+
+class TestResolveClient:
+    """Тесты _resolve_client: выбор per-team клиента с fallback."""
+
+    def test_returns_team_client_when_connected(self):
+        ch = SwarmChannels()
+        main_mock = MagicMock()
+        team_mock = MagicMock()
+        team_mock.is_connected = True
+        ch._client = main_mock
+        ch._team_clients = {"traders": team_mock}
+        assert ch._resolve_client("traders") is team_mock
+
+    def test_fallback_to_main_when_disconnected(self):
+        ch = SwarmChannels()
+        main_mock = MagicMock()
+        team_mock = MagicMock()
+        team_mock.is_connected = False
+        ch._client = main_mock
+        ch._team_clients = {"traders": team_mock}
+        assert ch._resolve_client("traders") is main_mock
+
+    def test_fallback_to_main_when_no_team_client(self):
+        ch = SwarmChannels()
+        main_mock = MagicMock()
+        ch._client = main_mock
+        ch._team_clients = {}
+        assert ch._resolve_client("coders") is main_mock
+
+    def test_case_insensitive(self):
+        ch = SwarmChannels()
+        team_mock = MagicMock()
+        team_mock.is_connected = True
+        ch._client = MagicMock()
+        ch._team_clients = {"traders": team_mock}
+        assert ch._resolve_client("Traders") is team_mock
+
+    def test_fallback_when_is_connected_raises(self):
+        ch = SwarmChannels()
+        main_mock = MagicMock()
+        team_mock = MagicMock()
+        type(team_mock).is_connected = property(lambda _: (_ for _ in ()).throw(RuntimeError))
+        ch._client = main_mock
+        ch._team_clients = {"traders": team_mock}
+        assert ch._resolve_client("traders") is main_mock
+
+
+class TestBindTeamClient:
+    def test_bind_and_unbind(self):
+        ch = SwarmChannels()
+        mock_cl = MagicMock()
+        ch.bind_team_client("Traders", mock_cl)
+        assert ch._team_clients["traders"] is mock_cl
+        ch.unbind_team_client("Traders")
+        assert "traders" not in ch._team_clients
+
+
+class TestSendMessageWithTeamClient:
+    """Тест что _send_message использует переданный client kwarg."""
+
+    @pytest.mark.asyncio
+    async def test_uses_explicit_client(self):
+        ch = SwarmChannels()
+        main_mock = AsyncMock()
+        team_mock = AsyncMock()
+        ch._client = main_mock
+
+        await ch._send_message(chat_id=-100123, text="hi", client=team_mock)
+        team_mock.send_message.assert_called_once_with(-100123, "hi")
+        main_mock.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_main_client(self):
+        ch = SwarmChannels()
+        main_mock = AsyncMock()
+        ch._client = main_mock
+
+        await ch._send_message(chat_id=-100123, text="hi")
+        main_mock.send_message.assert_called_once_with(-100123, "hi")
+
+
+class TestFormatStatusTeamAccounts:
+    """Тест что format_status показывает team accounts."""
+
+    def test_shows_connected_team(self):
+        ch = SwarmChannels()
+        ch._forum_chat_id = -100123
+        ch._team_topics = {"traders": 1}
+        ch._client = MagicMock()
+        team_mock = MagicMock()
+        team_mock.is_connected = True
+        ch._team_clients = {"traders": team_mock}
+        status = ch.format_status()
+        assert "Team accounts" in status
+        assert "🟢" in status
+        assert "traders" in status
+
+    def test_shows_disconnected_team(self):
+        ch = SwarmChannels()
+        ch._forum_chat_id = -100123
+        ch._team_topics = {"traders": 1}
+        ch._client = MagicMock()
+        team_mock = MagicMock()
+        team_mock.is_connected = False
+        ch._team_clients = {"traders": team_mock}
+        status = ch.format_status()
+        assert "🔴" in status

@@ -94,6 +94,7 @@ class SwarmChannels:
         self._team_chats: dict[str, int] = {}
 
         self._client: Any = None
+        self._team_clients: dict[str, Any] = {}  # team → per-team Pyrogram Client
         self._owner_id: int = 0
         self._interventions: dict[str, list[str]] = {}
         self._active_rounds: dict[str, float] = {}
@@ -127,6 +128,28 @@ class SwarmChannels:
         self._save()
         mode = "forum" if self.is_forum_mode else ("legacy" if self._team_chats else "none")
         logger.info("swarm_channels_bound", mode=mode, owner_id=owner_id)
+
+    def bind_team_client(self, team: str, client: Any) -> None:
+        """Привязывает per-team Pyrogram Client для отправки от имени команды."""
+        self._team_clients[team.lower()] = client
+        logger.info("swarm_team_client_bound", team=team)
+
+    def unbind_team_client(self, team: str) -> None:
+        """Убирает per-team client."""
+        self._team_clients.pop(team.lower(), None)
+        logger.info("swarm_team_client_unbound", team=team)
+
+    def _resolve_client(self, team: str) -> Any:
+        """Выбирает Pyrogram Client для команды (fallback на основной)."""
+        team_cl = self._team_clients.get(team.lower())
+        if team_cl is not None:
+            try:
+                if team_cl.is_connected:
+                    return team_cl
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning("swarm_team_client_unavailable_fallback", team=team)
+        return self._client
 
     # -- persistence ----------------------------------------------------------
 
@@ -358,9 +381,12 @@ class SwarmChannels:
         chat_id: int,
         text: str,
         topic_id: int | None = None,
+        *,
+        client: Any = None,
     ) -> None:
         """Отправляет сообщение в чат, опционально в конкретный топик форума (pyrofork 2.3+)."""
-        if not self._client:
+        _cl = client or self._client
+        if not _cl:
             return
 
         if len(text) > 4000:
@@ -368,7 +394,7 @@ class SwarmChannels:
 
         if topic_id:
             try:
-                await self._client.send_message(
+                await _cl.send_message(
                     chat_id, text, message_thread_id=topic_id,
                 )
                 return
@@ -378,12 +404,12 @@ class SwarmChannels:
                 try:
                     from pyrogram import raw  # noqa: PLC0415
 
-                    peer = await self._client.resolve_peer(chat_id)
-                    await self._client.invoke(
+                    peer = await _cl.resolve_peer(chat_id)
+                    await _cl.invoke(
                         raw.functions.messages.SendMessage(
                             peer=peer,
                             message=text,
-                            random_id=self._client.rnd_id(),
+                            random_id=_cl.rnd_id(),
                             top_msg_id=topic_id,
                         )
                     )
@@ -392,7 +418,7 @@ class SwarmChannels:
                     logger.warning("swarm_channels_raw_send_failed", error=str(raw_exc))
 
         # Обычная отправка (без топика или оба способа с топиком не сработали)
-        await self._client.send_message(chat_id, text)
+        await _cl.send_message(chat_id, text)
 
     def _resolve_destination(self, team: str) -> tuple[int | None, int | None]:
         """
@@ -488,6 +514,7 @@ class SwarmChannels:
         chat_id, topic_id = self._resolve_destination(team)
         if not chat_id or not self._client:
             return
+        cl = self._resolve_client(team)
 
         if is_start:
             msg = "🐝 **Начинаю раунд**\nТема будет в следующем сообщении..."
@@ -497,7 +524,7 @@ class SwarmChannels:
             msg = f"**{role_emoji} {role_title}:**\n{text}"
 
         try:
-            await self._send_message(chat_id, msg, topic_id=topic_id)
+            await self._send_message(chat_id, msg, topic_id=topic_id, client=cl)
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_channels_broadcast_failed",
                            team=team, role=role_name, error=str(exc))
@@ -507,12 +534,14 @@ class SwarmChannels:
         chat_id, topic_id = self._resolve_destination(team)
         if not chat_id or not self._client:
             return
+        cl = self._resolve_client(team)
         try:
             await self._send_message(
                 chat_id,
                 f"🐝 **Новый раунд**\n📋 Тема: _{topic[:200]}_\n\n"
                 f"💡 Напиши сообщение чтобы направить команду.",
                 topic_id=topic_id,
+                client=cl,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_channels_round_start_failed", team=team, error=str(exc))
@@ -522,12 +551,14 @@ class SwarmChannels:
         chat_id, topic_id = self._resolve_destination(team)
         if not chat_id or not self._client:
             return
+        cl = self._resolve_client(team)
         short = summary[:500] + ("..." if len(summary) > 500 else "")
         try:
             await self._send_message(
                 chat_id,
                 f"✅ **Раунд завершён**\n\n{short}",
                 topic_id=topic_id,
+                client=cl,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_channels_round_end_failed", team=team, error=str(exc))
@@ -542,6 +573,7 @@ class SwarmChannels:
             chat_id, topic_id = self._resolve_destination(source_team)
         if not chat_id or not self._client:
             return
+        cl = self._resolve_client(source_team)
         try:
             await self._send_message(
                 chat_id,
@@ -549,6 +581,7 @@ class SwarmChannels:
                 f"От: **{source_team}** → **{target_team}**\n"
                 f"Задача: _{topic[:200]}_",
                 topic_id=topic_id,
+                client=cl,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_channels_delegation_broadcast_failed", error=str(exc))
@@ -597,6 +630,12 @@ class SwarmChannels:
                 lines.append("\n📡 **Legacy-группы** (не используются при Forum mode):")
                 for team, cid in self._team_chats.items():
                     lines.append(f"  **{team}** → `{cid}`")
+            if self._team_clients:
+                lines.append("\n🤖 **Team accounts:**")
+                for t, cl in self._team_clients.items():
+                    connected = getattr(cl, "is_connected", False) if cl else False
+                    icon = "🟢" if connected else "🔴"
+                    lines.append(f"  {icon} **{t}**")
             return "\n".join(lines)
 
         if self._team_chats:

@@ -590,6 +590,7 @@ class KraabUserbot:
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
+        self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
         self._telegram_restart_lock = asyncio.Lock()
@@ -1762,11 +1763,77 @@ class KraabUserbot:
         except Exception as exc:  # noqa: BLE001
             logger.warning("reserve_bot_start_error", error=str(exc))
 
+        # Per-team swarm clients — отдельные TG аккаунты для каждой команды (background)
+        asyncio.create_task(self._init_swarm_team_clients())
+
     @staticmethod
     def _is_auth_key_invalid(exc: Exception) -> bool:
         """True, если исключение связано с протухшей Telegram auth key."""
         text = str(exc).lower()
         return "auth key not found" in text or "auth_key_unregistered" in text
+
+    # -- per-team swarm clients ------------------------------------------------
+
+    async def _start_swarm_team_clients(self) -> dict[str, Any]:
+        """Создаёт и стартует Pyrogram Clients для per-team аккаунтов свёрма."""
+        accounts = config.load_swarm_team_accounts()
+        if not accounts:
+            return {}
+
+        started: dict[str, Any] = {}
+        for team, acct in accounts.items():
+            session_name = acct.get("session_name", f"swarm_{team}")
+            try:
+                cl = Client(
+                    session_name,
+                    api_id=config.TELEGRAM_API_ID,
+                    api_hash=config.TELEGRAM_API_HASH,
+                    workdir=str(self._session_workdir),
+                    no_updates=True,
+                )
+                await asyncio.wait_for(cl.start(), timeout=15)
+                me = await cl.get_me()
+                started[team.lower()] = cl
+                logger.info(
+                    "swarm_team_client_started",
+                    team=team,
+                    session=session_name,
+                    username=getattr(me, "username", None),
+                    user_id=getattr(me, "id", None),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "swarm_team_client_start_failed",
+                    team=team,
+                    session=session_name,
+                    error=repr(exc),
+                )
+        return started
+
+    async def _stop_swarm_team_clients(self) -> None:
+        """Останавливает все per-team swarm clients."""
+        for team, cl in list(self._swarm_team_clients.items()):
+            try:
+                if cl.is_connected:
+                    await cl.stop()
+                logger.info("swarm_team_client_stopped", team=team)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("swarm_team_client_stop_failed", team=team, error=str(exc))
+        self._swarm_team_clients.clear()
+
+    async def _init_swarm_team_clients(self) -> None:
+        """Background init per-team swarm clients (не блокирует основной бот)."""
+        try:
+            self._swarm_team_clients = await self._start_swarm_team_clients()
+            for team, cl in self._swarm_team_clients.items():
+                swarm_channels.bind_team_client(team, cl)
+            if self._swarm_team_clients:
+                logger.info(
+                    "swarm_team_clients_ready",
+                    teams=list(self._swarm_team_clients.keys()),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("swarm_team_clients_init_failed", error=repr(exc))
 
     async def _recover_telegram_session(self, reason: str) -> None:
         """
@@ -1969,6 +2036,8 @@ class KraabUserbot:
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
+        # Per-team swarm clients — остановить до основного клиента
+        await self._stop_swarm_team_clients()
         try:
             await self._safe_stop_client(reason="runtime_stop")
         except Exception as exc:  # noqa: BLE001
