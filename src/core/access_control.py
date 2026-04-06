@@ -107,8 +107,6 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "hs",
         # Capability policy matrix — runtime toggle, только владелец
         "cap",
-        # Silence mode — только владелец
-        "тишина",
     }
 )
 
