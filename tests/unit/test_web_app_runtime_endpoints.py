@@ -553,6 +553,18 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
             },
         }
 
+    async def push_event(self, session_id: str, *, event_type: str, data: dict | None = None) -> dict:
+        # Stub для удовлетворения VoiceGatewayControlPlane Protocol; не вызывается в текущих тестах.
+        return {"ok": True, "session_id": session_id, "event_type": event_type, "data": dict(data or {})}
+
+    async def session_tts(self, session_id: str, *, text: str, voice: str = "default", style: str = "neutral") -> dict:
+        # Stub для удовлетворения VoiceGatewayControlPlane Protocol; не вызывается в текущих тестах.
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": {"text": text, "voice": voice, "style": style, "audio_url": ""},
+        }
+
 
 class _FakeVoiceGatewayFreshSessionClient(_FakeVoiceGatewayControlPlaneClient):
     """Фейк для проверки выбора самой свежей active session."""
