@@ -4919,8 +4919,21 @@ class KraabUserbot:
                     ]
                     for _vpath in _auto_voice_candidates:
                         try:
-                            _age = _now_ts - os.path.getmtime(_vpath)
-                            if os.path.exists(_vpath) and _age < 900:  # 15 минут
+                            _vmtime = os.path.getmtime(_vpath)
+                            # Инжектим только файлы, созданные/перезаписанные
+                            # в рамках текущего LLM flow. Иначе после первого
+                            # успешного голосового ответа stale-ogg переиспользуется
+                            # на каждый следующий текстовый reply ("залипает звук").
+                            if _vmtime < _flow_start_ts - 30:
+                                logger.debug(
+                                    "voice_auto_inject_skip_stale",
+                                    path=_vpath,
+                                    mtime=_vmtime,
+                                    flow_start_ts=_flow_start_ts,
+                                )
+                                continue
+                            _age = _now_ts - _vmtime
+                            if os.path.exists(_vpath):
                                 logger.info(
                                     "media_auto_inject_fallback",
                                     chat_id=chat_id,
