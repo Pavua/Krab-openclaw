@@ -171,6 +171,10 @@ async def test_capture_gateway_transition_syncs_inbox(monkeypatch: pytest.Monkey
     monkeypatch.setattr(service, "collect_snapshot", _collect)
     monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
     monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+    # ProactiveWatchService.capture → _check_and_trace_cron_executions → _fetch_openclaw_cron_jobs
+    # запускает реальный `openclaw cron list --json --all` subprocess. Без mock'а реальные cron items
+    # из ~/.openclaw/krab_runtime_state/ утекают в test inbox и ломают assertions на пустоту.
+    monkeypatch.setattr(proactive_watch_module, "_fetch_openclaw_cron_jobs", AsyncMock(return_value=[]))
 
     await service.capture(manual=False, persist_memory=True, notify=False)
     down = await service.capture(manual=False, persist_memory=True, notify=False)
@@ -217,6 +221,10 @@ async def test_gateway_down_dedupe_key_has_no_timestamp(
     monkeypatch.setattr(service, "collect_snapshot", _collect)
     monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
     monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+    # ProactiveWatchService.capture → _check_and_trace_cron_executions → _fetch_openclaw_cron_jobs
+    # запускает реальный `openclaw cron list --json --all` subprocess. Без mock'а реальные cron items
+    # из ~/.openclaw/krab_runtime_state/ утекают в test inbox и ломают assertions на пустоту.
+    monkeypatch.setattr(proactive_watch_module, "_fetch_openclaw_cron_jobs", AsyncMock(return_value=[]))
 
     await service.capture(manual=False, persist_memory=False, notify=False)
     await service.capture(manual=False, persist_memory=False, notify=False)  # первый gateway_down
@@ -246,6 +254,10 @@ async def test_memory_only_reason_does_not_create_inbox_item(
     monkeypatch.setattr(service, "collect_snapshot", _collect)
     monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
     monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+    # ProactiveWatchService.capture → _check_and_trace_cron_executions → _fetch_openclaw_cron_jobs
+    # запускает реальный `openclaw cron list --json --all` subprocess. Без mock'а реальные cron items
+    # из ~/.openclaw/krab_runtime_state/ утекают в test inbox и ломают assertions на пустоту.
+    monkeypatch.setattr(proactive_watch_module, "_fetch_openclaw_cron_jobs", AsyncMock(return_value=[]))
 
     await service.capture(manual=False, persist_memory=False, notify=False)
     result = await service.capture(manual=False, persist_memory=False, notify=False)
@@ -273,6 +285,10 @@ async def test_actionable_reason_creates_inbox_item(
     monkeypatch.setattr(service, "collect_snapshot", _collect)
     monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
     monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+    # ProactiveWatchService.capture → _check_and_trace_cron_executions → _fetch_openclaw_cron_jobs
+    # запускает реальный `openclaw cron list --json --all` subprocess. Без mock'а реальные cron items
+    # из ~/.openclaw/krab_runtime_state/ утекают в test inbox и ломают assertions на пустоту.
+    monkeypatch.setattr(proactive_watch_module, "_fetch_openclaw_cron_jobs", AsyncMock(return_value=[]))
 
     await service.capture(manual=False, persist_memory=False, notify=False)
     result = await service.capture(manual=False, persist_memory=False, notify=False)
@@ -302,6 +318,10 @@ async def test_recovery_reason_closes_existing_proactive_action_trace(
     monkeypatch.setattr(service, "collect_snapshot", _collect)
     monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
     monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+    # ProactiveWatchService.capture → _check_and_trace_cron_executions → _fetch_openclaw_cron_jobs
+    # запускает реальный `openclaw cron list --json --all` subprocess. Без mock'а реальные cron items
+    # из ~/.openclaw/krab_runtime_state/ утекают в test inbox и ломают assertions на пустоту.
+    monkeypatch.setattr(proactive_watch_module, "_fetch_openclaw_cron_jobs", AsyncMock(return_value=[]))
 
     await service.capture(manual=False, persist_memory=False, notify=False)
     await service.capture(manual=False, persist_memory=False, notify=False)
@@ -343,6 +363,10 @@ async def test_cooldown_blocks_repeat_alert_for_same_reason(
     monkeypatch.setattr(service, "collect_snapshot", _collect)
     monkeypatch.setattr(proactive_watch_module, "append_workspace_memory_entry", lambda text, **kwargs: True)
     monkeypatch.setattr(proactive_watch_module, "inbox_service", inbox)
+    # ProactiveWatchService.capture → _check_and_trace_cron_executions → _fetch_openclaw_cron_jobs
+    # запускает реальный `openclaw cron list --json --all` subprocess. Без mock'а реальные cron items
+    # из ~/.openclaw/krab_runtime_state/ утекают в test inbox и ломают assertions на пустоту.
+    monkeypatch.setattr(proactive_watch_module, "_fetch_openclaw_cron_jobs", AsyncMock(return_value=[]))
 
     await service.capture(manual=False, persist_memory=False, notify=True, notifier=_notifier)
     await service.capture(manual=False, persist_memory=False, notify=True, notifier=_notifier)  # first gateway_down

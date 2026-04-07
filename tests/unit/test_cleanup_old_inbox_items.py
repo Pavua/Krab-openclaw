@@ -56,6 +56,15 @@ def test_select_stale_items_defaults_to_old_owner_requests_only(
     cleanup_module = _load_cleanup_module()
     service = InboxService(state_path=tmp_path / "inbox.json")
 
+    # `select_stale_items → build_cutoff_iso → datetime.now(tz)` берёт реальное "now"
+    # из модуля, поэтому фиксируем его в test-relative точке (2026-03-27 17:16:11+00:00),
+    # иначе cutoff уползает в реальное сегодня и помечает stale даже свежий item.
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return datetime(2026, 3, 27, 17, 16, 11, tzinfo=tz or timezone.utc)
+
+    monkeypatch.setattr(cleanup_module, "datetime", _FixedDatetime)
     monkeypatch.setattr(inbox_module, "_now_utc_iso", lambda: "2026-03-19T00:17:49+00:00")
     service.upsert_incoming_owner_request(
         chat_id="312322764",
