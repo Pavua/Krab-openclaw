@@ -39,3 +39,8 @@ node_modules/
 .idea/
 .gemini/
 .agent/
+
+# Agent / session state (per-session, не shared)
+.remember/
+.claude/
+docs/superpowers/
