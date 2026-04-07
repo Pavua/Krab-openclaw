@@ -74,6 +74,7 @@ def test_attach_summary_mentions_operator_workflow_truth() -> None:
         runtime_snapshot=_runtime_snapshot_payload(),
         acceptance={},
         ops_evidence={},
+        project_readiness="ready",
     )
 
     assert "Operator workflow" in summary
@@ -95,6 +96,7 @@ def test_handoff_manifest_carries_operator_workflow_snapshot(tmp_path: Path) -> 
             acceptance={},
             ops_evidence={},
             bundle_zip_path=bundle_dir / "bundle.zip",
+            project_readiness="ready",
         )
     finally:
         handoff_module.BUNDLE_DIR = original_bundle_dir

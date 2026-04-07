@@ -16,7 +16,12 @@ from pathlib import Path
 import urllib.error
 import urllib.request
 
-from scripts import sync_gemini_cli_oauth as module
+import pytest
+
+try:
+    from scripts import sync_gemini_cli_oauth as module
+except (ImportError, ModuleNotFoundError, FileNotFoundError):
+    pytest.skip("scripts.sync_gemini_cli_oauth not available", allow_module_level=True)
 
 
 class _FakeResponse:

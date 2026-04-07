@@ -17,8 +17,8 @@ from pyrogram.types import Message
 
 from ..config import config
 from ..core.access_control import (
-    AccessLevel,
     PARTIAL_ACCESS_COMMANDS,
+    AccessLevel,
     get_effective_owner_label,
     load_acl_runtime_state,
     update_acl_subject,
@@ -29,8 +29,11 @@ from ..core.lm_studio_health import is_lm_studio_available
 from ..core.logger import get_logger
 from ..core.model_aliases import normalize_model_alias
 from ..core.openclaw_runtime_models import get_runtime_primary_model
-from ..core.openclaw_workspace import append_workspace_memory_entry, recall_workspace_memory
-from ..core.openclaw_workspace import list_workspace_memory_entries
+from ..core.openclaw_workspace import (
+    append_workspace_memory_entry,
+    list_workspace_memory_entries,
+    recall_workspace_memory,
+)
 from ..core.proactive_watch import proactive_watch
 from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
 from ..core.swarm import AgentRoom
@@ -304,7 +307,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "`!swarm memory [команда]` — история прогонов\n"
             "`!swarm schedule traders 4h BTC` — автозапуск\n"
             "`!swarm jobs` — список задач\n"
-            "`!swarm unschedule <id>` — удалить задачу"
+            "`!swarm unschedule <id>` — удалить задачу\n"
+            "`!swarm setup` — создать Forum-группу с топиками\n"
+            "`!swarm channels` — статус групп/топиков"
         ))
 
     # !swarm teams — справка
@@ -400,6 +405,64 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     if args.lower() in {"channels", "группы", "каналы"}:
         from ..core.swarm_channels import swarm_channels
         await message.reply(swarm_channels.format_status())
+        return
+
+    # !swarm setup — создание Forum-группы с топиками
+    if args.lower() in {"setup", "настройка", "форум"}:
+        from ..core.swarm_channels import swarm_channels
+
+        chat = message.chat
+        # Группы/супергруппы всегда имеют отрицательный chat_id
+        is_group = chat.id < 0
+
+        if is_group:
+            # Вызвано в группе — пробуем создать топики напрямую
+            msg = await message.reply("📡 Создаю топики...")
+            try:
+                topic_ids = await swarm_channels.setup_topics_in_existing(chat.id)
+                if topic_ids:
+                    topics_text = "\n".join(
+                        f"  **{team}** → topic `{tid}`" for team, tid in topic_ids.items()
+                    )
+                    await msg.edit_text(
+                        f"✅ **Forum Topics настроены!**\n\n{topics_text}\n\n"
+                        f"Свёрм транслирует раунды в топики.\n"
+                        f"Пиши в топик во время раунда — Краб подхватит как директиву."
+                    )
+                else:
+                    await msg.edit_text(
+                        "⚠️ Не удалось создать топики.\n"
+                        "Убедись что **Topics** включены: Group Info → Edit → Topics.\n"
+                        "После включения повтори `!swarm setup`."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await msg.edit_text(
+                    f"⚠️ Ошибка создания топиков: `{exc}`\n\n"
+                    f"Включи **Topics** в настройках группы и повтори."
+                )
+        else:
+            # Вызвано в личке — создаём новую группу
+            msg = await message.reply("📡 Создаю группу **🐝 Krab Swarm**...")
+            try:
+                result = await swarm_channels.setup_forum()
+                if result.get("topic_ids"):
+                    topics_text = "\n".join(
+                        f"  **{team}** → topic `{tid}`"
+                        for team, tid in result["topic_ids"].items()
+                    )
+                    await msg.edit_text(
+                        f"✅ **Krab Swarm Forum создан!**\n\n"
+                        f"Chat ID: `{result['chat_id']}`\n{topics_text}\n\n"
+                        f"Свёрм транслирует раунды в топики."
+                    )
+                else:
+                    await msg.edit_text(
+                        f"⚠️ **Группа создана** (Chat ID: `{result['chat_id']}`)\n\n"
+                        f"Включи **Topics**: Group Info → Edit → Topics\n"
+                        f"Затем набери `!swarm setup` **в этой группе**."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await msg.edit_text(f"❌ Ошибка: {exc}")
         return
 
     # !swarm setchat <team> — привязать текущую группу к команде
@@ -2633,7 +2696,6 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
       !screenshot ocr      — снимок + OCR (tesseract, brew install tesseract)
       !screenshot ocr rus  — OCR с указанием языка
     """
-    import io
     del bot
     from ..integrations.browser_bridge import browser_bridge as _bb
 
@@ -2737,11 +2799,11 @@ async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
     """
     del bot
     from ..core.capability_registry import (
+        _VALID_CAPABILITIES,  # type: ignore[attr-defined]
         clear_capability_overrides,
         get_capability_overrides,
         set_capability_override,
     )
-    from ..core.capability_registry import _VALID_CAPABILITIES  # type: ignore[attr-defined]
 
     raw_parts = str(message.text or "").split()
     sub = raw_parts[1].lower().strip() if len(raw_parts) > 1 else ""
@@ -2790,3 +2852,53 @@ async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
 
     icon = "✅" if action == "on" else "🚫"
     await message.reply(f"{icon} `{cap_name}` → **{action.upper()}** (все роли)")
+
+
+async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
+    """!тишина — управление режимом тишины.
+
+    Синтаксис:
+      !тишина           — toggle текущего чата (30 мин)
+      !тишина 15        — mute текущего чата на 15 минут
+      !тишина стоп      — снять mute текущего чата
+      !тишина глобально — глобальный mute (60 мин)
+      !тишина глобально 30 — глобальный mute на 30 мин
+      !тишина статус    — показать все активные mutes
+    """
+    from ..core.silence_mode import silence_manager
+
+    chat_id = str(message.chat.id)
+    raw = (message.text or "").strip()
+    # Убираем префикс команды
+    parts = raw.split(maxsplit=1)
+    args = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    if args == "статус":
+        await message.reply(silence_manager.format_status())
+        return
+
+    if args.startswith("стоп"):
+        was_chat = silence_manager.unmute_chat(chat_id)
+        was_global = silence_manager.unmute_global()
+        if was_chat or was_global:
+            await message.reply("🔊 Тишина снята.")
+        else:
+            await message.reply("ℹ️ Тишина не была активна.")
+        return
+
+    if args.startswith("глобально"):
+        rest = args.replace("глобально", "").strip()
+        minutes = int(rest) if rest.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 60))
+        silence_manager.mute_global(minutes)
+        await message.reply(f"🤫 Глобальная тишина на **{minutes}** мин.")
+        return
+
+    # Per-chat: toggle или с указанием минут
+    if silence_manager.is_chat_muted(chat_id):
+        silence_manager.unmute_chat(chat_id)
+        await message.reply("🔊 Тишина в этом чате снята.")
+        return
+
+    minutes = int(args) if args.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 30))
+    silence_manager.mute_chat(chat_id, minutes)
+    await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.\n`!тишина стоп` чтобы снять.")

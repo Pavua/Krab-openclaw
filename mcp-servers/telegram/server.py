@@ -19,6 +19,7 @@ Krab Telegram MCP Server
   1. KrabEar IPC transcribe_paths  — Metal GPU, модель уже в памяти, нет cold start
   2. mlx-whisper напрямую          — fallback если KrabEar не запущен
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,7 +41,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # ── Bootstrap путей и .env ────────────────────────────────────────────────────
 
 _SERVER_DIR = Path(__file__).resolve().parent
-_PROJECT_ROOT = _SERVER_DIR.parents[1]          # .../Краб/
+_PROJECT_ROOT = _SERVER_DIR.parents[1]  # .../Краб/
 
 # Добавляем нужные пути в sys.path
 if str(_PROJECT_ROOT) not in sys.path:
@@ -52,27 +53,26 @@ if str(_SERVER_DIR) not in sys.path:
 
 _ENV_PATH = _PROJECT_ROOT / ".env"
 if _ENV_PATH.exists():
-    load_dotenv(_ENV_PATH, override=False)       # shell env имеет приоритет
+    load_dotenv(_ENV_PATH, override=False)  # shell env имеет приоритет
 
 # Импортируем TelegramBridge после того, как sys.path настроен
 from telegram_bridge import TelegramBridge  # noqa: E402
 
 # ── Константы ─────────────────────────────────────────────────────────────────
 
-_KRAB_WEB_BASE    = os.getenv("KRAB_WEB_BASE_URL", "http://127.0.0.1:8080")
-_KRAB_LOG_PATH    = Path(os.getenv("KRAB_LOG_PATH",
-                                   str(_PROJECT_ROOT / "openclaw.log")))
-_KRAB_EAR_SOCKET  = Path(os.getenv("KRAB_EAR_SOCKET_PATH",
-                                   "~/Library/Application Support/KrabEar/krabear.sock"
-                                   )).expanduser()
-_WHISPER_MODEL    = os.getenv("WHISPER_MODEL",
-                              "mlx-community/whisper-large-v3-turbo")
+_KRAB_WEB_BASE = os.getenv("KRAB_WEB_BASE_URL", "http://127.0.0.1:8080")
+_KRAB_LOG_PATH = Path(os.getenv("KRAB_LOG_PATH", str(_PROJECT_ROOT / "openclaw.log")))
+_KRAB_EAR_SOCKET = Path(
+    os.getenv("KRAB_EAR_SOCKET_PATH", "~/Library/Application Support/KrabEar/krabear.sock")
+).expanduser()
+_WHISPER_MODEL = os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
 
 # ── Singleton бридж ────────────────────────────────────────────────────────────
 
 _bridge = TelegramBridge()
 
 # ── FastMCP lifespan ──────────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def _lifespan(server: FastMCP) -> AsyncIterator[None]:
@@ -83,7 +83,9 @@ async def _lifespan(server: FastMCP) -> AsyncIterator[None]:
     finally:
         await _bridge.stop()
 
+
 # ── CLI args ──────────────────────────────────────────────────────────────────
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -96,11 +98,12 @@ def _parse_args() -> argparse.Namespace:
         choices=["stdio", "sse"],
         help="Транспортный протокол: stdio (для Claude/Codex) или sse (для web-клиентов)",
     )
-    p.add_argument("--port", type=int, default=8001,
-                   help="Порт для SSE транспорта (default: 8001)")
-    p.add_argument("--host", default="127.0.0.1",
-                   help="Хост для SSE транспорта (default: 127.0.0.1)")
-    return p.parse_known_args()[0]   # parse_known_args безопасен при вызове MCP-хостом
+    p.add_argument("--port", type=int, default=8001, help="Порт для SSE транспорта (default: 8001)")
+    p.add_argument(
+        "--host", default="127.0.0.1", help="Хост для SSE транспорта (default: 127.0.0.1)"
+    )
+    return p.parse_known_args()[0]  # parse_known_args безопасен при вызове MCP-хостом
+
 
 _args = _parse_args()
 
@@ -122,60 +125,70 @@ mcp = FastMCP(
 # Pydantic input models
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 class _GetDialogsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    limit: int = Field(default=20, ge=1, le=200,
-                       description="Максимальное количество диалогов для возврата (1–200)")
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="Максимальное количество диалогов для возврата (1–200)",
+    )
 
 
 class _GetHistoryInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    chat_id: str = Field(...,
-                         description="ID чата или username (например: -1001234567890 или @channel_name)")
-    limit: int = Field(default=20, ge=1, le=100,
-                       description="Количество последних сообщений (1–100)")
+    chat_id: str = Field(
+        ..., description="ID чата или username (например: -1001234567890 или @channel_name)"
+    )
+    limit: int = Field(
+        default=20, ge=1, le=100, description="Количество последних сообщений (1–100)"
+    )
 
 
 class _SendMessageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    chat_id: str = Field(...,
-                         description="ID чата или username получателя")
-    text: str = Field(..., min_length=1, max_length=4096,
-                      description="Текст сообщения (до 4096 символов)")
+    chat_id: str = Field(..., description="ID чата или username получателя")
+    text: str = Field(
+        ..., min_length=1, max_length=4096, description="Текст сообщения (до 4096 символов)"
+    )
 
 
 class _MediaInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     chat_id: str = Field(..., description="ID чата или username")
-    message_id: int = Field(..., gt=0,
-                            description="ID сообщения с медиафайлом")
+    message_id: int = Field(..., gt=0, description="ID сообщения с медиафайлом")
 
 
 class _SearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    query: str = Field(..., min_length=1, max_length=255,
-                       description="Поисковый запрос (текст, имя пользователя, ключевое слово)")
-    limit: int = Field(default=20, ge=1, le=100,
-                       description="Максимальное количество результатов (1–100)")
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Поисковый запрос (текст, имя пользователя, ключевое слово)",
+    )
+    limit: int = Field(
+        default=20, ge=1, le=100, description="Максимальное количество результатов (1–100)"
+    )
 
 
 class _EditMessageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     chat_id: str = Field(..., description="ID чата или username")
     message_id: int = Field(..., gt=0, description="ID сообщения для редактирования")
-    text: str = Field(..., min_length=1, max_length=4096,
-                      description="Новый текст сообщения")
+    text: str = Field(..., min_length=1, max_length=4096, description="Новый текст сообщения")
 
 
 class _TailLogsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    n: int = Field(default=50, ge=1, le=500,
-                   description="Количество последних строк лога (1–500)")
+    n: int = Field(default=50, ge=1, le=500, description="Количество последних строк лога (1–500)")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ── TELEGRAM TOOLS ────────────────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 @mcp.tool(
     name="telegram_get_dialogs",
@@ -319,9 +332,7 @@ async def telegram_transcribe_voice(params: _MediaInput) -> str:
             )
 
     # Fallback: mlx-whisper напрямую
-    text = await asyncio.get_event_loop().run_in_executor(
-        None, _transcribe_mlx, file_path
-    )
+    text = await asyncio.get_event_loop().run_in_executor(None, _transcribe_mlx, file_path)
     return json.dumps(
         {"text": text, "source": "mlx_whisper", "file_path": file_path},
         ensure_ascii=False,
@@ -367,6 +378,7 @@ async def _transcribe_via_krabear(audio_path: str) -> str | None:
 def _transcribe_mlx(audio_path: str) -> str:
     """Синхронная транскрипция через mlx-whisper (запускается в executor)."""
     import mlx_whisper  # type: ignore
+
     result = mlx_whisper.transcribe(
         audio_path,
         path_or_hf_repo=_WHISPER_MODEL,
@@ -432,6 +444,7 @@ async def telegram_edit_message(params: _EditMessageInput) -> str:
 # ── КРАБ-DEV TOOLS ───────────────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 @mcp.tool(
     name="krab_status",
     annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True},
@@ -493,10 +506,10 @@ async def krab_tail_logs(params: _TailLogsInput) -> str:
             # Seek к концу файла и читаем chunk-ами
             f.seek(0, 2)
             end = f.tell()
-            buf_size = min(end, params.n * 200)   # ~200 байт на строку в среднем
+            buf_size = min(end, params.n * 200)  # ~200 байт на строку в среднем
             f.seek(max(0, end - buf_size))
             content = f.read().decode("utf-8", errors="replace")
-            lines = content.splitlines()[-params.n:]
+            lines = content.splitlines()[-params.n :]
         return json.dumps(
             {
                 "log_path": str(log_path),
@@ -530,7 +543,9 @@ async def krab_restart_gateway() -> str:
             None,
             lambda: subprocess.run(
                 ["openclaw", "gateway", "stop"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             ),
         )
         await asyncio.sleep(2.0)
@@ -538,7 +553,9 @@ async def krab_restart_gateway() -> str:
             None,
             lambda: subprocess.run(
                 ["openclaw", "gateway", "start"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             ),
         )
         return json.dumps(
@@ -554,7 +571,10 @@ async def krab_restart_gateway() -> str:
         )
     except FileNotFoundError:
         return json.dumps(
-            {"status": "error", "error": "openclaw CLI не найден. Убедись что OpenClaw установлен и в PATH."},
+            {
+                "status": "error",
+                "error": "openclaw CLI не найден. Убедись что OpenClaw установлен и в PATH.",
+            },
             ensure_ascii=False,
         )
     except Exception as exc:  # noqa: BLE001
@@ -564,6 +584,7 @@ async def krab_restart_gateway() -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 # krab_run_tests
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 class _RunTestsInput(BaseModel):
     path: str = Field(
@@ -610,7 +631,9 @@ async def krab_run_tests(params: _RunTestsInput) -> str:
                    "output": "...", "summary": "последняя строка вывода"}
     """
     project_root = Path("/Users/pablito/Antigravity_AGENTS/Краб")
-    python_bin = project_root / ".venv" / "bin" / "python"
+    # Единый venv (Python 3.13 + pyrofork 2.3.69), синхронизирован с runtime.
+    # После унификации venv в batch 7 (commit 00d6a41) старый .venv (Py3.12) удалён.
+    python_bin = project_root / "venv" / "bin" / "python"
 
     # Security: only paths inside tests/
     normalized = params.path.lstrip("/").lstrip("./")
@@ -634,9 +657,13 @@ async def krab_run_tests(params: _RunTestsInput) -> str:
         safe_extra.append(arg)
 
     cmd = [
-        str(python_bin), "-m", "pytest",
+        str(python_bin),
+        "-m",
+        "pytest",
         normalized,
-        "-q", "--tb=short", "--no-header",
+        "-q",
+        "--tb=short",
+        "--no-header",
         *safe_extra,
     ]
 

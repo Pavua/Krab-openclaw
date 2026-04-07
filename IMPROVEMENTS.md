@@ -1,7 +1,7 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-04
-> Статус: Активная разработка — ветка `claude/sweet-chatterjee-r44QI`
+> Составлен: 2026-03-23 | Обновлён: 2026-04-06 (batch 6)
+> Статус: Активная разработка
 > Владелец: По
 
 ---
@@ -11,18 +11,22 @@
 ### 1. Рой автономных агентов (Multi-Agent Swarm)
 **Цель:** Создание независимых виртуальных команд (трейдеры, кодеры, аналитики), которые могут общаться между собой. Например, команда трейдеров анализирует рынок и ставит задачу команде кодеров на написание/корректировку крипто-бота. Главный фокус — окупаемость и автономный заработок.
 
-**Статус:** 🚧 В РАЗРАБОТКЕ (R18→R19, 2026-04-05) — инфраструктура + память + расписание:
-- `src/core/swarm_bus.py`: TeamRegistry (4 команды: traders/coders/analysts/creative) + SwarmBus (межкомандное делегирование через `[DELEGATE: team]`, max_depth=2)
+**Статус:** 🚧 В РАЗРАБОТКЕ (R18→R20, 2026-04-06) — инфраструктура + память + расписание + инструменты:
+- `src/core/swarm_bus.py`: TeamRegistry (4 команды: traders/coders/analysts/creative) + SwarmBus (межкомандное делегирование через `[DELEGATE: team]`, max_depth=1)
 - `src/core/swarm.py`: AgentRoom R18 — детектирует директивы делегирования, инжектирует результат в контекст
 - `src/core/swarm_memory.py`: ✅ (2026-04-05) Персистентная память между сессиями — JSON в `~/.openclaw/krab_runtime_state/swarm_memory.json`, FIFO 50 записей/команда, auto-inject в system_hint ролей
 - `src/core/swarm_scheduler.py`: ✅ (2026-04-05) Рекуррентный планировщик — `!swarm schedule traders 4h BTC`, `!swarm jobs`, `!swarm unschedule <id>`, гейт `SWARM_AUTONOMOUS_ENABLED`
+- ✅ (2026-04-06) **Tool access**: web_search, tor_fetch (TOR_ENABLED), peekaboo, все MCP tools. Tool awareness hint инжектируется в промпт каждой роли. `SWARM_ROLE_MAX_OUTPUT_TOKENS`=4096, `role_context_clip`=3000.
+- ✅ (2026-04-06) **Forum Topics**: Одна supergroup "🐝 Krab Swarm" (chat_id `-1003703978531`) с 5 топиками (traders/coders/analysts/creative/crossteam). Live broadcast каждой роли в соответствующий топик. Делегирование → crossteam topic. `!swarm setup` для автоматического создания.
+- ✅ (2026-04-06) **Broadcast for delegated rounds**: Убран фильтр `_depth==0` — delegated rounds (coders при делегировании от traders) теперь тоже транслируются в свой топик. `_MAX_DEPTH` снижен 2→1 для предотвращения каскадных делегаций.
+- ✅ (2026-04-06) **Swarm channels tests**: 31 тест (broadcast routing, delegation, resolve_destination, is_forum_mode, resolve_team_from_topic). Мокают `_send_message` для изоляции от Pyrogram transport.
 - Команды в Telegram: `!swarm traders <тема>`, `!swarm teams`, `!swarm memory [команда]`, `!swarm schedule/jobs/unschedule`
 
-**Следующий шаг:** Дать свёрму доступ к инструментам (web_search, browser, crypto API) — сейчас команды только разговаривают, но не могут действовать.
+**Следующий шаг:** Миграция на pyrofork (объединение dual venv), затем отдельные TG аккаунты для команд свёрма.
 
 ### 2. Максимальный доступ к macOS (Permission Audit)
 **Цель:** Дать Крабу возможность полностью управлять файловой системой, окнами и процессами без ручного вмешательства.
-**Задача:** Провести полный аудит разрешений macOS (Full Disk Access, Accessibility для Puppeteer, System Events, Screen Recording). Написать скрипт, который проверяет, выданы ли Крабу все нужные права, и не блокирует ли его Gatekeeper.
+**Статус:** ✅ ВЫПОЛНЕНО (2026-04-05) — полный аудит `artifacts/ops/macos_permission_audit_pablito_latest.json`, `overall_ready=true`. Full Disk Access, Accessibility, Screen Recording — всё выдано.
 
 ### 3. Интеграция с умным домом (HomePod mini)
 **Цель:** В будущем подключить управление HomePod mini и другими устройствами Apple прямо из контекста диалога с Крабом. (Приоритет: низкий, ждет стабилизации ядра).
@@ -77,6 +81,28 @@
 - `vision_read.py` как subprocess нигде не вызывается (файл отсутствует в `src/`).
 - Для фото-маршрута автоматически применяются увеличенные таймауты (`_resolve_openclaw_stream_timeouts(has_photo=True)`) и принудительный cloud-роутинг (`_should_force_cloud_for_photo_route`).
 
+### 18. ACL — Silence mode, Guest tools, Spam filter
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-06, batch 6)
+
+**SilenceManager** (`src/core/silence_mode.py`):
+- Per-chat и глобальный mute, in-memory, monotonic expiry
+- `!тишина [N]` — mute чата на N минут (default 30), `!тишина стоп`, `!тишина глобально [N]`, `!тишина статус`
+- Auto-silence: если owner пишет в чат сам → Краб молчит 5 мин (OWNER_AUTO_SILENCE_MINUTES)
+- Silence check в pipeline — после trigger conditions, перед AI запросом. Команды (!/.) проходят всегда.
+- Доступна FULL access (не только OWNER — т.к. OWNER=yung_nagato, оператор p0lrd имеет FULL)
+
+**Guest mode** (`src/openclaw_client.py`):
+- AccessLevel.GUEST → `disable_tools=True` в send_message_stream → tools=[] в payload
+- NON_OWNER_SAFE_PROMPT обновлён: "живой помощник", не представляется ботом
+- Контролируется `GUEST_TOOLS_DISABLED=1` (env)
+
+**Расширенный спам-фильтр** (`src/core/spam_filter.py`):
+- `is_notification_sender()` — shortcodes ≤5 цифр (iMessage)
+- `is_bulk_sender()` — scam/fake флаги, verified+no-username (банки/сервисы), OTP-паттерны в first_name
+- `should_skip_auto_reply()` — combined check, вызывается из userbot_bridge
+
+**Тесты:** 36 новых (test_silence_mode.py × 22, test_spam_filter.py × 14). E2E подтверждено через MCP.
+
 ### 10. Парсинг Mercadona (Anti-bot)
 **Решение:** Добавить `puppeteer-extra-plugin-stealth` и перехватывать XHR/Fetch запросы API через `page.on('response')` вместо нестабильного парсинга DOM-элементов.
 
@@ -102,13 +128,13 @@
 
 ---
 
-## 🔵 Глубокая интеграция в macOS (Бэклог)
+## 🔵 Глубокая интеграция в macOS
 
 ### 11. Локальная папка-шлюз "Inbox"
-**Идея:** Создать директорию `~/Krab_Inbox`. Использовать Folder Actions: любой закинутый туда файл автоматически улетает Крабу на анализ.
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-06) — LaunchAgent `ai.krab.inbox-watcher` мониторит `~/Krab_Inbox` через watchdog (FSEvents). Файлы пересылаются Крабу через `/api/notify`. Plist: `scripts/launchagents/ai.krab.inbox-watcher.plist`.
 
 ### 12. Глобальный macOS Hotkey
-**Идея:** Настроить Apple Shortcuts на глобальное сочетание клавиш для быстрого аудио/текстового ввода задач напрямую в OpenClaw.
+**Статус:** ✅ РЕАЛИЗОВАНО — Hammerspoon ⌘⇧K → текстовый ввод → Krab `/api/notify`. Apple Shortcut тоже настроен.
 
 ### 13. Управление окнами через Hammerspoon
-**Идея:** Настроить скрипты Hammerspoon (Lua), чтобы Краб мог управлять расположением окон на Mac по голосовой/текстовой команде.
+**Статус:** ✅ РЕАЛИЗОВАНО — HTTP bridge на `localhost:10101`, Python bridge `src/integrations/hammerspoon_bridge.py`. POST `/window` с командами `left|right|maximize|...`.

@@ -2851,9 +2851,10 @@ class WebApp:
             }
 
         project_root = self._project_root()
+        # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
         python_candidates = [
-            project_root / ".venv" / "bin" / "python",
             project_root / "venv" / "bin" / "python",
+            project_root / ".venv" / "bin" / "python",
         ]
         python_bin = next((path for path in python_candidates if path.exists() and path.is_file()), None)
         if python_bin is None:
@@ -11036,7 +11037,10 @@ class WebApp:
             if not script_path.exists():
                 raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_script_missing")
 
-            python_bin = project_root / ".venv" / "bin" / "python"
+            # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
+            python_bin = project_root / "venv" / "bin" / "python"
+            if not python_bin.exists():
+                python_bin = project_root / ".venv" / "bin" / "python"
             if not python_bin.exists():
                 python_bin = Path(sys.executable or "python3")
 
@@ -11094,7 +11098,10 @@ class WebApp:
             if not script_path.exists():
                 raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_script_missing")
 
-            python_bin = project_root / ".venv" / "bin" / "python"
+            # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
+            python_bin = project_root / "venv" / "bin" / "python"
+            if not python_bin.exists():
+                python_bin = project_root / ".venv" / "bin" / "python"
             if not python_bin.exists():
                 python_bin = Path(sys.executable or "python3")
 

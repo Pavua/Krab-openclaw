@@ -165,11 +165,13 @@ class AgentRoom:
         logger.info("agent_room_round_started", topic=topic, roles=len(self.roles), depth=_depth)
 
         # Live broadcast: анонс начала раунда в swarm-группу
-        if _team_name and _depth == 0:
+        # Для delegated rounds (depth>0) используем target_team для broadcast в его топик
+        broadcast_team = _team_name
+        if _team_name:
             swarm_channels.mark_round_active(_team_name)
             await swarm_channels.broadcast_round_start(team=_team_name, topic=topic)
 
-        for role in self.roles:
+        for role_idx, role in enumerate(self.roles):
             name = str(role.get("name", "agent"))
             emoji = str(role.get("emoji", "🤖"))
             title = str(role.get("title", name))
@@ -182,13 +184,21 @@ class AgentRoom:
                     accumulated_context += intervention
                     logger.info("agent_room_intervention_applied", team=_team_name, role=name)
 
-            # Tool awareness: сообщаем модели что она может использовать инструменты
-            tool_hint = (
-                "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
-                "peekaboo (скриншот экрана). Используй web_search для получения актуальных данных "
-                "(цены, новости, факты). Не стесняйся вызывать инструменты — это даёт реальные данные "
-                "вместо устаревших знаний."
-            )
+            # Tool awareness: первая роль ОБЯЗАНА использовать web_search для актуальных данных,
+            # остальные роли могут использовать по необходимости
+            if role_idx == 0:
+                tool_hint = (
+                    "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
+                    "peekaboo (скриншот экрана). "
+                    "ВАЖНО: ты ОБЯЗАН начать с вызова web_search чтобы получить актуальные данные "
+                    "(цены, курсы, новости, факты). Твои знания устарели — без web_search твой анализ "
+                    "будет основан на старых данных и бесполезен. Сначала поиск, потом анализ."
+                )
+            else:
+                tool_hint = (
+                    "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
+                    "peekaboo (скриншот экрана). Используй web_search если нужны дополнительные данные."
+                )
 
             if accumulated_context:
                 prompt = (
@@ -210,10 +220,10 @@ class AgentRoom:
                 clipped = "[Пустой ответ роли: проверьте контекст, лимиты или состояние модели]"
                 logger.warning("agent_room_role_empty_response", role=name, topic=topic)
 
-            # Live broadcast: публикуем ответ роли в swarm-группу
-            if _team_name and _depth == 0:
+            # Live broadcast: публикуем ответ роли в swarm-группу (все уровни depth)
+            if broadcast_team:
                 await swarm_channels.broadcast_role_step(
-                    team=_team_name, role_name=name, role_emoji=emoji,
+                    team=broadcast_team, role_name=name, role_emoji=emoji,
                     role_title=title, text=clipped,
                 )
 
@@ -230,6 +240,13 @@ class AgentRoom:
                         target_team=delegate_team,
                         depth=_depth,
                     )
+                    # Live broadcast: уведомление о делегировании (все уровни depth)
+                    if broadcast_team:
+                        await swarm_channels.broadcast_delegation(
+                            source_team=broadcast_team,
+                            target_team=delegate_team,
+                            topic=delegate_topic,
+                        )
                     delegate_result = await _bus.dispatch(
                         source_team=_team_name or "default",
                         target_team=delegate_team,
@@ -259,10 +276,10 @@ class AgentRoom:
         full_result = header + body.strip()
 
         # Live broadcast: итог раунда + снимаем active
-        if _team_name and _depth == 0:
+        if broadcast_team:
             last_role_text = round_results[-1]["text"] if round_results else ""
-            await swarm_channels.broadcast_round_end(team=_team_name, summary=last_role_text)
-            swarm_channels.mark_round_done(_team_name)
+            await swarm_channels.broadcast_round_end(team=broadcast_team, summary=last_role_text)
+            swarm_channels.mark_round_done(broadcast_team)
 
         # Сохраняем результат в персистентную память (только top-level раунды)
         if _team_name and _depth == 0:

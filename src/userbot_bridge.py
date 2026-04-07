@@ -105,7 +105,10 @@ from .handlers import (
     handle_write,
     handle_screenshot,
     handle_cap,
+    handle_silence,
 )
+from .core.silence_mode import silence_manager
+from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
 from .search_engine import close_search
@@ -587,6 +590,7 @@ class KraabUserbot:
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
+        self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
         self._telegram_restart_lock = asyncio.Lock()
@@ -824,6 +828,13 @@ class KraabUserbot:
         @self.client.on_message(filters.command("cap", prefixes=prefixes) & _make_command_filter("cap"), group=-1)
         async def wrap_cap(c, m):
             await run_cmd(handle_cap, m)
+
+        @self.client.on_message(
+            filters.command("тишина", prefixes=prefixes) & _make_command_filter("тишина"),
+            group=-1,
+        )
+        async def wrap_silence(c, m):
+            await run_cmd(handle_silence, m)
 
         @self.client.on_message(filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1)
         async def wrap_watch(c, m):
@@ -1752,11 +1763,96 @@ class KraabUserbot:
         except Exception as exc:  # noqa: BLE001
             logger.warning("reserve_bot_start_error", error=str(exc))
 
+        # Per-team swarm clients — отдельные TG аккаунты для каждой команды (background)
+        asyncio.create_task(self._init_swarm_team_clients())
+
     @staticmethod
     def _is_auth_key_invalid(exc: Exception) -> bool:
         """True, если исключение связано с протухшей Telegram auth key."""
         text = str(exc).lower()
         return "auth key not found" in text or "auth_key_unregistered" in text
+
+    # -- per-team swarm clients ------------------------------------------------
+
+    async def _start_swarm_team_clients(self) -> dict[str, Any]:
+        """Создаёт и стартует Pyrogram Clients для per-team аккаунтов свёрма."""
+        accounts = config.load_swarm_team_accounts()
+        if not accounts:
+            return {}
+
+        started: dict[str, Any] = {}
+        for team, acct in accounts.items():
+            session_name = acct.get("session_name", f"swarm_{team}")
+            try:
+                cl = Client(
+                    session_name,
+                    api_id=config.TELEGRAM_API_ID,
+                    api_hash=config.TELEGRAM_API_HASH,
+                    workdir=str(self._session_workdir),
+                    no_updates=True,
+                )
+                await asyncio.wait_for(cl.start(), timeout=15)
+                me = await cl.get_me()
+                started[team.lower()] = cl
+                logger.info(
+                    "swarm_team_client_started",
+                    team=team,
+                    session=session_name,
+                    username=getattr(me, "username", None),
+                    user_id=getattr(me, "id", None),
+                )
+                # Warm-up peer cache: get_dialogs загружает все чаты включая недавно
+                # добавленные группы (иначе send_message → CHAT_ID_INVALID).
+                try:
+                    async for _ in cl.get_dialogs(limit=50):
+                        pass
+                    logger.info("swarm_team_client_warmed_up", team=team)
+                except Exception as warm_exc:  # noqa: BLE001
+                    logger.warning(
+                        "swarm_team_client_warmup_failed",
+                        team=team,
+                        error=str(warm_exc),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "swarm_team_client_start_failed",
+                    team=team,
+                    session=session_name,
+                    error=repr(exc),
+                )
+        return started
+
+    async def _stop_swarm_team_clients(self) -> None:
+        """Останавливает все per-team swarm clients.
+
+        Безопасно вызывать даже если `_init_swarm_team_clients` не отработал
+        (например, в тестовых фикстурах или при раннем сбое старта).
+        """
+        clients = getattr(self, "_swarm_team_clients", None)
+        if not clients:
+            return
+        for team, cl in list(clients.items()):
+            try:
+                if cl.is_connected:
+                    await cl.stop()
+                logger.info("swarm_team_client_stopped", team=team)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("swarm_team_client_stop_failed", team=team, error=str(exc))
+        clients.clear()
+
+    async def _init_swarm_team_clients(self) -> None:
+        """Background init per-team swarm clients (не блокирует основной бот)."""
+        try:
+            self._swarm_team_clients = await self._start_swarm_team_clients()
+            for team, cl in self._swarm_team_clients.items():
+                swarm_channels.bind_team_client(team, cl)
+            if self._swarm_team_clients:
+                logger.info(
+                    "swarm_team_clients_ready",
+                    teams=list(self._swarm_team_clients.keys()),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("swarm_team_clients_init_failed", error=repr(exc))
 
     async def _recover_telegram_session(self, reason: str) -> None:
         """
@@ -1959,6 +2055,8 @@ class KraabUserbot:
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
+        # Per-team swarm clients — остановить до основного клиента
+        await self._stop_swarm_team_clients()
         try:
             await self._safe_stop_client(reason="runtime_stop")
         except Exception as exc:  # noqa: BLE001
@@ -4110,6 +4208,19 @@ class KraabUserbot:
                 message_ids=absorbed_ids,
             )
 
+        # Ставим реакцию 👀 на absorbed сообщения чтобы пользователь видел,
+        # что они включены в batch и не "висят" без ответа.
+        chat_id_int = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+        for absorbed_msg in combined_messages[1:]:
+            try:
+                await self.client.send_reaction(
+                    chat_id=chat_id_int,
+                    message_id=int(getattr(absorbed_msg, "id", 0) or 0),
+                    emoji="👀",
+                )
+            except Exception:  # noqa: BLE001
+                pass  # не все чаты поддерживают реакции
+
         combined_query = "\n\n".join(part for part in combined_parts if part).strip()
         anchor_message = combined_messages[-1]
         logger.info(
@@ -4365,6 +4476,12 @@ class KraabUserbot:
             has_images=bool(images),
         )
 
+        # Гостевой режим: отключаем tools/exec для GUEST-уровня
+        _guest_disable_tools = (
+            bool(getattr(config, "GUEST_TOOLS_DISABLED", True))
+            and hasattr(access_profile, "level")
+            and str(getattr(access_profile.level, "value", access_profile.level)).lower() == "guest"
+        )
         stream = openclaw_client.send_message_stream(
             message=effective_query,
             chat_id=runtime_chat_id,
@@ -4372,6 +4489,7 @@ class KraabUserbot:
             images=images,
             force_cloud=force_cloud,
             max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
+            disable_tools=_guest_disable_tools,
         )
         stream_iter = stream.__aiter__()
         received_any_chunk = False
@@ -5092,6 +5210,12 @@ class KraabUserbot:
         ):
             return
 
+        # Silence check: если чат заглушён — не обрабатывать AI-запросы.
+        # Команды (! / .) обработаны выше и уже return'нули.
+        if not is_self and silence_manager.is_silenced(chat_id):
+            logger.info("silence_mode_skip", chat_id=chat_id)
+            return
+
         query = self._get_clean_text(text)
         if not query and has_audio_message:
             query, voice_error = await self._transcribe_audio_message(message)
@@ -5126,10 +5250,17 @@ class KraabUserbot:
         except Exception as exc:  # noqa: BLE001
             logger.warning("incoming_message_inbox_sync_failed", chat_id=chat_id, error=str(exc))
 
-        # Фильтр OTP/уведомлений: не отвечать на SMS-shortcode отправителей (≤5 цифр)
-        # и на ручной MANUAL_BLOCKLIST. Входящее всё равно форвардится owner-у.
-        if not is_self and (self._is_notification_sender(user) or self._is_manually_blocked(user)):
-            _block_reason = "manual_blocklist" if self._is_manually_blocked(user) else "notification_sender"
+        # Фильтр спама: shortcodes, рассылки, OTP, scam/fake + ручной blocklist.
+        if not is_self and (
+            self._is_notification_sender(user)
+            or _is_bulk_sender_ext(user)
+            or self._is_manually_blocked(user)
+        ):
+            _block_reason = (
+                "manual_blocklist" if self._is_manually_blocked(user)
+                else "bulk_sender" if _is_bulk_sender_ext(user)
+                else "notification_sender"
+            )
             logger.info("auto_reply_skipped_blocked_sender", chat_id=chat_id, reason=_block_reason)
             if bool(getattr(config, "FORWARD_UNKNOWN_INCOMING", True)):
                 asyncio.create_task(
@@ -5497,10 +5628,16 @@ class KraabUserbot:
                 and message.text
             ):
                 swarm_team = swarm_channels.is_swarm_chat(message.chat.id)
-                if swarm_team and swarm_channels.is_round_active(swarm_team):
-                    swarm_channels.add_intervention(swarm_team, message.text)
-                    await message.reply(f"👑 Директива принята для **{swarm_team}**")
-                    return
+                if swarm_team:
+                    # Forum mode: определяем команду по topic_id
+                    if swarm_team == "_forum":
+                        topic_id = getattr(message, "message_thread_id", None) or getattr(message, "reply_to_top_message_id", None)
+                        if topic_id:
+                            swarm_team = swarm_channels.resolve_team_from_topic(topic_id)
+                    if swarm_team and swarm_team != "_forum" and swarm_channels.is_round_active(swarm_team):
+                        swarm_channels.add_intervention(swarm_team, message.text)
+                        await message.reply(f"👑 Директива принята для **{swarm_team}**")
+                        return
 
             access_profile = self._get_access_profile(user)
             is_allowed_sender = self._is_allowed_sender(user)
@@ -5511,6 +5648,16 @@ class KraabUserbot:
                     matched_subject=str(getattr(user, "username", "") or getattr(user, "id", "")),
                 )
             chat_id = str(message.chat.id)
+
+            # Auto-silence: owner сам пишет в чат (не команду) → Краб молчит N мин
+            is_self = self.me and user.id == self.me.id
+            raw_text = (message.text or "").strip()
+            is_command = raw_text[:1] in ("!", "/", ".") if raw_text else False
+            if is_self and not is_command and chat_id:
+                _auto_min = int(getattr(config, "OWNER_AUTO_SILENCE_MINUTES", 5))
+                if _auto_min > 0:
+                    silence_manager.auto_silence_owner_typing(chat_id, _auto_min)
+
             async with self._get_chat_processing_lock(chat_id):
                 if self._consume_batched_followup_message_id(
                     chat_id=chat_id,

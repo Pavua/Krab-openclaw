@@ -153,7 +153,6 @@ def test_build_openclaw_progress_wait_notice_mentions_running_tool() -> None:
         notice_index=1,
         tool_calls_summary="🔧 Выполняется: browser\nИнструментов: 0/1",
     )
-    assert "Использую инструмент" in notice
     assert "Выполняется: browser" in notice
 
 

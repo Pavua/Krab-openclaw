@@ -16,7 +16,7 @@
 
     <key>ProgramArguments</key>
     <array>
-      <string>/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin/python</string>
+      <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
       <string>/Users/pablito/Antigravity_AGENTS/Краб/scripts/krab_inbox_watcher.py</string>
     </array>
 
@@ -33,7 +33,7 @@
       <key>HOME</key>
       <string>/Users/pablito</string>
       <key>PATH</key>
-      <string>/Users/pablito/Antigravity_AGENTS/Краб/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
   </dict>
 </plist>

@@ -553,6 +553,18 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
             },
         }
 
+    async def push_event(self, session_id: str, *, event_type: str, data: dict | None = None) -> dict:
+        # Stub для удовлетворения VoiceGatewayControlPlane Protocol; не вызывается в текущих тестах.
+        return {"ok": True, "session_id": session_id, "event_type": event_type, "data": dict(data or {})}
+
+    async def session_tts(self, session_id: str, *, text: str, voice: str = "default", style: str = "neutral") -> dict:
+        # Stub для удовлетворения VoiceGatewayControlPlane Protocol; не вызывается в текущих тестах.
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": {"text": text, "voice": voice, "style": style, "audio_url": ""},
+        }
+
 
 class _FakeVoiceGatewayFreshSessionClient(_FakeVoiceGatewayControlPlaneClient):
     """Фейк для проверки выбора самой свежей active session."""
@@ -906,6 +918,30 @@ def test_runtime_cloud_presets_build_codex_cli_synthetic_catalog(monkeypatch) ->
         WebApp,
         "_openclaw_models_status_snapshot",
         classmethod(lambda cls: {"raw": {}, "providers": {}}),
+    )
+    # codex-cli synthetic preset получает configured_runtime=True только если
+    # provider readiness in {ready, attention}. _runtime_provider_state по-умолчанию
+    # дёргает реальный `shutil.which("codex")` + `codex login status`, что в тестовой
+    # песочнице непредсказуемо. Мокаем результат: "ready" для codex-cli, дефолт для остальных.
+    _real_runtime_provider_state = WebApp._runtime_provider_state
+
+    def _stub_runtime_provider_state(cls, provider_name, **kwargs):
+        normalized = str(provider_name or "").strip().lower()
+        if normalized == "codex-cli":
+            return {
+                "auth_mode": "cli",
+                "readiness": "ready",
+                "readiness_label": "CLI OK",
+                "detail": "stubbed for unit test",
+                "runtime_models": [],
+                "effective_kind": "cli",
+            }
+        return _real_runtime_provider_state.__func__(cls, provider_name, **kwargs)
+
+    monkeypatch.setattr(
+        WebApp,
+        "_runtime_provider_state",
+        classmethod(_stub_runtime_provider_state),
     )
     monkeypatch.setattr(
         WebApp,
@@ -6504,6 +6540,26 @@ def test_runtime_chat_session_clear_calls_openclaw_client(monkeypatch: pytest.Mo
     """Owner runtime endpoint должен чистить chat-session через общий openclaw_client."""
     monkeypatch.setenv("WEB_API_KEY", "secret")
     fake_openclaw = _FakeOpenClaw()
+    # В worktree-окружении тестов нет реального data/sessions/kraab.session SQLite,
+    # поэтому файловый snapshot вернул бы state="missing". Эмулируем здоровый
+    # ready-snapshot, чтобы тест проверял именно clear-flow, а не runtime fixture.
+    monkeypatch.setattr(
+        WebApp,
+        "_telegram_session_snapshot",
+        lambda self: {
+            "state": "ready",
+            "session_name": "kraab",
+            "session_path": "/tmp/kraab.session",
+            "session_exists": True,
+            "session_size_bytes": 4096,
+            "wal_exists": False,
+            "shm_exists": False,
+            "journal_exists": False,
+            "lock_files": [],
+            "sqlite_quick_check_ok": True,
+            "sqlite_error": "",
+        },
+    )
     client = TestClient(
         _make_app(
             openclaw_client=fake_openclaw,

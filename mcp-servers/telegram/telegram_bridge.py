@@ -124,13 +124,26 @@ class TelegramBridge:
         """Определяет transient SQLite-lock на session-файле Pyrogram."""
         return "database is locked" in str(exc).lower()
 
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        """Определяет ошибки потери соединения Pyrogram (disconnect, timeout)."""
+        msg = str(exc).lower()
+        return (
+            isinstance(exc, (ConnectionError, OSError, RuntimeError))
+            or "not initialized" in msg
+            or "не инициализирован" in msg
+            or "client has not been started" in msg
+            or "disconnected" in msg
+            or "connection" in msg and "error" in msg
+        )
+
     async def _restart_client_locked(self) -> None:
         """
-        Перезапускает Pyrogram-клиент под lock, если session SQLite временно залочена.
+        Перезапускает Pyrogram-клиент под lock.
 
         Почему restart допустим:
         - MCP server использует один singleton-клиент;
-        - session lock чаще всего означает зависший sqlite handle после restart/краша;
+        - session lock / disconnect чаще всего означает transient failure;
         - один controlled restart дешевле, чем оставлять весь MCP transport в ошибке.
         """
         async with self._client_lock:
@@ -144,9 +157,15 @@ class TelegramBridge:
             self._client = _make_client()
             await self._client.start()
 
+    async def _ensure_connected(self) -> Client:
+        """Возвращает клиент, переподключаясь если сессия отвалилась."""
+        if self._client is None:
+            await self._restart_client_locked()
+        return self._client  # type: ignore[return-value]
+
     async def _run_client_call(self, callback):
         """
-        Сериализует Telegram API вызовы и один раз переживает session-lock.
+        Сериализует Telegram API вызовы и один раз переживает session-lock или disconnect.
 
         Почему сериализация нужна:
         - Pyrogram session живёт в sqlite-файле;
@@ -156,9 +175,10 @@ class TelegramBridge:
         """
         async with self._operation_lock:
             try:
-                return await callback(self.client)
+                client = await self._ensure_connected()
+                return await callback(client)
             except Exception as exc:  # noqa: BLE001
-                if not self._is_session_lock_error(exc):
+                if not (self._is_session_lock_error(exc) or self._is_connection_error(exc)):
                     raise
                 await self._restart_client_locked()
                 return await callback(self.client)

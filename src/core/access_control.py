@@ -85,6 +85,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "swarm",
         # Capability policy matrix
         "cap",
+        # Silence mode
+        "тишина",
     }
 )
 

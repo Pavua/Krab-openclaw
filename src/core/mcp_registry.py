@@ -61,9 +61,14 @@ def load_project_env(env_path: Path | None = None) -> dict[str, str]:
 
 def _python_command() -> str:
     """Возвращает стабильный Python для launcher-скриптов LM Studio."""
-    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
-    if venv_python.exists():
-        return str(venv_python)
+    # Единый venv (Py 3.13 + pyrofork). Фолбек на legacy .venv оставлен
+    # для переходного периода, пока хост не очищен.
+    for candidate in (
+        PROJECT_ROOT / "venv" / "bin" / "python",
+        PROJECT_ROOT / ".venv" / "bin" / "python",
+    ):
+        if candidate.exists():
+            return str(candidate)
     return sys.executable or "/usr/bin/python3"
 
 
@@ -85,9 +90,7 @@ def _brave_search_api_key(env: dict[str, str] | None = None) -> str:
     """Возвращает Brave Search API key с legacy fallback."""
     scope = env or os.environ
     return str(
-        scope.get("BRAVE_SEARCH_API_KEY", "")
-        or scope.get("BRAVE_API_KEY", "")
-        or ""
+        scope.get("BRAVE_SEARCH_API_KEY", "") or scope.get("BRAVE_API_KEY", "") or ""
     ).strip()
 
 
@@ -95,9 +98,7 @@ def _github_token(env: dict[str, str] | None = None) -> str:
     """Возвращает GitHub token с поддержкой старого имени переменной."""
     scope = env or os.environ
     return str(
-        scope.get("GITHUB_TOKEN", "")
-        or scope.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")
-        or ""
+        scope.get("GITHUB_TOKEN", "") or scope.get("GITHUB_PERSONAL_ACCESS_TOKEN", "") or ""
     ).strip()
 
 
@@ -165,8 +166,11 @@ def get_managed_mcp_servers() -> dict[str, dict[str, Any]]:
         "telegram": _server(
             description="Telegram MCP: чтение чатов, отправка, транскрипция голосовых, dev-утилиты Краба.",
             command=_python_command(),
-            args=[str(PROJECT_ROOT / "mcp-servers" / "telegram" / "server.py"),
-                  "--transport", "stdio"],
+            args=[
+                str(PROJECT_ROOT / "mcp-servers" / "telegram" / "server.py"),
+                "--transport",
+                "stdio",
+            ],
             risk="high",
         ),
         "memory": _server(
@@ -272,7 +276,8 @@ def resolve_managed_server_launch(name: str) -> dict[str, Any]:
     merged_env.update(os.environ)
     merged_env.update(server.get("env", {}))
     missing_env = [
-        key for key in server.get("required_env", [])
+        key
+        for key in server.get("required_env", [])
         if not str(merged_env.get(key, "") or "").strip()
     ]
 
