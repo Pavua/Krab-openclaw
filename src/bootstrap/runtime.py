@@ -155,6 +155,11 @@ async def run_app() -> None:
             # На некоторых окружениях add_signal_handler недоступен (например, ограниченный runtime).
             pass
 
+    # Признак штатной остановки: SIGTERM/SIGINT ставит stop_event → чистый выход.
+    # Любое другое исключение (ConnectionError/OSError/TimeoutError/CancelledError
+    # на сетевом drop) должно приводить к реinit Pyrofork сессии верхним retry-loop'ом,
+    # а не тихо завершать процесс (см. Track B stability RCA, 2026-04-08).
+    network_failure: BaseException | None = None
     try:
         await kraab.start()
         kraab_state = kraab.get_runtime_state()
@@ -165,9 +170,20 @@ async def run_app() -> None:
         warmup_task = asyncio.create_task(_warmup_runtime_route_truth())
         await stop_event.wait()
     except asyncio.CancelledError:
-        logger.info("stopping_signal_received")
+        if stop_event.is_set():
+            logger.info("stopping_signal_received")
+        else:
+            logger.warning("run_app_cancelled_unexpectedly")
+            network_failure = asyncio.CancelledError("pyrofork loop cancelled")
+    except (ConnectionError, OSError, TimeoutError, asyncio.TimeoutError) as exc:
+        logger.error(
+            "run_app_network_error",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        network_failure = exc
     except Exception as e:
-        logger.error("fatal_error", error=str(e))
+        logger.error("fatal_error", error=str(e), error_type=type(e).__name__)
     finally:
         if warmup_task is not None and not warmup_task.done():
             warmup_task.cancel()
@@ -175,5 +191,10 @@ async def run_app() -> None:
                 await warmup_task
             except asyncio.CancelledError:
                 pass
-        await kraab.stop()
+        try:
+            await kraab.stop()
+        except Exception as stop_exc:  # noqa: BLE001
+            logger.warning("kraab_stop_failed", error=str(stop_exc))
         logger.info("kraab_stopped")
+    if network_failure is not None:
+        raise network_failure

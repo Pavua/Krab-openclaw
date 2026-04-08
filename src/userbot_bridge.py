@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import textwrap
 import time
+import traceback
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1455,6 +1456,9 @@ class KraabUserbot:
             "input_transcription_ready": perceptor_ready,
             "output_tts_ready": True,
             "live_voice_foundation": bool(perceptor_ready),
+            # Per-chat voice blocklist — нужен renderer'у, owner UI и handoff,
+            # чтобы не вычитывать config.VOICE_REPLY_BLOCKED_CHATS дважды.
+            "blocked_chats": self.get_voice_blocked_chats(),
         }
 
     def update_voice_runtime_profile(
@@ -3373,6 +3377,78 @@ class KraabUserbot:
             return False
         return not self._looks_like_error_surface_text(text)
 
+    def _is_voice_blocked_for_chat(self, chat_id: Any) -> bool:
+        """
+        True → в этом чате голосовые ответы запрещены (per-chat blocklist).
+
+        Причина: в некоторых группах модерация (или пользователи через report spam)
+        метит TTS userbot как нежелательный → chat-level USER_BANNED_IN_CHANNEL,
+        после которого Краб вообще не может туда ничего писать. Blocklist — это
+        явный opt-out, чтобы Краб продолжал работать текстом, но не триггерил
+        повторный бан голосом.
+
+        Источник списка — `config.VOICE_REPLY_BLOCKED_CHATS`, он перечитывается
+        на каждый вызов (через `getattr`), чтобы runtime-команды `!voice block`
+        применялись без рестарта.
+        """
+        blocked = getattr(config, "VOICE_REPLY_BLOCKED_CHATS", None) or []
+        if not blocked:
+            return False
+        target = str(chat_id or "").strip()
+        if not target:
+            return False
+        return target in {str(v).strip() for v in blocked}
+
+    def get_voice_blocked_chats(self) -> list[str]:
+        """
+        Возвращает актуальный per-chat voice blocklist (копию).
+
+        Копия, а не ссылка, чтобы случайный `.append` у caller'а не мутировал
+        общий `config.VOICE_REPLY_BLOCKED_CHATS`. Реальные изменения идут только
+        через `add_voice_blocked_chat` / `remove_voice_blocked_chat`.
+        """
+        blocked = getattr(config, "VOICE_REPLY_BLOCKED_CHATS", None) or []
+        return [str(v).strip() for v in blocked if str(v).strip()]
+
+    def add_voice_blocked_chat(self, chat_id: Any, *, persist: bool = True) -> list[str]:
+        """
+        Добавляет `chat_id` в voice blocklist и persist'ит в `.env`.
+
+        Идемпотентно: дубликат просто игнорируется. Возвращает актуальный список
+        ПОСЛЕ операции, чтобы caller мог сразу отрендерить его пользователю.
+        """
+        target = str(chat_id or "").strip()
+        if not target:
+            raise ValueError("chat_id required")
+        current = self.get_voice_blocked_chats()
+        if target not in current:
+            current.append(target)
+            if persist:
+                config.update_setting("VOICE_REPLY_BLOCKED_CHATS", ",".join(current))
+            else:
+                config.VOICE_REPLY_BLOCKED_CHATS = list(current)
+            logger.info("voice_blocklist_added", chat_id=target, size=len(current))
+        return self.get_voice_blocked_chats()
+
+    def remove_voice_blocked_chat(self, chat_id: Any, *, persist: bool = True) -> list[str]:
+        """
+        Убирает `chat_id` из voice blocklist и persist'ит в `.env`.
+
+        Идемпотентно: если элемента нет — просто возвращает текущий список.
+        """
+        target = str(chat_id or "").strip()
+        if not target:
+            raise ValueError("chat_id required")
+        current = self.get_voice_blocked_chats()
+        if target in current:
+            current = [v for v in current if v != target]
+            if persist:
+                config.update_setting("VOICE_REPLY_BLOCKED_CHATS", ",".join(current))
+            else:
+                config.VOICE_REPLY_BLOCKED_CHATS = list(current)
+            logger.info("voice_blocklist_removed", chat_id=target, size=len(current))
+        return self.get_voice_blocked_chats()
+
     @staticmethod
     def _message_has_audio(message: Message) -> bool:
         """Определяет voice/audio attachment, который можно отдать в STT."""
@@ -4755,9 +4831,14 @@ class KraabUserbot:
                             else:
                                 temp_msg = await self._safe_edit(temp_msg, slow_notice)
                         except Exception as exc:
+                            # P0 (2026-04-09): здесь раньше был литеральный `...` как positional arg,
+                            # из-за чего structlog stdlib factory падал на `event % (Ellipsis,)` →
+                            # TypeError "not all arguments converted". Заменено на штатные kwargs.
                             logger.warning(
                                 "openclaw_slow_notice_delivery_failed",
-                                ...
+                                chat_id=chat_id,
+                                error=str(exc),
+                                error_type=type(exc).__name__,
                             )
                         # We don't continue immediately, we might have progress notice to send
 
@@ -4802,9 +4883,16 @@ class KraabUserbot:
                             last_progress_notice_text = progress_notice
                             last_tool_summary = tool_summary
                         except Exception as exc:
+                            # P0 (2026-04-09): литеральный `...` в kwargs ломал structlog stdlib.
+                            # Важный инвариант: вся цепочка _run_llm_request_flow запускается в фоне
+                            # через _finish_ai_request_background, и TypeError отсюда валил весь
+                            # stream до получения первого chunk'а — Краб "зависал" после 15 сек.
                             logger.warning(
                                 "openclaw_progress_notice_delivery_failed",
-                                ...
+                                chat_id=chat_id,
+                                notice_index=progress_notice_count,
+                                error=str(exc),
+                                error_type=type(exc).__name__,
                             )
                         next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
                         next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
@@ -5117,6 +5205,16 @@ class KraabUserbot:
             # Запускаем Python TTS (edge_tts) только если агент не прислал аудио сам.
             # Это предотвращает дублирование: оба движка не должны отвечать голосом.
             if self._should_send_voice_for_response(full_response) and not _agent_sent_voice:
+                # Per-chat blocklist: в некоторых чатах TTS помечается модерацией
+                # как spam → yung_nagato получал USER_BANNED_IN_CHANNEL в How2AI.
+                # Пропускаем voice, но текстовая доставка продолжает работать штатно.
+                if self._is_voice_blocked_for_chat(chat_id):
+                    logger.info(
+                        "voice_reply_skipped_blocklist",
+                        chat_id=chat_id,
+                        reason="chat_in_voice_blocklist",
+                    )
+                    return
                 # Пропускаем TTS для очень коротких ответов (< 10 символов): Telegram
                 # отклоняет голосовые < ~1 секунды, что роняет весь delivery pipeline.
                 _tts_text = (full_response or "").strip()
@@ -5154,7 +5252,13 @@ class KraabUserbot:
         try:
             await self._run_llm_request_flow(**kwargs, prefer_send_message_for_background=True)
         except Exception as exc:  # noqa: BLE001
-            logger.error("background_ai_request_failed", chat_id=chat_id, error=str(exc))
+            logger.error(
+                "background_ai_request_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                traceback=traceback.format_exc(),
+            )
             error_text = "❌ Фоновая обработка запроса завершилась ошибкой. Попробуй повторить сообщение."
             try:
                 if temp_msg is not None:

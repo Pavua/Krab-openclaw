@@ -394,6 +394,18 @@ class Config:
         os.getenv("VOICE_REPLY_DELIVERY", "text+voice").strip().lower()
         or "text+voice"
     )
+    # Per-chat voice reply blocklist.
+    # Причина: в некоторых группах TTS от userbot квалифицируется модерацией как spam
+    # (How2AI → yung_nagato получил USER_BANNED_IN_CHANNEL после нескольких голосовых),
+    # и каждое новое сообщение Краба туда триггерит report spam → chat-level ban.
+    # Этот список — явный opt-out: в этих чатах Краб присылает ТОЛЬКО текст,
+    # даже если глобально включён voice_mode и delivery=text+voice.
+    # Формат: comma-separated chat_id (отрицательные для супергрупп и каналов).
+    VOICE_REPLY_BLOCKED_CHATS: list[str] = [
+        s.strip()
+        for s in os.getenv("VOICE_REPLY_BLOCKED_CHATS", "").split(",")
+        if s.strip()
+    ]
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -509,6 +521,10 @@ class Config:
                     cls.VOICE_REPLY_VOICE = value.strip() or "ru-RU-DmitryNeural"
                 elif key == "VOICE_REPLY_DELIVERY":
                     cls.VOICE_REPLY_DELIVERY = value.strip().lower() or "text+voice"
+                elif key == "VOICE_REPLY_BLOCKED_CHATS":
+                    cls.VOICE_REPLY_BLOCKED_CHATS = [
+                        s.strip() for s in (value or "").split(",") if s.strip()
+                    ]
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
                 elif key == "GEMINI_PAID_KEY_ENABLED":
