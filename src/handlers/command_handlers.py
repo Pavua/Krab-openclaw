@@ -66,6 +66,13 @@ def _render_voice_profile(profile: dict[str, Any]) -> str:
     voice_name = str(profile.get("voice") or "ru-RU-DmitryNeural")
     input_ready = bool(profile.get("input_transcription_ready"))
     live_foundation = bool(profile.get("live_voice_foundation"))
+    blocked_chats = profile.get("blocked_chats") or []
+    if blocked_chats:
+        blocked_preview = ", ".join(f"`{cid}`" for cid in list(blocked_chats)[:5])
+        if len(blocked_chats) > 5:
+            blocked_preview += f" (+{len(blocked_chats) - 5})"
+    else:
+        blocked_preview = "—"
     return (
         "🎙️ **Voice runtime**\n"
         f"- Озвучка ответов: `{'ВКЛ' if enabled else 'ВЫКЛ'}`\n"
@@ -73,12 +80,14 @@ def _render_voice_profile(profile: dict[str, Any]) -> str:
         f"- Скорость: `{speed:.2f}x`\n"
         f"- Голос: `{voice_name}`\n"
         f"- Входящие voice/STT: `{'READY' if input_ready else 'DOWN'}`\n"
-        f"- Live voice foundation: `{'READY' if live_foundation else 'DEGRADED'}`\n\n"
+        f"- Live voice foundation: `{'READY' if live_foundation else 'DEGRADED'}`\n"
+        f"- Blocked chats: {blocked_preview}\n\n"
         "Команды:\n"
         "`!voice on|off|toggle`\n"
         "`!voice speed <0.75..2.5>`\n"
         "`!voice voice <edge-tts-id>`\n"
         "`!voice delivery <text+voice|voice-only>`\n"
+        "`!voice block <chat_id>` / `!voice unblock <chat_id>` / `!voice blocked`\n"
         "`!voice reset`"
     )
 
@@ -1136,6 +1145,55 @@ async def handle_voice(bot: "KraabUserbot", message: Message) -> None:
             persist=True,
         )
         await message.reply(_render_voice_profile(profile))
+        return
+
+    if sub == "blocked":
+        blocked = bot.get_voice_blocked_chats()
+        if not blocked:
+            await message.reply(
+                "🎙️ **Voice blocklist** пуст.\n"
+                "Добавить чат: `!voice block <chat_id>` (например, `!voice block -1001587432709`)."
+            )
+            return
+        lines = "\n".join(f"- `{cid}`" for cid in blocked)
+        await message.reply(
+            f"🎙️ **Voice blocklist ({len(blocked)}):**\n{lines}\n\n"
+            "Убрать: `!voice unblock <chat_id>`"
+        )
+        return
+
+    if sub in {"block", "unblock"}:
+        # Разрешаем два варианта:
+        #   1) `!voice block <chat_id>` — явный id;
+        #   2) `!voice block` без аргумента → берём id текущего чата, удобно
+        #      когда owner прямо в проблемной группе пишет команду.
+        target_chat_id: str
+        if len(args) >= 3 and str(args[2] or "").strip():
+            target_chat_id = str(args[2]).strip()
+        else:
+            chat_ref = getattr(message, "chat", None)
+            inferred = getattr(chat_ref, "id", None) if chat_ref else None
+            if inferred is None:
+                raise UserInputError(
+                    user_message=(
+                        f"❌ Укажи chat_id: `!voice {sub} <chat_id>`\n"
+                        "(например, `-1001587432709` для супергруппы)"
+                    )
+                )
+            target_chat_id = str(inferred)
+
+        try:
+            if sub == "block":
+                bot.add_voice_blocked_chat(target_chat_id, persist=True)
+                prefix = "✅ Добавил в voice blocklist"
+            else:
+                bot.remove_voice_blocked_chat(target_chat_id, persist=True)
+                prefix = "✅ Убрал из voice blocklist"
+        except ValueError as exc:
+            raise UserInputError(user_message=f"❌ {exc}") from exc
+
+        profile = bot.get_voice_runtime_profile()
+        await message.reply(f"{prefix}: `{target_chat_id}`\n\n{_render_voice_profile(profile)}")
         return
 
     raise UserInputError(user_message="❌ Неизвестная подкоманда voice. Используй `!voice status`.")

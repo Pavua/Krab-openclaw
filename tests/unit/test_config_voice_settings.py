@@ -69,3 +69,59 @@ def test_update_setting_updates_voice_fields_and_env(tmp_path, monkeypatch) -> N
     assert "VOICE_REPLY_SPEED=1.2" in env_text
     assert "VOICE_REPLY_VOICE=ru-RU-SvetlanaNeural" in env_text
     assert "VOICE_REPLY_DELIVERY=voice-only" in env_text
+
+
+def test_config_reads_voice_blocked_chats_from_env(monkeypatch) -> None:
+    """
+    `VOICE_REPLY_BLOCKED_CHATS` должен парситься из env как список string'ов.
+
+    Поле типизировано как `list[str]`, а не просто string — иначе каждый
+    call-site был бы вынужден дублировать split/strip, и регрессия тихо
+    съела бы per-chat opt-out для How2AI.
+    """
+    with monkeypatch.context() as mp:
+        mp.setenv("VOICE_REPLY_BLOCKED_CHATS", "-1001587432709, -1002000000000 ,")
+        reloaded = importlib.reload(config_module)
+        assert reloaded.config.VOICE_REPLY_BLOCKED_CHATS == [
+            "-1001587432709",
+            "-1002000000000",
+        ]
+
+    importlib.reload(config_module)
+
+
+def test_update_setting_updates_blocked_chats_field_and_env(tmp_path, monkeypatch) -> None:
+    """
+    `update_setting('VOICE_REPLY_BLOCKED_CHATS', ...)` должен:
+    - обновить classref in-memory (чтобы runtime-команды `!voice block` работали
+      без рестарта userbot),
+    - переписать соответствующую строку в `.env` (чтобы состояние переживало рестарт).
+    """
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "VOICE_REPLY_BLOCKED_CHATS=\n",
+        encoding="utf-8",
+    )
+
+    with monkeypatch.context() as mp:
+        mp.setattr(config_module.Config, "BASE_DIR", tmp_path)
+        mp.setattr(config_module.Config, "VOICE_REPLY_BLOCKED_CHATS", [], raising=False)
+
+        assert (
+            config_module.Config.update_setting(
+                "VOICE_REPLY_BLOCKED_CHATS",
+                "-1001587432709,-1002000000000",
+            )
+            is True
+        )
+        assert config_module.Config.VOICE_REPLY_BLOCKED_CHATS == [
+            "-1001587432709",
+            "-1002000000000",
+        ]
+
+        # Идемпотентно очищаем — поле должно принимать пустую строку.
+        assert config_module.Config.update_setting("VOICE_REPLY_BLOCKED_CHATS", "") is True
+        assert config_module.Config.VOICE_REPLY_BLOCKED_CHATS == []
+
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "VOICE_REPLY_BLOCKED_CHATS=" in env_text
