@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import textwrap
 import time
+import traceback
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -4755,9 +4756,14 @@ class KraabUserbot:
                             else:
                                 temp_msg = await self._safe_edit(temp_msg, slow_notice)
                         except Exception as exc:
+                            # P0 (2026-04-09): здесь раньше был литеральный `...` как positional arg,
+                            # из-за чего structlog stdlib factory падал на `event % (Ellipsis,)` →
+                            # TypeError "not all arguments converted". Заменено на штатные kwargs.
                             logger.warning(
                                 "openclaw_slow_notice_delivery_failed",
-                                ...
+                                chat_id=chat_id,
+                                error=str(exc),
+                                error_type=type(exc).__name__,
                             )
                         # We don't continue immediately, we might have progress notice to send
 
@@ -4802,9 +4808,16 @@ class KraabUserbot:
                             last_progress_notice_text = progress_notice
                             last_tool_summary = tool_summary
                         except Exception as exc:
+                            # P0 (2026-04-09): литеральный `...` в kwargs ломал structlog stdlib.
+                            # Важный инвариант: вся цепочка _run_llm_request_flow запускается в фоне
+                            # через _finish_ai_request_background, и TypeError отсюда валил весь
+                            # stream до получения первого chunk'а — Краб "зависал" после 15 сек.
                             logger.warning(
                                 "openclaw_progress_notice_delivery_failed",
-                                ...
+                                chat_id=chat_id,
+                                notice_index=progress_notice_count,
+                                error=str(exc),
+                                error_type=type(exc).__name__,
                             )
                         next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
                         next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
@@ -5154,7 +5167,13 @@ class KraabUserbot:
         try:
             await self._run_llm_request_flow(**kwargs, prefer_send_message_for_background=True)
         except Exception as exc:  # noqa: BLE001
-            logger.error("background_ai_request_failed", chat_id=chat_id, error=str(exc))
+            logger.error(
+                "background_ai_request_failed",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                traceback=traceback.format_exc(),
+            )
             error_text = "❌ Фоновая обработка запроса завершилась ошибкой. Попробуй повторить сообщение."
             try:
                 if temp_msg is not None:
