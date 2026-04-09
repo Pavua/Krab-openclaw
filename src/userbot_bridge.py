@@ -38,6 +38,7 @@ from .core.access_control import (
 )
 from .core.capability_registry import resolve_access_mode
 from .core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
+from .core.chat_capability_cache import chat_capability_cache
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
 from .core.operator_identity import build_trace_id
@@ -1621,19 +1622,23 @@ class KraabUserbot:
         """Запуск юзербота"""
         self._set_startup_state(state="starting")
         logger.info("starting_userbot")
-        # Persisted chat ban cache — persist путь в ~/.openclaw/krab_runtime_state/,
-        # совпадая с swarm_channels.json / inbox_state.json / krab_main.log.
-        # Конфигурируется здесь а не в __init__ чтобы любой re-start подхватывал
-        # актуальный state с диска (нужно на случай ручного редактирования файла
-        # или на случай если cache был очищен между рестартами).
+        # Persisted chat ban cache (B.8) + chat capability cache (B.6).
+        # Оба persist путь в ~/.openclaw/krab_runtime_state/, совпадая с
+        # swarm_channels.json / inbox_state.json / krab_main.log. Конфигурируется
+        # здесь а не в __init__ чтобы любой re-start подхватывал актуальный
+        # state с диска (нужно на случай ручного редактирования файла или на
+        # случай если cache был очищен между рестартами).
         try:
             _runtime_state_dir = Path(
                 os.environ.get("KRAB_RUNTIME_STATE_DIR")
                 or str(Path.home() / ".openclaw" / "krab_runtime_state")
             ).expanduser()
             chat_ban_cache.configure_default_path(_runtime_state_dir / "chat_ban_cache.json")
+            chat_capability_cache.configure_default_path(
+                _runtime_state_dir / "chat_capability_cache.json"
+            )
         except Exception as _exc:  # noqa: BLE001
-            logger.warning("chat_ban_cache_bootstrap_failed", error=str(_exc))
+            logger.warning("chat_state_caches_bootstrap_failed", error=str(_exc))
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
@@ -3420,6 +3425,55 @@ class KraabUserbot:
         if not target:
             return False
         return target in {str(v).strip() for v in blocked}
+
+    async def _refresh_chat_capabilities_background(self, chat_id: Any) -> None:
+        """
+        Fire-and-forget fetch `client.get_chat(chat_id)` → upsert в capability cache.
+
+        Вызывается асинхронно из `_process_message`, но результат нигде не
+        блокирует — точно как chat_ban_cache marking в `_finish_ai_request_background`.
+        Это и есть весь смысл B.6: один раз в TTL (24ч default) мы платим
+        API-запросом `get_chat` чтобы дальше hot-path voice/text decisions
+        работал без вопросов к Telegram.
+
+        Fire-and-forget: exceptions не валят flow, они просто логгируются
+        как `chat_capability_refresh_failed`.
+        """
+        target = str(chat_id or "").strip()
+        if not target:
+            return
+        # Если в cache уже есть свежая запись (до TTL), ничего не делаем.
+        if chat_capability_cache.get(target) is not None:
+            return
+        client = getattr(self, "client", None)
+        get_chat_fn = getattr(client, "get_chat", None) if client is not None else None
+        if not callable(get_chat_fn):
+            return
+        try:
+            # Можно передавать int или str — pyrofork resolve'ит оба.
+            try:
+                chat_obj = await get_chat_fn(int(target))
+            except (TypeError, ValueError):
+                chat_obj = await get_chat_fn(target)
+        except Exception as exc:  # noqa: BLE001
+            # get_chat часто падает на приватках с ID вместо username, на
+            # каналах без админских прав, на forum топиках — всё это нормально,
+            # просто нет capability info для этого чата.
+            logger.debug(
+                "chat_capability_refresh_failed",
+                chat_id=target,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+        try:
+            chat_capability_cache.upsert_from_chat(chat_obj)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "chat_capability_upsert_failed",
+                chat_id=target,
+                error=str(exc),
+            )
 
     def get_voice_blocked_chats(self) -> list[str]:
         """
@@ -5291,6 +5345,19 @@ class KraabUserbot:
                         reason="chat_in_voice_blocklist",
                     )
                     return
+                # B.6 capability cache: если Telegram прямо сказал что voice в этом
+                # чате запрещён (ChatPermissions.can_send_voices=False или media-level
+                # запрещён), тоже пропускаем voice и идём только текстом. В отличие
+                # от blocklist это automatic — зависит от сервера, а не от owner.
+                # Возвращается True/False/None; None == "не знаем", тогда default
+                # разрешать (back-compat).
+                if chat_capability_cache.is_voice_allowed(chat_id) is False:
+                    logger.info(
+                        "voice_reply_skipped_capability",
+                        chat_id=chat_id,
+                        reason="voice_disallowed_by_chat_permissions",
+                    )
+                    return
                 # Пропускаем TTS для очень коротких ответов (< 10 символов): Telegram
                 # отклоняет голосовые < ~1 секунды, что роняет весь delivery pipeline.
                 _tts_text = (full_response or "").strip()
@@ -5886,6 +5953,20 @@ class KraabUserbot:
                     user=getattr(user, "username", None),
                 )
                 return
+
+            # B.6 chat capability cache: fire-and-forget refresh если в кеше
+            # нет свежей записи. `_refresh_chat_capabilities_background` сам
+            # внутри проверяет TTL и no-ops если данные свежие, так что
+            # безопасно вызывать на каждом сообщении.
+            if chat_id:
+                try:
+                    asyncio.create_task(
+                        self._refresh_chat_capabilities_background(chat_id)
+                    )
+                except RuntimeError:
+                    # Нет running loop — маловероятно внутри pyrogram handler,
+                    # но safe-guard против падения обработки.
+                    pass
 
             # Auto-silence: owner сам пишет в чат (не команду) → Краб молчит N мин
             is_self = self.me and user.id == self.me.id
