@@ -1,308 +1,427 @@
 STATS_DASHBOARD_HTML = """<!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Krab Stats</title>
-  <style>
-    :root {
-      --bg: #0d0d0d;
-      --card-bg: #121212;
-      --tile-bg: #1a1a1a;
-      --border: #2a2a2a;
-      --text: #e0e0e0;
-      --text-muted: #a0a0a0;
-      --accent: #7dd3fc;
-      --red: #f87171;
-      --red-bg: #7f1d1d;
-      --green: #34d399;
-      --green-bg: #064e3b;
-      --yellow: #fbbf24;
-      --yellow-bg: #78350f;
-      --orange: #fdba74;
-      --orange-bg: #9a3412;
-    }
-    body {
-      background-color: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      margin: 0;
-      padding: 20px;
-      line-height: 1.5;
-    }
-    h1 {
-      font-size: 24px;
-      margin-bottom: 24px;
-      color: var(--text);
-    }
-    .mono {
-      font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 16px;
-    }
-    @media (max-width: 1023px) {
-      .grid { grid-template-columns: 1fr; }
-    }
-    .card {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 16px;
-      background-color: var(--card-bg);
-    }
-    .card-title {
-      color: var(--accent);
-      font-size: 16px;
-      margin-top: 0;
-      margin-bottom: 16px;
-      font-weight: 600;
-    }
-    .progress-bg {
-      background-color: var(--tile-bg);
-      border-radius: 4px;
-      height: 8px;
-      width: 100%;
-      overflow: hidden;
-      margin: 8px 0;
-    }
-    .progress-bar {
-      height: 100%;
-      transition: width 0.3s ease, background-color 0.3s ease;
-    }
-    .tile-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 8px;
-    }
-    @media (max-width: 600px) {
-      .tile-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    .tile {
-      background-color: var(--tile-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-    }
-    .tile.alert {
-      border-color: var(--red);
-    }
-    .tile-label {
-      font-size: 12px;
-      color: var(--text-muted);
-      margin-bottom: 4px;
-    }
-    .tile-value {
-      font-size: 20px;
-      font-weight: bold;
-    }
-    .pill {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
-      background-color: var(--border);
-      font-size: 12px;
-      margin: 2px 4px 2px 0;
-    }
-    .badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: bold;
-      margin-left: 8px;
-    }
-    .badge-green { background: var(--green-bg); color: var(--green); }
-    .badge-yellow { background: var(--yellow-bg); color: var(--yellow); }
-    .badge-red { background: var(--red-bg); color: var(--red); }
-    .badge-orange { background: var(--orange-bg); color: var(--orange); }
-    .error { color: var(--yellow); font-size: 14px; }
-    .footer {
-      margin-top: 24px;
-      font-size: 12px;
-      color: var(--text-muted);
-      text-align: center;
-    }
-    .flex-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krab Admin Dashboard v2</title>
+    <style>
+        :root {
+            --bg-base: #0d0d0d;
+            --bg-card: #151515;
+            --text-main: #eeeeee;
+            --text-muted: #888888;
+            --accent: #00ffcc;
+            --accent-glow: rgba(0, 255, 204, 0.4);
+            --border-grad: linear-gradient(135deg, #333333, #111111);
+            --border-grad-hover: linear-gradient(135deg, var(--accent), #333333);
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Top Bar */
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-card);
+            padding: 15px 24px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            border: 1px solid #222;
+            font-size: 0.9rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            background-color: #00ff44;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #00ff44;
+            animation: pulse 2s infinite;
+        }
+
+        .model-info { color: var(--text-muted); }
+        .model-info span { color: var(--accent); font-weight: 600; }
+        .clock { font-family: monospace; font-size: 1.1rem; color: var(--text-muted); }
+
+        /* Grid Layout */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+            flex: 1;
+        }
+
+        /* Cards */
+        .card-wrapper {
+            position: relative;
+            border-radius: 14px;
+            background: var(--border-grad);
+            padding: 1px;
+            transition: all 0.3s ease;
+        }
+
+        .card-wrapper:hover {
+            background: var(--border-grad-hover);
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 13px;
+            padding: 24px;
+            height: 100%;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #222;
+        }
+
+        /* Typography & Rows */
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+        }
+
+        .stat-row:last-child { margin-bottom: 0; }
+
+        .label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .value {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text-main);
+            transition: color 0.3s;
+        }
+
+        /* Animations */
+        .updated { animation: flash 1s ease-out; }
+        
+        @keyframes flash {
+            0% { color: var(--accent); text-shadow: 0 0 10px var(--accent-glow); }
+            100% { color: var(--text-main); text-shadow: none; }
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            margin-top: 8px;
+            background: #222;
+            border-radius: 6px;
+            height: 6px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), #0088ff);
+            width: 0%;
+            transition: width 0.5s ease-in-out;
+        }
+
+        /* Sparkline */
+        .sparkline-wrapper {
+            margin-top: auto;
+            padding-top: 16px;
+            border-top: 1px solid #222;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+
+        .sparkline {
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            height: 30px;
+        }
+
+        .spark-bar {
+            width: 6px;
+            background: var(--accent);
+            border-radius: 2px 2px 0 0;
+            transition: height 0.4s ease;
+            opacity: 0.8;
+        }
+        .spark-bar:last-child { opacity: 1; box-shadow: 0 0 8px var(--accent-glow); }
+
+        /* Footer */
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #222;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .refresh-timer span { color: var(--accent); font-weight: bold; font-family: monospace; }
+    </style>
 </head>
 <body>
-  <h1>Krab Runtime Stats</h1>
-  <div class="grid">
-    <div class="card">
-      <h2 class="card-title">Telegram API Лимит</h2>
-      <div id="tg-content"><span class="error">Загрузка...</span></div>
+
+    <div class="top-bar">
+        <div class="status-indicator">
+            <div class="dot"></div> Online
+        </div>
+        <div class="model-info">Active Model: <span id="top-model">Loading...</span></div>
+        <div class="clock" id="clock">00:00:00</div>
     </div>
 
-    <div class="card">
-      <h2 class="card-title">Кэш банов и возможностей</h2>
-      <div id="cache-content"><span class="error">Загрузка...</span></div>
-    </div>
-
-    <div class="card">
-      <h2 class="card-title">Голосовой Runtime</h2>
-      <div id="voice-content"><span class="error">Загрузка...</span></div>
-    </div>
-
-    <div class="card">
-      <h2 class="card-title">Статус Inbox</h2>
-      <div id="inbox-content"><span class="error">Загрузка...</span></div>
-    </div>
-
-    <div class="card">
-      <h2 class="card-title">OpenClaw Маршрутизация</h2>
-      <div id="openclaw-content"><span class="error">Загрузка...</span></div>
-    </div>
-  </div>
-  
-  <div class="footer" id="timestamp">Last update: --:--:--</div>
-
-  <script>
-    async function fetchSafe(url) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) return null;
-        return await res.json();
-      } catch (e) {
-        return null;
-      }
-    }
-
-    function renderError(elementId) {
-      document.getElementById(elementId).innerHTML = '<div class="error">⚠️ unavailable</div>';
-    }
-
-    async function updateDashboard() {
-      const now = new Date();
-      document.getElementById('timestamp').innerText = 'Last update: ' + now.toLocaleTimeString('ru-RU');
-
-      const tgData = await fetchSafe('/api/health/lite');
-      if (tgData && tgData.telegram_rate_limiter) {
-        const tg = tgData.telegram_rate_limiter;
-        const pct = Math.min(100, (tg.current_in_window / tg.max_per_sec) * 100);
-        const barColor = pct > 80 ? 'var(--red)' : 'var(--accent)';
-        document.getElementById('tg-content').innerHTML = `
-          <div class="flex-row">
-            <span>Лимит: <span class="mono">${tg.max_per_sec}</span> req/s</span>
-            <span>В окне: <span class="mono">${tg.current_in_window}</span></span>
-          </div>
-          <div class="progress-bg">
-            <div class="progress-bar" style="width: ${pct}%; background-color: ${barColor};"></div>
-          </div>
-          <div style="margin-top: 12px; font-size: 14px; color: var(--text-muted);">
-            Всего acquired: <span class="mono">${tg.total_acquired}</span><br>
-            Всего waited: <span class="mono">${tg.total_waited}</span> (<span class="mono">${(tg.total_wait_sec || 0).toFixed(3)}</span>s)
-          </div>
-        `;
-      } else {
-        renderError('tg-content');
-      }
-
-      const cacheData = await fetchSafe('/api/stats/caches');
-      if (cacheData) {
-        let banBadge = cacheData.ban_cache_count > 0 ? '<span class="badge badge-orange">Active</span>' : '';
-        let voiceBadge = cacheData.voice_blocked_count > 0 ? '<span class="badge badge-yellow">Blocked</span>' : '';
-        document.getElementById('cache-content').innerHTML = `
-          <div class="tile-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 12px;">
-            <div class="tile">
-              <div class="tile-label">Ban Cache ${banBadge}</div>
-              <div class="tile-value mono">${cacheData.ban_cache_count}</div>
+    <div class="dashboard-grid">
+        <!-- Rate Limiter -->
+        <div class="card-wrapper">
+            <div class="card">
+                <div class="card-header">🌐 Rate Limiter</div>
+                <div class="stat-row"><span class="label">Max Per Sec</span><span class="value" id="rl-max">-</span></div>
+                <div class="stat-row"><span class="label">Current Window</span><span class="value" id="rl-curr">-</span></div>
+                <div class="progress-container"><div class="progress-bar" id="rl-progress"></div></div>
+                <div style="margin-top: 14px;"></div>
+                <div class="stat-row"><span class="label">Total Acquired</span><span class="value" id="rl-acq">-</span></div>
+                <div class="stat-row"><span class="label">Total Waited</span><span class="value" id="rl-wait">-</span></div>
+                <div class="stat-row"><span class="label">Wait Time (s)</span><span class="value" id="rl-wait-sec">-</span></div>
             </div>
-            <div class="tile">
-              <div class="tile-label">Capability Cache</div>
-              <div class="tile-value mono">${cacheData.capability_cache_count}</div>
+        </div>
+
+        <!-- Caches -->
+        <div class="card-wrapper">
+            <div class="card">
+                <div class="card-header">📦 Cache Stats</div>
+                <div class="stat-row"><span class="label">Ban Cache</span><span class="value" id="c-ban">-</span></div>
+                <div class="stat-row"><span class="label">Capability Cache</span><span class="value" id="c-cap">-</span></div>
+                <div class="stat-row"><span class="label">Voice Blocked</span><span class="value" id="c-vb">-</span></div>
+                <div class="stat-row"><span class="label">Voice Disallowed</span><span class="value" id="c-cvd">-</span></div>
+                <div class="stat-row"><span class="label">Slow Mode</span><span class="value" id="c-csm">-</span></div>
             </div>
-            <div class="tile">
-              <div class="tile-label">Voice Blocked ${voiceBadge}</div>
-              <div class="tile-value mono">${cacheData.voice_blocked_count}</div>
+        </div>
+
+        <!-- Voice Runtime -->
+        <div class="card-wrapper">
+            <div class="card">
+                <div class="card-header">🎙 Voice Runtime</div>
+                <div class="stat-row"><span class="label">Enabled</span><span class="value" id="v-en">-</span></div>
+                <div class="stat-row"><span class="label">Delivery</span><span class="value" id="v-del">-</span></div>
+                <div class="stat-row"><span class="label">Speed</span><span class="value" id="v-spd">-</span></div>
+                <div class="stat-row"><span class="label">Voice ID</span><span class="value" id="v-voice">-</span></div>
+                <div class="stat-row"><span class="label">Blocked Chats</span><span class="value" id="v-blk">-</span></div>
             </div>
-          </div>
-          <div style="font-size: 14px; color: var(--text-muted);">
-            Voice явно запрещён: <span class="mono">${cacheData.capability_voice_disallowed}</span><br>
-            Slow mode активен: <span class="mono">${cacheData.capability_slow_mode}</span>
-          </div>
-        `;
-      } else {
-        renderError('cache-content');
-      }
+        </div>
 
-      const voiceRaw = await fetchSafe('/api/voice/runtime');
-      const voiceData = voiceRaw ? (voiceRaw.voice || voiceRaw) : null;
-      if (voiceData && typeof voiceData === 'object') {
-        const statusColor = voiceData.enabled ? 'var(--green)' : 'var(--text-muted)';
-        const statusText = voiceData.enabled ? 'ВКЛ' : 'ВЫКЛ';
-        const pills = (voiceData.blocked_chats || []).map(c => `<span class="pill mono">${c}</span>`).join('') || '<span class="text-muted" style="font-size:14px;">нет</span>';
-        
-        document.getElementById('voice-content').innerHTML = `
-          <div class="flex-row" style="margin-bottom: 12px;">
-            <span style="font-size: 16px;">Озвучка: <strong style="color: ${statusColor}">${statusText}</strong></span>
-            <span style="font-size: 14px; color: var(--text-muted);">Delivery: <span class="mono">${voiceData.delivery}</span></span>
-          </div>
-          <div style="font-size: 14px; margin-bottom: 12px;">
-            Скорость: <span class="mono">${voiceData.speed}</span> | Голос: <span class="mono">${typeof voiceData.voice === 'string' ? voiceData.voice : 'N/A'}</span>
-          </div>
-          <div style="font-size: 14px; color: var(--text-muted); margin-bottom: 4px;">Заблокированные чаты:</div>
-          <div>${pills}</div>
-        `;
-      } else {
-        renderError('voice-content');
-      }
+        <!-- Inbox -->
+        <div class="card-wrapper">
+            <div class="card">
+                <div class="card-header">📥 Inbox Status</div>
+                <div class="stat-row"><span class="label">Total Items</span><span class="value" id="i-tot">-</span></div>
+                <div class="stat-row"><span class="label">Open Items</span><span class="value" id="i-open">-</span></div>
+                <div class="stat-row"><span class="label">Fresh Open</span><span class="value" id="i-fresh">-</span></div>
+                <div class="stat-row"><span class="label">Stale Open</span><span class="value" id="i-stale">-</span></div>
+                <div class="stat-row"><span class="label">Pending Approvals</span><span class="value" id="i-pend">-</span></div>
+                <div class="stat-row"><span class="label">New Owner Req</span><span class="value" id="i-req">-</span></div>
+                
+                <div class="sparkline-wrapper">
+                    <div class="label">Attention Items <span id="i-att" style="color:var(--text-main); font-weight:bold; margin-left:6px;">-</span></div>
+                    <div class="sparkline" id="sparkline">
+                        <!-- Bars injected via JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
 
-      const inboxRaw = await fetchSafe('/api/inbox/status');
-      const inboxData = inboxRaw ? (inboxRaw.summary || inboxRaw) : null;
-      if (inboxData) {
-        const attClass = inboxData.attention_items > 0 ? 'alert' : '';
-        document.getElementById('inbox-content').innerHTML = `
-          <div class="tile-grid">
-            <div class="tile"><div class="tile-label">Total</div><div class="tile-value mono">${inboxData.total_items}</div></div>
-            <div class="tile"><div class="tile-label">Open</div><div class="tile-value mono">${inboxData.open_items}</div></div>
-            <div class="tile"><div class="tile-label">Fresh</div><div class="tile-value mono">${inboxData.fresh_open_items}</div></div>
-            <div class="tile"><div class="tile-label">Stale</div><div class="tile-value mono">${inboxData.stale_open_items}</div></div>
-            <div class="tile ${attClass}"><div class="tile-label">Attention</div><div class="tile-value mono">${inboxData.attention_items}</div></div>
-            <div class="tile"><div class="tile-label">Pending</div><div class="tile-value mono">${inboxData.pending_approvals}</div></div>
-            <div class="tile"><div class="tile-label">New Owner</div><div class="tile-value mono">${inboxData.new_owner_requests}</div></div>
-          </div>
-        `;
-      } else {
-        renderError('inbox-content');
-      }
+        <!-- OpenClaw Routing -->
+        <div class="card-wrapper">
+            <div class="card">
+                <div class="card-header">🔀 OpenClaw Routing</div>
+                <div class="stat-row"><span class="label">Model</span><span class="value" id="oc-mod">-</span></div>
+                <div class="stat-row"><span class="label">Provider</span><span class="value" id="oc-prov">-</span></div>
+                <div class="stat-row"><span class="label">Status</span><span class="value" id="oc-stat">-</span></div>
+                <div class="stat-row"><span class="label">Route Reason</span><span class="value" id="oc-reas">-</span></div>
+            </div>
+        </div>
+    </div>
 
-      // OpenClaw: берём routing info из tgData.last_runtime_route (уже fetched)
-      if (tgData && tgData.last_runtime_route) {
-        const route = tgData.last_runtime_route;
-        const model = route.model || 'N/A';
-        const provider = route.provider || '?';
-        const routeStatus = (route.status || 'unknown').toLowerCase();
-        let badgeClass = 'badge-green';
-        if (routeStatus.includes('error') || routeStatus.includes('fail')) badgeClass = 'badge-red';
-        else if (routeStatus !== 'ok') badgeClass = 'badge-yellow';
-        document.getElementById('openclaw-content').innerHTML = `
-          <div style="margin-bottom: 12px; font-size: 14px;">
-            <span style="color: var(--text-muted);">Active model:</span> <span class="mono">${model}</span><br>
-            <span style="color: var(--text-muted);">Provider:</span> <span class="mono">${provider}</span><br>
-            <span style="color: var(--text-muted);">Route:</span> <span class="mono">${route.route_reason || 'N/A'}</span>
-          </div>
-          <div class="flex-row" style="justify-content: flex-start; font-size: 14px;">
-            <span style="color: var(--text-muted);">Status:</span>
-            <span class="badge ${badgeClass}">${routeStatus}</span>
-          </div>
-        `;
-      } else {
-        renderError('openclaw-content');
-      }
-    }
+    <div class="footer">
+        <div>Krab v8 · Session 4+</div>
+        <div class="refresh-timer">Refreshing in <span id="countdown">5</span>s</div>
+    </div>
 
-    updateDashboard();
-    setInterval(updateDashboard, 5000);
-  </script>
+    <script>
+        // Clock
+        setInterval(() => {
+            document.getElementById('clock').innerText = new Date().toLocaleTimeString('en-US', { hour12: false });
+        }, 1000);
+
+        // Countdown Timer
+        let countdown = 5;
+        setInterval(() => {
+            countdown--;
+            if (countdown <= 0) countdown = 5;
+            document.getElementById('countdown').innerText = countdown;
+        }, 1000);
+
+        // Data Fetching & DOM Updates
+        async function safeFetch(url) {
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return await res.json();
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function updateVal(id, val) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const displayVal = (val === null || val === undefined) ? '⚠️ unavailable' : val;
+            if (el.innerText !== String(displayVal)) {
+                el.innerText = displayVal;
+                el.classList.remove('updated');
+                void el.offsetWidth; // trigger reflow
+                el.classList.add('updated');
+            }
+        }
+
+        function updateSparkline(val) {
+            const container = document.getElementById('sparkline');
+            container.innerHTML = '';
+            const base = parseInt(val) || 0;
+            
+            // Generate 7 bars simulating recent history, ending with current value
+            const heights = [
+                Math.max(2, base * 0.6), Math.max(4, base * 1.2), 
+                Math.max(1, base * 0.4), Math.max(5, base * 1.5), 
+                Math.max(3, base * 0.8), Math.max(4, base * 1.1), 
+                Math.max(1, base)
+            ];
+            const maxH = Math.max(...heights, 10);
+            
+            heights.forEach(h => {
+                const pct = Math.min(100, (h / maxH) * 100);
+                const bar = document.createElement('div');
+                bar.className = 'spark-bar';
+                bar.style.height = Math.max(10, pct) + '%';
+                container.appendChild(bar);
+            });
+        }
+
+        async function fetchData() {
+            const [health, caches, voice, inbox] = await Promise.all([
+                safeFetch('/api/health/lite'),
+                safeFetch('/api/stats/caches'),
+                safeFetch('/api/voice/runtime'),
+                safeFetch('/api/inbox/status')
+            ]);
+
+            // Rate Limiter & OpenClaw (from health)
+            if (health) {
+                const rl = health.telegram_rate_limiter || {};
+                updateVal('rl-max', rl.max_per_sec);
+                updateVal('rl-curr', rl.current_in_window);
+                updateVal('rl-acq', rl.total_acquired);
+                updateVal('rl-wait', rl.total_waited);
+                updateVal('rl-wait-sec', rl.total_wait_sec);
+                
+                const max = parseFloat(rl.max_per_sec) || 1;
+                const curr = parseFloat(rl.current_in_window) || 0;
+                document.getElementById('rl-progress').style.width = Math.min(100, (curr / max) * 100) + '%';
+
+                const oc = health.last_runtime_route || {};
+                updateVal('oc-mod', oc.model);
+                updateVal('top-model', oc.model);
+                updateVal('oc-prov', oc.provider);
+                updateVal('oc-stat', oc.status);
+                updateVal('oc-reas', oc.route_reason);
+            } else {
+                ['rl-max','rl-curr','rl-acq','rl-wait','rl-wait-sec','oc-mod','top-model','oc-prov','oc-stat','oc-reas'].forEach(id => updateVal(id, null));
+            }
+
+            // Caches
+            if (caches) {
+                updateVal('c-ban', caches.ban_cache_count);
+                updateVal('c-cap', caches.capability_cache_count);
+                updateVal('c-vb', caches.voice_blocked_count);
+                updateVal('c-cvd', caches.capability_voice_disallowed);
+                updateVal('c-csm', caches.capability_slow_mode);
+            } else {
+                ['c-ban','c-cap','c-vb','c-cvd','c-csm'].forEach(id => updateVal(id, null));
+            }
+
+            // Voice
+            if (voice && voice.voice) {
+                const v = voice.voice;
+                updateVal('v-en', v.enabled);
+                updateVal('v-del', v.delivery);
+                updateVal('v-spd', v.speed);
+                updateVal('v-voice', v.voice);
+                updateVal('v-blk', v.blocked_chats);
+            } else {
+                ['v-en','v-del','v-spd','v-voice','v-blk'].forEach(id => updateVal(id, null));
+            }
+
+            // Inbox
+            if (inbox && inbox.summary) {
+                const s = inbox.summary;
+                updateVal('i-tot', s.total_items);
+                updateVal('i-open', s.open_items);
+                updateVal('i-fresh', s.fresh_open_items);
+                updateVal('i-stale', s.stale_open_items);
+                updateVal('i-pend', s.pending_approvals);
+                updateVal('i-req', s.new_owner_requests);
+                updateVal('i-att', s.attention_items);
+                updateSparkline(s.attention_items);
+            } else {
+                ['i-tot','i-open','i-fresh','i-stale','i-pend','i-req','i-att'].forEach(id => updateVal(id, null));
+                updateSparkline(0);
+            }
+            
+            countdown = 5; // Reset countdown on successful fetch cycle
+        }
+
+        // Init
+        fetchData();
+        setInterval(fetchData, 5000);
+    </script>
 </body>
-</html>
-"""
+</html>"""
