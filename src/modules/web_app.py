@@ -6971,6 +6971,78 @@ class WebApp:
                 headers=_no_store_headers(),
             )
 
+        # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
+
+        @self.app.get("/api/costs/report")
+        async def get_costs_report():
+            """Отчёт по расходам для /costs dashboard."""
+            try:
+                from ..core.cost_analytics import cost_analytics as _ca
+                report = _ca.build_usage_report_dict()
+                return {"ok": True, "report": report}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        @self.app.get("/api/swarm/status")
+        async def get_swarm_status():
+            """Статус мультиагентного свёрма для /swarm dashboard."""
+            try:
+                from ..core.swarm_channels import swarm_channels as _sc
+                from ..core.swarm_scheduler import swarm_scheduler as _ss
+                from ..core.swarm_memory import swarm_memory as _sm
+
+                teams_data = {}
+                for team_name in ["traders", "coders", "analysts", "creative"]:
+                    is_active = _sc.is_round_active(team_name) if hasattr(_sc, "is_round_active") else False
+                    teams_data[team_name] = {
+                        "active": bool(is_active),
+                        "rounds_total": 0,
+                    }
+
+                memory_count = 0
+                try:
+                    for team_name in teams_data:
+                        entries = _sm.recall(team_name) if hasattr(_sm, "recall") else []
+                        memory_count += len(entries) if entries else 0
+                except Exception:
+                    pass
+
+                scheduler_jobs = 0
+                try:
+                    if hasattr(_ss, "list_jobs"):
+                        scheduler_jobs = len(_ss.list_jobs() or [])
+                except Exception:
+                    pass
+
+                return {
+                    "ok": True,
+                    "teams": teams_data,
+                    "memory_entries": memory_count,
+                    "scheduler_jobs": scheduler_jobs,
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        @self.app.get("/api/swarm/memory")
+        async def get_swarm_memory(team: str = "traders", limit: int = 5):
+            """Последние записи памяти свёрма для конкретной команды."""
+            try:
+                from ..core.swarm_memory import swarm_memory as _sm
+                entries = _sm.recall(team, limit=limit) if hasattr(_sm, "recall") else []
+                return {
+                    "ok": True,
+                    "entries": [
+                        {
+                            "topic": str(e.get("topic", "")),
+                            "summary": str(e.get("summary", e.get("content", "")))[:300],
+                            "timestamp": str(e.get("timestamp", "")),
+                        }
+                        for e in (entries or [])[:limit]
+                    ] if entries else [],
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         # ── Browser Bridge API ──────────────────────────────────────────────
         from ..integrations.browser_bridge import browser_bridge as _browser_bridge
 
