@@ -81,15 +81,23 @@ def test_is_voice_allowed_distinguishes_true_false_none(cache: ChatCapabilityCac
     assert cache.is_voice_allowed(-999) is None  # no entry at all
 
 
-def test_ttl_expiry_returns_none_and_evicts(cache: ChatCapabilityCache) -> None:
+def test_ttl_expiry_returns_none_and_evicts(tmp_path: Path) -> None:
+    """
+    Fake clock: upsert в t0, потом «переводим часы» на 48h вперёд (за TTL 24h).
+    Public API only — без прямой мутации `_entries`.
+    """
+    clock = [datetime(2026, 4, 9, 12, 0, 0, tzinfo=timezone.utc)]
+    cache = ChatCapabilityCache(
+        storage_path=tmp_path / "chat_capability_cache.json",
+        now_fn=lambda: clock[0],
+    )
     cache.upsert(-100, slow_mode_seconds=10, voice_allowed=False, text_allowed=True)
-    # Подставляем fetched_at в прошлое, за пределами TTL
-    past = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-    cache._entries["-100"]["fetched_at"] = past
 
+    # Переводим часы на 48 часов вперёд — TTL (24h) истёк.
+    clock[0] = clock[0] + timedelta(hours=48)
     assert cache.get(-100, ttl_hours=24) is None
-    # Запись вычистилась из in-memory dict
-    assert "-100" not in cache._entries
+    # И list_entries тоже вернёт пусто (запись вычищена через public API).
+    assert cache.list_entries(ttl_hours=24) == []
 
 
 def test_upsert_from_chat_explicit_can_send_voices() -> None:
@@ -155,13 +163,23 @@ def test_invalidate_removes_entry(cache: ChatCapabilityCache) -> None:
     assert cache.invalidate(-100) is False  # idempotent
 
 
-def test_list_entries_filters_expired(cache: ChatCapabilityCache) -> None:
+def test_list_entries_filters_expired(tmp_path: Path) -> None:
+    """
+    Fake clock: два upsert'а с разным временем, TTL 24h, старший истёк.
+    Мы двигаем часы между upsert'ами чтобы получить разные fetched_at.
+    """
+    clock = [datetime(2026, 4, 9, 12, 0, 0, tzinfo=timezone.utc)]
+    cache = ChatCapabilityCache(
+        storage_path=tmp_path / "chat_capability_cache.json",
+        now_fn=lambda: clock[0],
+    )
+    # -100 записан в t0
     cache.upsert(-100, slow_mode_seconds=10, voice_allowed=False, text_allowed=True)
+    # Переводим часы на 48h вперёд и записываем -200 «сейчас»
+    clock[0] = clock[0] + timedelta(hours=48)
     cache.upsert(-200, slow_mode_seconds=None, voice_allowed=True, text_allowed=True)
-    # Expire one of them
-    past = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-    cache._entries["-100"]["fetched_at"] = past
 
+    # TTL 24h → -100 (возраст 48h) истёк, -200 (0h) валиден.
     entries = cache.list_entries(ttl_hours=24)
     assert len(entries) == 1
     assert entries[0]["chat_id"] == "-200"

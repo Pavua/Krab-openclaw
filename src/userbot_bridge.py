@@ -100,6 +100,7 @@ from .handlers import (
     handle_search,
     handle_set,
     handle_shop,
+    handle_stats,
     handle_status,
     handle_swarm,
     handle_sysinfo,
@@ -851,6 +852,13 @@ class KraabUserbot:
         )
         async def wrap_silence(c, m):
             await run_cmd(handle_silence, m)
+
+        @self.client.on_message(
+            filters.command("stats", prefixes=prefixes) & _make_command_filter("stats"),
+            group=-1,
+        )
+        async def wrap_stats(c, m):
+            await run_cmd(handle_stats, m)
 
         @self.client.on_message(filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1)
         async def wrap_watch(c, m):
@@ -3487,15 +3495,44 @@ class KraabUserbot:
             except (TypeError, ValueError):
                 chat_obj = await get_chat_fn(target)
         except Exception as exc:  # noqa: BLE001
-            # get_chat часто падает на приватках с ID вместо username, на
-            # каналах без админских прав, на forum топиках — всё это нормально,
-            # просто нет capability info для этого чата.
-            logger.debug(
-                "chat_capability_refresh_failed",
-                chat_id=target,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
+            # B.9.3 (silent-failure-hunter review): различаем severity по типу
+            # ошибки. Раньше всё шло в debug, что прятало session revoke /
+            # auth key unregistered — критичные события нельзя оставлять в
+            # debug потоке, их должен видеть owner.
+            error_type_name = type(exc).__name__
+            # Критичные session/auth события → error. При них Краб фактически
+            # перестаёт работать до ручного восстановления сессии.
+            if error_type_name in {
+                "AuthKeyUnregistered",
+                "SessionRevoked",
+                "SessionExpired",
+                "UserDeactivated",
+                "UserDeactivatedBan",
+            }:
+                logger.error(
+                    "chat_capability_refresh_session_error",
+                    chat_id=target,
+                    error=str(exc),
+                    error_type=error_type_name,
+                )
+            # FloodWait → warning. Не критично, но означает что rate limiter
+            # не справился и Telegram нас тормозит принудительно.
+            elif error_type_name == "FloodWait":
+                logger.warning(
+                    "chat_capability_refresh_flood_wait",
+                    chat_id=target,
+                    error=str(exc),
+                )
+            # Остальное (ChannelPrivate, ChatAdminRequired, PeerIdInvalid,
+            # ValueError на приватках с ID, etc.) — ожидаемо → debug.
+            # Это именно тот класс ошибок для которого debug severity правильная.
+            else:
+                logger.debug(
+                    "chat_capability_refresh_failed",
+                    chat_id=target,
+                    error=str(exc),
+                    error_type=error_type_name,
+                )
             return
         try:
             chat_capability_cache.upsert_from_chat(chat_obj)

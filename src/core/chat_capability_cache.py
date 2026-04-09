@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Persisted cache per-chat capabilities (Telegram chat permissions).
+Персистентный кэш per-chat capabilities (Telegram chat permissions).
 
 Зачем это нужно:
 
@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -63,18 +64,31 @@ _DEFAULT_TTL_HOURS: float = 24.0
 
 class ChatCapabilityCache:
     """
-    Thread-safe cache of per-chat capabilities with JSON persistence.
+    Потокобезопасный кэш per-chat capabilities с JSON-персистентностью.
 
     Используется как module-level singleton (`chat_capability_cache`). Инжектится
     в тестах через `storage_path` и через fake `fetcher` (см. `upsert_from_fetch`).
     """
 
-    def __init__(self, *, storage_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        storage_path: Path | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._storage_path: Path | None = storage_path
         self._entries: dict[str, dict[str, Any]] = {}
+        # Инжектируемый источник времени: тесты подменяют через fake clock,
+        # прод использует datetime.now(UTC) через default-фабрику.
+        self._now_fn: Callable[[], datetime] = now_fn or (
+            lambda: datetime.now(timezone.utc)
+        )
         if storage_path is not None:
             self._load_from_disk()
+
+    def _now(self) -> datetime:
+        return self._now_fn()
 
     # ---- Configuration --------------------------------------------------
 
@@ -110,11 +124,18 @@ class ChatCapabilityCache:
             try:
                 fetched_at = datetime.fromisoformat(fetched_at_str)
             except (TypeError, ValueError):
+                # Битая ISO-строка в fetched_at → запись невалидна.
+                # Логируем raw чтобы найти источник повреждения.
+                logger.warning(
+                    "chat_capability_cache_entry_corrupt",
+                    chat_id=target,
+                    raw=repr(entry),
+                )
                 del self._entries[target]
                 return None
             if fetched_at.tzinfo is None:
                 fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-            age = datetime.now(timezone.utc) - fetched_at
+            age = self._now() - fetched_at
             if age > timedelta(hours=ttl_hours):
                 del self._entries[target]
                 return None
@@ -152,6 +173,14 @@ class ChatCapabilityCache:
         try:
             return int(value)
         except (TypeError, ValueError):
+            # Битое значение → молчаливый возврат None приводит к
+            # интерпретации «нет slow mode» → мгновенная отправка → FloodWait.
+            # Логируем, чтобы диагностировать кто пишет мусор в cache.
+            logger.warning(
+                "chat_capability_slow_mode_corrupt",
+                chat_id=chat_id,
+                raw=repr(value),
+            )
             return None
 
     # ---- Write path -----------------------------------------------------
@@ -174,7 +203,7 @@ class ChatCapabilityCache:
         target = self._normalize(chat_id)
         if not target:
             raise ValueError("chat_id required")
-        now = datetime.now(timezone.utc)
+        now = self._now()
         entry = {
             "chat_id": target,
             "chat_type": str(chat_type or "unknown"),
@@ -261,8 +290,11 @@ class ChatCapabilityCache:
         Ленивый expiry тоже применяется: устаревшие записи вычищаются при
         обходе, так что `!chatcap status` не показывает старые данные.
         """
-        now = datetime.now(timezone.utc)
+        now = self._now()
         result: list[dict[str, Any]] = []
+        # Persist'им после eviction'ов — иначе на рестарте протухшие записи
+        # снова приедут с диска и снова будут вычищаться (бесконечный cleanup).
+        _evicted_any: bool = False
         with self._lock:
             for chat_id in list(self._entries.keys()):
                 entry = self._entries[chat_id]
@@ -272,12 +304,21 @@ class ChatCapabilityCache:
                     if fetched_at.tzinfo is None:
                         fetched_at = fetched_at.replace(tzinfo=timezone.utc)
                 except (TypeError, ValueError):
+                    logger.warning(
+                        "chat_capability_cache_entry_corrupt",
+                        chat_id=chat_id,
+                        raw=repr(entry),
+                    )
                     del self._entries[chat_id]
+                    _evicted_any = True
                     continue
                 if now - fetched_at > timedelta(hours=ttl_hours):
                     del self._entries[chat_id]
+                    _evicted_any = True
                     continue
                 result.append(dict(entry))
+            if _evicted_any:
+                self._persist_to_disk()
         return result
 
     # ---- Internal helpers -----------------------------------------------
@@ -323,11 +364,14 @@ class ChatCapabilityCache:
                 json.dumps(self._entries, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
-        except OSError as exc:
+        # TypeError ловим чтобы будущий баг с не-ISO datetime в entry
+        # (например, сырой datetime вместо isoformat) не ронял upsert.
+        except (OSError, TypeError) as exc:
             logger.warning(
                 "chat_capability_cache_persist_failed",
                 path=str(path),
                 error=str(exc),
+                error_type=type(exc).__name__,
             )
 
 
