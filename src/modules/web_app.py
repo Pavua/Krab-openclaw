@@ -6850,7 +6850,13 @@ class WebApp:
               «жив ли HTTP-процесс», а не «все ли внешние зависимости сейчас быстрые».
             """
             runtime = await self._collect_runtime_lite_snapshot()
-            return {
+            # B.7 (session 4): telegram_rate_limiter stats для /stats dashboard.
+            try:
+                from ..core.telegram_rate_limiter import telegram_rate_limiter as _trl
+                _rate_limiter_stats = _trl.stats()
+            except Exception:
+                _rate_limiter_stats = None
+            result = {
                 "ok": True,
                 "status": "up",
                 "telegram_session_state": runtime.get("telegram_session_state"),
@@ -6870,6 +6876,78 @@ class WebApp:
                 "inbox_summary": runtime.get("inbox_summary"),
                 "voice_gateway_configured": runtime.get("voice_gateway_configured"),
             }
+            if _rate_limiter_stats is not None:
+                result["telegram_rate_limiter"] = _rate_limiter_stats
+            return result
+
+        # ── Stats Dashboard (session 4+, Gemini 3.1 Pro frontend) ──────────
+
+        @self.app.get("/api/stats/caches")
+        async def get_stats_caches():
+            """
+            Агрегированные cache-метрики для /stats dashboard.
+
+            Возвращает counts для chat_ban_cache, chat_capability_cache
+            и voice_reply_blocked_chats. Dashboard делает один fetch сюда
+            вместо трёх отдельных вызовов.
+            """
+            try:
+                from ..core.chat_ban_cache import chat_ban_cache as _cbc
+                ban_entries = _cbc.list_entries()
+                ban_count = len(ban_entries)
+            except Exception:
+                ban_entries = []
+                ban_count = 0
+
+            try:
+                from ..core.chat_capability_cache import chat_capability_cache as _ccc
+                cap_entries = _ccc.list_entries()
+                cap_count = len(cap_entries)
+                voice_disallowed = sum(
+                    1 for e in cap_entries if e.get("voice_allowed") is False
+                )
+                slow_mode = sum(
+                    1 for e in cap_entries
+                    if isinstance(e.get("slow_mode_seconds"), (int, float))
+                    and e["slow_mode_seconds"] > 0
+                )
+            except Exception:
+                cap_count = 0
+                voice_disallowed = 0
+                slow_mode = 0
+
+            try:
+                userbot = self.deps.get("kraab_userbot")
+                blocked = (
+                    userbot.get_voice_blocked_chats() if userbot else []
+                )
+                voice_blocked_count = len(blocked)
+            except Exception:
+                voice_blocked_count = 0
+
+            return {
+                "ban_cache_count": ban_count,
+                "capability_cache_count": cap_count,
+                "voice_blocked_count": voice_blocked_count,
+                "capability_voice_disallowed": voice_disallowed,
+                "capability_slow_mode": slow_mode,
+            }
+
+        @self.app.get("/stats", response_class=HTMLResponse)
+        async def stats_dashboard():
+            """
+            HTML dashboard визуализирующий runtime state Краба.
+
+            Frontend сгенерирован Gemini 3.1 Pro по spec'у из session 4.
+            Читает /api/health/lite, /api/stats/caches, /api/voice/runtime,
+            /api/inbox/status, /api/openclaw/runtime-config через fetch.
+            Auto-refresh каждые 5 секунд через setInterval.
+            """
+            from .web_app_stats_dashboard import STATS_DASHBOARD_HTML
+            return HTMLResponse(
+                STATS_DASHBOARD_HTML,
+                headers=_no_store_headers(),
+            )
 
         # ── Browser Bridge API ──────────────────────────────────────────────
         from ..integrations.browser_bridge import browser_bridge as _browser_bridge
