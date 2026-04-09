@@ -40,6 +40,7 @@ from .core.capability_registry import resolve_access_mode
 from .core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
 from .core.chat_capability_cache import chat_capability_cache
 from .core.exceptions import KrabError, UserInputError
+from .core.telegram_rate_limiter import telegram_rate_limiter
 from .core.inbox_service import inbox_service
 from .core.operator_identity import build_trace_id
 from .core.logger import get_logger
@@ -232,6 +233,10 @@ class _TelegramSendQueue:
 
             for attempt in range(self._MAX_RETRIES):
                 try:
+                    # B.7: global API rate limit. acquire() → sleep если
+                    # aggregate rate превысил soft cap (default 20 req/s).
+                    # Ставим ДО coro_factory чтобы retry тоже учитывались.
+                    await telegram_rate_limiter.acquire(purpose="send_queue")
                     result_val = await coro_factory()
                     result_exc = None
                     break
@@ -1638,7 +1643,29 @@ class KraabUserbot:
                 _runtime_state_dir / "chat_capability_cache.json"
             )
         except Exception as _exc:  # noqa: BLE001
-            logger.warning("chat_state_caches_bootstrap_failed", error=str(_exc))
+            # silent-failure-hunter review (B.7): raised from warning → error.
+            # Если configure упал, singleton остался in-memory only, persist
+            # вообще не произойдёт, chat ban cache не переживёт рестарт.
+            # Это silent degradation — owner должен видеть это как ERROR
+            # чтобы сразу заметить broken state, а не warning в потоке.
+            logger.error(
+                "chat_state_caches_bootstrap_failed",
+                error=str(_exc),
+                error_type=type(_exc).__name__,
+            )
+
+        # B.7: global Telegram API rate limiter. Default 20 req/s, конфигурируется
+        # через env TELEGRAM_GLOBAL_RATE_MAX_PER_SEC. Это soft cap — лимитер НЕ
+        # отменяет вызовы, а замедляет (await asyncio.sleep). Нужно чтобы не
+        # триггерить SpamBot auto-review за частый polling/sending.
+        try:
+            _rate_max = int(
+                os.environ.get("TELEGRAM_GLOBAL_RATE_MAX_PER_SEC")
+                or getattr(config, "TELEGRAM_GLOBAL_RATE_MAX_PER_SEC", 20)
+            )
+            telegram_rate_limiter.configure(max_per_sec=max(1, _rate_max), window_sec=1.0)
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("telegram_rate_limiter_bootstrap_failed", error=str(_exc))
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
@@ -3450,6 +3477,10 @@ class KraabUserbot:
         if not callable(get_chat_fn):
             return
         try:
+            # B.7: даже capability refresh идёт через global rate limiter,
+            # чтобы массовый first-sight fetch нескольких чатов подряд не
+            # триггерил FloodWait. refresh не-critical, ждать можно.
+            await telegram_rate_limiter.acquire(purpose="get_chat_capability")
             # Можно передавать int или str — pyrofork resolve'ит оба.
             try:
                 chat_obj = await get_chat_fn(int(target))
@@ -4491,6 +4522,34 @@ class KraabUserbot:
             event_action="background_started",
         )
 
+    @staticmethod
+    def _log_background_task_exception_cb(task: asyncio.Task) -> None:
+        """
+        done_callback для fire-and-forget `asyncio.create_task(...)` — вытаскивает
+        исключение через `task.exception()` и логгирует его.
+
+        Причина: без done_callback необработанные exceptions внутри fire-and-forget
+        корутин превращаются в `Task exception was never retrieved` warning от
+        asyncio, с потерей stack trace. Хуже: если у task нет сильной ссылки
+        в caller'е, GC может прибить task до завершения. Этот callback
+        эффективно consumer'ит exception и даёт нам structured log вместо
+        тихого молчания. Используется из `_refresh_chat_capabilities_background`
+        и других fire-and-forget call sites.
+        """
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except Exception:  # noqa: BLE001
+            return
+        if exc is not None:
+            logger.warning(
+                "background_task_exception",
+                task_name=getattr(task, "get_name", lambda: "unknown")(),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
     def _register_chat_background_task(self, chat_id: str, task: asyncio.Task) -> None:
         """Регистрирует background-task чата и автоматически чистит stale-ссылку после завершения."""
         tasks = getattr(self, "_chat_background_tasks", None)
@@ -5421,8 +5480,19 @@ class KraabUserbot:
             try:
                 if temp_msg is not None:
                     await self.client.send_message(temp_msg.chat.id, error_text)
-            except Exception:
-                pass
+            except Exception as notify_exc:  # noqa: BLE001
+                # silent-failure-hunter review (B.7): раньше тут был пустой pass.
+                # Это значит что если и notify fails (тот же USER_BANNED_IN_CHANNEL
+                # или FloodWait на error path), owner/caller никогда не узнает
+                # что они не получили уведомление об ошибке. Теперь хотя бы
+                # в лог попадает.
+                logger.warning(
+                    "background_error_notify_failed",
+                    chat_id=chat_id,
+                    notify_error=str(notify_exc),
+                    notify_error_type=type(notify_exc).__name__,
+                    original_error_type=error_type_name,
+                )
             self._record_incoming_reply_to_inbox(
                 incoming_item_result=incoming_item_result,
                 response_text=error_text,
@@ -5958,15 +6028,28 @@ class KraabUserbot:
             # нет свежей записи. `_refresh_chat_capabilities_background` сам
             # внутри проверяет TTL и no-ops если данные свежие, так что
             # безопасно вызывать на каждом сообщении.
+            #
+            # B.7 fix (от silent-failure-hunter review): вешаем done_callback
+            # на fire-and-forget task чтобы необработанные исключения внутри
+            # корутины НЕ терялись с `Task exception was never retrieved` и
+            # попадали в логи нормально. Также логгируем случай no-running-loop.
             if chat_id:
                 try:
-                    asyncio.create_task(
+                    _cap_refresh_task = asyncio.create_task(
                         self._refresh_chat_capabilities_background(chat_id)
                     )
-                except RuntimeError:
+                    _cap_refresh_task.add_done_callback(
+                        self._log_background_task_exception_cb
+                    )
+                except RuntimeError as _no_loop_exc:
                     # Нет running loop — маловероятно внутри pyrogram handler,
-                    # но safe-guard против падения обработки.
-                    pass
+                    # но safe-guard против падения обработки. Явно логгируем
+                    # чтобы не было silent no-op.
+                    logger.debug(
+                        "chat_capability_refresh_no_running_loop",
+                        chat_id=chat_id,
+                        error=str(_no_loop_exc),
+                    )
 
             # Auto-silence: owner сам пишет в чат (не команду) → Краб молчит N мин
             is_self = self.me and user.id == self.me.id
