@@ -6743,10 +6743,13 @@ class WebApp:
 
         @self.app.get("/", response_class=HTMLResponse)
         async def index():
+            # Если есть кастомный index.html — отдаём его (для обратной совместимости).
             if self._index_path.exists():
                 return FileResponse(self._index_path, headers=_no_store_headers())
+            # Иначе — Gemini-generated landing page с навигацией по sub-dashboards.
+            from .web_app_landing_page import LANDING_PAGE_HTML
             return HTMLResponse(
-                "<h1>Krab Web Panel</h1><p>index.html не найден</p>",
+                LANDING_PAGE_HTML,
                 headers=_no_store_headers(),
             )
 
@@ -6935,17 +6938,18 @@ class WebApp:
 
         @self.app.get("/stats", response_class=HTMLResponse)
         async def stats_dashboard():
-            """
-            HTML dashboard визуализирующий runtime state Краба.
-
-            Frontend сгенерирован Gemini 3.1 Pro по spec'у из session 4.
-            Читает /api/health/lite, /api/stats/caches, /api/voice/runtime,
-            /api/inbox/status, /api/openclaw/runtime-config через fetch.
-            Auto-refresh каждые 5 секунд через setInterval.
-            """
+            """Runtime stats dashboard (Gemini 3.1 Pro frontend)."""
             from .web_app_stats_dashboard import STATS_DASHBOARD_HTML
             return HTMLResponse(
                 STATS_DASHBOARD_HTML,
+                headers=_no_store_headers(),
+
+        @self.app.get("/inbox", response_class=HTMLResponse)
+        async def inbox_dashboard():
+            """Inbox items dashboard с фильтрами и карточками (Gemini 3.1 Pro)."""
+            from .web_app_inbox_dashboard import INBOX_DASHBOARD_HTML
+            return HTMLResponse(
+                INBOX_DASHBOARD_HTML,
                 headers=_no_store_headers(),
             )
 
