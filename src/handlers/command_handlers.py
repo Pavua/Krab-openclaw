@@ -23,6 +23,7 @@ from ..core.access_control import (
     load_acl_runtime_state,
     update_acl_subject,
 )
+from ..core.chat_ban_cache import chat_ban_cache
 from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
@@ -1197,6 +1198,75 @@ async def handle_voice(bot: "KraabUserbot", message: Message) -> None:
         return
 
     raise UserInputError(user_message="❌ Неизвестная подкоманда voice. Используй `!voice status`.")
+
+
+def _render_chat_ban_entries(entries: list[dict[str, Any]]) -> str:
+    """Форматирует список chat ban cache записей для `!chatban status`."""
+    if not entries:
+        return (
+            "🚫 **Chat ban cache** пуст.\n"
+            "Записи создаются автоматически при `USER_BANNED_IN_CHANNEL` / "
+            "`ChatWriteForbidden`. Ручное управление: `!chatban clear <chat_id>`."
+        )
+    lines: list[str] = [f"🚫 **Chat ban cache ({len(entries)}):**"]
+    for entry in entries:
+        chat_id = entry.get("chat_id", "—")
+        code = entry.get("last_error_code") or entry.get("error_code") or "?"
+        expires = entry.get("expires_at") or "permanent"
+        hits = entry.get("hit_count", 1)
+        lines.append(
+            f"- `{chat_id}` · {code} · expires={expires} · hits={hits}"
+        )
+    lines.append("\nСнять: `!chatban clear <chat_id>`")
+    return "\n".join(lines)
+
+
+async def handle_chatban(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление persisted chat ban cache (B.8).
+
+    Когда Telegram возвращает `USER_BANNED_IN_CHANNEL` / `ChatWriteForbidden`
+    на попытку отправить сообщение, Краб помечает чат в cache. Пока запись
+    активна, Краб вообще не обрабатывает входящие из этого чата —
+    не гоняет LLM и не пытается `send_message`. Это защищает от:
+    - бессмысленных Gemini-токенов на ответы которые не дойдут;
+    - повторных API-вызовов в забаненный чат, которые Telegram считает
+      агрессивным паттерном и за которые продлевает SpamBot limit.
+
+    Subcommands:
+    - `!chatban` / `!chatban status` — показать текущие записи;
+    - `!chatban clear <chat_id>` — убрать конкретную запись вручную
+      (если уверен что ban снят).
+    """
+    args = str(message.text or "").split()
+    sub = (args[1].strip().lower() if len(args) >= 2 else "status")
+
+    if sub in {"", "status", "show", "list"}:
+        entries = chat_ban_cache.list_entries()
+        await message.reply(_render_chat_ban_entries(entries))
+        return
+
+    if sub == "clear":
+        if len(args) < 3 or not args[2].strip():
+            raise UserInputError(
+                user_message="❌ Укажи chat_id: `!chatban clear <chat_id>`"
+            )
+        target = args[2].strip()
+        removed = chat_ban_cache.clear(target)
+        if removed:
+            await message.reply(
+                f"✅ Убрал `{target}` из chat ban cache. "
+                f"Краб снова будет обрабатывать сообщения оттуда."
+            )
+        else:
+            await message.reply(
+                f"ℹ️ `{target}` не был в chat ban cache (уже снят или не помечен)."
+            )
+        return
+
+    raise UserInputError(
+        user_message="❌ Неизвестная подкоманда chatban. Используй `!chatban status` или `!chatban clear <chat_id>`."
+    )
 
 
 async def handle_translator(bot: "KraabUserbot", message: Message) -> None:

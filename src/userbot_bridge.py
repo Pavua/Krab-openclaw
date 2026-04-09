@@ -37,6 +37,7 @@ from .core.access_control import (
     resolve_access_profile,
 )
 from .core.capability_registry import resolve_access_mode
+from .core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
 from .core.operator_identity import build_trace_id
@@ -68,6 +69,7 @@ from .handlers import (
     handle_agent,
     handle_acl,
     handle_browser,
+    handle_chatban,
     handle_claude_cli,
     handle_clear,
     handle_codex,
@@ -809,6 +811,13 @@ class KraabUserbot:
         @self.client.on_message(filters.command("voice", prefixes=prefixes) & _make_command_filter("voice"), group=-1)
         async def wrap_voice(c, m):
             await run_cmd(handle_voice, m)
+
+        @self.client.on_message(
+            filters.command("chatban", prefixes=prefixes) & _make_command_filter("chatban"),
+            group=-1,
+        )
+        async def wrap_chatban(c, m):
+            await run_cmd(handle_chatban, m)
 
         @self.client.on_message(filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"), group=-1)
         async def wrap_translator(c, m):
@@ -1612,6 +1621,19 @@ class KraabUserbot:
         """Запуск юзербота"""
         self._set_startup_state(state="starting")
         logger.info("starting_userbot")
+        # Persisted chat ban cache — persist путь в ~/.openclaw/krab_runtime_state/,
+        # совпадая с swarm_channels.json / inbox_state.json / krab_main.log.
+        # Конфигурируется здесь а не в __init__ чтобы любой re-start подхватывал
+        # актуальный state с диска (нужно на случай ручного редактирования файла
+        # или на случай если cache был очищен между рестартами).
+        try:
+            _runtime_state_dir = Path(
+                os.environ.get("KRAB_RUNTIME_STATE_DIR")
+                or str(Path.home() / ".openclaw" / "krab_runtime_state")
+            ).expanduser()
+            chat_ban_cache.configure_default_path(_runtime_state_dir / "chat_ban_cache.json")
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("chat_ban_cache_bootstrap_failed", error=str(_exc))
         start_timeout_sec = int(getattr(config, "TELEGRAM_START_TIMEOUT_SEC", 35))
         max_attempts = int(getattr(config, "TELEGRAM_START_ATTEMPTS", 3))
         relogin_timeout_sec = int(getattr(config, "TELEGRAM_RELOGIN_TIMEOUT_SEC", 300))
@@ -5252,13 +5274,28 @@ class KraabUserbot:
         try:
             await self._run_llm_request_flow(**kwargs, prefer_send_message_for_background=True)
         except Exception as exc:  # noqa: BLE001
+            error_type_name = type(exc).__name__
             logger.error(
                 "background_ai_request_failed",
                 chat_id=chat_id,
                 error=str(exc),
-                error_type=type(exc).__name__,
+                error_type=error_type_name,
                 traceback=traceback.format_exc(),
             )
+            # Если это persistent chat-level bar (USER_BANNED_IN_CHANNEL /
+            # ChatWriteForbidden / UserDeactivated / ChannelPrivate), помечаем
+            # чат в ban cache, чтобы следующие сообщения из него не гоняли
+            # LLM + Telegram API впустую. Это и есть цель B.8 — защита от
+            # повторных отказов пока Telegram сам не снимет ограничение.
+            if error_type_name in BANNED_ERROR_CODES and chat_id:
+                try:
+                    chat_ban_cache.mark_banned(chat_id, error_type_name)
+                except Exception as _cache_exc:  # noqa: BLE001
+                    logger.warning(
+                        "chat_ban_cache_mark_failed",
+                        chat_id=chat_id,
+                        error=str(_cache_exc),
+                    )
             error_text = "❌ Фоновая обработка запроса завершилась ошибкой. Попробуй повторить сообщение."
             try:
                 if temp_msg is not None:
@@ -5765,6 +5802,36 @@ class KraabUserbot:
                     matched_subject=str(getattr(user, "username", "") or getattr(user, "id", "")),
                 )
             chat_id = str(message.chat.id)
+
+            # B.8 chat ban cache: если этот чат уже помечен как persistently
+            # забаненный (USER_BANNED_IN_CHANNEL / ChatWriteForbidden etc.),
+            # то Краб вообще не должен гонять LLM и не должен пытаться писать
+            # туда. Owner-override command `!chatban clear <chat_id>` снимет
+            # отметку; автоматически она истечёт по cooldown (default 6ч).
+            # ВАЖНО: check идёт ДО lock acquisition и owner auto-silence,
+            # чтобы не блокировать per-chat lock на каждое входящее от
+            # забаненного канала.
+            #
+            # Исключение: owner (self) должен иметь возможность писать в
+            # заблокированный чат команды — например `!chatban clear`, чтобы
+            # снять отметку. Поэтому self + command = пропускаем guard.
+            _is_self_for_guard = bool(self.me and user.id == self.me.id)
+            _raw_text_for_guard = (message.text or "").strip()
+            _is_command_for_guard = (
+                _raw_text_for_guard[:1] in ("!", "/", ".") if _raw_text_for_guard else False
+            )
+            if (
+                chat_id
+                and not (_is_self_for_guard and _is_command_for_guard)
+                and chat_ban_cache.is_banned(chat_id)
+            ):
+                logger.info(
+                    "chat_ban_cached_skip",
+                    chat_id=chat_id,
+                    reason="chat_in_ban_cache",
+                    user=getattr(user, "username", None),
+                )
+                return
 
             # Auto-silence: owner сам пишет в чат (не команду) → Краб молчит N мин
             is_self = self.me and user.id == self.me.id
