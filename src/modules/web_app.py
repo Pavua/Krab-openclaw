@@ -6953,6 +6953,24 @@ class WebApp:
                 headers=_no_store_headers(),
             )
 
+        @self.app.get("/costs", response_class=HTMLResponse)
+        async def costs_dashboard():
+            """Cost analytics dashboard с бюджетом и breakdown (Gemini 3.1 Pro)."""
+            from .web_app_costs_dashboard import COSTS_DASHBOARD_HTML
+            return HTMLResponse(
+                COSTS_DASHBOARD_HTML,
+                headers=_no_store_headers(),
+            )
+
+        @self.app.get("/swarm", response_class=HTMLResponse)
+        async def swarm_dashboard():
+            """Swarm multi-agent teams visualizer (Gemini 3.1 Pro)."""
+            from .web_app_swarm_dashboard import SWARM_DASHBOARD_HTML
+            return HTMLResponse(
+                SWARM_DASHBOARD_HTML,
+                headers=_no_store_headers(),
+            )
+
         # ── Browser Bridge API ──────────────────────────────────────────────
         from ..integrations.browser_bridge import browser_bridge as _browser_bridge
 
