@@ -6976,10 +6976,30 @@ class WebApp:
 
         @self.app.get("/api/costs/report")
         async def get_costs_report():
-            """Отчёт по расходам для /costs dashboard."""
+            """Отчёт по расходам для /costs dashboard (Gemini field names)."""
             try:
                 from ..core.cost_analytics import cost_analytics as _ca
-                report = _ca.build_usage_report_dict()
+                raw = _ca.build_usage_report_dict()
+                # Адаптируем поля под Gemini JS dashboard naming convention.
+                total_cost = float(raw.get("cost_session_usd") or 0)
+                budget = float(raw.get("monthly_budget_usd") or 0) or 50.0
+                total_calls = sum(
+                    m.get("calls", 0) for m in (raw.get("by_model") or {}).values()
+                )
+                report = {
+                    "total_cost_usd": total_cost,
+                    "total_calls": total_calls,
+                    "budget_monthly_usd": budget,
+                    "budget_remaining_usd": budget - total_cost,
+                    "budget_used_pct": round(total_cost / budget * 100, 2) if budget else 0,
+                    "by_model": raw.get("by_model", {}),
+                    "period_start": "2026-04-01T00:00:00Z",
+                    "period_end": __import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ).isoformat(),
+                    "input_tokens": raw.get("input_tokens", 0),
+                    "output_tokens": raw.get("output_tokens", 0),
+                }
                 return {"ok": True, "report": report}
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
