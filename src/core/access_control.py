@@ -87,6 +87,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "cap",
         # Silence mode
         "тишина",
+        # Chat ban cache — owner управляет списком чатов, в которые не слать
+        "chatban",
     }
 )
 
@@ -107,6 +109,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "hs",
         # Capability policy matrix — runtime toggle, только владелец
         "cap",
+        # Chat ban cache — runtime toggle списка забаненных чатов, только владелец
+        "chatban",
     }
 )
 
