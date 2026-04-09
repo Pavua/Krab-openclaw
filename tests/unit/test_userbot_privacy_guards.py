@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 from src.userbot_bridge import KraabUserbot
 import src.userbot_bridge as userbot_bridge_module
+import src.userbot.access_control as access_control_mixin_module
 
 
 def _make_bot_stub() -> KraabUserbot:
@@ -162,8 +163,8 @@ def test_build_system_prompt_for_owner_includes_openclaw_workspace_bundle(monkey
     bot = _make_bot_stub()
     monkeypatch.setattr(userbot_bridge_module.config, "NON_OWNER_SAFE_MODE_ENABLED", True, raising=False)
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
-    monkeypatch.setattr(userbot_bridge_module, "get_role_prompt", lambda role: "ROLE_PROMPT_TEST")
-    monkeypatch.setattr(userbot_bridge_module, "load_workspace_prompt_bundle", lambda: "WORKSPACE_TRUTH_TEST")
+    monkeypatch.setattr("src.employee_templates.get_role_prompt", lambda role: "ROLE_PROMPT_TEST")
+    monkeypatch.setattr("src.core.openclaw_workspace.load_workspace_prompt_bundle", lambda: "WORKSPACE_TRUTH_TEST")
 
     prompt = bot._build_system_prompt_for_sender(is_allowed_sender=True)
 
