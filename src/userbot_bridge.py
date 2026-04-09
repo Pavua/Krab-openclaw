@@ -4126,18 +4126,34 @@ class KraabUserbot:
         normalized = str(text or "").lstrip()
         return normalized[:1] in {"!", "/", "."}
 
-    def _is_private_text_batch_candidate(
+    def _is_text_batch_candidate(
         self,
         *,
         message: Message | Any,
         sender_id: int,
+        is_private_chat: bool,
+        self_user_id: int,
     ) -> bool:
         """
-        Решает, можно ли включать сообщение в private text-burst batch.
+        Решает, можно ли включать сообщение в text-burst batch.
 
         Склеиваем только plain-text сообщения того же отправителя:
         команды, фото и аудио должны идти отдельным путём, иначе потеряем
         ожидаемую семантику и управляемость.
+
+        В **приватном чате** достаточно совпадения sender_id — любое сообщение
+        в личку по определению адресовано Крабу, и burst разрыв тогда читается
+        как «одна мысль разбитая на несколько частей».
+
+        В **группе** (B.5, 2026-04-09) эта эвристика опасна: разные участники
+        могут писать параллельно, и merge «mid-conversation» text'ов чужих
+        пользователей сделает странный combined prompt. Поэтому в группах
+        дополнительно требуем чтобы absorbed сообщение **само по себе
+        триггерило Краба** — либо через keyword trigger (`!краб`, `краб`,
+        ...), либо через reply на сообщение самого Краба. Это оставляет
+        полезный use case («owner пишет Крабу несколько раз подряд с
+        трiггером в первом сообщении») покрытым, но не даёт batcher'у
+        проглатывать unrelated сообщения соседей.
         """
         message_sender_id = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
         if sender_id and message_sender_id != sender_id:
@@ -4147,9 +4163,25 @@ class KraabUserbot:
         text = self._get_clean_text(self._extract_message_text(message))
         if not text:
             return False
-        return not self._is_command_like_text(text)
+        if self._is_command_like_text(text):
+            return False
+        if is_private_chat:
+            return True
+        # Group / supergroup: absorbed candidate должен сам быть адресован Крабу.
+        # Проверяем две самых дешёвых сигнала — trigger keyword и reply на Краба.
+        if self._is_trigger(text):
+            return True
+        reply_target = getattr(message, "reply_to_message", None)
+        reply_from = getattr(reply_target, "from_user", None) if reply_target else None
+        if reply_from is not None and self_user_id:
+            try:
+                if int(getattr(reply_from, "id", 0) or 0) == int(self_user_id):
+                    return True
+            except (TypeError, ValueError):
+                pass
+        return False
 
-    async def _coalesce_private_text_burst(
+    async def _coalesce_text_burst(
         self,
         *,
         message: Message,
@@ -4157,7 +4189,7 @@ class KraabUserbot:
         query: str,
     ) -> tuple[Message, str]:
         """
-        Склеивает короткую пачку private-сообщений одного отправителя в один query.
+        Склеивает короткую пачку text-сообщений одного отправителя в один query.
 
         Зачем это нужно:
         - после `!clear` пользователь часто заново передаёт контекст несколькими
@@ -4166,12 +4198,27 @@ class KraabUserbot:
           начинает жить своей жизнью;
         - выбираем последнюю user-message как anchor для ответа, чтобы в клиенте
           это выглядело естественно.
+
+        B.5 (2026-04-09): работает и в private, и в group/supergroup. В группе
+        дополнительно требуется что absorbed сообщение само триггерит Краба
+        (`_is_text_batch_candidate` проверяет это через `_is_trigger` / reply-to-me).
+        Это защищает от проглатывания unrelated сообщений других участников,
+        но позволяет owner'у писать несколько triggered сообщений подряд и
+        получать один combined ответ — что снижает LLM/API нагрузку и Telegram
+        spam-detection риск (см. backlog B.5 от разговора с Chado, OG P Cod/id).
         """
         normalized_query = str(query or "").strip()
         if not normalized_query:
             return message, normalized_query
         chat_type = getattr(getattr(message, "chat", None), "type", None)
-        if chat_type != enums.ChatType.PRIVATE:
+        is_private_chat = chat_type == enums.ChatType.PRIVATE
+        # Forum-группы и каналы не batch'им — их семантика слишком разная,
+        # а risk схлопнуть unrelated тему существенно выше ожидаемой пользы.
+        is_batchable_group = chat_type in (
+            enums.ChatType.GROUP,
+            enums.ChatType.SUPERGROUP,
+        )
+        if not is_private_chat and not is_batchable_group:
             return message, normalized_query
         if self._is_command_like_text(normalized_query):
             return message, normalized_query
@@ -4238,6 +4285,7 @@ class KraabUserbot:
         sender_id = int(getattr(user, "id", 0) or 0)
         if current_message_id <= 0 or sender_id <= 0:
             return message, normalized_query
+        self_user_id = int(getattr(self.me, "id", 0) or 0)
 
         ordered_rows = sorted(
             (
@@ -4267,7 +4315,12 @@ class KraabUserbot:
                 current_found = True
             elif len(combined_messages) >= max_messages:
                 break
-            elif not self._is_private_text_batch_candidate(message=row, sender_id=sender_id):
+            elif not self._is_text_batch_candidate(
+                message=row,
+                sender_id=sender_id,
+                is_private_chat=is_private_chat,
+                self_user_id=self_user_id,
+            ):
                 break
 
             clean_text = normalized_query if row_id == current_message_id else self._get_clean_text(self._extract_message_text(row))
@@ -4322,8 +4375,9 @@ class KraabUserbot:
         combined_query = "\n\n".join(part for part in combined_parts if part).strip()
         anchor_message = combined_messages[-1]
         logger.info(
-            "private_text_burst_coalesced",
+            "text_burst_coalesced",
             chat_id=str(getattr(getattr(message, "chat", None), "id", "") or ""),
+            chat_type="private" if is_private_chat else "group",
             anchor_message_id=str(getattr(anchor_message, "id", "") or ""),
             absorbed_message_ids=absorbed_ids,
             messages_count=len(combined_messages),
@@ -5380,7 +5434,7 @@ class KraabUserbot:
                 )
                 return
         elif query and not message.photo and not has_audio_message:
-            message, query = await self._coalesce_private_text_burst(
+            message, query = await self._coalesce_text_burst(
                 message=message,
                 user=user,
                 query=query,
