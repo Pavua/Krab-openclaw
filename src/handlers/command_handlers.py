@@ -2982,6 +2982,126 @@ async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(f"{icon} `{cap_name}` → **{action.upper()}** (все роли)")
 
 
+def _render_stats_panel(bot: "KraabUserbot") -> str:
+    """
+    Собирает компактный runtime-статус Краба из четырёх подсистем.
+
+    Источники (все singleton'ы читаются sync):
+    - telegram_rate_limiter.stats() — sliding-window capacity cap;
+    - chat_ban_cache.list_entries() — persisted short-circuit ban list;
+    - chat_capability_cache.list_entries() — TTL cache per-chat permissions;
+    - silence_manager.status() — per-chat и глобальный mute;
+    - bot.get_voice_runtime_profile() — флаг delivery и blocked chats.
+
+    Бонус: голосовой runtime-профиль отображается только если bot отдал словарь,
+    чтобы тесты могли подменить профиль через stub без Pyrogram client'а.
+    """
+    from ..core.chat_ban_cache import chat_ban_cache
+    from ..core.chat_capability_cache import chat_capability_cache
+    from ..core.silence_mode import silence_manager
+    from ..core.telegram_rate_limiter import telegram_rate_limiter
+
+    lines: list[str] = ["📊 **Krab Runtime Stats**", ""]
+
+    # 1. Telegram API rate limiter ────────────────────────────────────
+    rl = telegram_rate_limiter.stats()
+    lines.append("🌐 **Telegram API rate limiter**")
+    lines.append(
+        f"- Cap: `{int(rl.get('max_per_sec', 0))} req/s` "
+        f"(окно `{float(rl.get('window_sec', 1.0)):.1f}s`) · "
+        f"В окне сейчас: `{int(rl.get('current_in_window', 0))}`"
+    )
+    lines.append(
+        f"- Всего acquire: `{int(rl.get('total_acquired', 0))}` · "
+        f"ждали: `{int(rl.get('total_waited', 0))}` "
+        f"(сумма `{float(rl.get('total_wait_sec', 0.0)):.3f}s`)"
+    )
+    lines.append("")
+
+    # 2. Chat ban cache ───────────────────────────────────────────────
+    ban_entries = chat_ban_cache.list_entries()
+    lines.append(f"🚫 **Chat ban cache** (`{len(ban_entries)}` active)")
+    if not ban_entries:
+        lines.append("- записей нет")
+    else:
+        for entry in ban_entries[:3]:
+            chat_id = entry.get("chat_id", "?")
+            code = (
+                entry.get("last_error_code")
+                or entry.get("error_code")
+                or "?"
+            )
+            lines.append(f"- `{chat_id}` · {code}")
+        if len(ban_entries) > 3:
+            lines.append(f"- …ещё `{len(ban_entries) - 3}`")
+    lines.append("")
+
+    # 3. Chat capability cache ────────────────────────────────────────
+    cap_entries = chat_capability_cache.list_entries()
+    voice_forbidden = sum(
+        1 for entry in cap_entries if entry.get("voice_allowed") is False
+    )
+    slow_mode_active = 0
+    for entry in cap_entries:
+        slow = entry.get("slow_mode_seconds")
+        try:
+            if slow is not None and int(slow) > 0:
+                slow_mode_active += 1
+        except (TypeError, ValueError):
+            continue
+    lines.append(f"🎛 **Chat capability cache** (`{len(cap_entries)}` cached)")
+    lines.append(f"- Voice запрещён явно: `{voice_forbidden}`")
+    lines.append(f"- Slow mode > 0: `{slow_mode_active}`")
+    lines.append("")
+
+    # 4. Silence mode ─────────────────────────────────────────────────
+    silence = silence_manager.status()
+    global_muted = bool(silence.get("global_muted"))
+    muted_chats_raw = silence.get("muted_chats") or {}
+    muted_chats_count = (
+        len(muted_chats_raw) if isinstance(muted_chats_raw, dict) else 0
+    )
+    global_remaining_min = silence.get("global_remaining_min") or 0
+    lines.append("🔇 **Silence mode**")
+    lines.append(
+        f"- Глобально: `{'ВКЛ' if global_muted else 'ВЫКЛ'}`"
+        + (
+            f" · осталось `{global_remaining_min} мин`"
+            if global_muted
+            else ""
+        )
+    )
+    lines.append(f"- Заглушённых чатов: `{muted_chats_count}`")
+    lines.append("")
+
+    # 5. Voice runtime (bonus) ────────────────────────────────────────
+    try:
+        profile = bot.get_voice_runtime_profile()
+    except Exception:  # pragma: no cover — defensive
+        profile = None
+    if isinstance(profile, dict):
+        blocked = profile.get("blocked_chats") or []
+        try:
+            blocked_count = len(blocked)
+        except TypeError:
+            blocked_count = 0
+        delivery = str(profile.get("delivery") or "text+voice")
+        enabled = bool(profile.get("enabled"))
+        lines.append("🎙 **Voice runtime**")
+        lines.append(
+            f"- Озвучка: `{'ВКЛ' if enabled else 'ВЫКЛ'}` · "
+            f"Delivery: `{delivery}` · Blocklist: `{blocked_count}`"
+        )
+
+    return "\n".join(lines).rstrip()
+
+
+async def handle_stats(bot: "KraabUserbot", message: Message) -> None:
+    """Агрегированный runtime-статус Краба (B.9 session 4 tail)."""
+    panel = _render_stats_panel(bot)
+    await message.reply(panel)
+
+
 async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     """!тишина — управление режимом тишины.
 

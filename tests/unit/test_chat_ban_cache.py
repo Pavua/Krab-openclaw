@@ -89,22 +89,25 @@ def test_mark_idempotent_does_not_extend_cooldown(
     assert entries_after[0]["last_error_code"] == "ChatWriteForbidden"
 
 
-def test_expired_entry_is_not_banned(cache: ChatBanCache, tmp_path: Path) -> None:
+def test_expired_entry_is_not_banned(tmp_path: Path) -> None:
     """
-    Ручная подставка истёкшей записи (как если бы она была загружена с диска
-    несколько часов назад). is_banned должен вернуть False и очистить запись.
+    Fake clock: ban помечается в t0, потом "часы" переводим на час вперёд
+    за пределы cooldown'а. is_banned должен вернуть False и вычистить запись.
+    Это чище чем прямая мутация `_entries` — мы работаем только через public API.
     """
-    expired_iso = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    # Прямая инъекция во внутренний dict — единственный способ не полагаться
-    # на monkeypatch системного времени.
-    cache._entries["-300"] = {
-        "error_code": "UserBannedInChannel",
-        "banned_at": (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),
-        "last_seen_at": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
-        "expires_at": expired_iso,
-        "hit_count": 1,
-        "last_error_code": "UserBannedInChannel",
-    }
+    # Mutable обёртка: closure над nonlocal не подошла бы элегантно, а list
+    # даёт простой «указатель» на текущее «сейчас» в fake clock.
+    clock = [datetime(2026, 4, 9, 12, 0, 0, tzinfo=timezone.utc)]
+
+    cache = ChatBanCache(
+        storage_path=tmp_path / "chat_ban_cache.json",
+        now_fn=lambda: clock[0],
+    )
+    cache.mark_banned(-300, "UserBannedInChannel", cooldown_hours=1)
+    assert cache.is_banned(-300) is True
+
+    # Переводим часы на 2 часа вперёд — cooldown (1h) истёк.
+    clock[0] = clock[0] + timedelta(hours=2)
     assert cache.is_banned(-300) is False
     # Запись должна вычиститься, следующий list_entries её не увидит.
     assert cache.list_entries() == []

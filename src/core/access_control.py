@@ -89,6 +89,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "тишина",
         # Chat ban cache — owner управляет списком чатов, в которые не слать
         "chatban",
+        # Aggregated runtime stats panel (rate limiter + caches + silence + voice)
+        "stats",
     }
 )
 

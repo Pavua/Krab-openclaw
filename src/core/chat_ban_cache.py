@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Persisted short-circuit cache для чатов, где Telegram API стабильно возвращает
+Персистентный short-circuit кэш для чатов, где Telegram API стабильно возвращает
 отказ на send (`USER_BANNED_IN_CHANNEL`, `ChatWriteForbidden`, `UserDeactivated`).
 
 Зачем это существует:
@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -73,19 +74,32 @@ _DEFAULT_COOLDOWN_HOURS: float = 6.0
 
 
 class ChatBanCache:
-    """Thread-safe ban cache с persist на диск.
+    """Потокобезопасный ban cache с persist на диск.
 
     Используется как module-level singleton (`chat_ban_cache` ниже). Принимает
     `storage_path` в конструкторе ТОЛЬКО для unit-тестов; в рантайме singleton
     инициализируется через `configure_default_path()`.
     """
 
-    def __init__(self, *, storage_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        storage_path: Path | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._storage_path: Path | None = storage_path
         self._entries: dict[str, dict[str, Any]] = {}
+        # Инжектируемый источник времени: нужен тестам, чтобы подменять
+        # «сейчас» без monkeypatch модуля и без прямой мутации _entries.
+        self._now_fn: Callable[[], datetime] = now_fn or (
+            lambda: datetime.now(timezone.utc)
+        )
         if storage_path is not None:
             self._load_from_disk()
+
+    def _now(self) -> datetime:
+        return self._now_fn()
 
     # ---- Configuration --------------------------------------------------
 
@@ -126,10 +140,16 @@ class ChatBanCache:
                 expires = datetime.fromisoformat(expires_at)
             except (TypeError, ValueError):
                 # Битая запись → считаем её невалидной, очищаем чтобы не
-                # накапливать мусор.
+                # накапливать мусор. Логируем raw чтобы диагностировать
+                # источник порчи (ручное редактирование, старый формат).
+                logger.warning(
+                    "chat_ban_cache_entry_corrupt",
+                    chat_id=target,
+                    raw=repr(entry),
+                )
                 del self._entries[target]
                 return False
-            if datetime.now(timezone.utc) >= expires:
+            if self._now() >= expires:
                 del self._entries[target]
                 return False
             return True
@@ -152,7 +172,7 @@ class ChatBanCache:
         if not target:
             return
         normalized_code = str(error_code or "unknown").strip() or "unknown"
-        now = datetime.now(timezone.utc)
+        now = self._now()
         expires_iso: str | None
         if cooldown_hours is None:
             expires_iso = None
@@ -204,10 +224,13 @@ class ChatBanCache:
         Возвращает копии dict'ов чтобы caller не мутировал внутреннее состояние.
         Ленивый expiry applied: записи с истёкшим expires_at не попадут в output.
         """
-        now = datetime.now(timezone.utc)
+        now = self._now()
         result: list[dict[str, Any]] = []
+        # Если были evictions — сразу persist'им, иначе на рестарте те же
+        # протухшие записи снова вернутся с диска и снова будут вычищаться
+        # в бесконечном цикле cleanup'а.
+        _evicted_any: bool = False
         with self._lock:
-            # Копируем ключи чтобы безопасно удалять во время iteration.
             for chat_id in list(self._entries.keys()):
                 entry = self._entries[chat_id]
                 expires_at = entry.get("expires_at")
@@ -215,13 +238,22 @@ class ChatBanCache:
                     try:
                         if now >= datetime.fromisoformat(expires_at):
                             del self._entries[chat_id]
+                            _evicted_any = True
                             continue
                     except (TypeError, ValueError):
+                        logger.warning(
+                            "chat_ban_cache_entry_corrupt",
+                            chat_id=chat_id,
+                            raw=repr(entry),
+                        )
                         del self._entries[chat_id]
+                        _evicted_any = True
                         continue
                 snapshot = dict(entry)
                 snapshot["chat_id"] = chat_id
                 result.append(snapshot)
+            if _evicted_any:
+                self._persist_to_disk()
         return result
 
     # ---- Internal helpers -----------------------------------------------
@@ -246,7 +278,7 @@ class ChatBanCache:
         if not isinstance(raw, dict):
             logger.warning("chat_ban_cache_load_malformed", path=str(path))
             return
-        now = datetime.now(timezone.utc)
+        now = self._now()
         loaded = 0
         skipped = 0
         for key, value in raw.items():
@@ -277,11 +309,15 @@ class ChatBanCache:
                 json.dumps(self._entries, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
-        except OSError as exc:
+        # TypeError ловим чтобы будущий баг с не-ISO datetime в entry
+        # (например, сырой datetime объект вместо isoformat) не ронял
+        # mark_banned в hot path. Лучше потерять write, чем вылететь.
+        except (OSError, TypeError) as exc:
             logger.warning(
                 "chat_ban_cache_persist_failed",
                 path=str(path),
                 error=str(exc),
+                error_type=type(exc).__name__,
             )
 
 

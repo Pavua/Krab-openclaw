@@ -42,6 +42,7 @@ from .command_handlers import (
     handle_set,
     handle_shop,
     handle_silence,
+    handle_stats,
     handle_status,
     handle_swarm,
     handle_sysinfo,
@@ -97,4 +98,5 @@ __all__ = [
     "handle_ls",
     "handle_screenshot",
     "handle_silence",
+    "handle_stats",
 ]
