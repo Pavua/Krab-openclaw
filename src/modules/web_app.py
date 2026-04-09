@@ -6943,6 +6943,7 @@ class WebApp:
             return HTMLResponse(
                 STATS_DASHBOARD_HTML,
                 headers=_no_store_headers(),
+            )
 
         @self.app.get("/inbox", response_class=HTMLResponse)
         async def inbox_dashboard():
