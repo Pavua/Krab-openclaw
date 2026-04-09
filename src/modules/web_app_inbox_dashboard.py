@@ -233,6 +233,8 @@ INBOX_DASHBOARD_HTML = """<!DOCTYPE html>
     </style>
 </head>
 <body>
+<nav style="background:#121212;border-bottom:1px solid #2a2a2a;padding:8px 20px;display:flex;gap:20px;align-items:center;font-size:14px;position:sticky;top:0;z-index:100;"><a href="/" style="color:#e0e0e0;text-decoration:none;opacity:0.7;">🦀 Главная</a><a href="/stats" style="color:#e0e0e0;text-decoration:none;opacity:0.7;">📊 Stats</a><a href="/inbox" style="color:#7dd3fc;text-decoration:none;border-bottom:2px solid #7dd3fc;padding-bottom:2px;">📥 Inbox</a><a href="/costs" style="color:#e0e0e0;text-decoration:none;opacity:0.7;">💰 Costs</a><a href="/swarm" style="color:#e0e0e0;text-decoration:none;opacity:0.7;">🐝 Swarm</a></nav>
+
 
     <header>
         <h1>Входящие</h1>
