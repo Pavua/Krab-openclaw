@@ -278,7 +278,10 @@ async def resolve_working_gemini_key(
 
 def reset_gemini_key_cache() -> None:
     """Clear the resolved key cache (useful when keys change at runtime)."""
-    resolve_working_gemini_key.__defaults__[3].pop("resolved", None)  # type: ignore[union-attr]
+    kw = resolve_working_gemini_key.__kwdefaults__ or {}
+    cache = kw.get("_cache")
+    if isinstance(cache, dict):
+        cache.pop("resolved", None)
 
 
 async def fetch_google_models_with_fallback(

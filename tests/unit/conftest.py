@@ -19,7 +19,31 @@ from collections.abc import Iterator
 
 import pytest
 
+import src.config as _config_module
 from src.userbot_bridge import KraabUserbot
+
+
+@pytest.fixture(autouse=True)
+def _align_config_after_reload(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """
+    Гарантирует, что mixin lazy-imports (`from ..config import config`)
+    видят тот же Config-объект, что и `userbot_bridge.config`.
+
+    Проблема: test_config_voice_settings.py делает `importlib.reload(src.config)`,
+    после чего `src.config.config` — НОВЫЙ экземпляр, а `userbot_bridge.config`
+    всё ещё ссылается на СТАРЫЙ. Mixin-методы (access_control, voice_profile)
+    делают lazy `from ..config import config` → получают новый, тесты патчат
+    старый → fails.
+
+    Фикс: перед каждым тестом форсируем `src.config.config` = тот объект,
+    который держит userbot_bridge. Тогда любой monkeypatch на него виден везде.
+    """
+    import src.userbot_bridge as _ub
+
+    canonical = _ub.config
+    if _config_module.config is not canonical:
+        monkeypatch.setattr(_config_module, "config", canonical)
+    yield
 
 
 @pytest.fixture(autouse=True)

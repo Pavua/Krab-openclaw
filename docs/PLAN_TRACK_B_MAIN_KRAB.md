@@ -5,6 +5,11 @@
 > **Created:** 2026-04-08
 > **Scope:** Phase 1 hardening + Phase 5 Translator MVP routing
 > **Self-contained:** да, можно работать без оглядки на Track C / Track D
+>
+> **⚠️ HOT BACKLOG (added 2026-04-08, Krab Ear session 3 RCA):**
+> - **🟠 P0 — string formatting bug в `src/userbot_bridge.py`** (причина «Краб повис в групповом чате»). Top-level catch на строке 5157 глотает traceback. См. `.remember/next_session.md` → «ПРИОРИТЕТ #0». Fix ~30-60 мин.
+> - **🔴 P1 — Stability C+B** (Pyrofork network resilience + launchd-only supervision, убрать `disable_legacy_launchd_core` из `new start_krab.command` и `new Stop Krab.command`). См. `.remember/next_session.md` → «ПРИОРИТЕТ #1». Fix ~3-5 часов.
+> - Порядок: P0 → P1. Независимые, но P0 даёт мгновенный user-visible win.
 
 ---
 
@@ -41,7 +46,7 @@ Master plan меняется при изменении shared foundation. Это
 - **#10 Mercadona** — anti-bot stealth, ждёт **логи терминала от пользователя**. Без логов копать дальше нельзя.
   Action: спросить пользователя в начале сессии, скопировать вывод последней попытки `!shop`.
 
-- **#14 OpenClaw v2026.4.5 monitoring** — пассивный watch 3-5 дней. Уже стабилен с 07.04, можно закрывать если нет инцидентов до 10.04.
+- ~~**#14 OpenClaw v2026.4.5 monitoring**~~ — **CLOSED 08.04.2026.** Audit: gateway up, route ok, userbot ready, ноль crash/restart за 24h. Только ожидаемый SIGTERM 07.04 20:20 (планово).
 
 **Опциональные мелочи:**
 
