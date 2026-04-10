@@ -21,11 +21,13 @@ def default_translator_session_state() -> dict[str, Any]:
         "session_id": "",
         "active_session_label": "",
         "translation_muted": False,
+        "active_chats": [],  # чаты в которых translator активен (per-chat opt-in)
         "last_language_pair": "",
         "last_translated_original": "",
         "last_translated_translation": "",
         "last_event": "session_idle",
         "updated_at": "",
+        "stats": {"total_translations": 0, "total_latency_ms": 0},
         "timeline_summary": {"total": 0, "line_events": 0, "control_events": 0},
         "timeline_preview": [],
         "timeline_event_count": 0,
