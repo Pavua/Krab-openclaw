@@ -101,6 +101,292 @@ async def test_scheduler_reminder_delivers_via_bound_sender(tmp_path: Path) -> N
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# parse_due_time — edge-cases
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_parse_due_time_empty_raises() -> None:
+    """Пустая строка должна бросать ValueError."""
+    with pytest.raises(ValueError, match="time_spec_empty"):
+        parse_due_time("")
+
+
+def test_parse_due_time_unknown_format_raises() -> None:
+    """Неизвестный формат должен бросать ValueError."""
+    with pytest.raises(ValueError, match="time_spec_parse_failed"):
+        parse_due_time("завтра утром")
+
+
+def test_parse_due_time_seconds() -> None:
+    """Формат `30s` — offset 30 секунд."""
+    now = datetime.now().astimezone().replace(microsecond=0)
+    due = parse_due_time("30s", now=now)
+    assert int((due - now).total_seconds()) == 30
+
+
+def test_parse_due_time_hours() -> None:
+    """Формат `2h` — offset 7200 секунд."""
+    now = datetime.now().astimezone().replace(microsecond=0)
+    due = parse_due_time("2h", now=now)
+    assert int((due - now).total_seconds()) == 7200
+
+
+def test_parse_due_time_days() -> None:
+    """Формат `1d` — offset 86400 секунд."""
+    now = datetime.now().astimezone().replace(microsecond=0)
+    due = parse_due_time("1d", now=now)
+    assert int((due - now).total_seconds()) == 86400
+
+
+def test_parse_due_time_russian_secs() -> None:
+    """Русский формат `через 5 секунд` — offset 5 секунд."""
+    now = datetime.now().astimezone().replace(microsecond=0)
+    due = parse_due_time("через 5 секунд", now=now)
+    assert int((due - now).total_seconds()) == 5
+
+
+def test_parse_due_time_russian_hours() -> None:
+    """Русский формат `через 3 часа` — offset 10800 секунд."""
+    now = datetime.now().astimezone().replace(microsecond=0)
+    due = parse_due_time("через 3 часа", now=now)
+    assert int((due - now).total_seconds()) == 10800
+
+
+def test_parse_due_time_at_hhmm_past_advances_to_next_day() -> None:
+    """Если HH:MM уже прошёл сегодня — планируется на следующий день."""
+    now = datetime.now().astimezone().replace(hour=23, minute=0, second=0, microsecond=0)
+    due = parse_due_time("в 10:00", now=now)
+    assert due.hour == 10
+    assert due.minute == 0
+    assert due.date() > now.date()
+
+
+def test_parse_due_time_iso_format() -> None:
+    """Формат `YYYY-MM-DD HH:MM` должен парситься корректно."""
+    now = datetime.now().astimezone().replace(microsecond=0)
+    due = parse_due_time("2030-06-15 14:30", now=now)
+    assert due.year == 2030
+    assert due.month == 6
+    assert due.day == 15
+    assert due.hour == 14
+    assert due.minute == 30
+
+
+def test_parse_due_time_ddmm_format() -> None:
+    """Формат `DD.MM HH:MM` должен парситься корректно."""
+    now = datetime.now().astimezone().replace(microsecond=0)
+    due = parse_due_time("25.12 09:00", now=now)
+    assert due.month == 12
+    assert due.day == 25
+    assert due.hour == 9
+    assert due.minute == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _retry_or_fail — логика retry/exhausted
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_retry_or_fail_increments_retries_and_reschedules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """После неудачной попытки reminder должен получить incremented retries и reschedule."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(scheduler_module, "inbox_service", inbox)
+
+    scheduler = KrabScheduler(storage_path=tmp_path / "reminders.json")
+    scheduler.start()
+    scheduler.bind_sender(None)  # type: ignore[arg-type]
+    try:
+        rid = scheduler.add_reminder(
+            chat_id="111",
+            text="тест retry",
+            due_at=datetime.now().astimezone() + timedelta(seconds=0.05),
+        )
+        # Дожидаемся первого срабатывания (sender=None → retry_or_fail)
+        await asyncio.sleep(0.3)
+        rec = scheduler._reminders.get(rid)
+        if rec:
+            assert rec.retries >= 1
+            assert rec.last_error == "sender_not_bound"
+    finally:
+        scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_retry_or_fail_marks_failed_after_max_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """После max_retries reminder должен получить статус 'failed'."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(scheduler_module, "inbox_service", inbox)
+
+    scheduler = KrabScheduler(storage_path=tmp_path / "reminders.json")
+    scheduler._max_retries = 2  # искусственно снижаем порог
+    scheduler.start()
+    try:
+        future_iso = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
+        from src.core.scheduler import ReminderRecord
+        rec = ReminderRecord(
+            reminder_id="fail_test",
+            chat_id="999",
+            text="fail me",
+            due_at_iso=future_iso,
+            created_at_iso=datetime.now().astimezone().isoformat(),
+            status="scheduled",
+            retries=2,  # уже на пороге
+        )
+        scheduler._reminders["fail_test"] = rec
+        # Вызываем _retry_or_fail напрямую
+        await scheduler._retry_or_fail(rec, "test_error")
+        assert rec.status == "failed"
+        assert rec.retries == 3
+    finally:
+        scheduler.stop()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _fire_reminder — delivery и отсутствие sender
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fire_reminder_no_sender_triggers_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Если sender не привязан, _fire_reminder должен вызвать _retry_or_fail."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(scheduler_module, "inbox_service", inbox)
+
+    scheduler = KrabScheduler(storage_path=tmp_path / "reminders.json")
+    scheduler.start()
+    # Sender намеренно не привязан
+    try:
+        future_iso = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
+        from src.core.scheduler import ReminderRecord
+        rec = ReminderRecord(
+            reminder_id="fire_no_sender",
+            chat_id="222",
+            text="нет сендера",
+            due_at_iso=future_iso,
+            created_at_iso=datetime.now().astimezone().isoformat(),
+            status="scheduled",
+        )
+        scheduler._reminders["fire_no_sender"] = rec
+        await scheduler._fire_reminder("fire_no_sender")
+        # Ожидаем, что retries увеличен — _retry_or_fail был вызван
+        assert rec.retries == 1
+        assert "sender_not_bound" in rec.last_error
+    finally:
+        scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_fire_reminder_missing_record_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_fire_reminder с несуществующим reminder_id не должен падать."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(scheduler_module, "inbox_service", inbox)
+
+    scheduler = KrabScheduler(storage_path=tmp_path / "reminders.json")
+    scheduler.start()
+    try:
+        # Не должно бросить исключение
+        await scheduler._fire_reminder("nonexistent_id")
+    finally:
+        scheduler.stop()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _persist — atomic write
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_persist_writes_only_scheduled_reminders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_persist должен сохранять только scheduled reminders, игнорировать failed/done."""
+    import json as json_module
+
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(scheduler_module, "inbox_service", inbox)
+
+    storage = tmp_path / "reminders.json"
+    scheduler = KrabScheduler(storage_path=storage)
+    scheduler.start()
+    try:
+        from src.core.scheduler import ReminderRecord
+        future_iso = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
+        scheduler._reminders["r_scheduled"] = ReminderRecord(
+            reminder_id="r_scheduled", chat_id="1", text="active",
+            due_at_iso=future_iso,
+            created_at_iso=datetime.now().astimezone().isoformat(),
+            status="scheduled",
+        )
+        scheduler._reminders["r_failed"] = ReminderRecord(
+            reminder_id="r_failed", chat_id="2", text="failed one",
+            due_at_iso=future_iso,
+            created_at_iso=datetime.now().astimezone().isoformat(),
+            status="failed",
+        )
+        scheduler._persist()
+        data = json_module.loads(storage.read_text(encoding="utf-8"))
+        ids = [r["reminder_id"] for r in data["reminders"]]
+        assert "r_scheduled" in ids
+        assert "r_failed" not in ids
+    finally:
+        scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_persist_creates_parent_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_persist должен создавать отсутствующие родительские директории."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(scheduler_module, "inbox_service", inbox)
+
+    nested_path = tmp_path / "a" / "b" / "c" / "reminders.json"
+    scheduler = KrabScheduler(storage_path=nested_path)
+    scheduler.start()
+    try:
+        scheduler._persist()
+        assert nested_path.exists()
+    finally:
+        scheduler.stop()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# get_status — диагностический срез
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_status_returns_expected_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_status должен вернуть все ожидаемые ключи."""
+    inbox = InboxService(state_path=tmp_path / "inbox.json")
+    monkeypatch.setattr(scheduler_module, "inbox_service", inbox)
+
+    scheduler = KrabScheduler(storage_path=tmp_path / "reminders.json")
+    scheduler.start()
+    try:
+        status = scheduler.get_status()
+        assert "started" in status
+        assert "pending_count" in status
+        assert "next_due_at" in status
+        assert "storage_path" in status
+        assert status["started"] is True
+        assert status["pending_count"] == 0
+    finally:
+        scheduler.stop()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Task 4.4 — _load graceful recovery
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -126,8 +412,6 @@ async def test_load_corrupted_json_initializes_empty_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Corrupted JSON файл не должен ронять scheduler — нужна graceful recovery."""
-    import json as json_module
-
     state_path = tmp_path / "bad_reminders.json"
     state_path.write_text("{ это не json !!!", encoding="utf-8")
     inbox = InboxService(state_path=tmp_path / "inbox.json")
