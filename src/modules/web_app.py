@@ -8042,6 +8042,16 @@ class WebApp:
             )
             return {"ok": True, "action": "started", "status": "active", "active_chats": active_chats}
 
+        @self.app.post("/api/translator/auto")
+        async def translator_auto(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Switch to auto-detect mode via API."""
+            self._assert_write_access(x_krab_web_key, token)
+            self.kraab.update_translator_runtime_profile(language_pair="auto-detect", persist=True)
+            return {"ok": True, "language_pair": "auto-detect"}
+
         @self.app.post("/api/translator/lang")
         async def translator_set_lang(
             payload: dict = Body(default_factory=dict),
