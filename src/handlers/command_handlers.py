@@ -450,6 +450,27 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         await message.reply("\n".join(lines))
         return
 
+    # !swarm report [team] — последние markdown reports
+    if args.lower().startswith("report") or args.lower().startswith("отчёт"):
+        from ..core.swarm_artifact_store import swarm_artifact_store
+        from pathlib import Path
+        report_dir = Path.home() / ".openclaw" / "krab_runtime_state" / "reports"
+        if not report_dir.exists():
+            await message.reply("📄 Отчётов пока нет.")
+            return
+        files = sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
+        if not files:
+            await message.reply("📄 Отчётов пока нет.")
+            return
+        lines = ["📄 **Последние отчёты:**"]
+        for f in files:
+            name = f.name.replace(".md", "")
+            size_kb = f.stat().st_size / 1024
+            lines.append(f"  `{name}` ({size_kb:.1f} KB)")
+        lines.append(f"\nВсего: {len(list(report_dir.glob('*.md')))} отчётов")
+        await message.reply("\n".join(lines))
+        return
+
     # !swarm listen on/off — управление team listeners
     if args.lower().startswith("listen"):
         from ..core.swarm_team_listener import is_listeners_enabled, set_listeners_enabled
