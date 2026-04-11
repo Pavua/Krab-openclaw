@@ -1744,7 +1744,16 @@ class OpenClawClient:
             }
         return merged_text
 
-    def _commit_usage_snapshot(self, usage: dict[str, Any] | None, *, model_id: str) -> None:
+    def _commit_usage_snapshot(
+        self,
+        usage: dict[str, Any] | None,
+        *,
+        model_id: str,
+        tool_calls_count: int = 0,
+        channel: str = "",
+        is_fallback: bool = False,
+        context_tokens: int = 0,
+    ) -> None:
         """
         Коммитит usage один раз на completion и зеркалит его в Cost Analytics.
 
@@ -1765,7 +1774,14 @@ class OpenClawClient:
 
             analytics = getattr(model_manager, "cost_analytics", None)
             if analytics and hasattr(analytics, "record_usage"):
-                analytics.record_usage(normalized, model_id=model_id)
+                analytics.record_usage(
+                    normalized,
+                    model_id=model_id,
+                    tool_calls_count=tool_calls_count,
+                    channel=channel,
+                    is_fallback=is_fallback,
+                    context_tokens=context_tokens,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "cost_analytics_record_usage_failed",
@@ -1958,7 +1974,12 @@ class OpenClawClient:
                     completion_tokens=usage_snapshot["completion_tokens"],
                     total_tokens=usage_snapshot["total_tokens"],
                 )
-        self._commit_usage_snapshot(usage_snapshot, model_id=model_id)
+        self._commit_usage_snapshot(
+            usage_snapshot,
+            model_id=model_id,
+            tool_calls_count=len(self._active_tool_calls),
+            channel="telegram",  # можно расширить для других каналов
+        )
         return full_response.strip()
 
     async def _resolve_local_model_for_retry(

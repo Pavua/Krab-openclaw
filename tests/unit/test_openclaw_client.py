@@ -450,10 +450,10 @@ def test_commit_usage_snapshot_updates_compat_stats_and_cost_analytics(client: O
         "output_tokens": 5,
         "total_tokens": 15,
     }
-    fake_analytics.record_usage.assert_called_once_with(
-        {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        model_id="google/gemini-2.5-flash",
-    )
+    fake_analytics.record_usage.assert_called_once()
+    call_args = fake_analytics.record_usage.call_args
+    assert call_args[0][0] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    assert call_args[1]["model_id"] == "google/gemini-2.5-flash"
 
 
 @pytest.mark.asyncio
@@ -489,10 +489,10 @@ async def test_openclaw_completion_once_estimates_usage_when_response_has_no_usa
         "output_tokens": expected_usage["completion_tokens"],
         "total_tokens": expected_usage["total_tokens"],
     }
-    fake_analytics.record_usage.assert_called_once_with(
-        expected_usage,
-        model_id="google/gemini-2.5-flash",
-    )
+    fake_analytics.record_usage.assert_called_once()
+    call_args2 = fake_analytics.record_usage.call_args
+    assert call_args2[0][0] == expected_usage
+    assert call_args2[1]["model_id"] == "google/gemini-2.5-flash"
     request_payload = client._http_client.post.call_args.kwargs["json"]
     assert request_payload["stream"] is False
 
