@@ -426,6 +426,7 @@ def build_system_control_snapshot(
     macos_probe: dict[str, Any] | None = None,
     mcp_probe: dict[str, Any] | None = None,
     tor_probe: dict[str, Any] | None = None,
+    hammerspoon_probe: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Строит truthful System Control v2 capability snapshot (Phase 3).
 
@@ -519,6 +520,12 @@ def build_system_control_snapshot(
             "error": tor_error,
             "role_requirement": "owner_only",
             "note": "SOCKS5 :9050 через tor_bridge; TOR_ENABLED в .env",
+        },
+        "hammerspoon": {
+            "status": _probe_status(hammerspoon_probe if isinstance(hammerspoon_probe, dict) else {})[0],
+            "error": _probe_status(hammerspoon_probe if isinstance(hammerspoon_probe, dict) else {})[1],
+            "role_requirement": "owner_only",
+            "note": "Window management через HTTP :10101; MCP server в mcp_hammerspoon_server.py",
         },
     }
 
