@@ -9233,6 +9233,17 @@ class WebApp:
                 "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
             }
 
+        @self.app.get("/api/endpoints")
+        async def list_endpoints():
+            """Список всех API endpoints."""
+            routes = []
+            for route in self.app.routes:
+                if hasattr(route, "methods") and hasattr(route, "path"):
+                    for method in route.methods:
+                        if method in {"GET", "POST", "DELETE", "PUT"}:
+                            routes.append({"method": method, "path": route.path})
+            return {"ok": True, "count": len(routes), "endpoints": sorted(routes, key=lambda r: r["path"])}
+
         @self.app.get("/api/version")
         async def version_info():
             """Версия Краба и session info."""
