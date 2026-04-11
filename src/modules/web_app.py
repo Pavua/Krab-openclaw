@@ -9195,6 +9195,28 @@ class WebApp:
                 "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
             }
 
+        @self.app.get("/api/translator/test")
+        async def translator_test_api(text: str = Query(default=""), tgt: str = Query(default="")):
+            """Тестовый перевод через API (GET для простоты)."""
+            if not text:
+                return {"ok": False, "error": "?text=Buenos+dias+amigo required"}
+            try:
+                from ..core.language_detect import detect_language, resolve_translation_pair
+                from ..core.translator_engine import translate_text
+                from ..openclaw_client import openclaw_client as _oc
+                detected = detect_language(text)
+                if not detected:
+                    return {"ok": False, "error": "language not detected"}
+                profile = self.kraab.get_translator_runtime_profile()
+                src, tgt_lang = resolve_translation_pair(detected, profile.get("language_pair", "es-ru"))
+                if tgt:
+                    tgt_lang = tgt
+                result = await translate_text(text, src, tgt_lang, openclaw_client=_oc)
+                return {"ok": True, "src": src, "tgt": tgt_lang, "original": result.original,
+                        "translated": result.translated, "latency_ms": result.latency_ms}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         @self.app.post("/api/model/switch")
         async def model_switch(
             payload: dict = Body(default_factory=dict),
