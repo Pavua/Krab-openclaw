@@ -9043,6 +9043,27 @@ class WebApp:
                 for a in arts
             ]}
 
+        @self.app.post("/api/swarm/tasks/create")
+        async def swarm_task_create(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Создать task в swarm board через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.swarm_task_board import swarm_task_board
+            team = str(payload.get("team") or "").strip()
+            title = str(payload.get("title") or "").strip()
+            if not team or not title:
+                return {"ok": False, "error": "team and title required"}
+            task = swarm_task_board.create_task(
+                team=team, title=title,
+                description=str(payload.get("description") or ""),
+                priority=str(payload.get("priority") or "medium"),
+                created_by=str(payload.get("created_by") or "api"),
+            )
+            return {"ok": True, "task_id": task.task_id, "team": task.team, "title": task.title}
+
         @self.app.get("/api/swarm/listeners")
         async def swarm_listeners_status():
             """Статус team listeners."""
