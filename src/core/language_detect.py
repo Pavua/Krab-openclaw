@@ -39,8 +39,15 @@ def resolve_translation_pair(
     Резолвит (src_lang, tgt_lang) на основе определённого языка и profile pair.
 
     Profile pair формат: "es-ru" → если detected=es, target=ru; если detected=ru, target=es.
+    "auto-detect" → переводим на ru (если detected != ru) или на en (если detected == ru).
     Если язык не в паре — переводим на второй язык пары (обычно ru).
     """
+    # Auto-detect: определяем целевой язык автоматически
+    if profile_pair == "auto-detect":
+        if detected_lang == "ru":
+            return "ru", "en"  # русский → английский
+        return detected_lang, "ru"  # всё остальное → русский
+
     parts = profile_pair.split("-", 1)
     if len(parts) != 2:
         return detected_lang, "ru"

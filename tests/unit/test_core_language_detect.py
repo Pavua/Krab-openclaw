@@ -76,8 +76,20 @@ class TestResolveTranslationPair:
         assert src == ""
         assert tgt == "ru"
 
-    def test_auto_detect_pair(self) -> None:
-        # "auto-detect" — нестандартная пара, split на "auto" и "detect"
+    def test_auto_detect_pair_spanish(self) -> None:
+        # auto-detect: испанский → русский
         src, tgt = resolve_translation_pair("es", "auto-detect")
         assert src == "es"
-        assert tgt == "detect"  # не идеально, но consistent
+        assert tgt == "ru"
+
+    def test_auto_detect_pair_russian(self) -> None:
+        # auto-detect: русский → английский
+        src, tgt = resolve_translation_pair("ru", "auto-detect")
+        assert src == "ru"
+        assert tgt == "en"
+
+    def test_auto_detect_pair_english(self) -> None:
+        # auto-detect: английский → русский
+        src, tgt = resolve_translation_pair("en", "auto-detect")
+        assert src == "en"
+        assert tgt == "ru"
