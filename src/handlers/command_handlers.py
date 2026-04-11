@@ -466,6 +466,15 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"📌 Task `{match.task_id[:8]}` → priority **{level}**")
             return
 
+        if sub == "count":
+            # Быстрый count по статусам
+            summary = swarm_task_board.get_board_summary()
+            by_status = summary.get("by_status", {})
+            total = summary.get("total", 0)
+            parts = [f"{s}: {c}" for s, c in sorted(by_status.items())]
+            await message.reply(f"📊 Tasks: {total} ({', '.join(parts)})")
+            return
+
         if sub == "clear":
             # Очищает done/failed tasks из board
             all_tasks = swarm_task_board.list_tasks(limit=500)
