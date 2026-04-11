@@ -9030,6 +9030,19 @@ class WebApp:
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
+        @self.app.get("/api/model/status")
+        async def model_status():
+            """Текущий статус модели и маршрутизации."""
+            from ..openclaw_client import openclaw_client as _oc
+            from ..model_manager import model_manager as _mm
+            route = _oc.get_last_runtime_route()
+            return {
+                "ok": True,
+                "route": route,
+                "provider": _mm.format_status() if hasattr(_mm, "format_status") else str(_mm),
+                "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
+            }
+
         @self.app.get("/api/notify/status")
         async def notify_status():
             """Статус tool narration toggle."""
