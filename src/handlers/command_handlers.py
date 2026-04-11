@@ -424,6 +424,32 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             )
             return
 
+        if sub in {"status", "show", "get"}:
+            tid = task_tokens[2].strip() if len(task_tokens) > 2 else ""
+            if not tid:
+                raise UserInputError(user_message="❌ Формат: `!swarm task status <task_id>`")
+            all_tasks = swarm_task_board.list_tasks(limit=200)
+            match = next((t for t in all_tasks if t.task_id.startswith(tid)), None)
+            if not match:
+                raise UserInputError(user_message=f"❌ Task `{tid}` не найден")
+            emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(match.status, "•")
+            lines = [
+                f"{emoji} **Task: {match.task_id[:12]}**",
+                f"Team: {match.team}",
+                f"Title: {match.title}",
+                f"Status: {match.status}",
+                f"Priority: {match.priority}",
+                f"Created by: {match.created_by}",
+                f"Created: {match.created_at}",
+                f"Updated: {match.updated_at}",
+            ]
+            if match.result:
+                lines.append(f"Result: {match.result[:200]}")
+            if match.parent_task_id:
+                lines.append(f"Parent: {match.parent_task_id[:12]}")
+            await message.reply("\n".join(lines))
+            return
+
         if sub == "clear":
             # Очищает done/failed tasks из board
             all_tasks = swarm_task_board.list_tasks(limit=500)
