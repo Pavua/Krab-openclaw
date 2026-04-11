@@ -1547,9 +1547,15 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
 
     if sub in {"lang", "language"}:
         if len(args) < 3:
-            raise UserInputError(
-                user_message="❌ Укажи языковую пару: `!translator lang es-ru`."
+            # Без аргументов — показать текущую пару
+            profile = bot.get_translator_runtime_profile()
+            current = profile.get("language_pair", "es-ru")
+            await message.reply(
+                f"🌐 Текущая пара: **{current}**\n\n"
+                f"Доступные: `es-ru`, `es-en`, `en-ru`, `auto-detect`\n"
+                f"Сменить: `!translator lang auto-detect`"
             )
+            return
         value = str(args[2] or "").strip().lower()
         if value not in ALLOWED_LANGUAGE_PAIRS:
             raise UserInputError(
