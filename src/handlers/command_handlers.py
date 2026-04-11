@@ -2311,7 +2311,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!voice ...` — голосовой runtime-профиль (on/off/speed/voice/delivery)
 `!notify on|off` — toggle tool narrations (🔍 Ищу... 📸 Скриншот...)
 `!тишина [мин|стоп|глобально|статус]` — режим тишины
-`!translator ...` — переводчик (lang/mode/strategy/session start|stop)
+`!translator ...` — переводчик (lang/mode/strategy/session/test)
 `!reasoning [show|clear]` — просмотр скрытой reasoning-trace
 
 **Swarm**
