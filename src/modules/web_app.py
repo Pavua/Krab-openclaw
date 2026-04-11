@@ -9311,6 +9311,28 @@ class WebApp:
                 for f in files
             ]}
 
+        @self.app.post("/api/swarm/task/{task_id}/update")
+        async def swarm_task_update(
+            task_id: str,
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Обновить task status/result через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.swarm_task_board import swarm_task_board
+            status = str(payload.get("status") or "").strip()
+            result = str(payload.get("result") or "").strip()
+            if status == "done" and result:
+                swarm_task_board.complete_task(task_id, result=result)
+            elif status == "failed":
+                swarm_task_board.fail_task(task_id, reason=result or "via API")
+            elif status:
+                swarm_task_board.update_task(task_id, status=status)
+            else:
+                return {"ok": False, "error": "status required"}
+            return {"ok": True, "task_id": task_id, "new_status": status}
+
         @self.app.post("/api/swarm/listeners/toggle")
         async def swarm_listeners_toggle(
             payload: dict = Body(default_factory=dict),
