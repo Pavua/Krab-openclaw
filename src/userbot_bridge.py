@@ -2198,6 +2198,14 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             access_level=access_profile.level,
         )
         is_self = user.id == self.me.id
+
+        # Phase 3: capability enforcement — проверяем право на chat
+        if not is_self:
+            from .core.capability_registry import check_capability  # noqa: PLC0415
+            access_level_str = str(getattr(access_profile.level, "value", access_profile.level) or "guest")
+            if not check_capability(access_level_str, "chat"):
+                logger.info("capability_denied_chat", chat_id=chat_id, level=access_level_str)
+                return
         has_trigger = self._is_trigger(text)
         has_group_audio_fallback = (
             has_audio_message
