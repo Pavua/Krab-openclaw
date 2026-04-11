@@ -9108,6 +9108,19 @@ class WebApp:
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
+        @self.app.post("/api/voice/toggle")
+        async def voice_toggle(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Toggle voice mode через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            current = bool(self.kraab.voice_mode)
+            new_state = bool(payload.get("enabled", not current))
+            self.kraab.voice_mode = new_state
+            return {"ok": True, "voice_enabled": new_state}
+
         @self.app.get("/api/translator/languages")
         async def translator_languages():
             """Доступные языковые пары."""
