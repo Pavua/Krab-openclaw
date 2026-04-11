@@ -1383,11 +1383,11 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             for team, cl in self._swarm_team_clients.items():
                 swarm_channels.bind_team_client(team, cl)
             # Регистрируем message handlers для team listener
-            if self._swarm_team_clients and hasattr(self, "openclaw"):
+            if self._swarm_team_clients:
                 from .core.swarm_team_listener import register_team_message_handler  # noqa: PLC0415
 
                 for team, cl in self._swarm_team_clients.items():
-                    register_team_message_handler(team, cl, self.openclaw)
+                    register_team_message_handler(team, cl, openclaw_client)
             if self._swarm_team_clients:
                 logger.info(
                     "swarm_team_clients_ready",
