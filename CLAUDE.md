@@ -80,8 +80,9 @@ Plists: `scripts/launchagents/`
 
 Runtime truth: `~/.openclaw/agents/main/agent/models.json`
 
-Текущий routing (06.04.2026):
-- Primary: `google/gemini-3.1-pro-preview`
+Текущий routing (11.04.2026):
+- Primary: `google/gemini-3-pro-preview`
+- Translator: `google/gemini-3-flash-preview` (preferred_model для скорости)
 - Fallbacks: `gemini-2.5-pro-preview`, `gemini-2.5-flash`, `gemini-3-flash-preview`
 - `google-antigravity` — НЕ использовать (квота/бан)
 - LM Studio local — автоматический fallback при cloud-failure
