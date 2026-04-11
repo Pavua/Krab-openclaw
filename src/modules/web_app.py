@@ -9038,6 +9038,22 @@ class WebApp:
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
+        @self.app.get("/api/v1/health")
+        async def health_v1():
+            """Versioned health endpoint для внешних мониторов."""
+            try:
+                health = await self._collect_runtime_lite_snapshot()
+                return {
+                    "ok": True,
+                    "version": "1",
+                    "status": health.get("status", "unknown"),
+                    "telegram": health.get("telegram_userbot_state", "unknown"),
+                    "gateway": health.get("openclaw_auth_state", "unknown"),
+                    "uptime_probe": "pass",
+                }
+            except Exception as exc:
+                return {"ok": False, "version": "1", "error": str(exc)}
+
         @self.app.get("/api/runtime/summary")
         async def runtime_summary():
             """Единый summary endpoint — полное состояние Краба одним запросом."""
