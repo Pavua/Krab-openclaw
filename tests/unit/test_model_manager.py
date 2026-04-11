@@ -569,3 +569,94 @@ async def test_single_local_mode_unloads_extra_models_when_target_already_loaded
         unload_call = manager._http_client.post.call_args_list[0]
         assert unload_call.args[0].endswith("/api/v1/models/unload")
         assert unload_call.kwargs["json"].get("identifier") == "zai-org/glm-4.6v-flash"
+
+
+# --- edge cases: health_check ---
+
+
+@pytest.mark.asyncio
+async def test_health_check_returns_unavailable_when_lm_studio_unreachable(manager: ModelManager) -> None:
+    """health_check возвращает unavailable, если LM Studio недоступен и кэш пуст."""
+    manager._loaded_models_cache = []
+    manager._loaded_models_cache_ts = 0.0
+
+    with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=False)):
+        result = await manager.health_check()
+
+    assert result["status"] == "unavailable"
+    assert result["loaded_models"] == []
+
+
+@pytest.mark.asyncio
+async def test_health_check_returns_error_on_httpx_exception(manager: ModelManager) -> None:
+    """health_check перехватывает httpx.HTTPError и возвращает status=error."""
+    import httpx
+
+    manager._loaded_models_cache = []
+    manager._loaded_models_cache_ts = 0.0
+
+    with patch(
+        "src.model_manager.is_lm_studio_available",
+        new=AsyncMock(side_effect=httpx.ConnectError("connection refused")),
+    ):
+        result = await manager.health_check()
+
+    assert result["status"] == "error"
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_health_check_stale_loaded_cache_triggers_probe(manager: ModelManager) -> None:
+    """Устаревший кэш (> 5 сек) не считается свежим — должен идти availability probe."""
+    manager._loaded_models_cache = ["old-model"]
+    manager._loaded_models_cache_ts = time.time() - 10.0  # протух
+
+    with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)) as probe:
+        result = await manager.health_check()
+
+    assert probe.await_count == 1
+    assert result["loaded_models"] == []  # стейл-кэш не попал в ответ
+    assert result["status"] == "healthy"
+
+
+# --- edge cases: get_ram_usage ---
+
+
+def test_get_ram_usage_returns_expected_keys(manager: ModelManager) -> None:
+    """get_ram_usage всегда возвращает все четыре ключа."""
+    with patch("src.model_manager.psutil.virtual_memory") as mock_mem:
+        mock_mem.return_value.total = 32 * 1024**3
+        mock_mem.return_value.used = 16 * 1024**3
+        mock_mem.return_value.available = 16 * 1024**3
+        mock_mem.return_value.percent = 50.0
+
+        result = manager.get_ram_usage()
+
+    assert set(result.keys()) == {"total_gb", "used_gb", "available_gb", "percent"}
+    assert result["total_gb"] == 32.0
+    assert result["percent"] == 50.0
+
+
+def test_can_load_model_respects_ram_buffer(manager: ModelManager) -> None:
+    """can_load_model учитывает RAM_BUFFER_GB: не даёт загружать, если нет буфера."""
+    with patch("src.model_manager.psutil.virtual_memory") as mock_mem:
+        mock_mem.return_value.available = 5 * 1024**3  # 5 GB свободно
+
+        # модель 4 GB: 4 + buffer > 5 → зависит от RAM_BUFFER_GB
+        from src.model_manager import RAM_BUFFER_GB
+        too_large = 5.0 - RAM_BUFFER_GB + 0.1
+        fits = 5.0 - RAM_BUFFER_GB - 0.1
+
+        assert manager.can_load_model(too_large) is False
+        assert manager.can_load_model(fits) is True
+
+
+# --- edge cases: get_cloud_runtime_state_export ---
+
+
+def test_get_cloud_runtime_state_export_returns_copy(manager: ModelManager) -> None:
+    """Экспорт должен возвращать независимую копию, а не прямую ссылку на внутренний dict."""
+    state = manager.get_cloud_runtime_state_export()
+    state["injected_key"] = "should_not_appear_inside"
+    internal_export = manager.get_cloud_runtime_state_export()
+    assert "injected_key" not in internal_export
