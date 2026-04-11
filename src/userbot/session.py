@@ -406,7 +406,8 @@ class SessionMixin:
     async def _telegram_session_watchdog(self) -> None:
         """
         Периодически проверяет валидность Telegram-сессии.
-        Если auth key протухла, запускает auto-recovery без ручного удаления файлов.
+        Если auth key протухла — auto-recovery. Если transport disconnected —
+        auto-reconnect через restart() (P1 fix session 5).
         """
         interval_sec = int(getattr(config, "TELEGRAM_SESSION_HEARTBEAT_SEC", 45))
         probe_timeout_sec = float(
@@ -415,16 +416,36 @@ class SessionMixin:
         probe_timeout_sec = max(5.0, probe_timeout_sec)
         failure_limit = int(getattr(config, "TELEGRAM_SESSION_PROBE_FAILURE_LIMIT", 3) or 3)
         failure_limit = max(1, failure_limit)
+        _reconnect_cooldown_sec = 60.0  # минимум между reconnect попытками
+        _last_reconnect_ts = 0.0
         while True:
             try:
                 await asyncio.sleep(max(15, interval_sec))
-                if not self.client.is_connected:
+                if not self.client or not self.client.is_connected:
                     self._telegram_probe_failures += 1
                     if self._telegram_probe_failures >= failure_limit:
                         self._mark_transport_degraded(
                             reason="client_not_connected",
                             error="Pyrogram client помечен как disconnected",
                         )
+                        # P1: auto-reconnect вместо пассивного ожидания
+                        import time as _time  # noqa: PLC0415
+                        now = _time.monotonic()
+                        if now - _last_reconnect_ts >= _reconnect_cooldown_sec:
+                            _last_reconnect_ts = now
+                            logger.warning(
+                                "telegram_watchdog_auto_reconnect",
+                                failures=self._telegram_probe_failures,
+                            )
+                            try:
+                                await self.restart(reason="watchdog_auto_reconnect")
+                                self._telegram_probe_failures = 0
+                            except Exception as restart_exc:  # noqa: BLE001
+                                logger.error(
+                                    "telegram_watchdog_reconnect_failed",
+                                    error=str(restart_exc),
+                                    exc_info=True,
+                                )
                     continue
                 if self._client_lifecycle_lock.locked() or self._telegram_restart_lock.locked():
                     continue
@@ -440,8 +461,28 @@ class SessionMixin:
                     self._telegram_probe_failures += 1
                     if self._telegram_probe_failures >= failure_limit:
                         self._mark_transport_degraded(reason="watchdog_probe_failed", error=str(exc))
-                    logger.warning(
-                        "telegram_watchdog_probe_failed",
-                        error=repr(exc),
-                        consecutive_failures=self._telegram_probe_failures,
-                    )
+                        # P1: auto-reconnect при probe failure
+                        import time as _time  # noqa: PLC0415
+                        now = _time.monotonic()
+                        if now - _last_reconnect_ts >= _reconnect_cooldown_sec:
+                            _last_reconnect_ts = now
+                            logger.warning(
+                                "telegram_watchdog_auto_reconnect_probe_failed",
+                                failures=self._telegram_probe_failures,
+                                error=repr(exc),
+                            )
+                            try:
+                                await self.restart(reason="watchdog_probe_auto_reconnect")
+                                self._telegram_probe_failures = 0
+                            except Exception as restart_exc:  # noqa: BLE001
+                                logger.error(
+                                    "telegram_watchdog_reconnect_failed",
+                                    error=str(restart_exc),
+                                    exc_info=True,
+                                )
+                    else:
+                        logger.warning(
+                            "telegram_watchdog_probe_failed",
+                            error=repr(exc),
+                            consecutive_failures=self._telegram_probe_failures,
+                        )
