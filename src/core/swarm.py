@@ -247,6 +247,19 @@ class AgentRoom:
                             target_team=delegate_team,
                             topic=delegate_topic,
                         )
+                    # Phase 8: delegation checkpoint — фиксируем в task board
+                    try:
+                        from .swarm_task_board import swarm_task_board  # noqa: PLC0415
+                        swarm_task_board.create_task(
+                            team=delegate_team,
+                            title=f"Delegation: {delegate_topic[:80]}",
+                            description=f"Delegated from {_team_name or 'default'} role {name}",
+                            priority="high",
+                            created_by=f"delegation:{_team_name or 'default'}",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
                     delegate_result = await _bus.dispatch(
                         source_team=_team_name or "default",
                         target_team=delegate_team,
