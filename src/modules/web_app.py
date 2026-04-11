@@ -9416,6 +9416,22 @@ class WebApp:
                 return {"ok": False, "error": "status required"}
             return {"ok": True, "task_id": task_id, "new_status": status}
 
+        @self.app.post("/api/swarm/task/{task_id}/priority")
+        async def swarm_task_priority(
+            task_id: str,
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Change task priority via API."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.swarm_task_board import swarm_task_board
+            level = str(payload.get("priority") or "").strip().lower()
+            if level not in {"low", "medium", "high", "critical"}:
+                return {"ok": False, "error": "priority must be low/medium/high/critical"}
+            swarm_task_board.update_task(task_id, priority=level)
+            return {"ok": True, "task_id": task_id, "priority": level}
+
         @self.app.post("/api/swarm/listeners/toggle")
         async def swarm_listeners_toggle(
             payload: dict = Body(default_factory=dict),
