@@ -9291,6 +9291,19 @@ class WebApp:
                 for f in files
             ]}
 
+        @self.app.post("/api/swarm/listeners/toggle")
+        async def swarm_listeners_toggle(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Toggle team listeners через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.swarm_team_listener import is_listeners_enabled, set_listeners_enabled
+            enabled = bool(payload.get("enabled", not is_listeners_enabled()))
+            set_listeners_enabled(enabled)
+            return {"ok": True, "listeners_enabled": enabled}
+
         @self.app.post("/api/swarm/artifacts/cleanup")
         async def swarm_artifacts_cleanup(
             x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
