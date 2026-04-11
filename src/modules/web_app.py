@@ -9221,6 +9221,26 @@ class WebApp:
                 for a in arts
             ]}
 
+        @self.app.get("/api/swarm/task/{task_id}")
+        async def swarm_task_detail(task_id: str):
+            """Детальная инфо о задаче."""
+            from ..core.swarm_task_board import swarm_task_board
+            all_tasks = swarm_task_board.list_tasks(limit=500)
+            match = next((t for t in all_tasks if t.task_id.startswith(task_id)), None)
+            if not match:
+                return {"ok": False, "error": f"task '{task_id}' not found"}
+            return {
+                "ok": True,
+                "task": {
+                    "task_id": match.task_id, "team": match.team, "title": match.title,
+                    "description": match.description, "status": match.status,
+                    "priority": match.priority, "created_by": match.created_by,
+                    "assigned_to": match.assigned_to, "created_at": match.created_at,
+                    "updated_at": match.updated_at, "result": match.result,
+                    "artifacts": match.artifacts, "parent_task_id": match.parent_task_id,
+                },
+            }
+
         @self.app.post("/api/swarm/tasks/create")
         async def swarm_task_create(
             payload: dict = Body(default_factory=dict),
