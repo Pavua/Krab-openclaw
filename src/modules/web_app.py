@@ -6972,6 +6972,14 @@ class WebApp:
                 headers=_no_store_headers(),
             )
 
+        @self.app.get("/translator", response_class=HTMLResponse)
+        async def translator_dashboard():
+            """Translator status page (Gemini-generated prototype)."""
+            proto = config.BASE_DIR / "src" / "web" / "prototypes" / "translator_v1.html"
+            if proto.exists():
+                return FileResponse(proto, headers=_no_store_headers())
+            return HTMLResponse("<h1>Translator page not found</h1>", headers=_no_store_headers())
+
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
 
         @self.app.get("/api/costs/report")
