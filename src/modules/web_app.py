@@ -8991,7 +8991,53 @@ class WebApp:
                 "after": after_state,
             }
 
-        # Phase 2: Silence API — channel parity (web panel + API, не только Telegram)
+        # Phase 2: Command API parity — все owner controls через REST, не только Telegram
+
+        @self.app.get("/api/notify/status")
+        async def notify_status():
+            """Статус tool narration toggle."""
+            return {"ok": True, "enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True))}
+
+        @self.app.post("/api/notify/toggle")
+        async def notify_toggle(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Toggle tool narration через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            enabled = bool(payload.get("enabled", not getattr(config, "TOOL_NARRATION_ENABLED", True)))
+            config.update_setting("TOOL_NARRATION_ENABLED", "1" if enabled else "0")
+            return {"ok": True, "enabled": enabled}
+
+        @self.app.get("/api/voice/profile")
+        async def voice_profile():
+            """Голосовой профиль runtime."""
+            return {"ok": True, "profile": self.kraab.get_voice_runtime_profile()}
+
+        @self.app.get("/api/swarm/task-board")
+        async def swarm_task_board_status():
+            """Сводка task board."""
+            from ..core.swarm_task_board import swarm_task_board
+            return {"ok": True, "summary": swarm_task_board.get_board_summary()}
+
+        @self.app.get("/api/swarm/tasks")
+        async def swarm_tasks_list(team: str = Query(default=""), limit: int = Query(default=20)):
+            """Список задач task board."""
+            from ..core.swarm_task_board import swarm_task_board
+            tasks = swarm_task_board.list_tasks(team=team or None, limit=limit)
+            return {"ok": True, "tasks": [
+                {"task_id": t.task_id, "team": t.team, "title": t.title,
+                 "status": t.status, "priority": t.priority, "created_at": t.created_at}
+                for t in tasks
+            ]}
+
+        @self.app.get("/api/swarm/listeners")
+        async def swarm_listeners_status():
+            """Статус team listeners."""
+            from ..core.swarm_team_listener import is_listeners_enabled
+            return {"ok": True, "listeners_enabled": is_listeners_enabled()}
+
         @self.app.get("/api/silence/status")
         async def silence_status():
             """Текущий статус тишины."""
