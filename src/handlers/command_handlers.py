@@ -491,6 +491,27 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"🎧 Team listeners: **{status}**")
         return
 
+    # !swarm stats — сводная статистика по всем командам
+    if args.lower().startswith("stats") or args.lower().startswith("стат"):
+        from ..core.swarm_task_board import swarm_task_board
+        from ..core.swarm_artifact_store import swarm_artifact_store
+        from ..core.swarm_team_listener import is_listeners_enabled
+        board = swarm_task_board.get_board_summary()
+        arts = swarm_artifact_store.list_artifacts(limit=100)
+        lines = [
+            "📊 **Swarm Stats**",
+            f"Tasks: {board.get('total', 0)} (done: {board.get('by_status', {}).get('done', 0)})",
+            f"Artifacts: {len(arts)}",
+            f"Listeners: {'ON' if is_listeners_enabled() else 'OFF'}",
+        ]
+        if board.get("by_team"):
+            lines.append("**По командам:**")
+            for team_name, count in sorted(board["by_team"].items()):
+                team_arts = len([a for a in arts if a.get("team", "").lower() == team_name.lower()])
+                lines.append(f"  {team_name}: {count} tasks, {team_arts} artifacts")
+        await message.reply("\n".join(lines))
+        return
+
     # !swarm memory [team] — история прогонов
     if args.lower().startswith("memory") or args.lower().startswith("память"):
         mem_tokens = args.split(maxsplit=1)
