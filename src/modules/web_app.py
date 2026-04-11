@@ -9195,6 +9195,28 @@ class WebApp:
                 "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
             }
 
+        @self.app.post("/api/model/switch")
+        async def model_switch(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Переключить модель через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..model_manager import model_manager as _mm
+            model = str(payload.get("model") or "").strip()
+            if not model:
+                return {"ok": False, "error": "model required (e.g. 'auto', 'local', 'cloud', model_id)"}
+            if model == "auto":
+                _mm.set_provider("auto")
+            elif model == "local":
+                _mm.set_provider("local")
+            elif model == "cloud":
+                _mm.set_provider("cloud")
+            else:
+                _mm.set_model(model)
+            return {"ok": True, "model": model, "active": str(getattr(_mm, "active_model_id", model))}
+
         @self.app.get("/api/notify/status")
         async def notify_status():
             """Статус tool narration toggle."""
