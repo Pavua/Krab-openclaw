@@ -9200,6 +9200,26 @@ class WebApp:
             )
             return {"ok": True, "task_id": task.task_id, "team": task.team, "title": task.title}
 
+        @self.app.get("/api/swarm/team/{team_name}")
+        async def swarm_team_info(team_name: str):
+            """Детальная инфо о команде."""
+            from ..core.swarm_artifact_store import swarm_artifact_store
+            from ..core.swarm_bus import TEAM_REGISTRY, resolve_team_name
+            from ..core.swarm_task_board import swarm_task_board
+            resolved = resolve_team_name(team_name)
+            if not resolved:
+                return {"ok": False, "error": f"team '{team_name}' not found"}
+            roles = TEAM_REGISTRY.get(resolved, [])
+            tasks = swarm_task_board.list_tasks(team=resolved, limit=10)
+            arts = swarm_artifact_store.list_artifacts(team=resolved, limit=5)
+            return {
+                "ok": True,
+                "team": resolved,
+                "roles": [{"name": r["name"], "title": r.get("title", ""), "emoji": r.get("emoji", "")} for r in roles],
+                "tasks": [{"task_id": t.task_id, "title": t.title, "status": t.status} for t in tasks],
+                "artifacts": [{"topic": a.get("topic"), "timestamp_iso": a.get("timestamp_iso")} for a in arts],
+            }
+
         @self.app.get("/api/swarm/stats")
         async def swarm_stats():
             """Сводная статистика по всем командам."""
