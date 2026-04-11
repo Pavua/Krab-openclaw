@@ -333,6 +333,8 @@ class OpenClawClient:
         attempt: int | None = None,
     ) -> None:
         """Фиксирует последний runtime-маршрут запроса без секретов."""
+        from .core.operator_identity import current_account_id, current_operator_id  # noqa: PLC0415
+
         self._last_runtime_route = {
             "timestamp": int(time.time()),
             "channel": channel,
@@ -344,6 +346,9 @@ class OpenClawClient:
             "error_code": error_code,
             "route_reason": route_reason,
             "route_detail": route_detail,
+            # Phase 1: identity fields в каждом routing event
+            "operator_id": current_operator_id(),
+            "account_id": current_account_id(),
         }
         if attempt is not None and int(attempt) > 0:
             self._last_runtime_route["attempt"] = int(attempt)
