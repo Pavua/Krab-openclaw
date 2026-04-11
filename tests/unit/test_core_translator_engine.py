@@ -132,3 +132,124 @@ async def _async_iter(items: list[str]):
     """Хелпер: async iterator из списка строк."""
     for item in items:
         yield item
+
+
+# ------------------------------------------------------------------
+# _LANG_NAMES / _LANG_NAMES_TO — покрытие словарей
+# ------------------------------------------------------------------
+
+
+class TestLangNames:
+    def test_key_languages_present(self) -> None:
+        from src.core.translator_engine import _LANG_NAMES
+
+        for code in ("es", "en", "ru", "fr", "de", "it", "pt", "uk"):
+            assert code in _LANG_NAMES, f"Язык {code!r} отсутствует в _LANG_NAMES"
+
+    def test_lang_names_to_present(self) -> None:
+        from src.core.translator_engine import _LANG_NAMES_TO
+
+        for code in ("es", "en", "ru", "fr", "de", "it", "pt", "uk"):
+            assert code in _LANG_NAMES_TO, f"Язык {code!r} отсутствует в _LANG_NAMES_TO"
+
+    def test_ru_values_differ_between_dicts(self) -> None:
+        # «с русского» vs «на русский» — разные падежи
+        from src.core.translator_engine import _LANG_NAMES, _LANG_NAMES_TO
+
+        assert _LANG_NAMES["ru"] != _LANG_NAMES_TO["ru"]
+
+
+# ------------------------------------------------------------------
+# build_translation_prompt — дополнительные пары
+# ------------------------------------------------------------------
+
+
+class TestBuildTranslationPromptExtra:
+    def test_fr_to_ru(self) -> None:
+        from src.core.translator_engine import build_translation_prompt
+
+        prompt = build_translation_prompt("Bonjour", "fr", "ru")
+        assert "французского" in prompt
+        assert "русский" in prompt
+        assert "Bonjour" in prompt
+
+    def test_de_to_en(self) -> None:
+        from src.core.translator_engine import build_translation_prompt
+
+        prompt = build_translation_prompt("Guten Tag", "de", "en")
+        assert "немецкого" in prompt
+        assert "английский" in prompt
+
+    def test_prompt_no_extra_explanation(self) -> None:
+        # Промпт не должен включать слово «объяснение»
+        from src.core.translator_engine import build_translation_prompt
+
+        prompt = build_translation_prompt("hello", "en", "ru")
+        assert "объяснен" not in prompt.lower()
+
+
+# ------------------------------------------------------------------
+# TranslationResult — dataclass дополнительно
+# ------------------------------------------------------------------
+
+
+class TestTranslationResultExtra:
+    def test_src_tgt_lang_stored(self) -> None:
+        r = TranslationResult(
+            original="Bonjour",
+            translated="Привет",
+            src_lang="fr",
+            tgt_lang="ru",
+            latency_ms=200,
+            model_id="google/gemini-3-flash",
+        )
+        assert r.src_lang == "fr"
+        assert r.tgt_lang == "ru"
+
+    def test_model_id_stored(self) -> None:
+        r = TranslationResult(
+            original="x",
+            translated="y",
+            src_lang="en",
+            tgt_lang="ru",
+            latency_ms=0,
+            model_id="test-model",
+        )
+        assert r.model_id == "test-model"
+
+
+# ------------------------------------------------------------------
+# translate_text — граничные случаи
+# ------------------------------------------------------------------
+
+
+class TestTranslateTextExtra:
+    @pytest.mark.asyncio
+    async def test_empty_result(self) -> None:
+        # Пустой ответ модели — translated должен быть пустой строкой
+        mock_client = _make_mock_client([])
+        result = await translate_text("Hola", "es", "ru", openclaw_client=mock_client)
+        assert result.translated == ""
+        assert result.original == "Hola"
+
+    @pytest.mark.asyncio
+    async def test_missing_route_returns_unknown(self) -> None:
+        # Если _last_runtime_route не задан — model_id == "unknown"
+        mock_client = _make_mock_client(["ok"])
+        del mock_client._last_runtime_route
+        result = await translate_text("hi", "en", "ru", openclaw_client=mock_client)
+        assert result.model_id == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_latency_non_negative(self) -> None:
+        mock_client = _make_mock_client(["Привет"])
+        result = await translate_text("Hello", "en", "ru", openclaw_client=mock_client)
+        assert result.latency_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_preferred_model_in_call(self) -> None:
+        # Убеждаемся, что в вызов передаётся flash-tier модель
+        mock_client = _make_mock_client(["ok"])
+        await translate_text("test", "en", "ru", openclaw_client=mock_client)
+        call_kwargs = mock_client.send_message_stream.call_args.kwargs
+        assert "gemini" in call_kwargs.get("preferred_model", "").lower()

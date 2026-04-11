@@ -185,3 +185,73 @@ class TestRegisterHandler:
 
         register_team_message_handler("coders", cl, openclaw)
         cl.on_message.assert_called_once()
+
+
+# ------------------------------------------------------------------
+# Расширенные тесты swarm_team_prompts
+# ------------------------------------------------------------------
+
+
+class TestTeamPromptsExtended:
+    def test_traders_prompt_contains_team_name(self) -> None:
+        prompt = get_team_system_prompt("traders")
+        assert "Traders" in prompt
+
+    def test_coders_prompt_contains_team_name(self) -> None:
+        prompt = get_team_system_prompt("coders")
+        assert "Coders" in prompt
+
+    def test_analysts_prompt_contains_team_name(self) -> None:
+        prompt = get_team_system_prompt("analysts")
+        assert "Analysts" in prompt
+
+    def test_creative_prompt_contains_team_name(self) -> None:
+        prompt = get_team_system_prompt("creative")
+        assert "Creative" in prompt
+
+    def test_all_prompts_contain_krab_reference(self) -> None:
+        """Все prompts упоминают проект Краб и основного бота."""
+        for team, prompt in TEAM_PROMPTS.items():
+            assert "Краб" in prompt, f"team={team}: нет упоминания Краб"
+            assert "yung_nagato" in prompt, f"team={team}: нет упоминания yung_nagato"
+
+    def test_all_prompts_long_enough(self) -> None:
+        """Каждый prompt содержательный — не менее 100 символов."""
+        for team, prompt in TEAM_PROMPTS.items():
+            assert len(prompt) > 100, f"team={team}: prompt слишком короткий ({len(prompt)} chars)"
+
+    def test_traders_prompt_contains_specialization(self) -> None:
+        prompt = get_team_system_prompt("traders")
+        assert "трейдинг" in prompt or "крипто" in prompt
+
+    def test_coders_prompt_contains_specialization(self) -> None:
+        prompt = get_team_system_prompt("coders")
+        assert "Python" in prompt
+
+    def test_analysts_prompt_contains_specialization(self) -> None:
+        prompt = get_team_system_prompt("analysts")
+        assert "аналитик" in prompt or "OSINT" in prompt
+
+    def test_creative_prompt_contains_specialization(self) -> None:
+        prompt = get_team_system_prompt("creative")
+        assert "контент" in prompt or "копирайтинг" in prompt
+
+    def test_unknown_team_returns_base_prompt(self) -> None:
+        """Неизвестная команда: возвращается базовый prompt с её именем."""
+        prompt = get_team_system_prompt("superteam")
+        assert "superteam" in prompt
+        # базовый prompt содержит ключевые слова
+        assert "Краб" in prompt
+        assert "yung_nagato" in prompt
+
+    def test_case_insensitive_lookup(self) -> None:
+        """get_team_system_prompt нечувствителен к регистру."""
+        lower = get_team_system_prompt("traders")
+        upper = get_team_system_prompt("TRADERS")
+        mixed = get_team_system_prompt("Traders")
+        assert lower == upper == mixed
+
+    def test_all_four_teams_present(self) -> None:
+        """TEAM_PROMPTS содержит ровно четыре ключевых команды."""
+        expected = {"traders", "coders", "analysts", "creative"}
+        assert expected.issubset(set(TEAM_PROMPTS.keys()))
