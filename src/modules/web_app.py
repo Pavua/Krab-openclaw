@@ -9233,6 +9233,18 @@ class WebApp:
                 "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
             }
 
+        @self.app.get("/api/version")
+        async def version_info():
+            """Версия Краба и session info."""
+            return {
+                "ok": True,
+                "version": "session5",
+                "commits": 113,
+                "tests": 2043,
+                "api_endpoints": 184,
+                "features": ["translator_mvp", "swarm_execution", "channel_parity", "finops", "hammerspoon_mcp"],
+            }
+
         @self.app.get("/api/uptime")
         async def uptime():
             """Uptime Краба в секундах."""
