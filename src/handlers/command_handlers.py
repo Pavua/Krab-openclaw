@@ -1530,10 +1530,17 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
         if action == "start":
             label = str(args[3] or "").strip() if len(args) >= 4 else ""
             profile = bot.get_translator_runtime_profile()
+            # Per-chat: добавляем chat_id в active_chats если не global
+            current_chat_id = str(message.chat.id)
+            current_state = bot.get_translator_session_state()
+            active_chats = list(current_state.get("active_chats") or [])
+            if current_chat_id not in active_chats:
+                active_chats.append(current_chat_id)
             state = bot.update_translator_session_state(
                 session_status="active",
                 translation_muted=False,
                 active_session_label=label,
+                active_chats=active_chats,
                 last_language_pair=profile.get("language_pair"),
                 last_event="session_started",
                 persist=True,
@@ -1557,13 +1564,26 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(_render_translator_session_state(state))
             return
         if action == "stop":
-            state = bot.update_translator_session_state(
-                session_status="idle",
-                translation_muted=False,
-                active_session_label="",
-                last_event="session_stopped",
-                persist=True,
-            )
+            # Per-chat: убираем этот чат из active_chats
+            current_chat_id = str(message.chat.id)
+            current_state = bot.get_translator_session_state()
+            active_chats = [c for c in (current_state.get("active_chats") or []) if c != current_chat_id]
+            # Если active_chats пуст — полный stop; иначе только deactivate этот чат
+            if not active_chats:
+                state = bot.update_translator_session_state(
+                    session_status="idle",
+                    translation_muted=False,
+                    active_session_label="",
+                    active_chats=[],
+                    last_event="session_stopped",
+                    persist=True,
+                )
+            else:
+                state = bot.update_translator_session_state(
+                    active_chats=active_chats,
+                    last_event=f"chat_removed:{current_chat_id}",
+                    persist=True,
+                )
             await message.reply(_render_translator_session_state(state))
             return
         if action == "clear":
