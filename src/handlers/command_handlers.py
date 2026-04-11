@@ -323,7 +323,8 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "`!swarm listen on|off` — team listeners\n"
             "`!swarm task create|list|done|fail|assign|board` — task board\n"
             "`!swarm artifacts [team]` — артефакты раундов\n"
-            "`!swarm report [team]` — markdown отчёты"
+            "`!swarm report [team]` — markdown отчёты\n"
+            "`!swarm stats` — сводная статистика"
         ))
 
     # !swarm teams — справка
