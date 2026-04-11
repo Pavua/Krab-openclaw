@@ -9429,6 +9429,22 @@ class WebApp:
                 return {"ok": False, "error": "status required"}
             return {"ok": True, "task_id": task_id, "new_status": status}
 
+        @self.app.delete("/api/swarm/task/{task_id}")
+        async def swarm_task_delete(
+            task_id: str,
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Удалить task из board."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.swarm_task_board import swarm_task_board
+            # Помечаем как failed для FIFO cleanup
+            try:
+                swarm_task_board.fail_task(task_id, reason="deleted via API")
+                return {"ok": True, "deleted": task_id}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         @self.app.post("/api/swarm/task/{task_id}/priority")
         async def swarm_task_priority(
             task_id: str,
