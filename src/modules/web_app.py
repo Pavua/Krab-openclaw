@@ -9143,6 +9143,20 @@ class WebApp:
             )
             return {"ok": True, "task_id": task.task_id, "team": task.team, "title": task.title}
 
+        @self.app.get("/api/swarm/reports")
+        async def swarm_reports_list(limit: int = Query(default=10)):
+            """Список markdown reports."""
+            from pathlib import Path as _P
+            report_dir = _P.home() / ".openclaw" / "krab_runtime_state" / "reports"
+            if not report_dir.exists():
+                return {"ok": True, "reports": []}
+            files = sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+            return {"ok": True, "reports": [
+                {"name": f.stem, "size_kb": round(f.stat().st_size / 1024, 1),
+                 "modified": f.stat().st_mtime}
+                for f in files
+            ]}
+
         @self.app.get("/api/swarm/listeners")
         async def swarm_listeners_status():
             """Статус team listeners."""
