@@ -8018,6 +8018,30 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+        @self.app.post("/api/translator/session/toggle")
+        async def translator_session_toggle(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Start/stop translator session через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            state = self.kraab.get_translator_session_state()
+            if state.get("session_status") == "active":
+                new_state = self.kraab.update_translator_session_state(
+                    session_status="idle", active_chats=[], last_event="session_stopped_api", persist=True,
+                )
+                return {"ok": True, "action": "stopped", "status": "idle"}
+            profile = self.kraab.get_translator_runtime_profile()
+            chat_id = str(payload.get("chat_id") or "").strip()
+            active_chats = [chat_id] if chat_id else []
+            new_state = self.kraab.update_translator_session_state(
+                session_status="active", active_chats=active_chats,
+                last_language_pair=profile.get("language_pair"),
+                last_event="session_started_api", persist=True,
+            )
+            return {"ok": True, "action": "started", "status": "active", "active_chats": active_chats}
+
         @self.app.get("/api/translator/history")
         async def translator_history():
             """История переводов и статистика."""
