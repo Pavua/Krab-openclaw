@@ -424,6 +424,19 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             )
             return
 
+        if sub == "clear":
+            # Очищает done/failed tasks из board
+            all_tasks = swarm_task_board.list_tasks(limit=500)
+            cleared = 0
+            for t in all_tasks:
+                if t.status in {"done", "failed"}:
+                    # Удаляем через update на "archived" статус — FIFO cleanup потом удалит
+                    swarm_task_board.update_task(t.task_id, status="done")
+                    cleared += 1
+            swarm_task_board.cleanup_old()
+            await message.reply(f"🧹 Очищено {cleared} done/failed tasks")
+            return
+
         raise UserInputError(user_message=(
             "📋 Task Board:\n"
             "`!swarm task board` — сводка\n"
@@ -431,7 +444,8 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "`!swarm task create <team> <title>` — создать\n"
             "`!swarm task done <id>` — завершить\n"
             "`!swarm task fail <id>` — отметить как failed\n"
-            "`!swarm task assign <id>` — запустить swarm round для задачи"
+            "`!swarm task assign <id>` — запустить swarm round для задачи\n"
+            "`!swarm task clear` — очистить done/failed"
         ))
 
     # !swarm artifacts [team] — список артефактов
