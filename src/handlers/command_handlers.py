@@ -1639,7 +1639,10 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "test":
         # !translator test <text> — быстрый inline перевод для тестирования
-        test_text = str(args[2] if len(args) >= 3 else "").strip()
+        # args split maxsplit=3 обрезает текст → берём всё после "!translator test "
+        raw_text = str(message.text or "")
+        test_idx = raw_text.lower().find("test")
+        test_text = raw_text[test_idx + 4:].strip() if test_idx >= 0 else ""
         if not test_text:
             raise UserInputError(user_message="❌ Формат: `!translator test Buenos días amigo`")
         try:
