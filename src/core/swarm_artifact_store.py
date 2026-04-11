@@ -88,6 +88,39 @@ class SwarmArtifactStore:
         except Exception:  # noqa: BLE001
             return None
 
+    def save_report(
+        self,
+        *,
+        team: str,
+        topic: str,
+        result: str,
+        report_dir: Path | None = None,
+    ) -> Path:
+        """Сохраняет результат как markdown report для service workflows (Phase 7)."""
+        ts = int(time.time())
+        safe_team = team.lower().replace("/", "_")[:20]
+        safe_topic = "".join(c if c.isalnum() or c in " _-" else "_" for c in topic[:50]).strip().replace(" ", "_")
+        filename = f"{safe_team}_{safe_topic}_{ts}.md"
+        dest = (report_dir or self._base_dir.parent / "reports")
+        dest.mkdir(parents=True, exist_ok=True)
+        path = dest / filename
+
+        content = (
+            f"# Swarm Report: {topic}\n\n"
+            f"**Team:** {team}\n"
+            f"**Generated:** {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(ts))}\n\n"
+            f"---\n\n"
+            f"{result}\n"
+        )
+
+        try:
+            path.write_text(content, encoding="utf-8")
+            logger.info("swarm_report_saved", team=team, path=str(path))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("swarm_report_save_failed", error=str(exc))
+
+        return path
+
     def cleanup_old(self, max_files: int = 100) -> int:
         """Удаляет старые артефакты сверх лимита."""
         files = sorted(self._base_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)

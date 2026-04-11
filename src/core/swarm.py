@@ -322,6 +322,11 @@ class AgentRoom:
                     delegations=delegation_results,
                     duration_sec=time.monotonic() - t0,
                 )
+                # Phase 7: auto-save markdown report для analysts/research rounds
+                if _team_name in {"analysts", "traders"}:
+                    swarm_artifact_store.save_report(
+                        team=_team_name, topic=topic, result=full_result,
+                    )
             except Exception:  # noqa: BLE001
                 pass
 
