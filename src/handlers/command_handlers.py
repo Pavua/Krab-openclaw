@@ -1637,6 +1637,27 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
             user_message="❌ Используй `!translator phrase add <текст>` или `!translator phrase remove <номер>`."
         )
 
+    if sub == "history":
+        # !translator history — последние переводы из session state
+        state = bot.get_translator_session_state()
+        stats = state.get("stats") or {}
+        total = stats.get("total_translations", 0)
+        last_orig = state.get("last_translated_original", "")
+        last_trans = state.get("last_translated_translation", "")
+        last_pair = state.get("last_language_pair", "")
+        avg_latency = round(stats.get("total_latency_ms", 0) / max(1, total))
+        lines = [
+            "📜 **Translator History**",
+            f"Всего переводов: {total}",
+            f"Средняя latency: {avg_latency}ms",
+        ]
+        if last_orig and last_trans:
+            lines.append(f"\n**Последний ({last_pair}):**")
+            lines.append(f"**{last_orig[:100]}**")
+            lines.append(f"_{last_trans[:100]}_")
+        await message.reply("\n".join(lines))
+        return
+
     if sub == "test":
         # !translator test <text> — быстрый inline перевод для тестирования
         # args split maxsplit=3 обрезает текст → берём всё после "!translator test "
