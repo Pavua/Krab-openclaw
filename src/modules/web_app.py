@@ -9233,6 +9233,16 @@ class WebApp:
                 "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
             }
 
+        @self.app.get("/api/uptime")
+        async def uptime():
+            """Uptime Краба в секундах."""
+            import time as _t
+            boot = getattr(self, "_boot_ts", None)
+            if not boot:
+                self._boot_ts = _t.time()
+                boot = self._boot_ts
+            return {"ok": True, "uptime_sec": round(_t.time() - boot), "boot_ts": boot}
+
         @self.app.get("/api/system/info")
         async def system_info():
             """Системная информация о хосте."""
