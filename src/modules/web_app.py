@@ -9187,6 +9187,21 @@ class WebApp:
             )
             return {"ok": True, "task_id": task.task_id, "team": task.team, "title": task.title}
 
+        @self.app.get("/api/swarm/stats")
+        async def swarm_stats():
+            """Сводная статистика по всем командам."""
+            from ..core.swarm_artifact_store import swarm_artifact_store
+            from ..core.swarm_task_board import swarm_task_board
+            from ..core.swarm_team_listener import is_listeners_enabled
+            board = swarm_task_board.get_board_summary()
+            arts = swarm_artifact_store.list_artifacts(limit=100)
+            return {
+                "ok": True,
+                "board": board,
+                "artifacts_count": len(arts),
+                "listeners_enabled": is_listeners_enabled(),
+            }
+
         @self.app.get("/api/swarm/reports")
         async def swarm_reports_list(limit: int = Query(default=10)):
             """Список markdown reports."""
