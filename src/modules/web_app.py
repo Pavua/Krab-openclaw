@@ -9030,6 +9030,35 @@ class WebApp:
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
+        @self.app.get("/api/runtime/summary")
+        async def runtime_summary():
+            """Единый summary endpoint — полное состояние Краба одним запросом."""
+            from ..core.cost_analytics import cost_analytics as _ca
+            from ..core.silence_mode import silence_manager
+            from ..core.swarm_task_board import swarm_task_board
+            from ..core.swarm_team_listener import is_listeners_enabled
+            from ..openclaw_client import openclaw_client as _oc
+            try:
+                health = await self._collect_runtime_lite_snapshot()
+            except Exception:
+                health = {}
+            return {
+                "ok": True,
+                "health": health,
+                "route": _oc.get_last_runtime_route(),
+                "costs": _ca.build_usage_report_dict(),
+                "translator": {
+                    "profile": self.kraab.get_translator_runtime_profile(),
+                    "session": self.kraab.get_translator_session_state(),
+                },
+                "swarm": {
+                    "task_board": swarm_task_board.get_board_summary(),
+                    "listeners_enabled": is_listeners_enabled(),
+                },
+                "silence": silence_manager.status(),
+                "notify_enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True)),
+            }
+
         @self.app.get("/api/model/status")
         async def model_status():
             """Текущий статус модели и маршрутизации."""
