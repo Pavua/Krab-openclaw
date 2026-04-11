@@ -690,10 +690,30 @@ def build_capability_registry(
     }
 
 
+def check_capability(access_level: str, capability: str) -> bool:
+    """
+    Runtime enforcement: проверяет имеет ли role доступ к capability.
+
+    Используется перед выполнением действий — не декларативно, а реально блокирует.
+    """
+    role_caps = _ROLE_CAPABILITIES.get(access_level)
+    if role_caps is None:
+        return False
+    return bool(role_caps.get(capability, False))
+
+
+def get_denied_capabilities(access_level: str) -> list[str]:
+    """Возвращает список capabilities которые запрещены для этого уровня доступа."""
+    role_caps = _ROLE_CAPABILITIES.get(access_level, {})
+    return [cap for cap, allowed in role_caps.items() if not allowed]
+
+
 __all__ = [
     "build_capability_registry",
     "build_channel_capability_snapshot",
     "build_policy_matrix",
     "build_system_control_snapshot",
+    "check_capability",
+    "get_denied_capabilities",
     "resolve_access_mode",
 ]
