@@ -33,6 +33,11 @@ class CallRecord:
     output_tokens: int
     cost_usd: float
     timestamp: float = field(default_factory=time.time)
+    # Phase 1 FinOps расширение
+    tool_calls_count: int = 0  # сколько tool_use вызовов в этом запросе
+    channel: str = ""  # telegram, reserve_bot, web, api
+    is_fallback: bool = False  # был ли fallback на другую модель/провайдер
+    context_tokens: int = 0  # длина контекста (session history) при запросе
 
 
 def _is_local_model(model_id: str) -> bool:
@@ -85,10 +90,17 @@ class CostAnalytics:
         self,
         usage: dict[str, Any],
         model_id: str = "unknown",
+        *,
+        tool_calls_count: int = 0,
+        channel: str = "",
+        is_fallback: bool = False,
+        context_tokens: int = 0,
     ) -> None:
         """
         Учитывает использование токенов и стоимость одного вызова.
-        usage: словарь с ключами prompt_tokens, completion_tokens, total_tokens (как в OpenClaw).
+
+        usage: словарь с ключами prompt_tokens, completion_tokens, total_tokens.
+        Расширенные FinOps-поля: tool_calls_count, channel, is_fallback, context_tokens.
         """
         inp = int(usage.get("prompt_tokens") or usage.get("input_tokens", 0))
         out = int(usage.get("completion_tokens") or usage.get("output_tokens", 0))
@@ -103,6 +115,10 @@ class CostAnalytics:
                 input_tokens=inp,
                 output_tokens=out,
                 cost_usd=cost,
+                tool_calls_count=tool_calls_count,
+                channel=channel,
+                is_fallback=is_fallback,
+                context_tokens=context_tokens,
             )
         )
         if cost > 0:
@@ -205,13 +221,23 @@ class CostAnalytics:
         return "\n".join(lines)
 
     def build_usage_report_dict(self) -> dict[str, Any]:
-        """Отчёт в виде словаря для API/JSON."""
+        """Отчёт в виде словаря для API/JSON. Включает FinOps-метрики."""
         by_model = defaultdict(lambda: {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "calls": 0})
+        by_channel: dict[str, int] = defaultdict(int)
+        total_tool_calls = 0
+        total_fallbacks = 0
+        total_context_tokens = 0
         for r in self._calls:
             by_model[r.model_id]["input_tokens"] += r.input_tokens
             by_model[r.model_id]["output_tokens"] += r.output_tokens
             by_model[r.model_id]["cost_usd"] += r.cost_usd
             by_model[r.model_id]["calls"] += 1
+            total_tool_calls += r.tool_calls_count
+            if r.channel:
+                by_channel[r.channel] += 1
+            if r.is_fallback:
+                total_fallbacks += 1
+            total_context_tokens += r.context_tokens
         return {
             "input_tokens": self._input_tokens,
             "output_tokens": self._output_tokens,
@@ -223,6 +249,12 @@ class CostAnalytics:
             "budget_ok": self.check_budget_ok(),
             "monthly_calls_forecast": self.monthly_calls_forecast(),
             "by_model": dict(by_model),
+            # FinOps расширение
+            "total_tool_calls": total_tool_calls,
+            "total_fallbacks": total_fallbacks,
+            "total_context_tokens": total_context_tokens,
+            "avg_context_tokens": round(total_context_tokens / len(self._calls)) if self._calls else 0,
+            "by_channel": dict(by_channel),
         }
 
 
