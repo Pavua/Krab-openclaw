@@ -98,3 +98,40 @@ class TestResolveTranslationPair:
         src, tgt = resolve_translation_pair("en", "auto-detect")
         assert src == "en"
         assert tgt == "ru"
+
+    def test_fr_unknown_in_pair(self) -> None:
+        # fr не входит в пару de-ru — переводим на второй (ru)
+        src, tgt = resolve_translation_pair("fr", "de-ru")
+        assert src == "fr"
+        assert tgt == "ru"
+
+    def test_empty_detected_empty_pair(self) -> None:
+        # пустой detected + пустая строка пары → fallback на ru
+        src, tgt = resolve_translation_pair("", "")
+        assert src == ""
+        assert tgt == "ru"
+
+
+# ------------------------------------------------------------------
+# detect_language — дополнительные языки и длинный текст
+# ------------------------------------------------------------------
+
+
+class TestDetectLanguageExtra:
+    def test_french(self) -> None:
+        result = detect_language("Bonjour, comment allez-vous? Je m'appelle Pierre")
+        assert result == "fr"
+
+    def test_german(self) -> None:
+        result = detect_language("Guten Tag, wie geht es Ihnen? Ich heiße Hans")
+        assert result == "de"
+
+    def test_long_text_russian(self) -> None:
+        # Длинный текст — детекция должна быть уверенной
+        long_ru = (
+            "Это очень длинный текст на русском языке, который содержит много слов "
+            "и предложений. Детектор языка должен без труда определить, что это "
+            "именно русский язык, а не какой-то другой. Проверяем устойчивость к "
+            "объёму: алгоритм не должен давать ложных срабатываний на длинных текстах."
+        )
+        assert detect_language(long_ru) == "ru"
