@@ -1325,7 +1325,7 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                     api_id=config.TELEGRAM_API_ID,
                     api_hash=config.TELEGRAM_API_HASH,
                     workdir=str(self._session_workdir),
-                    no_updates=True,
+                    # no_updates=False — нужно для on_message handlers (team listener)
                 )
                 await asyncio.wait_for(cl.start(), timeout=15)
                 me = await cl.get_me()
@@ -1382,6 +1382,12 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             self._swarm_team_clients = await self._start_swarm_team_clients()
             for team, cl in self._swarm_team_clients.items():
                 swarm_channels.bind_team_client(team, cl)
+            # Регистрируем message handlers для team listener
+            if self._swarm_team_clients and hasattr(self, "openclaw"):
+                from .core.swarm_team_listener import register_team_message_handler  # noqa: PLC0415
+
+                for team, cl in self._swarm_team_clients.items():
+                    register_team_message_handler(team, cl, self.openclaw)
             if self._swarm_team_clients:
                 logger.info(
                     "swarm_team_clients_ready",

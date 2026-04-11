@@ -327,6 +327,25 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(list_teams())
         return
 
+    # !swarm listen on/off — управление team listeners
+    if args.lower().startswith("listen"):
+        from ..core.swarm_team_listener import is_listeners_enabled, set_listeners_enabled
+        listen_tokens = args.split(maxsplit=1)
+        if len(listen_tokens) > 1:
+            val = listen_tokens[1].strip().lower()
+            if val in {"on", "1", "true", "yes"}:
+                set_listeners_enabled(True)
+                await message.reply("🎧 Team listeners: **ON**\nTeam-аккаунты отвечают в ЛС и на mention.")
+            elif val in {"off", "0", "false", "no"}:
+                set_listeners_enabled(False)
+                await message.reply("🔇 Team listeners: **OFF**\nTeam-аккаунты молчат.")
+            else:
+                await message.reply("❌ Формат: `!swarm listen on` или `!swarm listen off`")
+        else:
+            status = "ON ✅" if is_listeners_enabled() else "OFF 🔇"
+            await message.reply(f"🎧 Team listeners: **{status}**")
+        return
+
     # !swarm memory [team] — история прогонов
     if args.lower().startswith("memory") or args.lower().startswith("память"):
         mem_tokens = args.split(maxsplit=1)
