@@ -1572,6 +1572,19 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
 
     sub = str(args[1] or "").strip().lower()
 
+    if sub in {"help", "?", "commands"}:
+        await message.reply(
+            "🔄 **Translator Commands:**\n"
+            "`!translator` — текущий profile\n"
+            "`!translator lang [pair]` — показать/сменить языковую пару\n"
+            "`!translator auto` — переключить на auto-detect\n"
+            "`!translator test <text>` — быстрый перевод текста\n"
+            "`!translator history` — статистика переводов\n"
+            "`!translator session start|stop|pause|resume|status` — управление сессией\n"
+            "`!translator mode|strategy|phrase` — настройки профиля"
+        )
+        return
+
     if sub == "auto":
         # !translator auto — shortcut для !translator lang auto-detect
         profile = bot.update_translator_runtime_profile(language_pair="auto-detect", persist=True)
