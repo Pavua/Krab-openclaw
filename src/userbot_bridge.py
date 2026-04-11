@@ -104,6 +104,7 @@ from .handlers import (
     handle_status,
     handle_swarm,
     handle_sysinfo,
+    handle_notify,
     handle_translator,
     handle_voice,
     handle_watch,
@@ -486,6 +487,10 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         @self.client.on_message(filters.command("voice", prefixes=prefixes) & _make_command_filter("voice"), group=-1)
         async def wrap_voice(c, m):
             await run_cmd(handle_voice, m)
+
+        @self.client.on_message(filters.command("notify", prefixes=prefixes) & _make_command_filter("notify"), group=-1)
+        async def wrap_notify(c, m):
+            await run_cmd(handle_notify, m)
 
         @self.client.on_message(
             filters.command("chatban", prefixes=prefixes) & _make_command_filter("chatban"),

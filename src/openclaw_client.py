@@ -210,6 +210,9 @@ class OpenClawClient:
         """Возвращает granular сводку активных/завершённых tool calls для Telegram notices."""
         if not self._active_tool_calls:
             return ""
+        # Проверяем toggle — если выключен, не показываем narrations
+        if not getattr(config, "TOOL_NARRATION_ENABLED", True):
+            return ""
         running = [tc for tc in self._active_tool_calls if tc.get("status") == "running"]
         done = [tc for tc in self._active_tool_calls if tc.get("status") == "done"]
         parts: list[str] = []

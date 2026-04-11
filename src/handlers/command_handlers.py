@@ -1102,6 +1102,33 @@ async def handle_role(bot: "KraabUserbot", message: Message) -> None:
             raise UserInputError(user_message="❌ Роль не найдена.")
 
 
+async def handle_notify(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление streaming tool notifications в Telegram.
+
+    !notify on  — показывать какой инструмент вызывается (🔍 Ищу..., 📸 Скриншот...)
+    !notify off — не показывать (чище, меньше сообщений)
+    !notify     — текущий статус
+    """
+    from ..config import config as _cfg
+
+    args = bot._get_command_args(message).strip().lower()
+    if args in {"on", "1", "true", "yes"}:
+        _cfg.update_setting("TOOL_NARRATION_ENABLED", "1")
+        await message.reply("🔔 Tool notifications: **ON**\nБуду показывать какой инструмент вызываю.")
+    elif args in {"off", "0", "false", "no"}:
+        _cfg.update_setting("TOOL_NARRATION_ENABLED", "0")
+        await message.reply("🔕 Tool notifications: **OFF**\nИнструменты молча, только финальный ответ.")
+    else:
+        status = "ON ✅" if getattr(_cfg, "TOOL_NARRATION_ENABLED", True) else "OFF 🔕"
+        await message.reply(
+            f"🔔 Tool notifications: **{status}**\n\n"
+            "Команды:\n"
+            "`!notify on` — показывать инструменты\n"
+            "`!notify off` — скрыть инструменты"
+        )
+
+
 async def handle_voice(bot: "KraabUserbot", message: Message) -> None:
     """
     Управление runtime voice-профилем userbot.

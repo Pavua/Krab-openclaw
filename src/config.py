@@ -407,6 +407,16 @@ class Config:
         if s.strip()
     ]
 
+    # Session watchdog heartbeat (сек). Проверяет Telegram MTProto alive.
+    # Не тратит токенов, чисто внутренняя проверка.
+    TELEGRAM_SESSION_HEARTBEAT_SEC: int = int(os.getenv("TELEGRAM_SESSION_HEARTBEAT_SEC", "60"))
+
+    # Tool narration в Telegram (показывает какой инструмент вызывается).
+    # Можно переключать через !notify on/off.
+    TOOL_NARRATION_ENABLED: bool = os.getenv(
+        "TOOL_NARRATION_ENABLED", "1"
+    ).strip().lower() in ("1", "true", "yes")
+
     @classmethod
     def validate(cls) -> list[str]:
         """Проверяет обязательные настройки и возвращает список ошибок"""
@@ -525,6 +535,10 @@ class Config:
                     cls.VOICE_REPLY_BLOCKED_CHATS = [
                         s.strip() for s in (value or "").split(",") if s.strip()
                     ]
+                elif key == "TOOL_NARRATION_ENABLED":
+                    cls.TOOL_NARRATION_ENABLED = value.strip().lower() in ("1", "true", "yes")
+                elif key == "TELEGRAM_SESSION_HEARTBEAT_SEC":
+                    cls.TELEGRAM_SESSION_HEARTBEAT_SEC = max(15, int(value))
                 elif key == "GEMINI_API_KEY":
                     cls.GEMINI_API_KEY = value
                 elif key == "GEMINI_PAID_KEY_ENABLED":
