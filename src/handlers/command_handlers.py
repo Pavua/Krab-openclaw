@@ -450,6 +450,22 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply("\n".join(lines))
             return
 
+        if sub == "priority":
+            # !swarm task priority <id> <level>
+            parts = (task_tokens[2] if len(task_tokens) > 2 else "").split(maxsplit=1)
+            if len(parts) < 2:
+                raise UserInputError(user_message="❌ Формат: `!swarm task priority <id> low|medium|high|critical`")
+            tid, level = parts[0].strip(), parts[1].strip().lower()
+            if level not in {"low", "medium", "high", "critical"}:
+                raise UserInputError(user_message="❌ Приоритеты: `low`, `medium`, `high`, `critical`")
+            all_tasks = swarm_task_board.list_tasks(limit=200)
+            match = next((t for t in all_tasks if t.task_id.startswith(tid)), None)
+            if not match:
+                raise UserInputError(user_message=f"❌ Task `{tid}` не найден")
+            swarm_task_board.update_task(match.task_id, priority=level)
+            await message.reply(f"📌 Task `{match.task_id[:8]}` → priority **{level}**")
+            return
+
         if sub == "clear":
             # Очищает done/failed tasks из board
             all_tasks = swarm_task_board.list_tasks(limit=500)
