@@ -9032,6 +9032,17 @@ class WebApp:
                 for t in tasks
             ]}
 
+        @self.app.get("/api/swarm/artifacts")
+        async def swarm_artifacts_list(team: str = Query(default=""), limit: int = Query(default=10)):
+            """Список swarm artifacts."""
+            from ..core.swarm_artifact_store import swarm_artifact_store
+            arts = swarm_artifact_store.list_artifacts(team=team or None, limit=limit)
+            return {"ok": True, "artifacts": [
+                {"team": a.get("team"), "topic": a.get("topic"), "timestamp_iso": a.get("timestamp_iso"),
+                 "duration_sec": a.get("duration_sec"), "result_preview": (a.get("result") or "")[:200]}
+                for a in arts
+            ]}
+
         @self.app.get("/api/swarm/listeners")
         async def swarm_listeners_status():
             """Статус team listeners."""
