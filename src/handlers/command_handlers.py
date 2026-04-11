@@ -589,8 +589,12 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(part)
 
     except Exception as e:
-        logger.error("swarm_error", error=str(e))
-        await msg.edit(f"❌ Ошибка Swarm: {str(e)[:500]}")
+        logger.error("swarm_error", error=str(e), error_type=type(e).__name__, exc_info=True)
+        safe_err = str(e).replace("`", "'")[:500]
+        try:
+            await msg.edit(f"❌ Ошибка Swarm: {safe_err}" if safe_err else "❌ Ошибка Swarm")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def handle_shop(bot: "KraabUserbot", message: Message) -> None:

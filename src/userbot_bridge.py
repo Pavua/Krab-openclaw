@@ -439,8 +439,18 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             except UserInputError as e:
                 await m.reply(e.user_message or str(e))
             except Exception as e:
-                logger.error("command_error", handler=handler.__name__, error=str(e))
-                await m.reply(f"Ошибка: {str(e)[:200]}")
+                logger.error(
+                    "command_error",
+                    handler=handler.__name__,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    exc_info=True,
+                )
+                safe_err = str(e).replace("`", "'")[:200]
+                try:
+                    await m.reply(f"Ошибка: {safe_err}" if safe_err else "Внутренняя ошибка.")
+                except Exception:  # noqa: BLE001
+                    pass
             finally:
                 m.stop_propagation()
 
@@ -2745,8 +2755,23 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 logger.error("telegram_session_invalid_in_handler", error=str(e))
                 await self._recover_telegram_session(reason=str(e))
                 return
-            logger.error("process_message_error", error=str(e))
-            await self._safe_reply_or_send_new(message, f"🦀❌ **Ошибка в клешнях:** `{str(e)}`")
+            # P0 fix: логируем полный traceback (раньше только str(e) — терялась причина)
+            logger.error(
+                "process_message_error",
+                error=str(e),
+                error_type=type(e).__name__,
+                chat_id=str(getattr(message, "chat", None) and message.chat.id or "?"),
+                exc_info=True,
+            )
+            # Безопасное форматирование — экранируем markdown спецсимволы в тексте ошибки
+            safe_error = str(e).replace("`", "'").replace("*", "")[:200]
+            try:
+                await self._safe_reply_or_send_new(
+                    message,
+                    f"🦀❌ Ошибка: {safe_error}" if safe_error else "🦀❌ Внутренняя ошибка. Детали в логах.",
+                )
+            except Exception:  # noqa: BLE001
+                pass  # reply сам может упасть (ChatWriteForbidden etc.)
 
     async def _run_self_test(self, message: Message):
         """Вызов внешнего теста здоровья"""
