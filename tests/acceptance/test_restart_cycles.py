@@ -22,8 +22,8 @@ HEALTH_URL = "http://127.0.0.1:8080/api/health/lite"
 RESTART_URL = "http://127.0.0.1:8080/api/krab/restart_userbot"
 DEFAULT_CYCLES = 10
 HEALTH_TIMEOUT = 10
-RESTART_WAIT = 20  # секунд после restart до health check
-MAX_HEALTH_RETRIES = 6  # × 5s = 30s max wait
+RESTART_WAIT = 30  # секунд после restart до health check
+MAX_HEALTH_RETRIES = 10  # × 5s = 50s max wait
 
 
 def health_check() -> dict:

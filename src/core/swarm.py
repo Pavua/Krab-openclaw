@@ -291,6 +291,20 @@ class AgentRoom:
                 delegations=delegation_results,
                 duration_sec=duration,
             )
+            # Phase 8: save artifact
+            _artifact_verification: dict | None = None
+            try:
+                from .swarm_artifact_store import swarm_artifact_store  # noqa: PLC0415
+                swarm_artifact_store.save_round_artifact(
+                    team=_team_name,
+                    topic=topic,
+                    result=full_result,
+                    delegations=delegation_results,
+                    duration_sec=time.monotonic() - t0,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
             # Phase 8: quick heuristic verification of round result
             try:
                 from .swarm_verifier import quick_heuristic_check  # noqa: PLC0415
