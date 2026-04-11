@@ -401,13 +401,33 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"❌ Task `{match.task_id[:8]}` → failed")
             return
 
+        if sub == "assign":
+            # !swarm task assign <id> — помечает in_progress и подсказывает launch
+            tid = task_tokens[2].strip() if len(task_tokens) > 2 else ""
+            if not tid:
+                raise UserInputError(user_message="❌ Формат: `!swarm task assign <task_id>`")
+            all_tasks = swarm_task_board.list_tasks(limit=200)
+            match = next((t for t in all_tasks if t.task_id.startswith(tid)), None)
+            if not match:
+                raise UserInputError(user_message=f"❌ Task `{tid}` не найден")
+            if match.status == "done":
+                raise UserInputError(user_message=f"Task `{match.task_id[:8]}` уже завершён")
+            swarm_task_board.update_task(match.task_id, status="in_progress")
+            await message.reply(
+                f"🔄 Task `{match.task_id[:8]}` → **in_progress**\n\n"
+                f"Для запуска swarm round:\n"
+                f"`!swarm {match.team} {match.title}`"
+            )
+            return
+
         raise UserInputError(user_message=(
             "📋 Task Board:\n"
             "`!swarm task board` — сводка\n"
             "`!swarm task list [team]` — список задач\n"
             "`!swarm task create <team> <title>` — создать\n"
             "`!swarm task done <id>` — завершить\n"
-            "`!swarm task fail <id>` — отметить как failed"
+            "`!swarm task fail <id>` — отметить как failed\n"
+            "`!swarm task assign <id>` — запустить swarm round для задачи"
         ))
 
     # !swarm listen on/off — управление team listeners

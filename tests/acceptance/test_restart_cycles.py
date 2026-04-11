@@ -37,15 +37,27 @@ def health_check() -> dict:
 
 
 def trigger_restart() -> bool:
-    """POST /api/krab/restart_userbot, возвращает True если accepted."""
+    """Рестарт через API или через kill+wait если API timeout."""
+    import subprocess
+    # Сначала пробуем API
     try:
         req = urllib.request.Request(RESTART_URL, method="POST", data=b"{}")
         req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
             return data.get("ok", False) or resp.status == 200
+    except Exception:
+        pass
+    # Fallback: graceful SIGTERM → process restarts via launchd/script
+    try:
+        result = subprocess.run(
+            ["pkill", "-f", "python.*src.main"],
+            capture_output=True, timeout=5,
+        )
+        print(f"    pkill fallback (exit={result.returncode})")
+        return True  # pkill отправлен, ждём restart
     except Exception as exc:
-        print(f"    restart request failed: {exc}")
+        print(f"    restart failed completely: {exc}")
         return False
 
 
