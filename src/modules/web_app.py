@@ -8991,6 +8991,39 @@ class WebApp:
                 "after": after_state,
             }
 
+        # Phase 2: Silence API — channel parity (web panel + API, не только Telegram)
+        @self.app.get("/api/silence/status")
+        async def silence_status():
+            """Текущий статус тишины."""
+            from ..core.silence_mode import silence_manager
+            return {"ok": True, **silence_manager.status()}
+
+        @self.app.post("/api/silence/toggle")
+        async def silence_toggle(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Toggle silence mode через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.silence_mode import silence_manager
+            chat_id = str(payload.get("chat_id") or "").strip()
+            minutes = int(payload.get("minutes") or 30)
+            global_mode = bool(payload.get("global", False))
+            if global_mode:
+                if silence_manager.is_global_muted():
+                    silence_manager.unmute_global()
+                    return {"ok": True, "action": "unmuted_global"}
+                silence_manager.mute_global(minutes=minutes)
+                return {"ok": True, "action": "muted_global", "minutes": minutes}
+            if not chat_id:
+                return {"ok": False, "error": "chat_id required for per-chat silence"}
+            if silence_manager.is_silenced(chat_id):
+                silence_manager.unmute(chat_id)
+                return {"ok": True, "action": "unmuted", "chat_id": chat_id}
+            silence_manager.mute(chat_id, minutes=minutes)
+            return {"ok": True, "action": "muted", "chat_id": chat_id, "minutes": minutes}
+
         @self.app.post("/api/runtime/recover")
         async def runtime_recover(
             payload: dict = Body(default_factory=dict),
