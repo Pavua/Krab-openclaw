@@ -6,10 +6,9 @@
 > **Scope:** Phase 1 hardening + Phase 5 Translator MVP routing
 > **Self-contained:** да, можно работать без оглядки на Track C / Track D
 >
-> **⚠️ HOT BACKLOG (added 2026-04-08, Krab Ear session 3 RCA):**
-> - **🟠 P0 — string formatting bug в `src/userbot_bridge.py`** (причина «Краб повис в групповом чате»). Top-level catch на строке 5157 глотает traceback. См. `.remember/next_session.md` → «ПРИОРИТЕТ #0». Fix ~30-60 мин.
-> - **🔴 P1 — Stability C+B** (Pyrofork network resilience + launchd-only supervision, убрать `disable_legacy_launchd_core` из `new start_krab.command` и `new Stop Krab.command`). См. `.remember/next_session.md` → «ПРИОРИТЕТ #1». Fix ~3-5 часов.
-> - Порядок: P0 → P1. Независимые, но P0 даёт мгновенный user-visible win.
+> **HOT BACKLOG — CLOSED (session 5, 2026-04-11):**
+> - ~~**P0 — string formatting bug**~~ — FIXED (commit `32ec2e7`): exc_info=True, safe markdown, wrapped reply
+> - ~~**P1 — Stability C+B**~~ — FIXED (commit `6d2407d`): session watchdog auto-reconnect with 60s cooldown
 
 ---
 
@@ -26,16 +25,33 @@ Master plan меняется при изменении shared foundation. Это
 
 ---
 
-## Состояние трека на 08.04.2026
+## Состояние трека на 11.04.2026 (session 5)
 
 | Параметр | Значение |
 |----------|----------|
-| Phase | 1 (Stability Kernel) |
-| Готовность | ~85% |
-| Открытые блокеры | #10 Mercadona (ждёт логи), #14 OpenClaw v2026.4.5 monitoring |
-| Тесты | 691 passed, 15 skipped (batch 10 baseline) |
-| Runtime | OpenClaw v2026.4.5, port 18789 LISTEN, /health 200 |
+| Phase | 1-3, 5, 8 (multi-phase progress) |
+| Готовность | ~70% overall Master Plan |
+| Открытые блокеры | #10 Mercadona (ждёт логи) |
+| Тесты | ~1750+ passed (было 928 на старте session 5) |
+| Session 5 | 30 commits, +808 tests, translator MVP, swarm listeners+task board |
+| Runtime | gemini-3-pro-preview, P0+P1 fixed, 50/50 stability PASS |
 | Sync | origin/main ✅ |
+
+### Session 5 закрыто (2026-04-10..11)
+- **P0**: top-level exception handlers — full traceback logging + safe markdown
+- **P1**: session watchdog auto-reconnect (60s cooldown)
+- **B.2 Translator MVP**: language_detect + translator_engine + pipeline + per-chat + flash model + e2e
+- **B.10 Coverage**: ALL src/core/ + ALL src/userbot/ mixins + employee_templates + mcp_client
+- **Swarm listeners**: 4 team accounts respond in DMs (@p0lrdp_AI, @p0lrdp_worldwide, @hard2boof, @opiodimeo)
+- **Swarm task board**: create/list/done/fail/assign + auto-track rounds
+- **FinOps**: tool_calls, channel, fallback, context_tokens tracking
+- **Policy Matrix**: runtime enforcement via check_capability()
+- **Identity**: operator_id + account_id in every routing event
+- **Channel parity**: silence/notify/voice/tasks via REST API + reserve bot
+- **!notify on/off**: tool narration toggle
+- **p0lrd co-owner**: ACL promoted
+- **Heartbeat 60s**: optimized from 45s
+- **Dashboard specs**: translator page + FinOps update for Gemini 3.1 Pro
 
 ---
 
