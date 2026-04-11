@@ -291,6 +291,20 @@ class AgentRoom:
                 delegations=delegation_results,
                 duration_sec=duration,
             )
+            # Phase 8: quick heuristic verification of round result
+            try:
+                from .swarm_verifier import quick_heuristic_check  # noqa: PLC0415
+                verification = quick_heuristic_check(full_result)
+                if not verification.passed:
+                    logger.warning(
+                        "swarm_round_quality_check_failed",
+                        team=_team_name,
+                        score=verification.score,
+                        issues=verification.issues[:3],
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
             # Task board: автоматическая фиксация раунда как completed task
             try:
                 from .swarm_task_board import swarm_task_board  # noqa: PLC0415
