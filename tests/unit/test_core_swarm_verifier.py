@@ -216,3 +216,128 @@ async def test_verify_empty_result_early_exit() -> None:
     assert r.passed is False
     assert r.score == 0.0
     mock_client.send_message_stream.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Дополнительные тесты: score clamping, multiple error patterns,
+# VerificationResult defaults, длинный текст, markdown-форматирование
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationResultDefaults:
+    def test_default_issues_is_empty_list(self) -> None:
+        vr = VerificationResult(passed=True, score=0.7)
+        assert vr.issues == []
+
+    def test_default_suggestions_is_empty_list(self) -> None:
+        vr = VerificationResult(passed=False, score=0.3)
+        assert vr.suggestions == []
+
+    def test_score_clamped_above_one(self) -> None:
+        vr = VerificationResult(passed=True, score=2.5)
+        assert vr.score == 1.0
+
+    def test_score_clamped_below_zero(self) -> None:
+        vr = VerificationResult(passed=False, score=-99.0)
+        assert vr.score == 0.0
+
+    def test_score_at_boundary_zero(self) -> None:
+        vr = VerificationResult(passed=False, score=0.0)
+        assert vr.score == 0.0
+
+    def test_score_at_boundary_one(self) -> None:
+        vr = VerificationResult(passed=True, score=1.0)
+        assert vr.score == 1.0
+
+
+class TestMultipleErrorPatternsInOneText:
+    def test_traceback_and_exception_in_one_text(self) -> None:
+        # Сразу несколько error-паттернов — должен сработать первый совпавший
+        text = "Traceback (most recent call last):\n  ...\nHTTPError 500: bad gateway"
+        r = quick_heuristic_check(text)
+        assert r.passed is False
+        assert r.score <= 0.2
+        assert len(r.issues) > 0
+
+    def test_error_prefix_with_connection_error(self) -> None:
+        text = "Error: ConnectionError raised while calling OpenClaw API"
+        r = quick_heuristic_check(text)
+        assert r.passed is False
+        assert r.score <= 0.2
+
+    def test_no_response_pattern(self) -> None:
+        text = "No response received from the swarm agent after 30 seconds of waiting"
+        r = quick_heuristic_check(text)
+        assert r.passed is False
+        assert r.score <= 0.2
+
+
+class TestVeryLongResult:
+    def test_very_long_result_passes_with_high_score(self) -> None:
+        # Более 5000 символов — score насыщается до max (0.90)
+        text = "Детальный анализ рынка и данные. " * 160  # ~5280 символов
+        r = quick_heuristic_check(text)
+        assert r.passed is True
+        assert r.score >= 0.85
+
+    def test_very_long_result_score_not_exceed_one(self) -> None:
+        text = "A" * 100_000
+        r = quick_heuristic_check(text)
+        assert r.passed is True
+        assert 0.0 <= r.score <= 1.0
+
+
+class TestMarkdownFormattedResult:
+    def test_markdown_headers_and_bullets_passes(self) -> None:
+        text = (
+            "# Отчёт команды аналитиков\n\n"
+            "## Выводы\n"
+            "- Рост BTC на 12% за квартал.\n"
+            "- ETH показал стабильность на уровне $2800.\n"
+            "- Layer-2 решения ускорили транзакции на 40%.\n\n"
+            "## Риски\n"
+            "- Регуляторное давление в ЕС.\n"
+            "- Нестабильность стейблкоинов.\n\n"
+            "## Рекомендации\n"
+            "Диверсифицировать портфель. Держать долю стейблкоинов не выше 20%.\n"
+        )
+        r = quick_heuristic_check(text)
+        assert r.passed is True
+        assert r.score >= 0.65
+
+    def test_markdown_with_code_block_passes(self) -> None:
+        text = (
+            "Анализ завершён успешно. Основные метрики за апрель 2026 года:\n\n"
+            "```\n"
+            "BTC: +12.3%\n"
+            "ETH: +4.1%\n"
+            "SOL: +8.9%\n"
+            "ADA: -1.2%\n"
+            "DOT: +3.7%\n"
+            "```\n\n"
+            "Итог: диверсифицированный портфель вырос на 8.4% за апрель 2026 года.\n"
+            "Рекомендуется зафиксировать часть прибыли по BTC и перебалансировать.\n"
+        )
+        r = quick_heuristic_check(text)
+        assert r.passed is True
+        assert r.score >= 0.6
+
+
+@pytest.mark.asyncio
+async def test_verify_llm_score_clamped_from_llm_response() -> None:
+    """LLM вернул score за пределами [0, 1] — __post_init__ зажимает."""
+    mock_client = AsyncMock()
+    mock_client.send_message_stream.return_value = (
+        '{"passed": true, "score": 1.8, "issues": [], "suggestions": []}'
+    )
+
+    long_result = "Отчёт команды. " * 40
+    r = await verify_round_result(
+        team="analysts",
+        topic="Тест clamp score",
+        result=long_result,
+        openclaw_client=mock_client,
+    )
+
+    assert r.passed is True
+    assert r.score == 1.0

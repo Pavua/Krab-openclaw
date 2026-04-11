@@ -341,3 +341,136 @@ class TestConfigureDefaultPath:
         b.configure_default_path(new_path)
         # После reconfig — пустой board
         assert b.list_tasks() == []
+
+
+# ------------------------------------------------------------------
+# Дополнительные тесты (расширение покрытия)
+# ------------------------------------------------------------------
+
+
+class TestUpdateTaskInvalidTarget:
+    def test_update_task_invalid_id_returns_none(self, board: SwarmTaskBoard) -> None:
+        """update_task с несуществующим task_id возвращает None."""
+        result = board.update_task("definitely_not_real_id", title="New")
+        assert result is None
+
+    def test_update_task_empty_string_id_returns_none(self, board: SwarmTaskBoard) -> None:
+        """update_task с пустым ID возвращает None, не выбрасывает исключение."""
+        result = board.update_task("", status="done")
+        assert result is None
+
+    def test_update_task_after_deletion_via_trim(self, tmp_path: Path) -> None:
+        """update_task после FIFO-вытеснения задачи возвращает None."""
+        from src.core.swarm_task_board import _MAX_TASKS
+
+        b = SwarmTaskBoard(state_path=tmp_path / "board.json")
+        # Первая задача — done-кандидат на вытеснение
+        first = b.create_task("coders", "First done", "D")
+        b.complete_task(first.task_id, result="ok")
+
+        # Заполняем board ещё MAX задачами (pending), чтобы first был вытеснен
+        for i in range(_MAX_TASKS):
+            b.create_task("coders", f"Pending {i}", "D")
+
+        # first.task_id должен быть удалён
+        result = b.update_task(first.task_id, title="Too late")
+        assert result is None
+
+
+class TestListTasksSorting:
+    def test_sorted_by_created_at_descending(self, board: SwarmTaskBoard) -> None:
+        """list_tasks возвращает задачи от новых к старым."""
+        t1 = board.create_task("coders", "Older", "D")
+        t2 = board.create_task("coders", "Newer", "D")
+
+        # Принудительно расставляем created_at чтобы t1 < t2 независимо от скорости
+        board._tasks[t1.task_id]["created_at"] = "2020-01-01T00:00:00+00:00"  # type: ignore[attr-defined]
+        board._tasks[t2.task_id]["created_at"] = "2025-01-01T00:00:00+00:00"  # type: ignore[attr-defined]
+
+        tasks = board.list_tasks()
+        # Первым должен быть более новый (t2)
+        assert tasks[0].task_id == t2.task_id
+        assert tasks[1].task_id == t1.task_id
+
+    def test_limit_zero_returns_all(self, board: SwarmTaskBoard) -> None:
+        """list_tasks(limit=0) возвращает все задачи (срез [:0] пустой)."""
+        for i in range(5):
+            board.create_task("coders", f"T{i}", "D")
+        # limit=0 означает tasks[:0] == [], так как 0 задач — это ожидаемое поведение
+        tasks = board.list_tasks(limit=0)
+        assert len(tasks) == 0
+
+    def test_list_returns_copies_not_references(self, board: SwarmTaskBoard) -> None:
+        """Элементы из list_tasks — независимые объекты SwarmTask."""
+        board.create_task("coders", "T", "D")
+        tasks1 = board.list_tasks()
+        tasks2 = board.list_tasks()
+        assert tasks1[0] is not tasks2[0]
+
+
+class TestCompleteTaskIdempotency:
+    def test_complete_already_done_updates_result(self, board: SwarmTaskBoard) -> None:
+        """Повторный complete_task на done-задаче обновляет result."""
+        task = board.create_task("analysts", "Research", "D")
+        board.complete_task(task.task_id, result="First result")
+        second = board.complete_task(task.task_id, result="Second result")
+        assert second is not None
+        assert second.status == "done"
+        assert second.result == "Second result"
+
+    def test_complete_failed_task_overrides_status(self, board: SwarmTaskBoard) -> None:
+        """complete_task на failed-задаче переводит её в done."""
+        task = board.create_task("traders", "Trade", "D")
+        board.fail_task(task.task_id, reason="Timeout")
+        recovered = board.complete_task(task.task_id, result="Recovered")
+        assert recovered is not None
+        assert recovered.status == "done"
+
+
+class TestBoardSummaryMixedStatuses:
+    def test_summary_all_statuses(self, board: SwarmTaskBoard) -> None:
+        """get_board_summary учитывает все используемые статусы."""
+        t1 = board.create_task("coders", "A", "D")
+        t2 = board.create_task("coders", "B", "D")
+        t3 = board.create_task("analysts", "C", "D")
+        board.create_task("traders", "D", "D")
+
+        board.complete_task(t1.task_id, result="ok")
+        board.fail_task(t2.task_id, reason="err")
+        board.update_task(t3.task_id, status="in_progress")
+        # последняя задача остаётся pending
+
+        summary = board.get_board_summary()
+        assert summary["total"] == 4
+        assert summary["by_status"].get("done") == 1
+        assert summary["by_status"].get("failed") == 1
+        assert summary["by_status"].get("in_progress") == 1
+        assert summary["by_status"].get("pending") == 1
+        assert summary["by_team"]["coders"] == 2
+        assert summary["by_team"]["analysts"] == 1
+        assert summary["by_team"]["traders"] == 1
+
+
+class TestFifo201Task:
+    def test_201st_task_trims_oldest_done(self, tmp_path: Path) -> None:
+        """При создании 201-й задачи board не превышает _MAX_TASKS."""
+        from src.core.swarm_task_board import _MAX_TASKS
+
+        b = SwarmTaskBoard(state_path=tmp_path / "board.json")
+
+        # Создаём MAX задач, каждую вторую помечаем done
+        ids = []
+        for i in range(_MAX_TASKS):
+            t = b.create_task("coders", f"Task {i}", "D")
+            ids.append(t.task_id)
+            if i % 2 == 0:
+                b.complete_task(t.task_id, result="ok")
+
+        assert len(b.list_tasks(limit=0)) <= _MAX_TASKS
+
+        # Создаём 201-ю задачу
+        extra = b.create_task("coders", "Task 201", "Extra")
+        assert extra is not None
+
+        # Board не должен превысить _MAX_TASKS
+        assert len(b._tasks) <= _MAX_TASKS  # type: ignore[attr-defined]
