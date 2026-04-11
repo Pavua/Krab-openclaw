@@ -9067,6 +9067,26 @@ class WebApp:
                 "notify_enabled": bool(getattr(config, "TOOL_NARRATION_ENABLED", True)),
             }
 
+        @self.app.get("/api/commands")
+        async def list_commands():
+            """Список доступных Telegram команд."""
+            return {"ok": True, "commands": [
+                {"cmd": "!status", "desc": "статус системы"},
+                {"cmd": "!model", "desc": "маршрутизация модели"},
+                {"cmd": "!clear", "desc": "очистить историю"},
+                {"cmd": "!voice", "desc": "голосовой профиль"},
+                {"cmd": "!notify", "desc": "toggle tool narrations"},
+                {"cmd": "!тишина", "desc": "режим тишины"},
+                {"cmd": "!translator", "desc": "переводчик"},
+                {"cmd": "!swarm", "desc": "multi-agent teams"},
+                {"cmd": "!search", "desc": "веб-поиск"},
+                {"cmd": "!inbox", "desc": "owner inbox"},
+                {"cmd": "!watch", "desc": "proactive watch"},
+                {"cmd": "!remember", "desc": "запомнить"},
+                {"cmd": "!recall", "desc": "вспомнить"},
+                {"cmd": "!help", "desc": "справка"},
+            ]}
+
         @self.app.get("/api/model/status")
         async def model_status():
             """Текущий статус модели и маршрутизации."""
