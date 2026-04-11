@@ -1572,6 +1572,12 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
 
     sub = str(args[1] or "").strip().lower()
 
+    if sub == "auto":
+        # !translator auto — shortcut для !translator lang auto-detect
+        profile = bot.update_translator_runtime_profile(language_pair="auto-detect", persist=True)
+        await message.reply("🌐 Translator → **auto-detect** mode.\nЯзык будет определяться автоматически.")
+        return
+
     if sub in {"lang", "language"}:
         if len(args) < 3:
             # Без аргументов — показать текущую пару
