@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krab Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --card-bg-color: #16213e;
+            --text-color: #e0e0e0;
+            --primary-color: #0f3460; /* A slightly lighter blue for accents */
+            --success-color: #4CAF50;
+            --danger-color: #F44336;
+            --warning-color: #FFC107;
+            --info-color: #2196F3;
+            --border-color: #2c3e50;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 0 15px;
+            flex-grow: 1;
+        }
+
+        nav {
+            background-color: var(--card-bg-color);
+            padding: 15px 0;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        nav .nav-list {
+            display: flex;
+            justify-content: center;
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        nav .nav-list li {
+            margin: 0 15px;
+        }
+
+        nav .nav-list a {
+            color: var(--text-color);
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 1.1em;
+            padding: 8px 12px;
+            border-radius: 5px;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        nav .nav-list a:hover,
+        nav .nav-list a.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .quick-stats {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-around;
+            background-color: var(--card-bg-color);
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+        }
+
+        .stat-item {
+            text-align: center;
+            margin: 10px 20px;
+            flex: 1 1 auto;
+            min-width: 150px;
+        }
+
+        .stat-item h3 {
+            margin: 0 0 5px 0;
+            font-size: 1.1em;
+            color: var(--text-color);
+        }
+
+        .stat-item p {
+            margin: 0;
+            font-size: 1.4em;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-indicator.up { background-color: var(--success-color); }
+        .status-indicator.down { background-color: var(--danger-color); }
+        .status-indicator.unknown { background-color: var(--warning-color); }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background-color: var(--card-bg-color);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            min-height: 180px; /* Ensure cards have a consistent minimum height */
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .card-header h2 {
+            margin: 0;
+            font-size: 1.3em;
+            color: var(--text-color);
+            flex-grow: 1;
+        }
+
+        .card-icon {
+            font-size: 1.8em;
+            margin-right: 10px;
+            color: var(--info-color);
+        }
+
+        .card-content {
+            font-size: 0.95em;
+            flex-grow: 1;
+        }
+
+        .card-content p {
+            margin: 5px 0;
+        }
+
+        .card-content strong {
+            color: var(--primary-color);
+        }
+
+        .status-text.up { color: var(--success-color); }
+        .status-text.down { color: var(--danger-color); }
+        .status-text.unknown { color: var(--warning-color); }
+        .status-text.enabled { color: var(--success-color); }
+        .status-text.disabled { color: var(--danger-color); }
+        .status-text.on { color: var(--success-color); }
+        .status-text.off { color: var(--danger-color); }
+
+        .loading-spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid var(--info-color);
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .nav-list {
+                flex-wrap: wrap;
+            }
+            .nav-list li {
+                margin: 5px 10px;
+            }
+            .quick-stats {
+                flex-direction: column;
+                align-items: center;
+            }
+            .stat-item {
+                margin: 10px 0;
+            }
+            .cards-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <ul class="nav-list">
+            <li><a href="#" class="active">Stats</a></li>
+            <li><a href="#">Inbox</a></li>
+            <li><a href="#">Costs</a></li>
+            <li><a href="#">Swarm</a></li>
+            <li><a href="#">Translator</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <div class="quick-stats">
+            <div class="stat-item">
+                <h3>Krab Status</h3>
+                <p id="krab-status">
+                    <span class="status-indicator unknown"></span>
+                    Loading...
+                </p>
+            </div>
+            <div class="stat-item">
+                <h3>Model</h3>
+                <p id="model-name">Loading...</p>
+            </div>
+            <div class="stat-item">
+                <h3>Costs Today</h3>
+                <p id="costs-today">Loading...</p>
+            </div>
+        </div>
+
+        <div class="cards-grid" id="cards-grid">
+            <!-- Telegram Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">💬</span>
+                    <h2>Telegram</h2>
+                </div>
+                <div class="card-content">
+                    <p>Status: <span id="telegram-status" class="status-text unknown">Loading...</span></p>
+                    <p>Username: <span id="telegram-username">Loading...</span></p>
+                    <p>Session: <span id="telegram-session-state">Loading...</span></p>
+                </div>
+            </div>
+
+            <!-- Model Route Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🛣️</span>
+                    <h2>Model Route</h2>
+                </div>
+                <div class="card-content">
+                    <p>Provider: <span id="route-provider">Loading...</span></p>
+                    <p>Model: <span id="route-model">Loading...</span></p>
+                    <p>Channel: <span id="route-channel">Loading...</span></p>
+                    <p>Last Route: <span id="route-last-route">Loading...</span></p>
+                </div>
+            </div>
+
+            <!-- Translator Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🗣️</span>
+                    <h2>Translator</h2>
+                </div>
+                <div class="card-content">
+                    <p>Profile: <span id="translator-profile">Loading...</span></p>
+                    <p>Session: <span id="translator-session">Loading...</span></p>
+                </div>
+            </div>
+
+            <!-- Swarm Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🐝</span>
+                    <h2>Swarm</h2>
+                </div>
+                <div class="card-content">
+                    <p>Listeners: <span id="swarm-listeners" class="status-text unknown">Loading...</span></p>
+                    <p>Task Board:</p>
+                    <ul id="swarm-task-board" style="margin: 0; padding-left: 20px;">
+                        <li>Loading...</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Costs Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">💰</span>
+                    <h2>Costs</h2>
+                </div>
+                <div class="card-content">
+                    <p>Total Cost: <span id="costs-total">Loading...</span></p>
+                    <p>Calls: <span id="costs-calls">Loading...</span></p>
+                    <p>By Model:</p>
+                    <ul id="costs-by-model" style="margin: 0; padding-left: 20px;">
+                        <li>Loading...</li>
+                    </ul>
+                    <p>By Channel:</p>
+                    <ul id="costs-by-channel" style="margin: 0; padding-left: 20px;">
+                        <li>Loading...</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Silence Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🔇</span>
+                    <h2>Silence</h2>
+                </div>
+                <div class="card-content">
+                    <p>Global Status: <span id="silence-global" class="status-text unknown">Loading...</span></p>
+                    <p>Per-Chat Status:</p>
+                    <ul id="silence-per-chat" style="margin: 0; padding-left: 20px;">
+                        <li>Loading...</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_ENDPOINT = '/api/runtime/summary';
+        const REFRESH_INTERVAL = 10000; // 10 seconds
+
+        function getStatusClass(status) {
+            if (status === 'UP' || status === 'CONNECTED' || status === 'ENABLED' || status === 'ON' || status === true) {
+                return 'up';
+            } else if (status === 'DOWN' || status === 'DISCONNECTED' || status === 'DISABLED' || status === 'OFF' || status === false) {
+                return 'down';
+            }
+            return 'unknown';
+        }
+
+        function formatCost(cost) {
+            return `$${(cost || 0).toFixed(2)}`;
+        }
+
+        function updateList(elementId, dataObject) {
+            const ul = document.getElementById(elementId);
+            ul.innerHTML = '';
+            if (dataObject && Object.keys(dataObject).length > 0) {
+                for (const key in dataObject) {
+                    const li = document.createElement('li');
+                    li.textContent = `${key}: ${dataObject[key]}`;
+                    ul.appendChild(li);
+                }
+            } else {
+                const li = document.createElement('li');
+                li.textContent = 'N/A';
+                ul.appendChild(li);
+            }
+        }
+
+        async function fetchData() {
+            try {
+                const response = await fetch(API_ENDPOINT);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                updateUI(data);
+            } catch (error) {
+                console.error("Failed to fetch Krab summary:", error);
+                // Optionally update UI to show error state
+                document.getElementById('krab-status').innerHTML = '<span class="status-indicator down"></span> Error';
+                document.getElementById('model-name').textContent = 'N/A';
+                document.getElementById('costs-today').textContent = 'N/A';
+            }
+        }
+
+        function updateUI(data) {
+            // Quick Stats Row
+            const krabUp = data.health.telegram.status === 'UP' &&
+                           data.health.gateway.status === 'UP' &&
+                           data.health.scheduler.status === 'UP';
+            const krabStatusElement = document.getElementById('krab-status');
+            krabStatusElement.innerHTML = `<span class="status-indicator ${krabUp ? 'up' : 'down'}"></span> ${krabUp ? 'UP' : 'DOWN'}`;
+            document.getElementById('model-name').textContent = data.route.model || 'N/A';
+            document.getElementById('costs-today').textContent = formatCost(data.costs.total_cost);
+
+            // Telegram Card
+            document.getElementById('telegram-status').textContent = data.health.telegram.status || 'N/A';
+            document.getElementById('telegram-status').className = `status-text ${getStatusClass(data.health.telegram.status)}`;
+            document.getElementById('telegram-username').textContent = data.health.telegram.username || 'N/A';
+            document.getElementById('telegram-session-state').textContent = data.health.telegram.session_state || 'N/A';
+
+            // Model Route Card
+            document.getElementById('route-provider').textContent = data.route.provider || 'N/A';
+            document.getElementById('route-model').textContent = data.route.model || 'N/A';
+            document.getElementById('route-channel').textContent = data.route.channel || 'N/A';
+            document.getElementById('route-last-route').textContent = data.route.last_route || 'N/A';
+
+            // Translator Card
+            document.getElementById('translator-profile').textContent = data.translator.profile || 'N/A';
+            document.getElementById('translator-session').textContent = data.translator.session || 'N/A';
+
+            // Swarm Card
+            document.getElementById('swarm-listeners').textContent = data.swarm.listeners_enabled ? 'ON' : 'OFF';
+            document.getElementById('swarm-listeners').className = `status-text ${getStatusClass(data.swarm.listeners_enabled)}`;
+            updateList('swarm-task-board', data.swarm.task_board);
+
+            // Costs Card
+            document.getElementById('costs-total').textContent = formatCost(data.costs.total_cost);
+            document.getElementById('costs-calls').textContent = data.costs.calls !== undefined ? data.costs.calls : 'N/A';
+            updateList('costs-by-model', data.costs.by_model);
+            updateList('costs-by-channel', data.costs.by_channel);
+
+            // Silence Card
+            document.getElementById('silence-global').textContent = data.silence.global_status ? 'ON' : 'OFF';
+            document.getElementById('silence-global').className = `status-text ${getStatusClass(data.silence.global_status)}`;
+            updateList('silence-per-chat', data.silence.per_chat_status);
+        }
+
+        // Initial fetch and set up auto-refresh
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchData();
+            setInterval(fetchData, REFRESH_INTERVAL);
+        });
+    </script>
+</body>
+</html>

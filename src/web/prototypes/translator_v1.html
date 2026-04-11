@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krab Dashboard: Translator</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --card-bg-color: #16213e;
+            --text-color: #e0e0e0;
+            --accent-color: #0f3460;
+            --active-color: #4CAF50; /* Green */
+            --idle-color: #607D8B;   /* Gray */
+            --paused-color: #FFC107; /* Yellow */
+            --border-color: #0f3460;
+            --shadow-color: rgba(0, 0, 0, 0.2);
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        nav {
+            background-color: var(--card-bg-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 2px 5px var(--shadow-color);
+        }
+
+        nav a {
+            color: var(--text-color);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        nav a:hover {
+            background-color: var(--accent-color);
+            color: white;
+        }
+
+        nav a.active {
+            background-color: var(--accent-color);
+            color: white;
+            font-weight: bold;
+        }
+
+        .container {
+            flex-grow: 1;
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .header-section {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .header-section h1 {
+            margin: 0;
+            font-size: 2.5rem;
+            color: white;
+        }
+
+        .status-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            color: white;
+            box-shadow: 0 2px 4px var(--shadow-color);
+        }
+
+        .status-badge.active { background-color: var(--active-color); }
+        .status-badge.idle { background-color: var(--idle-color); }
+        .status-badge.paused { background-color: var(--paused-color); }
+
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .card {
+            background-color: var(--card-bg-color);
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px var(--shadow-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card h3 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+            color: white;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+        }
+
+        .key-value {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.7rem;
+            font-size: 0.95rem;
+        }
+
+        .key-value .key {
+            font-weight: 500;
+            color: var(--text-color);
+        }
+
+        .key-value .value {
+            color: #b0b0b0;
+            text-align: right;
+        }
+
+        .value.on { color: var(--active-color); }
+        .value.off { color: var(--idle-color); }
+        .value.yes { color: var(--active-color); }
+        .value.no { color: var(--idle-color); }
+
+        .translation-box {
+            background-color: #0f1a2a;
+            border: 1px solid var(--border-color);
+            padding: 1rem;
+            border-radius: 5px;
+            margin-top: 0.8rem;
+            font-style: italic;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+        }
+
+        .direction-badge {
+            background-color: var(--accent-color);
+            color: white;
+            padding: 0.3rem 0.7rem;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-top: 1rem;
+            align-self: flex-start;
+        }
+
+        .last-updated {
+            text-align: right;
+            font-size: 0.85rem;
+            color: #909090;
+            margin-top: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            nav {
+                flex-wrap: wrap;
+                gap: 1rem;
+                padding: 1rem;
+            }
+            .container {
+                margin: 1rem auto;
+                padding: 0 1rem;
+            }
+            .header-section h1 {
+                font-size: 2rem;
+            }
+            .card-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/">← /</a>
+        <a href="/stats">Stats</a>
+        <a href="/inbox">Inbox</a>
+        <a href="/costs">Costs</a>
+        <a href="/swarm">Swarm</a>
+        <a href="/translator" class="active">Translator</a>
+    </nav>
+
+    <div class="container">
+        <div class="header-section">
+            <h1>🔄 Translator</h1>
+            <span id="main-status-badge" class="status-badge idle">Loading...</span>
+        </div>
+
+        <div class="card-grid">
+            <!-- Profile Card -->
+            <div class="card">
+                <h3>Profile Settings</h3>
+                <div class="key-value">
+                    <span class="key">Language Pair:</span>
+                    <span class="value" id="profile-language-pair">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Mode:</span>
+                    <span class="value" id="profile-mode">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Voice Strategy:</span>
+                    <span class="value" id="profile-voice-strategy">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Ordinary Calls:</span>
+                    <span class="value" id="profile-ordinary-calls">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Internet Calls:</span>
+                    <span class="value" id="profile-internet-calls">N/A</span>
+                </div>
+            </div>
+
+            <!-- Session Card -->
+            <div class="card">
+                <h3>Current Session</h3>
+                <div class="key-value">
+                    <span class="key">Status:</span>
+                    <span class="value" id="session-status">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Muted:</span>
+                    <span class="value" id="session-muted">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Active Chats:</span>
+                    <span class="value" id="session-active-chats">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Total Translations:</span>
+                    <span class="value" id="session-total-translations">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Avg. Latency:</span>
+                    <span class="value" id="session-avg-latency">N/A</span>
+                </div>
+            </div>
+
+            <!-- Last Translation Card -->
+            <div class="card">
+                <h3>Last Translation</h3>
+                <div class="key-value">
+                    <span class="key">Last Event:</span>
+                    <span class="value" id="last-event">N/A</span>
+                </div>
+                <div class="key-value">
+                    <span class="key">Last Language Pair:</span>
+                    <span class="value" id="last-language-pair">N/A</span>
+                </div>
+                <div class="direction-badge" id="last-translation-direction">N/A</div>
+                <p><strong>Original:</strong></p>
+                <div class="translation-box" id="last-translated-original">
+                    No recent translation.
+                </div>
+                <p><strong>Translation:</strong></p>
+                <div class="translation-box" id="last-translated-translation">
+                    No recent translation.
+                </div>
+            </div>
+        </div>
+        <div class="last-updated" id="last-updated">Last updated: Never</div>
+    </div>
+
+    <script>
+        const API_ENDPOINT = '/api/translator/status';
+        const REFRESH_INTERVAL_MS = 10000; // 10 seconds
+
+        function updateStatusBadge(element, status) {
+            element.textContent = status;
+            element.className = 'status-badge'; // Reset classes
+            if (status) {
+                element.classList.add(status.toLowerCase());
+            }
+        }
+
+        function formatBoolean(value) {
+            if (value === true) return '<span class="value on">ON</span>';
+            if (value === false) return '<span class="value off">OFF</span>';
+            return 'N/A';
+        }
+
+        function formatMuted(value) {
+            if (value === true) return '<span class="value yes">Yes</span>';
+            if (value === false) return '<span class="value no">No</span>';
+            return 'N/A';
+        }
+
+        async function fetchTranslatorStatus() {
+            try {
+                const response = await fetch(API_ENDPOINT);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                updateUI(data);
+            } catch (error) {
+                console.error("Failed to fetch translator status:", error);
+                // Optionally update UI to show error state
+                document.getElementById('main-status-badge').textContent = 'Error';
+                document.getElementById('main-status-badge').className = 'status-badge idle'; // Use idle for error
+                document.getElementById('last-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()} (Error)`;
+            }
+        }
+
+        function updateUI(data) {
+            // Main Header Status
+            const sessionStatus = data.session.session_status || 'idle';
+            updateStatusBadge(document.getElementById('main-status-badge'), sessionStatus);
+
+            // Profile Card
+            document.getElementById('profile-language-pair').textContent = data.profile.language_pair || 'N/A';
+            document.getElementById('profile-mode').textContent = data.profile.translation_mode || 'N/A';
+            document.getElementById('profile-voice-strategy').textContent = data.profile.voice_strategy || 'N/A';
+            document.getElementById('profile-ordinary-calls').innerHTML = formatBoolean(data.profile.ordinary_calls_enabled);
+            document.getElementById('profile-internet-calls').innerHTML = formatBoolean(data.profile.internet_calls_enabled);
+
+            // Session Card
+            document.getElementById('session-status').textContent = sessionStatus;
+            document.getElementById('session-muted').innerHTML = formatMuted(data.session.translation_muted);
+            document.getElementById('session-active-chats').textContent = data.session.active_chats && data.session.active_chats.length > 0
+                ? data.session.active_chats.join(', ')
+                : 'None';
+
+            const totalTranslations = data.session.stats.total_translations;
+            const totalLatencyMs = data.session.stats.total_latency_ms;
+            document.getElementById('session-total-translations').textContent = totalTranslations !== undefined ? totalTranslations : 'N/A';
+
+            let avgLatency = 'N/A';
+            if (totalTranslations > 0) {
+                avgLatency = `${(totalLatencyMs / totalTranslations).toFixed(2)} ms`;
+            }
+            document.getElementById('session-avg-latency').textContent = avgLatency;
+
+            // Last Translation Card
+            document.getElementById('last-event').textContent = data.session.last_event || 'N/A';
+            document.getElementById('last-language-pair').textContent = data.session.last_language_pair || 'N/A';
+
+            const lastOriginal = data.session.last_translated_original || 'No recent translation.';
+            const lastTranslation = data.session.last_translated_translation || 'No recent translation.';
+            document.getElementById('last-translated-original').textContent = lastOriginal;
+            document.getElementById('last-translated-translation').textContent = lastTranslation;
+
+            const langPair = data.session.last_language_pair;
+            if (langPair && langPair.includes('-')) {
+                const [source, target] = langPair.split('-');
+                document.getElementById('last-translation-direction').textContent = `${source}→${target}`;
+            } else {
+                document.getElementById('last-translation-direction').textContent = 'N/A';
+            }
+
+            // Last Updated Timestamp
+            document.getElementById('last-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchTranslatorStatus(); // Initial fetch
+            setInterval(fetchTranslatorStatus, REFRESH_INTERVAL_MS); // Set up auto-refresh
+        });
+    </script>
+</body>
+</html>
