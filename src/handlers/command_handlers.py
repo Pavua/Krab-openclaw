@@ -1637,6 +1637,34 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
             user_message="❌ Используй `!translator phrase add <текст>` или `!translator phrase remove <номер>`."
         )
 
+    if sub == "test":
+        # !translator test <text> — быстрый inline перевод для тестирования
+        test_text = str(args[2] if len(args) >= 3 else "").strip()
+        if not test_text:
+            raise UserInputError(user_message="❌ Формат: `!translator test Buenos días amigo`")
+        try:
+            from ..core.language_detect import detect_language, resolve_translation_pair
+            from ..core.translator_engine import translate_text
+            from ..openclaw_client import openclaw_client as _oc
+            detected = detect_language(test_text)
+            if not detected:
+                await message.reply("❌ Не удалось определить язык.")
+                return
+            profile = bot.get_translator_runtime_profile()
+            src, tgt = resolve_translation_pair(detected, profile.get("language_pair", "es-ru"))
+            if src == tgt:
+                await message.reply(f"ℹ️ Язык совпадает ({src}), перевод не нужен.")
+                return
+            result = await translate_text(test_text, src, tgt, openclaw_client=_oc)
+            await message.reply(
+                f"🔄 {src}→{tgt} ({result.latency_ms}ms)\n"
+                f"**{result.original}**\n"
+                f"_{result.translated}_"
+            )
+        except Exception as exc:
+            await message.reply(f"❌ Ошибка: {str(exc)[:200]}")
+        return
+
     if sub == "session":
         action = str(args[2] or "").strip().lower() if len(args) >= 3 else "status"
         if action in {"status", "show"}:
