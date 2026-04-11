@@ -91,6 +91,7 @@ async def translate_text(
         chat_id=chat_id,
         system_prompt=system,
         force_cloud=True,
+        preferred_model="google/gemini-3-flash-preview",  # flash tier для скорости перевода
         max_output_tokens=2048,
         disable_tools=True,
     ):

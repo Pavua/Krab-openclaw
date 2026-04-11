@@ -1482,6 +1482,20 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             await self._auto_export_handoff_snapshot(reason="userbot_stop")
         except Exception as exc:  # noqa: BLE001
             logger.warning("auto_handoff_export_failed", error=str(exc), non_fatal=True)
+
+        # Phase 2: pre-shutdown memory flush — persist swarm state
+        try:
+            from .core.swarm_memory import swarm_memory as _sm  # noqa: PLC0415
+            _sm._persist()
+            logger.info("pre_shutdown_swarm_memory_flushed")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from .core.swarm_task_board import swarm_task_board as _tb  # noqa: PLC0415
+            _tb._persist()
+            logger.info("pre_shutdown_task_board_flushed")
+        except Exception:  # noqa: BLE001
+            pass
         
         if krab_scheduler.is_started:
             try:
