@@ -8042,6 +8042,21 @@ class WebApp:
             )
             return {"ok": True, "action": "started", "status": "active", "active_chats": active_chats}
 
+        @self.app.post("/api/translator/lang")
+        async def translator_set_lang(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Сменить языковую пару через API."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
+            pair = str(payload.get("language_pair") or "").strip().lower()
+            if pair not in ALLOWED_LANGUAGE_PAIRS:
+                return {"ok": False, "error": f"invalid pair, use: {sorted(ALLOWED_LANGUAGE_PAIRS)}"}
+            profile = self.kraab.update_translator_runtime_profile(language_pair=pair, persist=True)
+            return {"ok": True, "language_pair": pair}
+
         @self.app.get("/api/translator/history")
         async def translator_history():
             """История переводов и статистика."""
