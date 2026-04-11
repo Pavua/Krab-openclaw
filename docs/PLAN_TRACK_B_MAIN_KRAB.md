@@ -33,7 +33,7 @@ Master plan меняется при изменении shared foundation. Это
 | Готовность | ~70% overall Master Plan |
 | Открытые блокеры | #10 Mercadona (ждёт логи) |
 | Тесты | ~1750+ passed (было 928 на старте session 5) |
-| Session 5 | **87 commits**, +893 tests, translator MVP e2e, swarm execution, 25 API endpoints |
+| Session 5 | **100 commits**, 2002 tests (was 928), translator MVP e2e, swarm execution, 31 API endpoints, 5 dashboards |
 | Runtime | gemini-3-pro-preview, P0+P1 fixed, 50/50 stability PASS |
 | Sync | origin/main ✅ |
 
