@@ -488,6 +488,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "`!swarm task fail <id>` — отметить как failed\n"
             "`!swarm task assign <id>` — запустить swarm round для задачи\n"
             "`!swarm task status <id>` — детальный view\n"
+            "`!swarm task priority <id> <level>` — изменить приоритет\n"
             "`!swarm task clear` — очистить done/failed"
         ))
 
