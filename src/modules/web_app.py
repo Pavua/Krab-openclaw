@@ -7987,6 +7987,16 @@ class WebApp:
             snapshot["policy_matrix_endpoint"] = "/api/policy/matrix"
             return snapshot
 
+        @self.app.get("/api/translator/status")
+        async def translator_status():
+            """Лёгкий status endpoint для dashboard /translator page."""
+            try:
+                profile = self.kraab.get_translator_runtime_profile()
+                session = self.kraab.get_translator_session_state()
+                return {"ok": True, "profile": profile, "session": session}
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         @self.app.get("/api/translator/bootstrap")
         async def translator_bootstrap():
             """
