@@ -6972,6 +6972,19 @@ class WebApp:
                 headers=_no_store_headers(),
             )
 
+        @self.app.get("/prototypes/{page}", response_class=HTMLResponse)
+        async def prototype_page(page: str):
+            """Доступ к Gemini-generated prototype pages."""
+            safe_page = page.replace("..", "").replace("/", "")
+            proto = config.BASE_DIR / "src" / "web" / "prototypes" / f"{safe_page}.html"
+            if proto.exists():
+                return FileResponse(proto, headers=_no_store_headers())
+            # Попробуем с _v1 суффиксом
+            proto_v1 = config.BASE_DIR / "src" / "web" / "prototypes" / f"{safe_page}_v1.html"
+            if proto_v1.exists():
+                return FileResponse(proto_v1, headers=_no_store_headers())
+            return HTMLResponse(f"<h1>Prototype '{page}' not found</h1>", status_code=404)
+
         @self.app.get("/translator", response_class=HTMLResponse)
         async def translator_dashboard():
             """Translator status page (Gemini-generated prototype)."""
