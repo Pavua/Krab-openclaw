@@ -2203,10 +2203,21 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 `!agent swarm <тема>` — роевой раунд (аналитик/критик/интегратор)
 `!agent swarm loop [N] <тема>` — несколько роевых раундов (итеративная доработка)
 `!voice ...` — голосовой runtime-профиль (on/off/speed/voice/delivery)
-`!translator ...` — product runtime-профиль переводчика (языки/mode/strategy/flags/phrases)
-`!reasoning [show|clear]` — owner-only просмотр скрытой reasoning-trace последнего ответа
+`!notify on|off` — toggle tool narrations (🔍 Ищу... 📸 Скриншот...)
+`!тишина [мин|стоп|глобально|статус]` — режим тишины
+`!translator ...` — переводчик (lang/mode/strategy/session start|stop)
+`!reasoning [show|clear]` — просмотр скрытой reasoning-trace
+
+**Swarm**
+`!swarm <team> <тема>` — запуск роевого раунда
+`!swarm teams` — список команд
+`!swarm task board|list|create|done|fail|assign` — task board
+`!swarm artifacts [team]` — артефакты раундов
+`!swarm listen on|off` — team listeners (DM ответы)
+`!swarm memory|schedule|jobs|channels|setup` — управление свёрмом
+
 `!web` — управление браузером
-`!panel` — панель управления (soon)
+`!panel` — панель управления
 """
     await message.reply(text)
 
