@@ -291,6 +291,22 @@ class AgentRoom:
                 delegations=delegation_results,
                 duration_sec=duration,
             )
+            # Task board: автоматическая фиксация раунда как completed task
+            try:
+                from .swarm_task_board import swarm_task_board  # noqa: PLC0415
+                task = swarm_task_board.create_task(
+                    team=_team_name,
+                    title=topic[:100],
+                    description=f"Swarm round ({len(self.roles)} roles, {len(delegation_results)} delegations)",
+                    priority="medium",
+                    created_by="swarm_auto",
+                )
+                swarm_task_board.complete_task(
+                    task.task_id,
+                    result=full_result[:500],
+                )
+            except Exception:  # noqa: BLE001
+                pass  # task board — не критично
 
         logger.info("agent_room_round_completed", topic=topic, delegations=len(delegation_results))
         return full_result

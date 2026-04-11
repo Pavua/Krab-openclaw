@@ -319,13 +319,96 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "`!swarm jobs` — список задач\n"
             "`!swarm unschedule <id>` — удалить задачу\n"
             "`!swarm setup` — создать Forum-группу с топиками\n"
-            "`!swarm channels` — статус групп/топиков"
+            "`!swarm channels` — статус групп/топиков\n"
+            "`!swarm listen on|off` — team listeners\n"
+            "`!swarm task create|list|done|fail|board` — task board"
         ))
 
     # !swarm teams — справка
     if args.lower() in {"teams", "команды", "help"}:
         await message.reply(list_teams())
         return
+
+    # !swarm task — task board operations
+    if args.lower().startswith("task"):
+        from ..core.swarm_task_board import swarm_task_board
+        task_tokens = args.split(maxsplit=2)
+        sub = task_tokens[1].lower() if len(task_tokens) > 1 else "board"
+
+        if sub == "board":
+            summary = swarm_task_board.get_board_summary()
+            lines = ["📋 **Swarm Task Board**"]
+            for status_name, count in sorted(summary.get("by_status", {}).items()):
+                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌", "blocked": "🚫"}.get(status_name, "•")
+                lines.append(f"  {emoji} {status_name}: {count}")
+            if summary.get("by_team"):
+                lines.append("**По командам:**")
+                for team_name, count in sorted(summary["by_team"].items()):
+                    lines.append(f"  {team_name}: {count}")
+            lines.append(f"Всего: {summary.get('total', 0)}")
+            await message.reply("\n".join(lines))
+            return
+
+        if sub == "list":
+            team_filter = task_tokens[2].strip().lower() if len(task_tokens) > 2 else None
+            tasks = swarm_task_board.list_tasks(team=team_filter, limit=10)
+            if not tasks:
+                await message.reply("📋 Task board пуст.")
+                return
+            lines = ["📋 **Tasks:**"]
+            for t in tasks:
+                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(t.status, "•")
+                lines.append(f"{emoji} `{t.task_id[:8]}` [{t.team}] {t.title} ({t.priority})")
+            await message.reply("\n".join(lines))
+            return
+
+        if sub == "create":
+            # !swarm task create <team> <title>
+            create_parts = (task_tokens[2] if len(task_tokens) > 2 else "").split(maxsplit=1)
+            if len(create_parts) < 2:
+                raise UserInputError(user_message="❌ Формат: `!swarm task create <team> <title>`")
+            team_name = create_parts[0].lower()
+            title = create_parts[1]
+            task = swarm_task_board.create_task(
+                team=team_name, title=title, description="",
+                priority="medium", created_by="owner",
+            )
+            await message.reply(f"✅ Task `{task.task_id[:8]}` создан для **{team_name}**: {title}")
+            return
+
+        if sub == "done":
+            tid = task_tokens[2].strip() if len(task_tokens) > 2 else ""
+            if not tid:
+                raise UserInputError(user_message="❌ Формат: `!swarm task done <task_id>`")
+            # Ищем по prefix
+            all_tasks = swarm_task_board.list_tasks(limit=200)
+            match = next((t for t in all_tasks if t.task_id.startswith(tid)), None)
+            if not match:
+                raise UserInputError(user_message=f"❌ Task `{tid}` не найден")
+            swarm_task_board.complete_task(match.task_id, result="completed by owner")
+            await message.reply(f"✅ Task `{match.task_id[:8]}` → done")
+            return
+
+        if sub == "fail":
+            tid = task_tokens[2].strip() if len(task_tokens) > 2 else ""
+            if not tid:
+                raise UserInputError(user_message="❌ Формат: `!swarm task fail <task_id>`")
+            all_tasks = swarm_task_board.list_tasks(limit=200)
+            match = next((t for t in all_tasks if t.task_id.startswith(tid)), None)
+            if not match:
+                raise UserInputError(user_message=f"❌ Task `{tid}` не найден")
+            swarm_task_board.fail_task(match.task_id, reason="failed by owner")
+            await message.reply(f"❌ Task `{match.task_id[:8]}` → failed")
+            return
+
+        raise UserInputError(user_message=(
+            "📋 Task Board:\n"
+            "`!swarm task board` — сводка\n"
+            "`!swarm task list [team]` — список задач\n"
+            "`!swarm task create <team> <title>` — создать\n"
+            "`!swarm task done <id>` — завершить\n"
+            "`!swarm task fail <id>` — отметить как failed"
+        ))
 
     # !swarm listen on/off — управление team listeners
     if args.lower().startswith("listen"):
