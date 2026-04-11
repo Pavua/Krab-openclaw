@@ -3403,6 +3403,32 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
             f"Delivery: `{delivery}` · Blocklist: `{blocked_count}`"
         )
 
+    # 6. FinOps + Translator + Swarm (session 5) ──────────────────────
+    lines.append("")
+    try:
+        from ..core.cost_analytics import cost_analytics as _ca
+        report = _ca.build_usage_report_dict()
+        cost = report.get("cost_session_usd", 0)
+        calls = sum(m.get("calls", 0) for m in (report.get("by_model") or {}).values())
+        tool_calls = report.get("total_tool_calls", 0)
+        lines.append(f"💰 **FinOps** · ${cost:.4f} · {calls} calls · {tool_calls} tools")
+    except Exception:
+        pass
+    try:
+        translator_state = bot.get_translator_session_state()
+        t_status = translator_state.get("session_status", "idle")
+        t_stats = translator_state.get("stats") or {}
+        t_count = t_stats.get("total_translations", 0)
+        lines.append(f"🔄 **Translator** · {t_status} · {t_count} переводов")
+    except Exception:
+        pass
+    try:
+        from ..core.swarm_task_board import swarm_task_board
+        board = swarm_task_board.get_board_summary()
+        lines.append(f"🐝 **Swarm** · {board.get('total', 0)} tasks · done: {board.get('by_status', {}).get('done', 0)}")
+    except Exception:
+        pass
+
     return "\n".join(lines).rstrip()
 
 
