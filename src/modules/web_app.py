@@ -9069,6 +9069,30 @@ class WebApp:
 
         # Phase 2: Command API parity — все owner controls через REST, не только Telegram
 
+        @self.app.get("/api/translator/languages")
+        async def translator_languages():
+            """Доступные языковые пары."""
+            from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
+            profile = self.kraab.get_translator_runtime_profile()
+            return {
+                "ok": True,
+                "current": profile.get("language_pair", "es-ru"),
+                "available": sorted(ALLOWED_LANGUAGE_PAIRS),
+            }
+
+        @self.app.get("/api/swarm/teams")
+        async def swarm_teams_list():
+            """Список swarm команд с ролями."""
+            from ..core.swarm_bus import TEAM_REGISTRY
+            return {
+                "ok": True,
+                "teams": {
+                    team: [{"name": r["name"], "title": r.get("title", ""), "emoji": r.get("emoji", "")}
+                           for r in roles]
+                    for team, roles in TEAM_REGISTRY.items()
+                },
+            }
+
         @self.app.get("/api/v1/health")
         async def health_v1():
             """Versioned health endpoint для внешних мониторов."""
