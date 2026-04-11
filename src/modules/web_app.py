@@ -9233,6 +9233,22 @@ class WebApp:
                 "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
             }
 
+        @self.app.get("/api/system/info")
+        async def system_info():
+            """Системная информация о хосте."""
+            import platform
+            import psutil
+            return {
+                "ok": True,
+                "hostname": platform.node(),
+                "platform": platform.platform(),
+                "python": platform.python_version(),
+                "cpu_count": psutil.cpu_count(),
+                "ram_total_gb": round(psutil.virtual_memory().total / (1024**3), 1),
+                "ram_used_pct": psutil.virtual_memory().percent,
+                "disk_used_pct": psutil.disk_usage("/").percent,
+            }
+
         @self.app.get("/api/translator/test")
         async def translator_test_api(text: str = Query(default=""), tgt: str = Query(default="")):
             """Тестовый перевод через API (GET для простоты)."""
