@@ -430,6 +430,25 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             "`!swarm task assign <id>` — запустить swarm round для задачи"
         ))
 
+    # !swarm artifacts [team] — список артефактов
+    if args.lower().startswith("artifacts") or args.lower().startswith("артефакт"):
+        from ..core.swarm_artifact_store import swarm_artifact_store
+        art_tokens = args.split(maxsplit=1)
+        team_filter = art_tokens[1].strip().lower() if len(art_tokens) > 1 else None
+        arts = swarm_artifact_store.list_artifacts(team=team_filter, limit=10)
+        if not arts:
+            await message.reply("📦 Артефактов пока нет.")
+            return
+        lines = ["📦 **Swarm Artifacts:**"]
+        for a in arts:
+            ts = a.get("timestamp_iso", "?")[:16]
+            team = a.get("team", "?")
+            topic = (a.get("topic") or "?")[:50]
+            dur = a.get("duration_sec", 0)
+            lines.append(f"  [{team}] {topic} ({dur:.0f}s, {ts})")
+        await message.reply("\n".join(lines))
+        return
+
     # !swarm listen on/off — управление team listeners
     if args.lower().startswith("listen"):
         from ..core.swarm_team_listener import is_listeners_enabled, set_listeners_enabled
