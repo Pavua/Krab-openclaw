@@ -7997,6 +7997,43 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+        @self.app.post("/api/translator/translate")
+        async def translator_translate(
+            payload: dict = Body(default_factory=dict),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Прямой перевод текста через API (без voice note)."""
+            self._assert_write_access(x_krab_web_key, token)
+            text = str(payload.get("text") or "").strip()
+            if not text:
+                return {"ok": False, "error": "text required"}
+            src_lang = str(payload.get("src_lang") or "").strip()
+            tgt_lang = str(payload.get("tgt_lang") or "ru").strip()
+            try:
+                from ..core.language_detect import detect_language, resolve_translation_pair
+                from ..core.translator_engine import translate_text
+                from ..openclaw_client import openclaw_client as _oc
+                if not src_lang:
+                    src_lang = detect_language(text)
+                if not src_lang:
+                    return {"ok": False, "error": "language not detected"}
+                profile = self.kraab.get_translator_runtime_profile()
+                if not tgt_lang or tgt_lang == "auto":
+                    src_lang, tgt_lang = resolve_translation_pair(src_lang, profile.get("language_pair", "es-ru"))
+                result = await translate_text(text, src_lang, tgt_lang, openclaw_client=_oc)
+                return {
+                    "ok": True,
+                    "original": result.original,
+                    "translated": result.translated,
+                    "src_lang": result.src_lang,
+                    "tgt_lang": result.tgt_lang,
+                    "latency_ms": result.latency_ms,
+                    "model": result.model_id,
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         @self.app.get("/api/translator/bootstrap")
         async def translator_bootstrap():
             """
