@@ -9267,6 +9267,17 @@ class WebApp:
                 for f in files
             ]}
 
+        @self.app.post("/api/swarm/artifacts/cleanup")
+        async def swarm_artifacts_cleanup(
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Очистка старых артефактов."""
+            self._assert_write_access(x_krab_web_key, token)
+            from ..core.swarm_artifact_store import swarm_artifact_store
+            removed = swarm_artifact_store.cleanup_old(max_files=50)
+            return {"ok": True, "removed": removed}
+
         @self.app.get("/api/swarm/listeners")
         async def swarm_listeners_status():
             """Статус team listeners."""
