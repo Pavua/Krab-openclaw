@@ -186,18 +186,25 @@ class AgentRoom:
 
             # Tool awareness: первая роль ОБЯЗАНА использовать web_search для актуальных данных,
             # остальные роли могут использовать по необходимости
+            _extra_tools = ""
+            try:
+                from ..config import config as _cfg  # noqa: PLC0415
+                if getattr(_cfg, "TOR_ENABLED", False):
+                    _extra_tools = ", tor_fetch (анонимный HTTP через Tor)"
+            except Exception:  # noqa: BLE001
+                pass
+            _base_tools = f"web_search (поиск в интернете), peekaboo (скриншот экрана){_extra_tools}"
             if role_idx == 0:
                 tool_hint = (
-                    "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
-                    "peekaboo (скриншот экрана). "
+                    f"\n\nУ тебя есть доступ к инструментам: {_base_tools}. "
                     "ВАЖНО: ты ОБЯЗАН начать с вызова web_search чтобы получить актуальные данные "
                     "(цены, курсы, новости, факты). Твои знания устарели — без web_search твой анализ "
                     "будет основан на старых данных и бесполезен. Сначала поиск, потом анализ."
                 )
             else:
                 tool_hint = (
-                    "\n\nУ тебя есть доступ к инструментам: web_search (поиск в интернете), "
-                    "peekaboo (скриншот экрана). Используй web_search если нужны дополнительные данные."
+                    f"\n\nУ тебя есть доступ к инструментам: {_base_tools}. "
+                    "Используй web_search если нужны дополнительные данные."
                 )
 
             if accumulated_context:
