@@ -8018,6 +8018,24 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+        @self.app.get("/api/translator/history")
+        async def translator_history():
+            """История переводов и статистика."""
+            try:
+                state = self.kraab.get_translator_session_state()
+                stats = state.get("stats") or {}
+                return {
+                    "ok": True,
+                    "total_translations": stats.get("total_translations", 0),
+                    "total_latency_ms": stats.get("total_latency_ms", 0),
+                    "avg_latency_ms": round(stats.get("total_latency_ms", 0) / max(1, stats.get("total_translations", 1))),
+                    "last_pair": state.get("last_language_pair", ""),
+                    "last_original": state.get("last_translated_original", ""),
+                    "last_translation": state.get("last_translated_translation", ""),
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         @self.app.post("/api/translator/translate")
         async def translator_translate(
             payload: dict = Body(default_factory=dict),
