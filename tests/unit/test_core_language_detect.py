@@ -5,7 +5,12 @@
 
 from __future__ import annotations
 
-from src.core.language_detect import detect_language, resolve_translation_pair
+import pytest
+
+try:
+    from src.core.language_detect import detect_language, resolve_translation_pair
+except ImportError:
+    pytest.skip("langdetect не установлен", allow_module_level=True)
 
 # ------------------------------------------------------------------
 # detect_language
