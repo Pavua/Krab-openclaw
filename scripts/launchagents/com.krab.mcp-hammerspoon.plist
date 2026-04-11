@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.krab.mcp-hammerspoon</string>
+
+    <key>Comment</key>
+    <string>Krab Hammerspoon MCP — SSE on :8013, window management</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin/python</string>
+      <string>-m</string>
+      <string>src.mcp_hammerspoon_server</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pablito/Antigravity_AGENTS/Краб</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/krab-mcp-hammerspoon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/krab-mcp-hammerspoon.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>HOME</key>
+      <string>/Users/pablito</string>
+      <key>PATH</key>
+      <string>/Users/pablito/Antigravity_AGENTS/Краб/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <key>MCP_TRANSPORT</key>
+      <string>sse</string>
+      <key>MCP_PORT</key>
+      <string>8013</string>
+    </dict>
+  </dict>
+</plist>
