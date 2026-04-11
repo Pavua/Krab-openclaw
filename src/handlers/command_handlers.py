@@ -492,6 +492,36 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"🎧 Team listeners: **{status}**")
         return
 
+    # !swarm info <team> — детальная инфо о команде
+    if args.lower().startswith("info"):
+        info_tokens = args.split(maxsplit=1)
+        team_arg = info_tokens[1].strip().lower() if len(info_tokens) > 1 else ""
+        if not team_arg:
+            raise UserInputError(user_message="❌ Формат: `!swarm info <team>`")
+        resolved = resolve_team_name(team_arg)
+        if not resolved:
+            raise UserInputError(user_message=f"❌ Команда `{team_arg}` не найдена")
+        roles = TEAM_REGISTRY.get(resolved, [])
+        from ..core.swarm_task_board import swarm_task_board
+        from ..core.swarm_artifact_store import swarm_artifact_store
+        tasks = swarm_task_board.list_tasks(team=resolved, limit=5)
+        arts = swarm_artifact_store.list_artifacts(team=resolved, limit=3)
+        lines = [f"🐝 **Команда: {resolved}**", ""]
+        lines.append("**Роли:**")
+        for r in roles:
+            lines.append(f"  {r.get('emoji', '•')} {r.get('title', r.get('name', '?'))}")
+        if tasks:
+            lines.append(f"\n**Задачи ({len(tasks)}):**")
+            for t in tasks:
+                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(t.status, "•")
+                lines.append(f"  {emoji} {t.title[:50]} ({t.status})")
+        if arts:
+            lines.append(f"\n**Артефакты ({len(arts)}):**")
+            for a in arts:
+                lines.append(f"  📦 {(a.get('topic') or '?')[:40]} ({a.get('duration_sec', 0):.0f}s)")
+        await message.reply("\n".join(lines))
+        return
+
     # !swarm stats — сводная статистика по всем командам
     if args.lower().startswith("stats") or args.lower().startswith("стат"):
         from ..core.swarm_task_board import swarm_task_board
