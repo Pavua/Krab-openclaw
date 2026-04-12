@@ -1515,12 +1515,26 @@ class KraabUserbot(
         for team, acct in accounts.items():
             session_name = acct.get("session_name", f"swarm_{team}")
             try:
+                # Очистка stale SQLite lock (database is locked)
+                _sess_path = Path(self._session_workdir) / f"{session_name}.session"
+                if _sess_path.exists():
+                    _journal = _sess_path.with_suffix(".session-journal")
+                    _wal = _sess_path.with_suffix(".session-wal")
+                    for _lockf in (_journal, _wal):
+                        if _lockf.exists():
+                            try:
+                                _lockf.unlink()
+                                logger.info(
+                                    "swarm_stale_lock_cleaned",
+                                    team=team, file=str(_lockf),
+                                )
+                            except OSError:
+                                pass
                 cl = Client(
                     session_name,
                     api_id=config.TELEGRAM_API_ID,
                     api_hash=config.TELEGRAM_API_HASH,
                     workdir=str(self._session_workdir),
-                    # no_updates=False — нужно для on_message handlers (team listener)
                 )
                 await asyncio.wait_for(cl.start(), timeout=15)
                 me = await cl.get_me()
