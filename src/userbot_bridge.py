@@ -161,6 +161,7 @@ from .handlers import (
     handle_watch,
     handle_weather,
     handle_link,
+    handle_template,
     handle_top,
     handle_web,
     handle_welcome,
@@ -1233,6 +1234,14 @@ class KraabUserbot(
         )
         async def wrap_link(c, m):
             await run_cmd(handle_link, m)
+
+        # Шаблоны сообщений с подстановкой переменных
+        @self.client.on_message(
+            filters.command("template", prefixes=prefixes) & _make_command_filter("template"),
+            group=-1,
+        )
+        async def wrap_template(c, m):
+            await run_cmd(handle_template, m)
 
         # Выполнение Python-кода (owner-only)
         @self.client.on_message(
