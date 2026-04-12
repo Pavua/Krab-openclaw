@@ -124,6 +124,7 @@ from .handlers import (
     handle_catchup,
     handle_translate,
     handle_export,
+    handle_react,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -933,6 +934,18 @@ class KraabUserbot(
         )
         async def wrap_export(c, m):
             await run_cmd(handle_export, m)
+
+        @self.client.on_message(
+            filters.command("react", prefixes=prefixes) & _make_command_filter("react"),
+            group=-1,
+        )
+        async def wrap_react(c, m):
+            await run_cmd(handle_react, m)
+
+        # Хендлер для реакций других пользователей на сообщения Краба
+        @self.client.on_message_reaction_updated()
+        async def wrap_reaction_updated(c, reaction_update):
+            await self._handle_message_reaction_updated(reaction_update)
 
         # Обработка callback query от inline-кнопок
         @self.client.on_callback_query()
@@ -2618,6 +2631,72 @@ class KraabUserbot(
             )
         except Exception:  # noqa: BLE001
             pass  # реакции — best-effort, не прерываем основной flow
+
+    async def _handle_message_reaction_updated(self, reaction_update: Any) -> None:
+        """
+        Обрабатывает обновление реакции пользователя на сообщение.
+
+        Логирует реакции как feedback и передаёт в ReactionEngine для накопления статистики.
+        Полезно: 👍/❤️ = пользователь доволен ответом, 👎 = недоволен.
+        """
+        try:
+            # Извлекаем поля из MessageReactionUpdated
+            chat = getattr(reaction_update, "chat", None)
+            from_user = getattr(reaction_update, "from_user", None)
+            message_id = int(getattr(reaction_update, "id", 0) or 0)
+            chat_id = int(getattr(chat, "id", 0) or 0) if chat else 0
+            user_id = int(getattr(from_user, "id", 0) or 0) if from_user else None
+
+            if not chat_id or not message_id:
+                return
+
+            # Список Reaction объектов
+            new_reactions = list(getattr(reaction_update, "new_reaction", None) or [])
+            old_reactions = list(getattr(reaction_update, "old_reaction", None) or [])
+
+            def _extract_emojis(reactions: list) -> list[str]:
+                """Извлекает emoji-строки из объектов Reaction."""
+                result = []
+                for r in reactions:
+                    emoji = getattr(r, "emoji", None) or getattr(r, "emoticon", None)
+                    if emoji:
+                        result.append(str(emoji))
+                return result
+
+            new_emojis = _extract_emojis(new_reactions)
+            old_emojis = _extract_emojis(old_reactions)
+
+            # Добавленные реакции (не было в old, появились в new)
+            added = [e for e in new_emojis if e not in old_emojis]
+            removed = [e for e in old_emojis if e not in new_emojis]
+
+            if not added and not removed:
+                return
+
+            logger.info(
+                "reaction_updated",
+                chat_id=chat_id,
+                message_id=message_id,
+                user_id=user_id,
+                added=added,
+                removed=removed,
+            )
+
+            # Передаём в ReactionEngine для накопления feedback
+            try:
+                from .core.reaction_engine import reaction_engine  # noqa: PLC0415
+                reaction_engine.record_reaction(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    user_id=user_id,
+                    new_emojis=new_emojis,
+                    old_emojis=old_emojis,
+                )
+            except Exception as eng_exc:  # noqa: BLE001
+                logger.warning("reaction_engine_record_failed", error=str(eng_exc))
+
+        except Exception:  # noqa: BLE001
+            logger.exception("handle_message_reaction_updated_error")
 
     async def _send_monitor_alert(self, message: Message, matched_keyword: str) -> None:
         """Отправляет alert owner'у в Saved Messages при совпадении keyword в мониторимом чате."""
