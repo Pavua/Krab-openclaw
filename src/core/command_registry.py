@@ -151,6 +151,13 @@ _COMMANDS: list[CommandInfo] = [
         description="Расширенный исследовательский отчёт",
         usage="!report <тема>",
     ),
+    CommandInfo(
+        name="img",
+        category="ai",
+        description="Описание фото через AI vision (reply на фото)",
+        usage="!img [вопрос]",
+        owner_only=True,
+    ),
 
     # ── models ───────────────────────────────────────────────────────────────
     CommandInfo(
