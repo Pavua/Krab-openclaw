@@ -2904,14 +2904,38 @@ async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:
     await msg.edit("\n".join(report))
 
 
+_REMIND_HELP = (
+    "⏰ **Напоминания — форматы:**\n\n"
+    "**Создать:**\n"
+    "- `!remind me in 30m купить молоко`\n"
+    "- `!remind in 2 hours позвонить`\n"
+    "- `!remind at 15:00 встреча`\n"
+    "- `!remind tomorrow 9:00 зарядка`\n"
+    "- `!remind через 20 минут проверить почту`\n"
+    "- `!remind в 18:30 созвон`\n"
+    "- `!remind 10m | выпить воды`\n\n"
+    "**Управление:**\n"
+    "- `!remind list` — список активных\n"
+    "- `!remind cancel <id>` — отменить\n"
+)
+
+
 async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     """
-    Добавляет reminder-задачу в runtime scheduler.
+    Управляет напоминаниями с natural language парсингом.
 
-    Форматы:
-    - `!remind 10m | купить воду`
+    Форматы создания:
+    - `!remind me in 30m купить молоко`
+    - `!remind in 2 hours позвонить`
+    - `!remind at 15:00 встреча`
+    - `!remind tomorrow 9:00 зарядка`
     - `!remind через 20 минут проверить почту`
     - `!remind в 18:30 созвон`
+    - `!remind 10m | выпить воды`
+
+    Управление:
+    - `!remind list` — список pending напоминаний
+    - `!remind cancel <id>` — отменить напоминание
     """
     if not bool(getattr(config, "SCHEDULER_ENABLED", False)):
         raise UserInputError(
@@ -2921,25 +2945,54 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
             )
         )
 
-    raw_args = bot._get_command_args(message)
-    if not raw_args:
-        raise UserInputError(
-            user_message=(
-                "⏰ Формат:\n"
-                "`!remind <время> | <текст>`\n\n"
-                "Примеры:\n"
-                "- `!remind 10m | выпить воды`\n"
-                "- `!remind через 20 минут проверить почту`\n"
-                "- `!remind в 18:30 созвон`"
-            )
-        )
+    raw_args = bot._get_command_args(message).strip()
 
+    # --- Субкоманда: list ---
+    if raw_args.lower() in ("list", "список", "ls"):
+        rows = krab_scheduler.list_reminders(chat_id=str(message.chat.id))
+        if not rows:
+            await message.reply("⏰ Активных напоминаний нет.")
+            return
+        lines = ["⏰ **Активные напоминания:**"]
+        for item in rows:
+            due_raw = str(item.get("due_at_iso") or "")
+            try:
+                from datetime import datetime as _dt
+                due_label = _dt.fromisoformat(due_raw).strftime("%d.%m %H:%M")
+            except Exception:  # noqa: BLE001
+                due_label = due_raw
+            text = str(item.get("text") or "")
+            rid = str(item.get("reminder_id") or "")
+            lines.append(f"- `{rid}` · `{due_label}` · {text}")
+        payload = "\n".join(lines)
+        chunks = _split_text_for_telegram(payload, limit=3600)
+        await message.reply(chunks[0])
+        for part in chunks[1:]:
+            await message.reply(part)
+        return
+
+    # --- Субкоманда: cancel <id> ---
+    cancel_match = re.match(r"^(?:cancel|отмена|rm|del)\s+(\S+)$", raw_args, re.IGNORECASE)
+    if cancel_match:
+        rid = cancel_match.group(1)
+        ok = krab_scheduler.remove_reminder(rid)
+        if ok:
+            await message.reply(f"🗑️ Напоминание `{rid}` отменено.")
+        else:
+            await message.reply(f"⚠️ Напоминание `{rid}` не найдено.")
+        return
+
+    # --- Без аргументов: справка ---
+    if not raw_args:
+        raise UserInputError(user_message=_REMIND_HELP)
+
+    # --- Создание напоминания ---
     time_spec, reminder_text = split_reminder_input(raw_args)
     if not time_spec or not reminder_text:
         raise UserInputError(
             user_message=(
-                "⏰ Не удалось разобрать время/текст.\n"
-                "Используй формат: `!remind <время> | <текст>`"
+                "⏰ Не удалось разобрать время/текст.\n\n"
+                + _REMIND_HELP
             )
         )
 
@@ -2948,8 +3001,8 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
     except ValueError:
         raise UserInputError(
             user_message=(
-                "❌ Не удалось распознать время.\n"
-                "Поддерживается: `10m`, `через 20 минут`, `в 18:30`, `2026-03-05 09:00`."
+                "❌ Не удалось распознать время.\n\n"
+                + _REMIND_HELP
             )
         )
 
@@ -2975,7 +3028,8 @@ async def handle_remind(bot: "KraabUserbot", message: Message) -> None:
         "✅ Напоминание создано.\n"
         f"- ID: `{reminder_id}`\n"
         f"- Когда: `{due_label}`\n"
-        f"- Текст: {reminder_text}"
+        f"- Текст: {reminder_text}\n\n"
+        f"Отменить: `!remind cancel {reminder_id}`"
     )
 
 
@@ -8454,12 +8508,8 @@ async def handle_sed(bot: "KraabUserbot", message: Message) -> None:
     - Своё сообщение → редактирует через edit_text
     - Чужое сообщение → отвечает «✏️ Исправление: <текст>»
     """
-    # Получаем аргументы команды
-    raw = (message.text or "").strip()
-
-    # Убираем префикс команды (!sed / .sed / etc.)
-    # message.command содержит список частей после команды
-    parts = message.command  # pyrogram: ['sed', 's/old/new/g']
+    # message.command содержит список частей после команды: ['sed', 's/old/new/g']
+    parts = message.command
     if not parts or len(parts) < 2:
         await message.reply(
             "✏️ **!sed — IRC-style замена**\n\n"

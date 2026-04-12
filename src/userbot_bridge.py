@@ -155,6 +155,8 @@ from .handlers import (
     handle_welcome,
     handle_new_chat_members,
     handle_afk,
+    handle_spam,
+    apply_spam_action,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -1161,10 +1163,30 @@ class KraabUserbot(
         async def wrap_welcome(c, m):
             await run_cmd(handle_welcome, m)
 
+        # Антиспам фильтр для групп
+        @self.client.on_message(
+            filters.command("spam", prefixes=prefixes) & _make_command_filter("spam"), group=-1
+        )
+        async def wrap_spam(c, m):
+            await run_cmd(handle_spam, m)
+
         # Автоприветствие новых участников группы
         @self.client.on_message(filters.new_chat_members, group=-1)
         async def wrap_new_chat_members(c, m):
             await handle_new_chat_members(self, m)
+
+        # AFK-режим: !afk и !back
+        @self.client.on_message(
+            filters.command("afk", prefixes=prefixes) & _make_command_filter("afk"), group=-1
+        )
+        async def wrap_afk(c, m):
+            await run_cmd(handle_afk, m)
+
+        @self.client.on_message(
+            filters.command("back", prefixes=prefixes) & _make_command_filter("back"), group=-1
+        )
+        async def wrap_back(c, m):
+            await run_cmd(handle_afk, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
@@ -3104,6 +3126,24 @@ class KraabUserbot(
             if not check_capability(access_level_str, "chat"):
                 logger.info("capability_denied_chat", chat_id=chat_id, level=access_level_str)
                 return
+        # Антиспам: проверяем только в группах для не-себя
+        if not is_self and message.chat.type not in (
+            enums.ChatType.PRIVATE,
+            enums.ChatType.BOT,
+        ):
+            from .core.spam_guard import classify_message as _classify_spam  # noqa: PLC0415
+            from .core.spam_guard import is_enabled as _spam_enabled  # noqa: PLC0415
+
+            if _spam_enabled(message.chat.id):
+                _spam_reason = _classify_spam(
+                    message.chat.id,
+                    int(user.id),
+                    message,
+                )
+                if _spam_reason:
+                    await apply_spam_action(self, message, _spam_reason)
+                    return
+
         has_trigger = self._is_trigger(text)
         has_group_audio_fallback = (
             has_audio_message
