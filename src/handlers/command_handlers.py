@@ -2677,133 +2677,63 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_help(bot: "KraabUserbot", message: Message) -> None:
-    """Справка по командам — все категории, с пагинацией если текст длинный."""
-    # Лимит Telegram — 4096 символов. Делим на 2 части при превышении.
+    """Справка по командам — генерируется из command_registry, с пагинацией."""
+    from ..core.command_registry import registry as _reg
+
+    # Эмодзи-иконки для категорий
+    _CATEGORY_ICONS: dict[str, str] = {
+        "basic": "📋",
+        "ai": "💬",
+        "models": "🤖",
+        "translator": "🔄",
+        "swarm": "🐝",
+        "costs": "💰",
+        "notes": "📝",
+        "management": "⚙️",
+        "modes": "🔇",
+        "users": "👤",
+        "scheduler": "⏰",
+        "system": "🖥️",
+        "dev": "🛠️",
+    }
+    _CATEGORY_LABELS: dict[str, str] = {
+        "basic": "Основные",
+        "ai": "AI",
+        "models": "Модели",
+        "translator": "Translator",
+        "swarm": "Swarm (рой агентов)",
+        "costs": "Расходы и бюджет",
+        "notes": "Заметки и закладки",
+        "management": "Управление сообщениями",
+        "modes": "Режимы и фильтры",
+        "users": "Пользователи и доступ",
+        "scheduler": "Планировщик",
+        "system": "Система и macOS",
+        "dev": "Dev / AI CLI",
+    }
+
+    def _build_part(cat_list: list[str], header: str) -> str:
+        """Строит текст части справки для заданных категорий."""
+        parts = [header]
+        for cat in cat_list:
+            icon = _CATEGORY_ICONS.get(cat, "•")
+            label = _CATEGORY_LABELS.get(cat, cat)
+            lines = [f"{icon} **{label}**"]
+            for cmd in _reg.by_category(cat):
+                lines.append(f"`!{cmd.name}` — {cmd.description}")
+            parts.append("\n".join(lines))
+        return "\n\n".join(parts)
+
+    cats = _reg.categories()
+    half = len(cats) // 2
+    part1_cats = cats[:half]
+    part2_cats = cats[half:]
+
+    part1 = _build_part(part1_cats, "🦀 **Krab Commands** (1/2)\n━━━━━━━━━━━━━━━")
+    part2 = _build_part(part2_cats, "🦀 **Krab Commands** (2/2)\n━━━━━━━━━━━━━━━")
+
+    # Отправляем одним или двумя сообщениями (Telegram лимит 4096)
     page_limit = 4000
-
-    part1 = """🦀 **Krab Commands** (1/2)
-━━━━━━━━━━━━━━━
-
-📋 **Основные**
-`!help` — эта справка
-`!stats` — статистика сессии
-`!health` — диагностика системы
-`!status` — статус всех подсистем
-`!context [clear|save]` — управление контекстом чата
-`!diagnose` — детальная диагностика подключений
-`!panel` — Owner panel (:8080)
-
-💬 **AI**
-`!ask [вопрос]` — спросить AI о сообщении (reply → AI отвечает)
-`!translate [язык]` — перевод текста (reply или аргумент)
-`!summary [N]` — суммаризация последних N сообщений
-`!catchup` — кратко о пропущенном с момента последнего визита
-`!search <запрос>` — веб-поиск Brave
-`!report <тема>` — расширенный исследовательский отчёт
-
-🤖 **Модели**
-`!model` — статус маршрутизации
-`!model local|cloud|auto` — выбор режима
-`!model set <id>` — конкретная модель (из `!model scan`)
-`!model load <name>|unload|scan` — управление LM Studio
-`!role [name|list]` — смена системного ролевого промпта
-`!reasoning [show|clear]` — просмотр reasoning-trace
-
-🔄 **Translator**
-`!translator on|off|status|history` — управление автопереводом
-`!translator lang <from>-<to>` — языковая пара
-`!translator mode <mode>` — режим перевода
-`!translator session start|stop|pause` — сессия перевода
-
-🐝 **Swarm (рой агентов)**
-`!swarm <team> <задача>` — запустить роевой раунд
-`!swarm research <тема>` — глубокий веб-ресёрч свёрмом
-`!swarm summary` / `!swarm сводка` — сводка активностей
-`!swarm teams` — список команд (traders/coders/analysts/creative)
-`!swarm schedule [add|list|del]` — рекуррентные задачи
-`!swarm memory [team]` — персистентная память роя
-`!swarm jobs` — активные задачи свёрма
-`!swarm task board|create|done|fail|assign` — task board
-`!swarm artifacts [team]` — артефакты раундов
-`!swarm listen on|off` — ответы в DM от team-аккаунтов
-`!swarm channels|setup` — настройка live-broadcast топиков
-
-💰 **Расходы и бюджет**
-`!costs` — отчёт расходов по провайдерам
-`!costs detail` — детальная разбивка
-`!budget [сумма]` — просмотр/установка дневного бюджета
-`!digest` — weekly digest активности"""
-
-    part2 = """🦀 **Krab Commands** (2/2)
-━━━━━━━━━━━━━━━
-
-📝 **Заметки и закладки**
-`!memo <текст>` — заметка в Obsidian (reply или аргумент)
-`!note` — голосовая заметка (reply на голосовое сообщение)
-`!bookmark` / `!bm` — закладка на сообщение
-`!export [N]` — экспорт N последних сообщений чата
-`!remember <текст>` — запомнить факт в память
-`!recall <запрос>` — вспомнить факт из памяти
-`!memory recent` — последние записи памяти
-
-⚙️ **Управление сообщениями**
-`!pin` / `!unpin` — закрепить/открепить сообщение (reply)
-`!del [N]` — удалить N последних сообщений (default 1)
-`!purge` — очистить историю бота в чате
-`!autodel <сек>` — автоудаление через N секунд (0 = выключить)
-`!fwd <chat_id>` — переслать сообщение (reply)
-`!collect [N]` — собрать N сообщений чата в один текст
-`!react <эмодзи>` — поставить реакцию (reply)
-`!schedule [list|cancel|add]` — отложенные сообщения
-
-🔇 **Режимы и фильтры**
-`!voice on|off|toggle|block|unblock` — голосовые ответы
-`!voice speed <0.75..2.5>` — скорость TTS
-`!voice voice <edge-tts-id>` — голос TTS
-`!тишина [мин|стоп|глобально|расписание HH:MM-HH:MM|статус]` — режим тишины
-`!chatban [chat_id]` — заблокировать обработку чата
-`!notify on|off` — tool narrations (🔍 Ищу... 📸 Скриншот...)
-`!cap [name on|off|reset]` — матрица capabilities
-
-👤 **Пользователи и доступ**
-`!who [@user|reply]` — инфо о пользователе или чате
-`!acl` / `!access` — управление full/partial доступом (owner-only)
-`!alias [add|del|list]` — алиасы команд
-`!inbox [list|ack|done|approve|reject|task]` — owner inbox / escalation
-
-⏰ **Планировщик**
-`!remind <время> | <текст>` — поставить напоминание
-`!reminders` — список активных напоминаний
-`!rm_remind <id>` — удалить напоминание
-`!cronstatus` — статус cron scheduler
-`!monitor [add|del|list|status]` — мониторинг чатов
-`!watch status|now` — proactive watch / owner-digest
-
-🖥️ **Система и macOS**
-`!sysinfo` — информация о хосте (CPU/RAM/диск)
-`!ls [path]` — список файлов
-`!read <path>` — чтение файла
-`!write <file> <content>` — запись файла
-`!mac clipboard|notify|apps|finder|notes|reminders|calendar` — macOS автоматизация
-`!screenshot [ocr [lang]|health]` — снимок Chrome / OCR / статус CDP
-`!hs <команда>` — Hammerspoon bridge
-`!web [status|open|close]` — управление браузером
-`!browser [cdp|status]` — CDP browser bridge
-
-🛠️ **Dev / AI CLI**
-`!agent new <name> <prompt>` — создать агента
-`!agent list` — список агентов
-`!agent swarm [loop N] <тема>` — роевой dev-раунд
-`!codex <задача>` — OpenAI Codex CLI
-`!gemini <задача>` — Gemini CLI
-`!claude_cli <задача>` — Claude Code CLI
-`!opencode <задача>` — OpenCode CLI
-`!shop <url>` — Mercadona scraper
-`!clear` — очистить историю диалога
-`!config` / `!set <KEY> <VAL>` — настройки
-`!restart` — перезапуск бота"""
-
-    # Отправляем одним или двумя сообщениями
     combined = part1 + "\n\n" + part2
     if len(combined) <= page_limit:
         await message.reply(combined)
