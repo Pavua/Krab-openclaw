@@ -9090,6 +9090,95 @@ async def handle_spam(bot: "KraabUserbot", message: Message) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# !run — выполнение Python-выражений (owner-only, subprocess-изолированно)
+# ---------------------------------------------------------------------------
+
+
+async def handle_run(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !run <код>  — выполнить Python-выражение или блок кода.
+
+    Варианты использования:
+      !run print("hello")   → stdout в ответ
+      !run 2**100           → результат выражения
+      !run (в reply)        → выполнить код из ответного сообщения
+
+    Ограничения:
+      - Только владелец (owner-only)
+      - Timeout: 5 секунд
+      - Выполняется в subprocess (изолированно от основного процесса)
+    """
+    from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+    # Проверка: только владелец
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!run` доступен только владельцу.")
+
+    # Получаем код: из аргументов или из reply-сообщения
+    code = bot._get_command_args(message).strip()
+    if not code and message.reply_to_message:
+        code = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
+
+    if not code:
+        raise UserInputError(
+            user_message=(
+                "🐍 **!run — выполнение Python**\n\n"
+                "Использование:\n"
+                "`!run print('hello')` — выполнить код\n"
+                "`!run 2**100` — вычислить выражение\n"
+                "`!run` (в reply) — выполнить код из ответного сообщения\n\n"
+                "Timeout: 5 секунд."
+            )
+        )
+
+    # Оборачиваем одиночное выражение в print() если это не statement
+    # Определяем: если код парсится как expression — оборачиваем
+    exec_code = code
+    try:
+        tree = _ast.parse(code, mode="eval")
+        # Это выражение — оборачиваем в print для вывода результата
+        exec_code = f"__r = {code}\nif __r is not None: print(__r)"
+    except SyntaxError:
+        # Это statement (def, print(...), if ... и т.д.) — выполняем как есть
+        exec_code = code
+
+    # Запускаем в subprocess с timeout
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            exec_code,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=clean_subprocess_env(),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        await message.reply("⏱ Timeout: выполнение прервано (>5 сек).")
+        return
+
+    # Формируем ответ
+    out = stdout.decode("utf-8", errors="replace").rstrip()
+    err = stderr.decode("utf-8", errors="replace").rstrip()
+
+    parts: list[str] = []
+    if out:
+        parts.append(f"```\n{out}\n```")
+    if err:
+        parts.append(f"⚠️ stderr:\n```\n{err}\n```")
+    if not parts:
+        rc = proc.returncode
+        parts.append(f"✅ Код выполнен (exit {rc}, без вывода).")
+
+    await message.reply("\n".join(parts))
+
+
 async def apply_spam_action(
     bot: "KraabUserbot",
     message: Message,

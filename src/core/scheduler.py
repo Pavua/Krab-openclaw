@@ -36,9 +36,28 @@ _RUS_DELAY_PATTERN = re.compile(
     r"^\s*через\s+(\d+)\s*(сек(?:унд[ауы]?|)|мин(?:ут[ауы]?|)|час(?:а|ов)?|дн(?:я|ей)?)\s*$",
     re.IGNORECASE,
 )
-_AT_TIME_PATTERN = re.compile(r"^\s*(?:в\s*)?(\d{1,2}):(\d{2})\s*$", re.IGNORECASE)
+_AT_TIME_PATTERN = re.compile(r"^\s*(?:в\s*|at\s+)?(\d{1,2}):(\d{2})\s*$", re.IGNORECASE)
 _DATE_TIME_ISO_PATTERN = re.compile(r"^\s*(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s*$")
 _DATE_TIME_DDMM_PATTERN = re.compile(r"^\s*(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{2})\s*$")
+# "tomorrow 9:00" / "завтра 9:00"
+_TOMORROW_TIME_PATTERN = re.compile(
+    r"^\s*(?:tomorrow|завтра)\s+(\d{1,2}):(\d{2})\s*$",
+    re.IGNORECASE,
+)
+# "in 30m" / "in 2h" / "in 45s" / "in 1d" (английский inline-стиль)
+_IN_DELAY_PATTERN = re.compile(r"^\s*in\s+(\d+)\s*([smhd])\s*$", re.IGNORECASE)
+# "in N minutes/hours/days/seconds" (English long form)
+_IN_DELAY_LONG_EN_PATTERN = re.compile(
+    r"^\s*in\s+(\d+)\s*(second|seconds|minute|minutes|hour|hours|day|days)\s*$",
+    re.IGNORECASE,
+)
+# "через N минут" (already handled above, but also used in split_reminder_input)
+# "at HH:MM" — handled by _AT_TIME_PATTERN (supports "at" prefix)
+# "N минут/часов/дней" без "через" (короткая русская форма)
+_RUS_DELAY_SHORT_PATTERN = re.compile(
+    r"^\s*(\d+)\s*(сек(?:унд[ауы]?)?|мин(?:ут[ауы]?)?|час(?:а|ов)?|дн(?:я|ей)?)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _now_local() -> datetime:
@@ -51,9 +70,14 @@ def split_reminder_input(raw: str) -> tuple[str, str]:
     Делит ввод `!remind` на time_spec и reminder_text.
 
     Поддержка:
-    - `10m | купить воду`
+    - `10m | купить воду`  (pipe-разделитель)
     - `через 10 минут купить воду`
     - `в 18:30 позвонить`
+    - `me in 30m купить молоко`  (английский "me in N<unit>")
+    - `in 30m купить молоко`
+    - `at 15:00 позвонить`
+    - `tomorrow 9:00 встреча` / `завтра 9:00 встреча`
+    - `in 2 hours проверить почту`
     """
     text = str(raw or "").strip()
     if not text:
@@ -63,18 +87,45 @@ def split_reminder_input(raw: str) -> tuple[str, str]:
         left, right = text.split("|", 1)
         return left.strip(), right.strip()
 
+    # Стрипаем опциональное "me " в начале (английский стиль "remind me in ...")
+    stripped = re.sub(r"^me\s+", "", text, flags=re.IGNORECASE)
+
     patterns = [
+        # "через N ед. текст"
         re.compile(
             r"^(через\s+\d+\s*(?:сек(?:унд[ауы]?|)|мин(?:ут[ауы]?|)|час(?:а|ов)?|дн(?:я|ей)?))\s+(.+)$",
             re.IGNORECASE,
         ),
+        # "in N minutes/hours/days/seconds текст"
+        re.compile(
+            r"^(in\s+\d+\s*(?:second|seconds|minute|minutes|hour|hours|day|days))\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        # "in Nm/h/s/d текст"
+        re.compile(r"^(in\s+\d+\s*[smhd])\s+(.+)$", re.IGNORECASE),
+        # "at HH:MM текст"
+        re.compile(r"^(at\s+\d{1,2}:\d{2})\s+(.+)$", re.IGNORECASE),
+        # "tomorrow HH:MM текст" / "завтра HH:MM текст"
+        re.compile(
+            r"^((?:tomorrow|завтра)\s+\d{1,2}:\d{2})\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        # "Nm/h/s/d текст"  (без in)
         re.compile(r"^(\d+\s*[smhd])\s+(.+)$", re.IGNORECASE),
+        # "в HH:MM текст" / "HH:MM текст"
         re.compile(r"^((?:в\s*)?\d{1,2}:\d{2})\s+(.+)$", re.IGNORECASE),
+        # "YYYY-MM-DD HH:MM текст"
         re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2})\s+(.+)$", re.IGNORECASE),
+        # "DD.MM HH:MM текст"
         re.compile(r"^(\d{1,2}\.\d{1,2}\s+\d{1,2}:\d{2})\s+(.+)$", re.IGNORECASE),
+        # "N минут/часов/дней текст" (краткая рус. форма без "через")
+        re.compile(
+            r"^(\d+\s*(?:сек(?:унд[ауы]?)?|мин(?:ут[ауы]?)?|час(?:а|ов)?|дн(?:я|ей)?))\s+(.+)$",
+            re.IGNORECASE,
+        ),
     ]
     for pattern in patterns:
-        match = pattern.match(text)
+        match = pattern.match(stripped)
         if match:
             return match.group(1).strip(), match.group(2).strip()
 
@@ -146,6 +197,54 @@ def parse_due_time(spec: str, *, now: datetime | None = None) -> datetime:
         if due <= now_local:
             due = due.replace(year=due.year + 1)
         return due
+
+    # "tomorrow HH:MM" / "завтра HH:MM"
+    tomorrow_match = _TOMORROW_TIME_PATTERN.match(raw)
+    if tomorrow_match:
+        hour = int(tomorrow_match.group(1))
+        minute = int(tomorrow_match.group(2))
+        due = (now_local + timedelta(days=1)).replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        return due
+
+    # "in 30m" / "in 2h" / "in 45s" / "in 1d"
+    in_match = _IN_DELAY_PATTERN.match(raw)
+    if in_match:
+        amount = int(in_match.group(1))
+        unit = in_match.group(2).lower()
+        scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+        return now_local + timedelta(seconds=amount * scale)
+
+    # "in 2 hours" / "in 30 minutes" / "in 5 seconds" / "in 1 day"
+    in_long_match = _IN_DELAY_LONG_EN_PATTERN.match(raw)
+    if in_long_match:
+        amount = int(in_long_match.group(1))
+        unit_raw = in_long_match.group(2).lower()
+        if unit_raw.startswith("sec"):
+            scale = 1
+        elif unit_raw.startswith("min"):
+            scale = 60
+        elif unit_raw.startswith("hour"):
+            scale = 3600
+        else:
+            scale = 86400
+        return now_local + timedelta(seconds=amount * scale)
+
+    # "5 минут" / "2 часа" / "30 секунд" (краткая рус. форма без "через")
+    rus_short_match = _RUS_DELAY_SHORT_PATTERN.match(raw)
+    if rus_short_match:
+        amount = int(rus_short_match.group(1))
+        unit_raw = rus_short_match.group(2).lower()
+        if unit_raw.startswith("сек"):
+            scale = 1
+        elif unit_raw.startswith("мин"):
+            scale = 60
+        elif unit_raw.startswith("час"):
+            scale = 3600
+        else:
+            scale = 86400
+        return now_local + timedelta(seconds=amount * scale)
 
     raise ValueError("time_spec_parse_failed")
 

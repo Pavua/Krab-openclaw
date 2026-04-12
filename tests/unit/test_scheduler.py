@@ -525,3 +525,230 @@ async def test_load_past_due_reminder_marked_failed(
         assert scheduler._reminders["past01"].status == "failed"
     finally:
         scheduler.stop()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Тесты natural language парсинга (расширение session 7)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestSplitReminderInputNaturalLanguage:
+    """Тесты split_reminder_input для новых форматов."""
+
+    def test_me_in_short_unit(self) -> None:
+        """'me in 30m купить молоко' должен игнорировать 'me' и вернуть 'in 30m'."""
+        time_spec, text = split_reminder_input("me in 30m купить молоко")
+        assert time_spec == "in 30m"
+        assert text == "купить молоко"
+
+    def test_me_in_hours(self) -> None:
+        """'me in 2h позвонить' — игнорирует 'me', парсит 'in 2h'."""
+        time_spec, text = split_reminder_input("me in 2h позвонить")
+        assert time_spec == "in 2h"
+        assert text == "позвонить"
+
+    def test_in_short_unit_without_me(self) -> None:
+        """'in 45m выпить воды' без 'me'."""
+        time_spec, text = split_reminder_input("in 45m выпить воды")
+        assert time_spec == "in 45m"
+        assert text == "выпить воды"
+
+    def test_in_long_minutes(self) -> None:
+        """'in 30 minutes купить хлеб' — английская полная форма."""
+        time_spec, text = split_reminder_input("in 30 minutes купить хлеб")
+        assert time_spec == "in 30 minutes"
+        assert text == "купить хлеб"
+
+    def test_in_long_hours(self) -> None:
+        """'in 2 hours позвонить' — английская полная форма."""
+        time_spec, text = split_reminder_input("in 2 hours позвонить")
+        assert time_spec == "in 2 hours"
+        assert text == "позвонить"
+
+    def test_in_long_days(self) -> None:
+        """'in 1 day встреча' — один день."""
+        time_spec, text = split_reminder_input("in 1 day встреча")
+        assert time_spec == "in 1 day"
+        assert text == "встреча"
+
+    def test_at_hhmm(self) -> None:
+        """'at 15:00 позвонить' — английский формат at HH:MM."""
+        time_spec, text = split_reminder_input("at 15:00 позвонить")
+        assert time_spec == "at 15:00"
+        assert text == "позвонить"
+
+    def test_at_hhmm_leading_zero(self) -> None:
+        """'at 09:30 встреча' — с ведущим нулём."""
+        time_spec, text = split_reminder_input("at 09:30 встреча")
+        assert time_spec == "at 09:30"
+        assert text == "встреча"
+
+    def test_tomorrow_hhmm(self) -> None:
+        """'tomorrow 9:00 встреча' — завтра в 9:00."""
+        time_spec, text = split_reminder_input("tomorrow 9:00 встреча")
+        assert time_spec == "tomorrow 9:00"
+        assert text == "встреча"
+
+    def test_tomorrow_hhmm_with_leading_zero(self) -> None:
+        """'tomorrow 09:00 зарядка'."""
+        time_spec, text = split_reminder_input("tomorrow 09:00 зарядка")
+        assert time_spec == "tomorrow 09:00"
+        assert text == "зарядка"
+
+    def test_zavtra_hhmm(self) -> None:
+        """'завтра 9:00 встреча' — русский tomorrow."""
+        time_spec, text = split_reminder_input("завтра 9:00 встреча")
+        assert time_spec == "завтра 9:00"
+        assert text == "встреча"
+
+    def test_me_in_case_insensitive(self) -> None:
+        """'ME in 30m текст' — игнор регистра для 'me'."""
+        time_spec, text = split_reminder_input("ME in 30m текст")
+        assert time_spec == "in 30m"
+        assert text == "текст"
+
+    def test_pipe_format_unchanged(self) -> None:
+        """Pipe-формат по-прежнему работает."""
+        time_spec, text = split_reminder_input("10m | купить воду")
+        assert time_spec == "10m"
+        assert text == "купить воду"
+
+    def test_empty_returns_empty(self) -> None:
+        """Пустая строка — ('', '')."""
+        assert split_reminder_input("") == ("", "")
+
+    def test_me_in_days(self) -> None:
+        """'me in 1d напоминание' — дни."""
+        time_spec, text = split_reminder_input("me in 1d напоминание")
+        assert time_spec == "in 1d"
+        assert text == "напоминание"
+
+
+class TestParseDueTimeNaturalLanguage:
+    """Тесты parse_due_time для новых форматов."""
+
+    def test_in_short_minutes(self) -> None:
+        """'in 30m' — offset 1800 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 30m", now=now)
+        assert int((due - now).total_seconds()) == 1800
+
+    def test_in_short_hours(self) -> None:
+        """'in 2h' — offset 7200 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 2h", now=now)
+        assert int((due - now).total_seconds()) == 7200
+
+    def test_in_short_seconds(self) -> None:
+        """'in 45s' — offset 45 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 45s", now=now)
+        assert int((due - now).total_seconds()) == 45
+
+    def test_in_short_days(self) -> None:
+        """'in 1d' — offset 86400 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 1d", now=now)
+        assert int((due - now).total_seconds()) == 86400
+
+    def test_in_long_minutes(self) -> None:
+        """'in 30 minutes' — offset 1800 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 30 minutes", now=now)
+        assert int((due - now).total_seconds()) == 1800
+
+    def test_in_long_minute_singular(self) -> None:
+        """'in 1 minute' — offset 60 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 1 minute", now=now)
+        assert int((due - now).total_seconds()) == 60
+
+    def test_in_long_hours(self) -> None:
+        """'in 2 hours' — offset 7200 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 2 hours", now=now)
+        assert int((due - now).total_seconds()) == 7200
+
+    def test_in_long_hour_singular(self) -> None:
+        """'in 1 hour' — offset 3600 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 1 hour", now=now)
+        assert int((due - now).total_seconds()) == 3600
+
+    def test_in_long_days(self) -> None:
+        """'in 3 days' — offset 259200 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 3 days", now=now)
+        assert int((due - now).total_seconds()) == 259200
+
+    def test_in_long_day_singular(self) -> None:
+        """'in 1 day' — offset 86400 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 1 day", now=now)
+        assert int((due - now).total_seconds()) == 86400
+
+    def test_in_long_seconds(self) -> None:
+        """'in 10 seconds' — offset 10 секунд."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("in 10 seconds", now=now)
+        assert int((due - now).total_seconds()) == 10
+
+    def test_at_hhmm(self) -> None:
+        """'at 15:00' — планируется на 15:00 сегодня или завтра."""
+        now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+        due = parse_due_time("at 15:00", now=now)
+        assert due.hour == 15
+        assert due.minute == 0
+
+    def test_at_hhmm_past_advances_next_day(self) -> None:
+        """'at 10:00' когда сейчас 23:00 — планируется на завтра."""
+        now = datetime.now().astimezone().replace(hour=23, minute=0, second=0, microsecond=0)
+        due = parse_due_time("at 10:00", now=now)
+        assert due.hour == 10
+        assert due.date() > now.date()
+
+    def test_tomorrow_hhmm(self) -> None:
+        """'tomorrow 9:00' — ровно завтра в 9:00."""
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        due = parse_due_time("tomorrow 9:00", now=now)
+        assert due.hour == 9
+        assert due.minute == 0
+        assert due.date() == (now + timedelta(days=1)).date()
+
+    def test_tomorrow_hhmm_at_midnight(self) -> None:
+        """'tomorrow 0:00' — завтра в полночь."""
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        due = parse_due_time("tomorrow 0:00", now=now)
+        assert due.hour == 0
+        assert due.date() == (now + timedelta(days=1)).date()
+
+    def test_zavtra_hhmm(self) -> None:
+        """'завтра 9:00' — русский вариант tomorrow 9:00."""
+        now = datetime.now().astimezone().replace(hour=8, minute=0, second=0, microsecond=0)
+        due = parse_due_time("завтра 9:00", now=now)
+        assert due.hour == 9
+        assert due.date() == (now + timedelta(days=1)).date()
+
+    def test_in_case_insensitive(self) -> None:
+        """'IN 30M' — регистронезависимость."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("IN 30M", now=now)
+        assert int((due - now).total_seconds()) == 1800
+
+    def test_rus_short_minutes(self) -> None:
+        """'5 минут' (без 'через') — краткая рус. форма."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("5 минут", now=now)
+        assert int((due - now).total_seconds()) == 300
+
+    def test_rus_short_hours(self) -> None:
+        """'2 часа' (без 'через') — краткая рус. форма."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("2 часа", now=now)
+        assert int((due - now).total_seconds()) == 7200
+
+    def test_rus_short_seconds(self) -> None:
+        """'30 секунд' (без 'через') — краткая рус. форма."""
+        now = datetime.now().astimezone().replace(microsecond=0)
+        due = parse_due_time("30 секунд", now=now)
+        assert int((due - now).total_seconds()) == 30
