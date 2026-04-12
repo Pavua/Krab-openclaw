@@ -7634,6 +7634,62 @@ class WebApp:
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
+        @self.app.get("/api/costs/budget")
+        async def get_costs_budget():
+            """Состояние бюджета: лимит, потрачено, осталось, статус."""
+            try:
+                from ..core.cost_analytics import cost_analytics as _ca
+
+                budget = _ca.get_monthly_budget_usd()
+                spent = _ca.get_monthly_cost_usd()
+                remaining = _ca.get_remaining_budget_usd()
+                return {
+                    "ok": True,
+                    "budget": {
+                        "monthly_limit_usd": budget if budget > 0 else None,
+                        "spent_usd": round(spent, 6),
+                        "remaining_usd": round(remaining, 6) if remaining is not None else None,
+                        "budget_ok": _ca.check_budget_ok(),
+                        "used_pct": round(spent / budget * 100, 2) if budget > 0 else None,
+                        "forecast_calls": _ca.monthly_calls_forecast(),
+                    },
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        @self.app.get("/api/costs/history")
+        async def get_costs_history(limit: int = 20, channel: str = ""):
+            """История вызовов модели: последние N записей, опционально фильтр по channel."""
+            try:
+                from ..core.cost_analytics import cost_analytics as _ca
+
+                calls = list(_ca._calls)
+                # Фильтр по каналу если задан
+                if channel:
+                    calls = [r for r in calls if r.channel == channel]
+                # Самые последние первыми
+                calls = calls[-limit:][::-1]
+                return {
+                    "ok": True,
+                    "total_records": len(_ca._calls),
+                    "returned": len(calls),
+                    "history": [
+                        {
+                            "model_id": r.model_id,
+                            "input_tokens": r.input_tokens,
+                            "output_tokens": r.output_tokens,
+                            "cost_usd": round(r.cost_usd, 6),
+                            "timestamp": r.timestamp,
+                            "channel": r.channel,
+                            "is_fallback": r.is_fallback,
+                            "tool_calls_count": r.tool_calls_count,
+                        }
+                        for r in calls
+                    ],
+                }
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
         @self.app.get("/api/swarm/status")
         async def get_swarm_status():
             """Статус мультиагентного свёрма для /swarm dashboard."""
