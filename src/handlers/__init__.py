@@ -218,4 +218,5 @@ __all__ = [
     "handle_run",
     "apply_spam_action",
     "handle_afk",
+    "handle_snippet",
 ]
