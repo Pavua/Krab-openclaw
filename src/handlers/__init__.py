@@ -34,6 +34,7 @@ from .command_handlers import (
     handle_define,
     handle_del,
     handle_diagnose,
+    handle_diff,
     handle_digest,
     handle_dns,
     handle_export,
@@ -95,6 +96,7 @@ from .command_handlers import (
     handle_summary,
     handle_swarm,
     handle_sysinfo,
+    handle_tag,
     handle_timer,
     handle_todo,
     handle_translate,
@@ -219,4 +221,6 @@ __all__ = [
     "apply_spam_action",
     "handle_afk",
     "handle_snippet",
+    "handle_diff",
+    "handle_tag",
 ]

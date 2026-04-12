@@ -8573,6 +8573,101 @@ async def handle_sed(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Утилита для сравнения текстов (!diff)
+# ---------------------------------------------------------------------------
+
+
+def _build_diff_output(old_text: str, new_text: str) -> str:
+    """
+    Сравнивает two texts и возвращает unified diff в Telegram-формате.
+
+    Строки старого текста помечаются «- », нового — «+ », общие — «  ».
+    Заголовки @@ из unified_diff опускаются.
+    """
+    import difflib
+
+    old_lines = old_text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
+
+    # lineterm="" убирает \n из строк difflib — управляем переносами сами
+    diff_lines: list[str] = []
+    for line in difflib.unified_diff(old_lines, new_lines, lineterm=""):
+        if line.startswith("---") or line.startswith("+++"):
+            # Заголовки файлов не нужны
+            continue
+        if line.startswith("@@"):
+            # Разделитель блоков — вставляем пустую строку для читаемости
+            if diff_lines:
+                diff_lines.append("")
+            continue
+        # Убираем завершающий \n если он есть (splitlines убрал, но diff мог добавить)
+        diff_lines.append(line.rstrip("\n"))
+
+    return "\n".join(diff_lines)
+
+
+async def handle_diff(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !diff — сравнение двух текстов в unified-формате (как git diff).
+
+    Использование:
+      В reply на сообщение + текст в команде:
+        !diff <новый текст>  — сравнивает текст reply (старый) с аргументом (новый)
+
+    Вывод:
+      - строка   → только в старом
+      + строка   → только в новом
+        строка   → общая
+    """
+    args = bot._get_command_args(message).strip()
+
+    # Определяем тексты для сравнения
+    reply = message.reply_to_message
+    reply_text: str | None = None
+    if reply:
+        reply_text = (reply.text or reply.caption or "").strip() or None
+
+    if reply_text is None:
+        raise UserInputError(
+            user_message=(
+                "📊 **!diff — сравнение текстов**\n\n"
+                "Используй в reply на сообщение:\n"
+                "`!diff <новый текст>` — сравнивает текст reply с твоим текстом\n\n"
+                "_Старый текст — сообщение, на которое отвечаешь._\n"
+                "_Новый текст — аргумент команды._"
+            )
+        )
+
+    if not args:
+        raise UserInputError(
+            user_message=(
+                "❌ Укажи новый текст: `!diff <текст>`\n"
+                "_Старый текст берётся из reply-сообщения._"
+            )
+        )
+
+    old_text = reply_text
+    new_text = args
+
+    diff_body = _build_diff_output(old_text, new_text)
+
+    if not diff_body.strip():
+        await message.reply("✅ Тексты идентичны — различий нет.")
+        return
+
+    separator = "─" * 5
+    header = f"📊 **Diff**\n{separator}"
+    full_output = f"{header}\n```\n{diff_body}\n```"
+
+    # Telegram ограничивает длину — режем если нужно
+    if len(full_output) > 3900:
+        diff_body_trimmed = diff_body[: 3800 - len(header)]
+        full_output = f"{header}\n```\n{diff_body_trimmed}\n…(обрезано)```"
+
+    await message.reply(full_output)
+
+
+# ---------------------------------------------------------------------------
 # Управление стикерами (!sticker)
 # ---------------------------------------------------------------------------
 
@@ -9463,3 +9558,357 @@ async def handle_snippet(bot: "KraabUserbot", message: Message) -> None:
     created = snippets[name].get("created_at", "")
     header = f"📄 **{name}**" + (f" _(сохранён {created[:10]})_" if created else "")
     await message.reply(f"{header}\n```\n{code}\n```")
+
+
+# ---------------------------------------------------------------------------
+# !tag — теги на сообщения
+# ---------------------------------------------------------------------------
+
+_TAGS_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "message_tags.json"
+
+
+def _load_tags() -> dict[str, dict[str, list[str]]]:
+    """Загружает теги из JSON. Формат: {chat_id: {message_id: [tags]}}."""
+    try:
+        if _TAGS_FILE.exists():
+            return json.loads(_TAGS_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _save_tags(data: dict[str, dict[str, list[str]]]) -> None:
+    """Сохраняет теги в JSON-файл."""
+    _TAGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _TAGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _make_msg_link(chat_id: int, message_id: int) -> str:
+    """Формирует ссылку на сообщение Telegram."""
+    if chat_id < 0:
+        # Супергруппы/каналы: -100XXXXXXXXXX → t.me/c/XXXXXXXXXX/id
+        numeric = str(chat_id).lstrip("-")
+        if numeric.startswith("100"):
+            numeric = numeric[3:]
+        return f"https://t.me/c/{numeric}/{message_id}"
+    return f"https://t.me/c/{chat_id}/{message_id}"
+
+
+async def handle_tag(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !tag <тег>              — в reply → добавляет тег к сообщению
+    !tag list               — все теги (уникальные) с количеством
+    !tag find <тег>         — сообщения с тегом (ссылки)
+    !tag del <тег>          — удалить тег с сообщения (в reply)
+    """
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split(None, 1)
+
+    chat_id = message.chat.id
+
+    # --- !tag list ---
+    if not parts or parts[0].lower() == "list":
+        tags_data = _load_tags()
+        chat_key = str(chat_id)
+        chat_tags = tags_data.get(chat_key, {})
+        # Собираем все теги с подсчётом
+        counter: dict[str, int] = {}
+        for tag_list in chat_tags.values():
+            for t in tag_list:
+                counter[t] = counter.get(t, 0) + 1
+        if not counter:
+            await message.reply("🏷 Тегов нет. Используй `!tag <тег>` в reply на сообщение.")
+            return
+        lines = [f"• `{t}` — {n} сообщ." for t, n in sorted(counter.items())]
+        await message.reply("🏷 **Теги в этом чате:**\n" + "\n".join(lines))
+        return
+
+    subcommand = parts[0].lower()
+
+    # --- !tag find <тег> ---
+    if subcommand == "find":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи тег: `!tag find <тег>`")
+        needle = parts[1].strip().lower()
+        tags_data = _load_tags()
+        chat_key = str(chat_id)
+        chat_tags = tags_data.get(chat_key, {})
+        matches = [
+            int(msg_id)
+            for msg_id, tag_list in chat_tags.items()
+            if needle in [t.lower() for t in tag_list]
+        ]
+        if not matches:
+            await message.reply(f"🔍 Нет сообщений с тегом `{needle}`.")
+            return
+        links = [_make_msg_link(chat_id, mid) for mid in sorted(matches)]
+        header = f"🔍 Сообщения с тегом `{needle}` ({len(links)}):"
+        await message.reply(header + "\n" + "\n".join(links))
+        return
+
+    # --- !tag del <тег> ---
+    if subcommand == "del":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи тег: `!tag del <тег>` в reply на сообщение")
+        tag = parts[1].strip()
+        replied = message.reply_to_message
+        if replied is None:
+            raise UserInputError(user_message="❌ Ответь на сообщение командой `!tag del <тег>`")
+        msg_id = str(replied.id)
+        chat_key = str(chat_id)
+        tags_data = _load_tags()
+        tag_list = tags_data.get(chat_key, {}).get(msg_id, [])
+        if tag not in tag_list:
+            raise UserInputError(user_message=f"❌ Тег `{tag}` не найден на этом сообщении.")
+        tag_list.remove(tag)
+        if tag_list:
+            tags_data[chat_key][msg_id] = tag_list
+        else:
+            del tags_data[chat_key][msg_id]
+            if not tags_data[chat_key]:
+                del tags_data[chat_key]
+        _save_tags(tags_data)
+        await message.reply(f"🗑 Тег `{tag}` удалён с сообщения.")
+        return
+
+    # --- !tag <тег> в reply — добавить тег ---
+    tag = parts[0].strip()
+    # Тег — одно слово без пробелов
+    if " " in tag:
+        raise UserInputError(user_message="❌ Тег должен быть одним словом без пробелов.")
+    replied = message.reply_to_message
+    if replied is None:
+        raise UserInputError(user_message="❌ Ответь на сообщение командой `!tag <тег>`")
+    msg_id = str(replied.id)
+    chat_key = str(chat_id)
+    tags_data = _load_tags()
+    chat_tags = tags_data.setdefault(chat_key, {})
+    tag_list = chat_tags.setdefault(msg_id, [])
+    if tag in tag_list:
+        await message.reply(f"ℹ️ Тег `{tag}` уже есть на этом сообщении.")
+        return
+    tag_list.append(tag)
+    _save_tags(tags_data)
+    await message.reply(f"🏷 Тег `{tag}` добавлен.")
+
+
+# ---------------------------------------------------------------------------
+# handle_link — утилиты для URL: preview, expand, reply-анализ
+# ---------------------------------------------------------------------------
+
+# Паттерн для поиска URL в тексте
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+# Набор коротких доменов (для _is_short_url)
+_SHORT_DOMAINS = frozenset(
+    [
+        "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "buff.ly",
+        "short.link", "rb.gy", "cutt.ly", "is.gd", "v.gd", "tiny.cc",
+        "shorturl.at", "clck.ru", "vk.cc",
+    ]
+)
+
+
+def _is_short_url(url: str) -> bool:
+    """Проверяет, является ли URL коротким (шорт-линк)."""
+    try:
+        from urllib.parse import urlparse  # noqa: PLC0415
+        host = urlparse(url).netloc.lower().lstrip("www.")
+        return host in _SHORT_DOMAINS
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _fetch_link_meta(url: str, *, timeout: float = 10.0) -> dict:
+    """
+    Загружает страницу по URL и извлекает мета-теги: title, description, og:image.
+    Возвращает dict с ключами title, description, image, final_url.
+    """
+    _headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "ru,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    result: dict = {
+        "title": "",
+        "description": "",
+        "image": "",
+        "final_url": url,
+    }
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=timeout,
+        headers=_headers,
+    ) as client:
+        resp = await client.get(url)
+        result["final_url"] = str(resp.url)
+        html = resp.text
+
+    # Парсим <title>
+    title_match = re.search(
+        r"<title[^>]*>([^<]{1,300})</title>", html, re.IGNORECASE | re.DOTALL
+    )
+    if title_match:
+        result["title"] = re.sub(r"\s+", " ", title_match.group(1)).strip()
+
+    # og:title перекрывает <title>
+    og_title = re.search(
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']{1,300})["\']',
+        html, re.IGNORECASE,
+    )
+    if og_title:
+        result["title"] = og_title.group(1).strip()
+
+    # og:description или meta description
+    og_desc = re.search(
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']{1,500})["\']',
+        html, re.IGNORECASE,
+    )
+    if not og_desc:
+        og_desc = re.search(
+            r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{1,500})["\']',
+            html, re.IGNORECASE,
+        )
+    if og_desc:
+        result["description"] = og_desc.group(1).strip()
+
+    # og:image
+    og_img = re.search(
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']{1,500})["\']',
+        html, re.IGNORECASE,
+    )
+    if og_img:
+        result["image"] = og_img.group(1).strip()
+
+    return result
+
+
+async def _expand_url(url: str, *, timeout: float = 10.0) -> str:
+    """
+    Разворачивает короткий URL через HEAD-запрос с редиректами.
+    Возвращает финальный URL.
+    """
+    _headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+    }
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=timeout,
+        headers=_headers,
+    ) as client:
+        resp = await client.head(url)
+        return str(resp.url)
+
+
+def _format_link_preview(meta: dict) -> str:
+    """Форматирует мета-данные ссылки в стандартный блок."""
+    lines = ["🔗 **Link Preview**", "─────"]
+    if meta.get("title"):
+        lines.append(f"Title: {meta['title']}")
+    if meta.get("description"):
+        desc = meta["description"]
+        if len(desc) > 200:
+            desc = desc[:197] + "..."
+        lines.append(f"Description: {desc}")
+    lines.append(f"URL: {meta['final_url']}")
+    if meta.get("image"):
+        lines.append(f"Image: {meta['image']}")
+    return "\n".join(lines)
+
+
+async def handle_link(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда !link — утилиты для ссылок.
+
+    !link preview <URL>   — мета-данные страницы (title, description, og:image)
+    !link expand <URL>    — разворачивает короткий URL (HEAD + follow redirects)
+    !link (в reply)       — анализирует первую ссылку из reply-сообщения
+    """
+    args_raw = bot._get_command_args(message).strip()
+
+    # --- reply без аргументов: берём первую ссылку из quoted сообщения ---
+    if not args_raw and message.reply_to_message:
+        reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+        urls = _URL_RE.findall(reply_text)
+        if not urls:
+            raise UserInputError(user_message="❌ В reply-сообщении нет ссылок.")
+        url = urls[0]
+        await message.reply("⏳ Анализирую ссылку...")
+        try:
+            meta = await _fetch_link_meta(url)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось загрузить: {exc}") from exc
+        await message.reply(_format_link_preview(meta), disable_web_page_preview=True)
+        return
+
+    parts = args_raw.split(maxsplit=1)
+    if not parts:
+        raise UserInputError(
+            user_message=(
+                "❌ Использование:\n"
+                "`!link preview <URL>` — превью страницы\n"
+                "`!link expand <URL>` — развернуть короткую ссылку\n"
+                "Или ответь на сообщение: `!link`"
+            )
+        )
+
+    subcommand = parts[0].lower()
+
+    # --- !link preview <URL> ---
+    if subcommand == "preview":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи URL: `!link preview <URL>`")
+        url = parts[1].strip()
+        await message.reply("⏳ Загружаю превью...")
+        try:
+            meta = await _fetch_link_meta(url)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось загрузить: {exc}") from exc
+        await message.reply(_format_link_preview(meta), disable_web_page_preview=True)
+        return
+
+    # --- !link expand <URL> ---
+    if subcommand == "expand":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи URL: `!link expand <URL>`")
+        url = parts[1].strip()
+        await message.reply("⏳ Разворачиваю ссылку...")
+        try:
+            final = await _expand_url(url)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось развернуть: {exc}") from exc
+        if final == url:
+            text = f"🔗 URL не изменился:\n`{final}`"
+        else:
+            text = f"🔗 **Expand**\n─────\nИсходный: `{url}`\nФинальный: `{final}`"
+        await message.reply(text, disable_web_page_preview=True)
+        return
+
+    # --- !link <URL> без subcommand (автоопределение) ---
+    # Если первый аргумент выглядит как URL — делаем preview
+    if parts[0].startswith(("http://", "https://")):
+        url = args_raw.strip()
+        await message.reply("⏳ Загружаю превью...")
+        try:
+            meta = await _fetch_link_meta(url)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось загрузить: {exc}") from exc
+        await message.reply(_format_link_preview(meta), disable_web_page_preview=True)
+        return
+
+    raise UserInputError(
+        user_message=(
+            "❌ Неизвестная подкоманда. Использование:\n"
+            "`!link preview <URL>` — превью страницы\n"
+            "`!link expand <URL>` — развернуть короткую ссылку\n"
+            "Или ответь на сообщение: `!link`"
+        )
+    )
