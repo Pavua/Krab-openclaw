@@ -8118,6 +8118,182 @@ async def handle_rand(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# !quote — случайные и сохранённые цитаты
+# ---------------------------------------------------------------------------
+
+# Встроенный набор мотивационных цитат (~50 шт.) на русском и английском
+_BUILTIN_QUOTES: list[str] = [
+    "Успех — это не конечная точка, провал — не смертельный исход. Важна лишь смелость продолжать. — Уинстон Черчилль",
+    "В середине каждой трудности лежит возможность. — Альберт Эйнштейн",
+    "Жизнь — это то, что происходит с тобой, пока ты строишь другие планы. — Джон Леннон",
+    "Будь собой — все остальные роли уже заняты. — Оскар Уайльд",
+    "Единственный способ делать великую работу — любить то, что ты делаешь. — Стив Джобс",
+    "Не важно, как медленно ты идёшь, главное — не останавливаться. — Конфуций",
+    "Верь, что можешь, — и ты уже на полпути. — Теодор Рузвельт",
+    "Жизнь прожита не зря, если ты зажёг хотя бы одну свечу во тьме. — Ромен Роллан",
+    "Сначала они тебя игнорируют, потом смеются над тобой, потом борются с тобой. Потом ты побеждаешь. — Махатма Ганди",
+    "Человек рождён для счастья, как птица для полёта. — Владимир Короленко",
+    "Всё, что нас не убивает, делает нас сильнее. — Фридрих Ницше",
+    "Чтобы дойти до цели, надо прежде всего идти. — Оноре де Бальзак",
+    "Мечтай, как будто ты будешь жить вечно. Живи, как будто ты умрёшь сегодня. — Джеймс Дин",
+    "Не бойся медленно продвигаться вперёд. Бойся стоять на месте. — Китайская пословица",
+    "Смелость — это не отсутствие страха, а решимость победить его. — Нельсон Мандела",
+    "Каждый день — это новая возможность изменить свою жизнь. — Сэр Пол Маккартни",
+    "Лучшее время, чтобы посадить дерево, было 20 лет назад. Второе лучшее время — сейчас. — Китайская пословица",
+    "Ты не можешь вернуться назад и изменить начало, но ты можешь начать сейчас и изменить конец. — К.С. Льюис",
+    "Величайшая слава в жизни — не в том, чтобы никогда не падать, а в том, чтобы каждый раз подниматься. — Нельсон Мандела",
+    "Стремись не к тому, чтобы добиться успеха, а к тому, чтобы твоя жизнь имела смысл. — Альберт Эйнштейн",
+    "Делай, что можешь, тем, что имеешь, там, где ты есть. — Теодор Рузвельт",
+    "Счастье — это когда то, что ты думаешь, то, что ты говоришь, и то, что ты делаешь, находятся в гармонии. — Махатма Ганди",
+    "Измени своё мышление, и ты изменишь свой мир. — Норман Пил",
+    "Опыт — это то, что ты получаешь, когда не получаешь того, чего хотел. — Рэнди Пауш",
+    "Проблема людей в том, что они слишком долго думают, прежде чем начать. — Конфуций",
+    "Начни где стоишь. Используй что имеешь. Делай что можешь. — Артур Эш",
+    "It does not matter how slowly you go as long as you do not stop. — Confucius",
+    "In the middle of difficulty lies opportunity. — Albert Einstein",
+    "The only way to do great work is to love what you do. — Steve Jobs",
+    "Success is not final, failure is not fatal: It is the courage to continue that counts. — Winston Churchill",
+    "Believe you can and you\'re halfway there. — Theodore Roosevelt",
+    "The future belongs to those who believe in the beauty of their dreams. — Eleanor Roosevelt",
+    "It always seems impossible until it\'s done. — Nelson Mandela",
+    "You are never too old to set another goal or to dream a new dream. — C.S. Lewis",
+    "The only limit to our realization of tomorrow will be our doubts of today. — Franklin D. Roosevelt",
+    "Act as if what you do makes a difference. It does. — William James",
+    "Hardships often prepare ordinary people for an extraordinary destiny. — C.S. Lewis",
+    "Keep your eyes on the stars and your feet on the ground. — Theodore Roosevelt",
+    "Life is what happens when you\'re busy making other plans. — John Lennon",
+    "Happiness is when what you think, what you say, and what you do are in harmony. — Mahatma Gandhi",
+    "Be the change you wish to see in the world. — Mahatma Gandhi",
+    "The best time to plant a tree was 20 years ago. The second best time is now. — Chinese Proverb",
+    "Dream as if you\'ll live forever. Live as if you\'ll die today. — James Dean",
+    "Don\'t watch the clock; do what it does. Keep going. — Sam Levenson",
+    "You miss 100% of the shots you don\'t take. — Wayne Gretzky",
+    "The secret of getting ahead is getting started. — Mark Twain",
+    "Whether you think you can or you think you can\'t, you\'re right. — Henry Ford",
+    "Twenty years from now you will be more disappointed by the things you didn\'t do. — Mark Twain",
+    "The way to get started is to quit talking and begin doing. — Walt Disney",
+    "Innovation distinguishes between a leader and a follower. — Steve Jobs",
+]
+
+# Путь к файлу с пользовательскими цитатами
+_SAVED_QUOTES_PATH = (
+    pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_quotes.json"
+)
+
+
+def _load_saved_quotes() -> list[dict]:
+    """Загружает сохранённые цитаты из JSON-файла."""
+    if not _SAVED_QUOTES_PATH.exists():
+        return []
+    try:
+        data = json.loads(_SAVED_QUOTES_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_quotes(quotes: list[dict]) -> None:
+    """Сохраняет список цитат в JSON-файл."""
+    _SAVED_QUOTES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _SAVED_QUOTES_PATH.write_text(
+        json.dumps(quotes, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+async def handle_quote(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда цитат.
+
+    Синтаксис:
+      !quote              — случайная встроенная мотивационная цитата
+      !quote save         — сохранить цитируемое сообщение (reply)
+      !quote my           — случайная из сохранённых
+      !quote list         — список всех сохранённых цитат
+    """
+    import random
+
+    args = bot._get_command_args(message).strip().lower()
+
+    # --- !quote save ---
+    if args == "save":
+        reply = message.reply_to_message
+        if not reply:
+            await message.reply("💬 Ответь на сообщение, которое хочешь сохранить как цитату.")
+            return
+        text = (reply.text or reply.caption or "").strip()
+        if not text:
+            await message.reply("💬 Сообщение не содержит текста.")
+            return
+        # Автор: имя пользователя или «неизвестно»
+        sender = reply.from_user
+        if sender:
+            author = sender.first_name or ""
+            if sender.last_name:
+                author = f"{author} {sender.last_name}".strip()
+            if not author and sender.username:
+                author = f"@{sender.username}"
+        else:
+            author = "Неизвестно"
+        saved = _load_saved_quotes()
+        entry = {
+            "text": text,
+            "author": author,
+            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        saved.append(entry)
+        _save_quotes(saved)
+        await message.reply(f"✅ Цитата сохранена (#{len(saved)}):\n\n_{text}_\n— **{author}**")
+        return
+
+    # --- !quote my ---
+    if args == "my":
+        saved = _load_saved_quotes()
+        if not saved:
+            await message.reply(
+                "📭 У тебя пока нет сохранённых цитат. Используй `!quote save` в reply."
+            )
+            return
+        entry = random.choice(saved)
+        text = entry.get("text", "")
+        author = entry.get("author", "Неизвестно")
+        await message.reply(f"💬 _{text}_\n— **{author}**")
+        return
+
+    # --- !quote list ---
+    if args == "list":
+        saved = _load_saved_quotes()
+        if not saved:
+            await message.reply("📭 Нет сохранённых цитат. Используй `!quote save` в reply.")
+            return
+        lines = []
+        for i, entry in enumerate(saved, 1):
+            text = entry.get("text", "")
+            author = entry.get("author", "?")
+            # Обрезаем длинный текст для списка
+            preview = text[:80] + "…" if len(text) > 80 else text
+            lines.append(f"{i}. _{preview}_ — **{author}**")
+        reply_text = "📚 **Сохранённые цитаты:**\n\n" + "\n".join(lines)
+        await message.reply(reply_text)
+        return
+
+    # --- неизвестная подкоманда — справка ---
+    if args and args not in ("save", "my", "list"):
+        await message.reply(
+            "💬 **!quote** — цитаты\n\n"
+            "`!quote` — случайная мотивационная цитата\n"
+            "`!quote save` — сохранить цитируемое сообщение (reply)\n"
+            "`!quote my` — случайная из сохранённых\n"
+            "`!quote list` — все сохранённые цитаты"
+        )
+        return
+
+    # --- !quote (без аргументов) — случайная встроенная цитата ---
+    quote = random.choice(_BUILTIN_QUOTES)
+    await message.reply(f"💬 _{quote}_")
+
+
+# ---------------------------------------------------------------------------
 # !define — определение слова/термина через AI
 # ---------------------------------------------------------------------------
 

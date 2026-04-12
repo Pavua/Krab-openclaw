@@ -70,6 +70,7 @@ from .command_handlers import (
     handle_purge,
     handle_qr,
     handle_quiz,
+    handle_quote,
     handle_rand,
     handle_react,
     handle_read,
