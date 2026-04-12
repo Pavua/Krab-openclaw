@@ -2681,7 +2681,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
     from ..core.command_registry import registry as _reg
 
     # Эмодзи-иконки для категорий
-    _CATEGORY_ICONS: dict[str, str] = {
+    _category_icons: dict[str, str] = {
         "basic": "📋",
         "ai": "💬",
         "models": "🤖",
@@ -2696,7 +2696,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
         "system": "🖥️",
         "dev": "🛠️",
     }
-    _CATEGORY_LABELS: dict[str, str] = {
+    _category_labels: dict[str, str] = {
         "basic": "Основные",
         "ai": "AI",
         "models": "Модели",
@@ -2716,8 +2716,8 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
         """Строит текст части справки для заданных категорий."""
         parts = [header]
         for cat in cat_list:
-            icon = _CATEGORY_ICONS.get(cat, "•")
-            label = _CATEGORY_LABELS.get(cat, cat)
+            icon = _category_icons.get(cat, "•")
+            label = _category_labels.get(cat, cat)
             lines = [f"{icon} **{label}**"]
             for cmd in _reg.by_category(cat):
                 lines.append(f"`!{cmd.name}` — {cmd.description}")
@@ -6934,4 +6934,81 @@ async def handle_stopwatch(bot: "KraabUserbot", message: Message) -> None:
         "`!stopwatch stop` — остановить\n"
         "`!stopwatch lap` — отметить круг\n"
         "`!stopwatch` — текущее время"
+    )
+
+
+async def handle_todo(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Персональный менеджер задач в Telegram.
+
+    Синтаксис:
+      !todo                   — показать все задачи
+      !todo list              — то же самое
+      !todo add <текст>       — добавить задачу
+      !todo done <id>         — отметить выполненной
+      !todo del <id>          — удалить задачу
+      !todo clear done        — очистить выполненные
+    """
+    from ..core.personal_todo import personal_todo_service
+
+    args = bot._get_command_args(message).strip()
+
+    # Без аргументов или "list" — показать список
+    if not args or args.lower() in ("list",):
+        await message.reply(personal_todo_service.render())
+        return
+
+    parts = args.split(maxsplit=1)
+    sub = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    # --- add ---
+    if sub == "add":
+        if not rest:
+            raise UserInputError(user_message="📋 Формат: `!todo add <текст задачи>`")
+        item = personal_todo_service.add(rest)
+        await message.reply(f"✅ Задача добавлена: **{item['id']}. {item['text']}**")
+        return
+
+    # --- done ---
+    if sub == "done":
+        if not rest.isdigit():
+            raise UserInputError(user_message="📋 Формат: `!todo done <id>`")
+        todo_id = int(rest)
+        item = personal_todo_service.mark_done(todo_id)
+        if item is None:
+            raise UserInputError(user_message=f"📋 Задача #{todo_id} не найдена.")
+        await message.reply(f"✅ Отмечено выполненным: ~{item['text']}~")
+        return
+
+    # --- del ---
+    if sub in ("del", "delete", "rm"):
+        if not rest.isdigit():
+            raise UserInputError(user_message="📋 Формат: `!todo del <id>`")
+        todo_id = int(rest)
+        deleted = personal_todo_service.delete(todo_id)
+        if not deleted:
+            raise UserInputError(user_message=f"📋 Задача #{todo_id} не найдена.")
+        await message.reply(f"🗑 Задача #{todo_id} удалена.")
+        return
+
+    # --- clear done ---
+    if sub == "clear" and rest.lower() == "done":
+        count = personal_todo_service.clear_done()
+        if count == 0:
+            await message.reply("📋 Нет выполненных задач для очистки.")
+        else:
+            await message.reply(f"🗑 Очищено {count} выполненных задач.")
+        return
+
+    # Неизвестная подкоманда
+    raise UserInputError(
+        user_message=(
+            "📋 **Todo — менеджер задач**\n\n"
+            "`!todo` / `!todo list` — показать все задачи\n"
+            "`!todo add <текст>` — добавить задачу\n"
+            "`!todo done <id>` — отметить выполненной\n"
+            "`!todo del <id>` — удалить задачу\n"
+            "`!todo clear done` — очистить выполненные"
+        )
     )

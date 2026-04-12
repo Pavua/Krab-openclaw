@@ -10185,26 +10185,22 @@ class WebApp:
 
         @self.app.get("/api/commands")
         async def list_commands():
-            """Список доступных Telegram команд."""
-            return {
-                "ok": True,
-                "commands": [
-                    {"cmd": "!status", "desc": "статус системы"},
-                    {"cmd": "!model", "desc": "маршрутизация модели"},
-                    {"cmd": "!clear", "desc": "очистить историю"},
-                    {"cmd": "!voice", "desc": "голосовой профиль"},
-                    {"cmd": "!notify", "desc": "toggle tool narrations"},
-                    {"cmd": "!тишина", "desc": "режим тишины"},
-                    {"cmd": "!translator", "desc": "переводчик"},
-                    {"cmd": "!swarm", "desc": "multi-agent teams"},
-                    {"cmd": "!search", "desc": "веб-поиск"},
-                    {"cmd": "!inbox", "desc": "owner inbox"},
-                    {"cmd": "!watch", "desc": "proactive watch"},
-                    {"cmd": "!remember", "desc": "запомнить"},
-                    {"cmd": "!recall", "desc": "вспомнить"},
-                    {"cmd": "!help", "desc": "справка"},
-                ],
-            }
+            """Полный список команд с метаданными из command_registry."""
+            from ..core.command_registry import registry as _reg
+            return _reg.to_api_response()
+
+        @self.app.get("/api/commands/{name}")
+        async def get_command(name: str):
+            """Детальная информация о конкретной команде."""
+            from ..core.command_registry import registry as _reg
+            cmd = _reg.get(name)
+            if cmd is None:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Команда '{name}' не найдена",
+                )
+            return {"ok": True, "command": cmd.to_dict()}
 
         @self.app.get("/api/model/status")
         async def model_status():
