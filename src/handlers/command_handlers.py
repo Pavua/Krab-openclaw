@@ -2634,7 +2634,7 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
 async def handle_help(bot: "KraabUserbot", message: Message) -> None:
     """Справка по командам — все категории, с пагинацией если текст длинный."""
     # Лимит Telegram — 4096 символов. Делим на 2 части при превышении.
-    PAGE_LIMIT = 4000
+    page_limit = 4000
 
     part1 = """🦀 **Krab Commands** (1/2)
 ━━━━━━━━━━━━━━━
@@ -2760,7 +2760,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 
     # Отправляем одним или двумя сообщениями
     combined = part1 + "\n\n" + part2
-    if len(combined) <= PAGE_LIMIT:
+    if len(combined) <= page_limit:
         await message.reply(combined)
     else:
         await message.reply(part1)
