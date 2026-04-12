@@ -607,6 +607,12 @@ class KraabUserbot(
             await run_cmd(handle_stats, m)
 
         @self.client.on_message(
+            filters.command("who", prefixes=prefixes) & _make_command_filter("who"), group=-1
+        )
+        async def wrap_who(c, m):
+            await run_cmd(handle_who, m)
+
+        @self.client.on_message(
             filters.command("costs", prefixes=prefixes) & _make_command_filter("costs"), group=-1
         )
         async def wrap_costs(c, m):

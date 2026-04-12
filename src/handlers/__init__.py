@@ -63,6 +63,7 @@ from .command_handlers import (
     handle_voice,
     handle_watch,
     handle_web,
+    handle_who,
     handle_write,
     handle_fwd,
     handle_collect,
@@ -70,6 +71,7 @@ from .command_handlers import (
     handle_schedule,
     handle_summary,
     handle_catchup,
+    handle_translate,
 )
 
 __all__ = [
@@ -134,6 +136,8 @@ __all__ = [
     "handle_del",
     "handle_purge",
     "handle_autodel",
+    "handle_who",
     "handle_summary",
     "handle_catchup",
+    "handle_translate",
 ]
