@@ -362,6 +362,7 @@ class LLMFlowMixin:
         full_response_raw = ""
         last_edit_time = 0.0
         timeout_error_was_sent = False
+        _reaction_sent = False  # флаг: уже поставили ✅/❌ на исходное сообщение
 
         first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
             has_photo=bool(images)
@@ -943,6 +944,31 @@ class LLMFlowMixin:
                             )
                             _media_refs = _injected_screenshots
 
+            # Auto-retry: если full_response содержит retryable infrastructure error —
+            # поднимаем LLMRetryableError. Обёртка в _finish_ai_request_background
+            # поймает его и повторит запрос. Не применяется при ошибках пользователя.
+            from .llm_retry import LLMRetryableError, is_retryable_error_text
+
+            _auto_retry_count = int(getattr(config, "OPENCLAW_AUTO_RETRY_COUNT", 1))
+            # Проверяем retryable условие: timeout path ИЛИ semantic error в тексте ответа
+            _should_retry = (
+                _auto_retry_count > 0
+                and is_retryable_error_text(full_response)
+                and (timeout_error_was_sent or not received_any_chunk or not full_response_raw)
+            )
+            if _should_retry:
+                logger.info(
+                    "llm_auto_retry_signal",
+                    chat_id=chat_id,
+                    full_response_tail=repr((full_response or "")[-200:]),
+                    timeout_error_was_sent=timeout_error_was_sent,
+                    received_any_chunk=received_any_chunk,
+                )
+                raise LLMRetryableError(
+                    f"retryable_llm_error: {full_response[:120]}",
+                    error_text=full_response,
+                )
+
             full_response = self._apply_deferred_action_guard(full_response)
             self._remember_hidden_reasoning_trace(
                 chat_id=chat_id,
@@ -974,6 +1000,12 @@ class LLMFlowMixin:
                 if prefer_send_message_for_background
                 else "llm_response_delivered",
             )
+
+            # Реакция ✅ — ответ доставлен успешно.
+            # Только для owner (is_self), не для ошибочных ответов.
+            if is_self and not timeout_error_was_sent and not self._looks_like_error_surface_text(full_response):
+                asyncio.create_task(self._send_message_reaction(message, "✅"))
+                _reaction_sent = True
 
             # Post-response relay: если Краб пообещал передать в ответе, а входящее
             # не попало в _RELAY_INTENT_KEYWORDS — форсируем relay.
@@ -1123,6 +1155,9 @@ class LLMFlowMixin:
                             if os.path.exists(voice_path):
                                 os.remove(voice_path)
         finally:
+            # Реакция ❌ — если ошибка и ещё не поставили ✅.
+            if is_self and not _reaction_sent and (timeout_error_was_sent or not full_response):
+                asyncio.create_task(self._send_message_reaction(message, "❌"))
             action_stop_event.set()
             action_task.cancel()
             await asyncio.gather(action_task, return_exceptions=True)
@@ -1130,12 +1165,75 @@ class LLMFlowMixin:
     async def _finish_ai_request_background(self, **kwargs: Any) -> None:
         """Доводит long LLM/tool path до конца уже после release per-chat lock."""
         from ..core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
+        from .llm_retry import (
+            LLMRetryableError,
+            build_final_error_notice,
+            build_retry_notice,
+        )
 
         chat_id = str(kwargs.get("chat_id") or "").strip()
         incoming_item_result = kwargs.get("incoming_item_result")
         temp_msg = kwargs.get("temp_msg")
+
+        # Конфигурация auto-retry
+        max_retries = int(getattr(config, "OPENCLAW_AUTO_RETRY_COUNT", 1))
+        retry_delay_sec = float(getattr(config, "OPENCLAW_AUTO_RETRY_DELAY_SEC", 2.0))
+        last_retryable_error_text = ""
+        retry_attempt = 0
+
         try:
-            await self._run_llm_request_flow(**kwargs, prefer_send_message_for_background=True)
+            while True:
+                try:
+                    await self._run_llm_request_flow(
+                        **kwargs, prefer_send_message_for_background=True
+                    )
+                    return  # успешно — выходим
+                except LLMRetryableError as retry_err:
+                    last_retryable_error_text = retry_err.error_text
+                    if retry_attempt >= max_retries:
+                        # Все попытки исчерпаны — показываем финальную ошибку
+                        logger.warning(
+                            "llm_auto_retry_exhausted",
+                            chat_id=chat_id,
+                            attempts=retry_attempt,
+                            max_retries=max_retries,
+                            error_text=last_retryable_error_text[:200],
+                        )
+                        final_text = build_final_error_notice(
+                            original_error=last_retryable_error_text,
+                            attempts_made=retry_attempt,
+                            max_retries=max_retries,
+                        )
+                        try:
+                            if temp_msg is not None:
+                                await self._safe_edit(temp_msg, final_text)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return
+                    # Уведомляем о retry и делаем паузу
+                    retry_attempt += 1
+                    notice = build_retry_notice(
+                        attempt=retry_attempt,
+                        max_retries=max_retries,
+                        delay_sec=retry_delay_sec,
+                    )
+                    logger.info(
+                        "llm_auto_retry_attempt",
+                        chat_id=chat_id,
+                        attempt=retry_attempt,
+                        max_retries=max_retries,
+                        delay_sec=retry_delay_sec,
+                        error_text=last_retryable_error_text[:200],
+                    )
+                    try:
+                        if temp_msg is not None:
+                            temp_msg = await self._safe_edit(temp_msg, notice)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await asyncio.sleep(retry_delay_sec)
+                    # Продолжаем loop — следующая попытка
+                    continue
+
         except Exception as exc:  # noqa: BLE001
             error_type_name = type(exc).__name__
             logger.error(

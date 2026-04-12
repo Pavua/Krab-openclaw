@@ -168,6 +168,12 @@ class Config:
     OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC: float = float(
         os.getenv("OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC", "60")
     )
+    # Auto-retry при инфраструктурных ошибках LLM (quota, timeout, 5xx).
+    # Не применяется при ошибках пользователя (safety block, неверный запрос).
+    # RETRY_COUNT=0 — отключить auto-retry полностью.
+    # RETRY_DELAY_SEC — пауза перед каждой повторной попыткой.
+    OPENCLAW_AUTO_RETRY_COUNT: int = int(os.getenv("OPENCLAW_AUTO_RETRY_COUNT", "1"))
+    OPENCLAW_AUTO_RETRY_DELAY_SEC: float = float(os.getenv("OPENCLAW_AUTO_RETRY_DELAY_SEC", "2.0"))
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
     USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420"))
@@ -400,6 +406,10 @@ class Config:
         "true",
         "yes",
     )
+    # Реакции на owner-сообщения: 👀 при получении, ✅ успех, ❌ ошибка.
+    TELEGRAM_REACTIONS_ENABLED: bool = os.getenv(
+        "TELEGRAM_REACTIONS_ENABLED", "1"
+    ).strip().lower() in ("1", "true", "yes")
 
     # JSON-файл с настройками per-team Telegram аккаунтов для свёрма.
     # Формат: {"traders": {"session_name": "swarm_traders", "phone": "+34..."}, ...}
