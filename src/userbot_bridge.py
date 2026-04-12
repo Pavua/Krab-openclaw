@@ -123,6 +123,7 @@ from .handlers import (
     handle_summary,
     handle_catchup,
     handle_translate,
+    handle_export,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -925,6 +926,13 @@ class KraabUserbot(
         )
         async def wrap_translate(c, m):
             await run_cmd(handle_translate, m)
+
+        @self.client.on_message(
+            filters.command("export", prefixes=prefixes) & _make_command_filter("export"),
+            group=-1,
+        )
+        async def wrap_export(c, m):
+            await run_cmd(handle_export, m)
 
         # Обработка callback query от inline-кнопок
         @self.client.on_callback_query()
