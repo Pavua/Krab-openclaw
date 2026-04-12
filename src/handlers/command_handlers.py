@@ -5652,3 +5652,129 @@ async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
         f"**{result.original}**\n"
         f"_{result.translated}_"
     )
+
+
+async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Закладки на важные Telegram-сообщения.
+
+    Синтаксис:
+      !bookmark (или !bm) — в ответ на сообщение, сохраняет закладку
+      !bookmark list       — список всех закладок с превью
+      !bookmark search <запрос> — поиск по закладкам
+      !bookmark del <id>   — удалить закладку по ID
+    """
+    from ..core.bookmark_service import bookmark_service
+    import datetime as _dt
+
+    args = bot._get_command_args(message).strip()
+
+    # ─── help ───────────────────────────────────────────────────────────────
+    if args.lower() in ("help", "помощь", "?"):
+        raise UserInputError(
+            user_message=(
+                "🔖 **Bookmark — закладки на сообщения**\n\n"
+                "Ответь на сообщение и введи:\n"
+                "`!bookmark` или `!bm` — сохранить закладку\n"
+                "`!bookmark list` — все закладки\n"
+                "`!bookmark search <запрос>` — поиск\n"
+                "`!bookmark del <id>` — удалить"
+            )
+        )
+
+    # ─── list ───────────────────────────────────────────────────────────────
+    if args.lower() in ("list", "список", "ls"):
+        items = bookmark_service.list_all()
+        if not items:
+            await message.reply("📭 Закладок пока нет.")
+            return
+        lines = [f"🔖 **Закладки ({len(items)}):**\n"]
+        for b in items:
+            ts = _dt.datetime.fromtimestamp(b["timestamp"]).strftime("%d.%m %H:%M")
+            preview = b["text_preview"] or "—"
+            from_user = b.get("from_user") or "?"
+            lines.append(
+                f"**#{b['id']}** · {b['chat_title']} · {from_user} · {ts}\n"
+                f"   {preview}"
+            )
+        await message.reply("\n".join(lines))
+        return
+
+    # ─── search ─────────────────────────────────────────────────────────────
+    if args.lower().startswith("search ") or args.lower().startswith("поиск "):
+        query = args.split(maxsplit=1)[1].strip() if " " in args else ""
+        if not query:
+            raise UserInputError(user_message="🔍 Укажи запрос: `!bookmark search <текст>`")
+        results = bookmark_service.search(query)
+        if not results:
+            await message.reply(f"🔍 Ничего не найдено по запросу: `{query}`")
+            return
+        lines = [f"🔍 **Найдено ({len(results)}):**\n"]
+        for b in results:
+            ts = _dt.datetime.fromtimestamp(b["timestamp"]).strftime("%d.%m %H:%M")
+            lines.append(
+                f"**#{b['id']}** · {b['chat_title']} · {ts}\n"
+                f"   {b['text_preview'] or '—'}"
+            )
+        await message.reply("\n".join(lines))
+        return
+
+    # ─── del ────────────────────────────────────────────────────────────────
+    if args.lower().startswith("del ") or args.lower().startswith("delete ") or args.lower().startswith("rm "):
+        id_str = args.split(maxsplit=1)[1].strip() if " " in args else ""
+        if not id_str.isdigit():
+            raise UserInputError(user_message="❌ Укажи числовой ID: `!bookmark del <id>`")
+        bm_id = int(id_str)
+        ok = await bookmark_service.delete_async(bm_id)
+        if ok:
+            await message.reply(f"🗑 Закладка **#{bm_id}** удалена.")
+        else:
+            await message.reply(f"❌ Закладка #{bm_id} не найдена.")
+        return
+
+    # ─── save (ответ на сообщение) ──────────────────────────────────────────
+    reply = getattr(message, "reply_to_message", None)
+    if reply is None:
+        raise UserInputError(
+            user_message=(
+                "🔖 Ответь на сообщение, которое хочешь сохранить как закладку:\n"
+                "`!bookmark` или `!bm`\n\n"
+                "Другие команды:\n"
+                "`!bookmark list` · `!bookmark search <текст>` · `!bookmark del <id>`"
+            )
+        )
+
+    # Собираем данные о сообщении
+    chat = message.chat
+    chat_title: str = (
+        getattr(chat, "title", None)
+        or getattr(chat, "first_name", None)
+        or str(chat.id)
+    )
+    reply_from = getattr(reply, "from_user", None)
+    if reply_from:
+        from_name = (
+            getattr(reply_from, "username", None)
+            and f"@{reply_from.username}"
+            or getattr(reply_from, "first_name", None)
+            or str(getattr(reply_from, "id", "?"))
+        )
+    else:
+        from_name = "?"
+
+    text = str(getattr(reply, "text", None) or getattr(reply, "caption", None) or "").strip()
+    if not text:
+        text = "[медиа-сообщение без текста]"
+
+    bm = await bookmark_service.add_async(
+        chat_id=chat.id,
+        chat_title=chat_title,
+        message_id=reply.id,
+        text=text,
+        from_user=from_name,
+    )
+    await message.reply(
+        f"🔖 Закладка **#{bm['id']}** сохранена!\n"
+        f"Чат: {chat_title} · От: {from_name}\n"
+        f"_{bm['text_preview'][:100]}{'…' if len(bm['text_preview']) > 100 else ''}_"
+    )

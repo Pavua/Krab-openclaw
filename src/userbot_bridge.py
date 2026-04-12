@@ -77,6 +77,7 @@ from .handlers import (
     handle_gemini_cli,
     handle_help,
     handle_hs,
+    handle_bookmark,
     handle_inbox,
     handle_ls,
     handle_macos,
@@ -685,6 +686,14 @@ class KraabUserbot(
         )
         async def wrap_memo(c, m):
             await run_cmd(handle_memo, m)
+
+        @self.client.on_message(
+            filters.command(["bookmark", "bm"], prefixes=prefixes)
+            & _make_command_filter("bookmark"),
+            group=-1,
+        )
+        async def wrap_bookmark(c, m):
+            await run_cmd(handle_bookmark, m)
 
         @self.client.on_message(
             filters.command("remember", prefixes=prefixes) & _make_command_filter("remember"),
