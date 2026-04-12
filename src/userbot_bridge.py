@@ -142,10 +142,14 @@ from .handlers import (
     handle_calc,
     handle_b64,
     handle_define,
+    handle_len,
     handle_rand,
     handle_ip,
     handle_dns,
     handle_ping,
+    handle_currency,
+    handle_sticker,
+    handle_sed,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -467,6 +471,12 @@ class KraabUserbot(
         self._startup_state = "initializing"
         self._startup_error_code = ""
         self._startup_error = ""
+        # AFK-режим: in-memory состояние (сбрасывается при рестарте)
+        self._afk_mode: bool = False
+        self._afk_reason: str = ""
+        self._afk_since: float = 0.0
+        # Отслеживаем чаты, которым уже отправили автоответ (чтобы не спамить)
+        self._afk_replied_chats: set[str] = set()
         self._recreate_client()
 
     # _get_session_dirs, _session_name, _primary_session_file, _inspect_session_file,
@@ -1095,6 +1105,36 @@ class KraabUserbot(
         )
         async def wrap_ping(c, m):
             await run_cmd(handle_ping, m)
+
+        @self.client.on_message(
+            filters.command("currency", prefixes=prefixes) & _make_command_filter("currency"), group=-1
+        )
+        async def wrap_currency(c, m):
+            await run_cmd(handle_currency, m)
+
+        @self.client.on_message(
+            filters.command("len", prefixes=prefixes) & _make_command_filter("len"), group=-1
+        )
+        async def wrap_len(c, m):
+            await run_cmd(handle_len, m)
+
+        @self.client.on_message(
+            filters.command("count", prefixes=prefixes) & _make_command_filter("count"), group=-1
+        )
+        async def wrap_count(c, m):
+            await run_cmd(handle_len, m)
+
+        @self.client.on_message(
+            filters.command("sticker", prefixes=prefixes) & _make_command_filter("sticker"), group=-1
+        )
+        async def wrap_sticker(c, m):
+            await run_cmd(handle_sticker, m)
+
+        @self.client.on_message(
+            filters.command("sed", prefixes=prefixes) & _make_command_filter("sed"), group=-1
+        )
+        async def wrap_sed(c, m):
+            await run_cmd(handle_sed, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
@@ -3607,6 +3647,39 @@ class KraabUserbot(
                 _auto_min = int(getattr(config, "OWNER_AUTO_SILENCE_MINUTES", 5))
                 if _auto_min > 0:
                     silence_manager.auto_silence_owner_typing(chat_id, _auto_min)
+
+            # AFK-режим: owner сам написал (не команду) → автовыключение AFK
+            if self._afk_mode and is_self and not is_command:
+                self._afk_mode = False
+                self._afk_reason = ""
+                self._afk_since = 0.0
+                self._afk_replied_chats.clear()
+                logger.info("afk_auto_disabled", reason="owner_sent_message")
+
+            # AFK-режим: входящий DM от другого пользователя → автоответ (один раз на чат)
+            if (
+                self._afk_mode
+                and not is_self
+                and message.chat
+                and getattr(message.chat, "type", None) is not None
+                and str(message.chat.type).upper().endswith("PRIVATE")
+                and chat_id not in self._afk_replied_chats
+            ):
+                _afk_elapsed = int(time.time() - self._afk_since)
+                _afk_mins = _afk_elapsed // 60
+                _afk_secs = _afk_elapsed % 60
+                _afk_time_str = (
+                    f"{_afk_mins} мин {_afk_secs} с" if _afk_mins else f"{_afk_secs} с"
+                )
+                _afk_reason_part = f"\n📝 Причина: {self._afk_reason}" if self._afk_reason else ""
+                try:
+                    await message.reply(
+                        f"🌙 Я сейчас AFK (отсутствую {_afk_time_str}).{_afk_reason_part}\n"
+                        f"Отвечу когда вернусь!"
+                    )
+                    self._afk_replied_chats.add(chat_id)
+                except Exception as _afk_err:  # noqa: BLE001
+                    logger.debug("afk_autoreply_failed", error=str(_afk_err))
 
             async with self._get_chat_processing_lock(chat_id):
                 if self._consume_batched_followup_message_id(

@@ -14,6 +14,7 @@ import math as _math
 import operator as _operator
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import sys
@@ -7944,6 +7945,76 @@ def _build_define_prompt(term: str, lang: str, detailed: bool) -> str:
     )
 
 
+async def handle_len(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !len <текст> / !count <текст> — подсчёт символов, слов и строк.
+
+    Варианты:
+      !len <текст>   — статистика переданного текста
+      !len (reply)   — статистика текста ответного сообщения
+      !count <текст> — алиас для !len
+    """
+    raw_args = bot._get_command_args(message).strip()
+
+    # Если аргументов нет — берём из reply
+    if not raw_args and message.reply_to_message:
+        replied = message.reply_to_message
+        raw_args = (replied.text or replied.caption or "").strip()
+
+    if not raw_args:
+        raise UserInputError(
+            user_message=(
+                "📏 **!len — статистика текста**\n\n"
+                "`!len <текст>` — символы, слова, строки\n"
+                "`!count <текст>` — то же самое\n"
+                "_Или ответь командой на любое сообщение._"
+            )
+        )
+
+    # Подсчёт статистики
+    chars = len(raw_args)
+    words = len(raw_args.split())
+    lines = len(raw_args.splitlines()) or 1  # минимум 1 строка
+
+    # Склонение существительных
+    def _plural_chars(n: int) -> str:
+        if 11 <= n % 100 <= 19:
+            return "символов"
+        r = n % 10
+        if r == 1:
+            return "символ"
+        if 2 <= r <= 4:
+            return "символа"
+        return "символов"
+
+    def _plural_words(n: int) -> str:
+        if 11 <= n % 100 <= 19:
+            return "слов"
+        r = n % 10
+        if r == 1:
+            return "слово"
+        if 2 <= r <= 4:
+            return "слова"
+        return "слов"
+
+    def _plural_lines(n: int) -> str:
+        if 11 <= n % 100 <= 19:
+            return "строк"
+        r = n % 10
+        if r == 1:
+            return "строка"
+        if 2 <= r <= 4:
+            return "строки"
+        return "строк"
+
+    result = (
+        f"📏 Текст: {chars} {_plural_chars(chars)}, "
+        f"{words} {_plural_words(words)}, "
+        f"{lines} {_plural_lines(lines)}"
+    )
+    await message.reply(result)
+
+
 async def handle_define(bot: "KraabUserbot", message: Message) -> None:
     """
     !define <слово> [en] [подробно] — определение слова/термина через AI.
@@ -8013,3 +8084,668 @@ async def handle_define(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("handle_define_failed", term=term, error=str(exc))
         await status_msg.edit(f"❌ Не удалось получить определение «{term}»: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# !currency — конвертер валют (open.er-api.com, без ключа)
+# ---------------------------------------------------------------------------
+
+# Дефолтная целевая валюта — переопределяется через CURRENCY_DEFAULT_TARGET
+_CURRENCY_DEFAULT_TARGET: str = os.getenv("CURRENCY_DEFAULT_TARGET", "EUR").upper()
+
+# URL шаблон: base-валюта подставляется при запросе
+_CURRENCY_API_URL = "https://open.er-api.com/v6/latest/{base}"
+
+# Тайм-аут запроса к API (секунды)
+_CURRENCY_HTTP_TIMEOUT = 10.0
+
+
+def _parse_currency_args(raw: str) -> tuple[float, str, str | None]:
+    """
+    Разбирает аргументы команды !currency.
+
+    Форматы:
+      !currency 100 USD EUR    → (100.0, "USD", "EUR")
+      !currency 100 usd        → (100.0, "USD", None)  — дефолтная цель
+      !currency 100.50 GBP EUR → (100.5, "GBP", "EUR")
+
+    Raises:
+        UserInputError: при неправильном формате.
+    """
+    parts = raw.strip().split()
+    if len(parts) < 2 or len(parts) > 3:
+        raise UserInputError(
+            user_message=(
+                "💱 **Конвертер валют**\n\n"
+                "Использование:\n"
+                "`!currency <сумма> <FROM> [TO]`\n\n"
+                "Примеры:\n"
+                "`!currency 100 USD EUR` → 100 USD в EUR\n"
+                f"`!currency 100 USD` → 100 USD в {_CURRENCY_DEFAULT_TARGET} (дефолт)\n\n"
+                "_Курсы: open.er-api.com (обновляются ежечасно)_"
+            )
+        )
+    try:
+        amount = float(parts[0].replace(",", "."))
+    except ValueError:
+        raise UserInputError(user_message=f"❌ Неверная сумма: `{parts[0]}`")
+
+    if amount < 0:
+        raise UserInputError(user_message="❌ Сумма не может быть отрицательной.")
+
+    from_currency = parts[1].upper()
+    to_currency = parts[2].upper() if len(parts) == 3 else None
+    return amount, from_currency, to_currency
+
+
+async def fetch_exchange_rate(from_currency: str, to_currency: str) -> float:
+    """
+    Получает курс from_currency → to_currency через open.er-api.com.
+
+    Returns:
+        Курс (float) — сколько единиц to_currency за 1 from_currency.
+
+    Raises:
+        UserInputError: при неверном коде валюты или недоступности API.
+    """
+    url = _CURRENCY_API_URL.format(base=from_currency)
+    async with httpx.AsyncClient(timeout=_CURRENCY_HTTP_TIMEOUT) as client:
+        try:
+            resp = await client.get(url)
+        except httpx.TimeoutException:
+            raise UserInputError(user_message="❌ API курсов валют не отвечает (таймаут).")
+        except httpx.RequestError as exc:
+            raise UserInputError(user_message=f"❌ Ошибка соединения с API: {exc}")
+
+    if resp.status_code != 200:
+        raise UserInputError(
+            user_message=f"❌ API вернул статус {resp.status_code}. Попробуй позже."
+        )
+
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        raise UserInputError(user_message="❌ Не удалось разобрать ответ API.")
+
+    # Проверяем статус ответа
+    if data.get("result") != "success":
+        error_type = data.get("error-type", "unknown")
+        if error_type == "unsupported-code":
+            raise UserInputError(
+                user_message=f"❌ Неизвестная валюта: `{from_currency}`. Проверь код (ISO 4217)."
+            )
+        raise UserInputError(user_message=f"❌ API ошибка: `{error_type}`")
+
+    rates = data.get("rates", {})
+    if to_currency not in rates:
+        raise UserInputError(
+            user_message=f"❌ Неизвестная целевая валюта: `{to_currency}`. Проверь код (ISO 4217)."
+        )
+
+    return float(rates[to_currency])
+
+
+async def handle_currency(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !currency <сумма> <FROM> [TO] — конвертер валют.
+
+    Примеры:
+      !currency 100 USD EUR     → 💱 100 USD = 92.35 EUR (курс: 0.9235)
+      !currency 100 usd         → 💱 100 USD = 92.35 EUR (курс: 0.9235)
+      !currency 1500 RUB EUR    → 💱 1500 RUB = 15.20 EUR (курс: 0.0101)
+    """
+    raw_args = bot._get_command_args(message).strip()
+    if not raw_args:
+        raise UserInputError(
+            user_message=(
+                "💱 **Конвертер валют**\n\n"
+                "Использование:\n"
+                "`!currency <сумма> <FROM> [TO]`\n\n"
+                "Примеры:\n"
+                "`!currency 100 USD EUR` → 100 USD в EUR\n"
+                f"`!currency 100 USD` → 100 USD в {_CURRENCY_DEFAULT_TARGET} (дефолт)\n\n"
+                "_Курсы: open.er-api.com (обновляются ежечасно)_"
+            )
+        )
+
+    amount, from_currency, to_currency_raw = _parse_currency_args(raw_args)
+    to_currency = to_currency_raw or _CURRENCY_DEFAULT_TARGET
+
+    # Тривиальный случай: одна и та же валюта
+    if from_currency == to_currency:
+        formatted_amount = _fmt_currency(amount)
+        await message.reply(
+            f"💱 {formatted_amount} {from_currency} = {formatted_amount} {to_currency} (курс: 1)"
+        )
+        return
+
+    rate = await fetch_exchange_rate(from_currency, to_currency)
+    converted = amount * rate
+
+    amount_str = _fmt_currency(amount)
+    converted_str = _fmt_currency(converted)
+    rate_str = _fmt_currency(rate)
+
+    await message.reply(
+        f"💱 {amount_str} {from_currency} = {converted_str} {to_currency} (курс: {rate_str})"
+    )
+
+
+def _fmt_currency(val: float) -> str:
+    """Форматирует число для вывода в !currency (убирает лишние нули)."""
+    if val >= 1000:
+        return f"{val:,.2f}"
+    if val >= 0.01:
+        return f"{val:.4f}".rstrip("0").rstrip(".")
+    # Очень маленькие значения — больше знаков
+    return f"{val:.6f}".rstrip("0").rstrip(".")
+
+
+# ---------------------------------------------------------------------------
+# !welcome — автоприветствие новых участников
+# ---------------------------------------------------------------------------
+
+_WELCOME_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "welcome_messages.json"
+
+# Переменные, доступные в шаблоне приветствия
+_WELCOME_TEMPLATE_VARS = "{name}, {username}, {chat}, {count}"
+
+
+def _load_welcome_config() -> dict:
+    """Загружает конфиг приветствий из JSON-файла."""
+    if not _WELCOME_FILE.exists():
+        return {}
+    try:
+        return json.loads(_WELCOME_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_welcome_config(data: dict) -> None:
+    """Сохраняет конфиг приветствий в JSON-файл."""
+    _WELCOME_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _WELCOME_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _render_welcome_text(template: str, *, name: str, username: str, chat: str, count: int) -> str:
+    """Подставляет переменные в шаблон приветствия."""
+    return (
+        template
+        .replace("{name}", name)
+        .replace("{username}", username)
+        .replace("{chat}", chat)
+        .replace("{count}", str(count))
+    )
+
+
+async def handle_welcome(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !welcome — управление автоприветствием новых участников группы.
+
+    Синтаксис:
+      !welcome set <текст>   — установить шаблон (доступны: {name}, {username}, {chat}, {count})
+      !welcome off           — выключить приветствие для этого чата
+      !welcome status        — показать текущий шаблон и статус
+      !welcome test          — отправить тестовое приветствие (preview)
+    """
+    chat_id = str(message.chat.id)
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=2)
+    sub = parts[1].strip().lower() if len(parts) >= 2 else "status"
+
+    cfg = _load_welcome_config()
+
+    if sub == "set":
+        if len(parts) < 3 or not parts[2].strip():
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи текст приветствия.\n\n"
+                    "Пример: `!welcome set Привет, {name}! Добро пожаловать в {chat}!`\n\n"
+                    f"Доступные переменные: `{_WELCOME_TEMPLATE_VARS}`"
+                )
+            )
+        template = parts[2].strip()
+        cfg[chat_id] = {"enabled": True, "template": template}
+        _save_welcome_config(cfg)
+        await message.reply(
+            f"✅ Приветствие для этого чата установлено:\n\n_{template}_\n\n"
+            f"Переменные: `{_WELCOME_TEMPLATE_VARS}`\n"
+            "`!welcome test` — проверить, `!welcome off` — выключить"
+        )
+        return
+
+    if sub == "off":
+        if chat_id in cfg:
+            cfg[chat_id]["enabled"] = False
+            _save_welcome_config(cfg)
+        await message.reply("🔇 Автоприветствие для этого чата **выключено**.")
+        return
+
+    if sub in ("status", "show"):
+        entry = cfg.get(chat_id)
+        if not entry or not entry.get("enabled"):
+            await message.reply(
+                "ℹ️ Автоприветствие в этом чате **не настроено** или выключено.\n"
+                f"`!welcome set <текст>` — установить\n"
+                f"Переменные: `{_WELCOME_TEMPLATE_VARS}`"
+            )
+        else:
+            await message.reply(
+                f"✅ Автоприветствие **включено**:\n\n_{entry['template']}_\n\n"
+                "`!welcome off` — выключить | `!welcome test` — preview"
+            )
+        return
+
+    if sub == "test":
+        entry = cfg.get(chat_id)
+        if not entry or not entry.get("enabled"):
+            raise UserInputError(
+                user_message="❌ Приветствие не настроено. Сначала: `!welcome set <текст>`"
+            )
+        # Формируем preview с данными текущего юзера
+        user = message.from_user
+        name = getattr(user, "first_name", None) or "Новичок"
+        uname = f"@{user.username}" if getattr(user, "username", None) else name
+        chat_title = getattr(message.chat, "title", None) or "этом чате"
+        preview = _render_welcome_text(
+            entry["template"],
+            name=name,
+            username=uname,
+            chat=chat_title,
+            count=1,
+        )
+        await message.reply(f"🧪 **Preview приветствия:**\n\n{preview}")
+        return
+
+    raise UserInputError(
+        user_message=(
+            "❌ Неизвестная подкоманда.\n\n"
+            "Доступно:\n"
+            "`!welcome set <текст>` — установить\n"
+            "`!welcome off` — выключить\n"
+            "`!welcome status` — показать\n"
+            "`!welcome test` — preview"
+        )
+    )
+
+
+async def handle_new_chat_members(bot: "KraabUserbot", message: Message) -> None:
+    """Автоприветствие новых участников — вызывается на filters.new_chat_members."""
+    chat_id = str(message.chat.id)
+    cfg = _load_welcome_config()
+    entry = cfg.get(chat_id)
+    if not entry or not entry.get("enabled") or not entry.get("template"):
+        return
+
+    chat_title = getattr(message.chat, "title", None) or str(chat_id)
+    new_members = getattr(message, "new_chat_members", None) or []
+    count = len(new_members)
+
+    for member in new_members:
+        name = getattr(member, "first_name", None) or "Новичок"
+        uname = f"@{member.username}" if getattr(member, "username", None) else name
+        text = _render_welcome_text(
+            entry["template"],
+            name=name,
+            username=uname,
+            chat=chat_title,
+            count=count,
+        )
+        try:
+            await message.reply(text)
+        except Exception as exc:
+            logger.warning("welcome_send_failed", chat_id=chat_id, error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# !sed — IRC-style regex замена
+# ---------------------------------------------------------------------------
+
+# Допустимые флаги в конце выражения s/old/new/flags
+_SED_VALID_FLAGS = frozenset("gi")
+
+
+def _parse_sed_expr(expr: str) -> tuple[str, str, int]:
+    """Парсит выражение вида s/old/new/[flags].
+
+    Возвращает (pattern, replacement, re_flags).
+    Поддерживает альтернативный разделитель (любой символ после 's').
+    Бросает ValueError при некорректном формате.
+    """
+    if len(expr) < 2 or expr[0] != "s":
+        raise ValueError("Выражение должно начинаться с 's'")
+
+    sep = expr[1]  # разделитель — обычно /
+    parts = expr[2:].split(sep)
+
+    if len(parts) < 2:
+        raise ValueError("Недостаточно частей в s-выражении")
+
+    pattern = parts[0]
+    replacement = parts[1]
+    raw_flags = parts[2] if len(parts) > 2 else ""
+
+    # Проверяем флаги
+    unknown = set(raw_flags) - _SED_VALID_FLAGS
+    if unknown:
+        raise ValueError(f"Неизвестные флаги: {''.join(sorted(unknown))}")
+
+    re_flags = 0
+    count = 1  # по умолчанию — первое совпадение
+
+    if "i" in raw_flags:
+        re_flags |= re.IGNORECASE
+    if "g" in raw_flags:
+        count = 0  # 0 = все совпадения
+
+    # Компилируем паттерн — чтобы поймать ошибку до применения
+    try:
+        compiled = re.compile(pattern, re_flags)
+    except re.error as exc:
+        raise ValueError(f"Ошибка в regex: {exc}") from exc
+
+    return compiled, replacement, count
+
+
+async def handle_sed(bot: "KraabUserbot", message: Message) -> None:
+    """Обработчик !sed s/old/new/[flags] — IRC-style regex замена.
+
+    В reply на сообщение:
+    - Своё сообщение → редактирует через edit_text
+    - Чужое сообщение → отвечает «✏️ Исправление: <текст>»
+    """
+    # Получаем аргументы команды
+    raw = (message.text or "").strip()
+
+    # Убираем префикс команды (!sed / .sed / etc.)
+    # message.command содержит список частей после команды
+    parts = message.command  # pyrogram: ['sed', 's/old/new/g']
+    if not parts or len(parts) < 2:
+        await message.reply(
+            "✏️ **!sed — IRC-style замена**\n\n"
+            "Использование: `!sed s/old/new/[флаги]` в reply на сообщение\n\n"
+            "Флаги:\n"
+            "`g` — заменить все совпадения (глобально)\n"
+            "`i` — без учёта регистра\n\n"
+            "Примеры:\n"
+            "`!sed s/опечатка/слово/` — первое вхождение\n"
+            "`!sed s/foo/bar/g` — все вхождения\n"
+            "`!sed s/Hello/Привет/i` — без учёта регистра"
+        )
+        return
+
+    expr = parts[1]
+
+    try:
+        compiled, replacement, count = _parse_sed_expr(expr)
+    except ValueError as exc:
+        raise UserInputError(user_message=f"❌ {exc}") from exc
+
+    # Определяем целевое сообщение: reply или само сообщение
+    target = message.reply_to_message
+    if target is None:
+        raise UserInputError(user_message="❌ Используй `!sed` в reply на сообщение")
+
+    # Исходный текст целевого сообщения
+    original_text = target.text or target.caption or ""
+    if not original_text:
+        raise UserInputError(user_message="❌ Целевое сообщение не содержит текста")
+
+    # Применяем замену
+    new_text, n_subs = compiled.subn(replacement, original_text, count=count)
+
+    if n_subs == 0:
+        await message.reply("⚠️ Паттерн не найден в тексте")
+        return
+
+    # Определяем, является ли целевое сообщение нашим
+    me = await bot.client.get_me()
+    is_own = target.from_user and target.from_user.id == me.id
+
+    if is_own:
+        # Редактируем своё сообщение
+        try:
+            await bot.client.edit_message_text(
+                chat_id=target.chat.id,
+                message_id=target.id,
+                text=new_text,
+            )
+            # Удаляем команду-триггер, чтобы не засорять чат
+            try:
+                await message.delete()
+            except Exception:
+                pass
+        except Exception as exc:
+            await message.reply(f"❌ Не удалось отредактировать: {exc}")
+    else:
+        # Чужое сообщение — отправляем исправление как reply
+        await message.reply(f"✏️ Исправление:\n{new_text}")
+
+
+# ---------------------------------------------------------------------------
+# Управление стикерами (!sticker)
+# ---------------------------------------------------------------------------
+
+_STICKERS_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "saved_stickers.json"
+
+
+def _load_stickers() -> dict[str, str]:
+    """Загружает словарь {name: file_id} из JSON-файла."""
+    try:
+        if _STICKERS_FILE.exists():
+            return json.loads(_STICKERS_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _save_stickers(data: dict[str, str]) -> None:
+    """Сохраняет словарь {name: file_id} в JSON-файл."""
+    _STICKERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _STICKERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def handle_sticker(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !sticker save <name> — сохранить стикер (в ответ на стикер)
+    !sticker <name>      — отправить сохранённый стикер
+    !sticker list        — показать список сохранённых стикеров
+    !sticker del <name>  — удалить стикер из коллекции
+    """
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split(None, 1)
+
+    # --- !sticker list ---
+    if not parts or parts[0].lower() == "list":
+        stickers = _load_stickers()
+        if not stickers:
+            await message.reply("📭 Нет сохранённых стикеров. Используй `!sticker save <name>` в ответ на стикер.")
+            return
+        lines = [f"• `{name}`" for name in sorted(stickers)]
+        await message.reply("🗂 **Сохранённые стикеры:**\n" + "\n".join(lines))
+        return
+
+    subcommand = parts[0].lower()
+
+    # --- !sticker save <name> ---
+    if subcommand == "save":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи имя: `!sticker save <name>`")
+        name = parts[1].strip().lower()
+
+        # Ищем стикер в replied сообщении
+        replied = message.reply_to_message
+        if replied is None or replied.sticker is None:
+            raise UserInputError(user_message="❌ Ответь на стикер командой `!sticker save <name>`")
+
+        file_id = replied.sticker.file_id
+        stickers = _load_stickers()
+        stickers[name] = file_id
+        _save_stickers(stickers)
+        await message.reply(f"✅ Стикер `{name}` сохранён!")
+        return
+
+    # --- !sticker del <name> ---
+    if subcommand == "del":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи имя: `!sticker del <name>`")
+        name = parts[1].strip().lower()
+        stickers = _load_stickers()
+        if name not in stickers:
+            raise UserInputError(user_message=f"❌ Стикер `{name}` не найден.")
+        del stickers[name]
+        _save_stickers(stickers)
+        await message.reply(f"🗑 Стикер `{name}` удалён.")
+        return
+
+    # --- !sticker <name> — отправить стикер ---
+    name = parts[0].lower()
+    stickers = _load_stickers()
+    if name not in stickers:
+        raise UserInputError(
+            user_message=f"❌ Стикер `{name}` не найден. Список: `!sticker list`"
+        )
+    file_id = stickers[name]
+    await bot.client.send_sticker(message.chat.id, file_id)
+    # Удаляем исходную команду, чтобы не засорять чат
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
+# !tts — текст в голосовое сообщение (macOS say)
+# ---------------------------------------------------------------------------
+
+# Поддерживаемые языки и voice macOS say
+_TTS_VOICES: dict[str, str] = {
+    "ru": "Milena",
+    "en": "Samantha",
+    "es": "Monica",
+}
+
+# Алиасы кодов языков
+_TTS_LANG_ALIASES: dict[str, str] = {
+    "ru": "ru",
+    "en": "en",
+    "es": "es",
+    "russian": "ru",
+    "english": "en",
+    "spanish": "es",
+}
+
+
+async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !tts [lang] <текст> — голосовое сообщение через macOS say + ffmpeg.
+
+    Варианты вызова:
+      !tts Привет, мир          — русский (Milena, по умолчанию)
+      !tts en Hello world       — английский (Samantha)
+      !tts es Hola mundo        — испанский (Monica)
+      !tts (reply на сообщение) — озвучивает текст ответного сообщения
+
+    Пайплайн: say -v <Voice> -o speech.aiff <text> → ffmpeg → OGG/Opus → send_voice
+    """
+    import tempfile
+
+    from ..core.subprocess_env import clean_subprocess_env
+
+    raw = bot._get_command_args(message).strip()
+
+    # Определяем язык и текст
+    lang = "ru"
+    text = raw
+
+    if raw:
+        parts = raw.split(None, 1)
+        first = parts[0].lower()
+        if first in _TTS_LANG_ALIASES:
+            lang = _TTS_LANG_ALIASES[first]
+            text = parts[1].strip() if len(parts) > 1 else ""
+
+    # Если текста нет — проверяем reply на сообщение
+    if not text:
+        replied = getattr(message, "reply_to_message", None)
+        if replied is not None:
+            replied_text = (
+                getattr(replied, "text", None) or getattr(replied, "caption", None) or ""
+            )
+            text = replied_text.strip()
+
+    if not text:
+        raise UserInputError(
+            user_message=(
+                "🎙️ **TTS — текст в голос (macOS say)**\n\n"
+                "Использование:\n"
+                "`!tts <текст>` — русский (Milena)\n"
+                "`!tts en <текст>` — английский (Samantha)\n"
+                "`!tts es <текст>` — испанский (Monica)\n"
+                "`!tts` в ответ на сообщение — озвучить его\n\n"
+                "_Поддерживаемые языки: ru, en, es_"
+            )
+        )
+
+    voice_name = _TTS_VOICES.get(lang, _TTS_VOICES["ru"])
+
+    # Временные файлы: say генерирует AIFF, ffmpeg конвертирует в OGG/Opus
+    with tempfile.TemporaryDirectory(prefix="krab_tts_") as tmpdir:
+        aiff_path = os.path.join(tmpdir, "speech.aiff")
+        ogg_path = os.path.join(tmpdir, "speech.ogg")
+
+        try:
+            # Шаг 1: macOS say → AIFF
+            say_proc = await asyncio.create_subprocess_exec(
+                "/usr/bin/say",
+                "-v", voice_name,
+                "-o", aiff_path,
+                text,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=clean_subprocess_env(),
+            )
+            await say_proc.wait()
+            if say_proc.returncode != 0:
+                logger.error("tts_say_failed", voice=voice_name, returncode=say_proc.returncode)
+                raise UserInputError(
+                    user_message=f"❌ macOS say завершился с ошибкой (код {say_proc.returncode})."
+                )
+
+            # Шаг 2: AIFF → OGG/Opus (Telegram voice message)
+            ffmpeg_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-i", aiff_path,
+                "-c:a", "libopus",
+                "-b:a", "32k",
+                "-vbr", "on",
+                "-compression_level", "10",
+                ogg_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=clean_subprocess_env(),
+            )
+            await ffmpeg_proc.wait()
+
+            if not os.path.exists(ogg_path) or os.path.getsize(ogg_path) == 0:
+                logger.error("tts_ffmpeg_failed", aiff=aiff_path, ogg=ogg_path)
+                raise UserInputError(user_message="❌ ffmpeg не смог конвертировать аудио.")
+
+            # Шаг 3: отправляем голосовое сообщение
+            logger.info(
+                "tts_sending_voice",
+                lang=lang,
+                voice=voice_name,
+                text_len=len(text),
+                ogg_size=os.path.getsize(ogg_path),
+            )
+            await bot.client.send_voice(message.chat.id, ogg_path)
+
+        except UserInputError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error("tts_error", error=str(exc), error_type=type(exc).__name__)
+            raise UserInputError(
+                user_message=f"❌ TTS ошибка: {str(exc)[:200]}"
+            ) from exc
