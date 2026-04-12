@@ -2658,6 +2658,7 @@ async def handle_help(bot: "KraabUserbot", message: Message) -> None:
 
 **Tools**
 `!search <query>` — веб-поиск
+`!who [@user|reply]` — инфо о пользователе или чате
 `!remember <text>` — запомнить факт
 `!recall <query>` — вспомнить факт
 `!acl ...` / `!access ...` — управление full/partial доступом (owner-only)
@@ -3924,6 +3925,151 @@ async def handle_stats(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(panel)
 
 
+async def handle_who(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Информация о пользователе или чате.
+
+    Варианты использования:
+      !who                — в ответ на сообщение: инфо об авторе
+      !who @username      — инфо по username или user_id
+      !who                — без reply и без аргументов: инфо о текущем чате
+    """
+
+    def _fmt_status(user) -> str:
+        """Форматирует статус пользователя."""
+        from pyrogram.enums import UserStatus
+
+        status = getattr(user, "status", None)
+        if status is None:
+            return "неизвестен"
+        status_map = {
+            UserStatus.ONLINE: "🟢 online",
+            UserStatus.OFFLINE: "⚪ offline",
+            UserStatus.RECENTLY: "🕐 недавно в сети",
+            UserStatus.LAST_WEEK: "📅 на прошлой неделе",
+            UserStatus.LAST_MONTH: "📆 в прошлом месяце",
+            UserStatus.LONG_AGO: "⏳ давно",
+        }
+        return status_map.get(status, str(status))
+
+    args = bot._get_command_args(message).strip()
+
+    # Определяем цель: reply / аргумент / текущий чат
+    target_user_id = None
+    show_chat = False
+
+    if message.reply_to_message and not args:
+        # Ответ на сообщение — берём автора
+        replied = message.reply_to_message
+        if replied.from_user:
+            target_user_id = replied.from_user.id
+        elif replied.sender_chat:
+            target_user_id = replied.sender_chat.id
+            show_chat = True
+        else:
+            await message.reply("❓ Не могу определить отправителя сообщения.")
+            return
+    elif args:
+        # Аргумент: @username или числовой ID
+        raw = args.lstrip("@")
+        try:
+            target_user_id = int(raw)
+        except ValueError:
+            target_user_id = raw
+    else:
+        # Без аргументов и без reply — текущий чат
+        show_chat = True
+        target_user_id = message.chat.id
+
+    if show_chat:
+        # Инфо о чате
+        try:
+            chat = await bot.client.get_chat(target_user_id)
+        except Exception as exc:
+            await message.reply(f"❌ Ошибка: не удалось получить инфо о чате: {exc}")
+            return
+
+        chat_type = str(getattr(chat, "type", "")).replace("ChatType.", "")
+        members = getattr(chat, "members_count", None)
+        description = getattr(chat, "description", None) or "—"
+        username = f"@{chat.username}" if getattr(chat, "username", None) else "отсутствует"
+
+        lines = [
+            "💬 **Chat Info**",
+            "─────────────",
+            f"**Название:** {chat.title or chat.first_name or '—'}",
+            f"**Username:** {username}",
+            f"**ID:** `{chat.id}`",
+            f"**Тип:** {chat_type}",
+        ]
+        if members is not None:
+            lines.append(f"**Участников:** {members}")
+        lines.append(f"**Описание:** {description}")
+
+        await message.reply("\n".join(lines))
+        return
+
+    # Инфо о пользователе
+    try:
+        user = await bot.client.get_users(target_user_id)
+    except Exception as exc:
+        await message.reply(f"❌ Ошибка: не удалось получить инфо о пользователе: {exc}")
+        return
+
+    # Общие чаты — только для реальных пользователей (не ботов)
+    common_count: int | str = "—"
+    if not getattr(user, "is_bot", False):
+        try:
+            common_chats = await bot.client.get_common_chats(user.id)
+            common_count = len(common_chats)
+        except Exception:
+            common_count = "—"
+
+    # Bio — берём из get_chat (там полное описание)
+    bio = "—"
+    try:
+        chat_info = await bot.client.get_chat(user.id)
+        bio = getattr(chat_info, "bio", None) or "—"
+    except Exception:
+        pass
+
+    # Телефон — доступен только для контактов
+    phone = getattr(user, "phone_number", None) or "скрыт"
+
+    name_parts = [user.first_name or ""]
+    if user.last_name:
+        name_parts.append(user.last_name)
+    full_name = " ".join(name_parts).strip() or "—"
+
+    username_str = f"@{user.username}" if user.username else "—"
+    is_bot = "да" if getattr(user, "is_bot", False) else "нет"
+    is_premium = "да" if getattr(user, "is_premium", False) else "нет"
+    is_verified = "да" if getattr(user, "is_verified", False) else "нет"
+    is_restricted = "да" if getattr(user, "is_restricted", False) else "нет"
+    is_scam = " ⚠️ SCAM" if getattr(user, "is_scam", False) else ""
+    is_fake = " ⚠️ FAKE" if getattr(user, "is_fake", False) else ""
+
+    lines = [
+        f"👤 **User Info**{is_scam}{is_fake}",
+        "─────────────",
+        f"**Имя:** {full_name}",
+        f"**Username:** {username_str}",
+        f"**ID:** `{user.id}`",
+        f"**Телефон:** {phone}",
+        f"**Статус:** {_fmt_status(user)}",
+        f"**Бот:** {is_bot}",
+        f"**Premium:** {is_premium}",
+        f"**Verified:** {is_verified}",
+    ]
+    if is_restricted == "да":
+        lines.append("**Restricted:** да")
+    lines.append(f"**Bio:** {bio}")
+    if not getattr(user, "is_bot", False):
+        lines.append(f"**Общих чатов:** {common_count}")
+
+    await message.reply("\n".join(lines))
+
+
 async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     """!тишина — управление режимом тишины.
 
@@ -5037,7 +5183,7 @@ async def handle_del(bot: "KraabUserbot", message: Message) -> None:
     Включает само сообщение с командой !del.
     """
     access_profile = bot._get_access_profile(message.from_user)
-    if not access_profile.is_owner:
+    if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🚫 Только owner может удалять сообщения.")
 
     raw = bot._get_command_args(message).strip()
@@ -5086,7 +5232,7 @@ async def handle_purge(bot: "KraabUserbot", message: Message) -> None:
     Проходит историю за 60 минут, собирает ID сообщений бота и удаляет пачками.
     """
     access_profile = bot._get_access_profile(message.from_user)
-    if not access_profile.is_owner:
+    if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🚫 Только owner может использовать !purge.")
 
     chat_id = message.chat.id
@@ -5135,7 +5281,7 @@ async def handle_autodel(bot: "KraabUserbot", message: Message) -> None:
     Каждый ответ Краба в этом чате будет удалён через N секунд после отправки.
     """
     access_profile = bot._get_access_profile(message.from_user)
-    if not access_profile.is_owner:
+    if access_profile.level != AccessLevel.OWNER:
         raise UserInputError(user_message="🚫 Только owner может управлять автоудалением.")
 
     chat_id = message.chat.id
@@ -5374,3 +5520,135 @@ async def handle_catchup(bot: "KraabUserbot", message: Message) -> None:
         await handle_summary(bot, message)
     finally:
         bot._get_command_args = original_get_args  # type: ignore[method-assign]
+
+
+# ---------------------------------------------------------------------------
+# !translate — быстрый перевод текста без voice
+# ---------------------------------------------------------------------------
+
+# Поддерживаемые языки для быстрого указания через аргумент
+_TRANSLATE_LANG_ALIASES: dict[str, str] = {
+    "ru": "ru",
+    "en": "en",
+    "es": "es",
+    "fr": "fr",
+    "de": "de",
+    "it": "it",
+    "pt": "pt",
+    "uk": "uk",
+    "рус": "ru",
+    "рu": "ru",
+    "eng": "en",
+    "spa": "es",
+}
+
+
+async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !translate [lang] <текст> — быстрый перевод без voice.
+
+    Формы вызова:
+      !translate <текст>         — перевод по текущей language pair из translator profile
+      !translate en <текст>      — перевод на указанный язык
+      !translate (reply)         — перевод текста ответного сообщения
+    """
+    from ..core.translator_engine import translate_text
+    from ..openclaw_client import openclaw_client as _oc
+
+    # --- Парсинг аргументов ---
+    raw_text = str(message.text or "").strip()
+    # Убираем команду: !translate или Краб translate
+    parts = raw_text.split(maxsplit=1)
+    after_cmd = parts[1].strip() if len(parts) > 1 else ""
+
+    # Определяем target lang и текст для перевода
+    tgt_lang_override: str | None = None
+    text_to_translate: str = ""
+
+    if after_cmd:
+        # Проверяем первое слово — может быть указание языка
+        first_word, _, rest = after_cmd.partition(" ")
+        if first_word.lower() in _TRANSLATE_LANG_ALIASES:
+            tgt_lang_override = _TRANSLATE_LANG_ALIASES[first_word.lower()]
+            text_to_translate = rest.strip()
+        else:
+            text_to_translate = after_cmd.strip()
+
+    # Если текст не указан — берём из reply
+    if not text_to_translate:
+        reply_msg = getattr(message, "reply_to_message", None)
+        if reply_msg is not None:
+            text_to_translate = str(getattr(reply_msg, "text", None) or "").strip()
+        if not text_to_translate:
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи текст для перевода:\n"
+                    "`!translate <текст>`\n"
+                    "`!translate en <текст>`\n"
+                    "Или ответь командой на сообщение."
+                )
+            )
+
+    # --- Определяем языковую пару ---
+    profile = bot.get_translator_runtime_profile()
+    pair = profile.get("language_pair", "es-ru")
+
+    if tgt_lang_override:
+        # Пользователь явно указал целевой язык — автоопределяем source через language_detect
+        try:
+            from ..core.language_detect import detect_language
+
+            detected = detect_language(text_to_translate)
+            src_lang = detected if detected and detected != tgt_lang_override else "auto"
+            if src_lang == "auto" or not src_lang:
+                # Берём src из профиля если авто не сработал
+                src_lang = pair.split("-")[0] if "-" in pair else "es"
+        except Exception:
+            src_lang = pair.split("-")[0] if "-" in pair else "es"
+        tgt_lang = tgt_lang_override
+        if src_lang == tgt_lang:
+            # Если совпадает — переводим на другой (из профиля tgt)
+            tgt_lang = pair.split("-")[1] if "-" in pair else "ru"
+    else:
+        # Используем пару из профиля; language_detect определяет src
+        try:
+            from ..core.language_detect import detect_language, resolve_translation_pair
+
+            detected = detect_language(text_to_translate)
+            if detected:
+                src_lang, tgt_lang = resolve_translation_pair(detected, pair)
+            else:
+                src_lang, tgt_lang = (pair.split("-") + ["ru"])[:2]
+        except Exception:
+            src_lang, tgt_lang = (pair.split("-") + ["ru"])[:2]
+
+    # Если src == tgt — принудительно меняем tgt на второй язык пары
+    if src_lang == tgt_lang:
+        parts_pair = pair.split("-")
+        tgt_lang = parts_pair[1] if len(parts_pair) >= 2 else "ru"
+        if src_lang == tgt_lang:
+            tgt_lang = "ru"
+
+    # --- Перевод ---
+    try:
+        result = await translate_text(
+            text_to_translate,
+            src_lang,
+            tgt_lang,
+            openclaw_client=_oc,
+            chat_id="translate_cmd",
+        )
+    except Exception as exc:
+        logger.exception("handle_translate: ошибка при переводе")
+        await message.reply(f"❌ Ошибка перевода: {str(exc)[:200]}")
+        return
+
+    if not result.translated:
+        await message.reply("❌ Пустой ответ от модели.")
+        return
+
+    await message.reply(
+        f"🔄 {result.src_lang}→{result.tgt_lang} ({result.latency_ms}ms)\n"
+        f"**{result.original}**\n"
+        f"_{result.translated}_"
+    )

@@ -118,8 +118,10 @@ from .handlers import (
     handle_del,
     handle_purge,
     handle_autodel,
+    handle_who,
     handle_summary,
     handle_catchup,
+    handle_translate,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -887,6 +889,27 @@ class KraabUserbot(
         )
         async def wrap_autodel(c, m):
             await run_cmd(handle_autodel, m)
+
+        @self.client.on_message(
+            filters.command("summary", prefixes=prefixes) & _make_command_filter("summary"),
+            group=-1,
+        )
+        async def wrap_summary(c, m):
+            await run_cmd(handle_summary, m)
+
+        @self.client.on_message(
+            filters.command("catchup", prefixes=prefixes) & _make_command_filter("catchup"),
+            group=-1,
+        )
+        async def wrap_catchup(c, m):
+            await run_cmd(handle_catchup, m)
+
+        @self.client.on_message(
+            filters.command("translate", prefixes=prefixes) & _make_command_filter("translate"),
+            group=-1,
+        )
+        async def wrap_translate(c, m):
+            await run_cmd(handle_translate, m)
 
         # Обработка callback query от inline-кнопок
         @self.client.on_callback_query()
