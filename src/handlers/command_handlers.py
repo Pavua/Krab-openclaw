@@ -2632,75 +2632,139 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_help(bot: "KraabUserbot", message: Message) -> None:
-    """Справка по командам (v7.2 categories)."""
-    text = """🦀 **Команды Краба**
+    """Справка по командам — все категории, с пагинацией если текст длинный."""
+    # Лимит Telegram — 4096 символов. Делим на 2 части при превышении.
+    PAGE_LIMIT = 4000
 
-**Core**
-`!status` — статус системы
-`!clear` — очистить историю диалога
-`!config` — текущие настройки
-`!set <KEY> <VAL>` — изменить настройку
-`!restart` — перезапуск бота
+    part1 = """🦀 **Krab Commands** (1/2)
+━━━━━━━━━━━━━━━
+
+📋 **Основные**
 `!help` — эта справка
+`!stats` — статистика сессии
+`!health` — диагностика системы
+`!status` — статус всех подсистем
+`!context [clear|save]` — управление контекстом чата
+`!diagnose` — детальная диагностика подключений
+`!panel` — Owner panel (:8080)
 
-**AI / Model**
+💬 **AI**
+`!ask [вопрос]` — спросить AI о сообщении (reply → AI отвечает)
+`!translate [язык]` — перевод текста (reply или аргумент)
+`!summary [N]` — суммаризация последних N сообщений
+`!catchup` — кратко о пропущенном с момента последнего визита
+`!search <запрос>` — веб-поиск Brave
+`!report <тема>` — расширенный исследовательский отчёт
+
+🤖 **Модели**
 `!model` — статус маршрутизации
-`!model local` — принудительно локальная модель
-`!model cloud` — принудительно облачная модель
-`!model auto` — автоматический выбор
-`!model set <model_id>` — выбрать конкретную модель (из `!model scan`)
-`!model load <name>` — загрузить модель
-`!model unload` — выгрузить модель
-`!model scan` — список доступных моделей
+`!model local|cloud|auto` — выбор режима
+`!model set <id>` — конкретная модель (из `!model scan`)
+`!model load <name>|unload|scan` — управление LM Studio
+`!role [name|list]` — смена системного ролевого промпта
+`!reasoning [show|clear]` — просмотр reasoning-trace
 
-**Tools**
-`!search <query>` — веб-поиск
+🔄 **Translator**
+`!translator on|off|status|history` — управление автопереводом
+`!translator lang <from>-<to>` — языковая пара
+`!translator mode <mode>` — режим перевода
+`!translator session start|stop|pause` — сессия перевода
+
+🐝 **Swarm (рой агентов)**
+`!swarm <team> <задача>` — запустить роевой раунд
+`!swarm research <тема>` — глубокий веб-ресёрч свёрмом
+`!swarm summary` / `!swarm сводка` — сводка активностей
+`!swarm teams` — список команд (traders/coders/analysts/creative)
+`!swarm schedule [add|list|del]` — рекуррентные задачи
+`!swarm memory [team]` — персистентная память роя
+`!swarm jobs` — активные задачи свёрма
+`!swarm task board|create|done|fail|assign` — task board
+`!swarm artifacts [team]` — артефакты раундов
+`!swarm listen on|off` — ответы в DM от team-аккаунтов
+`!swarm channels|setup` — настройка live-broadcast топиков
+
+💰 **Расходы и бюджет**
+`!costs` — отчёт расходов по провайдерам
+`!costs detail` — детальная разбивка
+`!budget [сумма]` — просмотр/установка дневного бюджета
+`!digest` — weekly digest активности"""
+
+    part2 = """🦀 **Krab Commands** (2/2)
+━━━━━━━━━━━━━━━
+
+📝 **Заметки и закладки**
+`!memo <текст>` — заметка в Obsidian (reply или аргумент)
+`!note` — голосовая заметка (reply на голосовое сообщение)
+`!bookmark` / `!bm` — закладка на сообщение
+`!export [N]` — экспорт N последних сообщений чата
+`!remember <текст>` — запомнить факт в память
+`!recall <запрос>` — вспомнить факт из памяти
+`!memory recent` — последние записи памяти
+
+⚙️ **Управление сообщениями**
+`!pin` / `!unpin` — закрепить/открепить сообщение (reply)
+`!del [N]` — удалить N последних сообщений (default 1)
+`!purge` — очистить историю бота в чате
+`!autodel <сек>` — автоудаление через N секунд (0 = выключить)
+`!fwd <chat_id>` — переслать сообщение (reply)
+`!collect [N]` — собрать N сообщений чата в один текст
+`!react <эмодзи>` — поставить реакцию (reply)
+`!schedule [list|cancel|add]` — отложенные сообщения
+
+🔇 **Режимы и фильтры**
+`!voice on|off|toggle|block|unblock` — голосовые ответы
+`!voice speed <0.75..2.5>` — скорость TTS
+`!voice voice <edge-tts-id>` — голос TTS
+`!тишина [мин|стоп|глобально|расписание HH:MM-HH:MM|статус]` — режим тишины
+`!chatban [chat_id]` — заблокировать обработку чата
+`!notify on|off` — tool narrations (🔍 Ищу... 📸 Скриншот...)
+`!cap [name on|off|reset]` — матрица capabilities
+
+👤 **Пользователи и доступ**
 `!who [@user|reply]` — инфо о пользователе или чате
-`!remember <text>` — запомнить факт
-`!recall <query>` — вспомнить факт
-`!acl ...` / `!access ...` — управление full/partial доступом (owner-only)
-`!role [name|list]` — смена личности
+`!acl` / `!access` — управление full/partial доступом (owner-only)
+`!alias [add|del|list]` — алиасы команд
+`!inbox [list|ack|done|approve|reject|task]` — owner inbox / escalation
+
+⏰ **Планировщик**
 `!remind <время> | <текст>` — поставить напоминание
 `!reminders` — список активных напоминаний
 `!rm_remind <id>` — удалить напоминание
-`!cronstatus` — статус scheduler
+`!cronstatus` — статус cron scheduler
+`!monitor [add|del|list|status]` — мониторинг чатов
 `!watch status|now` — proactive watch / owner-digest
-`!memory recent` — последние записи общей памяти
-`!inbox [list|status|ack|done|cancel|approve|reject|task|approval]` — owner-visible inbox / escalation
 
-**System**
+🖥️ **Система и macOS**
+`!sysinfo` — информация о хосте (CPU/RAM/диск)
 `!ls [path]` — список файлов
 `!read <path>` — чтение файла
 `!write <file> <content>` — запись файла
-`!sysinfo` — информация о хосте
-`!mac ...` — управление macOS (clipboard / notify / apps / Finder / Notes / Reminders / Calendar)
-`!screenshot` — снимок текущей вкладки Chrome; `!screenshot ocr [lang]` — OCR; `!screenshot health` — статус CDP
-`!cap` — просмотр/toggle capabilities матрицы; `!cap <name> on|off`; `!cap reset`
-`!diagnose` — диагностика подключений
+`!mac clipboard|notify|apps|finder|notes|reminders|calendar` — macOS автоматизация
+`!screenshot [ocr [lang]|health]` — снимок Chrome / OCR / статус CDP
+`!hs <команда>` — Hammerspoon bridge
+`!web [status|open|close]` — управление браузером
+`!browser [cdp|status]` — CDP browser bridge
 
-**Dev**
+🛠️ **Dev / AI CLI**
 `!agent new <name> <prompt>` — создать агента
 `!agent list` — список агентов
-`!agent swarm <тема>` — роевой раунд (аналитик/критик/интегратор)
-`!agent swarm loop [N] <тема>` — несколько роевых раундов (итеративная доработка)
-`!voice ...` — голосовой runtime-профиль (on/off/speed/voice/delivery)
-`!notify on|off` — toggle tool narrations (🔍 Ищу... 📸 Скриншот...)
-`!тишина [мин|стоп|глобально|статус]` — режим тишины
-`!translator ...` — переводчик (lang/mode/strategy/session/test)
-`!reasoning [show|clear]` — просмотр скрытой reasoning-trace
+`!agent swarm [loop N] <тема>` — роевой dev-раунд
+`!codex <задача>` — OpenAI Codex CLI
+`!gemini <задача>` — Gemini CLI
+`!claude_cli <задача>` — Claude Code CLI
+`!opencode <задача>` — OpenCode CLI
+`!shop <url>` — Mercadona scraper
+`!clear` — очистить историю диалога
+`!config` / `!set <KEY> <VAL>` — настройки
+`!restart` — перезапуск бота"""
 
-**Swarm**
-`!swarm <team> <тема>` — запуск роевого раунда
-`!swarm teams` — список команд
-`!swarm task board|list|create|done|fail|assign` — task board
-`!swarm artifacts [team]` — артефакты раундов
-`!swarm listen on|off` — team listeners (DM ответы)
-`!swarm memory|schedule|jobs|channels|setup` — управление свёрмом
-
-`!web` — управление браузером
-`!panel` — панель управления
-"""
-    await message.reply(text)
+    # Отправляем одним или двумя сообщениями
+    combined = part1 + "\n\n" + part2
+    if len(combined) <= PAGE_LIMIT:
+        await message.reply(combined)
+    else:
+        await message.reply(part1)
+        await message.reply(part2)
 
 
 async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:
@@ -6209,3 +6273,230 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_ask_error", error=str(exc))
         await msg.edit(f"❌ Ошибка: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# !report — структурированный отчёт
+# ---------------------------------------------------------------------------
+
+def _collect_daily_report_data() -> dict:
+    """Собирает данные для дневного отчёта из доступных источников."""
+    import time as _time
+
+    from ..core.swarm_artifact_store import swarm_artifact_store
+
+    data: dict = {}
+
+    # --- Расходы за сегодня ---
+    try:
+        today_start = _time.mktime(datetime.date.today().timetuple())
+        today_calls = [r for r in cost_analytics._calls if r.timestamp >= today_start]
+        data["cost_today_usd"] = round(sum(r.cost_usd for r in today_calls), 4)
+        data["cost_month_usd"] = round(cost_analytics.get_monthly_cost_usd(), 4)
+        data["calls_today"] = len(today_calls)
+        data["tokens_today"] = sum(r.input_tokens + r.output_tokens for r in today_calls)
+    except Exception:  # noqa: BLE001
+        data["cost_today_usd"] = 0.0
+        data["cost_month_usd"] = 0.0
+        data["calls_today"] = 0
+        data["tokens_today"] = 0
+
+    # --- Swarm rounds за сегодня ---
+    try:
+        all_arts = swarm_artifact_store.list_artifacts(limit=500)
+        today_str = datetime.date.today().isoformat()
+        today_arts = [a for a in all_arts if str(a.get("timestamp_iso", "")).startswith(today_str)]
+        data["swarm_rounds_today"] = len(today_arts)
+        data["swarm_teams_today"] = sorted({a.get("team", "?") for a in today_arts})
+        data["swarm_duration_today"] = sum(a.get("duration_sec", 0) for a in today_arts)
+    except Exception:  # noqa: BLE001
+        data["swarm_rounds_today"] = 0
+        data["swarm_teams_today"] = []
+        data["swarm_duration_today"] = 0
+
+    # --- Errors/warnings из inbox ---
+    try:
+        summary = inbox_service.get_summary()
+        data["inbox_open"] = summary.get("open", 0)
+        data["inbox_errors"] = summary.get("error", 0)
+        data["inbox_warnings"] = summary.get("warning", 0)
+    except Exception:  # noqa: BLE001
+        data["inbox_open"] = 0
+        data["inbox_errors"] = 0
+        data["inbox_warnings"] = 0
+
+    return data
+
+
+def _render_daily_report(data: dict) -> str:
+    """Форматирует дневной отчёт в markdown."""
+    today = datetime.date.today().isoformat()
+    lines = [
+        f"📊 **Daily Report — {today}**",
+        "",
+        "**💰 Расходы**",
+        f"  • Сегодня: ${data['cost_today_usd']:.4f} ({data['calls_today']} вызовов, {data['tokens_today']:,} токенов)",
+        f"  • Месяц: ${data['cost_month_usd']:.4f}",
+        "",
+        "**🐝 Swarm**",
+        f"  • Раундов сегодня: {data['swarm_rounds_today']}",
+    ]
+    if data["swarm_teams_today"]:
+        lines.append(f"  • Команды: {', '.join(data['swarm_teams_today'])}")
+    if data["swarm_duration_today"]:
+        lines.append(f"  • Суммарное время: {data['swarm_duration_today']:.0f}с")
+    lines += [
+        "",
+        "**⚠️ Inbox**",
+        f"  • Открытых: {data['inbox_open']} (🔴 ошибок: {data['inbox_errors']}, 🟡 warnings: {data['inbox_warnings']})",
+    ]
+    return "\n".join(lines)
+
+
+async def handle_report(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Структурированный отчёт через LLM.
+
+    Синтаксис:
+      !report daily   — дневной отчёт (cost, swarm rounds, ошибки)
+      !report weekly  — недельный отчёт через WeeklyDigest
+      !report <тема>  — кастомный отчёт через LLM по заданной теме
+
+    Owner-only команда.
+    """
+    # Проверка прав
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    args = bot._get_command_args(message).strip()
+
+    if not args or args.lower() in {"help", "помощь"}:
+        raise UserInputError(
+            user_message=(
+                "📊 **!report — генерация отчётов**\n\n"
+                "`!report daily` — дневной отчёт (cost, swarm, ошибки)\n"
+                "`!report weekly` — недельный отчёт через WeeklyDigest\n"
+                "`!report <тема>` — кастомный отчёт через LLM по любой теме"
+            )
+        )
+
+    # --- daily ---
+    if args.lower() in {"daily", "день", "дневной"}:
+        status_msg = await message.reply("⏳ Собираю данные за сегодня...")
+        try:
+            data = _collect_daily_report_data()
+            report_text = _render_daily_report(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("handle_report_daily_failed", error=str(exc))
+            await status_msg.edit(f"❌ Ошибка сбора данных: {exc}")
+            return
+        await status_msg.edit(report_text)
+        return
+
+    # --- weekly ---
+    if args.lower() in {"weekly", "неделя", "недельный"}:
+        status_msg = await message.reply("⏳ Генерирую недельный отчёт...")
+        try:
+            result = await weekly_digest.generate_digest()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("handle_report_weekly_failed", error=str(exc))
+            await status_msg.edit(f"❌ Ошибка генерации недельного отчёта: {exc}")
+            return
+
+        if not result.get("ok"):
+            err = result.get("error", "неизвестная ошибка")
+            await status_msg.edit(f"❌ Недельный отчёт не удался: {err}")
+            return
+
+        rounds = result.get("total_rounds", 0)
+        cost = result.get("cost_week_usd", 0.0)
+        attention = result.get("attention_count", 0)
+        calls = result.get("calls_count", 0)
+        tokens = result.get("total_tokens", 0)
+
+        lines = [
+            "📊 **Weekly Report**",
+            "",
+            "**🐝 Swarm**",
+            f"  • Раундов за неделю: {rounds}",
+            "",
+            "**💰 Расходы (7 дней)**",
+            f"  • Cost: ${cost:.4f}",
+            f"  • Вызовов: {calls}",
+            f"  • Токенов: {tokens:,}",
+            "",
+            "**⚠️ Inbox (attention)**",
+            f"  • Требуют внимания: {attention}",
+        ]
+        await status_msg.edit("\n".join(lines))
+        return
+
+    # --- кастомный отчёт через LLM ---
+    topic = args
+    status_msg = await message.reply(f"⏳ Генерирую отчёт по теме: **{topic}**...")
+
+    # Собираем контекст системных данных для LLM
+    try:
+        daily_data = _collect_daily_report_data()
+        context_block = (
+            f"Текущие системные данные Краба (на {datetime.date.today().isoformat()}):\n"
+            f"- Расходы сегодня: ${daily_data['cost_today_usd']:.4f} ({daily_data['calls_today']} вызовов)\n"
+            f"- Расходы за месяц: ${daily_data['cost_month_usd']:.4f}\n"
+            f"- Swarm раундов сегодня: {daily_data['swarm_rounds_today']}\n"
+            f"- Команды сегодня: {', '.join(daily_data['swarm_teams_today']) or 'нет'}\n"
+            f"- Открытых inbox-items: {daily_data['inbox_open']} "
+            f"(ошибок: {daily_data['inbox_errors']}, warnings: {daily_data['inbox_warnings']})\n"
+        )
+    except Exception:  # noqa: BLE001
+        context_block = ""
+
+    prompt = (
+        f"Ты — аналитик Telegram userbot Краб. Напиши структурированный отчёт по теме: **{topic}**.\n\n"
+        f"{context_block}\n"
+        "Требования к отчёту:\n"
+        "- Оформи в виде markdown с секциями\n"
+        "- Выдели ключевые метрики, выводы, рекомендации\n"
+        "- Будь конкретным и кратким\n"
+        "- Отвечай на русском языке\n"
+    )
+
+    header = f"📊 **Отчёт: {topic}**\n─────────────────\n"
+    await status_msg.edit(header + "⏳ LLM генерирует...")
+
+    chunks: list[str] = []
+    last_edit_len = 0
+    edit_threshold = 200
+
+    try:
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=f"report_{message.chat.id}_{int(datetime.datetime.now().timestamp())}",
+            disable_tools=True,
+        ):
+            chunks.append(str(chunk))
+            total = "".join(chunks)
+            if len(total) - last_edit_len >= edit_threshold:
+                last_edit_len = len(total)
+                preview = total
+                max_preview = 4000 - len(header)
+                if len(preview) > max_preview:
+                    preview = preview[-max_preview:]
+                try:
+                    await status_msg.edit(header + preview)
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handle_report_llm_failed", topic=topic, error=str(exc))
+        await status_msg.edit(f"❌ Ошибка генерации отчёта: {exc}")
+        return
+
+    # Финальное обновление
+    final_text = "".join(chunks)
+    max_len = 4000 - len(header)
+    if len(final_text) > max_len:
+        final_text = final_text[-max_len:]
+    try:
+        await status_msg.edit(header + final_text)
+    except Exception:  # noqa: BLE001
+        pass

@@ -78,6 +78,7 @@ from .command_handlers import (
     handle_note,
     handle_react,
     handle_ask,
+    handle_report,
 )
 
 __all__ = [
@@ -152,4 +153,5 @@ __all__ = [
     "handle_export",
     "handle_alias",
     "handle_react",
+    "handle_report",
 ]

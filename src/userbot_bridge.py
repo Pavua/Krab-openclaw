@@ -128,6 +128,7 @@ from .handlers import (
     handle_export,
     handle_react,
     handle_ask,
+    handle_report,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -635,6 +636,12 @@ class KraabUserbot(
         )
         async def wrap_digest(c, m):
             await run_cmd(handle_digest, m)
+
+        @self.client.on_message(
+            filters.command("report", prefixes=prefixes) & _make_command_filter("report"), group=-1
+        )
+        async def wrap_report(c, m):
+            await run_cmd(handle_report, m)
 
         @self.client.on_message(
             filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1
