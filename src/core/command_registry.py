@@ -140,6 +140,12 @@ _COMMANDS: list[CommandInfo] = [
         aliases=["s"],
     ),
     CommandInfo(
+        name="weather",
+        category="ai",
+        description="Текущая погода через web_search",
+        usage="!weather [город]",
+    ),
+    CommandInfo(
         name="report",
         category="ai",
         description="Расширенный исследовательский отчёт",
@@ -549,6 +555,13 @@ _COMMANDS: list[CommandInfo] = [
         category="dev",
         description="Перезапуск бота",
         usage="!restart",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="qr",
+        category="basic",
+        description="Генерация QR-кода из текста или URL",
+        usage="!qr <текст|URL>  или ответь на сообщение",
         owner_only=True,
     ),
 ]

@@ -270,6 +270,9 @@ class Config:
         "1",
     ).strip().lower() in ("1", "true", "yes")
 
+    # Погода: город по умолчанию для !weather без аргументов
+    DEFAULT_WEATHER_CITY: str = os.getenv("DEFAULT_WEATHER_CITY", "Barcelona")
+
     # Tor SOCKS5 proxy (опционально, для анонимных запросов через Tor)
     TOR_ENABLED: bool = os.getenv("TOR_ENABLED", "0").strip().lower() in ("1", "true", "yes")
     TOR_SOCKS_PORT: int = int(os.getenv("TOR_SOCKS_PORT", "9050"))
