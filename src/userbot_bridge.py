@@ -942,6 +942,16 @@ class KraabUserbot(
         # Запускаем периодическую сводку ошибок (каждые 6 часов)
         if self._error_digest_task is None or self._error_digest_task.done():
             self._error_digest_task = proactive_watch.start_error_digest_loop()
+        # WeeklyDigest: подключаем Telegram delivery callback + запускаем loop
+        try:
+            from .core.weekly_digest import weekly_digest  # noqa: PLC0415
+
+            weekly_digest.set_telegram_callback(self._send_proactive_watch_alert)
+            wdt = getattr(self, "_weekly_digest_task", None)
+            if wdt is None or wdt.done():
+                self._weekly_digest_task = weekly_digest.start_weekly_digest_loop()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_digest_setup_failed", error=str(exc))
 
     async def _run_proactive_watch_loop(self) -> None:
         """

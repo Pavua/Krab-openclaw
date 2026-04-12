@@ -86,13 +86,19 @@ async def translate_text(
     start = time.monotonic()
     chunks: list[str] = []
 
+    # Предварительно очищаем session чтобы не тратить время на history lookup
+    try:
+        openclaw_client.clear_session(chat_id)
+    except Exception:
+        pass
+
     async for chunk in openclaw_client.send_message_stream(
         message=prompt,
         chat_id=chat_id,
         system_prompt=system,
         force_cloud=True,
-        preferred_model="google/gemini-3-flash-preview",  # flash tier для скорости перевода
-        max_output_tokens=2048,
+        preferred_model="google/gemini-3-flash-preview",
+        max_output_tokens=512,  # переводы коротких фраз, 2048 избыточно
         disable_tools=True,
     ):
         chunks.append(chunk)
@@ -100,11 +106,9 @@ async def translate_text(
     elapsed_ms = int((time.monotonic() - start) * 1000)
     translated = "".join(chunks).strip()
 
-    # Убираем возможные кавычки
     if translated.startswith('"') and translated.endswith('"'):
         translated = translated[1:-1]
 
-    # Получаем model_id из last_runtime_route
     model_id = "unknown"
     try:
         route = getattr(openclaw_client, "_last_runtime_route", None)
@@ -113,7 +117,7 @@ async def translate_text(
     except Exception:
         pass
 
-    # Чистим session после single-shot (не накапливаем history)
+    # Чистим session после single-shot
     try:
         openclaw_client.clear_session(chat_id)
     except Exception:

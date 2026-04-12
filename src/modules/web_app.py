@@ -7629,6 +7629,12 @@ class WebApp:
                     .isoformat(),
                     "input_tokens": raw.get("input_tokens", 0),
                     "output_tokens": raw.get("output_tokens", 0),
+                    # FinOps поля для dashboard migration
+                    "total_tool_calls": raw.get("total_tool_calls", 0),
+                    "total_fallbacks": raw.get("total_fallbacks", 0),
+                    "total_context_tokens": raw.get("total_context_tokens", 0),
+                    "avg_context_tokens": raw.get("avg_context_tokens", 0),
+                    "by_channel": raw.get("by_channel", {}),
                 }
                 return {"ok": True, "report": report}
             except Exception as exc:

@@ -665,6 +665,13 @@ class ProactiveWatchService:
             logger.warning("alert_check_swarm_job_stalled_failed", error=str(exc))
             results["swarm_job_stalled"] = False
 
+        # -- cost_budget ----------------------------------------------------------
+        try:
+            results["cost_budget"] = self._check_cost_budget()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("alert_check_cost_budget_failed", error=str(exc))
+            results["cost_budget"] = False
+
         logger.info("alert_checks_done", results=results)
         return results
 
@@ -802,6 +809,64 @@ class ProactiveWatchService:
             triggered_any = True
 
         return triggered_any
+
+    def _check_cost_budget(self) -> bool:
+        """
+        Проверяет расходы относительно месячного бюджета.
+
+        >80% → warning, >100% → error. Dedupe по месяцу.
+        Возвращает True если алерт сработал.
+        """
+        from .cost_analytics import cost_analytics as _ca  # noqa: PLC0415
+
+        budget = _ca.get_monthly_budget_usd()
+        if budget <= 0:
+            return False  # бюджет не установлен
+        spent = _ca.get_monthly_cost_usd()
+        pct = spent / budget * 100
+
+        if pct < 80:
+            return False
+
+        import datetime as _dt  # noqa: PLC0415
+
+        month_label = _dt.date.today().strftime("%Y-%m")
+        severity = "error" if pct >= 100 else "warning"
+        ts_now = _now_utc_iso()
+
+        inbox_service.upsert_item(
+            dedupe_key=f"proactive:alert:cost_budget:{month_label}",
+            kind="proactive_action",
+            source="krab-internal",
+            title=f"Cost Budget {'Exceeded' if pct >= 100 else 'Warning'}: {pct:.0f}%",
+            body=(
+                f"**Cost Budget Alert** — {ts_now}\n"
+                f"Потрачено: ${spent:.4f} из ${budget:.2f} ({pct:.1f}%)\n"
+                f"Осталось: ${max(0, budget - spent):.4f}"
+            ),
+            severity=severity,
+            status="open",
+            identity=inbox_service.build_identity(
+                channel_id="system",
+                team_id="owner",
+                trace_id=f"alert:cost_budget:{month_label}",
+                approval_scope="owner",
+            ),
+            metadata={
+                "action_type": "cost_budget_alert",
+                "spent_usd": round(spent, 6),
+                "budget_usd": budget,
+                "used_pct": round(pct, 2),
+                "alert_ts": ts_now,
+            },
+        )
+        logger.warning(
+            "alert_cost_budget_triggered",
+            spent=round(spent, 4),
+            budget=budget,
+            pct=round(pct, 1),
+        )
+        return True
 
     async def _run_alert_checks_loop(self) -> None:
         """Бесконечный цикл: каждые 30 минут запускает run_alert_checks."""
