@@ -150,6 +150,10 @@ from .handlers import (
     handle_currency,
     handle_sticker,
     handle_sed,
+    handle_tts,
+    handle_img,
+    handle_welcome,
+    handle_new_chat_members,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -1135,6 +1139,12 @@ class KraabUserbot(
         )
         async def wrap_sed(c, m):
             await run_cmd(handle_sed, m)
+
+        @self.client.on_message(
+            filters.command("tts", prefixes=prefixes) & _make_command_filter("tts"), group=-1
+        )
+        async def wrap_tts(c, m):
+            await run_cmd(handle_tts, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()

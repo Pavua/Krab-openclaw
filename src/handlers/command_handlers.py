@@ -8749,3 +8749,112 @@ async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
             raise UserInputError(
                 user_message=f"❌ TTS ошибка: {str(exc)[:200]}"
             ) from exc
+
+
+# ---------------------------------------------------------------------------
+# !img — описание фото через AI vision
+# ---------------------------------------------------------------------------
+
+
+async def handle_img(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Описывает фото через AI vision (multimodal).
+
+    Использование:
+      !img                — reply на фото → краткое описание
+      !img <вопрос>       — reply на фото → ответ на вопрос о фото
+
+    Требуется reply на сообщение с фото или документом-изображением.
+    Сессия изолирована: img_{chat_id} (не засоряет основной контекст).
+    Всегда force_cloud=True — vision требует облачной модели.
+    """
+    import base64
+    import io
+
+    question = bot._get_command_args(message).strip()
+
+    # Проверяем, что есть reply на сообщение
+    replied = message.reply_to_message
+    if replied is None:
+        raise UserInputError(
+            user_message=(
+                "🖼 **!img** — описание фото через AI vision\n\n"
+                "Ответь на сообщение с фото:\n"
+                "`!img` — описание\n"
+                "`!img <вопрос>` — ответ на вопрос о фото"
+            )
+        )
+
+    # Определяем наличие фото в сообщении
+    has_photo = bool(replied.photo)
+    # Документ-изображение (jpg/png/webp отправленные без сжатия)
+    has_doc_image = bool(
+        replied.document
+        and replied.document.mime_type
+        and replied.document.mime_type.startswith("image/")
+    )
+
+    if not has_photo and not has_doc_image:
+        raise UserInputError(
+            user_message=(
+                "🖼 Это сообщение не содержит фото. "
+                "Ответь командой на сообщение с фотографией."
+            )
+        )
+
+    # Статусное сообщение
+    status_msg = await message.reply("🔍 Анализирую фото...")
+
+    try:
+        # Скачиваем фото в память
+        img_bytes_io = io.BytesIO()
+        await replied.download(in_memory=img_bytes_io)
+        img_bytes_io.seek(0)
+        img_bytes = img_bytes_io.read()
+
+        if not img_bytes:
+            await status_msg.edit("❌ Не удалось скачать фото.")
+            return
+
+        # Base64-кодирование для передачи в API
+        img_b64 = base64.b64encode(img_bytes).decode("ascii")
+
+        # Формируем промпт: вопрос пользователя или дефолтное описание
+        if question:
+            prompt = question
+        else:
+            prompt = (
+                "Опиши это фото подробно. "
+                "Что на нём изображено? Текст, объекты, люди, место — всё что видишь."
+            )
+
+        # Изолированная сессия, чтобы vision-контент не загрязнял основной диалог чата
+        session_id = f"img_{message.chat.id}"
+
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            images=[img_b64],
+            force_cloud=True,
+            disable_tools=True,
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+
+        if not result:
+            await status_msg.edit("❌ AI не смог проанализировать фото.")
+            return
+
+        # Разбиваем длинный ответ если нужно
+        parts = _split_text_for_telegram(result)
+        await status_msg.edit(parts[0])
+        for part in parts[1:]:
+            await message.reply(part)
+
+    except UserInputError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_img_error", error=str(exc))
+        await status_msg.edit(f"❌ Ошибка анализа фото: {exc}")
