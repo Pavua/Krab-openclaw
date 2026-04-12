@@ -1,8 +1,43 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-12 (session 6)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-12 (session 7)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 7 (2026-04-12)
+
+> 4 коммита | 6 файлов изменено (src) + 5 тест-файлов | +27 тестов
+
+### Bugfixes
+- **`_current_runtime_primary_model` AttributeError** (`userbot_bridge.py`, `runtime_status.py`) — re-export из `llm_flow` после mixin decomposition; voice messages крашились
+- **`/api/inbox/items?status=all`** (`inbox_service.py`) — `status="all"` ошибочно фильтровал всё вместо отключения фильтра
+- **`!translator on/off/status`** (`command_handlers.py`) — добавлены shorthand алиасы (on→session start, off→session stop, status→session status)
+
+### Features
+- **FinOps поля в `/api/costs/report`** (`web_app.py`) — добавлены `total_tool_calls`, `total_fallbacks`, `total_context_tokens`, `avg_context_tokens`, `by_channel` из `cost_analytics`
+- **WeeklyDigest Telegram delivery** (`weekly_digest.py`, `userbot_bridge.py`) — callback pattern через `_send_proactive_watch_alert`, auto-запуск loop в `_ensure_proactive_watch_started`
+- **Cost budget alert** (`proactive_watch.py`) — >80% warning, >100% error; dedupe по месяцу; интегрирован в `run_alert_checks()` (каждые 30 мин)
+- **Translator latency opt** (`translator_engine.py`) — `max_output_tokens` 2048→512, pre-clear session для снижения overhead
+- **Streaming UI config** (`config.py`, `userbot_bridge.py`) — explicit `TELEGRAM_STREAM_UPDATE_INTERVAL_SEC` (2.0s), `OPENCLAW_TOOL_PROGRESS_POLL_SEC` (3.0s), model hint в initial ack
+
+### Tests (+27 новых)
+- `test_web_app_costs_finops.py` (7) — FinOps response fields
+- `test_inbox_status_filter.py` (7) — status=all/acked/open/empty
+- `test_translator_engine_optimized.py` (5) — max_output_tokens, pre-clear
+- `test_weekly_digest_delivery.py` (4) — callback, error resilience
+- `test_cost_budget_alert.py` (4) — budget thresholds, severity
+
+### Phase 7 статус (после session 7)
+- **Готовность: ~50%** (было ~40%)
+- ✅ WeeklyDigest Telegram delivery
+- ✅ Cost budget alert workflow
+- ✅ Dashboard API gaps закрыты (6/6 verified, 2 fixed)
+- ✅ Translator latency оптимизирована
+- ✅ Streaming UI конфигурация
+- ❌ Research Pipeline как отдельный модуль
+- ❌ Scheduled Auto-Dispatch с workflow_type
 
 ---
 
