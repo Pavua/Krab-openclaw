@@ -108,6 +108,7 @@ from .handlers import (
     handle_ip,
     handle_json,
     handle_len,
+    handle_log,
     handle_ls,
     handle_macos,
     handle_mark,
@@ -883,6 +884,12 @@ class KraabUserbot(
         )
         async def wrap_paste(c, m):
             await run_cmd(handle_paste, m)
+
+        @self.client.on_message(
+            filters.command("log", prefixes=prefixes) & _make_command_filter("log"), group=-1
+        )
+        async def wrap_log(c, m):
+            await run_cmd(handle_log, m)
 
         @self.client.on_message(
             filters.command("agent", prefixes=prefixes) & _make_command_filter("agent"), group=-1
