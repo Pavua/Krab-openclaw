@@ -616,6 +616,12 @@ class Config:
                     cls.GEMINI_PAID_KEY_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "BRAVE_SEARCH_API_KEY":
                     cls.BRAVE_SEARCH_API_KEY = value
+                elif key == "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC":
+                    cls.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC = max(0.5, float(value))
+                elif key == "TELEGRAM_REACTIONS_ENABLED":
+                    cls.TELEGRAM_REACTIONS_ENABLED = value.strip().lower() in ("1", "true", "yes", "on")
+                elif key == "DEFAULT_WEATHER_CITY":
+                    cls.DEFAULT_WEATHER_CITY = value.strip()
 
             # Обновляем .env файл для сохранения между перезапусками
             env_path = cls.BASE_DIR / ".env"

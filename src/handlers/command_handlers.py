@@ -339,18 +339,107 @@ class _AgentRoomRouterAdapter:
 
 
 async def handle_search(bot: "KraabUserbot", message: Message) -> None:
-    """Ручной веб-поиск через Brave."""
-    query = bot._get_command_args(message)
-    if not query or query.lower() in ["search", "!search"]:
-        raise UserInputError(user_message="🔍 Что ищем? Напиши: `!search <запрос>`")
+    """
+    Веб-поиск с AI-суммаризацией через OpenClaw + web_search tool.
+
+    Форматы:
+      !search <запрос>         — AI-режим: краткий ответ + источники (по умолчанию)
+      !search --raw <запрос>   — сырые результаты Brave без AI
+      !search --brave <запрос> — то же, что --raw
+
+    Длинные ответы автоматически разбиваются на части (пагинация).
+    """
+    raw_args = bot._get_command_args(message).strip()
+
+    # Проверяем пустой запрос
+    if not raw_args or raw_args.lower() in ["search", "!search"]:
+        raise UserInputError(
+            user_message=(
+                "🔍 Что ищем?\n"
+                "`!search <запрос>` — поиск с AI-суммаризацией\n"
+                "`!search --raw <запрос>` — сырые результаты Brave"
+            )
+        )
+
+    # Определяем режим: --raw/--brave → без AI
+    raw_mode = False
+    query = raw_args
+    for flag in ("--raw", "--brave"):
+        if raw_args.lower().startswith(flag):
+            raw_mode = True
+            query = raw_args[len(flag):].strip()
+            break
+
+    if not query:
+        raise UserInputError(user_message="🔍 Укажи запрос после флага.")
+
+    # Изолированная сессия, чтобы не загрязнять основной контекст чата
+    session_id = f"search_{message.chat.id}"
+
+    if raw_mode:
+        # --- Режим raw: прямой Brave-поиск без AI ---
+        msg = await message.reply(f"🔍 **Ищу (raw):** `{query}`...")
+        try:
+            results = await search_brave(query)
+            if not results:
+                await msg.edit("❌ Ничего не найдено.")
+                return
+            # Пагинация длинных результатов
+            header = f"🔍 **Результаты поиска:** `{query}`\n\n"
+            parts = _split_text_for_telegram(header + results)
+            await msg.edit(parts[0])
+            for part in parts[1:]:
+                await message.reply(part)
+        except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
+            logger.error("handle_search_raw_error", query=query, error=str(e))
+            await msg.edit(f"❌ Ошибка поиска: {e}")
+        return
+
+    # --- Режим AI: OpenClaw + web_search tool ---
     msg = await message.reply(f"🔍 **Краб ищет в сети:** `{query}`...")
+
+    prompt = (
+        f"Найди в интернете информацию по запросу: {query}. "
+        "Дай краткий структурированный ответ с ключевыми фактами и источниками (URL)."
+    )
+
     try:
-        results = await search_brave(query)
-        if len(results) > 4000:
-            results = results[:3900] + "..."
-        await msg.edit(f"🔍 **Результаты поиска:**\n\n{results}")
-    except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
-        await msg.edit(f"❌ Ошибка поиска: {e}")
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=False,  # обязательно использует web_search
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+
+        if not result:
+            await msg.edit("❌ Не удалось получить результаты поиска.")
+            return
+
+        # Заголовок + результат
+        header = f"🔍 **{query}**\n\n"
+        full_text = header + result
+
+        # Пагинация: Telegram ограничивает ~4096 символов
+        parts = _split_text_for_telegram(full_text)
+        total = len(parts)
+
+        # Редактируем первое сообщение
+        first = parts[0]
+        if total > 1:
+            first += f"\n\n_(часть 1/{total})_"
+        await msg.edit(first)
+
+        # Остальные части отправляем как новые сообщения
+        for i, part in enumerate(parts[1:], start=2):
+            suffix = f"\n\n_(часть {i}/{total})_" if total > 2 else ""
+            await message.reply(part + suffix)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_search_ai_error", query=query, error=str(exc))
+        await msg.edit(f"❌ Ошибка поиска: {exc}")
 
 
 async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
@@ -4491,6 +4580,131 @@ async def handle_who(bot: "KraabUserbot", message: Message) -> None:
     await message.reply("\n".join(lines))
 
 
+async def handle_chatinfo(bot: "KraabUserbot", message: Message) -> None:
+    """Подробная информация о чате.
+
+    Синтаксис:
+      !chatinfo              — текущий чат
+      !chatinfo <chat_id>   — другой чат по ID или @username
+    """
+    args = bot._get_command_args(message).strip()
+
+    # Определяем целевой чат
+    if args:
+        raw = args.lstrip("@")
+        try:
+            target: int | str = int(raw)
+        except ValueError:
+            target = args  # оставляем @username как строку
+    else:
+        target = message.chat.id
+
+    # Получаем объект чата
+    try:
+        chat = await bot.client.get_chat(target)
+    except Exception as exc:
+        raise UserInputError(
+            user_message=f"❌ Не удалось получить инфо о чате `{target}`: {exc}"
+        ) from exc
+
+    # Тип чата — убираем префикс "ChatType."
+    chat_type = str(getattr(chat, "type", "")).replace("ChatType.", "").lower()
+
+    # Участники — пробуем members_count из объекта или отдельный запрос
+    members_count = getattr(chat, "members_count", None)
+    if members_count is None:
+        try:
+            members_count = await bot.client.get_chat_members_count(chat.id)
+        except Exception:
+            members_count = None
+
+    # Username
+    username = f"@{chat.username}" if getattr(chat, "username", None) else "—"
+
+    # Название / имя
+    title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or "—"
+
+    # Описание
+    description = (getattr(chat, "description", None) or "").strip() or "—"
+
+    # Дата создания
+    dc_date = getattr(chat, "date", None)
+    created_str: str
+    if dc_date:
+        try:
+            import datetime as _dt
+            if isinstance(dc_date, (int, float)):
+                dt = _dt.datetime.utcfromtimestamp(dc_date)
+            else:
+                dt = dc_date
+            created_str = dt.strftime("%Y-%m-%d")
+        except Exception:
+            created_str = str(dc_date)
+    else:
+        created_str = "—"
+
+    # Linked chat (привязанный канал/группа)
+    linked_chat = getattr(chat, "linked_chat", None)
+    if linked_chat:
+        lc_username = getattr(linked_chat, "username", None)
+        lc_id = getattr(linked_chat, "id", None)
+        linked_str = f"@{lc_username}" if lc_username else str(lc_id or "—")
+    else:
+        linked_str = "—"
+
+    # Количество администраторов
+    admins_count: int | str = "—"
+    try:
+        admins = [m async for m in bot.client.get_chat_members(chat.id, filter="administrators")]
+        admins_count = len(admins)
+    except Exception:
+        pass
+
+    # Базовые права участников (permissions)
+    perms = getattr(chat, "permissions", None)
+    perm_lines: list[str] = []
+    if perms:
+        _perm_map = [
+            ("can_send_messages", "Писать сообщения"),
+            ("can_send_media_messages", "Медиа"),
+            ("can_send_polls", "Опросы"),
+            ("can_add_web_page_previews", "Превью"),
+            ("can_change_info", "Изменять инфо"),
+            ("can_invite_users", "Приглашать"),
+            ("can_pin_messages", "Закреплять"),
+        ]
+        for attr, label in _perm_map:
+            val = getattr(perms, attr, None)
+            if val is not None:
+                icon = "✅" if val else "❌"
+                perm_lines.append(f"  {icon} {label}")
+
+    # Формируем ответ
+    lines: list[str] = [
+        "📊 **Chat Info**",
+        "─────────────",
+        f"**Название:** {title}",
+        f"**ID:** `{chat.id}`",
+        f"**Тип:** {chat_type}",
+    ]
+    if members_count is not None:
+        lines.append(f"**Участников:** {members_count:,}")
+    lines.append(f"**Username:** {username}")
+    lines.append(f"**Создан:** {created_str}")
+    if description != "—":
+        # Обрезаем длинное описание
+        desc_display = description[:200] + "…" if len(description) > 200 else description
+        lines.append(f"**Описание:** {desc_display}")
+    lines.append(f"**Linked chat:** {linked_str}")
+    if isinstance(admins_count, int):
+        lines.append(f"**Администраторов:** {admins_count}")
+    if perm_lines:
+        lines.append("**Права участников:**")
+        lines.extend(perm_lines)
+
+    await message.reply("\n".join(lines))
+
+
 async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     """!тишина — управление режимом тишины.
 
@@ -6887,6 +7101,62 @@ async def handle_quiz(bot: "KraabUserbot", message: Message) -> None:
         is_anonymous=False,
     )
     logger.info("handle_quiz_sent", question=question, options_count=len(options))
+
+
+async def handle_dice(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Отправка анимированных Telegram dice (кубик/дартс/футбол/баскетбол/боулинг/слот).
+
+    Синтаксис:
+      !dice            → 🎲 кубик (по умолчанию)
+      !dice dart       → 🎯 дартс
+      !dice ball       → ⚽ футбол
+      !dice basket     → 🏀 баскетбол
+      !dice bowl       → 🎳 боулинг
+      !dice slot       → 🎰 слот-машина
+    """
+    # Карта alias → эмодзи
+    _DICE_ALIASES: dict[str, str] = {
+        "": "🎲",
+        "dice": "🎲",
+        "dart": "🎯",
+        "darts": "🎯",
+        "ball": "⚽",
+        "football": "⚽",
+        "soccer": "⚽",
+        "basket": "🏀",
+        "basketball": "🏀",
+        "bowl": "🎳",
+        "bowling": "🎳",
+        "slot": "🎰",
+        "slots": "🎰",
+        "casino": "🎰",
+    }
+
+    raw = bot._get_command_args(message).strip().lower()
+
+    emoji = _DICE_ALIASES.get(raw)
+    if emoji is None:
+        raise UserInputError(
+            user_message=(
+                "🎲 **!dice — анимированные кубики**\n\n"
+                "`!dice` — 🎲 кубик\n"
+                "`!dice dart` — 🎯 дартс\n"
+                "`!dice ball` — ⚽ футбол\n"
+                "`!dice basket` — 🏀 баскетбол\n"
+                "`!dice bowl` — 🎳 боулинг\n"
+                "`!dice slot` — 🎰 слот-машина"
+            )
+        )
+
+    # Удаляем команду (best-effort)
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+
+    await bot.client.send_dice(chat_id=message.chat.id, emoji=emoji)
+    logger.info("handle_dice_sent", emoji=emoji, chat_id=message.chat.id)
 
 
 async def handle_report(bot: "KraabUserbot", message: Message) -> None:
@@ -11129,3 +11399,385 @@ async def handle_time(bot: "KraabUserbot", message: Message) -> None:
         lines.append(f"**{city_name}** — `{_time_format_dt(dt)}` {offset_fmt}")
 
     await message.reply("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# !mark — пометка чатов как прочитанных/непрочитанных
+# ---------------------------------------------------------------------------
+
+async def handle_mark(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление статусом прочитанности чатов.
+
+    Подкоманды:
+        !mark read     — пометить текущий чат как прочитанный
+        !mark unread   — пометить текущий чат как непрочитанный
+        !mark readall  — пометить ВСЕ чаты как прочитанные
+
+    Owner-only.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!mark` доступен только владельцу.")
+
+    subcmd = bot._get_command_args(message).strip().lower()
+
+    async def _reply(text: str) -> None:
+        """Редактирует если сообщение от self, иначе отвечает."""
+        if message.from_user and message.from_user.id == bot.me.id:
+            await message.edit(text)
+        else:
+            await message.reply(text)
+
+    if subcmd == "read":
+        # Пометить текущий чат как прочитанный
+        try:
+            await bot.client.read_chat_history(chat_id=message.chat.id)
+            await _reply("✅ Чат помечен как прочитанный.")
+        except Exception as exc:
+            await _reply(f"❌ Не удалось пометить как прочитанный: `{exc}`")
+
+    elif subcmd == "unread":
+        # Пометить текущий чат как непрочитанный
+        try:
+            await bot.client.mark_chat_unread(chat_id=message.chat.id)
+            await _reply("🔵 Чат помечен как непрочитанный.")
+        except Exception as exc:
+            await _reply(f"❌ Не удалось пометить как непрочитанный: `{exc}`")
+
+    elif subcmd == "readall":
+        # Пометить ВСЕ диалоги как прочитанные
+        success_count = 0
+        fail_count = 0
+        try:
+            async for dialog in bot.client.get_dialogs():
+                try:
+                    await bot.client.read_chat_history(chat_id=dialog.chat.id)
+                    success_count += 1
+                except Exception:  # noqa: BLE001
+                    fail_count += 1
+
+            result = f"✅ Все чаты помечены как прочитанные ({success_count} чатов)."
+            if fail_count:
+                result += f"\n⚠️ Не удалось обработать: {fail_count}."
+            await _reply(result)
+        except Exception as exc:
+            await _reply(f"❌ Ошибка при получении диалогов: `{exc}`")
+
+    else:
+        raise UserInputError(
+            user_message=(
+                "📖 **Управление статусом прочтения**\n\n"
+                "`!mark read` — пометить текущий чат как прочитанный\n"
+                "`!mark unread` — пометить как непрочитанный\n"
+                "`!mark readall` — пометить ВСЕ чаты как прочитанные"
+            )
+        )
+
+# ---------------------------------------------------------------------------
+# !typing — симуляция набора текста / записи голосового / загрузки файла
+# ---------------------------------------------------------------------------
+
+_TYPING_ACTION_MAP: dict[str, str] = {
+    "typing": "TYPING",
+    "record": "RECORD_AUDIO",
+    "upload": "UPLOAD_DOCUMENT",
+}
+
+_TYPING_LABEL_MAP: dict[str, str] = {
+    "typing": "⌨️ typing...",
+    "record": "🎙 recording voice...",
+    "upload": "📤 uploading...",
+}
+
+_TYPING_DEFAULT_SECONDS = 5
+_TYPING_MAX_SECONDS = 30
+
+
+async def handle_typing(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Симулирует действие в чате (typing / recording / uploading).
+
+    Синтаксис:
+      !typing [seconds]        — показывает «typing...» N секунд (default 5, max 30)
+      !typing record [seconds] — показывает «recording voice...»
+      !typing upload [seconds] — показывает «uploading...»
+
+    Owner-only.
+    """
+    from pyrogram import enums as _pyrogram_enums
+
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!typing` доступен только владельцу.")
+
+    args = bot._get_command_args(message).strip().lower().split()
+
+    # Определяем режим и длительность
+    action_key = "typing"
+    seconds = _TYPING_DEFAULT_SECONDS
+
+    if args:
+        if args[0] in _TYPING_ACTION_MAP:
+            # !typing record [N] / !typing upload [N]
+            action_key = args[0]
+            if len(args) >= 2:
+                try:
+                    seconds = int(args[1])
+                except ValueError:
+                    raise UserInputError(
+                        user_message=f"❌ Длительность должна быть числом, получено: `{args[1]}`"
+                    )
+        else:
+            # !typing N
+            try:
+                seconds = int(args[0])
+            except ValueError:
+                raise UserInputError(
+                    user_message=(
+                        "⌨️ **Симуляция набора текста**\n\n"
+                        "`!typing [N]` — typing N секунд (default 5, max 30)\n"
+                        "`!typing record [N]` — recording voice...\n"
+                        "`!typing upload [N]` — uploading..."
+                    )
+                )
+
+    # Клэмп длительности
+    seconds = max(1, min(seconds, _TYPING_MAX_SECONDS))
+
+    pyrogram_action = getattr(_pyrogram_enums.ChatAction, _TYPING_ACTION_MAP[action_key])
+    label = _TYPING_LABEL_MAP[action_key]
+    chat_id = message.chat.id
+
+    # Удаляем команду, чтобы не оставлять следов
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Отправляем chat action каждые ~4 секунды (Telegram сбрасывает статус ~5 сек)
+    logger.info("handle_typing: %s в чате %s на %ss", action_key, chat_id, seconds)
+    elapsed = 0
+    interval = 4
+    while elapsed < seconds:
+        try:
+            await bot.client.send_chat_action(chat_id, pyrogram_action)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("handle_typing: send_chat_action ошибка: %s", exc)
+            break
+        sleep_time = min(interval, seconds - elapsed)
+        await asyncio.sleep(sleep_time)
+        elapsed += sleep_time
+
+    # Сбрасываем статус явно
+    try:
+        await bot.client.send_chat_action(chat_id, _pyrogram_enums.ChatAction.CANCEL)
+    except Exception:  # noqa: BLE001
+        pass
+
+    logger.info("handle_typing: завершено (%s, %ss)", label, seconds)
+
+
+# Допустимые значения slowmode (секунды) согласно Telegram API
+_SLOWMODE_VALID = {0, 10, 30, 60, 300, 900, 3600}
+_SLOWMODE_LABELS: dict[int, str] = {
+    0: "выключен",
+    10: "10 сек",
+    30: "30 сек",
+    60: "1 мин",
+    300: "5 мин",
+    900: "15 мин",
+    3600: "1 час",
+}
+
+
+async def handle_slowmode(bot: "KraabUserbot", message: Message) -> None:
+    """!slowmode — управление slowmode в группе (требует прав администратора).
+
+    Синтаксис:
+      !slowmode <seconds>  — установить задержку (0, 10, 30, 60, 300, 900, 3600)
+      !slowmode off        — выключить slowmode (= 0 секунд)
+      !slowmode status     — показать текущий slowmode чата
+    """
+    # Только группы и каналы поддерживают slowmode
+    chat = message.chat
+    if chat.type.name not in ("GROUP", "SUPERGROUP", "CHANNEL"):
+        raise UserInputError(user_message="❌ Slowmode доступен только в группах и каналах.")
+
+    raw_text = (message.text or "").strip()
+    parts = raw_text.split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    # ── status ──────────────────────────────────────────────────────────────
+    if not arg or arg == "status":
+        try:
+            full_chat = await bot.client.get_chat(chat.id)
+            delay = getattr(full_chat, "slow_mode_delay", None) or 0
+            label = _SLOWMODE_LABELS.get(delay, f"{delay} сек")
+            await message.reply(
+                f"🐢 **Slowmode** в `{chat.title or chat.id}`\n"
+                f"Текущее значение: **{label}**\n\n"
+                f"Допустимые значения: 0, 10, 30, 60, 300, 900, 3600\n"
+                f"`!slowmode <сек>` — установить | `!slowmode off` — выключить"
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(
+                user_message=f"❌ Не удалось получить информацию о чате: {exc}"
+            ) from exc
+        return
+
+    # ── off → 0 ─────────────────────────────────────────────────────────────
+    if arg in ("off", "выкл", "0"):
+        seconds = 0
+    else:
+        # Числовой аргумент
+        if not arg.isdigit():
+            raise UserInputError(
+                user_message=(
+                    "❌ Неверный аргумент. Используй:\n"
+                    "`!slowmode <сек>` — 0, 10, 30, 60, 300, 900, 3600\n"
+                    "`!slowmode off` — выключить\n"
+                    "`!slowmode status` — текущее значение"
+                )
+            )
+        seconds = int(arg)
+        if seconds not in _SLOWMODE_VALID:
+            raise UserInputError(
+                user_message=(
+                    f"❌ Недопустимое значение `{seconds}`.\n"
+                    f"Telegram принимает: **0, 10, 30, 60, 300, 900, 3600**"
+                )
+            )
+
+    # ── Применяем ───────────────────────────────────────────────────────────
+    try:
+        await bot.client.set_slow_mode(chat.id, seconds)
+    except Exception as exc:  # noqa: BLE001
+        err_str = str(exc)
+        if "CHAT_ADMIN_REQUIRED" in err_str or "admin" in err_str.lower():
+            raise UserInputError(
+                user_message="❌ Нет прав администратора для управления slowmode."
+            ) from exc
+        raise UserInputError(
+            user_message=f"❌ Ошибка установки slowmode: {exc}"
+        ) from exc
+
+    label = _SLOWMODE_LABELS.get(seconds, f"{seconds} сек")
+    if seconds == 0:
+        await message.reply(f"✅ Slowmode **выключен** в `{chat.title or chat.id}`.")
+    else:
+        await message.reply(
+            f"🐢 Slowmode установлен: **{label}** в `{chat.title or chat.id}`."
+        )
+
+
+# ---------------------------------------------------------------------------
+# !chatmute — управление Telegram-уведомлениями per-chat
+# ---------------------------------------------------------------------------
+
+# Таймаут mute в секундах: 2147483647 = максимум int32 (~68 лет, «навсегда»)
+_MUTE_FOREVER_UNTIL: int = 2_147_483_647
+
+
+async def handle_chatmute(bot: "KraabUserbot", message: Message) -> None:
+    """Управление Telegram-уведомлениями текущего чата через MTProto.
+
+    Команды:
+      !chatmute off     — отключить уведомления (mute навсегда)
+      !chatmute on      — включить уведомления
+      !chatmute status  — показать текущий статус
+      !chatmute         — показать справку
+    """
+    from pyrogram import raw as _raw
+
+    args = bot._get_command_args(message).strip().lower()
+    chat_id = message.chat.id
+
+    async def _get_peer_settings() -> dict:
+        """Получить текущие настройки уведомлений для чата."""
+        try:
+            peer = await bot.client.resolve_peer(chat_id)
+            notify_peer = _raw.types.InputNotifyPeer(peer=peer)
+            result = await bot.client.invoke(
+                _raw.functions.account.GetNotifySettings(peer=notify_peer)
+            )
+            return {
+                "mute_until": getattr(result, "mute_until", 0) or 0,
+            }
+        except Exception:
+            return {"mute_until": 0}
+
+    if args in {"off", "mute", "выкл", "тихо"}:
+        # Mute навсегда
+        try:
+            peer = await bot.client.resolve_peer(chat_id)
+            notify_peer = _raw.types.InputNotifyPeer(peer=peer)
+            settings = _raw.types.InputPeerNotifySettings(
+                mute_until=_MUTE_FOREVER_UNTIL,
+                silent=True,
+            )
+            await bot.client.invoke(
+                _raw.functions.account.UpdateNotifySettings(
+                    peer=notify_peer, settings=settings
+                )
+            )
+            await message.reply(
+                "🔕 Уведомления в этом чате **отключены**.\n"
+                "`!chatmute on` — включить обратно."
+            )
+        except Exception as exc:
+            raise UserInputError(
+                user_message=f"❌ Не удалось отключить уведомления: {exc}"
+            ) from exc
+
+    elif args in {"on", "unmute", "вкл", "громко"}:
+        # Unmute — mute_until=0 снимает mute
+        try:
+            peer = await bot.client.resolve_peer(chat_id)
+            notify_peer = _raw.types.InputNotifyPeer(peer=peer)
+            settings = _raw.types.InputPeerNotifySettings(
+                mute_until=0,
+                silent=False,
+            )
+            await bot.client.invoke(
+                _raw.functions.account.UpdateNotifySettings(
+                    peer=notify_peer, settings=settings
+                )
+            )
+            await message.reply("🔔 Уведомления в этом чате **включены**.")
+        except Exception as exc:
+            raise UserInputError(
+                user_message=f"❌ Не удалось включить уведомления: {exc}"
+            ) from exc
+
+    elif args in {"status", "статус"}:
+        import time as _time_mod
+
+        s = await _get_peer_settings()
+        mute_until = s.get("mute_until", 0)
+        now_ts = int(_time_mod.time())
+
+        if mute_until and mute_until > now_ts:
+            if mute_until >= _MUTE_FOREVER_UNTIL:
+                status_line = "🔕 **Заглушён** (навсегда)"
+            else:
+                import datetime as _dt_mod
+
+                dt_until = _dt_mod.datetime.fromtimestamp(mute_until)
+                status_line = f"🔕 **Заглушён** до {dt_until.strftime('%d.%m.%Y %H:%M')}"
+        else:
+            status_line = "🔔 **Уведомления включены**"
+
+        await message.reply(
+            f"📢 Статус уведомлений чата:\n{status_line}\n\n"
+            "`!chatmute off` — отключить\n"
+            "`!chatmute on`  — включить"
+        )
+
+    else:
+        await message.reply(
+            "📢 **Управление уведомлениями чата**\n\n"
+            "`!chatmute off`    — отключить уведомления\n"
+            "`!chatmute on`     — включить уведомления\n"
+            "`!chatmute status` — текущий статус"
+        )
