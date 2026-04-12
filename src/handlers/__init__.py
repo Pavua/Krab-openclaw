@@ -107,6 +107,7 @@ from .command_handlers import (
     handle_voice,
     handle_watch,
     handle_weather,
+    handle_link,
     handle_web,
     handle_welcome,
     handle_who,
@@ -223,4 +224,5 @@ __all__ = [
     "handle_snippet",
     "handle_diff",
     "handle_tag",
+    "handle_link",
 ]

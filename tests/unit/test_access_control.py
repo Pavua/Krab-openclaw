@@ -135,6 +135,10 @@ def test_full_profile_cannot_execute_owner_only_commands(
         "hs",
         "cap",
         "chatban",
+        "alias",
+        "welcome",
+        "afk",
+        "back",
     }
     assert profile.can_execute_command("status", set(USERBOT_KNOWN_COMMANDS)) is True
     assert profile.can_execute_command("acl", set(USERBOT_KNOWN_COMMANDS)) is False
@@ -145,7 +149,7 @@ def test_full_profile_cannot_execute_owner_only_commands(
 def test_build_command_access_matrix_marks_owner_only_and_partial_counts() -> None:
     matrix = build_command_access_matrix()
 
-    assert matrix["summary"]["owner_only_count"] == 12
+    assert matrix["summary"]["owner_only_count"] == len(OWNER_ONLY_COMMANDS)
     assert matrix["roles"]["owner"]["command_count"] == len(USERBOT_KNOWN_COMMANDS)
     assert "acl" in matrix["roles"]["owner"]["commands"]
     assert "reasoning" in matrix["roles"]["owner"]["commands"]
