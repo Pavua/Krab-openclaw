@@ -192,15 +192,20 @@ class TestSafeReplyOrSendNew:
         """При успешном reply возвращает результат."""
         from src.userbot_bridge import KraabUserbot  # noqa: PLC0415
 
-        bot = MagicMock(spec=KraabUserbot)
-        bot.client = MagicMock()
+        bot = MagicMock()  # без spec — иначе .client недоступен
         sent = MagicMock()
         msg = _make_message(text="hi")
         msg.reply = AsyncMock(return_value=sent)
 
-        # Мокаем очередь отправки
+        # mock_run должен await корутину, которую вернёт lambda
+        async def mock_run(chat_id, fn):
+            result = fn()
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
+
         with patch("src.userbot_bridge._telegram_send_queue") as mock_q:
-            mock_q.run = AsyncMock(side_effect=lambda chat_id, fn: fn())
+            mock_q.run = AsyncMock(side_effect=mock_run)
             result = await KraabUserbot._safe_reply_or_send_new(bot, msg, "Ответ")
 
         assert result is sent
@@ -210,14 +215,12 @@ class TestSafeReplyOrSendNew:
         """При ошибке reply → fallback на send_message."""
         from src.userbot_bridge import KraabUserbot  # noqa: PLC0415
 
-        bot = MagicMock(spec=KraabUserbot)
+        bot = MagicMock()  # без spec
         fallback_msg = MagicMock()
         bot.client.send_message = AsyncMock(return_value=fallback_msg)
 
         msg = _make_message(text="hi", chat_id=555)
         msg.reply = AsyncMock(side_effect=Exception("REPLY_FAILED"))
-
-        calls = []
 
         async def mock_run(chat_id, fn):
             result = fn()
@@ -225,10 +228,9 @@ class TestSafeReplyOrSendNew:
                 return await result
             return result
 
-        # Первый вызов (reply) бросает, второй (send_message) проходит
         with patch("src.userbot_bridge._telegram_send_queue") as mock_q:
             mock_q.run = AsyncMock(side_effect=mock_run)
-            result = await KraabUserbot._safe_reply_or_send_new(bot, msg, "Текст fallback")
+            await KraabUserbot._safe_reply_or_send_new(bot, msg, "Текст fallback")
 
         # После ошибки должен быть вызван send_message
         bot.client.send_message.assert_called_once()
@@ -238,7 +240,7 @@ class TestSafeReplyOrSendNew:
         """Пустой текст превращается в '…' (не падаем при пустом ответе)."""
         from src.userbot_bridge import KraabUserbot  # noqa: PLC0415
 
-        bot = MagicMock(spec=KraabUserbot)
+        bot = MagicMock()  # без spec
         sent = MagicMock()
         msg = _make_message(text="", chat_id=10)
 
@@ -250,7 +252,7 @@ class TestSafeReplyOrSendNew:
                 return await result
             return result
 
-        msg.reply = AsyncMock(side_effect=lambda t: (_ for _ in ()).throw(Exception("err")))
+        msg.reply = AsyncMock(side_effect=Exception("reply err"))
 
         async def capture_send(chat_id, text):
             captured_text.append(text)
@@ -262,7 +264,7 @@ class TestSafeReplyOrSendNew:
             mock_q.run = AsyncMock(side_effect=mock_run)
             await KraabUserbot._safe_reply_or_send_new(bot, msg, "")
 
-        # Текст не должен быть пустой строкой
+        # Текст не должен быть пустой строкой — '…' заменяет ""
         assert captured_text and captured_text[0] != ""
 
 
@@ -292,22 +294,18 @@ class TestHandleTranslatorVoice:
         bot = self._make_bot_for_translator()
         msg = _make_message()
 
-        with (
-            patch("src.userbot_bridge.KraabUserbot._handle_translator_voice", wraps=None),
-            patch("src.core.language_detect.detect_language", return_value=None, create=True),
-        ):
-            # Патчим импорт внутри метода через sys.modules
-            import sys
+        # Патчим импорт внутри метода через sys.modules
+        import sys
 
-            fake_ld = MagicMock()
-            fake_ld.detect_language = MagicMock(return_value=None)
-            fake_ld.resolve_translation_pair = MagicMock(return_value=("es", "ru"))
-            fake_te = MagicMock()
+        fake_ld = MagicMock()
+        fake_ld.detect_language = MagicMock(return_value=None)
+        fake_ld.resolve_translation_pair = MagicMock(return_value=("es", "ru"))
+        fake_te = MagicMock()
 
-            sys.modules.setdefault("src.core.language_detect", fake_ld)
-            sys.modules.setdefault("src.core.translator_engine", fake_te)
+        sys.modules["src.core.language_detect"] = fake_ld
+        sys.modules["src.core.translator_engine"] = fake_te
 
-            result = await KraabUserbot._handle_translator_voice(bot, msg, "texto", 100)
+        result = await KraabUserbot._handle_translator_voice(bot, msg, "texto", 100)
 
         assert result is False
 
