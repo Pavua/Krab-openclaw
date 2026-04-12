@@ -113,6 +113,11 @@ from .handlers import (
     handle_watch,
     handle_web,
     handle_write,
+    handle_fwd,
+    handle_collect,
+    handle_del,
+    handle_purge,
+    handle_autodel,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -795,6 +800,19 @@ class KraabUserbot(
             await run_cmd(handle_unpin, m)
 
         @self.client.on_message(
+            filters.command("fwd", prefixes=prefixes) & _make_command_filter("fwd"), group=-1
+        )
+        async def wrap_fwd(c, m):
+            await run_cmd(handle_fwd, m)
+
+        @self.client.on_message(
+            filters.command("collect", prefixes=prefixes) & _make_command_filter("collect"),
+            group=-1,
+        )
+        async def wrap_collect(c, m):
+            await run_cmd(handle_collect, m)
+
+        @self.client.on_message(
             filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1
         )
         async def wrap_help(c, m):
@@ -1008,10 +1026,7 @@ class KraabUserbot(
             team = action[len("swarm_team:"):]
             await cq.answer(f"🐝 {team}")
             await cq.message.reply(
-                f"🐝 Используй команду:
-`!swarm {team} <тема>`
-
-"
+                f"🐝 Используй команду:\n`!swarm {team} <тема>`\n\n"
                 f"Например: `!swarm {team} анализ текущей ситуации`"
             )
         elif action == "costs_detail":
@@ -1028,13 +1043,11 @@ class KraabUserbot(
                 tokens = d.get("tokens", 0)
                 cost = d.get("cost_usd", 0)
                 lines.append(f"• `{mid}`: ${cost:.4f} | {calls} calls | {tokens} tokens")
-            await cq.message.reply("
-".join(lines))
+            await cq.message.reply("\n".join(lines))
         elif action == "health_recheck":
             await cq.answer("🔄 Перепроверяю…")
             await cq.message.reply(
-                "🔄 Запускаю повторный health check…
-"
+                "🔄 Запускаю повторный health check…\n"
                 "Используй `!health` для полного отчёта."
             )
         else:
@@ -3177,6 +3190,18 @@ class KraabUserbot(
                     user=getattr(user, "username", None),
                 )
                 return
+
+            # MONITOR: проверяем активные мониторинги чатов на ключевые слова.
+            # Уникальная фича юзербота — видим ВСЕ сообщения во всех чатах.
+            # Проверяем только чужие сообщения (не self).
+            if not _is_self_for_guard and message.text and chat_id:
+                from .core.chat_monitor import chat_monitor_service
+
+                _matched_kw = chat_monitor_service.check_message(chat_id, message.text)
+                if _matched_kw is not None:
+                    asyncio.create_task(
+                        self._send_monitor_alert(message=message, matched_keyword=_matched_kw)
+                    )
 
             # B.6 chat capability cache: fire-and-forget refresh если в кеше
             # нет свежей записи. `_refresh_chat_capabilities_background` сам

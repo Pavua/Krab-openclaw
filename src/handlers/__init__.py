@@ -9,7 +9,9 @@ from .command_handlers import (
     handle_acl,
     handle_agent,
     handle_audio_message,
+    handle_autodel,
     handle_browser,
+    handle_del,
     handle_budget,
     handle_cap,
     handle_chatban,
@@ -62,6 +64,10 @@ from .command_handlers import (
     handle_watch,
     handle_web,
     handle_write,
+    handle_fwd,
+    handle_collect,
+    handle_purge,
+    handle_schedule,
 )
 
 __all__ = [
@@ -121,4 +127,9 @@ __all__ = [
     "handle_memo",
     "handle_pin",
     "handle_unpin",
+    "handle_fwd",
+    "handle_collect",
+    "handle_del",
+    "handle_purge",
+    "handle_autodel",
 ]

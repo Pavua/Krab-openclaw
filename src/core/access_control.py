@@ -94,6 +94,10 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "stats",
         # Контекст чата — просмотр / сброс / checkpoint
         "context",
+        # Управление сообщениями (owner-only)
+        "del",
+        "purge",
+        "autodel",
     }
 )
 

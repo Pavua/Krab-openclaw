@@ -323,28 +323,15 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
 
     args = bot._get_command_args(message).strip()
     if not args:
-        raise UserInputError(
-            user_message=(
-                "🐝 Как использовать Swarm:\n"
-                "`!swarm <тема>` — базовый room\n"
-                "`!swarm traders BTC анализ` — команда трейдеров\n"
-                "`!swarm teams` — список команд\n"
-                "`!swarm memory [команда]` — история прогонов\n"
-                "`!swarm schedule traders 4h BTC` — автозапуск\n"
-                "`!swarm jobs` — список задач\n"
-                "`!swarm unschedule <id>` — удалить задачу\n"
-                "`!swarm setup` — создать Forum-группу с топиками\n"
-                "`!swarm channels` — статус групп/топиков\n"
-                "`!swarm listen on|off` — team listeners\n"
-                "`!swarm task create|list|done|fail|assign|board` — task board\n"
-                "`!swarm artifacts [team]` — артефакты раундов\n"
-                "`!swarm report [team]` — markdown отчёты\n"
-                "`!swarm summary` — сводка сессии (задачи, артефакты, раунды)\n"
-                "`!swarm stats` — сводная статистика\n"
-                "`!swarm info <team>` — детальная инфо о команде\n"
-                "`!swarm research <тема>` — research pipeline с web_search"
-            )
+        # Показываем inline-кнопки выбора команды вместо текстовой справки
+        await message.reply(
+            "🐝 **Swarm** — выбери команду или укажи тему:\n"
+            "`!swarm <тема>` — базовый room\n"
+            "`!swarm <команда> <тема>` — именованная команда\n\n"
+            "Быстрый выбор команды:",
+            reply_markup=build_swarm_team_buttons(),
         )
+        return
 
     # !swarm teams — справка
     if args.lower() in {"teams", "команды", "help"}:
@@ -4320,7 +4307,7 @@ def _format_time_ago(seconds: float) -> str:
     return f"{int(seconds // 3600)} ч назад"
 
 
-_CHECKPOINTS_DIR = _pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "context_checkpoints"
+_CHECKPOINTS_DIR = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "context_checkpoints"
 
 
 async def handle_context(bot: "KraabUserbot", message: Message) -> None:
@@ -4353,8 +4340,7 @@ async def handle_context(bot: "KraabUserbot", message: Message) -> None:
             return
         try:
             _CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
-            import datetime as _dt
-            ts = _dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+            ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
             filename = _CHECKPOINTS_DIR / f"{chat_id}_{ts}.json"
             payload = {
                 "chat_id": chat_id,
@@ -4363,7 +4349,7 @@ async def handle_context(bot: "KraabUserbot", message: Message) -> None:
                 "estimated_tokens": _estimate_session_tokens(messages),
                 "messages": messages,
             }
-            filename.write_text(_json.dumps(payload, ensure_ascii=False, indent=2))
+            filename.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
             await message.reply(
                 f"💾 **Checkpoint сохранён**\n"
                 f"Файл: `{filename.name}`\n"
@@ -4396,8 +4382,7 @@ async def handle_context(bot: "KraabUserbot", message: Message) -> None:
             ts_map: dict = openclaw_client._session_last_updated  # type: ignore[attr-defined]
             last_ts = ts_map.get(chat_id)
             if last_ts is not None:
-                import time as _time
-                elapsed = _time.time() - last_ts
+                elapsed = time.time() - last_ts
                 last_update_str = _format_time_ago(elapsed)
     except Exception:  # noqa: BLE001
         pass
@@ -4703,7 +4688,6 @@ async def handle_schedule(bot: "KraabUserbot", message: Message) -> None:
         !schedule cancel <id>     — отменить по ID
     """
     from ..core.message_scheduler import (
-        MessageSchedulerStore,
         _MIN_SCHEDULE_SECONDS,
         _now_local,
         format_scheduled_list,
@@ -4991,3 +4975,201 @@ async def handle_collect(bot: "KraabUserbot", message: Message) -> None:
             await message.edit(reply)
         else:
             await message.reply(reply)
+
+
+# ---------------------------------------------------------------------------
+# Команды управления сообщениями: !del, !purge, !autodel
+# ---------------------------------------------------------------------------
+
+# Ключ в _runtime_state бота для хранения настроек autodel по чатам
+_AUTODEL_STATE_KEY = "autodel_settings"
+
+
+async def _delete_after(client: Any, chat_id: int, message_id: int, delay: float) -> None:
+    """Удаляет сообщение после задержки (внутренняя утилита для autodel)."""
+    await asyncio.sleep(delay)
+    try:
+        await client.delete_messages(chat_id, message_ids=[message_id])
+    except Exception as exc:
+        logger.debug("autodel_failed", chat_id=chat_id, msg_id=message_id, error=str(exc))
+
+
+def schedule_autodel(client: Any, chat_id: int, message_id: int, delay: float) -> None:
+    """
+    Планирует отложенное удаление сообщения Краба.
+    Вызывается из LLM flow после отправки ответа, если autodel включён для чата.
+    """
+    asyncio.create_task(
+        _delete_after(client, chat_id, message_id, delay),
+        name=f"autodel_{chat_id}_{message_id}",
+    )
+
+
+def get_autodel_delay(bot: "KraabUserbot", chat_id: int) -> float | None:
+    """
+    Возвращает задержку autodel для чата (в секундах) или None если выключен.
+    Читает из _runtime_state бота.
+    """
+    state: dict = getattr(bot, "_runtime_state", {}) or {}
+    settings: dict = state.get(_AUTODEL_STATE_KEY, {})
+    delay = settings.get(str(chat_id))
+    if delay is None or delay <= 0:
+        return None
+    return float(delay)
+
+
+def _set_autodel_delay(bot: "KraabUserbot", chat_id: int, delay: float) -> None:
+    """Сохраняет настройку autodel в _runtime_state бота."""
+    if not hasattr(bot, "_runtime_state") or bot._runtime_state is None:
+        bot._runtime_state = {}
+    settings: dict = bot._runtime_state.setdefault(_AUTODEL_STATE_KEY, {})
+    if delay <= 0:
+        settings.pop(str(chat_id), None)
+    else:
+        settings[str(chat_id)] = delay
+
+
+async def handle_del(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !del [N] — удаляет последние N сообщений Краба в текущем чате.
+
+    По умолчанию N=1. Максимум 100 за раз.
+    Включает само сообщение с командой !del.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if not access_profile.is_owner:
+        raise UserInputError(user_message="🚫 Только owner может удалять сообщения.")
+
+    raw = bot._get_command_args(message).strip()
+    try:
+        n = int(raw) if raw else 1
+    except ValueError:
+        raise UserInputError(user_message="❌ Использование: `!del [N]` — N должно быть числом.")
+
+    if n < 1 or n > 100:
+        raise UserInputError(user_message="❌ N должно быть от 1 до 100.")
+
+    chat_id = message.chat.id
+    bot_id = bot.me.id
+
+    # Удаляем саму команду !del сразу
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Собираем историю и ищем сообщения Краба
+    collected: list[int] = []
+    try:
+        async for msg in bot.client.get_chat_history(chat_id, limit=200):
+            if msg.from_user and msg.from_user.id == bot_id:
+                collected.append(msg.id)
+                if len(collected) >= n:
+                    break
+    except Exception as exc:
+        logger.warning("handle_del_history_error", error=str(exc))
+
+    if not collected:
+        return
+
+    try:
+        await bot.client.delete_messages(chat_id, message_ids=collected)
+        logger.info("handle_del_done", chat_id=chat_id, count=len(collected))
+    except Exception as exc:
+        logger.warning("handle_del_failed", error=str(exc))
+
+
+async def handle_purge(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !purge — удаляет ВСЕ сообщения Краба в текущем чате за последний час.
+
+    Проходит историю за 60 минут, собирает ID сообщений бота и удаляет пачками.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if not access_profile.is_owner:
+        raise UserInputError(user_message="🚫 Только owner может использовать !purge.")
+
+    chat_id = message.chat.id
+    bot_id = bot.me.id
+    cutoff = time.time() - 3600  # 1 час назад
+
+    # Удаляем саму команду
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    collected: list[int] = []
+    try:
+        async for msg in bot.client.get_chat_history(chat_id, limit=500):
+            if msg.date and msg.date.timestamp() < cutoff:
+                break
+            if msg.from_user and msg.from_user.id == bot_id:
+                collected.append(msg.id)
+    except Exception as exc:
+        logger.warning("handle_purge_history_error", error=str(exc))
+
+    if not collected:
+        return
+
+    # Удаляем пачками по 100 (лимит Telegram)
+    chunk_size = 100
+    deleted_total = 0
+    for i in range(0, len(collected), chunk_size):
+        chunk = collected[i : i + chunk_size]
+        try:
+            await bot.client.delete_messages(chat_id, message_ids=chunk)
+            deleted_total += len(chunk)
+        except Exception as exc:
+            logger.warning("handle_purge_chunk_error", error=str(exc))
+
+    logger.info("handle_purge_done", chat_id=chat_id, deleted=deleted_total)
+
+
+async def handle_autodel(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !autodel <секунды> — автоудаление ответов Краба через N секунд.
+    !autodel 0          — выключить автоудаление.
+    !autodel status     — показать текущую настройку.
+
+    Каждый ответ Краба в этом чате будет удалён через N секунд после отправки.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if not access_profile.is_owner:
+        raise UserInputError(user_message="🚫 Только owner может управлять автоудалением.")
+
+    chat_id = message.chat.id
+    raw = bot._get_command_args(message).strip()
+
+    if not raw or raw.lower() == "status":
+        delay = get_autodel_delay(bot, chat_id)
+        if delay:
+            await message.reply(
+                f"⏱ Автоудаление: **включено** — через `{int(delay)}` сек.\n"
+                f"`!autodel 0` — выключить."
+            )
+        else:
+            await message.reply(
+                "⏱ Автоудаление: **выключено**.\n"
+                "`!autodel <секунды>` — включить."
+            )
+        return
+
+    try:
+        delay = float(raw)
+    except ValueError:
+        raise UserInputError(
+            user_message="❌ Использование: `!autodel <секунды>` или `!autodel status`."
+        )
+
+    if delay < 0:
+        raise UserInputError(user_message="❌ Секунды не могут быть отрицательными.")
+
+    _set_autodel_delay(bot, chat_id, delay)
+
+    if delay == 0:
+        await message.reply("⏱ Автоудаление **выключено**.")
+    else:
+        await message.reply(
+            f"⏱ Автоудаление **включено**: ответы Краба будут удалены через `{int(delay)}` сек."
+        )
