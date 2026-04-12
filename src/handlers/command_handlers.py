@@ -5329,6 +5329,8 @@ _SUMMARY_DEFAULT_N = 50
 _SUMMARY_MAX_N = 500
 # Максимум символов истории, передаваемых в LLM
 _SUMMARY_MAX_HISTORY_CHARS = 24_000
+# Порог редактирования streaming-сообщения (каждые N новых символов)
+_SUMMARY_EDIT_THRESHOLD = 200
 
 
 def _format_chat_history_for_llm(messages: list) -> str:
@@ -5467,8 +5469,6 @@ async def handle_summary(bot: "KraabUserbot", message: Message) -> None:
 
     chunks: list[str] = []
     last_edit_len = 0
-    # Редактируем каждые ~200 новых символов, чтобы не флудить Telegram API
-    _EDIT_THRESHOLD = 200
 
     try:
         async for chunk in openclaw_client.send_message_stream(
@@ -5479,7 +5479,7 @@ async def handle_summary(bot: "KraabUserbot", message: Message) -> None:
         ):
             chunks.append(str(chunk))
             total = "".join(chunks)
-            if len(total) - last_edit_len >= _EDIT_THRESHOLD:
+            if len(total) - last_edit_len >= _SUMMARY_EDIT_THRESHOLD:
                 last_edit_len = len(total)
                 preview = total
                 max_preview = 4000 - len(header)
