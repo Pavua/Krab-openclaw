@@ -39,7 +39,6 @@ from .core.proactive_watch import proactive_watch
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .core.silence_mode import silence_manager
-from .core.silence_schedule import silence_schedule_manager
 from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
 from .core.swarm_channels import swarm_channels
 from .core.swarm_scheduler import swarm_scheduler
@@ -50,7 +49,6 @@ from .core.translator_runtime_profile import (
     save_translator_runtime_profile,
 )
 from .core.translator_session_state import (
-    append_translator_history_entry,
     apply_translator_session_update,
     default_translator_session_state,
     load_translator_session_state,
@@ -61,10 +59,6 @@ from .handlers import (
     handle_acl,
     handle_agent,
     handle_browser,
-    handle_budget,
-    handle_costs,
-    handle_digest,
-    handle_health,
     handle_cap,
     handle_chatban,
     handle_claude_cli,
@@ -116,8 +110,6 @@ from .userbot.access_control import AccessControlMixin
 from .userbot.background_tasks import BackgroundTasksMixin
 from .userbot.llm_flow import (
     LLMFlowMixin,
-    _current_runtime_primary_model,
-    _resolve_openclaw_stream_timeouts,
 )
 from .userbot.llm_text_processing import LLMTextProcessingMixin
 from .userbot.runtime_status import RuntimeStatusMixin
@@ -409,7 +401,6 @@ class KraabUserbot(
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
         self._error_digest_task: Optional[asyncio.Task] = None
-        self._silence_schedule_task: Optional[asyncio.Task] = None
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -421,9 +412,6 @@ class KraabUserbot(
         self._hidden_reasoning_traces: dict[str, dict[str, Any]] = {}
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
-        # Время старта и счётчик обработанных сообщений за сессию (для !stats).
-        self._session_start_time: float = time.time()
-        self._session_messages_processed: int = 0
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
         self._startup_error_code = ""
@@ -592,24 +580,6 @@ class KraabUserbot(
             await run_cmd(handle_stats, m)
 
         @self.client.on_message(
-            filters.command("costs", prefixes=prefixes) & _make_command_filter("costs"), group=-1
-        )
-        async def wrap_costs(c, m):
-            await run_cmd(handle_costs, m)
-
-        @self.client.on_message(
-            filters.command("budget", prefixes=prefixes) & _make_command_filter("budget"), group=-1
-        )
-        async def wrap_budget(c, m):
-            await run_cmd(handle_budget, m)
-
-        @self.client.on_message(
-            filters.command("digest", prefixes=prefixes) & _make_command_filter("digest"), group=-1
-        )
-        async def wrap_digest(c, m):
-            await run_cmd(handle_digest, m)
-
-        @self.client.on_message(
             filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1
         )
         async def wrap_watch(c, m):
@@ -755,13 +725,6 @@ class KraabUserbot(
         )
         async def wrap_diagnose(c, m):
             await run_cmd(handle_diagnose, m)
-
-        @self.client.on_message(
-            filters.command("health", prefixes=prefixes) & _make_command_filter("health"),
-            group=-1,
-        )
-        async def wrap_health(c, m):
-            await run_cmd(handle_health, m)
 
         @self.client.on_message(
             filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1
@@ -969,21 +932,6 @@ class KraabUserbot(
             return
         raise RuntimeError("telegram_client_not_ready")
 
-    def _ensure_silence_schedule_started(self) -> None:
-        """Запускает фоновый loop проверки расписания ночного режима."""
-        if self._silence_schedule_task and not self._silence_schedule_task.done():
-            return
-
-        def _apply_mute() -> None:
-            silence_manager.mute_global(minutes=480)  # максимум 8 часов запас
-
-        def _remove_mute() -> None:
-            silence_manager.unmute_global()
-
-        self._silence_schedule_task = asyncio.create_task(
-            silence_schedule_manager.run_loop(_apply_mute, _remove_mute)
-        )
-
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
         if not bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)):
@@ -994,16 +942,6 @@ class KraabUserbot(
         # Запускаем периодическую сводку ошибок (каждые 6 часов)
         if self._error_digest_task is None or self._error_digest_task.done():
             self._error_digest_task = proactive_watch.start_error_digest_loop()
-        # WeeklyDigest: подключаем Telegram delivery callback + запускаем loop
-        try:
-            from .core.weekly_digest import weekly_digest  # noqa: PLC0415
-
-            weekly_digest.set_telegram_callback(self._send_proactive_watch_alert)
-            wdt = getattr(self, "_weekly_digest_task", None)
-            if wdt is None or wdt.done():
-                self._weekly_digest_task = weekly_digest.start_weekly_digest_loop()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("weekly_digest_setup_failed", error=str(exc))
 
     async def _run_proactive_watch_loop(self) -> None:
         """
@@ -1258,25 +1196,15 @@ class KraabUserbot(
         reply_text = f"🔄 {src_lang}→{tgt_lang}\n**{result.original}**\n_{result.translated}_"
         await self._safe_reply_or_send_new(message, reply_text)
 
-        # Обновляем session stats и добавляем запись в history
+        # Обновляем session stats
         try:
             state = self.get_translator_session_state()
             stats = state.get("stats") or {"total_translations": 0, "total_latency_ms": 0}
-            # Добавляем запись в историю переводов
-            updated_state = append_translator_history_entry(
-                state,
-                src_lang=src_lang,
-                tgt_lang=tgt_lang,
-                original=transcript[:300],
-                translation=result.translated[:300],
-                latency_ms=result.latency_ms,
-            )
             self.update_translator_session_state(
                 last_language_pair=f"{src_lang}-{tgt_lang}",
                 last_translated_original=transcript[:200],
                 last_translated_translation=result.translated[:200],
                 last_event="translation_completed",
-                history=updated_state["history"],
                 stats={
                     "total_translations": stats.get("total_translations", 0) + 1,
                     "total_latency_ms": stats.get("total_latency_ms", 0) + result.latency_ms,
@@ -1490,7 +1418,6 @@ class KraabUserbot(
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
         self._background_task_reaper_task = asyncio.create_task(self._background_task_reaper())
         self._ensure_proactive_watch_started()
-        self._ensure_silence_schedule_started()
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
@@ -1515,26 +1442,12 @@ class KraabUserbot(
         for team, acct in accounts.items():
             session_name = acct.get("session_name", f"swarm_{team}")
             try:
-                # Очистка stale SQLite lock (database is locked)
-                _sess_path = Path(self._session_workdir) / f"{session_name}.session"
-                if _sess_path.exists():
-                    _journal = _sess_path.with_suffix(".session-journal")
-                    _wal = _sess_path.with_suffix(".session-wal")
-                    for _lockf in (_journal, _wal):
-                        if _lockf.exists():
-                            try:
-                                _lockf.unlink()
-                                logger.info(
-                                    "swarm_stale_lock_cleaned",
-                                    team=team, file=str(_lockf),
-                                )
-                            except OSError:
-                                pass
                 cl = Client(
                     session_name,
                     api_id=config.TELEGRAM_API_ID,
                     api_hash=config.TELEGRAM_API_HASH,
                     workdir=str(self._session_workdir),
+                    # no_updates=False — нужно для on_message handlers (team listener)
                 )
                 await asyncio.wait_for(cl.start(), timeout=15)
                 me = await cl.get_me()
@@ -1706,7 +1619,6 @@ class KraabUserbot(
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
-        await self._cancel_background_task("_silence_schedule_task")
         # Per-team swarm clients — остановить до основного клиента
         await self._stop_swarm_team_clients()
         try:
@@ -2451,9 +2363,6 @@ class KraabUserbot(
         if not text and not message.photo and not has_audio_message and not has_document:
             return
 
-        # Счётчик обработанных сообщений за сессию (для !stats).
-        self._session_messages_processed += 1
-
         runtime_chat_id = self._build_runtime_chat_scope_id(
             chat_id=chat_id,
             user_id=int(user.id),
@@ -2607,29 +2516,21 @@ class KraabUserbot(
                     return
 
         temp_msg = message
-        # Формируем информативный ack с моделью и маршрутом
-        _ack_model = ""
-        try:
-            from .userbot.llm_flow import _current_runtime_primary_model  # noqa: PLC0415
-            _ack_model = _current_runtime_primary_model() or ""
-        except Exception:
-            pass
-        _ack_model_hint = f"\nТекущий маршрут: `{_ack_model}`" if _ack_model else ""
-        _ack_text = (
-            f"🦀 Принял запрос.\n\n"
-            f"🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
-        )
         if not is_self:
             try:
                 temp_msg = await asyncio.wait_for(
-                    self._safe_reply_or_send_new(message, _ack_text),
+                    self._safe_reply_or_send_new(
+                        message,
+                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
+                    ),
                     timeout=10.0,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
                 try:
                     temp_msg = await self.client.send_message(
-                        message.chat.id, _ack_text,
+                        message.chat.id,
+                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
                     )
                 except Exception as send_exc:  # noqa: BLE001
                     logger.warning(
@@ -2641,7 +2542,7 @@ class KraabUserbot(
         else:
             message = await self._safe_edit(
                 message,
-                f"🦀 {query}\n\n🛠️ Собираю контекст...{_ack_model_hint}",
+                f"🦀 {query}\n\n🛠️ Собираю контекст и запускаю маршрут...",
             )
 
         if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(
