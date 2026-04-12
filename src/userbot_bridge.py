@@ -866,6 +866,26 @@ class KraabUserbot(
         async def wrap_monitor(c, m):
             await run_cmd(handle_monitor, m)
 
+        # Управление сообщениями: !del, !purge, !autodel
+        @self.client.on_message(
+            filters.command("del", prefixes=prefixes) & _make_command_filter("del"), group=-1
+        )
+        async def wrap_del(c, m):
+            await run_cmd(handle_del, m)
+
+        @self.client.on_message(
+            filters.command("purge", prefixes=prefixes) & _make_command_filter("purge"), group=-1
+        )
+        async def wrap_purge(c, m):
+            await run_cmd(handle_purge, m)
+
+        @self.client.on_message(
+            filters.command("autodel", prefixes=prefixes) & _make_command_filter("autodel"),
+            group=-1,
+        )
+        async def wrap_autodel(c, m):
+            await run_cmd(handle_autodel, m)
+
         # Обработка callback query от inline-кнопок
         @self.client.on_callback_query()
         async def wrap_callback_query(c, cq):
@@ -2001,11 +2021,29 @@ class KraabUserbot(
             sent = await self._safe_reply_or_send_new(source_message, part)
             if getattr(sent, "id", None):
                 delivered_ids.append(str(sent.id))
-        return {
+        result = {
             "delivery_mode": "edit_and_reply",
             "text_message_ids": delivered_ids,
             "parts_count": len(parts),
         }
+        self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
+        return result
+
+    def _maybe_schedule_autodel(self, chat_id: int, delivered_ids: list[str]) -> None:
+        """
+        Если для чата включено autodel — планирует удаление доставленных сообщений.
+        """
+        from .handlers.command_handlers import get_autodel_delay, schedule_autodel
+
+        delay = get_autodel_delay(self, chat_id)
+        if not delay or not delivered_ids:
+            return
+        for msg_id_str in delivered_ids:
+            try:
+                msg_id = int(msg_id_str)
+            except (ValueError, TypeError):
+                continue
+            schedule_autodel(self.client, chat_id, msg_id, delay)
 
     @staticmethod
     def _message_ids_from_delivery(delivery_result: dict[str, Any] | None) -> list[str]:
@@ -2530,6 +2568,46 @@ class KraabUserbot(
             )
         except Exception:  # noqa: BLE001
             pass  # реакции — best-effort, не прерываем основной flow
+
+    async def _send_monitor_alert(self, message: Message, matched_keyword: str) -> None:
+        """Отправляет alert owner'у в Saved Messages при совпадении keyword в мониторимом чате."""
+        try:
+            if not self.me:
+                return
+            # Информация об отправителе
+            sender = message.from_user
+            sender_name = (
+                getattr(sender, "username", None)
+                or getattr(sender, "first_name", None)
+                or str(getattr(sender, "id", "?"))
+            ) if sender else "Unknown"
+            # Название чата
+            chat_title = (
+                getattr(message.chat, "title", None)
+                or getattr(message.chat, "first_name", None)
+                or str(message.chat.id)
+            )
+            # Текст сообщения (обрезаем длинные)
+            msg_text = (message.text or "").strip()
+            if len(msg_text) > 800:
+                msg_text = msg_text[:797] + "..."
+            alert = (
+                f"\U0001f514 **Monitor Alert**\n"
+                f"Chat: {chat_title} (`{message.chat.id}`)\n"
+                f"From: @{sender_name}\n"
+                f"Keyword: `{matched_keyword}`\n"
+                f"\u2500\u2500\u2500\u2500\u2500\n"
+                f"{msg_text}"
+            )
+            await self.client.send_message(self.me.id, alert)
+            logger.info(
+                "monitor_alert_sent",
+                chat_id=str(message.chat.id),
+                keyword=matched_keyword,
+                sender=sender_name,
+            )
+        except Exception as exc:
+            logger.warning("monitor_alert_error", error=str(exc))
 
     async def _safe_edit(self, msg: Message, text: str) -> Message:
         """

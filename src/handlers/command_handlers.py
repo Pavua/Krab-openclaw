@@ -28,11 +28,6 @@ from ..core.access_control import (
 )
 from ..core.chat_ban_cache import chat_ban_cache
 from ..core.cost_analytics import cost_analytics
-from ..core.telegram_buttons import (
-    build_costs_detail_buttons,
-    build_health_recheck_buttons,
-    build_swarm_team_buttons,
-)
 from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
@@ -47,6 +42,11 @@ from ..core.openclaw_workspace import (
 from ..core.proactive_watch import proactive_watch
 from ..core.scheduler import krab_scheduler, parse_due_time, split_reminder_input
 from ..core.swarm import AgentRoom
+from ..core.telegram_buttons import (
+    build_costs_detail_buttons,
+    build_health_recheck_buttons,
+    build_swarm_team_buttons,
+)
 from ..core.translator_runtime_profile import (
     ALLOWED_LANGUAGE_PAIRS,
     ALLOWED_TRANSLATION_MODES,
@@ -4059,7 +4059,7 @@ async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
         ch_parts = [f"{ch}: {cnt}" for ch, cnt in sorted(by_channel.items())]
         lines.append("• " + " | ".join(ch_parts))
 
-    await message.reply("\n".join(lines))
+    await message.reply("\n".join(lines), reply_markup=build_costs_detail_buttons())
 
 
 async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
@@ -4273,7 +4273,7 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(report)
     else:
-        await message.reply(report)
+        await message.reply(report, reply_markup=build_health_recheck_buttons())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
