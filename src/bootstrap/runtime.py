@@ -62,6 +62,7 @@ async def _start_web_panel(
         voice_gateway_client = VoiceGatewayClient()
         krab_ear_client = KrabEarClient()
 
+        from ..core.reaction_engine import reaction_engine  # noqa: PLC0415
         deps = {
             "router": router_compat,
             "openclaw_client": openclaw_client,
@@ -74,7 +75,7 @@ async def _start_web_panel(
             ),
             "provisioning_service": ProvisioningService(),
             "ai_runtime": None,
-            "reaction_engine": None,
+            "reaction_engine": reaction_engine,
             "voice_gateway_client": voice_gateway_client,
             "krab_ear_client": krab_ear_client,
             "perceptor": perceptor,
