@@ -9157,3 +9157,87 @@ async def apply_spam_action(
         except Exception as exc:  # noqa: BLE001
             logger.warning("spam_mute_failed", error=str(exc))
     # action == "delete": сообщение уже удалено выше
+
+
+# ---------------------------------------------------------------------------
+# !json — форматирование и валидация JSON
+# ---------------------------------------------------------------------------
+
+
+def _json_extract_text(message: Message, args: str) -> str | None:
+    """Извлекает текст: сначала из args, затем из reply."""
+    if args:
+        return args
+    if message.reply_to_message:
+        return message.reply_to_message.text or message.reply_to_message.caption or None
+    return None
+
+
+async def handle_json(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !json <текст>            — форматирует (pretty print) JSON с отступами 2
+    !json (reply)            — форматирует текст ответного сообщения
+    !json validate <текст>   — проверяет валидность, показывает ошибку с позицией
+    !json minify <текст>     — минифицирует JSON (убирает пробелы)
+    """
+    raw_args = bot._get_command_args(message).strip()
+
+    # Определяем подкоманду
+    sub: str | None = None
+    payload: str = raw_args
+
+    lower = raw_args.lower()
+    if lower.startswith("validate ") or lower == "validate":
+        sub = "validate"
+        payload = raw_args[len("validate"):].strip()
+    elif lower.startswith("minify ") or lower == "minify":
+        sub = "minify"
+        payload = raw_args[len("minify"):].strip()
+
+    # Если payload пуст — пробуем взять из reply
+    if not payload:
+        payload = _json_extract_text(message, "") or ""
+
+    if not payload:
+        raise UserInputError(
+            user_message=(
+                "🔧 **JSON-утилита**\n\n"
+                "`!json <текст>` — форматировать (pretty print)\n"
+                "`!json` в reply — форматировать текст ответа\n"
+                "`!json validate <текст>` — проверить валидность\n"
+                "`!json minify <текст>` — минифицировать"
+            )
+        )
+
+    # --- validate ---
+    if sub == "validate":
+        try:
+            json.loads(payload)
+            await message.reply("✅ JSON валиден.")
+        except json.JSONDecodeError as exc:
+            await message.reply(
+                f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
+            )
+        return
+
+    # --- minify ---
+    if sub == "minify":
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise UserInputError(
+                user_message=f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
+            ) from exc
+        minified = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        await message.reply(f"```json\n{minified}\n```")
+        return
+
+    # --- format (default) ---
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise UserInputError(
+            user_message=f"❌ JSON невалиден: {exc.msg}: line {exc.lineno} column {exc.colno}"
+        ) from exc
+    pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
+    await message.reply(f"```json\n{pretty}\n```")

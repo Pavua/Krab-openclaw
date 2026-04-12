@@ -157,6 +157,7 @@ from .handlers import (
     handle_afk,
     handle_spam,
     apply_spam_action,
+    handle_json,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -1187,6 +1188,12 @@ class KraabUserbot(
         )
         async def wrap_back(c, m):
             await run_cmd(handle_afk, m)
+
+        @self.client.on_message(
+            filters.command("json", prefixes=prefixes) & _make_command_filter("json"), group=-1
+        )
+        async def wrap_json(c, m):
+            await run_cmd(handle_json, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()

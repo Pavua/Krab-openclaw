@@ -6,7 +6,9 @@
 """
 
 from .command_handlers import (
+    apply_spam_action,
     handle_acl,
+    handle_afk,
     handle_agent,
     handle_alias,
     handle_ask,
@@ -42,6 +44,7 @@ from .command_handlers import (
     handle_health,
     handle_help,
     handle_hs,
+    handle_img,
     handle_inbox,
     handle_ip,
     handle_len,
@@ -51,6 +54,7 @@ from .command_handlers import (
     handle_memory,
     handle_model,
     handle_monitor,
+    handle_new_chat_members,
     handle_note,
     handle_notify,
     handle_opencode,
@@ -80,6 +84,7 @@ from .command_handlers import (
     handle_set,
     handle_shop,
     handle_silence,
+    handle_spam,
     handle_stats,
     handle_status,
     handle_sticker,
@@ -91,6 +96,7 @@ from .command_handlers import (
     handle_todo,
     handle_translate,
     handle_translator,
+    handle_tts,
     handle_unpin,
     handle_uptime,
     handle_voice,
@@ -98,13 +104,13 @@ from .command_handlers import (
     handle_weather,
     handle_web,
     handle_welcome,
-    handle_new_chat_members,
     handle_who,
     handle_write,
 )
 
 __all__ = [
     "handle_acl",
+    "handle_afk",
     "handle_alias",
     "handle_budget",
     "handle_costs",
@@ -188,6 +194,7 @@ __all__ = [
     "handle_weather",
     "handle_ask",
     "handle_hash",
+    "handle_img",
     "handle_calc",
     "handle_b64",
     "handle_uptime",
@@ -200,6 +207,10 @@ __all__ = [
     "handle_rand",
     "handle_sticker",
     "handle_sed",
+    "handle_tts",
     "handle_welcome",
     "handle_new_chat_members",
+    "handle_spam",
+    "apply_spam_action",
+    "handle_afk",
 ]
