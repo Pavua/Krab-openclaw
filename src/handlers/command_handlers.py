@@ -1778,8 +1778,15 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
         while len(args) < 4:
             args.append("")
     sub = str(args[1] or "").strip().lower()
-    if not sub or sub in {"status", "show"}:
+    if not sub or sub == "show":
         await message.reply(_render_translator_profile(bot.get_translator_runtime_profile()))
+        return
+
+    if sub == "status":
+        # !translator status — показать и profile, и session state
+        profile_text = _render_translator_profile(bot.get_translator_runtime_profile())
+        session_text = _render_translator_session_state(bot.get_translator_session_state())
+        await message.reply(f"{profile_text}\n\n{session_text}")
         return
 
     if sub in {"help", "?", "commands"}:
@@ -1793,6 +1800,25 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
             "`!translator session start|stop|pause|resume|status` — управление сессией\n"
             "`!translator mode|strategy|phrase` — настройки профиля"
         )
+        return
+
+    if sub == "on":
+        # !translator on → !translator session start
+        profile = bot.get_translator_runtime_profile()
+        label = str(args[2] or "").strip() or None
+        current_state = bot.get_translator_session_state()
+        state = bot.update_translator_session_state(
+            session_status="active", label=label, persist=True
+        )
+        await message.reply(_render_translator_session_state(state))
+        return
+
+    if sub == "off":
+        # !translator off → !translator session stop
+        state = bot.update_translator_session_state(
+            session_status="stopped", persist=True
+        )
+        await message.reply(_render_translator_session_state(state))
         return
 
     if sub == "auto":

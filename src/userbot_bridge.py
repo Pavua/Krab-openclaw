@@ -110,6 +110,8 @@ from .userbot.access_control import AccessControlMixin
 from .userbot.background_tasks import BackgroundTasksMixin
 from .userbot.llm_flow import (
     LLMFlowMixin,
+    _current_runtime_primary_model,
+    _resolve_openclaw_stream_timeouts,
 )
 from .userbot.llm_text_processing import LLMTextProcessingMixin
 from .userbot.runtime_status import RuntimeStatusMixin
