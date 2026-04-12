@@ -64,6 +64,7 @@ from .handlers import (
     handle_budget,
     handle_costs,
     handle_digest,
+    handle_health,
     handle_cap,
     handle_chatban,
     handle_claude_cli,
@@ -421,8 +422,7 @@ class KraabUserbot(
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
         # Время старта и счётчик обработанных сообщений за сессию (для !stats).
-        import time as _time_mod
-        self._session_start_time: float = _time_mod.time()
+        self._session_start_time: float = time.time()
         self._session_messages_processed: int = 0
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
@@ -757,6 +757,13 @@ class KraabUserbot(
             await run_cmd(handle_diagnose, m)
 
         @self.client.on_message(
+            filters.command("health", prefixes=prefixes) & _make_command_filter("health"),
+            group=-1,
+        )
+        async def wrap_health(c, m):
+            await run_cmd(handle_health, m)
+
+        @self.client.on_message(
             filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1
         )
         async def wrap_help(c, m):
@@ -961,6 +968,21 @@ class KraabUserbot(
             await reserve_bot.send_to_owner(f"[reserve] {clean_text}")
             return
         raise RuntimeError("telegram_client_not_ready")
+
+    def _ensure_silence_schedule_started(self) -> None:
+        """Запускает фоновый loop проверки расписания ночного режима."""
+        if self._silence_schedule_task and not self._silence_schedule_task.done():
+            return
+
+        def _apply_mute() -> None:
+            silence_manager.mute_global(minutes=480)  # максимум 8 часов запас
+
+        def _remove_mute() -> None:
+            silence_manager.unmute_global()
+
+        self._silence_schedule_task = asyncio.create_task(
+            silence_schedule_manager.run_loop(_apply_mute, _remove_mute)
+        )
 
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
@@ -1468,6 +1490,7 @@ class KraabUserbot(
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
         self._background_task_reaper_task = asyncio.create_task(self._background_task_reaper())
         self._ensure_proactive_watch_started()
+        self._ensure_silence_schedule_started()
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
@@ -1669,6 +1692,7 @@ class KraabUserbot(
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
+        await self._cancel_background_task("_silence_schedule_task")
         # Per-team swarm clients — остановить до основного клиента
         await self._stop_swarm_team_clients()
         try:

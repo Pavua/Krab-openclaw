@@ -3726,6 +3726,7 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     чтобы тесты могли подменить профиль через stub без Pyrogram client'а.
     """
     import time as _time
+
     import psutil as _psutil
 
     from ..core.chat_ban_cache import chat_ban_cache
@@ -3770,8 +3771,9 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
 
     # Swarm rounds за сегодня
     try:
-        from ..core.swarm_artifact_store import swarm_artifact_store as _sas
         import datetime as _dt
+
+        from ..core.swarm_artifact_store import swarm_artifact_store as _sas
         today_str = _dt.date.today().isoformat()
         all_arts = _sas.list_artifacts(limit=200)
         swarm_today = sum(
@@ -3785,8 +3787,8 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     try:
         from ..core.inbox_service import inbox_service as _inbox
         isummary = _inbox.get_summary()
-        inbox_open = isummary.get("open", 0)
-        inbox_attention = isummary.get("attention", 0)
+        inbox_open = isummary.get("open_items", 0)
+        inbox_attention = isummary.get("attention_items", 0)
         inbox_str = f"{inbox_open} open" + (f" ({inbox_attention} attention)" if inbox_attention else "")
     except Exception:
         inbox_str = "?"
@@ -4155,3 +4157,129 @@ async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
             f"✅ Digest отправлен.\n"
             f"Rounds: {rounds} | Cost 7д: ${cost:.4f} | Attention: {attention}"
         )
+
+
+async def handle_health(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Глубокая диагностика всех подсистем Краба (!health).
+
+    Каждая строка — ✅ OK / ⚠️ Warning / ❌ Error.
+    Owner-only команда.
+    """
+    from ..core.swarm_bus import TEAM_REGISTRY
+    from ..core.swarm_scheduler import swarm_scheduler
+    from ..core.telegram_rate_limiter import telegram_rate_limiter
+
+    lines: list[str] = ["🏥 **Health Check**", "─────────────────"]
+
+    # 1. Telegram: проверяем, что me доступен (userbot подключён)
+    try:
+        telegram_ok = bot.me is not None
+        lines.append("✅ Telegram: connected" if telegram_ok else "❌ Telegram: не инициализирован")
+    except Exception as exc:
+        lines.append(f"❌ Telegram: ошибка ({exc})")
+
+    # 2. OpenClaw gateway — health check + текущая модель маршрута
+    try:
+        oc_ok = await openclaw_client.health_check()
+        route_meta: dict[str, Any] = {}
+        if hasattr(openclaw_client, "get_last_runtime_route"):
+            route_meta = openclaw_client.get_last_runtime_route() or {}
+        model = str(route_meta.get("model") or "").strip()
+        if not model:
+            from ..core.openclaw_runtime_models import get_runtime_primary_model
+            model = str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "unknown")
+        if oc_ok:
+            lines.append(f"✅ OpenClaw: up ({model})")
+        else:
+            lines.append(f"❌ OpenClaw: offline ({model})")
+    except Exception as exc:
+        lines.append(f"❌ OpenClaw: ошибка ({exc})")
+
+    # 3. Swarm scheduler — флаг ENABLED и количество jobs
+    try:
+        sched_enabled = getattr(config, "SCHEDULER_ENABLED", False)
+        jobs = swarm_scheduler.list_jobs()
+        job_count = len(jobs)
+        if sched_enabled:
+            lines.append(f"✅ Scheduler: enabled ({job_count} jobs)")
+        else:
+            lines.append(f"⚠️ Scheduler: disabled ({job_count} jobs)")
+    except Exception as exc:
+        lines.append(f"❌ Scheduler: ошибка ({exc})")
+
+    # 4. Proactive Watch — фоновая asyncio-задача жива?
+    try:
+        pw_task = getattr(bot, "_proactive_watch_task", None)
+        pw_running = pw_task is not None and not pw_task.done()
+        if pw_running:
+            lines.append("✅ Proactive Watch: running")
+        else:
+            lines.append("⚠️ Proactive Watch: не запущен")
+    except Exception as exc:
+        lines.append(f"❌ Proactive Watch: ошибка ({exc})")
+
+    # 5. Inbox — attention items (warning/error severity)
+    try:
+        inbox_summary = inbox_service.get_summary()
+        attention = int(inbox_summary.get("attention_items", 0))
+        open_items = int(inbox_summary.get("open_items", 0))
+        if attention > 0:
+            lines.append(f"⚠️ Inbox: {attention} attention items ({open_items} open)")
+        else:
+            lines.append(f"✅ Inbox: чисто ({open_items} open)")
+    except Exception as exc:
+        lines.append(f"❌ Inbox: ошибка ({exc})")
+
+    # 6. Swarm teams — из TEAM_REGISTRY
+    try:
+        team_count = len(TEAM_REGISTRY)
+        if team_count > 0:
+            lines.append(f"✅ Swarm: {team_count} teams ready ({', '.join(TEAM_REGISTRY)})")
+        else:
+            lines.append("❌ Swarm: команды не зарегистрированы")
+    except Exception as exc:
+        lines.append(f"❌ Swarm: ошибка ({exc})")
+
+    # 7. Voice — проверяем конфигурацию через runtime профиль бота
+    try:
+        voice_profile: dict[str, Any] = (
+            bot.get_voice_runtime_profile() if hasattr(bot, "get_voice_runtime_profile") else {}
+        )
+        voice_name = str(voice_profile.get("voice") or getattr(config, "VOICE_REPLY_VOICE", ""))
+        voice_enabled = bool(voice_profile.get("enabled"))
+        if voice_name:
+            status_str = "ВКЛ" if voice_enabled else "ВЫКЛ"
+            lines.append(f"✅ Voice: configured ({voice_name}, {status_str})")
+        else:
+            lines.append("⚠️ Voice: не настроен")
+    except Exception as exc:
+        lines.append(f"❌ Voice: ошибка ({exc})")
+
+    # 8. LM Studio — availability check (короткий таймаут)
+    try:
+        lm_ok = await is_lm_studio_available(config.LM_STUDIO_URL, timeout=2.0)
+        if lm_ok:
+            lines.append("✅ LM Studio: online")
+        else:
+            lines.append("❌ LM Studio: offline")
+    except Exception as exc:
+        lines.append(f"❌ LM Studio: ошибка ({exc})")
+
+    # 9. Rate Limiter — текущая нагрузка sliding window
+    try:
+        rl_stats = telegram_rate_limiter.stats()
+        current = int(rl_stats.get("current_in_window", 0))
+        cap = int(rl_stats.get("max_per_sec", 20))
+        if current >= cap:
+            lines.append(f"⚠️ Rate Limiter: {current}/{cap} rps (перегрузка)")
+        else:
+            lines.append(f"✅ Rate Limiter: {current}/{cap} rps")
+    except Exception as exc:
+        lines.append(f"❌ Rate Limiter: ошибка ({exc})")
+
+    report = "\n".join(lines)
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(report)
+    else:
+        await message.reply(report)
