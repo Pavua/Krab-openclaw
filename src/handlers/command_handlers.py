@@ -4279,3 +4279,83 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
         await message.edit(report)
     else:
         await message.reply(report)
+
+
+async def handle_pin(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Закрепляет сообщение в чате (!pin в ответ на сообщение).
+
+    Owner-only. Опциональный флаг `silent` подавляет системное уведомление.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!pin` доступен только владельцу.")
+
+    target = message.reply_to_message
+    if target is None:
+        raise UserInputError(user_message="📌 Ответь на сообщение, которое хочешь закрепить.")
+
+    # Флаг silent — подавляет системное уведомление о закреплении
+    args = bot._get_command_args(message).strip().lower()
+    silent = args == "silent"
+
+    try:
+        await bot.client.pin_chat_message(
+            chat_id=message.chat.id,
+            message_id=target.id,
+            disable_notification=silent,
+        )
+        note = " (без уведомления)" if silent else ""
+        reply = f"📌 Сообщение закреплено{note}."
+    except Exception as exc:
+        reply = f"❌ Не удалось закрепить: `{exc}`"
+
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(reply)
+    else:
+        await message.reply(reply)
+
+
+async def handle_unpin(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Открепляет сообщение в чате (!unpin).
+
+    - `!unpin` в ответ на сообщение — открепляет конкретное сообщение.
+    - `!unpin all` — открепляет все сообщения в чате.
+    Owner-only.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!unpin` доступен только владельцу.")
+
+    args = bot._get_command_args(message).strip().lower()
+
+    try:
+        if args == "all":
+            # Открепляем все сообщения в чате
+            await bot.client.unpin_all_chat_messages(chat_id=message.chat.id)
+            reply = "📌 Все сообщения откреплены."
+        else:
+            # Открепляем конкретное сообщение (reply) или последнее закреплённое
+            target = message.reply_to_message
+            if target is None:
+                raise UserInputError(
+                    user_message=(
+                        "📌 Ответь на сообщение, которое хочешь открепить, "
+                        "или используй `!unpin all`."
+                    )
+                )
+            await bot.client.unpin_chat_message(
+                chat_id=message.chat.id,
+                message_id=target.id,
+            )
+            reply = "📌 Сообщение откреплено."
+    except UserInputError:
+        raise
+    except Exception as exc:
+        reply = f"❌ Не удалось открепить: `{exc}`"
+
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(reply)
+    else:
+        await message.reply(reply)

@@ -23,6 +23,7 @@ import json
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -38,6 +39,14 @@ _MIN_INTERVAL_SEC = 300
 
 # Максимум рекуррентных jobs
 _MAX_JOBS = 10
+
+class WorkflowType(str, Enum):
+    """Тип workflow для рекуррентного job."""
+
+    STANDARD = "standard"   # обычный round свёрма
+    RESEARCH = "research"   # research pipeline (web_search обязателен)
+    REPORT = "report"       # генерация отчёта и сохранение артефакта
+
 
 _INTERVAL_PATTERN_MAP = {
     "m": 60,
@@ -86,6 +95,7 @@ class RecurringJob:
     team: str
     topic: str
     interval_sec: int
+    workflow_type: str = WorkflowType.STANDARD  # "standard" | "research" | "report"
     created_at: str = field(default_factory=_now_utc_iso)
     last_run_at: str = ""
     next_run_at: str = ""
@@ -95,11 +105,18 @@ class RecurringJob:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RecurringJob:
+        # Поддержка старых записей без workflow_type — дефолт standard
+        raw_wf = d.get("workflow_type", WorkflowType.STANDARD)
+        try:
+            wf = WorkflowType(raw_wf).value
+        except ValueError:
+            wf = WorkflowType.STANDARD.value
         return cls(
             job_id=d.get("job_id", ""),
             team=d.get("team", ""),
             topic=d.get("topic", ""),
             interval_sec=int(d.get("interval_sec", 0)),
+            workflow_type=wf,
             created_at=d.get("created_at", ""),
             last_run_at=d.get("last_run_at", ""),
             next_run_at=d.get("next_run_at", ""),
@@ -195,8 +212,22 @@ class SwarmScheduler:
 
     # -- public API -----------------------------------------------------------
 
-    def add_job(self, *, team: str, topic: str, interval_sec: int) -> RecurringJob:
-        """Создаёт и запускает рекуррентный job."""
+    def add_job(
+        self,
+        *,
+        team: str,
+        topic: str,
+        interval_sec: int,
+        workflow_type: str | WorkflowType = WorkflowType.STANDARD,
+    ) -> RecurringJob:
+        """Создаёт и запускает рекуррентный job.
+
+        Args:
+            team: команда свёрма (traders/coders/analysts/creative)
+            topic: тема задачи
+            interval_sec: интервал повторения в секундах
+            workflow_type: тип workflow — standard/research/report
+        """
         if not config.SWARM_AUTONOMOUS_ENABLED:
             raise RuntimeError(
                 "Автономные задачи выключены. Включи: SWARM_AUTONOMOUS_ENABLED=1 в .env"
@@ -204,11 +235,19 @@ class SwarmScheduler:
         if len(self._jobs) >= _MAX_JOBS:
             raise RuntimeError(f"Максимум {_MAX_JOBS} рекуррентных задач")
 
+        # Валидируем workflow_type
+        try:
+            wf = WorkflowType(workflow_type).value
+        except ValueError:
+            valid = ", ".join(w.value for w in WorkflowType)
+            raise ValueError(f"Неизвестный workflow_type: {workflow_type!r}. Допустимые: {valid}")
+
         job = RecurringJob(
             job_id=uuid.uuid4().hex[:8],
             team=team.lower(),
             topic=topic.strip(),
             interval_sec=max(interval_sec, _MIN_INTERVAL_SEC),
+            workflow_type=wf,
         )
         self._jobs[job.job_id] = job
         self._save()
@@ -249,8 +288,11 @@ class SwarmScheduler:
             interval_str = (
                 f"{interval_h:.1f}ч" if interval_h >= 1 else f"{job.interval_sec // 60}мин"
             )
+            wf_emoji = {"standard": "🔄", "research": "🔬", "report": "📊"}.get(
+                job.workflow_type, "🔄"
+            )
             lines.append(
-                f"{status} `{job.job_id}` — **{job.team}** каждые {interval_str}\n"
+                f"{status} `{job.job_id}` — **{job.team}** каждые {interval_str} {wf_emoji}`{job.workflow_type}`\n"
                 f"  Тема: _{job.topic[:80]}_\n"
                 f"  Прогонов: {job.total_runs} | "
                 f"Последний: {job.last_run_at or '—'}"
@@ -277,6 +319,7 @@ class SwarmScheduler:
                     "team": j.team,
                     "topic": j.topic[:80],
                     "interval_sec": j.interval_sec,
+                    "workflow_type": j.workflow_type,
                     "total_runs": j.total_runs,
                     "enabled": j.enabled,
                 }
@@ -332,33 +375,26 @@ class SwarmScheduler:
             self._tasks.pop(job_id, None)
 
     async def _execute_job(self, job: RecurringJob) -> None:
-        """Выполняет один прогон свёрма для job."""
-        from .swarm import AgentRoom
-        from .swarm_bus import TEAM_REGISTRY, swarm_bus
-
-        logger.info("swarm_scheduler_job_executing", job_id=job.job_id, team=job.team)
+        """Диспатчит job по workflow_type и обрабатывает ошибки."""
+        logger.info(
+            "swarm_scheduler_job_executing",
+            job_id=job.job_id,
+            team=job.team,
+            workflow_type=job.workflow_type,
+        )
 
         if not self._router_factory:
             job.last_error = "router_factory_not_bound"
             self._save()
             return
 
-        roles = TEAM_REGISTRY.get(job.team)
-        if not roles:
-            job.last_error = f"team_not_found:{job.team}"
-            self._save()
-            return
-
         try:
-            room = AgentRoom(roles=roles)
-            router = self._router_factory(job.team)
-            result = await room.run_round(
-                job.topic,
-                router,
-                _bus=swarm_bus,
-                _router_factory=self._router_factory,
-                _team_name=job.team,
-            )
+            if job.workflow_type == WorkflowType.RESEARCH:
+                result = await self._execute_research_job(job)
+            elif job.workflow_type == WorkflowType.REPORT:
+                result = await self._execute_report_job(job)
+            else:
+                result = await self._execute_standard_job(job)
 
             job.total_runs += 1
             job.last_run_at = _now_utc_iso()
@@ -367,8 +403,11 @@ class SwarmScheduler:
 
             # Отправляем результат owner-у
             if self._sender and self._owner_chat_id:
+                wf_label = {"research": "🔬 Research", "report": "📊 Report"}.get(
+                    job.workflow_type, "📅 Авто-прогон"
+                )
                 header = (
-                    f"📅 **Автономный прогон #{job.total_runs}**\n"
+                    f"{wf_label} **#{job.total_runs}**\n"
                     f"Команда: {job.team} | Тема: {job.topic[:100]}\n\n"
                 )
                 msg = header + result
@@ -414,6 +453,115 @@ class SwarmScheduler:
                 )
             except Exception:  # noqa: BLE001
                 pass
+
+    async def _execute_standard_job(self, job: RecurringJob) -> str:
+        """Стандартный прогон свёрма — обычный AgentRoom.run_round()."""
+        from .swarm import AgentRoom
+        from .swarm_bus import TEAM_REGISTRY, swarm_bus
+
+        roles = TEAM_REGISTRY.get(job.team)
+        if not roles:
+            raise RuntimeError(f"team_not_found:{job.team}")
+
+        room = AgentRoom(roles=roles)
+        router = self._router_factory(job.team)
+        return await room.run_round(
+            job.topic,
+            router,
+            _bus=swarm_bus,
+            _router_factory=self._router_factory,
+            _team_name=job.team,
+        )
+
+    async def _execute_research_job(self, job: RecurringJob) -> str:
+        """Research pipeline: запуск analysts с принудительным web_search.
+
+        Аналог команды !swarm research — промпт усиленный,
+        результат сохраняется в artifact store.
+        """
+        from .swarm import AgentRoom
+        from .swarm_bus import TEAM_REGISTRY, swarm_bus
+
+        # Для research всегда используем analysts (они умеют web_search)
+        team_key = "analysts"
+        roles = TEAM_REGISTRY.get(team_key)
+        if not roles:
+            raise RuntimeError(f"team_not_found:{team_key}")
+
+        # Усиленный промпт: обязателен web_search + структурированный результат
+        research_topic = (
+            f"Проведи исследование по теме: {job.topic}. "
+            "Обязательно используй web_search для поиска актуальной информации. "
+            "Структурируй результат: Summary, Key Findings, Sources."
+        )
+
+        room = AgentRoom(roles=roles)
+        router = self._router_factory(team_key)
+        result = await room.run_round(
+            research_topic,
+            router,
+            _bus=swarm_bus,
+            _router_factory=self._router_factory,
+            _team_name=team_key,
+        )
+
+        # Сохраняем в artifact store
+        try:
+            from .swarm_artifact_store import swarm_artifact_store
+
+            swarm_artifact_store.save_round_artifact(
+                team=team_key,
+                topic=f"[scheduled-research] {job.topic}",
+                result=result,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("swarm_scheduler_research_artifact_save_failed", error=str(exc))
+
+        return result
+
+    async def _execute_report_job(self, job: RecurringJob) -> str:
+        """Report pipeline: генерирует отчёт и сохраняет как артефакт.
+
+        Промпт требует структурированного отчёта (Summary, Metrics, Recommendations).
+        Результат всегда сохраняется в artifact store.
+        """
+        from .swarm import AgentRoom
+        from .swarm_bus import TEAM_REGISTRY, swarm_bus
+
+        roles = TEAM_REGISTRY.get(job.team)
+        if not roles:
+            raise RuntimeError(f"team_not_found:{job.team}")
+
+        # Промпт для структурированного отчёта
+        report_topic = (
+            f"Подготовь структурированный отчёт по теме: {job.topic}. "
+            "Включи разделы: Executive Summary, Ключевые метрики, Наблюдения, Рекомендации. "
+            "Будь конкретен и лаконичен."
+        )
+
+        room = AgentRoom(roles=roles)
+        router = self._router_factory(job.team)
+        result = await room.run_round(
+            report_topic,
+            router,
+            _bus=swarm_bus,
+            _router_factory=self._router_factory,
+            _team_name=job.team,
+        )
+
+        # Сохраняем отчёт в artifact store
+        try:
+            from .swarm_artifact_store import swarm_artifact_store
+
+            swarm_artifact_store.save_round_artifact(
+                team=job.team,
+                topic=f"[scheduled-report] {job.topic}",
+                result=result,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("swarm_scheduler_report_artifact_save_failed", error=str(exc))
+
+        return result
 
 
 # Singleton
