@@ -167,6 +167,7 @@ from .handlers import (
     handle_welcome,
     handle_who,
     handle_write,
+    handle_time,
     handle_yt,
 )
 from .model_manager import model_manager
@@ -769,6 +770,12 @@ class KraabUserbot(
         )
         async def wrap_yt(c, m):
             await run_cmd(handle_yt, m)
+
+        @self.client.on_message(
+            filters.command("time", prefixes=prefixes) & _make_command_filter("time"), group=-1
+        )
+        async def wrap_time(c, m):
+            await run_cmd(handle_time, m)
 
         @self.client.on_message(
             filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1

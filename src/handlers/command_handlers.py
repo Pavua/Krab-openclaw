@@ -1227,8 +1227,9 @@ async def handle_paste(bot: "KraabUserbot", message: Message) -> None:
 
     try:
         filepath.write_text(text, encoding="utf-8")
-        await message.reply_document(
-            document=str(filepath),
+        await bot.client.send_document(
+            message.chat.id,
+            str(filepath),
             caption="📋 Paste",
         )
     except (OSError, IOError) as e:
@@ -1477,22 +1478,163 @@ async def handle_config(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(text)
 
 
+##############################################################################
+# Алиасы !set: короткое имя → реальный ключ config (или специальный режим)
+##############################################################################
+_SET_ALIASES: dict[str, str] = {
+    "stream_interval": "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC",
+    "reactions": "TELEGRAM_REACTIONS_ENABLED",
+    "weather_city": "DEFAULT_WEATHER_CITY",
+    "language": "_TRANSLATOR_LANGUAGE",   # особый: через translator-профиль
+    "autodel": "_AUTODEL_DEFAULT",         # особый: глобальный default autodel
+}
+
+# (алиас → (config_key_или_метка, описание))
+_SET_FRIENDLY: dict[str, tuple[str, str]] = {
+    "stream_interval": ("TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", "Интервал стриминга (сек)"),
+    "reactions":       ("TELEGRAM_REACTIONS_ENABLED",          "Реакции 👀✅❌ (on/off)"),
+    "weather_city":    ("DEFAULT_WEATHER_CITY",                "Город погоды по умолчанию"),
+    "autodel":         ("_AUTODEL_DEFAULT",                    "Автоудаление ответов (сек, 0=выкл)"),
+    "language":        ("_TRANSLATOR_LANGUAGE",                "Языковая пара переводчика"),
+}
+
+
+def _get_set_value(bot: "KraabUserbot", alias: str) -> str:
+    """Возвращает текущее значение управляемой настройки по алиасу."""
+    if alias == "autodel":
+        state: dict = getattr(bot, "_runtime_state", {}) or {}
+        settings: dict = state.get(_AUTODEL_STATE_KEY, {})
+        val = settings.get("_default", 0)
+        return str(val) if val else "0 (выключен)"
+    if alias == "language":
+        fn = getattr(bot, "get_translator_runtime_profile", None)
+        profile: dict = fn() if callable(fn) else {}
+        return str(profile.get("language_pair", "es-ru"))
+    config_key = _SET_ALIASES.get(alias, alias.upper())
+    return str(getattr(config, config_key, "—"))
+
+
+def _render_all_settings(bot: "KraabUserbot") -> str:
+    """Формирует текст со всеми управляемыми настройками."""
+    lines = ["⚙️ **Управляемые настройки** (`!set`):", ""]
+    for alias, (_, description) in _SET_FRIENDLY.items():
+        value = _get_set_value(bot, alias)
+        lines.append(f"- `{alias}` = `{value}` — {description}")
+    lines.append("")
+    lines.append("Использование:")
+    lines.append("`!set` — показать всё")
+    lines.append("`!set <key>` — показать одну настройку")
+    lines.append("`!set <key> <value>` — установить")
+    lines.append("")
+    lines.append("Также поддерживаются RAW ключи config: `!set TELEGRAM_STREAM_UPDATE_INTERVAL_SEC 3`")
+    return "\n".join(lines)
+
+
 async def handle_set(bot: "KraabUserbot", message: Message) -> None:
-    """Изменение настроек на лету."""
-    args = message.text.split(maxsplit=2)
-    if len(args) < 3:
-        raise UserInputError(user_message="⚙️ `!set <KEY> <VAL>`")
-    key = str(args[1] or "").upper()
-    if config.update_setting(key, args[2]):
+    """
+    Управление настройками Краба из Telegram.
+
+    !set                    — показать все управляемые настройки
+    !set <key>              — показать значение одной настройки
+    !set <key> <value>      — установить значение
+
+    Поддерживаемые алиасы:
+      stream_interval  → TELEGRAM_STREAM_UPDATE_INTERVAL_SEC
+      reactions        → TELEGRAM_REACTIONS_ENABLED (on/off)
+      weather_city     → DEFAULT_WEATHER_CITY
+      autodel          → глобальный default autodel (сек, 0=выкл)
+      language         → языковая пара переводчика (es-ru, en-ru, ...)
+
+    Также принимаются прямые CONFIG-ключи (upper-case).
+    """
+    raw_args = bot._get_command_args(message).strip() if hasattr(bot, "_get_command_args") else ""
+    if not raw_args:
+        # Режим 1: показать все настройки
+        await message.reply(_render_all_settings(bot))
+        return
+
+    parts = raw_args.split(maxsplit=1)
+    alias_or_key = parts[0].lower()
+    has_value = len(parts) > 1
+    value_str = parts[1] if has_value else ""
+
+    # Режим 2: показать одну настройку
+    if not has_value:
+        if alias_or_key in _SET_FRIENDLY:
+            val = _get_set_value(bot, alias_or_key)
+            desc = _SET_FRIENDLY[alias_or_key][1]
+            await message.reply(f"⚙️ `{alias_or_key}` = `{val}` — {desc}")
+        else:
+            config_key = alias_or_key.upper()
+            if hasattr(config, config_key):
+                val = str(getattr(config, config_key))
+                await message.reply(f"⚙️ `{config_key}` = `{val}`")
+            else:
+                raise UserInputError(
+                    user_message=f"❓ Настройка `{alias_or_key}` не найдена.\n`!set` — список всех настроек."
+                )
+        return
+
+    # Режим 3: установить значение
+    if alias_or_key == "autodel":
+        try:
+            delay = float(value_str)
+        except ValueError:
+            raise UserInputError(user_message="❌ `autodel` принимает число секунд (0 = выключить).")
+        if not hasattr(bot, "_runtime_state") or bot._runtime_state is None:
+            bot._runtime_state = {}
+        autodel_settings: dict = bot._runtime_state.setdefault(_AUTODEL_STATE_KEY, {})
+        if delay <= 0:
+            autodel_settings.pop("_default", None)
+            await message.reply("✅ Автоудаление по умолчанию **выключено**.")
+        else:
+            autodel_settings["_default"] = delay
+            await message.reply(f"✅ Автоудаление по умолчанию: **{delay:.0f} сек**.")
+        return
+
+    if alias_or_key == "language":
+        if not hasattr(bot, "update_translator_runtime_profile"):
+            raise UserInputError(user_message="❌ Translator не инициализирован.")
+        value_norm = value_str.strip().lower()
+        try:
+            from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
+
+            if value_norm != "auto-detect" and value_norm not in ALLOWED_LANGUAGE_PAIRS:
+                pairs = ", ".join(sorted(ALLOWED_LANGUAGE_PAIRS))
+                raise UserInputError(
+                    user_message=(
+                        f"❌ Неизвестная языковая пара `{value_norm}`.\n"
+                        f"Доступны: `{pairs}`, `auto-detect`."
+                    )
+                )
+            profile = bot.update_translator_runtime_profile(language_pair=value_norm, persist=True)
+            new_pair = profile.get("language_pair", value_norm)
+            await message.reply(f"✅ Языковая пара переводчика: `{new_pair}`")
+        except UserInputError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await message.reply(f"❌ Ошибка установки языковой пары: {str(exc)[:120]}")
+        return
+
+    # Стандартный путь: алиас → CONFIG-ключ или прямой ключ
+    config_key = _SET_ALIASES.get(alias_or_key, alias_or_key.upper())
+    if config_key.startswith("_"):
+        # Спец-ключ без config-атрибута — не должен сюда попасть (autodel/language уже выше)
+        raise UserInputError(
+            user_message=f"❓ Настройка `{alias_or_key}` не найдена.\n`!set` — список всех настроек."
+        )
+
+    if config.update_setting(config_key, value_str):
         extra = ""
-        if key == "SCHEDULER_ENABLED" and hasattr(bot, "_sync_scheduler_runtime"):
+        if config_key == "SCHEDULER_ENABLED" and hasattr(bot, "_sync_scheduler_runtime"):
             try:
                 bot._sync_scheduler_runtime()
-                state = "ON" if bool(getattr(config, "SCHEDULER_ENABLED", False)) else "OFF"
-                extra = f"\n⏰ Scheduler runtime: `{state}`"
+                sched_state = "ON" if bool(getattr(config, "SCHEDULER_ENABLED", False)) else "OFF"
+                extra = f"\n⏰ Scheduler runtime: `{sched_state}`"
             except Exception as exc:  # noqa: BLE001
                 extra = f"\n⚠️ Scheduler sync warning: `{str(exc)[:120]}`"
-        await message.reply(f"✅ `{key}` обновлено!{extra}")
+        display_name = alias_or_key if alias_or_key in _SET_ALIASES else config_key
+        await message.reply(f"✅ `{display_name}` обновлено!{extra}")
     else:
         await message.reply("❌ Ошибка обновления.")
 

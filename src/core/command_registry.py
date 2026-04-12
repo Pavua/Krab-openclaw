@@ -584,6 +584,18 @@ _COMMANDS: list[CommandInfo] = [
         usage="!qr <текст|URL>  или ответь на сообщение",
         owner_only=True,
     ),
+    CommandInfo(
+        name="template",
+        category="notes",
+        description="Шаблоны сообщений с подстановкой переменных",
+        usage=(
+            "!template save <name> <text>  — сохранить\n"
+            "!template <name> [val1 val2]  — отправить (с подстановкой)\n"
+            "!template list                — список\n"
+            "!template del <name>          — удалить"
+        ),
+        owner_only=True,
+    ),
 ]
 
 
