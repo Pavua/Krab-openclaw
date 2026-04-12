@@ -111,6 +111,7 @@ from .handlers import (
     handle_status,
     handle_swarm,
     handle_sysinfo,
+    handle_uptime,
     handle_translator,
     handle_unpin,
     handle_voice,
@@ -137,6 +138,10 @@ from .handlers import (
     handle_stopwatch,
     handle_qr,
     handle_weather,
+    handle_hash,
+    handle_calc,
+    handle_b64,
+    handle_define,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -677,6 +682,13 @@ class KraabUserbot(
             await run_cmd(handle_sysinfo, m)
 
         @self.client.on_message(
+            filters.command("uptime", prefixes=prefixes) & _make_command_filter("uptime"),
+            group=-1,
+        )
+        async def wrap_uptime(c, m):
+            await run_cmd(handle_uptime, m)
+
+        @self.client.on_message(
             filters.command("panel", prefixes=prefixes) & _make_command_filter("panel"), group=-1
         )
         async def wrap_panel(c, m):
@@ -1031,6 +1043,24 @@ class KraabUserbot(
         )
         async def wrap_qr(c, m):
             await run_cmd(handle_qr, m)
+
+        @self.client.on_message(
+            filters.command("hash", prefixes=prefixes) & _make_command_filter("hash"), group=-1
+        )
+        async def wrap_hash(c, m):
+            await run_cmd(handle_hash, m)
+
+        @self.client.on_message(
+            filters.command("calc", prefixes=prefixes) & _make_command_filter("calc"), group=-1
+        )
+        async def wrap_calc(c, m):
+            await run_cmd(handle_calc, m)
+
+        @self.client.on_message(
+            filters.command("b64", prefixes=prefixes) & _make_command_filter("b64"), group=-1
+        )
+        async def wrap_b64(c, m):
+            await run_cmd(handle_b64, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()

@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
+import ast as _ast
 import asyncio
 import datetime
 import json
+import math as _math
+import operator as _operator
 import os
 import pathlib
+import socket
+import subprocess
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -2212,14 +2217,147 @@ async def handle_web(bot: "KraabUserbot", message: Message) -> None:
         await bot._run_self_test(message)
 
 
+def _format_uptime_str(elapsed_sec: float) -> str:
+    """Форматирует секунды в читаемый uptime: 1д 2ч 15м."""
+    elapsed = int(elapsed_sec)
+    days, rem = divmod(elapsed, 86400)
+    hours, rem2 = divmod(rem, 3600)
+    mins = rem2 // 60
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}д")
+    if hours:
+        parts.append(f"{hours}ч")
+    parts.append(f"{mins}м")
+    return " ".join(parts)
+
+
 async def handle_sysinfo(bot: "KraabUserbot", message: Message) -> None:
-    """Расширенная информация о хосте."""
+    """Расширенная информация о хосте: macOS, CPU, RAM, Disk, Network, Python, Krab."""
+    import os
     import platform
+    import socket
 
     import psutil
 
-    text = f"🖥️ **System:** `{platform.system()}`\n🔥 **CPU:** `{psutil.cpu_percent()}%`"
-    await message.reply(text)
+    lines: list[str] = ["🖥️ **System Info**", "─────────────"]
+
+    # macOS версия
+    try:
+        mac_ver = platform.mac_ver()[0] or platform.version()
+        darwin_ver = platform.release()
+        lines.append(f"macOS: `{mac_ver}` (Darwin {darwin_ver})")
+    except Exception:
+        lines.append(f"OS: `{platform.system()} {platform.release()}`")
+
+    # CPU: модель + load average
+    try:
+        cpu_model = platform.processor() or platform.machine()
+        load1, load5, load15 = os.getloadavg()
+        lines.append(f"CPU: `{cpu_model}` | Load: {load1:.1f}, {load5:.1f}, {load15:.1f}")
+    except Exception:
+        try:
+            lines.append(f"CPU: Load {psutil.cpu_percent()}%")
+        except Exception:
+            lines.append("CPU: N/A")
+
+    # RAM: total/used/free через psutil
+    try:
+        vm = psutil.virtual_memory()
+        total_gb = vm.total / 1024**3
+        used_gb = vm.used / 1024**3
+        pct = vm.percent
+        lines.append(f"RAM: {used_gb:.1f} / {total_gb:.1f} GB ({pct:.0f}%)")
+    except Exception:
+        lines.append("RAM: N/A")
+
+    # Disk: total/used/free (корневой раздел)
+    try:
+        disk = psutil.disk_usage("/")
+        d_total = disk.total / 1024**3
+        d_used = disk.used / 1024**3
+        d_pct = disk.percent
+        lines.append(f"Disk: {d_used:.0f} / {d_total:.0f} GB ({d_pct:.0f}%)")
+    except Exception:
+        lines.append("Disk: N/A")
+
+    # Network: IP адрес
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        lines.append(f"Network: `{local_ip}`")
+    except Exception:
+        lines.append("Network: N/A")
+
+    # Python версия
+    py_ver = platform.python_version()
+    lines.append(f"Python: `{py_ver}`")
+
+    # Krab uptime + PID
+    try:
+        elapsed = time.time() - bot._session_start_time
+        uptime_str = _format_uptime_str(elapsed)
+        krab_pid = os.getpid()
+        lines.append(f"Krab: PID {krab_pid} | Uptime: {uptime_str}")
+    except Exception:
+        import os as _os
+        lines.append(f"Krab: PID {_os.getpid()}")
+
+    await message.reply("\n".join(lines))
+
+
+async def handle_uptime(bot: "KraabUserbot", message: Message) -> None:
+    """Uptime системы macOS + Краба + OpenClaw gateway."""
+    import re
+    import subprocess
+    import time as _t
+
+    lines: list[str] = ["⏱️ **Uptime**", "─────────────"]
+
+    # macOS system uptime через sysctl kern.boottime
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "kern.boottime"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        m = re.search(r"sec\s*=\s*(\d+)", result.stdout)
+        if m:
+            boot_sec = int(m.group(1))
+            sys_elapsed = _t.time() - boot_sec
+            lines.append(f"macOS: `{_format_uptime_str(sys_elapsed)}`")
+        else:
+            lines.append("macOS: N/A")
+    except Exception:
+        lines.append("macOS: N/A")
+
+    # Krab uptime
+    try:
+        elapsed = time.time() - bot._session_start_time
+        lines.append(f"Краб: `{_format_uptime_str(elapsed)}`")
+    except Exception:
+        lines.append("Краб: N/A")
+
+    # OpenClaw gateway uptime — через health endpoint
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("http://127.0.0.1:18789/health")
+            if resp.status_code == 200:
+                data = resp.json()
+                oc_uptime = data.get("uptime") or data.get("uptime_seconds")
+                if oc_uptime is not None:
+                    lines.append(f"OpenClaw: `{_format_uptime_str(float(oc_uptime))}`")
+                else:
+                    lines.append("OpenClaw: ✅ Online")
+            else:
+                lines.append("OpenClaw: ❌ Offline")
+    except Exception:
+        lines.append("OpenClaw: ❌ Недоступен")
+
+    await message.reply("\n".join(lines))
 
 
 async def handle_panel(bot: "KraabUserbot", message: Message) -> None:
@@ -7121,3 +7259,763 @@ async def handle_weather(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_weather_error", error=str(exc))
         await msg.edit(f"❌ Ошибка получения погоды: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# !hash — хэширование текста (MD5, SHA1, SHA256)
+# ---------------------------------------------------------------------------
+
+async def handle_hash(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Хэширует текст и возвращает MD5 / SHA1 / SHA256.
+
+    Синтаксис:
+      !hash <текст>         — все три хэша
+      !hash md5 <текст>     — только MD5
+      !hash sha1 <текст>    — только SHA1
+      !hash sha256 <текст>  — только SHA256
+      !hash (reply)         — хэши текста из ответного сообщения
+    """
+    import hashlib
+
+    # Алгоритмы, поддерживаемые как первый аргумент
+    _known_algos = {"md5", "sha1", "sha256"}
+
+    raw_args = bot._get_command_args(message).strip()
+
+    # Определяем алгоритм-фильтр и текст для хэширования
+    algo_filter: str | None = None
+    text: str = ""
+
+    if raw_args:
+        parts = raw_args.split(maxsplit=1)
+        if parts[0].lower() in _known_algos:
+            # Первый токен — алгоритм
+            algo_filter = parts[0].lower()
+            text = parts[1].strip() if len(parts) > 1 else ""
+        else:
+            text = raw_args
+
+    # Если текст пустой — берём из reply-сообщения
+    if not text and message.reply_to_message:
+        replied = message.reply_to_message
+        text = (replied.text or replied.caption or "").strip()
+
+    if not text:
+        raise UserInputError(
+            user_message=(
+                "🔐 Укажи текст: `!hash <текст>`, `!hash md5 <текст>` "
+                "или ответь командой на сообщение."
+            )
+        )
+
+    # Вычисляем хэши
+    encoded = text.encode("utf-8")
+    hashes = {
+        "md5": hashlib.md5(encoded).hexdigest(),
+        "sha1": hashlib.sha1(encoded).hexdigest(),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+    # Формируем ответ
+    if algo_filter:
+        # Только один алгоритм
+        result = f"🔐 `{algo_filter.upper()}`\n─────\n`{hashes[algo_filter]}`"
+    else:
+        # Все три
+        result = (
+            "🔐 Hash\n"
+            "─────\n"
+            f"MD5:    `{hashes['md5']}`\n"
+            f"SHA1:   `{hashes['sha1']}`\n"
+            f"SHA256: `{hashes['sha256']}`"
+        )
+
+    await message.reply(result)
+
+# ---------------------------------------------------------------------------
+# !calc — безопасный калькулятор (compile + ограниченный namespace)
+# ---------------------------------------------------------------------------
+
+import ast as _ast
+import math as _math
+import operator as _operator
+
+
+# Разрешённые бинарные операции
+_CALC_BINOPS: dict[type, object] = {
+    _ast.Add: _operator.add,
+    _ast.Sub: _operator.sub,
+    _ast.Mult: _operator.mul,
+    _ast.Div: _operator.truediv,
+    _ast.Mod: _operator.mod,
+    _ast.Pow: _operator.pow,
+    _ast.FloorDiv: _operator.floordiv,
+}
+
+# Разрешённые унарные операции
+_CALC_UNOPS: dict[type, object] = {
+    _ast.UAdd: _operator.pos,
+    _ast.USub: _operator.neg,
+}
+
+# Разрешённые функции и константы
+_CALC_NAMESPACE: dict[str, object] = {
+    "sqrt": _math.sqrt,
+    "sin": _math.sin,
+    "cos": _math.cos,
+    "tan": _math.tan,
+    "log": _math.log,
+    "log2": _math.log2,
+    "log10": _math.log10,
+    "abs": abs,
+    "round": round,
+    "pi": _math.pi,
+    "e": _math.e,
+    "inf": _math.inf,
+}
+
+
+def _calc_eval_node(node: _ast.AST) -> float | int:
+    """Рекурсивно вычисляет AST-узел. Разрешены только безопасные операции."""
+    if isinstance(node, _ast.Expression):
+        return _calc_eval_node(node.body)
+    if isinstance(node, _ast.Constant):
+        # bool — подкласс int, но недопустим в математических выражениях
+        if isinstance(node.value, bool):
+            raise UserInputError(user_message=f"❌ Недопустимый литерал: {node.value!r}")
+        if isinstance(node.value, (int, float)):
+            return node.value
+        raise UserInputError(user_message=f"❌ Недопустимый литерал: {node.value!r}")
+    if isinstance(node, _ast.BinOp):
+        op_fn = _CALC_BINOPS.get(type(node.op))
+        if op_fn is None:
+            raise UserInputError(user_message="❌ Недопустимая операция.")
+        left = _calc_eval_node(node.left)
+        right = _calc_eval_node(node.right)
+        try:
+            return op_fn(left, right)  # type: ignore[operator]
+        except ZeroDivisionError:
+            raise UserInputError(user_message="❌ Деление на ноль.")
+    if isinstance(node, _ast.UnaryOp):
+        op_fn = _CALC_UNOPS.get(type(node.op))
+        if op_fn is None:
+            raise UserInputError(user_message="❌ Недопустимая унарная операция.")
+        return op_fn(_calc_eval_node(node.operand))  # type: ignore[operator]
+    if isinstance(node, _ast.Call):
+        # Разрешены только функции из _CALC_NAMESPACE
+        if not isinstance(node.func, _ast.Name):
+            raise UserInputError(user_message="❌ Недопустимый вызов функции.")
+        fn = _CALC_NAMESPACE.get(node.func.id)
+        if fn is None:
+            raise UserInputError(user_message=f"❌ Функция не поддерживается: {node.func.id}()")
+        if node.keywords:
+            raise UserInputError(user_message="❌ Именованные аргументы не поддерживаются.")
+        args = [_calc_eval_node(a) for a in node.args]
+        try:
+            return fn(*args)  # type: ignore[operator]
+        except (ValueError, TypeError) as exc:
+            raise UserInputError(user_message=f"❌ Ошибка вычисления: {exc}")
+    if isinstance(node, _ast.Name):
+        val = _CALC_NAMESPACE.get(node.id)
+        if val is None or not isinstance(val, (int, float)):
+            raise UserInputError(user_message=f"❌ Неизвестная переменная: {node.id}")
+        return val  # type: ignore[return-value]
+    raise UserInputError(user_message=f"❌ Недопустимая конструкция: {type(node).__name__}")
+
+
+def safe_calc(expression: str) -> float | int:
+    """
+    Безопасно вычисляет математическое выражение через AST.
+    Не использует eval/exec напрямую — только разбор AST и whitelisted операции.
+    """
+    expression = expression.strip()
+    if not expression:
+        raise UserInputError(user_message="❌ Пустое выражение.")
+    if len(expression) > 200:
+        raise UserInputError(user_message="❌ Выражение слишком длинное (макс. 200 символов).")
+    try:
+        tree = compile(expression, "<calc>", "eval", _ast.PyCF_ONLY_AST)
+    except SyntaxError as exc:
+        raise UserInputError(user_message=f"❌ Синтаксическая ошибка: {exc.msg}")
+    return _calc_eval_node(tree)
+
+
+async def handle_calc(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !calc <выражение> — безопасный калькулятор.
+
+    Примеры:
+      !calc 2+2*3       → = 8
+      !calc sqrt(144)   → = 12.0
+      !calc sin(pi/2)   → = 1.0
+    """
+    expr = bot._get_command_args(message).strip()
+    if not expr:
+        raise UserInputError(
+            user_message=(
+                "🧮 **Калькулятор**\n\n"
+                "Использование: `!calc <выражение>`\n\n"
+                "Примеры:\n"
+                "`!calc 2+2*3` → `= 8`\n"
+                "`!calc sqrt(144)` → `= 12.0`\n"
+                "`!calc sin(pi/2)` → `= 1.0`\n\n"
+                "Поддерживаются: `+`, `-`, `*`, `/`, `**`, `%`, `//`\n"
+                "Функции: `sqrt`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `abs`, `round`\n"
+                "Константы: `pi`, `e`"
+            )
+        )
+    result = safe_calc(expr)
+    # Красиво форматируем: целые числа без .0
+    if isinstance(result, float) and result.is_integer() and abs(result) < 1e15:
+        formatted = str(int(result))
+    else:
+        formatted = str(result)
+    await message.reply(f"= {formatted}")
+
+
+# ---------------------------------------------------------------------------
+# !b64 — кодирование/декодирование Base64
+# ---------------------------------------------------------------------------
+
+import base64 as _base64  # noqa: E402
+
+
+def _b64_is_valid(text: str) -> bool:
+    """Проверяет, является ли строка валидным Base64 (паддинг добавляется автоматически)."""
+    # Убираем пробельные символы — допустимы в некоторых форматах
+    stripped = text.strip().replace("\n", "").replace(" ", "")
+    if not stripped:
+        return False
+    # Паддим до кратности 4
+    padded = stripped + "=" * ((4 - len(stripped) % 4) % 4)
+    try:
+        _base64.b64decode(padded, validate=True)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _b64_encode(text: str) -> str:
+    """Кодирует текст в Base64 (UTF-8)."""
+    return _base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+def _b64_decode(b64: str) -> str:
+    """Декодирует Base64 в строку (UTF-8, с мягким паддингом)."""
+    stripped = b64.strip().replace("\n", "").replace(" ", "")
+    padded = stripped + "=" * ((4 - len(stripped) % 4) % 4)
+    return _base64.b64decode(padded).decode("utf-8")
+
+
+async def handle_b64(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда !b64 — Base64 кодирование и декодирование.
+
+    Форматы:
+      !b64 encode <текст>   — закодировать в Base64
+      !b64 decode <base64>  — декодировать из Base64
+      !b64 (reply)          — автоопределение: если reply — валидный Base64, декодирует,
+                              иначе кодирует
+      !b64 <текст>          — кодирует произвольный текст (без явной подкоманды)
+    """
+    args = bot._get_command_args(message).strip()
+
+    # --- явный режим encode ---
+    if args.lower().startswith("encode "):
+        payload = args[len("encode "):].strip()
+        if not payload:
+            raise UserInputError(user_message="❌ Укажи текст для кодирования: `!b64 encode <текст>`")
+        result = _b64_encode(payload)
+        await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
+        return
+
+    # --- явный режим decode ---
+    if args.lower().startswith("decode "):
+        payload = args[len("decode "):].strip()
+        if not payload:
+            raise UserInputError(user_message="❌ Укажи Base64 для декодирования: `!b64 decode <base64>`")
+        try:
+            result = _b64_decode(payload)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Невалидный Base64: {exc}") from exc
+        await message.reply(f"🔓 **Base64 (decode):**\n`{result}`")
+        return
+
+    # --- автоопределение по reply ---
+    reply_text: str | None = None
+    if message.reply_to_message and message.reply_to_message.text:
+        reply_text = message.reply_to_message.text
+
+    if not args and reply_text:
+        if _b64_is_valid(reply_text):
+            try:
+                result = _b64_decode(reply_text)
+                await message.reply(f"🔓 **Base64 (decode):**\n`{result}`")
+            except Exception as exc:  # noqa: BLE001
+                raise UserInputError(user_message=f"❌ Невалидный Base64: {exc}") from exc
+        else:
+            result = _b64_encode(reply_text)
+            await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
+        return
+
+    # --- нет явной подкоманды, есть текст — кодируем ---
+    if args:
+        result = _b64_encode(args)
+        await message.reply(f"🔐 **Base64 (encode):**\n`{result}`")
+        return
+
+    # --- справка ---
+    raise UserInputError(
+        user_message=(
+            "🔐 **Base64 — справка**\n\n"
+            "`!b64 encode <текст>` — закодировать\n"
+            "`!b64 decode <base64>` — декодировать\n"
+            "`!b64 <текст>` — закодировать (короткий вариант)\n"
+            "`!b64` в reply — автоопределение по содержимому"
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Вспомогательные функции для сетевых утилит
+# ---------------------------------------------------------------------------
+
+
+def _get_local_ip() -> str:
+    """Определить локальный IP через UDP-сокет (без отправки пакетов)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:  # noqa: BLE001
+        return "н/д"
+
+
+async def _get_public_ip() -> str:
+    """Получить публичный IP через api.ipify.org."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get("https://api.ipify.org?format=json")
+        resp.raise_for_status()
+        return resp.json()["ip"]
+
+
+# ---------------------------------------------------------------------------
+# handle_ip — публичный и локальный IP
+# ---------------------------------------------------------------------------
+
+
+async def handle_ip(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда !ip — показать IP-адреса.
+
+    !ip          — публичный + локальный
+    !ip local    — только локальный (без HTTP-запроса)
+    """
+    args = bot._get_command_args(message).strip().lower()
+
+    local_ip = _get_local_ip()
+
+    if args == "local":
+        # Только локальный IP
+        text = (
+            "🌐 **IP Info**\n"
+            "─────\n"
+            f"Local: `{local_ip}`"
+        )
+        await message.reply(text)
+        return
+
+    # Публичный + локальный
+    try:
+        public_ip = await _get_public_ip()
+    except Exception as exc:  # noqa: BLE001
+        raise UserInputError(user_message=f"❌ Не удалось получить публичный IP: {exc}") from exc
+
+    text = (
+        "🌐 **IP Info**\n"
+        "─────\n"
+        f"Public: `{public_ip}`\n"
+        f"Local: `{local_ip}`"
+    )
+    await message.reply(text)
+
+
+# ---------------------------------------------------------------------------
+# handle_dns — DNS lookup (A, AAAA, MX записи)
+# ---------------------------------------------------------------------------
+
+
+async def handle_dns(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда !dns <domain> — DNS lookup.
+
+    Показывает A, AAAA и MX записи для домена.
+    """
+    domain = bot._get_command_args(message).strip()
+    if not domain:
+        raise UserInputError(user_message="❌ Укажи домен: `!dns example.com`")
+
+    lines: list[str] = [f"🔍 **DNS: {domain}**", "─────"]
+
+    # A записи (IPv4)
+    try:
+        a_results = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: socket.getaddrinfo(domain, None, socket.AF_INET)
+        )
+        a_addrs = sorted({r[4][0] for r in a_results})
+        for addr in a_addrs:
+            lines.append(f"A     `{addr}`")
+    except socket.gaierror:
+        lines.append("A     н/д")
+
+    # AAAA записи (IPv6)
+    try:
+        aaaa_results = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: socket.getaddrinfo(domain, None, socket.AF_INET6)
+        )
+        aaaa_addrs = sorted({r[4][0] for r in aaaa_results})
+        for addr in aaaa_addrs:
+            lines.append(f"AAAA  `{addr}`")
+    except socket.gaierror:
+        pass  # IPv6 может отсутствовать — не показываем
+
+    # MX записи через host (доступна на macOS/Linux)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "host", "-t", "MX", domain,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        mx_lines = stdout.decode(errors="replace").splitlines()
+        for mx_line in mx_lines:
+            if "mail is handled" in mx_line or "MX" in mx_line:
+                parts = mx_line.split()
+                if len(parts) >= 2:
+                    mx_record = " ".join(parts[-2:]).rstrip(".")
+                    lines.append(f"MX    `{mx_record}`")
+    except Exception:  # noqa: BLE001
+        pass  # MX необязательны
+
+    await message.reply("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# handle_ping — ping одного хоста (1 пакет)
+# ---------------------------------------------------------------------------
+
+
+async def handle_ping(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда !ping <host> — ping хоста (1 пакет, показать latency).
+
+    Использует системный ping через subprocess.
+    """
+    host = bot._get_command_args(message).strip()
+    if not host:
+        raise UserInputError(user_message="❌ Укажи хост: `!ping example.com`")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ping", "-c", "1", "-W", "3", host,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        output = stdout.decode(errors="replace")
+    except asyncio.TimeoutError:
+        raise UserInputError(user_message=f"❌ `{host}` — timeout (10 сек)") from None
+    except Exception as exc:  # noqa: BLE001
+        raise UserInputError(user_message=f"❌ Ошибка ping: {exc}") from exc
+
+    # Парсим latency из строки вида: time=12.3 ms
+    latency: str | None = None
+    for line in output.splitlines():
+        if "time=" in line:
+            for part in line.split():
+                if part.startswith("time="):
+                    latency = part[len("time="):]
+                    break
+            if latency:
+                break
+
+    if proc.returncode == 0 and latency:
+        text = (
+            f"🏓 **Ping: {host}**\n"
+            "─────\n"
+            f"Latency: `{latency} ms`\n"
+            "Status: ✅ доступен"
+        )
+    elif proc.returncode == 0:
+        text = (
+            f"🏓 **Ping: {host}**\n"
+            "─────\n"
+            "Status: ✅ доступен"
+        )
+    else:
+        text = (
+            f"🏓 **Ping: {host}**\n"
+            "─────\n"
+            "Status: ❌ недоступен"
+        )
+
+    await message.reply(text)
+
+
+# ---------------------------------------------------------------------------
+# !rand — генератор случайных значений
+# ---------------------------------------------------------------------------
+
+async def handle_rand(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Генератор случайных значений.
+
+    Синтаксис:
+      !rand                   — число 1–100
+      !rand N                 — число 1–N
+      !rand N M               — число N–M
+      !rand coin              — орёл/решка 🪙
+      !rand dice              — кубик 1–6 🎲
+      !rand pick a, b, c      — случайный выбор из списка
+      !rand pass [N]          — пароль длиной N символов (default 16)
+      !rand uuid              — UUID4
+    """
+    import random
+    import secrets
+    import string
+    import uuid as _uuid_mod
+
+    args = bot._get_command_args(message).strip()
+
+    # --- без аргументов: 1–100 ---
+    if not args:
+        n = random.randint(1, 100)
+        await message.reply(f"🎲 {n}")
+        return
+
+    parts = args.split(maxsplit=1)
+    sub = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    # --- coin ---
+    if sub == "coin":
+        result = random.choice(["Орёл 🦅", "Решка 🪙"])
+        await message.reply(result)
+        return
+
+    # --- dice ---
+    if sub == "dice":
+        n = random.randint(1, 6)
+        await message.reply(f"🎲 {n}")
+        return
+
+    # --- pick ---
+    if sub == "pick":
+        if not rest:
+            raise UserInputError(user_message="🎲 Формат: `!rand pick item1, item2, item3`")
+        items = [item.strip() for item in rest.split(",") if item.strip()]
+        if len(items) < 2:
+            raise UserInputError(user_message="🎲 Нужно минимум 2 варианта, разделённых запятой.")
+        chosen = random.choice(items)
+        await message.reply(f"🎲 Выбрано: **{chosen}**")
+        return
+
+    # --- pass ---
+    if sub == "pass":
+        length = 16
+        if rest:
+            if not rest.isdigit():
+                raise UserInputError(user_message="🎲 Формат: `!rand pass [длина]`")
+            length = int(rest)
+            if not (4 <= length <= 128):
+                raise UserInputError(user_message="🎲 Длина пароля: от 4 до 128 символов.")
+        # secrets для криптографической случайности
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_=+"
+        password = "".join(secrets.choice(alphabet) for _ in range(length))
+        await message.reply(f"🔑 `{password}`")
+        return
+
+    # --- uuid ---
+    if sub == "uuid":
+        uid = str(_uuid_mod.uuid4())
+        await message.reply(f"`{uid}`")
+        return
+
+    # --- !rand N или !rand N M ---
+    # Попытка распарсить числа
+    try:
+        first = int(sub)
+    except ValueError:
+        raise UserInputError(
+            user_message=(
+                "🎲 **!rand** — генератор случайных значений\n"
+                "`!rand` — число 1–100\n"
+                "`!rand N` — число 1–N\n"
+                "`!rand N M` — число N–M\n"
+                "`!rand coin` — орёл/решка\n"
+                "`!rand dice` — кубик 1–6\n"
+                "`!rand pick a, b, c` — выбор из списка\n"
+                "`!rand pass [N]` — пароль (default 16 символов)\n"
+                "`!rand uuid` — UUID4"
+            )
+        )
+
+    if not rest:
+        # !rand N → 1..N
+        if first < 1:
+            raise UserInputError(user_message="🎲 N должен быть ≥ 1.")
+        n = random.randint(1, first)
+        await message.reply(f"🎲 {n}")
+        return
+
+    # !rand N M → N..M
+    try:
+        second = int(rest.split()[0])
+    except ValueError:
+        raise UserInputError(user_message="🎲 Формат: `!rand N M` — оба аргумента должны быть целыми числами.")
+    lo, hi = min(first, second), max(first, second)
+    n = random.randint(lo, hi)
+    await message.reply(f"🎲 {n}")
+
+
+# ---------------------------------------------------------------------------
+# !define — определение слова/термина через AI
+# ---------------------------------------------------------------------------
+
+# Модификаторы режима и языка
+_DEFINE_DETAILED_KEYWORDS = {"подробно", "detailed", "full", "полно", "полностью", "расширенно"}
+_DEFINE_EN_KEYWORDS = {"en", "english", "англ", "английский"}
+
+
+def _parse_define_args(raw_args: str) -> tuple[str, str, bool]:
+    """
+    Разбирает аргументы команды !define.
+
+    Возвращает (слово, язык, подробно).
+    язык: "ru" | "en"
+    подробно: True если запрошено развёрнутое определение.
+
+    Примеры:
+      "Python"           -> ("Python", "ru", False)
+      "Python en"        -> ("Python", "en", False)
+      "Python подробно"  -> ("Python", "ru", True)
+      "Python en подробно" -> ("Python", "en", True)
+    """
+    parts = raw_args.strip().split()
+    if not parts:
+        return ("", "ru", False)
+
+    lang = "ru"
+    detailed = False
+    term_parts: list[str] = []
+
+    for part in parts:
+        lower = part.lower()
+        if lower in _DEFINE_EN_KEYWORDS:
+            lang = "en"
+        elif lower in _DEFINE_DETAILED_KEYWORDS:
+            detailed = True
+        else:
+            term_parts.append(part)
+
+    term = " ".join(term_parts).strip()
+    return (term, lang, detailed)
+
+
+def _build_define_prompt(term: str, lang: str, detailed: bool) -> str:
+    """Формирует промпт для запроса определения."""
+    if lang == "en":
+        if detailed:
+            return (
+                f"Give a detailed definition of the term or word: «{term}». "
+                "Include etymology if relevant, main meanings, examples of use, "
+                "and related concepts. Answer in English."
+            )
+        return (
+            f"Give a brief definition of the term or word: «{term}» in 2-3 sentences. "
+            "Be precise and clear. Answer in English."
+        )
+    # ru
+    if detailed:
+        return (
+            f"Дай развёрнутое определение термина или слова: «{term}». "
+            "Включи этимологию если уместно, основные значения, примеры использования "
+            "и связанные понятия. Отвечай на русском."
+        )
+    return (
+        f"Дай краткое определение термина или слова: «{term}» в 2-3 предложениях. "
+        "Будь точен и лаконичен. Отвечай на русском."
+    )
+
+
+async def handle_define(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !define <слово> [en] [подробно] — определение слова/термина через AI.
+
+    Варианты:
+      !define Python           — краткое определение на русском
+      !define Python en        — краткое определение на английском
+      !define Python подробно  — развёрнутое определение на русском
+    """
+    raw_args = bot._get_command_args(message).strip()
+
+    # Если аргументов нет — пробуем взять текст из reply
+    if not raw_args and message.reply_to_message:
+        raw_args = (message.reply_to_message.text or "").strip()
+
+    if not raw_args:
+        raise UserInputError(
+            user_message=(
+                "📖 **!define — определение слова/термина**\n\n"
+                "`!define <слово>` — краткое определение (рус.)\n"
+                "`!define <слово> en` — краткое определение (англ.)\n"
+                "`!define <слово> подробно` — развёрнутое определение\n\n"
+                "_Пример: `!define энтропия` или `!define recursion en`_"
+            )
+        )
+
+    term, lang, detailed = _parse_define_args(raw_args)
+
+    if not term:
+        raise UserInputError(user_message="❓ Укажи слово или термин: `!define <слово>`")
+
+    # Формируем визуальный маркер режима
+    lang_label = " (EN)" if lang == "en" else ""
+    status_msg = await message.reply(f"📖 Определяю «{term}»{lang_label}...")
+
+    prompt = _build_define_prompt(term, lang, detailed)
+    # Изолированная сессия — не смешивается с контекстом основного чата
+    session_id = f"define_{message.chat.id}"
+    max_tokens = 800 if detailed else 350
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=True,
+            max_output_tokens=max_tokens,
+        ):
+            chunks.append(chunk)
+
+        definition = "".join(chunks).strip()
+        if not definition:
+            raise ValueError("пустой ответ от модели")
+
+        # Форматируем ответ
+        header = f"📖 **{term}**{lang_label}"
+        if detailed:
+            header += " _(подробно)_"
+        response_text = f"{header}\n\n{definition}"
+
+        # Ограничиваем длину для Telegram
+        if len(response_text) > 4000:
+            response_text = response_text[:3950] + "..."
+
+        await status_msg.edit(response_text)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handle_define_failed", term=term, error=str(exc))
+        await status_msg.edit(f"❌ Не удалось получить определение «{term}»: {exc}")
