@@ -24,6 +24,7 @@ from ..core.access_control import (
     update_acl_subject,
 )
 from ..core.chat_ban_cache import chat_ban_cache
+from ..core.cost_analytics import cost_analytics
 from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
@@ -44,6 +45,7 @@ from ..core.translator_runtime_profile import (
     ALLOWED_VOICE_STRATEGIES,
     default_translator_runtime_profile,
 )
+from ..core.weekly_digest import weekly_digest
 from ..employee_templates import ROLES, get_role_prompt, list_roles, save_role
 from ..integrations.hammerspoon_bridge import HammerspoonBridgeError, hammerspoon
 from ..integrations.macos_automation import macos_automation
@@ -4017,8 +4019,6 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
 
 async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
     """!costs — текущий cost report прямо в Telegram (owner-only)."""
-    from ..core.cost_analytics import cost_analytics
-
     # Проверка: только владелец
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
@@ -4069,8 +4069,6 @@ async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
 
 async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
     """!budget [сумма] — показать или установить месячный бюджет (owner-only)."""
-    from ..core.cost_analytics import cost_analytics
-
     # Проверка: только владелец
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
@@ -4117,8 +4115,6 @@ async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
 
 async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
     """!digest — немедленно сгенерировать и отправить weekly digest (owner-only)."""
-    from ..core.weekly_digest import weekly_digest
-
     # Проверка: только владелец
     access_profile = bot._get_access_profile(message.from_user)
     if access_profile.level != AccessLevel.OWNER:
