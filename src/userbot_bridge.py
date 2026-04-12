@@ -106,6 +106,7 @@ from .handlers import (
     handle_set,
     handle_shop,
     handle_silence,
+    handle_todo,
     handle_stats,
     handle_status,
     handle_swarm,
@@ -134,6 +135,8 @@ from .handlers import (
     handle_grep,
     handle_timer,
     handle_stopwatch,
+    handle_qr,
+    handle_weather,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -744,6 +747,12 @@ class KraabUserbot(
             await run_cmd(handle_recall, m)
 
         @self.client.on_message(
+            filters.command("todo", prefixes=prefixes) & _make_command_filter("todo"), group=-1
+        )
+        async def wrap_todo(c, m):
+            await run_cmd(handle_todo, m)
+
+        @self.client.on_message(
             filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1
         )
         async def wrap_ls(c, m):
@@ -1009,6 +1018,12 @@ class KraabUserbot(
         )
         async def wrap_stopwatch(c, m):
             await run_cmd(handle_stopwatch, m)
+
+        @self.client.on_message(
+            filters.command("qr", prefixes=prefixes) & _make_command_filter("qr"), group=-1
+        )
+        async def wrap_qr(c, m):
+            await run_cmd(handle_qr, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()

@@ -6937,6 +6937,62 @@ async def handle_stopwatch(bot: "KraabUserbot", message: Message) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# QR-генерация
+# ---------------------------------------------------------------------------
+
+async def handle_qr(bot: "KraabUserbot", message: Message) -> None:
+    """Генерирует QR-код из текста/URL и отправляет фото."""
+    import os
+    import tempfile
+
+    # Получаем текст: из аргументов или из reply-сообщения
+    raw_args = bot._get_command_args(message).strip()
+
+    if raw_args:
+        text = raw_args
+    elif message.reply_to_message:
+        replied = message.reply_to_message
+        # берём текст или подпись к медиа
+        text = replied.text or replied.caption or ""
+        text = text.strip()
+    else:
+        text = ""
+
+    if not text:
+        raise UserInputError(
+            user_message="📷 Укажи текст или URL: `!qr <текст>`, либо ответь на сообщение."
+        )
+
+    # Генерируем QR через segno (чистый Python, без зависимостей от Pillow)
+    try:
+        import segno
+    except ImportError:
+        await message.reply("❌ Библиотека `segno` не установлена. Запусти: `pip install segno`")
+        return
+
+    # Создаём временный файл
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="krab_qr_")
+    os.close(tmp_fd)
+
+    try:
+        qr = segno.make(text, error="m")
+        # scale=10 → ~350px при версии 1; border=4 — стандартный quiet zone
+        qr.save(tmp_path, kind="png", scale=10, border=4)
+
+        caption = f"📷 QR: `{text[:80]}{'...' if len(text) > 80 else ''}`"
+        await bot.client.send_photo(
+            chat_id=message.chat.id,
+            photo=tmp_path,
+            caption=caption,
+            reply_to_message_id=message.id,
+        )
+    finally:
+        # Удаляем временный файл в любом случае
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 async def handle_todo(bot: "KraabUserbot", message: Message) -> None:
     """
     Персональный менеджер задач в Telegram.
@@ -7012,3 +7068,56 @@ async def handle_todo(bot: "KraabUserbot", message: Message) -> None:
             "`!todo clear done` — очистить выполненные"
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# !weather — погода через OpenClaw + web_search
+# ---------------------------------------------------------------------------
+
+async def handle_weather(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Показывает текущую погоду для города через LLM + web_search.
+
+    Форматы:
+    - !weather          — погода в городе по умолчанию (DEFAULT_WEATHER_CITY)
+    - !weather <город>  — погода в указанном городе
+    """
+    # Определяем город: из аргументов или из конфига
+    city = bot._get_command_args(message).strip()
+    if not city:
+        city = config.DEFAULT_WEATHER_CITY
+
+    # Изолированная сессия, чтобы не загрязнять основной контекст чата
+    session_id = f"weather_{message.chat.id}"
+
+    prompt = (
+        f"Какая сейчас погода в {city}? "
+        "Дай краткий ответ: температура, облачность, осадки. "
+        "Используй актуальные данные из веб-поиска."
+    )
+
+    msg = await message.reply(f"🌤 Смотрю погоду в **{city}**...")
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=False,  # LLM должен использовать web_search
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+        if not result:
+            await msg.edit("❌ Не удалось получить данные о погоде.")
+            return
+
+        # Разбиваем длинный ответ если нужно
+        parts = _split_text_for_telegram(result)
+        await msg.edit(parts[0])
+        for part in parts[1:]:
+            await message.reply(part)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_weather_error", error=str(exc))
+        await msg.edit(f"❌ Ошибка получения погоды: {exc}")
