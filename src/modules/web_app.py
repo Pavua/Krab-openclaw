@@ -8871,22 +8871,28 @@ class WebApp:
             return {"ok": True, "language_pair": pair}
 
         @self.app.get("/api/translator/history")
-        async def translator_history():
-            """История переводов и статистика."""
+        async def translator_history(n: int = 20):
+            """История переводов и статистика. ?n=N — последние N записей (default 20)."""
             try:
                 state = self.kraab.get_translator_session_state()
                 stats = state.get("stats") or {}
+                total = stats.get("total_translations", 0)
+                history: list[dict] = list(state.get("history") or [])
+                # Ограничиваем выборку по параметру n
+                n_clamped = max(1, min(20, n))
+                recent = history[-n_clamped:] if history else []
                 return {
                     "ok": True,
-                    "total_translations": stats.get("total_translations", 0),
+                    "total_translations": total,
                     "total_latency_ms": stats.get("total_latency_ms", 0),
                     "avg_latency_ms": round(
-                        stats.get("total_latency_ms", 0)
-                        / max(1, stats.get("total_translations", 1))
+                        stats.get("total_latency_ms", 0) / max(1, total)
                     ),
                     "last_pair": state.get("last_language_pair", ""),
                     "last_original": state.get("last_translated_original", ""),
                     "last_translation": state.get("last_translated_translation", ""),
+                    "history": list(reversed(recent)),  # новые первыми
+                    "history_count": len(history),
                 }
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}

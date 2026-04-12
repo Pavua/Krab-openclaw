@@ -725,15 +725,38 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 await message.reply("\n".join(lines))
         return
 
-    # !swarm schedule <team> <topic> <interval> — создание рекуррентной задачи
+    # !swarm schedule <team> <interval> <topic> [--workflow research|report] — создание рекуррентной задачи
     if args.lower().startswith("schedule") or args.lower().startswith("расписание"):
-        from ..core.swarm_scheduler import parse_interval, swarm_scheduler
+        import re as _re
 
-        sched_tokens = args.split(maxsplit=3)  # schedule traders "BTC" 4h
+        from ..core.swarm_scheduler import WorkflowType, parse_interval, swarm_scheduler
+
+        # Извлекаем --workflow флаг до разбора позиционных аргументов
+        workflow_match = _re.search(r"--workflow\s+(\S+)", args)
+        workflow_type = WorkflowType.STANDARD
+        if workflow_match:
+            wf_raw = workflow_match.group(1).lower()
+            try:
+                workflow_type = WorkflowType(wf_raw)
+            except ValueError:
+                valid_wf = ", ".join(w.value for w in WorkflowType)
+                await message.reply(
+                    f"❌ Неизвестный workflow: `{wf_raw}`\nДопустимые: {valid_wf}"
+                )
+                return
+            # Убираем --workflow ... из args для разбора позиционных аргументов
+            args_clean = _re.sub(r"--workflow\s+\S+", "", args).strip()
+        else:
+            args_clean = args
+
+        sched_tokens = args_clean.split(maxsplit=3)  # schedule traders 4h <BTC тема>
         if len(sched_tokens) < 4:
             await message.reply(
-                "📅 Формат: `!swarm schedule <команда> <интервал> <тема>`\n"
-                "Пример: `!swarm schedule traders 4h анализ BTC`\n"
+                "📅 Формат: `!swarm schedule <команда> <интервал> <тема> [--workflow research|report]`\n"
+                "Примеры:\n"
+                "  `!swarm schedule traders 4h анализ BTC`\n"
+                "  `!swarm schedule analysts 6h крипторынок --workflow research`\n"
+                "  `!swarm schedule coders 1d прогресс --workflow report`\n"
                 "Интервалы: `30m`, `1h`, `4h`, `1d`"
             )
             return
@@ -750,16 +773,25 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             return
         sched_topic = sched_tokens[3] if len(sched_tokens) > 3 else "общий анализ"
         try:
-            job = swarm_scheduler.add_job(team=sched_team, topic=sched_topic, interval_sec=interval)
+            job = swarm_scheduler.add_job(
+                team=sched_team,
+                topic=sched_topic,
+                interval_sec=interval,
+                workflow_type=workflow_type,
+            )
             interval_h = interval / 3600
             interval_str = f"{interval_h:.1f}ч" if interval_h >= 1 else f"{interval // 60}мин"
+            wf_emoji = {"standard": "🔄", "research": "🔬", "report": "📊"}.get(
+                job.workflow_type, "🔄"
+            )
             await message.reply(
                 f"📅 Задача создана!\n"
                 f"ID: `{job.job_id}`\n"
                 f"Команда: **{sched_team}** каждые {interval_str}\n"
-                f"Тема: _{sched_topic}_"
+                f"Тема: _{sched_topic}_\n"
+                f"Workflow: {wf_emoji} `{job.workflow_type}`"
             )
-        except RuntimeError as e:
+        except (RuntimeError, ValueError) as e:
             await message.reply(f"❌ {e}")
         return
 
@@ -874,7 +906,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
 
     # !swarm research <тема> — research pipeline с обязательным web_search
     if args.lower().startswith("research") or args.lower().startswith("исследование"):
-        from ..core.swarm_artifact_store import swarm_artifact_store
+        from ..core.swarm_research_pipeline import SwarmResearchPipeline
 
         research_tokens = args.split(maxsplit=1)
         if len(research_tokens) < 2 or not research_tokens[1].strip():
@@ -884,13 +916,6 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 )
             )
         raw_topic = research_tokens[1].strip()
-        # Усиленный промпт: обязателен web_search + структурированный результат
-        research_topic = (
-            f"Проведи исследование по теме: {raw_topic}. "
-            "Обязательно используй web_search для поиска актуальной информации. "
-            "Структурируй результат: Summary, Key Findings, Sources."
-        )
-        team_key = "analysts"
         msg = await message.reply(
             f"🔬 **Research Pipeline** [analysts]\nТема: `{raw_topic}`\n_web_search обязателен_"
         )
@@ -903,27 +928,18 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 is_allowed_sender=is_allowed_sender,
                 access_level=access_profile.level,
             )
-            router = _AgentRoomRouterAdapter(
-                chat_id=f"swarm:{chat_id}:{team_key}",
-                system_prompt=system_prompt,
-            )
-            roles = TEAM_REGISTRY.get(team_key)
-            room = AgentRoom(roles=roles)
-            result_text = await room.run_round(
-                research_topic,
-                router,
-                _bus=swarm_bus,
-                _router_factory=lambda tn: _AgentRoomRouterAdapter(
+
+            def _router_factory(tn: str) -> _AgentRoomRouterAdapter:
+                return _AgentRoomRouterAdapter(
                     chat_id=f"swarm:{chat_id}:{tn}",
                     system_prompt=system_prompt,
-                ),
-                _team_name=team_key,
-            )
-            # Сохраняем в artifact store с пометкой research
-            swarm_artifact_store.save_round_artifact(
-                team=team_key,
-                topic=f"[research] {raw_topic}",
-                result=result_text,
+                )
+
+            pipeline = SwarmResearchPipeline()
+            result_text = await pipeline.run(
+                raw_topic,
+                router_factory=_router_factory,
+                swarm_bus=swarm_bus,
             )
             chunks = _split_text_for_telegram(result_text)
             await msg.edit(chunks[0])
@@ -1942,24 +1958,34 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
         )
 
     if sub == "history":
-        # !translator history — последние переводы из session state
+        # !translator history [N] — последние N переводов из session state (default 5)
+        # Парсим необязательный аргумент N
+        raw_text_parts = str(message.text or "").split(None, 2)
+        raw_n = raw_text_parts[2].strip() if len(raw_text_parts) > 2 else ""
+        try:
+            n_show = max(1, min(20, int(raw_n))) if raw_n.isdigit() else 5
+        except (ValueError, TypeError):
+            n_show = 5
+
         state = bot.get_translator_session_state()
-        stats = state.get("stats") or {}
-        total = stats.get("total_translations", 0)
-        last_orig = state.get("last_translated_original", "")
-        last_trans = state.get("last_translated_translation", "")
-        last_pair = state.get("last_language_pair", "")
-        avg_latency = round(stats.get("total_latency_ms", 0) / max(1, total))
-        lines = [
-            "📜 **Translator History**",
-            f"Всего переводов: {total}",
-            f"Средняя latency: {avg_latency}ms",
-        ]
-        if last_orig and last_trans:
-            lines.append(f"\n**Последний ({last_pair}):**")
-            lines.append(f"**{last_orig[:100]}**")
-            lines.append(f"_{last_trans[:100]}_")
-        await message.reply("\n".join(lines))
+        history: list[dict] = list(state.get("history") or [])
+        recent = history[-n_show:] if history else []
+
+        if not recent:
+            await message.reply("📋 История переводов пуста.")
+            return
+
+        lines = ["📋 **Последние переводы:**", ""]
+        for idx, entry in enumerate(reversed(recent), start=1):
+            src = entry.get("src_lang", "?")
+            tgt = entry.get("tgt_lang", "?")
+            latency_s = entry.get("latency_ms", 0) / 1000
+            orig = entry.get("original", "")[:120]
+            trans = entry.get("translation", "")[:120]
+            lines.append(f"{idx}. [{src}→{tgt}] {latency_s:.1f}s")
+            lines.append(f'   "{orig}" → "{trans}"')
+            lines.append("")
+        await message.reply("\n".join(lines).rstrip())
         return
 
     if sub == "test":
@@ -3699,12 +3725,88 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     Бонус: голосовой runtime-профиль отображается только если bot отдал словарь,
     чтобы тесты могли подменить профиль через stub без Pyrogram client'а.
     """
+    import time as _time
+    import psutil as _psutil
+
     from ..core.chat_ban_cache import chat_ban_cache
     from ..core.chat_capability_cache import chat_capability_cache
     from ..core.silence_mode import silence_manager
     from ..core.telegram_rate_limiter import telegram_rate_limiter
 
-    lines: list[str] = ["📊 **Krab Runtime Stats**", ""]
+    lines: list[str] = ["📊 **Krab Stats**", "─────────────"]
+
+    # 0. Компактная сводка: uptime, сообщения, модель, translator, swarm, inbox, RAM ──
+    try:
+        elapsed = int(_time.time() - bot._session_start_time)
+        hours, rem = divmod(elapsed, 3600)
+        mins = rem // 60
+        uptime_str = f"{hours}ч {mins}м" if hours else f"{mins}м"
+    except Exception:
+        uptime_str = "?"
+
+    try:
+        msg_count = bot._session_messages_processed
+    except Exception:
+        msg_count = 0
+
+    # Текущая модель из runtime models config
+    try:
+        from ..core.openclaw_runtime_models import get_runtime_primary_model as _grpm
+        model_name = _grpm() or "?"
+        provider = (model_name.split("/")[0]) if "/" in model_name else "?"
+        model_short = model_name.split("/")[-1] if "/" in model_name else model_name
+    except Exception:
+        model_short = "?"
+        provider = "?"
+
+    # Статус транслятора
+    try:
+        t_state = bot.get_translator_session_state()
+        t_status = t_state.get("session_status", "idle")
+        t_pair = t_state.get("last_pair") or ""
+        translator_str = f"{t_status}" + (f" ({t_pair})" if t_pair else "")
+    except Exception:
+        translator_str = "idle"
+
+    # Swarm rounds за сегодня
+    try:
+        from ..core.swarm_artifact_store import swarm_artifact_store as _sas
+        import datetime as _dt
+        today_str = _dt.date.today().isoformat()
+        all_arts = _sas.list_artifacts(limit=200)
+        swarm_today = sum(
+            1 for a in all_arts
+            if str(a.get("timestamp_iso", "")).startswith(today_str)
+        )
+    except Exception:
+        swarm_today = 0
+
+    # Inbox summary
+    try:
+        from ..core.inbox_service import inbox_service as _inbox
+        isummary = _inbox.get_summary()
+        inbox_open = isummary.get("open", 0)
+        inbox_attention = isummary.get("attention", 0)
+        inbox_str = f"{inbox_open} open" + (f" ({inbox_attention} attention)" if inbox_attention else "")
+    except Exception:
+        inbox_str = "?"
+
+    # RAM usage
+    try:
+        import os as _os
+        rss_mb = int(_psutil.Process(_os.getpid()).memory_info().rss / 1024 / 1024)
+        ram_str = f"{rss_mb} MB"
+    except Exception:
+        ram_str = "?"
+
+    lines.append(f"⏱ Uptime: {uptime_str}")
+    lines.append(f"💬 Сообщений: {msg_count}")
+    lines.append(f"🤖 Модель: {model_short} ({provider})")
+    lines.append(f"🔄 Translator: {translator_str}")
+    lines.append(f"🐝 Swarm: {swarm_today} rounds today")
+    lines.append(f"📬 Inbox: {inbox_str}")
+    lines.append(f"🧠 RAM: {ram_str}")
+    lines.append("")
 
     # 1. Telegram API rate limiter ────────────────────────────────────
     rl = telegram_rate_limiter.stats()
@@ -3827,20 +3929,56 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     """!тишина — управление режимом тишины.
 
     Синтаксис:
-      !тишина           — toggle текущего чата (30 мин)
-      !тишина 15        — mute текущего чата на 15 минут
-      !тишина стоп      — снять mute текущего чата
-      !тишина глобально — глобальный mute (60 мин)
-      !тишина глобально 30 — глобальный mute на 30 мин
-      !тишина статус    — показать все активные mutes
+      !тишина               — toggle текущего чата (30 мин)
+      !тишина 15            — mute текущего чата на 15 минут
+      !тишина стоп          — снять mute текущего чата
+      !тишина глобально     — глобальный mute (60 мин)
+      !тишина глобально 30  — глобальный mute на 30 мин
+      !тишина статус        — показать все активные mutes
+      !тишина расписание 23:00-08:00 — ночной режим по расписанию
+      !тишина расписание статус      — статус расписания
+      !тишина расписание выкл        — отключить расписание
     """
     from ..core.silence_mode import silence_manager
+    from ..core.silence_schedule import silence_schedule_manager
 
     chat_id = str(message.chat.id)
     raw = (message.text or "").strip()
     # Убираем префикс команды
     parts = raw.split(maxsplit=1)
     args = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    # ── Расписание ночного режима ──────────────────────────────
+    if args.startswith("расписание"):
+        sched_arg = args[len("расписание"):].strip()
+        if not sched_arg or sched_arg == "статус":
+            await message.reply(silence_schedule_manager.format_status())
+            return
+        if sched_arg in ("выкл", "off", "стоп"):
+            silence_schedule_manager.disable_schedule()
+            await message.reply("🌙 Расписание тишины **отключено**.")
+            return
+        # Ожидаем формат HH:MM-HH:MM
+        if "-" in sched_arg:
+            time_parts = sched_arg.split("-", 1)
+            if len(time_parts) == 2:
+                start_s, end_s = time_parts[0].strip(), time_parts[1].strip()
+                try:
+                    silence_schedule_manager.set_schedule(start_s, end_s)
+                    active_marker = " (сейчас активно ✅)" if silence_schedule_manager.is_schedule_active() else ""
+                    await message.reply(
+                        f"🌙 Расписание тишины установлено: **{start_s}–{end_s}**{active_marker}\n"
+                        f"Краб будет молчать в эти часы.\n"
+                        f"`!тишина расписание выкл` — отключить"
+                    )
+                    return
+                except ValueError as exc:
+                    await message.reply(f"❌ {exc}")
+                    return
+        await message.reply(
+            "❌ Неверный формат. Пример: `!тишина расписание 23:00-08:00`"
+        )
+        return
 
     if args == "статус":
         await message.reply(silence_manager.format_status())
@@ -3873,3 +4011,147 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     minutes = int(args) if args.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 30))
     silence_manager.mute_chat(chat_id, minutes)
     await message.reply(f"🤫 Тишина в этом чате на **{minutes}** мин.\n`!тишина стоп` чтобы снять.")
+
+
+async def handle_costs(bot: "KraabUserbot", message: Message) -> None:
+    """!costs — текущий cost report прямо в Telegram (owner-only)."""
+    from ..core.cost_analytics import cost_analytics
+
+    # Проверка: только владелец
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    report = cost_analytics.build_usage_report_dict()
+
+    cost_session = report.get("cost_session_usd", 0.0)
+    budget = report.get("monthly_budget_usd") or 0.0
+    cost_month = report.get("cost_month_usd", 0.0)
+    total_calls = len(getattr(cost_analytics, "_calls", []))
+    total_tokens = report.get("total_tokens", 0)
+    total_fallbacks = report.get("total_fallbacks", 0)
+    total_tool_calls = report.get("total_tool_calls", 0)
+    by_model: dict = report.get("by_model", {})
+    by_channel: dict = report.get("by_channel", {})
+
+    # Процент бюджета
+    if budget > 0:
+        pct = min(100, round(cost_month / budget * 100, 1))
+        budget_line = f"Бюджет: ${budget:.2f} ({pct}% использовано)"
+    else:
+        budget_line = "Бюджет: не задан"
+
+    lines = [
+        "💰 **Cost Report**",
+        "─────────────────",
+        f"Потрачено: ${cost_session:.4f}",
+        budget_line,
+        f"Вызовов: {total_calls} | Токенов: {total_tokens}",
+        f"Fallbacks: {total_fallbacks} | Tool calls: {total_tool_calls}",
+    ]
+
+    if by_model:
+        lines.append("")
+        lines.append("**По моделям:**")
+        for mid, data in sorted(by_model.items(), key=lambda x: -x[1].get("cost_usd", 0)):
+            lines.append(f"• {mid}: ${data.get('cost_usd', 0):.4f} ({data.get('calls', 0)} calls)")
+
+    if by_channel:
+        lines.append("")
+        lines.append("**По каналам:**")
+        ch_parts = [f"{ch}: {cnt}" for ch, cnt in sorted(by_channel.items())]
+        lines.append("• " + " | ".join(ch_parts))
+
+    await message.reply("\n".join(lines))
+
+
+async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
+    """!budget [сумма] — показать или установить месячный бюджет (owner-only)."""
+    from ..core.cost_analytics import cost_analytics
+
+    # Проверка: только владелец
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    raw_args = bot._get_command_args(message).strip()
+
+    if not raw_args:
+        # Показать текущий бюджет
+        current = cost_analytics.get_monthly_budget_usd()
+        cost_month = cost_analytics.get_monthly_cost_usd()
+        if current > 0:
+            pct = min(100, round(cost_month / current * 100, 1))
+            remaining = max(0.0, current - cost_month)
+            await message.reply(
+                f"💳 **Месячный бюджет:** ${current:.2f}\n"
+                f"Потрачено: ${cost_month:.4f} ({pct}%)\n"
+                f"Осталось: ${remaining:.4f}"
+            )
+        else:
+            await message.reply(
+                f"💳 **Месячный бюджет:** не задан\n"
+                f"Потрачено за месяц: ${cost_month:.4f}\n"
+                f"Чтобы задать: `!budget 10.00`"
+            )
+        return
+
+    # Установить новый бюджет
+    try:
+        new_budget = float(raw_args.replace(",", "."))
+    except ValueError:
+        raise UserInputError(user_message=f"❌ Некорректное значение: `{raw_args}`. Укажи число, например `!budget 15.00`.")
+
+    if new_budget < 0:
+        raise UserInputError(user_message="❌ Бюджет не может быть отрицательным.")
+
+    cost_analytics._monthly_budget_usd = new_budget
+
+    if new_budget == 0:
+        await message.reply("✅ Месячный бюджет сброшен (без ограничений).")
+    else:
+        await message.reply(f"✅ Месячный бюджет установлен: **${new_budget:.2f}**")
+
+
+async def handle_digest(bot: "KraabUserbot", message: Message) -> None:
+    """!digest — немедленно сгенерировать и отправить weekly digest (owner-only)."""
+    from ..core.weekly_digest import weekly_digest
+
+    # Проверка: только владелец
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    await message.reply("⏳ Генерирую digest, подожди...")
+
+    try:
+        result = await weekly_digest.generate_digest()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handle_digest_failed", error=str(exc))
+        await message.reply(f"❌ Ошибка генерации digest: {exc}")
+        return
+
+    if not result.get("ok"):
+        err = result.get("error", "неизвестная ошибка")
+        await message.reply(f"❌ Digest не удался: {err}")
+        return
+
+    rounds = result.get("total_rounds", 0)
+    cost = result.get("cost_week_usd", 0.0)
+    attention = result.get("attention_count", 0)
+
+    # Digest уже доставлен через telegram_callback если он настроен;
+    # иначе выводим итоговую сводку
+    if not weekly_digest._telegram_callback:
+        await message.reply(
+            f"✅ **Weekly Digest сгенерирован**\n"
+            f"Swarm rounds: {rounds}\n"
+            f"Cost (7д): ${cost:.4f}\n"
+            f"Attention items: {attention}\n\n"
+            "_Для автодоставки в чат настрой telegram_callback._"
+        )
+    else:
+        await message.reply(
+            f"✅ Digest отправлен.\n"
+            f"Rounds: {rounds} | Cost 7д: ${cost:.4f} | Attention: {attention}"
+        )
