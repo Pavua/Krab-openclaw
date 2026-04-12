@@ -68,6 +68,8 @@ from .command_handlers import (
     handle_collect,
     handle_purge,
     handle_schedule,
+    handle_summary,
+    handle_catchup,
 )
 
 __all__ = [
@@ -132,4 +134,6 @@ __all__ = [
     "handle_del",
     "handle_purge",
     "handle_autodel",
+    "handle_summary",
+    "handle_catchup",
 ]

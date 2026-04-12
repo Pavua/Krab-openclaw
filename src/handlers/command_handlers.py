@@ -5173,3 +5173,204 @@ async def handle_autodel(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(
             f"⏱ Автоудаление **включено**: ответы Краба будут удалены через `{int(delay)}` сек."
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# !summary / !catchup — суммаризация истории чата через LLM
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SUMMARY_DEFAULT_N = 50
+_SUMMARY_MAX_N = 500
+# Максимум символов истории, передаваемых в LLM
+_SUMMARY_MAX_HISTORY_CHARS = 24_000
+
+
+def _format_chat_history_for_llm(messages: list) -> str:
+    """
+    Форматирует список Pyrogram Message в читаемый текст для LLM.
+
+    Формат строки: [HH:MM] Имя: текст
+    Медиа без подписи помечается как [тип медиа].
+    История приходит из get_chat_history новые-первые, разворачиваем в хронологию.
+    """
+    lines: list[str] = []
+    for msg in reversed(messages):
+        # Определяем имя отправителя
+        sender = "Unknown"
+        if getattr(msg, "from_user", None):
+            u = msg.from_user
+            name_parts = [p for p in [getattr(u, "first_name", None), getattr(u, "last_name", None)] if p]
+            if name_parts:
+                sender = " ".join(name_parts)
+            elif getattr(u, "username", None):
+                sender = f"@{u.username}"
+            else:
+                sender = str(u.id)
+        elif getattr(msg, "sender_chat", None):
+            sender = getattr(msg.sender_chat, "title", None) or str(msg.sender_chat.id)
+
+        # Текст сообщения
+        text: str = getattr(msg, "text", None) or getattr(msg, "caption", None) or ""
+        if not text:
+            if getattr(msg, "photo", None):
+                text = "[фото]"
+            elif getattr(msg, "video", None):
+                text = "[видео]"
+            elif getattr(msg, "voice", None) or getattr(msg, "audio", None):
+                text = "[голосовое/аудио]"
+            elif getattr(msg, "document", None):
+                text = "[документ]"
+            elif getattr(msg, "sticker", None):
+                text = "[стикер]"
+            else:
+                text = "[медиа]"
+
+        # Время
+        ts = ""
+        date = getattr(msg, "date", None)
+        if date:
+            ts = date.strftime("%H:%M")
+
+        lines.append(f"[{ts}] {sender}: {text}")
+
+    return "\n".join(lines)
+
+
+async def handle_summary(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Суммаризирует историю чата через LLM.
+
+    Синтаксис:
+      !summary [N]               — последние N сообщений текущего чата (default 50)
+      !summary <chat_id> [N]     — другой чат (userbot видит всё)
+      !catchup                   — алиас для !summary 100
+
+    Примеры:
+      !summary
+      !summary 100
+      !summary -1001234567890 200
+    """
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split() if raw_args else []
+
+    # Парсим аргументы: опциональный chat_id и N
+    target_chat_id: int = message.chat.id
+    n: int = _SUMMARY_DEFAULT_N
+
+    if parts:
+        first = parts[0]
+        # chat_id: начинается с '-100' или длинное число (>6 цифр)
+        is_chat_id = first.startswith("-100") or (first.lstrip("-").isdigit() and len(first.lstrip("-")) > 6)
+        if is_chat_id:
+            try:
+                target_chat_id = int(first)
+            except ValueError:
+                raise UserInputError(user_message=f"❌ Некорректный chat_id: `{first}`")
+            if len(parts) >= 2 and parts[1].isdigit():
+                n = max(1, min(int(parts[1]), _SUMMARY_MAX_N))
+        elif first.isdigit():
+            # Только число — N для текущего чата
+            n = max(1, min(int(first), _SUMMARY_MAX_N))
+        else:
+            raise UserInputError(
+                user_message=(
+                    "📋 **Суммаризация чата**\n\n"
+                    "`!summary [N]` — последние N сообщений текущего чата\n"
+                    "`!summary <chat_id> [N]` — другой чат\n"
+                    "`!catchup` — алиас для !summary 100"
+                )
+            )
+
+    # Отправляем плейсхолдер
+    status_msg = await message.reply(f"📋 Собираю последние {n} сообщений...")
+
+    # Читаем историю через pyrogram
+    try:
+        raw_messages = [
+            m async for m in bot.client.get_chat_history(target_chat_id, limit=n)
+        ]
+    except Exception as exc:
+        logger.warning("handle_summary_fetch_failed", chat_id=target_chat_id, error=str(exc))
+        await status_msg.edit(f"❌ Не удалось получить историю чата: {exc}")
+        return
+
+    if not raw_messages:
+        await status_msg.edit("📭 История чата пуста или недоступна.")
+        return
+
+    # Форматируем историю
+    history_text = _format_chat_history_for_llm(raw_messages)
+
+    # Обрезаем если слишком длинно (эвристика по символам)
+    if len(history_text) > _SUMMARY_MAX_HISTORY_CHARS:
+        history_text = "[...]\n" + history_text[-_SUMMARY_MAX_HISTORY_CHARS:]
+
+    actual_n = len(raw_messages)
+    chat_label = str(target_chat_id) if target_chat_id != message.chat.id else "текущего чата"
+
+    prompt = (
+        f"Суммаризируй этот чат (последние {actual_n} сообщений из {chat_label}).\n"
+        "Выдели ключевые темы, решения и важные факты. "
+        "Будь кратким и структурированным. Отвечай на языке чата.\n\n"
+        f"История:\n{history_text}"
+    )
+
+    # Обновляем плейсхолдер перед стримингом
+    header = f"📋 **Сводка чата** (последние {actual_n} сообщений)\n─────────────\n"
+    await status_msg.edit(header + "⏳ Генерирую...")
+
+    chunks: list[str] = []
+    last_edit_len = 0
+    # Редактируем каждые ~200 новых символов, чтобы не флудить Telegram API
+    _EDIT_THRESHOLD = 200
+
+    try:
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            # Изолированная сессия — не портит основной контекст чата
+            chat_id=f"summary_{message.chat.id}",
+            disable_tools=True,
+        ):
+            chunks.append(str(chunk))
+            total = "".join(chunks)
+            if len(total) - last_edit_len >= _EDIT_THRESHOLD:
+                last_edit_len = len(total)
+                preview = total
+                max_preview = 4000 - len(header)
+                if len(preview) > max_preview:
+                    preview = preview[-max_preview:]
+                try:
+                    await status_msg.edit(header + preview)
+                except Exception:  # noqa: BLE001
+                    pass  # промежуточные ошибки редактирования игнорируем
+
+    except Exception as exc:
+        logger.warning("handle_summary_llm_failed", error=str(exc))
+        await status_msg.edit(f"❌ Ошибка суммаризации: {exc}")
+        return
+
+    # Финальное редактирование с полным текстом
+    final_text = "".join(chunks).strip()
+    result = header + final_text
+    if len(result) > 4096:
+        result = result[:4090] + "..."
+    try:
+        await status_msg.edit(result)
+    except Exception:  # noqa: BLE001
+        # Если редактирование не удалось — пишем новым сообщением
+        await message.reply(result)
+
+
+async def handle_catchup(bot: "KraabUserbot", message: Message) -> None:
+    """!catchup — алиас для !summary 100 (быстро догнать пропущенное)."""
+    # Подменяем _get_command_args чтобы handle_summary получил "100"
+    original_get_args = bot._get_command_args
+
+    def _patched_args(_msg: Message) -> str:  # noqa: ARG001
+        return "100"
+
+    bot._get_command_args = _patched_args  # type: ignore[method-assign]
+    try:
+        await handle_summary(bot, message)
+    finally:
+        bot._get_command_args = original_get_args  # type: ignore[method-assign]

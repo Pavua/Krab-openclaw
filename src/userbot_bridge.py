@@ -118,6 +118,8 @@ from .handlers import (
     handle_del,
     handle_purge,
     handle_autodel,
+    handle_summary,
+    handle_catchup,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -1978,6 +1980,7 @@ class KraabUserbot(
                 sent = await self._safe_reply_or_send_new(source_message, part)
                 if getattr(sent, "id", None):
                     delivered_ids.append(str(sent.id))
+            self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "edit_and_reply",
                 "text_message_ids": delivered_ids,
@@ -2008,6 +2011,7 @@ class KraabUserbot(
                     await delete_coro()
             except Exception:
                 pass
+            self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "send_message",
                 "text_message_ids": delivered_ids,
