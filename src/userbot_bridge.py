@@ -109,8 +109,10 @@ from .handlers import (
     handle_new_chat_members,
     handle_note,
     handle_notify,
+    handle_ocr,
     handle_opencode,
     handle_panel,
+    handle_paste,
     handle_pin,
     handle_ping,
     handle_poll,
@@ -120,6 +122,7 @@ from .handlers import (
     handle_rand,
     handle_react,
     handle_read,
+    handle_regex,
     handle_reasoning,
     handle_recall,
     handle_remember,
@@ -158,10 +161,12 @@ from .handlers import (
     handle_watch,
     handle_weather,
     handle_link,
+    handle_top,
     handle_web,
     handle_welcome,
     handle_who,
     handle_write,
+    handle_yt,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -734,6 +739,12 @@ class KraabUserbot(
             await run_cmd(handle_search, m)
 
         @self.client.on_message(
+            filters.command("top", prefixes=prefixes) & _make_command_filter("top"), group=-1
+        )
+        async def wrap_top(c, m):
+            await run_cmd(handle_top, m)
+
+        @self.client.on_message(
             filters.command("weather", prefixes=prefixes) & _make_command_filter("weather"),
             group=-1,
         )
@@ -751,6 +762,12 @@ class KraabUserbot(
         )
         async def wrap_ask(c, m):
             await run_cmd(handle_ask, m)
+
+        @self.client.on_message(
+            filters.command("yt", prefixes=prefixes) & _make_command_filter("yt"), group=-1
+        )
+        async def wrap_yt(c, m):
+            await run_cmd(handle_yt, m)
 
         @self.client.on_message(
             filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1
@@ -814,6 +831,12 @@ class KraabUserbot(
         )
         async def wrap_write(c, m):
             await run_cmd(handle_write, m)
+
+        @self.client.on_message(
+            filters.command("paste", prefixes=prefixes) & _make_command_filter("paste"), group=-1
+        )
+        async def wrap_paste(c, m):
+            await run_cmd(handle_paste, m)
 
         @self.client.on_message(
             filters.command("agent", prefixes=prefixes) & _make_command_filter("agent"), group=-1
@@ -1076,6 +1099,13 @@ class KraabUserbot(
         async def wrap_hash(c, m):
             await run_cmd(handle_hash, m)
 
+        # Тестирование регулярных выражений: !regex <паттерн> <текст>
+        @self.client.on_message(
+            filters.command("regex", prefixes=prefixes) & _make_command_filter("regex"), group=-1
+        )
+        async def wrap_regex(c, m):
+            await run_cmd(handle_regex, m)
+
         @self.client.on_message(
             filters.command("calc", prefixes=prefixes) & _make_command_filter("calc"), group=-1
         )
@@ -1160,6 +1190,11 @@ class KraabUserbot(
         async def wrap_img(c, m):
             await run_cmd(handle_img, m)
 
+        @self.client.on_message(
+            filters.command("ocr", prefixes=prefixes) & _make_command_filter("ocr"), group=-1
+        )
+        async def wrap_ocr(c, m):
+            await run_cmd(handle_ocr, m)
 
         @self.client.on_message(
             filters.command("welcome", prefixes=prefixes) & _make_command_filter("welcome"),

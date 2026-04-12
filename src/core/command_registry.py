@@ -158,6 +158,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!img [вопрос]",
         owner_only=True,
     ),
+    CommandInfo(
+        name="ocr",
+        category="ai",
+        description="Извлечение текста из изображения через AI vision (reply на фото)",
+        usage="!ocr [подсказка]",
+        owner_only=True,
+    ),
 
     # ── models ───────────────────────────────────────────────────────────────
     CommandInfo(
@@ -248,6 +255,12 @@ _COMMANDS: list[CommandInfo] = [
         category="notes",
         description="Экспорт N последних сообщений чата",
         usage="!export [N]",
+    ),
+    CommandInfo(
+        name="paste",
+        category="notes",
+        description="Отправить длинный текст как файл-документ (>4096 символов)",
+        usage="!paste <текст>  или reply на сообщение",
     ),
     CommandInfo(
         name="remember",

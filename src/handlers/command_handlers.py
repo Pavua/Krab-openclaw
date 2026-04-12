@@ -1195,6 +1195,52 @@ async def handle_write(bot: "KraabUserbot", message: Message) -> None:
     await message.reply(result)
 
 
+async def handle_paste(bot: "KraabUserbot", message: Message) -> None:
+    """Создать текстовый paste-файл и отправить как документ.
+
+    Поддерживает два режима:
+      !paste <текст>   — создаёт файл из аргумента
+      !paste (reply)  — создаёт файл из текста исходного сообщения
+    """
+    args = bot._get_command_args(message)
+    reply = getattr(message, "reply_to_message", None)
+
+    # Определяем текст для paste
+    if args:
+        text = args
+    elif reply and getattr(reply, "text", None):
+        text = reply.text
+    else:
+        raise UserInputError(
+            user_message=(
+                "📋 Формат: `!paste <текст>` или сделай reply на сообщение\n"
+                "Полезно для длинных текстов >4096 символов."
+            )
+        )
+
+    # Формируем имя файла
+    now = datetime.datetime.now()
+    filename = now.strftime("paste_%Y-%m-%d_%H-%M.txt")
+    tmpdir = pathlib.Path(config.BASE_DIR) / ".runtime" / "pastes"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    filepath = tmpdir / filename
+
+    try:
+        filepath.write_text(text, encoding="utf-8")
+        await message.reply_document(
+            document=str(filepath),
+            caption="📋 Paste",
+        )
+    except (OSError, IOError) as e:
+        await message.reply(f"❌ Ошибка создания paste: {e}")
+    finally:
+        # Удаляем временный файл после отправки
+        try:
+            filepath.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 async def handle_status(bot: "KraabUserbot", message: Message) -> None:
     """Статус системы и ресурсов."""
     ram = model_manager.get_ram_usage()
@@ -9097,6 +9143,119 @@ async def handle_img(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# !ocr — извлечение текста из изображения через AI vision
+# ---------------------------------------------------------------------------
+
+
+async def handle_ocr(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Извлекает текст из изображения через AI vision (OCR).
+
+    Использование:
+      !ocr                — reply на фото → дословный текст с изображения
+      !ocr <подсказка>    — reply на фото → OCR с доп. контекстом
+
+    Требуется reply на сообщение с фото или документом-изображением.
+    Сессия изолирована: ocr_{chat_id} (не засоряет основной контекст).
+    Всегда force_cloud=True — vision требует облачной модели.
+    """
+    import base64
+    import io
+
+    hint = bot._get_command_args(message).strip()
+
+    # Проверяем наличие reply на сообщение с фото
+    replied = message.reply_to_message
+    if replied is None:
+        raise UserInputError(
+            user_message=(
+                "📄 **!ocr** — извлечение текста из изображения\n\n"
+                "Ответь командой на сообщение с фото:\n"
+                "`!ocr` — извлечь весь текст\n"
+                "`!ocr <подсказка>` — OCR с дополнительным контекстом"
+            )
+        )
+
+    # Определяем тип медиа в сообщении
+    has_photo = bool(replied.photo)
+    has_doc_image = bool(
+        replied.document
+        and replied.document.mime_type
+        and replied.document.mime_type.startswith("image/")
+    )
+
+    if not has_photo and not has_doc_image:
+        raise UserInputError(
+            user_message=(
+                "📄 Это сообщение не содержит фото. "
+                "Ответь командой на сообщение с изображением."
+            )
+        )
+
+    # Статусное сообщение
+    status_msg = await message.reply("🔍 Извлекаю текст...")
+
+    try:
+        # Скачиваем изображение в память
+        img_bytes_io = io.BytesIO()
+        await replied.download(in_memory=img_bytes_io)
+        img_bytes_io.seek(0)
+        img_bytes = img_bytes_io.read()
+
+        if not img_bytes:
+            await status_msg.edit("❌ Не удалось скачать изображение.")
+            return
+
+        # Base64-кодирование для передачи в API
+        img_b64 = base64.b64encode(img_bytes).decode("ascii")
+
+        # Формируем OCR-промпт
+        if hint:
+            prompt = (
+                f"Извлеки весь текст с этого изображения дословно. "
+                f"Дополнительный контекст: {hint}. "
+                f"Верни только сам текст без пояснений."
+            )
+        else:
+            prompt = (
+                "Извлеки весь текст с этого изображения дословно. "
+                "Сохрани оригинальное форматирование (абзацы, списки, таблицы). "
+                "Верни только текст без пояснений и комментариев."
+            )
+
+        # Изолированная OCR-сессия, чтобы не засорять основной диалог
+        session_id = f"ocr_{message.chat.id}"
+
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            images=[img_b64],
+            force_cloud=True,
+            disable_tools=True,
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+
+        if not result:
+            await status_msg.edit("❌ Текст на изображении не найден.")
+            return
+
+        # Разбиваем длинный результат если нужно
+        parts = _split_text_for_telegram(result)
+        await status_msg.edit(f"📄 **OCR:**\n{parts[0]}")
+        for part in parts[1:]:
+            await message.reply(part)
+
+    except UserInputError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_ocr_error", error=str(exc))
+        await status_msg.edit(f"❌ Ошибка OCR: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Антиспам фильтр для групп (!spam)
 # ---------------------------------------------------------------------------
 
@@ -9690,6 +9849,126 @@ async def handle_tag(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# handle_top — лидерборд активности чата
+# ---------------------------------------------------------------------------
+
+def _plural_messages(n: int) -> str:
+    """Возвращает правильную форму слова 'сообщение' для числа n."""
+    if 11 <= n % 100 <= 19:
+        return "сообщений"
+    rem = n % 10
+    if rem == 1:
+        return "сообщение"
+    if 2 <= rem <= 4:
+        return "сообщения"
+    return "сообщений"
+
+
+async def handle_top(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Лидерборд активности чата на основе истории сообщений.
+
+    Варианты:
+      !top [N]     — топ N самых активных за последние 24 часа (default N=10)
+      !top week    — за последние 7 дней
+      !top all     — за всё время (последние 1000 сообщений)
+    """
+    args = bot._get_command_args(message).strip().lower()
+
+    # Парсим аргументы
+    limit = 1000  # сколько сообщений из истории тянуть
+    top_n = 10    # сколько участников показать
+    period_label = "24ч"
+
+    # Временные рамки фильтрации
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff: datetime.datetime | None = now - datetime.timedelta(hours=24)
+
+    if args == "week":
+        cutoff = now - datetime.timedelta(days=7)
+        period_label = "неделя"
+    elif args == "all":
+        cutoff = None
+        period_label = "всё время"
+    elif args:
+        # Пробуем распарсить число N
+        try:
+            top_n = max(1, min(int(args), 50))
+        except ValueError:
+            raise UserInputError(
+                user_message=(
+                    "❌ Неверный аргумент.\n"
+                    "Использование:\n"
+                    "`!top [N]` — топ за 24ч (N до 50)\n"
+                    "`!top week` — за неделю\n"
+                    "`!top all` — за всё время"
+                )
+            )
+
+    # Статусное сообщение
+    status_msg = await message.reply(f"⏳ Считаю активность за {period_label}...")
+
+    # Собираем историю чата
+    chat_id = message.chat.id
+    counts: dict[int, tuple[str, int]] = {}  # user_id → (display_name, count)
+
+    try:
+        async for msg in bot.client.get_chat_history(chat_id, limit=limit):
+            # Фильтр по дате
+            if cutoff is not None:
+                msg_date = msg.date
+                # Pyrogram возвращает datetime (aware или naive UTC)
+                if msg_date is not None:
+                    if msg_date.tzinfo is None:
+                        msg_date = msg_date.replace(tzinfo=datetime.timezone.utc)
+                    if msg_date < cutoff:
+                        break  # история идёт в обратном порядке — дальше старее
+
+            # Считаем только сообщения с живым отправителем (не каналы/боты/сервисные)
+            user = msg.from_user
+            if user is None:
+                continue
+
+            uid = user.id
+            if uid not in counts:
+                # Формируем отображаемое имя
+                if user.username:
+                    display = f"@{user.username}"
+                elif user.first_name or user.last_name:
+                    parts = filter(None, [user.first_name, user.last_name])
+                    display = " ".join(parts)
+                else:
+                    display = f"user_{uid}"
+                counts[uid] = (display, 0)
+
+            display_name, cnt = counts[uid]
+            counts[uid] = (display_name, cnt + 1)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handle_top: ошибка при получении истории чата %s: %s", chat_id, exc)
+        await status_msg.edit(f"❌ Не удалось получить историю чата: {exc}")
+        return
+
+    if not counts:
+        await status_msg.edit(f"📭 Нет сообщений за {period_label}.")
+        return
+
+    # Сортируем по убыванию
+    ranking = sorted(counts.values(), key=lambda x: x[1], reverse=True)[:top_n]
+
+    # Формируем текст
+    medals = ["🥇", "🥈", "🥉"]
+    lines = [f"🏆 **Топ чата ({period_label})**", "─────────────"]
+    for i, (name, cnt) in enumerate(ranking, start=1):
+        prefix = medals[i - 1] if i <= 3 else f"{i}."
+        word = _plural_messages(cnt)
+        lines.append(f"{prefix} {name} — {cnt} {word}")
+
+    text = "\n".join(lines)
+    await status_msg.edit(text)
+
+
+# ---------------------------------------------------------------------------
 # handle_link — утилиты для URL: preview, expand, reply-анализ
 # ---------------------------------------------------------------------------
 
@@ -9909,3 +10188,554 @@ async def handle_link(bot: "KraabUserbot", message: Message) -> None:
             "Или ответь на сообщение: `!link`"
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# !regex — тестирование регулярных выражений
+# ---------------------------------------------------------------------------
+
+
+def _format_regex_result(pattern_src: str, text: str) -> str:
+    """Форматирует результат regex-матча в читаемый вид для Telegram."""
+    import re as _re
+
+    # Компилируем паттерн (ошибки обрабатываем снаружи)
+    compiled = _re.compile(pattern_src)
+    matches = list(compiled.finditer(text))
+
+    if not matches:
+        return f"🔍 Regex: `/{pattern_src}/`\n\n⚠️ Совпадений не найдено"
+
+    lines: list[str] = [
+        f"🔍 Regex: `/{pattern_src}/`",
+        f"Matches: {len(matches)}",
+    ]
+
+    for i, m in enumerate(matches[:10], start=1):
+        # Обрезаем длинные совпадения до 60 символов
+        matched_text = m.group(0)
+        if len(matched_text) > 60:
+            matched_text = matched_text[:57] + "..."
+        start, end = m.span()
+        lines.append(f'{i}. `"{matched_text}"` ({start}:{end})')
+
+        # Именованные группы приоритетнее позиционных
+        if m.lastindex or m.groupdict():
+            groups: list[str] = []
+            named = m.groupdict()
+            if named:
+                for name, val in named.items():
+                    groups.append(f'{name}="{val}"')
+            else:
+                for j, val in enumerate(m.groups(), start=1):
+                    groups.append(f'group{j}="{val}"')
+            if groups:
+                lines.append(f"   Groups: {', '.join(groups)}")
+
+    if len(matches) > 10:
+        lines.append(f"   … и ещё {len(matches) - 10} совпадений")
+
+    return "\n".join(lines)
+
+
+async def handle_regex(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Тестирует регулярное выражение прямо в Telegram.
+
+    Синтаксис:
+      !regex <паттерн> <текст>  — тест паттерна на тексте
+      !regex <паттерн>          — тест паттерна на тексте reply-сообщения
+      !regex (reply с паттерном) — паттерн из reply, текст reply как текст?
+                                  нет — паттерн из команды, текст из reply
+
+    Формат ответа:
+      🔍 Regex: /паттерн/
+      Matches: 3
+      1. "match1" (0:5)
+      2. "match2" (10:15)
+         Groups: group1="...", group2="..."
+    """
+    import re
+
+    raw_args = bot._get_command_args(message).strip()
+
+    # --- Определяем паттерн и текст ---
+    pattern_src: str = ""
+    text: str = ""
+
+    if raw_args:
+        # Пробуем разбить: первый "токен" — паттерн, остальное — текст
+        # Паттерн может содержать пробелы внутри /…/, но обычно без них
+        # Формат: !regex <pattern> <text>  или  !regex <pattern> (+ reply)
+        parts = raw_args.split(maxsplit=1)
+        pattern_src = parts[0]
+        if len(parts) > 1:
+            text = parts[1].strip()
+
+    # Если текст не задан — берём из reply
+    if not text and message.reply_to_message:
+        reply = message.reply_to_message
+        text = (reply.text or reply.caption or "").strip()
+
+    # Нет ни паттерна, ни текста → справка
+    if not pattern_src:
+        raise UserInputError(
+            user_message=(
+                "🔍 **!regex — тестирование регулярных выражений**\n\n"
+                "Использование:\n"
+                "`!regex <паттерн> <текст>` — тест на тексте\n"
+                "`!regex <паттерн>` (reply) — паттерн, текст из reply\n\n"
+                "Примеры:\n"
+                r"`!regex \d+ abc123def456`" + " → 2 совпадения\n"
+                r"`!regex (foo|bar) foo baz bar`" + " → 2 совпадения\n"
+                r"`!regex (?P<name>\w+) Hello World`" + " → именованные группы"
+            )
+        )
+
+    if not text:
+        raise UserInputError(
+            user_message=(
+                "❌ Укажи текст для проверки или ответь командой на сообщение.\n"
+                "Пример: `!regex \\d+ текст 123`"
+            )
+        )
+
+    # Компилируем паттерн с проверкой ошибок
+    try:
+        re.compile(pattern_src)
+    except re.error as exc:
+        raise UserInputError(
+            user_message=f"❌ Невалидный regex: `{exc}`"
+        ) from exc
+
+    # Формируем и отправляем результат
+    result = _format_regex_result(pattern_src, text)
+    await message.reply(result)
+
+
+# ---------------------------------------------------------------------------
+# !yt — информация о YouTube видео
+# ---------------------------------------------------------------------------
+
+# Регулярки для извлечения YouTube URL из текста
+_YT_URL_RE = re.compile(
+    r"https?://(?:www\.)?(?:youtube\.com/watch\?[^\s]*v=[\w-]+|youtu\.be/[\w-]+|youtube\.com/shorts/[\w-]+)"
+)
+
+_YT_PROMPT_TEMPLATE = (
+    "Найди информацию об этом YouTube видео: {url}. "
+    "Покажи: название, автор, длительность, дата, описание (кратко)."
+)
+
+
+def _extract_yt_url(text: str) -> str | None:
+    """Извлекает первый YouTube URL из текста. Возвращает None если не найдено."""
+    m = _YT_URL_RE.search(text or "")
+    return m.group(0) if m else None
+
+
+async def handle_yt(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !yt <URL>       — информация о YouTube видео через AI + web_search.
+    !yt (в reply)   — извлекает URL из цитируемого сообщения.
+
+    Сессия изолирована: yt_{chat_id}.
+    """
+    args = bot._get_command_args(message).strip()
+
+    # Пытаемся найти URL: сначала в аргументах, затем в reply
+    url: str | None = _extract_yt_url(args)
+    if url is None and message.reply_to_message is not None:
+        replied_text = (
+            message.reply_to_message.text
+            or message.reply_to_message.caption
+            or ""
+        )
+        url = _extract_yt_url(replied_text)
+
+    if url is None:
+        raise UserInputError(
+            user_message=(
+                "🎬 Использование:\n"
+                "`!yt <YouTube URL>` — информация о видео\n"
+                "или ответь командой `!yt` на сообщение с YouTube ссылкой"
+            )
+        )
+
+    prompt = _YT_PROMPT_TEMPLATE.format(url=url)
+    session_id = f"yt_{message.chat.id}"
+
+    msg = await message.reply(f"🎬 Ищу информацию о видео: `{url}`...")
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=False,  # web_search нужен для поиска инфо о видео
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+        if not result:
+            await msg.edit("❌ AI вернул пустой ответ.")
+            return
+
+        parts = _split_text_for_telegram(result)
+        await msg.edit(parts[0])
+        for part in parts[1:]:
+            await message.reply(part)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_yt_error", error=str(exc))
+        await msg.edit(f"❌ Ошибка: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# !template — шаблоны сообщений с подстановкой переменных
+# ---------------------------------------------------------------------------
+
+_TEMPLATES_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "message_templates.json"
+
+
+def _load_templates() -> dict[str, str]:
+    """Загружает шаблоны из JSON. Формат: {name: text}."""
+    try:
+        if _TEMPLATES_FILE.exists():
+            return json.loads(_TEMPLATES_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _save_templates(data: dict[str, str]) -> None:
+    """Сохраняет шаблоны в JSON-файл."""
+    _TEMPLATES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _TEMPLATES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _apply_template_vars(text: str, positional_args: list[str]) -> str:
+    """
+    Подставляет позиционные переменные {var1}, {var2}, ... в порядке появления.
+    Например: 'Привет, {name}! Ты {age} лет' + ['Павел', '30'] -> 'Привет, Павел! Ты 30 лет'
+    """
+    # Ищем все уникальные плейсхолдеры в порядке появления
+    placeholders = list(dict.fromkeys(re.findall(r"\{(\w+)\}", text)))
+    if not placeholders:
+        return text  # нет переменных — возвращаем как есть
+    result = text
+    for idx, ph in enumerate(placeholders):
+        if idx < len(positional_args):
+            result = result.replace(f"{{{ph}}}", positional_args[idx])
+    return result
+
+
+async def handle_template(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !template save <name> <text>  — сохранить шаблон
+    !template list                — список всех шаблонов
+    !template del <name>          — удалить шаблон
+    !template <name>              — отправить шаблон (без переменных)
+    !template <name> val1 val2 …  — отправить с подстановкой переменных
+    """
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split(None, 1)
+
+    # --- !template list ---
+    if not parts or parts[0].lower() == "list":
+        templates = _load_templates()
+        if not templates:
+            await message.reply(
+                "📭 Нет сохранённых шаблонов.\n"
+                "Используй `!template save <name> <text>` чтобы создать шаблон."
+            )
+            return
+        lines = []
+        for name, text in sorted(templates.items()):
+            preview = text[:60].replace("\n", " ")
+            if len(text) > 60:
+                preview += "…"
+            lines.append(f"• `{name}` — {preview}")
+        await message.reply("📋 **Шаблоны:**\n" + "\n".join(lines))
+        return
+
+    subcommand = parts[0].lower()
+
+    # --- !template save <name> <text> ---
+    if subcommand == "save":
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        name_and_text = rest.split(None, 1)
+        if not name_and_text:
+            raise UserInputError(
+                user_message="❌ Укажи имя и текст: `!template save <name> <text>`"
+            )
+        name = name_and_text[0].strip().lower()
+        if not name:
+            raise UserInputError(user_message="❌ Имя шаблона не может быть пустым.")
+        if len(name_and_text) < 2 or not name_and_text[1].strip():
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи текст шаблона: `!template save <name> <text>`\n"
+                    "Переменные задаются как `{var1}`, `{var2}` и т.д."
+                )
+            )
+        text = name_and_text[1].strip()
+        templates = _load_templates()
+        templates[name] = text
+        _save_templates(templates)
+        # Показываем найденные переменные в подсказке
+        vars_found = list(dict.fromkeys(re.findall(r"\{(\w+)\}", text)))
+        var_hint = (
+            f" Переменные: {', '.join(f'`{{{v}}}`' for v in vars_found)}"
+            if vars_found
+            else ""
+        )
+        await message.reply(f"✅ Шаблон `{name}` сохранён.{var_hint}")
+        return
+
+    # --- !template del <name> ---
+    if subcommand == "del":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи имя: `!template del <name>`")
+        name = parts[1].strip().lower()
+        templates = _load_templates()
+        if name not in templates:
+            raise UserInputError(user_message=f"❌ Шаблон `{name}` не найден.")
+        del templates[name]
+        _save_templates(templates)
+        await message.reply(f"🗑 Шаблон `{name}` удалён.")
+        return
+
+    # --- !template <name> [val1] [val2] ... ---
+    name = subcommand  # уже lower()
+    templates = _load_templates()
+    if name not in templates:
+        raise UserInputError(
+            user_message=f"❌ Шаблон `{name}` не найден. Список: `!template list`"
+        )
+    template_text = templates[name]
+    # Позиционные аргументы: всё что после имени шаблона, разбитое по пробелам
+    positional_args: list[str] = parts[1].split() if len(parts) > 1 else []
+    result_text = _apply_template_vars(template_text, positional_args)
+    await message.reply(result_text)
+
+
+# ---------------------------------------------------------------------------
+# !time — мировые часы и конвертация времени
+# ---------------------------------------------------------------------------
+
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError  # noqa: E402
+
+# Маппинг: имя города (нижний регистр) → IANA timezone
+_TIME_CITY_MAP: dict[str, str] = {
+    # Европа
+    "madrid": "Europe/Madrid",
+    "barcelona": "Europe/Madrid",
+    "moscow": "Europe/Moscow",
+    "москва": "Europe/Moscow",
+    "london": "Europe/London",
+    "лондон": "Europe/London",
+    "berlin": "Europe/Berlin",
+    "берлин": "Europe/Berlin",
+    "paris": "Europe/Paris",
+    "париж": "Europe/Paris",
+    "amsterdam": "Europe/Amsterdam",
+    "rome": "Europe/Rome",
+    "рим": "Europe/Rome",
+    "istanbul": "Europe/Istanbul",
+    "стамбул": "Europe/Istanbul",
+    # Америка
+    "new york": "America/New_York",
+    "newyork": "America/New_York",
+    "nyc": "America/New_York",
+    "нью-йорк": "America/New_York",
+    "нью йорк": "America/New_York",
+    "los angeles": "America/Los_Angeles",
+    "la": "America/Los_Angeles",
+    "лос-анджелес": "America/Los_Angeles",
+    "chicago": "America/Chicago",
+    "чикаго": "America/Chicago",
+    "toronto": "America/Toronto",
+    "торонто": "America/Toronto",
+    "sao paulo": "America/Sao_Paulo",
+    "são paulo": "America/Sao_Paulo",
+    "mexico": "America/Mexico_City",
+    "mexico city": "America/Mexico_City",
+    # Азия / Тихий океан
+    "tokyo": "Asia/Tokyo",
+    "токио": "Asia/Tokyo",
+    "beijing": "Asia/Shanghai",
+    "shanghai": "Asia/Shanghai",
+    "пекин": "Asia/Shanghai",
+    "шанхай": "Asia/Shanghai",
+    "seoul": "Asia/Seoul",
+    "сеул": "Asia/Seoul",
+    "dubai": "Asia/Dubai",
+    "дубай": "Asia/Dubai",
+    "singapore": "Asia/Singapore",
+    "сингапур": "Asia/Singapore",
+    "hong kong": "Asia/Hong_Kong",
+    "гонконг": "Asia/Hong_Kong",
+    "mumbai": "Asia/Kolkata",
+    "delhi": "Asia/Kolkata",
+    "мумбаи": "Asia/Kolkata",
+    "дели": "Asia/Kolkata",
+    "bangkok": "Asia/Bangkok",
+    "бангкок": "Asia/Bangkok",
+    "sydney": "Australia/Sydney",
+    "сидней": "Australia/Sydney",
+}
+
+# Города по умолчанию для `!time` без аргументов
+_TIME_DEFAULT_CITIES: list[tuple[str, str]] = [
+    ("Madrid", "Europe/Madrid"),
+    ("Moscow", "Europe/Moscow"),
+    ("New York", "America/New_York"),
+    ("Tokyo", "Asia/Tokyo"),
+]
+
+
+def _time_format_dt(dt: "datetime.datetime") -> str:
+    """Форматирует datetime в '10:35 Mon, Apr 12' (с днём и датой)."""
+    return dt.strftime("%H:%M %a, %b %-d")
+
+
+def _time_lookup_tz(city: str) -> str | None:
+    """
+    Возвращает IANA timezone для города или None.
+    Сначала ищем в маппинге, затем пробуем как IANA-строку напрямую.
+    """
+    key = city.strip().lower()
+    if key in _TIME_CITY_MAP:
+        return _TIME_CITY_MAP[key]
+    # Пробуем напрямую (например, "Europe/Berlin")
+    try:
+        ZoneInfo(city)
+        return city
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def handle_time(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !time — мировые часы и конвертация времени.
+
+    Форматы:
+      !time                              — время в Madrid, Moscow, NYC, Tokyo
+      !time <город>                      — время в конкретном городе
+      !time convert <HH:MM> <из> <в>    — конвертация между зонами
+    """
+    args = bot._get_command_args(message).strip()
+
+    # --- !time convert HH:MM <из> <в> ---
+    if args.lower().startswith("convert "):
+        rest = args[len("convert "):].strip()
+        # Первый токен — время, далее два города
+        time_match = re.match(r"^(\d{1,2}:\d{2})\s+(.+)$", rest)
+        if not time_match:
+            raise UserInputError(
+                user_message=(
+                    "❌ Формат: `!time convert HH:MM <город_из> <город_в>`\n"
+                    "Пример: `!time convert 15:00 Madrid Moscow`"
+                )
+            )
+        time_str = time_match.group(1)
+        cities_part = time_match.group(2).strip()
+
+        # Ищем разделение на два города (перебираем точки разреза)
+        from_tz: str | None = None
+        to_tz: str | None = None
+        city_from_name = ""
+        city_to_name = ""
+        tokens = cities_part.split()
+        found = False
+        for split_i in range(1, len(tokens)):
+            cf = " ".join(tokens[:split_i])
+            ct = " ".join(tokens[split_i:])
+            tz_f = _time_lookup_tz(cf)
+            tz_t = _time_lookup_tz(ct)
+            if tz_f and tz_t:
+                from_tz, to_tz = tz_f, tz_t
+                city_from_name, city_to_name = cf.title(), ct.title()
+                found = True
+                break
+
+        if not found:
+            raise UserInputError(
+                user_message=(
+                    "❌ Не могу распознать города.\n"
+                    "Поддерживаемые: Madrid, Moscow, New York, Tokyo, London, Dubai и др.\n"
+                    "Пример: `!time convert 15:00 Madrid Moscow`"
+                )
+            )
+
+        # Парсим HH:MM
+        try:
+            hh, mm = map(int, time_str.split(":"))
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                raise ValueError("out of range")
+        except ValueError:
+            raise UserInputError(
+                user_message=f"❌ Некорректное время: `{time_str}`. Формат HH:MM (00:00–23:59)."
+            )
+
+        # Строим datetime в исходной зоне (сегодняшняя дата)
+        today = datetime.date.today()
+        dt_from = datetime.datetime(
+            today.year, today.month, today.day, hh, mm, 0, tzinfo=ZoneInfo(from_tz)
+        )
+        dt_to = dt_from.astimezone(ZoneInfo(to_tz))
+
+        await message.reply(
+            f"🕐 **Конвертация времени**\n"
+            f"`{time_str}` ({city_from_name}, {from_tz})\n"
+            f"→ `{dt_to.strftime('%H:%M')}` ({city_to_name}, {to_tz})\n\n"
+            f"_{_time_format_dt(dt_from)} → {_time_format_dt(dt_to)}_"
+        )
+        return
+
+    # --- !time <город> ---
+    if args:
+        tz_name = _time_lookup_tz(args)
+
+        # Частичное совпадение если прямой поиск не дал результата
+        if not tz_name:
+            args_lower = args.lower()
+            for city_key, tz in _TIME_CITY_MAP.items():
+                if args_lower in city_key or city_key in args_lower:
+                    tz_name = tz
+                    break
+
+        if not tz_name:
+            raise UserInputError(
+                user_message=(
+                    f"❌ Город `{args}` не найден.\n\n"
+                    "Поддерживаемые города:\n"
+                    "Madrid, Barcelona, Moscow, London, Berlin, Paris,\n"
+                    "New York, Los Angeles, Chicago, Toronto,\n"
+                    "Tokyo, Dubai, Singapore, Hong Kong, Mumbai, Bangkok, Sydney\n\n"
+                    "Или IANA timezone напрямую: `!time Europe/Berlin`"
+                )
+            )
+
+        dt = datetime.datetime.now(ZoneInfo(tz_name))
+        display_name = args.title()
+        offset = dt.strftime("%z")
+        offset_fmt = f"UTC{offset[:3]}:{offset[3:]}" if offset else ""
+
+        await message.reply(
+            f"🕐 **{display_name}** ({tz_name})\n"
+            f"`{_time_format_dt(dt)}` {offset_fmt}"
+        )
+        return
+
+    # --- !time (без аргументов) — несколько городов ---
+    now_utc = datetime.datetime.now(ZoneInfo("UTC"))
+    lines: list[str] = ["🌍 **Мировое время**\n"]
+    for city_name, tz_name in _TIME_DEFAULT_CITIES:
+        dt = now_utc.astimezone(ZoneInfo(tz_name))
+        offset = dt.strftime("%z")
+        offset_fmt = f"UTC{offset[:3]}:{offset[3:]}" if offset else ""
+        lines.append(f"**{city_name}** — `{_time_format_dt(dt)}` {offset_fmt}")
+
+    await message.reply("\n".join(lines))
