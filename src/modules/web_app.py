@@ -11769,6 +11769,67 @@ class WebApp:
                 "routing": routing,
             }
 
+        @self.app.get("/api/thinking/status")
+        async def thinking_status():
+            """Текущий thinking_default и список доступных режимов."""
+            controls = self._build_openclaw_runtime_controls()
+            return {
+                "ok": True,
+                "thinking_default": controls.get("thinking_default", "off"),
+                "thinking_modes": controls.get(
+                    "thinking_modes",
+                    ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+                ),
+                "chain_items": controls.get("chain_items", []),
+            }
+
+        @self.app.post("/api/thinking/set")
+        async def thinking_set(
+            payload: dict = Body(...),
+            x_krab_web_key: str = Header(default="", alias="X-Krab-Web-Key"),
+            token: str = Query(default=""),
+        ):
+            """Устанавливает глобальный thinking_default без изменения моделей."""
+            self._assert_write_access(x_krab_web_key, token)
+            raw_mode = str(payload.get("mode", "")).strip().lower()
+            try:
+                mode = self._normalize_thinking_mode(raw_mode)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"invalid_thinking_mode: {raw_mode!r}")
+            # Считываем текущую chain, чтобы не затирать primary/fallbacks
+            current = self._build_openclaw_runtime_controls()
+            try:
+                applied = self._apply_openclaw_runtime_controls(
+                    primary_raw=current.get("primary") or "",
+                    fallbacks_raw=list(current.get("fallbacks") or []),
+                    context_tokens_raw=current.get("context_tokens"),
+                    thinking_default_raw=mode,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            self._runtime_lite_cache = None
+            return {
+                "ok": True,
+                "thinking_default": applied.get("thinking_default", mode),
+                "changed": applied.get("changed", {}),
+            }
+
+        @self.app.get("/api/depth/status")
+        async def depth_status():
+            """Алиас /api/thinking/status — depth == thinking_default в терминах OpenClaw."""
+            controls = self._build_openclaw_runtime_controls()
+            thinking_default = controls.get("thinking_default", "off")
+            modes = controls.get(
+                "thinking_modes",
+                ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+            )
+            return {
+                "ok": True,
+                "depth": thinking_default,
+                "thinking_default": thinking_default,
+                "available_modes": modes,
+            }
+
         @self.app.get("/api/userbot/acl/status")
         async def userbot_acl_status():
             """Read-only runtime ACL userbot."""
