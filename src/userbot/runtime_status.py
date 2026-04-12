@@ -507,7 +507,7 @@ class RuntimeStatusMixin:
         # Ленивые импорты: _current_runtime_primary_model — module-level helper
         # в userbot_bridge.py; resolve_managed_server_launch — из mcp_registry.
         from ..core.mcp_registry import resolve_managed_server_launch
-        from ..userbot_bridge import _current_runtime_primary_model
+        from .llm_flow import _current_runtime_primary_model
 
         route_meta = {}
         if hasattr(openclaw_client, "get_last_runtime_route"):
