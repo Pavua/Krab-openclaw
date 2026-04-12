@@ -146,6 +146,7 @@ from .handlers import (
     handle_summary,
     handle_swarm,
     handle_sysinfo,
+    handle_tag,
     handle_timer,
     handle_todo,
     handle_translate,
@@ -156,6 +157,7 @@ from .handlers import (
     handle_voice,
     handle_watch,
     handle_weather,
+    handle_link,
     handle_web,
     handle_welcome,
     handle_who,
@@ -1180,6 +1182,22 @@ class KraabUserbot(
         )
         async def wrap_snippet(c, m):
             await run_cmd(handle_snippet, m)
+
+        # Теги на сообщения
+        @self.client.on_message(
+            filters.command("tag", prefixes=prefixes) & _make_command_filter("tag"),
+            group=-1,
+        )
+        async def wrap_tag(c, m):
+            await run_cmd(handle_tag, m)
+
+        # Утилиты для ссылок: preview, expand, reply-анализ
+        @self.client.on_message(
+            filters.command("link", prefixes=prefixes) & _make_command_filter("link"),
+            group=-1,
+        )
+        async def wrap_link(c, m):
+            await run_cmd(handle_link, m)
 
         # Выполнение Python-кода (owner-only)
         @self.client.on_message(

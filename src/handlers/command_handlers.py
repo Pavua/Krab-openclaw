@@ -9673,9 +9673,6 @@ async def handle_tag(bot: "KraabUserbot", message: Message) -> None:
 
     # --- !tag <тег> в reply — добавить тег ---
     tag = parts[0].strip()
-    # Тег — одно слово без пробелов
-    if " " in tag:
-        raise UserInputError(user_message="❌ Тег должен быть одним словом без пробелов.")
     replied = message.reply_to_message
     if replied is None:
         raise UserInputError(user_message="❌ Ответь на сообщение командой `!tag <тег>`")
