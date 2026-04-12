@@ -398,6 +398,13 @@ _COMMANDS: list[CommandInfo] = [
 
     # ── users ────────────────────────────────────────────────────────────────
     CommandInfo(
+        name="blocked",
+        category="users",
+        description="Управление заблокированными пользователями",
+        usage="!blocked [list|add|remove]",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="who",
         category="users",
         description="Информация о пользователе или чате",
@@ -537,6 +544,13 @@ _COMMANDS: list[CommandInfo] = [
         category="system",
         description="Подробная информация о чате",
         usage="!chatinfo [chat_id|@username]",
+        owner_only=False,
+    ),
+    CommandInfo(
+        name="history",
+        category="system",
+        description="Статистика чата (последние 1000 сообщений)",
+        usage="!history",
         owner_only=False,
     ),
 

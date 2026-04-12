@@ -65,6 +65,7 @@ from .handlers import (
     handle_alias,
     handle_ask,
     handle_autodel,
+    handle_blocked,
     handle_b64,
     handle_bookmark,
     handle_browser,
@@ -75,6 +76,7 @@ from .handlers import (
     handle_chatban,
     handle_chatinfo,
     handle_chatmute,
+    handle_contacts,
     handle_claude_cli,
     handle_clear,
     handle_codex,
@@ -95,9 +97,11 @@ from .handlers import (
     handle_fwd,
     handle_gemini_cli,
     handle_grep,
+    handle_invite,
     handle_hash,
     handle_health,
     handle_help,
+    handle_history,
     handle_hs,
     handle_img,
     handle_inbox,
@@ -107,6 +111,7 @@ from .handlers import (
     handle_ls,
     handle_macos,
     handle_mark,
+    handle_media,
     handle_memo,
     handle_memory,
     handle_model,
@@ -165,6 +170,8 @@ from .handlers import (
     handle_unarchive,
     handle_unpin,
     handle_uptime,
+    handle_urban,
+    handle_profile,
     handle_voice,
     handle_watch,
     handle_weather,
@@ -623,6 +630,13 @@ class KraabUserbot(
             await run_cmd(handle_chatban, m)
 
         @self.client.on_message(
+            filters.command("blocked", prefixes=prefixes) & _make_command_filter("blocked"),
+            group=-1,
+        )
+        async def wrap_blocked(c, m):
+            await run_cmd(handle_blocked, m)
+
+        @self.client.on_message(
             filters.command("chatmute", prefixes=prefixes) & _make_command_filter("chatmute"),
             group=-1,
         )
@@ -988,6 +1002,14 @@ class KraabUserbot(
         async def wrap_fwd(c, m):
             await run_cmd(handle_fwd, m)
 
+        # Приглашение пользователей в группу и управление invite link
+        @self.client.on_message(
+            filters.command("invite", prefixes=prefixes) & _make_command_filter("invite"),
+            group=-1,
+        )
+        async def wrap_invite(c, m):
+            await run_cmd(handle_invite, m)
+
         @self.client.on_message(
             filters.command("collect", prefixes=prefixes) & _make_command_filter("collect"),
             group=-1,
@@ -1184,6 +1206,12 @@ class KraabUserbot(
             await run_cmd(handle_define, m)
 
         @self.client.on_message(
+            filters.command("urban", prefixes=prefixes) & _make_command_filter("urban"), group=-1
+        )
+        async def wrap_urban(c, m):
+            await run_cmd(handle_urban, m)
+
+        @self.client.on_message(
             filters.command("rand", prefixes=prefixes) & _make_command_filter("rand"), group=-1
         )
         async def wrap_rand(c, m):
@@ -1352,6 +1380,21 @@ class KraabUserbot(
         )
         async def wrap_chatinfo(c, m):
             await run_cmd(handle_chatinfo, m)
+
+        # Управление контактами адресной книги
+        @self.client.on_message(
+            filters.command("contacts", prefixes=prefixes) & _make_command_filter("contacts"),
+            group=-1,
+        )
+        async def wrap_contacts(c, m):
+            await run_cmd(handle_contacts, m)
+
+        @self.client.on_message(
+            filters.command("history", prefixes=prefixes) & _make_command_filter("history"),
+            group=-1,
+        )
+        async def wrap_history(c, m):
+            await run_cmd(handle_history, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()

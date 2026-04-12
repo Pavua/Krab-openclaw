@@ -4705,6 +4705,110 @@ async def handle_chatinfo(bot: "KraabUserbot", message: Message) -> None:
     await message.reply("\n".join(lines))
 
 
+async def handle_history(bot: "KraabUserbot", message: Message) -> None:
+    """Статистика текущего чата за последние 1000 сообщений.
+
+    Синтаксис:
+      !history   — статистика текущего чата
+    """
+    import datetime as _dt
+    from collections import Counter
+
+    chat_id = message.chat.id
+    limit = 1000
+
+    # Счётчики по типам
+    total = 0
+    text_count = 0
+    photo_count = 0
+    video_count = 0
+    voice_count = 0
+    doc_count = 0
+    other_count = 0
+
+    weekday_counts: Counter = Counter()  # {0..6: int} — день недели
+    dates_seen: set = set()              # уникальные даты для среднего
+
+    first_dt: _dt.datetime | None = None
+    last_dt: _dt.datetime | None = None
+
+    try:
+        async for msg in bot.client.get_chat_history(chat_id, limit=limit):
+            total += 1
+
+            # Тип сообщения
+            if msg.text:
+                text_count += 1
+            elif msg.photo:
+                photo_count += 1
+            elif msg.video or msg.video_note:
+                video_count += 1
+            elif msg.voice or msg.audio:
+                voice_count += 1
+            elif msg.document:
+                doc_count += 1
+            else:
+                other_count += 1
+
+            # Дата
+            if msg.date:
+                msg_dt = msg.date
+                if isinstance(msg_dt, (int, float)):
+                    msg_dt = _dt.datetime.fromtimestamp(msg_dt, tz=_dt.timezone.utc)
+                weekday_counts[msg_dt.weekday()] += 1
+                dates_seen.add(msg_dt.date())
+
+                if first_dt is None or msg_dt < first_dt:
+                    first_dt = msg_dt
+                if last_dt is None or msg_dt > last_dt:
+                    last_dt = msg_dt
+
+    except Exception as exc:
+        raise UserInputError(
+            user_message=f"❌ Не удалось получить историю чата: {exc}"
+        ) from exc
+
+    if total == 0:
+        await message.reply("📈 В этом чате нет сообщений (в пределах 1000).")
+        return
+
+    # Самый активный день недели
+    _weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    if weekday_counts:
+        busiest_wd, busiest_count = weekday_counts.most_common(1)[0]
+        busiest_name = _weekday_names[busiest_wd]
+        # Сколько таких дней встретилось в выборке
+        busiest_days_in_sample = sum(
+            1 for d in dates_seen if d.weekday() == busiest_wd
+        ) or 1
+        avg_on_busiest = round(busiest_count / busiest_days_in_sample)
+        most_active_str = f"{busiest_name} (avg {avg_on_busiest} msgs)"
+    else:
+        most_active_str = "—"
+
+    # Среднее в день
+    days_span = len(dates_seen) or 1
+    avg_per_day = round(total / days_span)
+
+    # Форматирование дат
+    first_str = first_dt.strftime("%Y-%m-%d") if first_dt else "—"
+    last_str = last_dt.strftime("%Y-%m-%d") if last_dt else "—"
+
+    lines = [
+        "📈 Chat History Stats",
+        "─────────────",
+        f"Messages: {total:,}",
+        (
+            f"Text: {text_count:,} | Photo: {photo_count:,} | Video: {video_count:,}"
+            f" | Voice: {voice_count:,} | Docs: {doc_count:,} | Other: {other_count:,}"
+        ),
+        f"Most active: {most_active_str}",
+        f"Average: {avg_per_day:,} msgs/day",
+        f"First: {first_str} | Last: {last_str}",
+    ]
+    await message.reply("\n".join(lines))
+
+
 async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
     """!тишина — управление режимом тишины.
 
@@ -9916,6 +10020,177 @@ async def handle_ocr(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# !media — скачивание медиафайлов (фото/видео/документ)
+# ---------------------------------------------------------------------------
+
+
+async def handle_media(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Скачивает медиафайлы из Telegram (userbot-only).
+
+    Использование (в reply на фото/видео/документ):
+      !media           — скачать и переслать как файл (документ)
+      !media save      — скачать в ~/Downloads/krab_media/
+      !media info      — показать метаданные (размер, тип, разрешение)
+
+    Поддерживаемые типы: фото, видео, документ, аудио, голосовое, стикер.
+    """
+    import mimetypes
+    import tempfile
+
+    args = bot._get_command_args(message).strip().lower()
+    subcommand = args.split()[0] if args else ""
+
+    replied = message.reply_to_message
+    if replied is None:
+        raise UserInputError(
+            user_message=(
+                "📥 **!media** — скачивание медиафайлов\n\n"
+                "Ответь на сообщение с медиа:\n"
+                "`!media` — скачать и переслать как файл\n"
+                "`!media save` — сохранить в ~/Downloads/krab_media/\n"
+                "`!media info` — метаданные файла"
+            )
+        )
+
+    # Определяем тип медиа и метаданные
+    media_type = None
+    file_name = None
+    file_size = None
+    mime_type = None
+    width = height = duration = None
+
+    if replied.photo:
+        media_type = "photo"
+        mime_type = "image/jpeg"
+        width = replied.photo.width
+        height = replied.photo.height
+        file_size = replied.photo.file_size
+        file_name = f"photo_{replied.photo.file_unique_id}.jpg"
+
+    elif replied.video:
+        media_type = "video"
+        mime_type = replied.video.mime_type or "video/mp4"
+        width = replied.video.width
+        height = replied.video.height
+        duration = replied.video.duration
+        file_size = replied.video.file_size
+        ext = mimetypes.guess_extension(mime_type) or ".mp4"
+        file_name = replied.video.file_name or f"video_{replied.video.file_unique_id}{ext}"
+
+    elif replied.document:
+        media_type = "document"
+        mime_type = replied.document.mime_type or "application/octet-stream"
+        file_size = replied.document.file_size
+        file_name = replied.document.file_name or f"doc_{replied.document.file_unique_id}"
+
+    elif replied.audio:
+        media_type = "audio"
+        mime_type = replied.audio.mime_type or "audio/mpeg"
+        duration = replied.audio.duration
+        file_size = replied.audio.file_size
+        ext = mimetypes.guess_extension(mime_type) or ".mp3"
+        file_name = replied.audio.file_name or f"audio_{replied.audio.file_unique_id}{ext}"
+
+    elif replied.voice:
+        media_type = "voice"
+        mime_type = replied.voice.mime_type or "audio/ogg"
+        duration = replied.voice.duration
+        file_size = replied.voice.file_size
+        ext = mimetypes.guess_extension(mime_type) or ".ogg"
+        file_name = f"voice_{replied.voice.file_unique_id}{ext}"
+
+    elif replied.sticker:
+        media_type = "sticker"
+        mime_type = replied.sticker.mime_type or "image/webp"
+        width = replied.sticker.width
+        height = replied.sticker.height
+        file_size = replied.sticker.file_size
+        ext = ".tgs" if getattr(replied.sticker, "is_animated", False) else ".webp"
+        file_name = f"sticker_{replied.sticker.file_unique_id}{ext}"
+
+    else:
+        raise UserInputError(
+            user_message=(
+                "📥 Это сообщение не содержит медиафайл.\n"
+                "Ответь командой на фото, видео, документ, аудио, голосовое или стикер."
+            )
+        )
+
+    # --- !media info: только метаданные, без скачивания ---
+    if subcommand == "info":
+        lines = [f"📋 **Метаданные медиафайла** (`{media_type}`)"]
+        lines.append(f"• Имя: `{file_name}`")
+        if mime_type:
+            lines.append(f"• MIME: `{mime_type}`")
+        if file_size:
+            size_kb = file_size / 1024
+            if size_kb >= 1024:
+                lines.append(f"• Размер: `{size_kb / 1024:.1f} МБ`")
+            else:
+                lines.append(f"• Размер: `{size_kb:.1f} КБ`")
+        if width and height:
+            lines.append(f"• Разрешение: `{width}×{height}`")
+        if duration is not None:
+            lines.append(f"• Длительность: `{duration} сек`")
+        await message.reply("\n".join(lines))
+        return
+
+    # --- !media save: скачать в ~/Downloads/krab_media/ ---
+    if subcommand == "save":
+        save_dir = pathlib.Path.home() / "Downloads" / "krab_media"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        save_path = save_dir / (file_name or "media_file")
+
+        status_msg = await message.reply(f"⬇️ Сохраняю `{file_name}`...")
+        try:
+            await replied.download(file_name=str(save_path))
+            size_str = ""
+            if save_path.exists():
+                sz = save_path.stat().st_size / 1024
+                size_str = f" ({sz / 1024:.1f} МБ)" if sz >= 1024 else f" ({sz:.1f} КБ)"
+            await status_msg.edit(f"✅ Сохранено: `{save_path}`{size_str}")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("handle_media_save_error", file_name=file_name, error=str(exc))
+            await status_msg.edit(f"❌ Ошибка сохранения: {exc}")
+        return
+
+    # --- !media (по умолчанию): скачать и переслать как документ ---
+    status_msg = await message.reply(f"⬇️ Скачиваю `{file_name}`...")
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = pathlib.Path(tmpdir) / (file_name or "media_file")
+            await replied.download(file_name=str(tmp_path))
+
+            if not tmp_path.exists() or tmp_path.stat().st_size == 0:
+                await status_msg.edit("❌ Не удалось скачать файл (пустой или недоступен).")
+                return
+
+            sz = tmp_path.stat().st_size / 1024
+            size_str = f"{sz / 1024:.1f} МБ" if sz >= 1024 else f"{sz:.1f} КБ"
+            caption = f"📥 `{file_name}` · {size_str}"
+
+            await bot.client.send_document(
+                message.chat.id,
+                str(tmp_path),
+                caption=caption,
+                reply_to_message_id=message.id,
+            )
+            # Статусное сообщение удаляем: документ уже отправлен
+            try:
+                await status_msg.delete()
+            except Exception:  # noqa: BLE001
+                pass
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_media_error", file_name=file_name, error=str(exc))
+        try:
+            await status_msg.edit(f"❌ Ошибка скачивания: {exc}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Антиспам фильтр для групп (!spam)
 # ---------------------------------------------------------------------------
 
@@ -11781,3 +12056,672 @@ async def handle_chatmute(bot: "KraabUserbot", message: Message) -> None:
             "`!chatmute on`     — включить уведомления\n"
             "`!chatmute status` — текущий статус"
         )
+
+
+# ---------------------------------------------------------------------------
+# !urban — Urban Dictionary lookup через AI + web_search
+# ---------------------------------------------------------------------------
+
+
+async def handle_urban(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !urban <слово> — определение слова из Urban Dictionary через AI.
+
+    Краб использует web_search для поиска актуального определения на urbandictionary.com.
+    Промпт гарантирует формат: определение, пример использования, автор.
+    """
+    word = bot._get_command_args(message).strip()
+
+    # Поддержка reply: берём текст ответного сообщения если аргументов нет
+    if not word and message.reply_to_message:
+        word = (message.reply_to_message.text or "").strip()
+
+    if not word:
+        raise UserInputError(
+            user_message=(
+                "📖 **!urban — Urban Dictionary lookup**\n\n"
+                "`!urban <слово>` — поиск сленгового определения\n\n"
+                "_Пример: `!urban yeet` или `!urban ghosting`_"
+            )
+        )
+
+    status_msg = await message.reply(f"📖 Ищу «{word}» на Urban Dictionary...")
+
+    # Изолированная сессия: не смешивается с основным контекстом чата
+    session_id = f"urban_{message.chat.id}"
+
+    prompt = (
+        f"Найди определение слова '{word}' на Urban Dictionary. "
+        "Используй web_search чтобы найти актуальное определение. "
+        "Покажи в ответе: определение, пример использования, автор. "
+        "Если слово не найдено — скажи об этом честно."
+    )
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=False,  # web_search обязателен для поиска UD
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+
+        if not result:
+            await status_msg.edit(f"❌ Не удалось получить определение «{word}».")
+            return
+
+        # Заголовок + результат
+        header = f"📖 **Urban Dictionary: {word}**\n\n"
+        full_text = header + result
+
+        # Пагинация: Telegram ограничивает ~4096 символов
+        parts = _split_text_for_telegram(full_text)
+        total = len(parts)
+
+        first = parts[0]
+        if total > 1:
+            first += f"\n\n_(часть 1/{total})_"
+        await status_msg.edit(first)
+
+        for i, part in enumerate(parts[1:], start=2):
+            suffix = f"\n\n_(часть {i}/{total})_" if total > 2 else ""
+            await message.reply(part + suffix)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_urban_error", word=word, error=str(exc))
+        await status_msg.edit(f"❌ Ошибка поиска Urban Dictionary: {exc}")
+
+
+async def handle_contacts(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление контактами Telegram (только userbot).
+
+    Синтаксис:
+      !contacts                      — количество контактов
+      !contacts search <запрос>      — поиск по имени или номеру
+      !contacts add <phone> <имя>    — добавить контакт по номеру телефона
+    """
+    args = bot._get_command_args(message).strip()
+
+    # ── Без аргументов: показать количество контактов ────────────────────────
+    if not args:
+        try:
+            contacts = await bot.client.get_contacts()
+            count = len(contacts)
+        except Exception as exc:
+            await message.reply(f"❌ Не удалось получить контакты: {exc}")
+            return
+        await message.reply(
+            f"📒 **Контакты**\n\n"
+            f"Всего в адресной книге: **{count}**\n\n"
+            "`!contacts search <запрос>` — поиск\n"
+            "`!contacts add <phone> <имя>` — добавить"
+        )
+        return
+
+    parts = args.split(maxsplit=1)
+    subcmd = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    # ── search ───────────────────────────────────────────────────────────────
+    if subcmd == "search":
+        if not rest:
+            raise UserInputError(
+                user_message="🔍 Укажи запрос: `!contacts search <имя или номер>`"
+            )
+        try:
+            results = await bot.client.search_contacts(rest)
+        except Exception as exc:
+            await message.reply(f"❌ Ошибка поиска контактов: {exc}")
+            return
+        if not results:
+            await message.reply(f"📭 Ничего не найдено по запросу: `{rest}`")
+            return
+        lines = [f"🔍 **Результаты поиска** (`{rest}`) — {len(results)}:\n"]
+        for user in results[:20]:  # ограничиваем вывод до 20
+            name_parts = [user.first_name or ""]
+            if user.last_name:
+                name_parts.append(user.last_name)
+            full_name = " ".join(name_parts).strip() or "—"
+            username_str = f" @{user.username}" if user.username else ""
+            phone = getattr(user, "phone_number", None) or "скрыт"
+            lines.append(f"• **{full_name}**{username_str} | `{user.id}` | 📞 {phone}")
+        if len(results) > 20:
+            lines.append(f"\n_… и ещё {len(results) - 20}_")
+        await message.reply("\n".join(lines))
+        return
+
+    # ── add ──────────────────────────────────────────────────────────────────
+    if subcmd == "add":
+        if not rest:
+            raise UserInputError(
+                user_message=(
+                    "📞 Укажи номер и имя: `!contacts add +79001234567 Иван`\n"
+                    "Номер должен быть в международном формате."
+                )
+            )
+        add_parts = rest.split(maxsplit=1)
+        if len(add_parts) < 2:
+            raise UserInputError(
+                user_message=(
+                    "📞 Формат: `!contacts add <phone> <имя>`\n"
+                    "Пример: `!contacts add +79001234567 Иван`"
+                )
+            )
+        phone_num, first_name = add_parts[0], add_parts[1].strip()
+        if not first_name:
+            raise UserInputError(user_message="📞 Укажи имя контакта.")
+        try:
+            added = await bot.client.add_contact(phone_num, first_name)
+        except Exception as exc:
+            await message.reply(f"❌ Не удалось добавить контакт: {exc}")
+            return
+        if added:
+            name_parts = [added.first_name or ""]
+            if added.last_name:
+                name_parts.append(added.last_name)
+            full_name = " ".join(name_parts).strip() or first_name
+            await message.reply(
+                f"✅ Контакт добавлен!\n\n"
+                f"**Имя:** {full_name}\n"
+                f"**ID:** `{added.id}`\n"
+                f"**Телефон:** {phone_num}"
+            )
+        else:
+            await message.reply(f"✅ Контакт `{first_name}` ({phone_num}) добавлен.")
+        return
+
+    # ── Неизвестная подкоманда ────────────────────────────────────────────────
+    raise UserInputError(
+        user_message=(
+            "📒 **Контакты**\n\n"
+            "`!contacts` — количество контактов\n"
+            "`!contacts search <запрос>` — поиск по имени или номеру\n"
+            "`!contacts add <phone> <имя>` — добавить контакт"
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# !invite — приглашение пользователей в группу
+# ---------------------------------------------------------------------------
+
+
+async def handle_invite(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление приглашениями в группу. Owner-only.
+
+    Форматы:
+      !invite @username             — добавить пользователя в текущую группу
+      !invite link                  — создать invite link
+      !invite link revoke <url>     — отозвать invite link
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!invite` доступен только владельцу.")
+
+    chat_id = message.chat.id
+    args_raw = message.command[1:] if message.command else []
+
+    # Справка при отсутствии аргументов
+    if not args_raw:
+        raise UserInputError(
+            user_message=(
+                "👥 **Приглашение в группу**\n\n"
+                "`!invite @username` — добавить пользователя в текущую группу\n"
+                "`!invite link` — создать пригласительную ссылку\n"
+                "`!invite link revoke <url>` — отозвать ссылку"
+            )
+        )
+
+    subcmd = args_raw[0].lower()
+
+    # ── invite link ───────────────────────────────────────────
+    if subcmd == "link":
+        if len(args_raw) >= 2 and args_raw[1].lower() == "revoke":
+            # Отозвать invite link
+            if len(args_raw) < 3:
+                raise UserInputError(
+                    user_message="❌ Укажи ссылку: `!invite link revoke <url>`"
+                )
+            link_url = args_raw[2]
+            try:
+                revoked = await bot.client.revoke_chat_invite_link(chat_id, link_url)
+                await message.reply(f"🔒 Ссылка отозвана:\n`{revoked.invite_link}`")
+            except Exception as exc:
+                raise UserInputError(
+                    user_message=f"❌ Не удалось отозвать ссылку: `{exc}`"
+                ) from exc
+            return
+
+        # Создать новую invite link
+        try:
+            link = await bot.client.create_chat_invite_link(chat_id)
+            await message.reply(f"🔗 **Пригласительная ссылка:**\n`{link.invite_link}`")
+        except Exception as exc:
+            raise UserInputError(
+                user_message=f"❌ Не удалось создать ссылку: `{exc}`"
+            ) from exc
+        return
+
+    # ── add user ───────────────────────────────────────────────
+    # Первый аргумент — @username или числовой user_id
+    target = args_raw[0]
+    try:
+        await bot.client.add_chat_members(chat_id, target)
+        await message.reply(f"✅ Пользователь `{target}` добавлен в чат.")
+    except Exception as exc:
+        raise UserInputError(
+            user_message=f"❌ Не удалось добавить `{target}`: `{exc}`"
+        ) from exc
+
+
+async def handle_blocked(bot: "KraabUserbot", message: Message) -> None:
+    """Управление заблокированными пользователями (userbot-only).
+
+    Подкоманды:
+      !blocked list             — список заблокированных
+      !blocked add              — заблокировать автора reply-сообщения
+      !blocked add @username    — заблокировать по username или user_id
+      !blocked remove @username — разблокировать по username или user_id
+    """
+    args_raw = bot._get_command_args(message).strip()
+    parts = args_raw.split(maxsplit=1)
+    sub = parts[0].lower() if parts else ""
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    # ── LIST ──────────────────────────────────────────────────────────────────
+    if sub in {"list", "список", "ls", ""}:
+        lines: list[str] = []
+        try:
+            async for user in bot.client.get_blocked():
+                name = user.first_name or ""
+                if user.last_name:
+                    name = f"{name} {user.last_name}".strip()
+                username_part = f" (@{user.username})" if user.username else ""
+                lines.append(f"• `{user.id}` — {name}{username_part}")
+        except Exception as exc:
+            raise UserInputError(
+                user_message=f"❌ Не удалось получить список заблокированных: {exc}"
+            ) from exc
+
+        if not lines:
+            await message.reply("✅ Список заблокированных пуст.")
+        else:
+            text = "🚫 **Заблокированные пользователи**\n\n" + "\n".join(lines)
+            await message.reply(text)
+        return
+
+    # ── ADD ───────────────────────────────────────────────────────────────────
+    if sub in {"add", "ban", "block", "заблок"}:
+        # Приоритет: reply > аргумент
+        target_id: "int | str | None" = None
+
+        if message.reply_to_message and not arg:
+            # Блокируем автора reply
+            replied = message.reply_to_message
+            if replied.from_user:
+                target_id = replied.from_user.id
+            elif replied.sender_chat:
+                target_id = replied.sender_chat.id
+            else:
+                raise UserInputError(user_message="❌ Не могу определить автора сообщения.")
+        elif arg:
+            raw = arg.lstrip("@")
+            try:
+                target_id = int(raw)
+            except ValueError:
+                target_id = raw  # username (строка)
+        else:
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи цель: ответь на сообщение или передай `@username` / `user_id`.\n"
+                    "Пример: `!blocked add @username`"
+                )
+            )
+
+        try:
+            await bot.client.block_user(target_id)
+        except Exception as exc:
+            raise UserInputError(
+                user_message=f"❌ Не удалось заблокировать `{target_id}`: {exc}"
+            ) from exc
+
+        await message.reply(f"🚫 Пользователь `{target_id}` заблокирован.")
+        return
+
+    # ── REMOVE ────────────────────────────────────────────────────────────────
+    if sub in {"remove", "unblock", "del", "rm", "разблок"}:
+        if not arg:
+            raise UserInputError(
+                user_message=(
+                    "❌ Укажи пользователя: `!blocked remove @username` или `!blocked remove <user_id>`."
+                )
+            )
+        raw = arg.lstrip("@")
+        try:
+            target_id = int(raw)
+        except ValueError:
+            target_id = raw  # username
+
+        try:
+            await bot.client.unblock_user(target_id)
+        except Exception as exc:
+            raise UserInputError(
+                user_message=f"❌ Не удалось разблокировать `{target_id}`: {exc}"
+            ) from exc
+
+        await message.reply(f"✅ Пользователь `{target_id}` разблокирован.")
+        return
+
+    # ── СПРАВКА ───────────────────────────────────────────────────────────────
+    await message.reply(
+        "🚫 **Управление заблокированными**\n\n"
+        "`!blocked list`             — список заблокированных\n"
+        "`!blocked add` _(reply)_    — заблокировать автора сообщения\n"
+        "`!blocked add @username`    — заблокировать по username/ID\n"
+        "`!blocked remove @username` — разблокировать"
+    )
+
+
+async def handle_profile(bot: "KraabUserbot", message: Message) -> None:
+    """!profile — управление профилем userbot-аккаунта (owner-only).
+
+    Синтаксис:
+      !profile                         — показать текущий профиль
+      !profile bio <текст>             — установить bio
+      !profile name <first> [last]     — изменить имя
+      !profile username <username>     — изменить username
+    """
+    # Только владелец может менять свой профиль
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=2)
+    # parts[0] = "!profile", parts[1] = subcommand (optional), parts[2] = args
+    sub = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    # --- Показ профиля ---
+    if not sub:
+        try:
+            me = await bot.client.get_me()
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось получить профиль: {exc}") from exc
+
+        first = me.first_name or ""
+        last = me.last_name or ""
+        full_name = f"{first} {last}".strip()
+        username = f"@{me.username}" if me.username else "—"
+        user_id = me.id
+        bio = getattr(me, "bio", None) or "—"
+        photo_count = 0
+        try:
+            async for _ in bot.client.get_chat_photos("me"):
+                photo_count += 1
+        except Exception:  # noqa: BLE001
+            photo_count = 0
+
+        lines = [
+            "👤 **Профиль аккаунта**",
+            "",
+            f"**Имя:** {full_name}",
+            f"**Username:** {username}",
+            f"**ID:** `{user_id}`",
+            f"**Bio:** {bio}",
+            f"**Фото:** {photo_count}",
+            "",
+            "`!profile bio <текст>` — изменить bio",
+            "`!profile name <first> [last]` — изменить имя",
+            "`!profile username <username>` — изменить username",
+        ]
+        await message.reply("\n".join(lines))
+        return
+
+    # --- Изменение bio ---
+    if sub == "bio":
+        bio_text = parts[2].strip() if len(parts) > 2 else ""
+        if not bio_text:
+            raise UserInputError(
+                user_message="❌ Укажи текст bio: `!profile bio <текст>`"
+            )
+        try:
+            await bot.client.update_profile(bio=bio_text)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось обновить bio: {exc}") from exc
+        await message.reply(f"✅ Bio обновлено:\n{bio_text}")
+        logger.info("handle_profile_bio_updated", length=len(bio_text))
+        return
+
+    # --- Изменение имени ---
+    if sub == "name":
+        name_args = parts[2].strip() if len(parts) > 2 else ""
+        if not name_args:
+            raise UserInputError(
+                user_message="❌ Укажи имя: `!profile name <first> [last]`"
+            )
+        name_parts = name_args.split(maxsplit=1)
+        first_name = name_parts[0]
+        last_name = name_parts[1] if len(name_parts) > 1 else ""
+        try:
+            await bot.client.update_profile(
+                first_name=first_name,
+                last_name=last_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось обновить имя: {exc}") from exc
+        full = f"{first_name} {last_name}".strip()
+        await message.reply(f"✅ Имя обновлено: **{full}**")
+        logger.info("handle_profile_name_updated", first=first_name, last=last_name)
+        return
+
+    # --- Изменение username ---
+    if sub == "username":
+        uname = parts[2].strip().lstrip("@") if len(parts) > 2 else ""
+        if not uname:
+            raise UserInputError(
+                user_message="❌ Укажи username: `!profile username <username>`"
+            )
+        try:
+            await bot.client.update_username(uname)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(user_message=f"❌ Не удалось обновить username: {exc}") from exc
+        await message.reply(f"✅ Username обновлён: @{uname}")
+        logger.info("handle_profile_username_updated", username=uname)
+        return
+
+    # --- Неизвестная подкоманда ---
+    raise UserInputError(
+        user_message=(
+            "👤 **!profile — управление профилем**\n\n"
+            "`!profile` — показать текущий профиль\n"
+            "`!profile bio <текст>` — установить bio\n"
+            "`!profile name <first> [last]` — изменить имя\n"
+            "`!profile username <username>` — изменить username"
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# !members — управление участниками группы (userbot-admin only)
+# ---------------------------------------------------------------------------
+
+async def handle_members(bot: "KraabUserbot", message: Message) -> None:
+    """Управление участниками группы.
+
+    Команды:
+      !members                  — количество участников
+      !members list [N]         — список последних N участников (по умолчанию 10)
+      !members kick             — кикнуть автора сообщения (reply)
+      !members ban              — забанить автора сообщения (reply)
+      !members unban @username  — разбанить пользователя по @username или user_id
+    """
+    chat = message.chat
+    # Только группы поддерживают управление участниками
+    if chat.type.name not in ("GROUP", "SUPERGROUP"):
+        raise UserInputError(
+            user_message="❌ Команда `!members` работает только в группах."
+        )
+
+    raw_text = (message.text or "").strip()
+    parts = raw_text.split(maxsplit=2)
+    # parts[0] = "!members", parts[1] = подкоманда, parts[2] = аргумент
+    sub = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    # ── !members (без аргументов) — количество участников ───────────────────
+    if not sub:
+        try:
+            count = await bot.client.get_chat_members_count(chat.id)
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(
+                user_message=f"❌ Не удалось получить количество участников: {exc}"
+            ) from exc
+        await message.reply(
+            f"👥 Участников в `{chat.title or chat.id}`: **{count}**"
+        )
+        return
+
+    # ── !members list [N] — список участников ───────────────────────────────
+    if sub == "list":
+        # Опциональный лимит
+        limit = 10
+        if len(parts) > 2:
+            try:
+                limit = int(parts[2].strip())
+                if limit < 1:
+                    raise ValueError
+                limit = min(limit, 200)  # Защита от слишком большого запроса
+            except ValueError:
+                raise UserInputError(
+                    user_message="❌ Укажи число участников: `!members list 20`"
+                )
+
+        try:
+            members_list = []
+            async for m in bot.client.get_chat_members(chat.id, limit=limit):
+                user = m.user
+                if user is None or user.is_deleted:
+                    continue
+                name = user.first_name or ""
+                if user.last_name:
+                    name = f"{name} {user.last_name}".strip()
+                username = f"@{user.username}" if user.username else f"id{user.id}"
+                members_list.append(f"• {name} ({username})")
+        except Exception as exc:  # noqa: BLE001
+            raise UserInputError(
+                user_message=f"❌ Не удалось получить список участников: {exc}"
+            ) from exc
+
+        if not members_list:
+            await message.reply("❌ Список участников пуст или недоступен.")
+            return
+
+        header = f"👥 **Участники** `{chat.title or chat.id}` (последние {len(members_list)}):\n\n"
+        body = "\n".join(members_list)
+        # Разбиваем если текст слишком длинный для Telegram (4096 символов)
+        full = header + body
+        if len(full) <= 4096:
+            await message.reply(full)
+        else:
+            await message.reply(header + body[:4000] + "\n…")
+        return
+
+    # ── !members kick — кикнуть автора reply ────────────────────────────────
+    if sub == "kick":
+        replied = getattr(message, "reply_to_message", None)
+        if replied is None or replied.from_user is None:
+            raise UserInputError(
+                user_message="❌ Ответь на сообщение участника которого хочешь кикнуть."
+            )
+        target = replied.from_user
+        if target.is_bot:
+            raise UserInputError(user_message="❌ Нельзя кикнуть бота этой командой.")
+        try:
+            # ban + немедленный unban = kick (удаляется из чата, но может вернуться)
+            await bot.client.ban_chat_member(chat.id, target.id)
+            await bot.client.unban_chat_member(chat.id, target.id)
+        except Exception as exc:  # noqa: BLE001
+            err_str = str(exc)
+            if "CHAT_ADMIN_REQUIRED" in err_str or "admin" in err_str.lower():
+                raise UserInputError(
+                    user_message="❌ Нет прав администратора для кика участников."
+                ) from exc
+            raise UserInputError(
+                user_message=f"❌ Не удалось кикнуть участника: {exc}"
+            ) from exc
+        name = target.first_name or str(target.id)
+        await message.reply(f"👟 **{name}** кикнут из `{chat.title or chat.id}`.")
+        return
+
+    # ── !members ban — забанить автора reply ─────────────────────────────────
+    if sub == "ban":
+        replied = getattr(message, "reply_to_message", None)
+        if replied is None or replied.from_user is None:
+            raise UserInputError(
+                user_message="❌ Ответь на сообщение участника которого хочешь забанить."
+            )
+        target = replied.from_user
+        if target.is_bot:
+            raise UserInputError(user_message="❌ Нельзя забанить бота этой командой.")
+        try:
+            await bot.client.ban_chat_member(chat.id, target.id)
+        except Exception as exc:  # noqa: BLE001
+            err_str = str(exc)
+            if "CHAT_ADMIN_REQUIRED" in err_str or "admin" in err_str.lower():
+                raise UserInputError(
+                    user_message="❌ Нет прав администратора для бана участников."
+                ) from exc
+            raise UserInputError(
+                user_message=f"❌ Не удалось забанить участника: {exc}"
+            ) from exc
+        name = target.first_name or str(target.id)
+        await message.reply(f"🔨 **{name}** забанен в `{chat.title or chat.id}`.")
+        return
+
+    # ── !members unban @username|user_id — разбанить ─────────────────────────
+    if sub == "unban":
+        if len(parts) < 3 or not parts[2].strip():
+            raise UserInputError(
+                user_message="❌ Укажи пользователя: `!members unban @username` или `!members unban 12345`"
+            )
+        target_str = parts[2].strip()
+        # Убираем @ если есть — Pyrogram принимает @username напрямую
+        if target_str.startswith("@"):
+            target_ref: int | str = target_str
+        else:
+            # Попробуем как числовой ID
+            try:
+                target_ref = int(target_str)
+            except ValueError:
+                target_ref = target_str  # Передаём как есть, Pyrogram разберётся
+
+        try:
+            await bot.client.unban_chat_member(chat.id, target_ref)
+        except Exception as exc:  # noqa: BLE001
+            err_str = str(exc)
+            if "CHAT_ADMIN_REQUIRED" in err_str or "admin" in err_str.lower():
+                raise UserInputError(
+                    user_message="❌ Нет прав администратора для разбана участников."
+                ) from exc
+            raise UserInputError(
+                user_message=f"❌ Не удалось разбанить пользователя: {exc}"
+            ) from exc
+        await message.reply(
+            f"✅ Пользователь `{target_str}` разбанен в `{chat.title or chat.id}`."
+        )
+        return
+
+    # ── Неизвестная подкоманда → справка ─────────────────────────────────────
+    raise UserInputError(
+        user_message=(
+            "👥 **Управление участниками группы**\n\n"
+            "`!members`              — количество участников\n"
+            "`!members list [N]`     — список последних N участников\n"
+            "`!members kick`         — кикнуть автора (reply)\n"
+            "`!members ban`          — забанить автора (reply)\n"
+            "`!members unban @user`  — разбанить пользователя"
+        )
+    )
