@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 import os
+import pathlib
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -25,6 +28,11 @@ from ..core.access_control import (
 )
 from ..core.chat_ban_cache import chat_ban_cache
 from ..core.cost_analytics import cost_analytics
+from ..core.telegram_buttons import (
+    build_costs_detail_buttons,
+    build_health_recheck_buttons,
+    build_swarm_team_buttons,
+)
 from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
 from ..core.lm_studio_health import is_lm_studio_available
@@ -4285,9 +4293,6 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
 # handle_context — показ / сброс / сохранение контекста чата (!context)
 # ─────────────────────────────────────────────────────────────────────────────
 
-import json as _json
-import pathlib as _pathlib
-
 
 def _estimate_session_tokens(messages: list[dict]) -> int:
     """Грубая оценка токенов в истории чата (символы / 4)."""
@@ -4820,3 +4825,169 @@ async def handle_schedule(bot: "KraabUserbot", message: Message) -> None:
         f"ID: `{record_id}` · Telegram msg: `{sent.id}`\n"
         f"Отмена: `!schedule cancel {record_id}`"
     )
+
+
+async def handle_fwd(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Пересылка сообщений без метки «Forwarded» (copy_message).
+
+    Синтаксис:
+      !fwd <chat_id>          — в ответ на сообщение: скопировать его в chat_id
+      !fwd <chat_id> last N   — скопировать последние N сообщений из текущего чата
+
+    Owner-only.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!fwd` доступен только владельцу.")
+
+    args = bot._get_command_args(message).strip()
+    if not args:
+        raise UserInputError(
+            user_message=(
+                "📤 **Форвард без метки**\n\n"
+                "`!fwd <chat_id>` — скопировать сообщение (в ответ)\n"
+                "`!fwd <chat_id> last N` — скопировать последние N сообщений"
+            )
+        )
+
+    parts = args.split()
+    try:
+        to_chat_id = int(parts[0])
+    except ValueError:
+        raise UserInputError(user_message=f"❌ Неверный chat_id: `{parts[0]}`")
+
+    from_chat_id = message.chat.id
+
+    # Режим: last N
+    if len(parts) >= 3 and parts[1].lower() == "last":
+        try:
+            n = int(parts[2])
+        except ValueError:
+            raise UserInputError(user_message=f"❌ N должно быть числом, получено: `{parts[2]}`")
+        if n < 1 or n > 200:
+            raise UserInputError(user_message="❌ N должно быть от 1 до 200.")
+
+        try:
+            # Собираем сообщения (get_chat_history возвращает newest-first)
+            msgs = []
+            async for msg in bot.client.get_chat_history(from_chat_id, limit=n):
+                msgs.append(msg)
+            # Пересылаем в хронологическом порядке (oldest first)
+            msgs.reverse()
+            copied = 0
+            for msg in msgs:
+                try:
+                    await bot.client.copy_message(to_chat_id, from_chat_id, msg.id)
+                    copied += 1
+                except Exception:
+                    pass  # пропускаем сервисные/недоступные сообщения
+            reply = f"📤 Скопировано {copied}/{len(msgs)} сообщений → `{to_chat_id}`"
+        except Exception as exc:
+            reply = f"❌ Ошибка при копировании: `{exc}`"
+
+    # Режим: reply на конкретное сообщение
+    else:
+        target = message.reply_to_message
+        if target is None:
+            raise UserInputError(
+                user_message=(
+                    "📤 Ответь на сообщение, которое хочешь переслать, "
+                    "или используй `!fwd <chat_id> last N`."
+                )
+            )
+        try:
+            await bot.client.copy_message(to_chat_id, from_chat_id, target.id)
+            reply = f"📤 Сообщение скопировано → `{to_chat_id}`"
+        except Exception as exc:
+            reply = f"❌ Не удалось скопировать: `{exc}`"
+
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(reply)
+    else:
+        await message.reply(reply)
+
+
+async def handle_collect(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Собирает последние N сообщений из указанного чата и выводит в текущий.
+
+    Синтаксис:
+      !collect <chat_id> <N>
+
+    Полезно для мониторинга: позволяет просмотреть историю любого чата,
+    к которому юзербот имеет доступ.
+
+    Owner-only.
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!collect` доступен только владельцу.")
+
+    args = bot._get_command_args(message).strip()
+    parts = args.split()
+    if len(parts) < 2:
+        raise UserInputError(
+            user_message=(
+                "📥 **Collect — просмотр истории чата**\n\n"
+                "`!collect <chat_id> <N>` — вывести последние N сообщений из чата"
+            )
+        )
+
+    try:
+        src_chat_id = int(parts[0])
+    except ValueError:
+        raise UserInputError(user_message=f"❌ Неверный chat_id: `{parts[0]}`")
+
+    try:
+        n = int(parts[1])
+    except ValueError:
+        raise UserInputError(user_message=f"❌ N должно быть числом, получено: `{parts[1]}`")
+
+    if n < 1 or n > 100:
+        raise UserInputError(user_message="❌ N должно быть от 1 до 100.")
+
+    to_chat_id = message.chat.id
+
+    try:
+        msgs = []
+        async for msg in bot.client.get_chat_history(src_chat_id, limit=n):
+            msgs.append(msg)
+        msgs.reverse()  # хронологический порядок
+
+        if not msgs:
+            reply = f"📭 Чат `{src_chat_id}` пуст или недоступен."
+            if message.from_user and message.from_user.id == bot.me.id:
+                await message.edit(reply)
+            else:
+                await message.reply(reply)
+            return
+
+        # Шапка с количеством
+        header = f"📥 **Collect** из `{src_chat_id}` — последние {len(msgs)} сообщений:"
+        if message.from_user and message.from_user.id == bot.me.id:
+            await message.edit(header)
+        else:
+            await message.reply(header)
+
+        # Копируем сообщения по одному
+        copied = 0
+        for msg in msgs:
+            try:
+                await bot.client.copy_message(to_chat_id, src_chat_id, msg.id)
+                copied += 1
+            except Exception:
+                pass  # сервисные сообщения могут не копироваться
+
+        if copied < len(msgs):
+            await message.reply(
+                f"⚠️ Скопировано {copied}/{len(msgs)} "
+                "(часть сообщений недоступна для копирования)"
+            )
+
+    except Exception as exc:
+        reply = f"❌ Ошибка при сборе: `{exc}`"
+        if message.from_user and message.from_user.id == bot.me.id:
+            await message.edit(reply)
+        else:
+            await message.reply(reply)

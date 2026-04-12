@@ -56,6 +56,7 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "inbox",
         "remember",
         "recall",
+        "memo",
         "ls",
         "read",
         "write",
@@ -91,6 +92,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "chatban",
         # Aggregated runtime stats panel (rate limiter + caches + silence + voice)
         "stats",
+        # Контекст чата — просмотр / сброс / checkpoint
+        "context",
     }
 )
 
