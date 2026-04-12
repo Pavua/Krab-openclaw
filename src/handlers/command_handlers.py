@@ -8752,6 +8752,97 @@ async def handle_tts(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# AFK-режим (!afk / !back)
+# ---------------------------------------------------------------------------
+
+
+async def handle_afk(bot: "KraabUserbot", message: Message) -> None:
+    """!afk [причина] / !afk off / !afk status / !back — режим отсутствия.
+
+    Синтаксис:
+      !afk               — включить AFK (без причины)
+      !afk <причина>     — включить AFK с причиной
+      !afk off           — выключить AFK
+      !back              — выключить AFK (алиас)
+      !afk status        — показать текущий статус
+    """
+    import time as _time  # noqa: PLC0415
+
+    raw = (message.text or "").strip()
+    # Парсим аргументы: убираем команду (!afk / !back)
+    parts = raw.split(maxsplit=1)
+    cmd_word = parts[0].lstrip("!/. ").lower()
+    args = parts[1].strip() if len(parts) > 1 else ""
+
+    # !back — всегда выключение
+    if cmd_word == "back":
+        if not bot._afk_mode:
+            await message.reply("ℹ️ AFK-режим и так не активен.")
+            return
+        elapsed = int(_time.time() - bot._afk_since)
+        mins = elapsed // 60
+        secs = elapsed % 60
+        time_str = f"{mins} мин {secs} с" if mins else f"{secs} с"
+        bot._afk_mode = False
+        bot._afk_reason = ""
+        bot._afk_since = 0.0
+        bot._afk_replied_chats.clear()
+        await message.reply(f"👋 Добро пожаловать обратно! Отсутствовал: **{time_str}**")
+        return
+
+    # !afk off / !afk стоп
+    if args.lower() in ("off", "стоп", "выкл", "выключить"):
+        if not bot._afk_mode:
+            await message.reply("ℹ️ AFK-режим и так не активен.")
+            return
+        elapsed = int(_time.time() - bot._afk_since)
+        mins = elapsed // 60
+        secs = elapsed % 60
+        time_str = f"{mins} мин {secs} с" if mins else f"{secs} с"
+        bot._afk_mode = False
+        bot._afk_reason = ""
+        bot._afk_since = 0.0
+        bot._afk_replied_chats.clear()
+        await message.reply(f"👋 AFK выключен. Отсутствовал: **{time_str}**")
+        return
+
+    # !afk status / !afk статус
+    if args.lower() in ("status", "статус", "stat"):
+        if not bot._afk_mode:
+            await message.reply("ℹ️ AFK-режим не активен.")
+        else:
+            elapsed = int(_time.time() - bot._afk_since)
+            mins = elapsed // 60
+            secs = elapsed % 60
+            time_str = f"{mins} мин {secs} с" if mins else f"{secs} с"
+            reason_part = f"\n📝 Причина: {bot._afk_reason}" if bot._afk_reason else ""
+            replied_count = len(bot._afk_replied_chats)
+            await message.reply(
+                f"🌙 **AFK активен** — отсутствую уже **{time_str}**{reason_part}\n"
+                f"Автоответ отправлен в {replied_count} чат(ах)."
+            )
+        return
+
+    # !afk [причина] — включить (или обновить причину если уже активен)
+    if bot._afk_mode:
+        bot._afk_reason = args
+        reason_part = f"\n📝 Причина обновлена: {args}" if args else " Причина сброшена."
+        await message.reply(f"🌙 AFK уже активен.{reason_part}")
+        return
+
+    bot._afk_mode = True
+    bot._afk_reason = args
+    bot._afk_since = _time.time()
+    bot._afk_replied_chats.clear()
+    reason_part = f"\n📝 Причина: {args}" if args else ""
+    await message.reply(
+        f"🌙 AFK-режим включён.{reason_part}\n"
+        f"Входящие DM получат автоответ.\n"
+        f"`!afk off` или `!back` — вернуться."
+    )
+
+
+# ---------------------------------------------------------------------------
 # !img — описание фото через AI vision
 # ---------------------------------------------------------------------------
 
@@ -8858,3 +8949,161 @@ async def handle_img(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_img_error", error=str(exc))
         await status_msg.edit(f"❌ Ошибка анализа фото: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Антиспам фильтр для групп (!spam)
+# ---------------------------------------------------------------------------
+
+async def handle_spam(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление антиспам фильтром в группе.
+
+    Subcommands:
+      !spam on            — включить в текущем чате
+      !spam off           — выключить в текущем чате
+      !spam status        — показать настройки
+      !spam action ban    — банить нарушителей
+      !spam action mute   — ограничивать (restrict) нарушителей
+      !spam action delete — только удалять сообщения (default)
+
+    Owner-only.
+    """
+    from ..core.spam_guard import (  # noqa: PLC0415
+        VALID_ACTIONS,
+        get_status,
+        set_action,
+        set_enabled,
+    )
+
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!spam` доступен только владельцу.")
+
+    chat_id = message.chat.id
+    args = (message.text or "").split()
+    sub = args[1].strip().lower() if len(args) >= 2 else "status"
+
+    # --- !spam on ---
+    if sub == "on":
+        set_enabled(chat_id, True)
+        status = get_status(chat_id)
+        await message.reply(
+            f"✅ Антиспам **включён** в чате `{chat_id}`.\n"
+            f"Действие при детекте: `{status['action']}`"
+        )
+        return
+
+    # --- !spam off ---
+    if sub == "off":
+        set_enabled(chat_id, False)
+        await message.reply(f"🔕 Антиспам **выключен** в чате `{chat_id}`.")
+        return
+
+    # --- !spam status ---
+    if sub in {"status", "show", ""}:
+        status = get_status(chat_id)
+        state_icon = "✅" if status["enabled"] else "❌"
+        await message.reply(
+            f"🛡 **Антиспам** — `{chat_id}`\n\n"
+            f"Статус: {state_icon} {'включён' if status['enabled'] else 'выключен'}\n"
+            f"Действие: `{status['action']}`\n\n"
+            f"Детект срабатывает при:\n"
+            f"• flood: >5 сообщений за 10 сек\n"
+            f"• >3 ссылок в одном сообщении\n"
+            f"• пересланное сообщение со ссылками"
+        )
+        return
+
+    # --- !spam action <ban|mute|delete> ---
+    if sub == "action":
+        action = args[2].strip().lower() if len(args) >= 3 else ""
+        if action not in VALID_ACTIONS:
+            raise UserInputError(
+                user_message=(
+                    f"❌ Неизвестное действие: `{action}`.\n"
+                    f"Доступны: `ban`, `mute`, `delete`"
+                )
+            )
+        set_action(chat_id, action)
+        await message.reply(f"⚙️ Действие при спаме установлено: `{action}`")
+        return
+
+    raise UserInputError(
+        user_message=(
+            "🛡 **!spam — антиспам фильтр**\n\n"
+            "`!spam on` — включить\n"
+            "`!spam off` — выключить\n"
+            "`!spam status` — текущие настройки\n"
+            "`!spam action ban|mute|delete` — действие при детекте"
+        )
+    )
+
+
+async def apply_spam_action(
+    bot: "KraabUserbot",
+    message: Message,
+    reason: str,
+) -> None:
+    """
+    Применяет действие антиспама к отправителю.
+    Вызывается из _process_message при детекте спама.
+    """
+    import time as _time  # noqa: PLC0415
+
+    from ..core.spam_guard import get_action  # noqa: PLC0415
+
+    chat_id = message.chat.id
+    user_id = getattr(message.from_user, "id", None) if message.from_user else None
+    action = get_action(chat_id)
+
+    _reason_labels = {
+        "flood": "флуд (>5 сообщений за 10 сек)",
+        "links": "слишком много ссылок",
+        "fwd_links": "пересланное со ссылками",
+    }
+    reason_text = _reason_labels.get(reason, reason)
+
+    logger.info(
+        "spam_detected",
+        chat_id=str(chat_id),
+        user_id=str(user_id),
+        reason=reason,
+        action=action,
+    )
+
+    # Удаляем сообщение (всегда, при любом действии)
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if action == "ban" and user_id:
+        try:
+            await bot.client.ban_chat_member(chat_id, user_id)
+            await bot.client.send_message(
+                chat_id,
+                f"🚫 Пользователь заблокирован за спам ({reason_text}).",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("spam_ban_failed", error=str(exc))
+
+    elif action == "mute" and user_id:
+        from pyrogram.types import ChatPermissions  # noqa: PLC0415
+
+        try:
+            # restrict на 1 час
+            until = int(_time.time()) + 3600
+            await bot.client.restrict_chat_member(
+                chat_id,
+                user_id,
+                ChatPermissions(),  # все права отозваны
+                until_date=until,
+            )
+            await bot.client.send_message(
+                chat_id,
+                f"🔇 Пользователь ограничен на 1 час за спам ({reason_text}).",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("spam_mute_failed", error=str(exc))
+    # action == "delete": сообщение уже удалено выше

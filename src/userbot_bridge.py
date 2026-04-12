@@ -154,6 +154,7 @@ from .handlers import (
     handle_img,
     handle_welcome,
     handle_new_chat_members,
+    handle_afk,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -1145,6 +1146,25 @@ class KraabUserbot(
         )
         async def wrap_tts(c, m):
             await run_cmd(handle_tts, m)
+
+        @self.client.on_message(
+            filters.command("img", prefixes=prefixes) & _make_command_filter("img"), group=-1
+        )
+        async def wrap_img(c, m):
+            await run_cmd(handle_img, m)
+
+
+        @self.client.on_message(
+            filters.command("welcome", prefixes=prefixes) & _make_command_filter("welcome"),
+            group=-1,
+        )
+        async def wrap_welcome(c, m):
+            await run_cmd(handle_welcome, m)
+
+        # Автоприветствие новых участников группы
+        @self.client.on_message(filters.new_chat_members, group=-1)
+        async def wrap_new_chat_members(c, m):
+            await handle_new_chat_members(self, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
