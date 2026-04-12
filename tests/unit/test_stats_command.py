@@ -80,6 +80,10 @@ def _make_bot_stub() -> KraabUserbot:
     bot.voice_reply_voice = "ru-RU-DmitryNeural"
     bot.voice_reply_delivery = "text+voice"
     bot.perceptor = None
+    # Атрибуты для расширенной секции !stats (uptime, счётчик сообщений).
+    import time as _t
+    bot._session_start_time = _t.time()
+    bot._session_messages_processed = 0
     return bot
 
 
@@ -89,7 +93,7 @@ def test_stats_panel_happy_path_renders_all_sections() -> None:
     panel = _render_stats_panel(bot)
 
     # Заголовок и все четыре секции должны присутствовать.
-    assert "Krab Runtime Stats" in panel
+    assert "Krab Stats" in panel
     assert "Telegram API rate limiter" in panel
     assert "Chat ban cache" in panel
     assert "Chat capability cache" in panel
@@ -185,5 +189,5 @@ async def test_handle_stats_replies_with_panel() -> None:
     await handle_stats(bot, msg)  # type: ignore[arg-type]
     assert len(msg.replies) == 1
     payload = msg.replies[0]
-    assert "Krab Runtime Stats" in payload
+    assert "Krab Stats" in payload
     assert "Telegram API rate limiter" in payload

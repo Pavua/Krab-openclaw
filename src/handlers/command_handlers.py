@@ -4281,6 +4281,151 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(report)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# handle_context — показ / сброс / сохранение контекста чата (!context)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import json as _json
+import pathlib as _pathlib
+
+
+def _estimate_session_tokens(messages: list[dict]) -> int:
+    """Грубая оценка токенов в истории чата (символы / 4)."""
+    total_chars = 0
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, list):
+            # multipart: собираем текстовые части
+            for part in content:
+                if isinstance(part, dict):
+                    total_chars += len(str(part.get("text") or ""))
+                else:
+                    total_chars += len(str(part))
+        else:
+            total_chars += len(str(content))
+    return max(0, (total_chars + 3) // 4)
+
+
+def _format_time_ago(seconds: float) -> str:
+    """Человекочитаемое 'X мин/сек/ч назад'."""
+    if seconds < 60:
+        return f"{int(seconds)} сек назад"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} мин назад"
+    return f"{int(seconds // 3600)} ч назад"
+
+
+_CHECKPOINTS_DIR = _pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "context_checkpoints"
+
+
+async def handle_context(bot: "KraabUserbot", message: Message) -> None:
+    """!context — управление контекстом чата OpenClaw.
+
+    Синтаксис:
+      !context              — показать текущий контекст чата
+      !context clear        — очистить историю (сброс)
+      !context save         — сохранить checkpoint контекста
+    """
+    chat_id = str(message.chat.id)
+    raw = (message.text or "").strip()
+    parts = raw.split(maxsplit=1)
+    sub = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    if sub in ("clear", "очисти", "сброс"):
+        # Сброс контекста чата
+        openclaw_client.clear_session(chat_id)
+        await message.reply(
+            "🗑️ **Контекст очищен**\n"
+            "История чата сброшена. Следующее сообщение начнёт новую сессию."
+        )
+        return
+
+    if sub in ("save", "сохрани", "checkpoint"):
+        # Сохранение checkpoint контекста в JSON
+        messages = list(openclaw_client._sessions.get(chat_id) or [])
+        if not messages:
+            await message.reply("⚠️ Контекст пуст — нечего сохранять.")
+            return
+        try:
+            _CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+            import datetime as _dt
+            ts = _dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+            filename = _CHECKPOINTS_DIR / f"{chat_id}_{ts}.json"
+            payload = {
+                "chat_id": chat_id,
+                "saved_at": ts,
+                "message_count": len(messages),
+                "estimated_tokens": _estimate_session_tokens(messages),
+                "messages": messages,
+            }
+            filename.write_text(_json.dumps(payload, ensure_ascii=False, indent=2))
+            await message.reply(
+                f"💾 **Checkpoint сохранён**\n"
+                f"Файл: `{filename.name}`\n"
+                f"Сообщений: {len(messages)}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("context_checkpoint_save_failed", chat_id=chat_id, error=str(exc))
+            await message.reply(f"❌ Не удалось сохранить checkpoint: {exc}")
+        return
+
+    # Показ текущего контекста (по умолчанию)
+    messages = list(openclaw_client._sessions.get(chat_id) or [])
+    # Считаем только не-системные сообщения как «диалоговые»
+    dialog_msgs = [m for m in messages if m.get("role") != "system"]
+    msg_count = len(dialog_msgs)
+    token_est = _estimate_session_tokens(messages)
+
+    # Определяем текущую модель через runtime route или config
+    model = ""
+    if hasattr(openclaw_client, "get_last_runtime_route"):
+        route_meta = openclaw_client.get_last_runtime_route() or {}
+        model = str(route_meta.get("model") or "").strip()
+    if not model:
+        model = str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "unknown")
+
+    # Время последнего обновления из атрибута _session_last_updated (если есть)
+    last_update_str = "—"
+    try:
+        if hasattr(openclaw_client, "_session_last_updated"):
+            ts_map: dict = openclaw_client._session_last_updated  # type: ignore[attr-defined]
+            last_ts = ts_map.get(chat_id)
+            if last_ts is not None:
+                import time as _time
+                elapsed = _time.time() - last_ts
+                last_update_str = _format_time_ago(elapsed)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Считаем сохранённые checkpoint'ы для этого чата
+    checkpoint_count = 0
+    try:
+        if _CHECKPOINTS_DIR.exists():
+            checkpoint_count = sum(1 for _ in _CHECKPOINTS_DIR.glob(f"{chat_id}_*.json"))
+    except Exception:  # noqa: BLE001
+        pass
+
+    lines = [
+        "📎 **Контекст чата**",
+        "─────────────────────",
+        f"Сообщений: `{msg_count}`",
+        f"Токенов (оценка): `~{token_est:,}`".replace(",", "_"),
+        f"Модель: `{model}`",
+        f"Session ID: `telegram_{chat_id}`",
+        f"Последнее обновление: {last_update_str}",
+    ]
+    if checkpoint_count:
+        lines.append(f"Checkpoints: `{checkpoint_count}`")
+    lines += [
+        "",
+        "Команды:",
+        "`!context clear` — сбросить контекст",
+        "`!context save` — сохранить checkpoint",
+    ]
+
+    await message.reply("\n".join(lines))
+
+
 async def handle_pin(bot: "KraabUserbot", message: Message) -> None:
     """
     Закрепляет сообщение в чате (!pin в ответ на сообщение).
@@ -4359,3 +4504,77 @@ async def handle_unpin(bot: "KraabUserbot", message: Message) -> None:
         await message.edit(reply)
     else:
         await message.reply(reply)
+
+
+async def handle_memo(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Быстрые заметки из Telegram в Obsidian vault (00_Inbox).
+
+    Синтаксис:
+      !memo <текст>           — сохранить заметку
+      !memo list [N]          — последние N заметок (по умолчанию 5)
+      !memo search <запрос>   — поиск по заметкам
+    """
+    from ..core.memo_service import memo_service
+
+    args = bot._get_command_args(message).strip()
+
+    # Определяем название чата
+    chat = message.chat
+    chat_title: str = (
+        getattr(chat, "title", None)
+        or getattr(chat, "first_name", None)
+        or str(chat.id)
+    )
+
+    if not args or args.lower() in ("memo", "!memo"):
+        raise UserInputError(
+            user_message=(
+                "📝 **Memo — быстрые заметки в Obsidian**\n\n"
+                "`!memo <текст>` — сохранить заметку\n"
+                "`!memo list [N]` — последние N заметок\n"
+                "`!memo search <запрос>` — поиск по заметкам"
+            )
+        )
+
+    # --- list ---
+    if args.lower().startswith("list"):
+        parts = args.split(maxsplit=1)
+        n = 5
+        if len(parts) == 2 and parts[1].isdigit():
+            n = max(1, min(int(parts[1]), 50))
+        items = memo_service.list_recent(n)
+        if not items:
+            await message.reply("📭 Заметок в 00_Inbox пока нет.")
+            return
+        lines = [f"📝 **Последние заметки ({len(items)}):**\n"]
+        for i, item in enumerate(items, 1):
+            lines.append(
+                f"{i}. `{item['filename']}`\n"
+                f"   🕐 {item['created']}\n"
+                f"   {item['preview']}"
+            )
+        await message.reply("\n".join(lines))
+        return
+
+    # --- search ---
+    if args.lower().startswith("search "):
+        query = args[7:].strip()
+        if not query:
+            raise UserInputError(user_message="🔍 Укажи запрос: `!memo search <текст>`")
+        results = memo_service.search(query)
+        if not results:
+            await message.reply(f"🔍 Ничего не найдено по запросу: `{query}`")
+            return
+        lines = [f"🔍 **Найдено ({len(results)}):**\n"]
+        for item in results:
+            lines.append(f"📄 `{item['filename']}`\n   {item['match']}")
+        await message.reply("\n".join(lines))
+        return
+
+    # --- save ---
+    result = await memo_service.save_async(args, chat_title=chat_title)
+    if result.success:
+        await message.reply(f"✅ {result.message}")
+    else:
+        await message.reply(f"❌ {result.message}")

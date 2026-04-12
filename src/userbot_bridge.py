@@ -71,6 +71,7 @@ from .handlers import (
     handle_clear,
     handle_codex,
     handle_config,
+    handle_context,
     handle_cronstatus,
     handle_diagnose,
     handle_gemini_cli,
@@ -79,11 +80,13 @@ from .handlers import (
     handle_inbox,
     handle_ls,
     handle_macos,
+    handle_memo,
     handle_memory,
     handle_model,
     handle_notify,
     handle_opencode,
     handle_panel,
+    handle_pin,
     handle_read,
     handle_reasoning,
     handle_recall,
@@ -103,6 +106,7 @@ from .handlers import (
     handle_swarm,
     handle_sysinfo,
     handle_translator,
+    handle_unpin,
     handle_voice,
     handle_watch,
     handle_web,
@@ -660,6 +664,12 @@ class KraabUserbot(
             await run_cmd(handle_shop, m)
 
         @self.client.on_message(
+            filters.command("memo", prefixes=prefixes) & _make_command_filter("memo"), group=-1
+        )
+        async def wrap_memo(c, m):
+            await run_cmd(handle_memo, m)
+
+        @self.client.on_message(
             filters.command("remember", prefixes=prefixes) & _make_command_filter("remember"),
             group=-1,
         )
@@ -764,6 +774,25 @@ class KraabUserbot(
             await run_cmd(handle_health, m)
 
         @self.client.on_message(
+            filters.command("context", prefixes=prefixes) & _make_command_filter("context"),
+            group=-1,
+        )
+        async def wrap_context(c, m):
+            await run_cmd(handle_context, m)
+
+        @self.client.on_message(
+            filters.command("pin", prefixes=prefixes) & _make_command_filter("pin"), group=-1
+        )
+        async def wrap_pin(c, m):
+            await run_cmd(handle_pin, m)
+
+        @self.client.on_message(
+            filters.command("unpin", prefixes=prefixes) & _make_command_filter("unpin"), group=-1
+        )
+        async def wrap_unpin(c, m):
+            await run_cmd(handle_unpin, m)
+
+        @self.client.on_message(
             filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1
         )
         async def wrap_help(c, m):
@@ -802,6 +831,11 @@ class KraabUserbot(
         )
         async def wrap_browser(c, m):
             await run_cmd(handle_browser, m)
+
+        # Обработка callback query от inline-кнопок
+        @self.client.on_callback_query()
+        async def wrap_callback_query(c, cq):
+            await self._handle_callback_query(cq)
 
         # Обработка обычных сообщений, медиа, голосовых и документов.
         # Voice/audio проходят в _process_message → _transcribe_audio_message
@@ -2340,6 +2374,29 @@ class KraabUserbot(
         """Определяет ошибку Telegram при превышении лимита длины сообщения (4096 chars)."""
         return "MESSAGE_TOO_LONG" in str(exc).upper()
 
+    async def _send_message_reaction(self, message: Message, emoji: str) -> None:
+        """
+        Ставит реакцию на сообщение через pyrofork send_reaction.
+
+        Молча игнорирует ошибки — не все чаты/типы сообщений поддерживают реакции
+        (каналы без реакций, анонимные группы, старые клиенты и т.д.).
+        Не ставит реакцию если TELEGRAM_REACTIONS_ENABLED=False.
+        """
+        if not bool(getattr(config, "TELEGRAM_REACTIONS_ENABLED", True)):
+            return
+        chat_id_int = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+        message_id_int = int(getattr(message, "id", 0) or 0)
+        if not chat_id_int or not message_id_int:
+            return
+        try:
+            await self.client.send_reaction(
+                chat_id=chat_id_int,
+                message_id=message_id_int,
+                emoji=emoji,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # реакции — best-effort, не прерываем основной flow
+
     async def _safe_edit(self, msg: Message, text: str) -> Message:
         """
         Безопасно редактирует сообщение через _telegram_send_queue (с retry).
@@ -2578,6 +2635,11 @@ class KraabUserbot(
                     chat_type=str(getattr(chat_type_raw, "value", chat_type_raw) or "").lower(),
                 )
             )
+
+        # Реакция "видит" — owner сразу понимает что Краб получил сообщение.
+        # Только для owner-сообщений (is_self=True или is_allowed_sender+is_self check).
+        if is_self:
+            asyncio.create_task(self._send_message_reaction(message, "👀"))
 
         _ai_request_start_ts = time.time()
         logger.info(
