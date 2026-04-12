@@ -737,9 +737,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 workflow_type = WorkflowType(wf_raw)
             except ValueError:
                 valid_wf = ", ".join(w.value for w in WorkflowType)
-                await message.reply(
-                    f"❌ Неизвестный workflow: `{wf_raw}`\nДопустимые: {valid_wf}"
-                )
+                await message.reply(f"❌ Неизвестный workflow: `{wf_raw}`\nДопустимые: {valid_wf}")
                 return
             # Убираем --workflow ... из args для разбора позиционных аргументов
             args_clean = _re.sub(r"--workflow\s+\S+", "", args).strip()
@@ -1828,9 +1826,7 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "off":
         # !translator off → !translator session stop
-        state = bot.update_translator_session_state(
-            session_status="stopped", persist=True
-        )
+        state = bot.update_translator_session_state(session_status="stopped", persist=True)
         await message.reply(_render_translator_session_state(state))
         return
 
@@ -3751,6 +3747,7 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     # Текущая модель из runtime models config
     try:
         from ..core.openclaw_runtime_models import get_runtime_primary_model as _grpm
+
         model_name = _grpm() or "?"
         provider = (model_name.split("/")[0]) if "/" in model_name else "?"
         model_short = model_name.split("/")[-1] if "/" in model_name else model_name
@@ -3772,11 +3769,11 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
         import datetime as _dt
 
         from ..core.swarm_artifact_store import swarm_artifact_store as _sas
+
         today_str = _dt.date.today().isoformat()
         all_arts = _sas.list_artifacts(limit=200)
         swarm_today = sum(
-            1 for a in all_arts
-            if str(a.get("timestamp_iso", "")).startswith(today_str)
+            1 for a in all_arts if str(a.get("timestamp_iso", "")).startswith(today_str)
         )
     except Exception:
         swarm_today = 0
@@ -3784,16 +3781,20 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     # Inbox summary
     try:
         from ..core.inbox_service import inbox_service as _inbox
+
         isummary = _inbox.get_summary()
         inbox_open = isummary.get("open_items", 0)
         inbox_attention = isummary.get("attention_items", 0)
-        inbox_str = f"{inbox_open} open" + (f" ({inbox_attention} attention)" if inbox_attention else "")
+        inbox_str = f"{inbox_open} open" + (
+            f" ({inbox_attention} attention)" if inbox_attention else ""
+        )
     except Exception:
         inbox_str = "?"
 
     # RAM usage
     try:
         import os as _os
+
         rss_mb = int(_psutil.Process(_os.getpid()).memory_info().rss / 1024 / 1024)
         ram_str = f"{rss_mb} MB"
     except Exception:
@@ -4095,7 +4096,7 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
 
     # ── Расписание ночного режима ──────────────────────────────
     if args.startswith("расписание"):
-        sched_arg = args[len("расписание"):].strip()
+        sched_arg = args[len("расписание") :].strip()
         if not sched_arg or sched_arg == "статус":
             await message.reply(silence_schedule_manager.format_status())
             return
@@ -4110,7 +4111,11 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
                 start_s, end_s = time_parts[0].strip(), time_parts[1].strip()
                 try:
                     silence_schedule_manager.set_schedule(start_s, end_s)
-                    active_marker = " (сейчас активно ✅)" if silence_schedule_manager.is_schedule_active() else ""
+                    active_marker = (
+                        " (сейчас активно ✅)"
+                        if silence_schedule_manager.is_schedule_active()
+                        else ""
+                    )
                     await message.reply(
                         f"🌙 Расписание тишины установлено: **{start_s}–{end_s}**{active_marker}\n"
                         f"Краб будет молчать в эти часы.\n"
@@ -4120,9 +4125,7 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
                 except ValueError as exc:
                     await message.reply(f"❌ {exc}")
                     return
-        await message.reply(
-            "❌ Неверный формат. Пример: `!тишина расписание 23:00-08:00`"
-        )
+        await message.reply("❌ Неверный формат. Пример: `!тишина расписание 23:00-08:00`")
         return
 
     if args == "статус":
@@ -4241,7 +4244,9 @@ async def handle_budget(bot: "KraabUserbot", message: Message) -> None:
     try:
         new_budget = float(raw_args.replace(",", "."))
     except ValueError:
-        raise UserInputError(user_message=f"❌ Некорректное значение: `{raw_args}`. Укажи число, например `!budget 15.00`.")
+        raise UserInputError(
+            user_message=f"❌ Некорректное значение: `{raw_args}`. Укажи число, например `!budget 15.00`."
+        )
 
     if new_budget < 0:
         raise UserInputError(user_message="❌ Бюджет не может быть отрицательным.")
@@ -4325,6 +4330,7 @@ async def handle_health(bot: "KraabUserbot", message: Message) -> None:
         model = str(route_meta.get("model") or "").strip()
         if not model:
             from ..core.openclaw_runtime_models import get_runtime_primary_model
+
             model = str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "unknown")
         if oc_ok:
             lines.append(f"✅ OpenClaw: up ({model})")
@@ -4473,8 +4479,7 @@ async def handle_context(bot: "KraabUserbot", message: Message) -> None:
         # Сброс контекста чата
         openclaw_client.clear_session(chat_id)
         await message.reply(
-            "🗑️ **Контекст очищен**\n"
-            "История чата сброшена. Следующее сообщение начнёт новую сессию."
+            "🗑️ **Контекст очищен**\nИстория чата сброшена. Следующее сообщение начнёт новую сессию."
         )
         return
 
@@ -4497,9 +4502,7 @@ async def handle_context(bot: "KraabUserbot", message: Message) -> None:
             }
             filename.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
             await message.reply(
-                f"💾 **Checkpoint сохранён**\n"
-                f"Файл: `{filename.name}`\n"
-                f"Сообщений: {len(messages)}"
+                f"💾 **Checkpoint сохранён**\nФайл: `{filename.name}`\nСообщений: {len(messages)}"
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("context_checkpoint_save_failed", chat_id=chat_id, error=str(exc))
@@ -4658,9 +4661,7 @@ async def handle_memo(bot: "KraabUserbot", message: Message) -> None:
     # Определяем название чата
     chat = message.chat
     chat_title: str = (
-        getattr(chat, "title", None)
-        or getattr(chat, "first_name", None)
-        or str(chat.id)
+        getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat.id)
     )
 
     if not args or args.lower() in ("memo", "!memo"):
@@ -4686,9 +4687,7 @@ async def handle_memo(bot: "KraabUserbot", message: Message) -> None:
         lines = [f"📝 **Последние заметки ({len(items)}):**\n"]
         for i, item in enumerate(items, 1):
             lines.append(
-                f"{i}. `{item['filename']}`\n"
-                f"   🕐 {item['created']}\n"
-                f"   {item['preview']}"
+                f"{i}. `{item['filename']}`\n   🕐 {item['created']}\n   {item['preview']}"
             )
         await message.reply("\n".join(lines))
         return
@@ -4791,9 +4790,7 @@ async def handle_monitor(bot: "KraabUserbot", message: Message) -> None:
             chat = await bot.client.get_chat(target_raw)
             chat_id_resolved = chat.id
             chat_title = (
-                getattr(chat, "title", None)
-                or getattr(chat, "first_name", None)
-                or target_raw
+                getattr(chat, "title", None) or getattr(chat, "first_name", None) or target_raw
             )
         except Exception as e:
             logger.warning("monitor_resolve_chat_error", target=target_raw, error=str(e))
@@ -4807,9 +4804,7 @@ async def handle_monitor(bot: "KraabUserbot", message: Message) -> None:
             keywords=list(keywords),
         )
         kw_str = (
-            ", ".join(f"`{k}`" for k in entry.keywords)
-            if entry.keywords
-            else "_(все сообщения)_"
+            ", ".join(f"`{k}`" for k in entry.keywords) if entry.keywords else "_(все сообщения)_"
         )
         await message.reply(
             f"✅ **Мониторинг запущен**\n"
@@ -4821,6 +4816,7 @@ async def handle_monitor(bot: "KraabUserbot", message: Message) -> None:
     raise UserInputError(
         user_message="❌ Неизвестная подкоманда. Используй: `add`, `remove`, `list`"
     )
+
 
 async def handle_schedule(bot: "KraabUserbot", message: Message) -> None:
     """
@@ -4899,10 +4895,7 @@ async def handle_schedule(bot: "KraabUserbot", message: Message) -> None:
     # --- schedule new message ---
     if not rest:
         raise UserInputError(
-            user_message=(
-                "❌ Укажи текст сообщения.\n"
-                "Пример: `!schedule +30m Позвонить Маше`"
-            )
+            user_message=("❌ Укажи текст сообщения.\nПример: `!schedule +30m Позвонить Маше`")
         )
 
     try:
@@ -5111,8 +5104,7 @@ async def handle_collect(bot: "KraabUserbot", message: Message) -> None:
 
         if copied < len(msgs):
             await message.reply(
-                f"⚠️ Скопировано {copied}/{len(msgs)} "
-                "(часть сообщений недоступна для копирования)"
+                f"⚠️ Скопировано {copied}/{len(msgs)} (часть сообщений недоступна для копирования)"
             )
 
     except Exception as exc:
@@ -5295,10 +5287,7 @@ async def handle_autodel(bot: "KraabUserbot", message: Message) -> None:
                 f"`!autodel 0` — выключить."
             )
         else:
-            await message.reply(
-                "⏱ Автоудаление: **выключено**.\n"
-                "`!autodel <секунды>` — включить."
-            )
+            await message.reply("⏱ Автоудаление: **выключено**.\n`!autodel <секунды>` — включить.")
         return
 
     try:
@@ -5347,7 +5336,9 @@ def _format_chat_history_for_llm(messages: list) -> str:
         sender = "Unknown"
         if getattr(msg, "from_user", None):
             u = msg.from_user
-            name_parts = [p for p in [getattr(u, "first_name", None), getattr(u, "last_name", None)] if p]
+            name_parts = [
+                p for p in [getattr(u, "first_name", None), getattr(u, "last_name", None)] if p
+            ]
             if name_parts:
                 sender = " ".join(name_parts)
             elif getattr(u, "username", None):
@@ -5408,7 +5399,9 @@ async def handle_summary(bot: "KraabUserbot", message: Message) -> None:
     if parts:
         first = parts[0]
         # chat_id: начинается с '-100' или длинное число (>6 цифр)
-        is_chat_id = first.startswith("-100") or (first.lstrip("-").isdigit() and len(first.lstrip("-")) > 6)
+        is_chat_id = first.startswith("-100") or (
+            first.lstrip("-").isdigit() and len(first.lstrip("-")) > 6
+        )
         if is_chat_id:
             try:
                 target_chat_id = int(first)
@@ -5434,9 +5427,7 @@ async def handle_summary(bot: "KraabUserbot", message: Message) -> None:
 
     # Читаем историю через pyrogram
     try:
-        raw_messages = [
-            m async for m in bot.client.get_chat_history(target_chat_id, limit=n)
-        ]
+        raw_messages = [m async for m in bot.client.get_chat_history(target_chat_id, limit=n)]
     except Exception as exc:
         logger.warning("handle_summary_fetch_failed", chat_id=target_chat_id, error=str(exc))
         await status_msg.edit(f"❌ Не удалось получить историю чата: {exc}")
@@ -5664,8 +5655,9 @@ async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:
       !bookmark search <запрос> — поиск по закладкам
       !bookmark del <id>   — удалить закладку по ID
     """
-    from ..core.bookmark_service import bookmark_service
     import datetime as _dt
+
+    from ..core.bookmark_service import bookmark_service
 
     args = bot._get_command_args(message).strip()
 
@@ -5693,10 +5685,7 @@ async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:
             ts = _dt.datetime.fromtimestamp(b["timestamp"]).strftime("%d.%m %H:%M")
             preview = b["text_preview"] or "—"
             from_user = b.get("from_user") or "?"
-            lines.append(
-                f"**#{b['id']}** · {b['chat_title']} · {from_user} · {ts}\n"
-                f"   {preview}"
-            )
+            lines.append(f"**#{b['id']}** · {b['chat_title']} · {from_user} · {ts}\n   {preview}")
         await message.reply("\n".join(lines))
         return
 
@@ -5713,14 +5702,17 @@ async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:
         for b in results:
             ts = _dt.datetime.fromtimestamp(b["timestamp"]).strftime("%d.%m %H:%M")
             lines.append(
-                f"**#{b['id']}** · {b['chat_title']} · {ts}\n"
-                f"   {b['text_preview'] or '—'}"
+                f"**#{b['id']}** · {b['chat_title']} · {ts}\n   {b['text_preview'] or '—'}"
             )
         await message.reply("\n".join(lines))
         return
 
     # ─── del ────────────────────────────────────────────────────────────────
-    if args.lower().startswith("del ") or args.lower().startswith("delete ") or args.lower().startswith("rm "):
+    if (
+        args.lower().startswith("del ")
+        or args.lower().startswith("delete ")
+        or args.lower().startswith("rm ")
+    ):
         id_str = args.split(maxsplit=1)[1].strip() if " " in args else ""
         if not id_str.isdigit():
             raise UserInputError(user_message="❌ Укажи числовой ID: `!bookmark del <id>`")
@@ -5747,9 +5739,7 @@ async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:
     # Собираем данные о сообщении
     chat = message.chat
     chat_title: str = (
-        getattr(chat, "title", None)
-        or getattr(chat, "first_name", None)
-        or str(chat.id)
+        getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat.id)
     )
     reply_from = getattr(reply, "from_user", None)
     if reply_from:
@@ -5778,3 +5768,166 @@ async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:
         f"Чат: {chat_title} · От: {from_name}\n"
         f"_{bm['text_preview'][:100]}{'…' if len(bm['text_preview']) > 100 else ''}_"
     )
+
+
+# ---------------------------------------------------------------------------
+# !export — экспорт истории чата в Markdown
+# ---------------------------------------------------------------------------
+
+EXPORT_VAULT_DIR = pathlib.Path("/Users/pablito/Documents/Obsidian Vault/30_Recordings/32_Chats")
+EXPORT_DEFAULT_LIMIT = 100
+EXPORT_MAX_LIMIT = 1000
+
+
+def _sanitize_filename(name: str) -> str:
+    """Убирает символы, запрещённые в именах файлов."""
+    return "".join(c if c.isalnum() or c in " _-" else "_" for c in name).strip()
+
+
+def _format_sender(msg) -> str:
+    """Возвращает отображаемое имя отправителя сообщения."""
+    if msg.from_user:
+        u = msg.from_user
+        parts = [u.first_name or "", u.last_name or ""]
+        full = " ".join(p for p in parts if p).strip()
+        return full or u.username or str(u.id)
+    if msg.sender_chat:
+        return msg.sender_chat.title or str(msg.sender_chat.id)
+    return "Unknown"
+
+
+def _msg_text(msg) -> str:
+    """Возвращает текстовое содержимое сообщения (текст или подпись)."""
+    return (msg.text or msg.caption or "").strip()
+
+
+def _render_export_markdown(
+    chat_title: str,
+    chat_id: int,
+    messages: list,
+    exported_at: datetime.datetime,
+) -> str:
+    """Рендерит список сообщений в Markdown-формат с YAML frontmatter."""
+    header = (
+        "---\n"
+        f"chat_title: {chat_title}\n"
+        f"chat_id: {chat_id}\n"
+        f"exported: {exported_at.strftime('%Y-%m-%dT%H:%M:%S')}\n"
+        f"messages: {len(messages)}\n"
+        "---\n"
+    )
+
+    # Группируем по дате
+    days: dict[str, list] = {}
+    for msg in messages:
+        if msg.date is None:
+            continue
+        day_key = msg.date.strftime("%Y-%m-%d")
+        days.setdefault(day_key, []).append(msg)
+
+    body_parts: list[str] = []
+    for day_key in sorted(days):
+        body_parts.append(f"\n## {day_key}\n")
+        for msg in days[day_key]:
+            time_str = msg.date.strftime("%H:%M")
+            sender = _format_sender(msg)
+            text = _msg_text(msg)
+            # Медиа без подписи
+            if not text:
+                if msg.photo:
+                    text = "_[фото]_"
+                elif msg.video:
+                    text = "_[видео]_"
+                elif msg.audio or msg.voice:
+                    text = "_[аудио]_"
+                elif msg.document:
+                    text = "_[документ]_"
+                elif msg.sticker:
+                    text = f"_[стикер: {msg.sticker.emoji or ''}]_"
+                else:
+                    text = "_[медиа]_"
+            body_parts.append(f"### {time_str} — {sender}\n{text}\n")
+
+    return header + "".join(body_parts)
+
+
+async def handle_export(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !export [N|all] — экспортирует историю чата в Markdown-файл.
+
+    !export        — последние 100 сообщений (default)
+    !export 200    — последние 200 сообщений
+    !export all    — все сообщения (до 1000)
+    """
+    # Парсим аргумент
+    raw_args = (message.text or "").split(maxsplit=1)
+    arg = raw_args[1].strip() if len(raw_args) > 1 else ""
+
+    if arg.lower() == "all":
+        limit = EXPORT_MAX_LIMIT
+    elif arg.isdigit():
+        limit = min(int(arg), EXPORT_MAX_LIMIT)
+    elif arg == "":
+        limit = EXPORT_DEFAULT_LIMIT
+    else:
+        await message.reply(
+            "❌ Неверный аргумент. Примеры:\n`!export` / `!export 200` / `!export all`"
+        )
+        return
+
+    chat = message.chat
+    chat_id = chat.id
+    chat_title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat_id)
+
+    status_msg = await message.reply(f"⏳ Экспортирую {limit} сообщений из «{chat_title}»…")
+
+    try:
+        # Собираем сообщения через MTProto (get_chat_history — обратный порядок, новые первые)
+        raw_msgs = []
+        async for msg in bot.client.get_chat_history(chat_id, limit=limit):
+            raw_msgs.append(msg)
+        # Разворачиваем в хронологический порядок
+        raw_msgs.reverse()
+    except Exception as exc:
+        logger.exception("handle_export: ошибка получения истории")
+        await status_msg.edit(f"❌ Ошибка получения истории: {str(exc)[:200]}")
+        return
+
+    if not raw_msgs:
+        await status_msg.edit("⚠️ Нет сообщений для экспорта.")
+        return
+
+    exported_at = datetime.datetime.now()
+    md_content = _render_export_markdown(chat_title, chat_id, raw_msgs, exported_at)
+
+    # Формируем имя файла
+    safe_title = _sanitize_filename(chat_title)[:60]
+    date_prefix = exported_at.strftime("%Y-%m-%d")
+    filename = f"{date_prefix}_{safe_title}.md"
+
+    # Создаём директорию если не существует
+    EXPORT_VAULT_DIR.mkdir(parents=True, exist_ok=True)
+    file_path = EXPORT_VAULT_DIR / filename
+
+    try:
+        file_path.write_text(md_content, encoding="utf-8")
+    except OSError as exc:
+        logger.exception("handle_export: ошибка записи файла")
+        await status_msg.edit(f"❌ Ошибка записи файла: {str(exc)[:200]}")
+        return
+
+    # Отправляем файл в чат
+    try:
+        await bot.client.send_document(
+            chat_id=chat_id,
+            document=str(file_path),
+            caption=(
+                f"📄 Экспорт чата «{chat_title}»\nСообщений: {len(raw_msgs)}\nФайл: `{filename}`"
+            ),
+        )
+        await status_msg.delete()
+    except Exception as exc:
+        logger.exception("handle_export: ошибка отправки документа")
+        await status_msg.edit(
+            f"✅ Файл сохранён: `{file_path}`\n⚠️ Не удалось отправить документ: {str(exc)[:200]}"
+        )

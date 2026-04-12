@@ -28,6 +28,7 @@ from .command_handlers import (
     handle_health,
     handle_help,
     handle_hs,
+    handle_bookmark,
     handle_inbox,
     handle_ls,
     handle_macos,
@@ -72,6 +73,7 @@ from .command_handlers import (
     handle_summary,
     handle_catchup,
     handle_translate,
+    handle_export,
 )
 
 __all__ = [
@@ -95,6 +97,7 @@ __all__ = [
     "handle_config",
     "handle_diagnose",
     "handle_help",
+    "handle_bookmark",
     "handle_inbox",
     "handle_model",
     "handle_monitor",
