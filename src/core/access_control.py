@@ -98,6 +98,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "del",
         "purge",
         "autodel",
+        # Пользовательские алиасы команд
+        "alias",
     }
 )
 
@@ -120,6 +122,8 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "cap",
         # Chat ban cache — runtime toggle списка забаненных чатов, только владелец
         "chatban",
+        # Пользовательские алиасы — изменяют поведение userbot, только владелец
+        "alias",
     }
 )
 

@@ -8,6 +8,7 @@
 from .command_handlers import (
     handle_acl,
     handle_agent,
+    handle_alias,
     handle_audio_message,
     handle_autodel,
     handle_browser,
@@ -74,10 +75,14 @@ from .command_handlers import (
     handle_catchup,
     handle_translate,
     handle_export,
+    handle_note,
+    handle_react,
+    handle_ask,
 )
 
 __all__ = [
     "handle_acl",
+    "handle_alias",
     "handle_budget",
     "handle_costs",
     "handle_digest",
@@ -143,4 +148,8 @@ __all__ = [
     "handle_summary",
     "handle_catchup",
     "handle_translate",
+    "handle_note",
+    "handle_export",
+    "handle_alias",
+    "handle_react",
 ]
