@@ -10666,7 +10666,7 @@ async def handle_template(bot: "KraabUserbot", message: Message) -> None:
 # !time — мировые часы и конвертация времени
 # ---------------------------------------------------------------------------
 
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
 
 # Маппинг: имя города (нижний регистр) → IANA timezone
 _TIME_CITY_MAP: dict[str, str] = {
@@ -10844,7 +10844,7 @@ async def handle_time(bot: "KraabUserbot", message: Message) -> None:
         if not tz_name:
             args_lower = args.lower()
             for city_key, tz in _TIME_CITY_MAP.items():
-                if args_lower in city_key or city_key in args_lower:
+                if city_key.startswith(args_lower) and len(args_lower) >= 3:
                     tz_name = tz
                     break
 
