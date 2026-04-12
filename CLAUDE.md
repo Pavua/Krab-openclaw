@@ -49,7 +49,8 @@ src/
     swarm_scheduler.py  — рекуррентный планировщик (!swarm schedule)
     swarm_channels.py   — live broadcast в Telegram группы
     subprocess_env.py   — clean_subprocess_env() (MallocStackLogging cleanup)
-    proactive_watch.py  — фоновый мониторинг runtime state
+    proactive_watch.py  — фоновый мониторинг runtime state (+ ErrorDigest + Telegram alerts)
+    weekly_digest.py    — еженедельный дайджест активности (session 6)
   handlers/
     command_handlers.py — !swarm, !search, _AgentRoomRouterAdapter
   integrations/
@@ -74,6 +75,7 @@ src/
 | Inbox watcher | — | `ai.krab.inbox-watcher` |
 
 MCP серверы — SSE транспорт. Claude Desktop подключается через `npx mcp-remote` proxy.
+MCP Hammerspoon (8013) зарегистрирован в Claude Desktop (session 6).
 Plists: `scripts/launchagents/`
 
 ## Модели и routing
@@ -90,6 +92,7 @@ Runtime truth: `~/.openclaw/agents/main/agent/models.json`
 ## Свёрм (Multi-Agent)
 
 Команды в Telegram: `!swarm <team> <topic>`, `!swarm teams`, `!swarm schedule`, `!swarm memory`
+Дополнительные команды (session 6): `!swarm research <topic>` — глубокий веб-ресёрч свёрмом; `!swarm summary` / `!swarm сводка` — сводка последних активностей
 Teams: `traders`, `coders`, `analysts`, `creative`
 
 Tool access: web_search, tor_fetch (если TOR_ENABLED), peekaboo, все MCP tools.
@@ -126,3 +129,22 @@ Pyrofork — форк Pyrogram с нативной поддержкой Forum To
 - `IMPROVEMENTS.md` — архитектурный бэклог и глобальное видение
 - `docs/MASTER_PLAN_VNEXT_RU.md` — мастер-план проекта
 - Memory: `~/.claude/projects/-Users-pablito-Antigravity-AGENTS-----/memory/`
+
+## Owner Panel API (актуально на 12.04.2026)
+
+Новые endpoints (session 6):
+
+| Endpoint | Метод | Описание |
+|----------|-------|----------|
+| `/api/costs/budget` | GET/POST | Просмотр и установка бюджета расходов |
+| `/api/costs/history` | GET | История расходов по провайдерам |
+| `/api/thinking/status` | GET | Статус режима thinking (extended reasoning) |
+| `/api/thinking/set` | POST | Включить/выключить thinking |
+| `/api/depth/status` | GET | Текущий уровень глубины reasoning |
+
+## Статистика тестов
+
+| Сессия | Тестов |
+|--------|--------|
+| Session 5 | 2071 |
+| Session 6 | 3633 |
