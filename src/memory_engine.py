@@ -40,6 +40,7 @@ class MemoryManager:
     Управляет долгосрочной памятью бота используя Vector Database (ChromaDB).
     Позволяет сохранять факты и искать их по смыслу.
     """
+
     def __init__(self):
         self.persist_directory = os.path.join(config.BASE_DIR, "memory_db")
         self.client = self._init_client()
@@ -150,12 +151,11 @@ class MemoryManager:
         try:
             # Генерируем ID на основе хеша текста или просто рандом
             import uuid
+
             fact_id = str(uuid.uuid4())
-            
+
             self.collection.add(
-                documents=[text],
-                metadatas=[metadata or {"source": "user"}],
-                ids=[fact_id]
+                documents=[text], metadatas=[metadata or {"source": "user"}], ids=[fact_id]
             )
             logger.info("fact_saved", text=text[:50])
             return True
@@ -169,16 +169,13 @@ class MemoryManager:
             logger.warning("recall_skipped_memory_disabled", reason=self.disabled_reason)
             return ""
         try:
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=n_results
-            )
-            
-            if not results['documents'][0]:
+            results = self.collection.query(query_texts=[query], n_results=n_results)
+
+            if not results["documents"][0]:
                 return ""
-            
+
             # Форматируем найденные факты
-            facts = results['documents'][0]
+            facts = results["documents"][0]
             return "\n".join([f"- {fact}" for fact in facts])
         except (ValueError, RuntimeError, OSError, KeyError, IndexError, TypeError) as e:
             logger.error("recall_error", error=str(e))
@@ -191,6 +188,7 @@ class MemoryManager:
             return int(self.collection.count())
         except (ValueError, RuntimeError, OSError, TypeError):
             return 0
+
 
 # Синглтон
 memory_manager = MemoryManager()

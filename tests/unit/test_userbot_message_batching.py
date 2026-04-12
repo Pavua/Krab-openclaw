@@ -84,16 +84,21 @@ def _make_message(
         photo=None,
         voice=None,
         audio=None,
-        date=datetime(2026, 3, 19, 1, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=seconds_offset),
+        date=datetime(2026, 3, 19, 1, 0, 0, tzinfo=timezone.utc)
+        + timedelta(seconds=seconds_offset),
         from_user=SimpleNamespace(id=sender_id, username="tester", is_bot=False),
         chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="", id=9000)),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="", id=9000)
+        ),
     )
 
 
 @pytest.mark.asyncio
-async def test_private_text_burst_coalesces_followup_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_private_text_burst_coalesces_followup_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Несколько быстрых private-сообщений должны уйти в модель как один query."""
     bot = _make_batching_bot_stub()
     first = _make_message(message_id=100, text="первая часть", seconds_offset=0.0)
@@ -118,11 +123,19 @@ async def test_private_text_burst_coalesces_followup_messages(monkeypatch: pytes
     )
 
     monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", _fake_stream)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False
+    )
     # Отключаем background handoff для синхронного теста
-    monkeypatch.setattr(userbot_bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False
+    )
 
     access_profile = AccessProfile(
         level=AccessLevel.FULL,
@@ -178,9 +191,15 @@ async def test_private_text_burst_retries_history_until_followups_appear(
     )
 
     monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", _fake_stream)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False
+    )
     monkeypatch.setattr(
         userbot_bridge_module.config,
         "TELEGRAM_MESSAGE_BATCH_SETTLE_INTERVAL_SEC",
@@ -193,7 +212,9 @@ async def test_private_text_burst_retries_history_until_followups_appear(
         0.05,
         raising=False,
     )
-    monkeypatch.setattr(userbot_bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False
+    )
 
     access_profile = AccessProfile(
         level=AccessLevel.FULL,
@@ -271,7 +292,11 @@ def _make_group_message(
         from_user=SimpleNamespace(id=sender_id, username="tester", is_bot=False),
         chat=SimpleNamespace(id=-1002000000000, type=chat_type),
         reply_to_message=reply_to,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=-1002000000000), text="", caption="", id=9000)),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(
+                chat=SimpleNamespace(id=-1002000000000), text="", caption="", id=9000
+            )
+        ),
     )
 
 
@@ -421,7 +446,9 @@ async def test_coalesce_text_burst_channels_are_skipped(monkeypatch: pytest.Monk
         chat_type=enums.ChatType.CHANNEL,
     )
 
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False
+    )
 
     result_msg, result_query = await bot._coalesce_text_burst(
         message=channel_msg,
@@ -435,7 +462,9 @@ async def test_coalesce_text_burst_channels_are_skipped(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_coalesce_text_burst_merges_triggered_group_burst(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_coalesce_text_burst_merges_triggered_group_burst(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     В группе два triggered сообщения одного sender'а за короткое время
     должны склеиваться в один combined query через _coalesce_text_burst.
@@ -471,14 +500,26 @@ async def test_coalesce_text_burst_merges_triggered_group_burst(monkeypatch: pyt
         get_chat_history=_fake_history,
     )
 
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False)
     monkeypatch.setattr(
-        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_SETTLE_INTERVAL_SEC", 0.01, raising=False
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False
     )
     monkeypatch.setattr(
-        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_SETTLE_MAX_EXTRA_SEC", 0.05, raising=False
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "TELEGRAM_MESSAGE_BATCH_SETTLE_INTERVAL_SEC",
+        0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "TELEGRAM_MESSAGE_BATCH_SETTLE_MAX_EXTRA_SEC",
+        0.05,
+        raising=False,
     )
 
     anchor, combined_query = await bot._coalesce_text_burst(
@@ -490,7 +531,10 @@ async def test_coalesce_text_burst_merges_triggered_group_burst(monkeypatch: pyt
     assert anchor is second  # последнее сообщение — anchor для reply
     # Second must have been recorded as absorbed follower — вторая обработка
     # через `_process_message` должна быть проигнорирована.
-    assert bot._consume_batched_followup_message_id(chat_id=str(first.chat.id), message_id="501") is True
+    assert (
+        bot._consume_batched_followup_message_id(chat_id=str(first.chat.id), message_id="501")
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -503,15 +547,17 @@ async def test_coalesce_text_burst_stops_at_non_triggered_neighbor_in_group(
     unrelated context.
     """
     bot = _make_batching_bot_stub()
-    bot._is_trigger = Mock(
-        side_effect=lambda text: text.lower().startswith("краб")
-    )
+    bot._is_trigger = Mock(side_effect=lambda text: text.lower().startswith("краб"))
 
-    first = _make_group_message(message_id=600, text="Краб, привет", sender_id=42, seconds_offset=0.0)
+    first = _make_group_message(
+        message_id=600, text="Краб, привет", sender_id=42, seconds_offset=0.0
+    )
     middle = _make_group_message(
         message_id=601, text="ой подождите, я тут кофе варю", sender_id=42, seconds_offset=0.2
     )
-    last = _make_group_message(message_id=602, text="Краб, продолжай", sender_id=42, seconds_offset=0.5)
+    last = _make_group_message(
+        message_id=602, text="Краб, продолжай", sender_id=42, seconds_offset=0.5
+    )
 
     async def _fake_history(chat_id: int, limit: int = 0):
         _ = (chat_id, limit)
@@ -525,14 +571,26 @@ async def test_coalesce_text_burst_stops_at_non_triggered_neighbor_in_group(
         get_chat_history=_fake_history,
     )
 
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False)
     monkeypatch.setattr(
-        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_SETTLE_INTERVAL_SEC", 0.01, raising=False
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_WINDOW_SEC", 0.01, raising=False
     )
     monkeypatch.setattr(
-        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_SETTLE_MAX_EXTRA_SEC", 0.05, raising=False
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_MESSAGES", 6, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "TELEGRAM_MESSAGE_BATCH_MAX_CHARS", 12000, raising=False
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "TELEGRAM_MESSAGE_BATCH_SETTLE_INTERVAL_SEC",
+        0.01,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.config,
+        "TELEGRAM_MESSAGE_BATCH_SETTLE_MAX_EXTRA_SEC",
+        0.05,
+        raising=False,
     )
 
     anchor, combined_query = await bot._coalesce_text_burst(

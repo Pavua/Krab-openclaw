@@ -172,9 +172,13 @@ def _run_json_command(cmd: Sequence[str], *, cwd: Path) -> dict[str, Any]:
     }
 
 
-def _iter_profile_entries(auth_profiles_payload: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any]]]:
+def _iter_profile_entries(
+    auth_profiles_payload: dict[str, Any],
+) -> Iterable[tuple[str, dict[str, Any]]]:
     """Нормализует разные формы auth-profiles payload к списку профилей."""
-    profiles = auth_profiles_payload.get("profiles") if isinstance(auth_profiles_payload, dict) else None
+    profiles = (
+        auth_profiles_payload.get("profiles") if isinstance(auth_profiles_payload, dict) else None
+    )
     if isinstance(profiles, dict):
         for key, payload in profiles.items():
             if isinstance(payload, dict):
@@ -191,7 +195,9 @@ def _iter_profile_entries(auth_profiles_payload: dict[str, Any]) -> Iterable[tup
                 yield (str(key or "").strip(), payload)
 
 
-def _build_status_provider_maps(status_payload: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def _build_status_provider_maps(
+    status_payload: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Собирает provider->meta maps из `openclaw models status --json`."""
     auth_root = status_payload.get("auth") if isinstance(status_payload, dict) else {}
     providers_root = auth_root.get("providers") if isinstance(auth_root, dict) else []
@@ -217,14 +223,24 @@ def _build_status_provider_maps(status_payload: dict[str, Any]) -> tuple[dict[st
     return providers_map, oauth_map
 
 
-def _runtime_primary_auth_state(status_payload: dict[str, Any], providers_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _runtime_primary_auth_state(
+    status_payload: dict[str, Any], providers_map: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     """Проверяет, жив ли текущий default runtime на этой учётке."""
-    current_primary = str(status_payload.get("resolvedDefault") or status_payload.get("defaultModel") or "").strip()
-    primary_provider = current_primary.split("/", 1)[0].strip().lower() if "/" in current_primary else ""
+    current_primary = str(
+        status_payload.get("resolvedDefault") or status_payload.get("defaultModel") or ""
+    ).strip()
+    primary_provider = (
+        current_primary.split("/", 1)[0].strip().lower() if "/" in current_primary else ""
+    )
     provider_meta = providers_map.get(primary_provider, {})
     effective = provider_meta.get("effective") if isinstance(provider_meta, dict) else {}
-    effective_kind = str(effective.get("kind", "") or "").strip().lower() if isinstance(effective, dict) else ""
-    runtime_ok = bool(primary_provider and effective_kind in {"env", "oauth", "token", "models.json"})
+    effective_kind = (
+        str(effective.get("kind", "") or "").strip().lower() if isinstance(effective, dict) else ""
+    )
+    runtime_ok = bool(
+        primary_provider and effective_kind in {"env", "oauth", "token", "models.json"}
+    )
     if runtime_ok:
         label = f"Текущий runtime жив: primary `{current_primary}` подтверждён через `{effective_kind}`."
     elif current_primary:
@@ -245,7 +261,9 @@ def _loaded_plugin_provider_ids(*, project_root: Path) -> set[str]:
     openclaw_bin = _resolve_openclaw_bin()
     if not openclaw_bin:
         return set()
-    payload = _run_json_command([openclaw_bin, "plugins", "list", "--json"], cwd=project_root).get("payload", {})
+    payload = _run_json_command([openclaw_bin, "plugins", "list", "--json"], cwd=project_root).get(
+        "payload", {}
+    )
     plugins = payload.get("plugins") if isinstance(payload, dict) else []
     loaded: set[str] = set()
     for item in plugins if isinstance(plugins, list) else []:
@@ -326,20 +344,44 @@ def _provider_usage_flags(
 ) -> dict[str, Any]:
     """Показывает, насколько provider реально участвует в текущем runtime."""
     normalized = str(provider_name or "").strip().lower()
-    default_model = str(status_payload.get("resolvedDefault") or status_payload.get("defaultModel") or "").strip()
-    fallbacks = [str(item or "").strip() for item in (status_payload.get("fallbacks") or []) if str(item or "").strip()]
-    allowed = [str(item or "").strip() for item in (status_payload.get("allowed") or []) if str(item or "").strip()]
+    default_model = str(
+        status_payload.get("resolvedDefault") or status_payload.get("defaultModel") or ""
+    ).strip()
+    fallbacks = [
+        str(item or "").strip()
+        for item in (status_payload.get("fallbacks") or [])
+        if str(item or "").strip()
+    ]
+    allowed = [
+        str(item or "").strip()
+        for item in (status_payload.get("allowed") or [])
+        if str(item or "").strip()
+    ]
 
-    runtime_providers = runtime_models_payload.get("providers") if isinstance(runtime_models_payload, dict) else {}
-    runtime_provider_present = isinstance(runtime_providers, dict) and normalized in runtime_providers
+    runtime_providers = (
+        runtime_models_payload.get("providers") if isinstance(runtime_models_payload, dict) else {}
+    )
+    runtime_provider_present = (
+        isinstance(runtime_providers, dict) and normalized in runtime_providers
+    )
 
-    config_models = runtime_config_payload.get("agents", {}).get("defaults", {}).get("model", {}) if isinstance(runtime_config_payload, dict) else {}
+    config_models = (
+        runtime_config_payload.get("agents", {}).get("defaults", {}).get("model", {})
+        if isinstance(runtime_config_payload, dict)
+        else {}
+    )
     config_primary = str(config_models.get("primary") or "").strip()
-    config_fallbacks = [str(item or "").strip() for item in (config_models.get("fallbacks") or []) if str(item or "").strip()]
+    config_fallbacks = [
+        str(item or "").strip()
+        for item in (config_models.get("fallbacks") or [])
+        if str(item or "").strip()
+    ]
 
     provider_allowed = [item for item in allowed if item.startswith(f"{normalized}/")]
     provider_fallbacks = [item for item in fallbacks if item.startswith(f"{normalized}/")]
-    provider_config_fallbacks = [item for item in config_fallbacks if item.startswith(f"{normalized}/")]
+    provider_config_fallbacks = [
+        item for item in config_fallbacks if item.startswith(f"{normalized}/")
+    ]
 
     role = "discoverable"
     if default_model.startswith(f"{normalized}/"):
@@ -361,10 +403,14 @@ def _provider_usage_flags(
     }
 
 
-def _provider_profile_counts(provider_name: str, auth_profiles_payload: dict[str, Any]) -> dict[str, int]:
+def _provider_profile_counts(
+    provider_name: str, auth_profiles_payload: dict[str, Any]
+) -> dict[str, int]:
     """Считает локальные auth-profile и usage stats для провайдера."""
     normalized = str(provider_name or "").strip().lower()
-    usage = auth_profiles_payload.get("usageStats") if isinstance(auth_profiles_payload, dict) else {}
+    usage = (
+        auth_profiles_payload.get("usageStats") if isinstance(auth_profiles_payload, dict) else {}
+    )
     usage = usage if isinstance(usage, dict) else {}
 
     profile_count = 0
@@ -401,15 +447,13 @@ def _normalize_scope_values(raw: Any) -> set[str]:
     if isinstance(raw, str):
         return {item for item in raw.replace(",", " ").split() if item}
     if isinstance(raw, (list, tuple, set)):
-        return {
-            str(item or "").strip()
-            for item in raw
-            if str(item or "").strip()
-        }
+        return {str(item or "").strip() for item in raw if str(item or "").strip()}
     return set()
 
 
-def provider_oauth_scope_truth(provider_name: str, auth_profiles_payload: dict[str, Any]) -> dict[str, Any]:
+def provider_oauth_scope_truth(
+    provider_name: str, auth_profiles_payload: dict[str, Any]
+) -> dict[str, Any]:
     """Возвращает truthful срез scopes из локальных OAuth-профилей провайдера."""
     normalized = str(provider_name or "").strip().lower()
     scopes: set[str] = set()
@@ -558,8 +602,14 @@ def _provider_recovery_entry(
     spec = PROVIDER_SPECS.get(normalized, {})
     helper_path = provider_repair_helper_path(project_root, normalized)
     requires_plugin = bool(spec.get("requires_plugin"))
-    provider_plugin_available = (normalized in CORE_OAUTH_PROVIDERS) or (normalized in loaded_plugin_providers) or not requires_plugin
-    helper_available = bool(helper_path and _path_exists_safe(helper_path) and provider_plugin_available)
+    provider_plugin_available = (
+        (normalized in CORE_OAUTH_PROVIDERS)
+        or (normalized in loaded_plugin_providers)
+        or not requires_plugin
+    )
+    helper_available = bool(
+        helper_path and _path_exists_safe(helper_path) and provider_plugin_available
+    )
     local_counts = _provider_profile_counts(normalized, auth_profiles_payload)
     scope_truth = provider_oauth_scope_truth(normalized, auth_profiles_payload)
     usage = _provider_usage_flags(
@@ -571,8 +621,12 @@ def _provider_recovery_entry(
     provider_meta = providers_map.get(normalized, {})
     oauth_meta = oauth_map.get(normalized, {})
     effective = provider_meta.get("effective") if isinstance(provider_meta, dict) else {}
-    effective_kind = str(effective.get("kind", "") or "").strip().lower() if isinstance(effective, dict) else ""
-    effective_detail = str(effective.get("detail", "") or "").strip() if isinstance(effective, dict) else ""
+    effective_kind = (
+        str(effective.get("kind", "") or "").strip().lower() if isinstance(effective, dict) else ""
+    )
+    effective_detail = (
+        str(effective.get("detail", "") or "").strip() if isinstance(effective, dict) else ""
+    )
     oauth_status = str(oauth_meta.get("status", "") or "").strip().lower()
     remaining_ms = oauth_meta.get("remainingMs")
     remaining_human = ""
@@ -580,11 +634,15 @@ def _provider_recovery_entry(
         total_minutes = max(int(remaining_ms), 0) // 60000
         hours, minutes = divmod(total_minutes, 60)
         remaining_human = f"{hours}ч {minutes}м" if hours else f"{minutes}м"
-    external_store_present = normalized == "google-gemini-cli" and _path_exists_safe(GEMINI_STORE_PATH)
+    external_store_present = normalized == "google-gemini-cli" and _path_exists_safe(
+        GEMINI_STORE_PATH
+    )
     gemini_cli_hint = _gemini_cli_api_key_hint() if normalized == "google-gemini-cli" else {}
     codex_cli_hint = _codex_cli_hint() if normalized == "codex-cli" else {}
 
-    oauth_ready = oauth_status == "ok" or (local_counts["profile_count"] > 0 and effective_kind in {"oauth", "token"})
+    oauth_ready = oauth_status == "ok" or (
+        local_counts["profile_count"] > 0 and effective_kind in {"oauth", "token"}
+    )
     state = "missing"
     severity = "warn"
     state_label = "OAuth не подтверждён"
@@ -645,7 +703,9 @@ def _provider_recovery_entry(
 
     runtime_policy = provider_runtime_policy(
         normalized,
-        readiness="ready" if severity == "ok" else ("attention" if severity == "warn" else "blocked"),
+        readiness="ready"
+        if severity == "ok"
+        else ("attention" if severity == "warn" else "blocked"),
         auth_mode=str(spec.get("expected_auth") or "oauth"),
         oauth_status=oauth_status,
         helper_available=helper_available,
@@ -711,19 +771,33 @@ def build_auth_recovery_readiness_snapshot(
     if not resolved_status:
         openclaw_bin = _resolve_openclaw_bin()
         if openclaw_bin:
-            resolved_status = _run_json_command([openclaw_bin, "models", "status", "--json"], cwd=resolved_project_root).get(
+            resolved_status = _run_json_command(
+                [openclaw_bin, "models", "status", "--json"], cwd=resolved_project_root
+            ).get(
                 "payload",
                 {},
             )
 
-    resolved_auth_profiles = auth_profiles_payload if isinstance(auth_profiles_payload, dict) else _load_json_file(AUTH_PROFILES_PATH, {})
-    resolved_runtime_models = runtime_models_payload if isinstance(runtime_models_payload, dict) else _load_json_file(
-        RUNTIME_MODELS_PATH,
-        {"providers": {}},
+    resolved_auth_profiles = (
+        auth_profiles_payload
+        if isinstance(auth_profiles_payload, dict)
+        else _load_json_file(AUTH_PROFILES_PATH, {})
     )
-    resolved_runtime_config = runtime_config_payload if isinstance(runtime_config_payload, dict) else _load_json_file(
-        RUNTIME_CONFIG_PATH,
-        {},
+    resolved_runtime_models = (
+        runtime_models_payload
+        if isinstance(runtime_models_payload, dict)
+        else _load_json_file(
+            RUNTIME_MODELS_PATH,
+            {"providers": {}},
+        )
+    )
+    resolved_runtime_config = (
+        runtime_config_payload
+        if isinstance(runtime_config_payload, dict)
+        else _load_json_file(
+            RUNTIME_CONFIG_PATH,
+            {},
+        )
     )
 
     providers_map, oauth_map = _build_status_provider_maps(resolved_status)
@@ -734,12 +808,26 @@ def build_auth_recovery_readiness_snapshot(
     provider_names.update(providers_map.keys())
     provider_names.update(oauth_map.keys())
 
-    runtime_providers = resolved_runtime_models.get("providers") if isinstance(resolved_runtime_models, dict) else {}
+    runtime_providers = (
+        resolved_runtime_models.get("providers")
+        if isinstance(resolved_runtime_models, dict)
+        else {}
+    )
     if isinstance(runtime_providers, dict):
-        provider_names.update(str(name or "").strip().lower() for name in runtime_providers.keys() if str(name or "").strip())
+        provider_names.update(
+            str(name or "").strip().lower()
+            for name in runtime_providers.keys()
+            if str(name or "").strip()
+        )
 
-    for model_id in [runtime_primary.get("primary_model", "")] + list(resolved_status.get("fallbacks") or []) + list(resolved_status.get("allowed") or []):
-        normalized = str(model_id.split("/", 1)[0] if "/" in str(model_id or "") else "").strip().lower()
+    for model_id in (
+        [runtime_primary.get("primary_model", "")]
+        + list(resolved_status.get("fallbacks") or [])
+        + list(resolved_status.get("allowed") or [])
+    ):
+        normalized = (
+            str(model_id.split("/", 1)[0] if "/" in str(model_id or "") else "").strip().lower()
+        )
         if normalized:
             provider_names.add(normalized)
 
@@ -761,7 +849,9 @@ def build_auth_recovery_readiness_snapshot(
             )
         )
 
-    providers.sort(key=lambda item: (int(item.get("priority", 500) or 500), str(item.get("provider") or "")))
+    providers.sort(
+        key=lambda item: (int(item.get("priority", 500) or 500), str(item.get("provider") or ""))
+    )
     providers_by_name = {str(item.get("provider") or ""): item for item in providers}
 
     bad_count = sum(1 for item in providers if str(item.get("severity") or "") == "bad")
@@ -781,7 +871,9 @@ def build_auth_recovery_readiness_snapshot(
 
     next_step = ""
     for item in providers:
-        if str(item.get("severity") or "") in {"bad", "warn"} and bool(item.get("helper_available")):
+        if str(item.get("severity") or "") in {"bad", "warn"} and bool(
+            item.get("helper_available")
+        ):
             next_step = (
                 f"Для `{item['label']}` можно сразу жать кнопку релогина в web panel: "
                 f"`{item['recommended_action_label'] or 'Запустить helper'}`."

@@ -271,4 +271,322 @@
     </style>
 </head>
 <body>
-    <
+    <nav>
+        <a href="/">/</a>
+        <a href="/stats">Stats</a>
+        <a href="/inbox">Inbox</a>
+        <a href="/costs">Costs</a>
+        <a href="/swarm" class="active">Swarm</a>
+        <a href="/translator">Translator</a>
+    </nav>
+
+    <div class="container">
+        <h1>Swarm Dashboard</h1>
+
+        <div id="loading" style="text-align:center;padding:40px;font-size:1.2em;color:#aaa;">Loading...</div>
+        <div id="error" style="display:none;text-align:center;color:#F44336;padding:40px;font-size:1.1em;">Failed to load data. Please try again later.</div>
+
+        <div id="dashboard-content" style="display:none;">
+            <div class="badges-container" id="stats-badges"></div>
+
+            <h3>Teams</h3>
+            <div class="dashboard-grid" id="teams-grid"></div>
+
+            <h3>Task Board</h3>
+            <div class="card">
+                <table id="task-table">
+                    <thead>
+                        <tr>
+                            <th>Task ID</th>
+                            <th>Team</th>
+                            <th>Topic</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="task-tbody"></tbody>
+                </table>
+            </div>
+
+            <h3>Recent Reports</h3>
+            <div id="reports-list"></div>
+
+            <h3>Artifacts</h3>
+            <div class="card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Team</th>
+                            <th>Type</th>
+                            <th>Size</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="artifact-tbody"></tbody>
+                </table>
+            </div>
+
+            <h3>Listeners</h3>
+            <div class="card listeners-list">
+                <ul id="listeners-ul"></ul>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>Krab Dashboard &mdash; Swarm &mdash; auto-refresh every 15s</p>
+    </footer>
+
+    <script>
+        const APIS = {
+            stats:     '/api/swarm/stats',
+            teams:     '/api/swarm/teams',
+            taskBoard: '/api/swarm/task-board',
+            reports:   '/api/swarm/reports',
+            artifacts: '/api/swarm/artifacts',
+            listeners: '/api/swarm/listeners'
+        };
+
+        function fmtDate(ts) {
+            if (!ts) return '—';
+            const d = new Date(typeof ts === 'number' ? ts * 1000 : ts);
+            return d.toLocaleString();
+        }
+
+        function statusBadgeClass(status) {
+            if (!status) return 'pending';
+            const s = status.toLowerCase().replace(/[- ]/g, '_');
+            if (s.includes('progress') || s.includes('running')) return 'in_progress';
+            if (s.includes('done') || s.includes('complet')) return 'done';
+            if (s.includes('fail') || s.includes('error')) return 'failed';
+            return 'pending';
+        }
+
+        function makeBadge(cls, text) {
+            const span = document.createElement('span');
+            span.className = 'badge ' + cls;
+            span.textContent = text;
+            return span;
+        }
+
+        function renderStats(data) {
+            const el = document.getElementById('stats-badges');
+            el.textContent = '';
+            const items = [
+                ['Total Tasks', data.total_tasks],
+                ['Active Teams', data.active_teams],
+                ['Done', data.done_tasks],
+                ['Running', data.running_tasks],
+                ['Failed', data.failed_tasks],
+                ['Listeners', data.listener_count]
+            ];
+            items.forEach(([label, val]) => {
+                el.appendChild(makeBadge('pending', label + ': ' + (val ?? '—')));
+            });
+        }
+
+        function renderTeams(teams) {
+            const grid = document.getElementById('teams-grid');
+            grid.textContent = '';
+            if (!teams || teams.length === 0) {
+                const p = document.createElement('p');
+                p.style.color = '#aaa';
+                p.textContent = 'No team data available.';
+                grid.appendChild(p);
+                return;
+            }
+            teams.forEach(team => {
+                const card = document.createElement('div');
+                card.className = 'card';
+
+                const h = document.createElement('h3');
+                h.textContent = team.name || team.id || 'Unknown Team';
+                card.appendChild(h);
+
+                const ul = document.createElement('ul');
+                ul.style.listStyle = 'none';
+                ul.style.padding = '0';
+
+                function addLi(label, value) {
+                    const li = document.createElement('li');
+                    li.style.padding = '4px 0';
+                    li.style.borderBottom = '1px dashed rgba(255,255,255,0.1)';
+                    const strong = document.createElement('strong');
+                    strong.textContent = label + ': ';
+                    li.appendChild(strong);
+                    if (value instanceof Node) {
+                        li.appendChild(value);
+                    } else {
+                        li.appendChild(document.createTextNode(String(value ?? '—')));
+                    }
+                    ul.appendChild(li);
+                }
+
+                addLi('Status', makeBadge(statusBadgeClass(team.status || 'idle'), team.status || 'idle'));
+                addLi('Roles', (team.roles || []).join(', ') || '—');
+                addLi('Tasks done', team.tasks_done ?? '—');
+                addLi('Last active', fmtDate(team.last_active));
+
+                card.appendChild(ul);
+                grid.appendChild(card);
+            });
+        }
+
+        function renderTasks(tasks) {
+            const tbody = document.getElementById('task-tbody');
+            tbody.textContent = '';
+            if (!tasks || tasks.length === 0) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 5;
+                td.style.textAlign = 'center';
+                td.style.color = '#aaa';
+                td.textContent = 'No tasks.';
+                tr.appendChild(td);
+                tbody.appendChild(tr);
+                return;
+            }
+            tasks.forEach(t => {
+                const tr = document.createElement('tr');
+                [
+                    t.id || '—',
+                    t.team || '—',
+                    t.topic || t.title || '—',
+                    null,
+                    fmtDate(t.created_at)
+                ].forEach((val, i) => {
+                    const td = document.createElement('td');
+                    if (i === 3) {
+                        td.appendChild(makeBadge(statusBadgeClass(t.status), t.status || '—'));
+                    } else {
+                        td.textContent = val;
+                    }
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderReports(reports) {
+            const el = document.getElementById('reports-list');
+            el.textContent = '';
+            if (!reports || reports.length === 0) {
+                const card = document.createElement('div');
+                card.className = 'card';
+                const p = document.createElement('p');
+                p.style.color = '#aaa';
+                p.textContent = 'No recent reports.';
+                card.appendChild(p);
+                el.appendChild(card);
+                return;
+            }
+            reports.forEach(r => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.style.marginBottom = '12px';
+
+                const h4 = document.createElement('h4');
+                h4.textContent = (r.title || r.task_id || 'Report') + ' — ' + (r.team || '') + ' — ' + fmtDate(r.created_at);
+                card.appendChild(h4);
+
+                const pre = document.createElement('div');
+                pre.className = 'artifact-preview';
+                pre.textContent = r.summary || r.content || JSON.stringify(r, null, 2);
+                card.appendChild(pre);
+
+                el.appendChild(card);
+            });
+        }
+
+        function renderArtifacts(artifacts) {
+            const tbody = document.getElementById('artifact-tbody');
+            tbody.textContent = '';
+            if (!artifacts || artifacts.length === 0) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 5;
+                td.style.textAlign = 'center';
+                td.style.color = '#aaa';
+                td.textContent = 'No artifacts.';
+                tr.appendChild(td);
+                tbody.appendChild(tr);
+                return;
+            }
+            artifacts.forEach(a => {
+                const tr = document.createElement('tr');
+                [a.name || a.id || '—', a.team || '—', a.type || '—',
+                 a.size != null ? a.size + ' B' : '—', fmtDate(a.created_at)].forEach(val => {
+                    const td = document.createElement('td');
+                    td.textContent = val;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderListeners(listeners) {
+            const ul = document.getElementById('listeners-ul');
+            ul.textContent = '';
+            if (!listeners || listeners.length === 0) {
+                const li = document.createElement('li');
+                li.style.color = '#aaa';
+                li.textContent = 'No listeners configured.';
+                ul.appendChild(li);
+                return;
+            }
+            listeners.forEach(l => {
+                const li = document.createElement('li');
+                const active = l.active || l.enabled;
+                li.appendChild(makeBadge(active ? 'on' : 'off', active ? 'ON' : 'OFF'));
+                li.appendChild(document.createTextNode(' '));
+                const name = document.createElement('strong');
+                name.textContent = l.name || l.account || l.id || 'Unknown';
+                li.appendChild(name);
+                if (l.team) li.appendChild(document.createTextNode(' — Team: ' + l.team));
+                if (l.chat_id) li.appendChild(document.createTextNode(' — Chat: ' + l.chat_id));
+                ul.appendChild(li);
+            });
+        }
+
+        async function fetchAll() {
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const content = document.getElementById('dashboard-content');
+
+            loading.style.display = 'block';
+            error.style.display = 'none';
+
+            try {
+                const results = await Promise.allSettled([
+                    fetch(APIS.stats).then(r => r.ok ? r.json() : {}),
+                    fetch(APIS.teams).then(r => r.ok ? r.json() : []),
+                    fetch(APIS.taskBoard).then(r => r.ok ? r.json() : []),
+                    fetch(APIS.reports).then(r => r.ok ? r.json() : []),
+                    fetch(APIS.artifacts).then(r => r.ok ? r.json() : []),
+                    fetch(APIS.listeners).then(r => r.ok ? r.json() : [])
+                ]);
+
+                renderStats(results[0].value ?? {});
+                renderTeams(results[1].value ?? []);
+                renderTasks(results[2].value ?? []);
+                renderReports(results[3].value ?? []);
+                renderArtifacts(results[4].value ?? []);
+                renderListeners(results[5].value ?? []);
+
+                content.style.display = 'block';
+            } catch (err) {
+                console.error('Swarm fetch error:', err);
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchAll();
+            setInterval(fetchAll, 15000);
+        });
+    </script>
+</body>
+</html>

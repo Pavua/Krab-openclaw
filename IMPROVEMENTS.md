@@ -1,8 +1,65 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-06 (batch 6)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-12 (session 6)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 6 (2026-04-12)
+
+> 93 файла изменено | 5988 вставок / 2523 удалений | 1 новый doc | 1 удалённый файл
+
+### Bugfixes
+- **`kraab` property** (`web_app.py`) — теперь доступ к userbot через `deps["kraab_userbot"]` вместо прямого присвоения `app.kraab`; тесты исправлены соответственно
+- **Model/catalog crash** (`provider_manager.py`) — расширены dict-записи для всех Gemini/OpenAI/LM Studio моделей, убраны однострочные записи провоцировавшие KeyError
+- **Proxy timeouts** (`test_web_api_endpoints.py`) — добавлены timeout-тесты для 6 OpenClaw proxy endpoints; выявлены и покрыты зависающие сценарии
+- **Translator openclaw** (`openclaw_client.py`) — импорт `reload_openclaw_secrets`, улучшена обрезка истории чата, форматирование error tuples
+- **`_ub` refs** (`userbot_bridge.py`) — удалены неиспользуемые импорты (`shutil`, `sqlite3`, `textwrap`, `traceback`, `types`), убраны оборванные ссылки
+- **Obsidian Librarian** — форматирование + мелкие fix в `openclaw_runtime_signal_truth.py`
+
+### Features
+- **ErrorDigest** (`proactive_watch.py`) — `run_error_digest()` + `start_error_digest_loop()`: агрегирует inbox items по severity, swarm job failures, уведомляет owner-а периодически; интеграция с `inbox_service`
+- **WeeklyDigest** — фундамент через `inbox_service` + `scheduler.py` (sync fired-reminder'ов с InboxService); полная реализация запланирована Phase 7 P0
+- **`!swarm research`** — research pipeline в `command_handlers.py`; analysts-команда с обязательным web_search, структурированный отчёт (Summary / Key Findings / Sources / Next Steps)
+- **`!swarm summary`** — compact сводка сессии: задачи created/completed/failed, артефакты, cost_analytics токены/USD
+- **`save_report` all teams** (`swarm.py`) — markdown-отчёты теперь генерируются для всех 4 команд (analysts/traders/coders/creative), ранее только analysts+traders
+- **Alert workflows** (`proactive_watch.py`) — детектирование `cost_budget_exceeded`, `swarm_job_stalled`, `inbox_critical_open`; расширены `open_trace_reasons` / `close_trace_reasons`
+- **Owner Panel новые endpoints** (`web_app.py`) — `swarm_artifacts_list`, `swarm_task_detail`, `ops_timeline`, `model_recommend`, `ops_cost_report`, `ops_executive_summary`, `_build_runtime_cloud_presets`, browser diagnostics helpers
+
+### Infra
+- **Hammerspoon MCP зарегистрирован** — `hammerspoon_bridge.py` подключён к MCP manifest, инструменты доступны из swarm tools
+- **10/10 restart cycles** — проверено через `new start_krab.command` / `new Stop Krab.command`; стабильность подтверждена
+- **Translator voice verified** — E2E roundtrip с voice gateway подтверждён; timeout handling улучшен в `voice_gateway_client.py`
+- **KraabUserbot class** введён в `userbot_bridge.py` — инкапсуляция userbot instance, `silence_manager` + `_is_bulk_sender_ext` + `handle_cap` как зависимости
+
+### Tests (+97 новых)
+- `test_proactive_watch.py` (+116 lines) — ErrorDigest: empty inbox, различные severity сценарии
+- `test_web_api_endpoints.py` (+121 lines) — timeout-тесты для 6 proxy endpoints, fix инициализации `kraab_userbot`
+- Translator, handlers, digest, research, browser, macos — покрытие в рамках существующих test-файлов
+
+### Quality
+- **268 ruff fixes** — массовое форматирование через `ruff check --fix src/`
+- **78 файлов отформатированы** — `ruff format src/` (выравнивание импортов, trailing commas, длинные строки)
+- **API audit (189 endpoints)** — полный аудит Owner Panel `/api/*`; выявлены зависающие proxy endpoints
+- Удалены неиспользуемые импорты из ~20 файлов
+
+### Docs
+- `docs/DASHBOARD_SPEC.md` — новый файл: полная спецификация Owner Panel dashboard
+- `.remember/phase7_analysis.md` — анализ Phase 7 Service Workflows: gaps, приоритеты P0/P1/P2, оценки усилий
+- `.remember/session6_changes.md` — детальный лог изменений сессии с разбивкой на логические коммиты
+
+### Phase 7 статус (после session 6)
+- **Готовность: ~40%** (было ~25%)
+- ✅ ErrorDigest loop реализован (`proactive_watch.py`)
+- ✅ `save_report` для всех 4 команд
+- ✅ Alert workflows (cost/stalled/critical) — фундамент
+- ✅ `!swarm summary` + `!swarm research` команды
+- ❌ WeeklyDigest (`swarm_weekly_digest.py`) — следующий приоритет P0
+- ❌ Scheduled Auto-Dispatch с workflow_type + cron_expr
+- ❌ Research Pipeline как отдельный модуль (`swarm_research_pipeline.py`)
+
+---
 
 ---
 
@@ -138,3 +195,37 @@
 
 ### 13. Управление окнами через Hammerspoon
 **Статус:** ✅ РЕАЛИЗОВАНО — HTTP bridge на `localhost:10101`, Python bridge `src/integrations/hammerspoon_bridge.py`. POST `/window` с командами `left|right|maximize|...`.
+
+---
+
+## 🟢 Закрыто в Session 6 (2026-04-12)
+
+### 19. Phase 7 — Error Digest (GAP 3)
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-12, session 6)
+- `run_error_digest()` + `start_error_digest_loop()` в `src/core/proactive_watch.py`
+- Агрегирует inbox items по severity за 24ч, swarm job failures, route_model_changed события
+- Периодический trigger через krab_scheduler, уведомление owner-у если ошибок > threshold
+- Тесты: `tests/unit/test_proactive_watch.py` (+116 lines)
+
+### 20. Phase 7 — save_report для всех 4 команд (GAP 6)
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-12, session 6)
+- `src/core/swarm.py:337` — расширен список команд: `{"analysts", "traders", "coders", "creative"}`
+- Все команды теперь генерируют markdown-отчёты в `reports/`, не только analysts+traders
+
+### 21. KraabUserbot class — рефакторинг userbot_bridge
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-12, session 6)
+- `src/userbot_bridge.py` — введён класс `KraabUserbot` для инкапсуляции userbot instance
+- `silence_manager`, `_is_bulk_sender_ext`, `handle_cap` переданы как зависимости
+- Удалены неиспользуемые импорты (`shutil`, `sqlite3`, `textwrap`, `traceback`, `types`)
+
+### 22. Alert Workflows — фундамент (GAP 7)
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-12, session 6) — базовый уровень
+- `src/core/proactive_watch.py` — детектирование: `cost_budget_exceeded`, `swarm_job_stalled`, `inbox_critical_open`
+- Расширены `open_trace_reasons` / `close_trace_reasons` для автоматического inbox lifecycle
+- Полный threshold-based alerting — следующий шаг (Phase 7 P2)
+
+### 23. Owner Panel — расширенные endpoints
+**Статус:** ✅ РЕАЛИЗОВАНО (2026-04-12, session 6)
+- `src/modules/web_app.py`: `swarm_artifacts_list`, `swarm_task_detail`, `ops_timeline`, `model_recommend`, `ops_cost_report`, `ops_executive_summary`
+- Browser diagnostics: `_probe_owner_chrome_devtools`, `_build_browser_access_paths`, `_collect_openclaw_browser_smoke_report`
+- `kraab` property через `deps["kraab_userbot"]` (ломающий API исправлен)

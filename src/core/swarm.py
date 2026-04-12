@@ -126,7 +126,9 @@ class AgentRoom:
     в контекст следующей роли.
     """
 
-    def __init__(self, roles: list[dict[str, str]] | None = None, *, role_context_clip: int = 3000) -> None:
+    def __init__(
+        self, roles: list[dict[str, str]] | None = None, *, role_context_clip: int = 3000
+    ) -> None:
         self.roles = roles or DEFAULT_AGENT_ROLES
         self.role_context_clip = max(200, int(role_context_clip))
         logger.info("agent_room_initialized", roles=[r.get("name", "agent") for r in self.roles])
@@ -159,8 +161,9 @@ class AgentRoom:
             memory_context = swarm_memory.get_context_for_injection(_team_name)
             if memory_context:
                 accumulated_context = memory_context + "\n\n"
-                logger.info("agent_room_memory_injected", team=_team_name,
-                            context_len=len(memory_context))
+                logger.info(
+                    "agent_room_memory_injected", team=_team_name, context_len=len(memory_context)
+                )
 
         logger.info("agent_room_round_started", topic=topic, roles=len(self.roles), depth=_depth)
 
@@ -189,11 +192,14 @@ class AgentRoom:
             _extra_tools = ""
             try:
                 from ..config import config as _cfg  # noqa: PLC0415
+
                 if getattr(_cfg, "TOR_ENABLED", False):
                     _extra_tools = ", tor_fetch (анонимный HTTP через Tor)"
             except Exception:  # noqa: BLE001
                 pass
-            _base_tools = f"web_search (поиск в интернете), peekaboo (скриншот экрана){_extra_tools}"
+            _base_tools = (
+                f"web_search (поиск в интернете), peekaboo (скриншот экрана){_extra_tools}"
+            )
             if role_idx == 0:
                 tool_hint = (
                     f"\n\nУ тебя есть доступ к инструментам: {_base_tools}. "
@@ -230,8 +236,11 @@ class AgentRoom:
             # Live broadcast: публикуем ответ роли в swarm-группу (все уровни depth)
             if broadcast_team:
                 await swarm_channels.broadcast_role_step(
-                    team=broadcast_team, role_name=name, role_emoji=emoji,
-                    role_title=title, text=clipped,
+                    team=broadcast_team,
+                    role_name=name,
+                    role_emoji=emoji,
+                    role_title=title,
+                    text=clipped,
                 )
 
             # R18: Детектируем директиву делегирования [DELEGATE: team]
@@ -257,6 +266,7 @@ class AgentRoom:
                     # Phase 8: delegation checkpoint — фиксируем в task board
                     try:
                         from .swarm_task_board import swarm_task_board  # noqa: PLC0415
+
                         swarm_task_board.create_task(
                             team=delegate_team,
                             title=f"Delegation: {delegate_topic[:80]}",
@@ -315,6 +325,7 @@ class AgentRoom:
             _artifact_verification: dict | None = None
             try:
                 from .swarm_artifact_store import swarm_artifact_store  # noqa: PLC0415
+
                 swarm_artifact_store.save_round_artifact(
                     team=_team_name,
                     topic=topic,
@@ -323,9 +334,11 @@ class AgentRoom:
                     duration_sec=time.monotonic() - t0,
                 )
                 # Phase 7: auto-save markdown report для analysts/research rounds
-                if _team_name in {"analysts", "traders"}:
+                if _team_name in {"analysts", "traders", "coders", "creative"}:
                     swarm_artifact_store.save_report(
-                        team=_team_name, topic=topic, result=full_result,
+                        team=_team_name,
+                        topic=topic,
+                        result=full_result,
                     )
             except Exception:  # noqa: BLE001
                 pass
@@ -333,6 +346,7 @@ class AgentRoom:
             # Phase 8: quick heuristic verification of round result
             try:
                 from .swarm_verifier import quick_heuristic_check  # noqa: PLC0415
+
                 verification = quick_heuristic_check(full_result)
                 if not verification.passed:
                     logger.warning(
@@ -347,6 +361,7 @@ class AgentRoom:
             # Task board: автоматическая фиксация раунда как completed task
             try:
                 from .swarm_task_board import swarm_task_board  # noqa: PLC0415
+
                 task = swarm_task_board.create_task(
                     team=_team_name,
                     title=topic[:100],
@@ -424,4 +439,3 @@ class AgentRoom:
 
         logger.info("agent_room_loop_completed", topic=topic, rounds=safe_rounds)
         return f"🐝 **Swarm Loop: {base_topic}**\n\n" + "\n\n".join(sections)
-

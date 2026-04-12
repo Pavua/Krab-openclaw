@@ -4,6 +4,7 @@
 
 Проверяем: get_role_prompt, list_roles, load_roles, save_role, edge cases.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,6 +14,7 @@ from unittest.mock import patch
 # ---------------------------------------------------------------------------
 # get_role_prompt
 # ---------------------------------------------------------------------------
+
 
 def test_get_role_prompt_known_role() -> None:
     """get_role_prompt для известной роли возвращает непустую строку."""
@@ -63,6 +65,7 @@ def test_get_role_prompt_returns_string_for_all_default_roles() -> None:
 # list_roles
 # ---------------------------------------------------------------------------
 
+
 def test_list_roles_returns_string() -> None:
     """list_roles возвращает строку."""
     from src.employee_templates import list_roles
@@ -94,6 +97,7 @@ def test_list_roles_sorted() -> None:
 # load_roles
 # ---------------------------------------------------------------------------
 
+
 def test_load_roles_returns_default_when_no_file(tmp_path) -> None:
     """load_roles без кастомного файла возвращает DEFAULT_ROLES."""
     from src.employee_templates import DEFAULT_ROLES
@@ -102,6 +106,7 @@ def test_load_roles_returns_default_when_no_file(tmp_path) -> None:
     fake_path = str(tmp_path / "roles_missing.json")
     with patch("src.employee_templates.ROLES_FILE", fake_path):
         from src.employee_templates import load_roles
+
         roles = load_roles()
 
     for key in DEFAULT_ROLES:
@@ -116,6 +121,7 @@ def test_load_roles_merges_custom_file(tmp_path) -> None:
 
     with patch("src.employee_templates.ROLES_FILE", str(roles_file)):
         from src.employee_templates import load_roles
+
         roles = load_roles()
 
     assert "custom_agent" in roles
@@ -131,6 +137,7 @@ def test_load_roles_survives_corrupt_json(tmp_path) -> None:
 
     with patch("src.employee_templates.ROLES_FILE", str(bad_file)):
         from src.employee_templates import load_roles
+
         roles = load_roles()
 
     # Должны получить хотя бы дефолтные роли
@@ -141,12 +148,14 @@ def test_load_roles_survives_corrupt_json(tmp_path) -> None:
 # save_role
 # ---------------------------------------------------------------------------
 
+
 def test_save_role_creates_file_and_persists(tmp_path) -> None:
     """save_role записывает новую роль в JSON и возвращает True."""
     roles_file = str(tmp_path / "roles.json")
 
     with patch("src.employee_templates.ROLES_FILE", roles_file):
         from src.employee_templates import save_role
+
         result = save_role("test_role", "Ты тестовый агент.")
 
     assert result is True
@@ -163,6 +172,7 @@ def test_save_role_normalizes_key_to_lowercase(tmp_path) -> None:
 
     with patch("src.employee_templates.ROLES_FILE", roles_file):
         from src.employee_templates import save_role
+
         save_role("MyRole", "Промпт.")
 
     with open(roles_file, encoding="utf-8") as f:

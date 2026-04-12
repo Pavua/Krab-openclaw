@@ -2,6 +2,7 @@
 """
 Жизненный цикл приложения: health checks, старт/остановка userbot + web panel (Фаза 4/6.2).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -50,12 +51,12 @@ async def _start_web_panel(
 ) -> object | None:
     """Starts the web panel on WEB_PORT (default 8080). Returns the WebApp instance or None."""
     try:
-        from ..modules.web_app import WebApp
-        from ..modules.web_router_compat import WebRouterCompat
         from ..core.ecosystem_health import EcosystemHealthService
         from ..core.provisioning_service import ProvisioningService
         from ..integrations.krab_ear_client import KrabEarClient
         from ..integrations.voice_gateway_client import VoiceGatewayClient
+        from ..modules.web_app import WebApp
+        from ..modules.web_router_compat import WebRouterCompat
 
         router_compat = WebRouterCompat(model_manager, openclaw_client)
         voice_gateway_client = VoiceGatewayClient()
@@ -137,7 +138,7 @@ async def run_app() -> None:
 
     perceptor = _build_perceptor()
     kraab = KraabUserbot(perceptor=perceptor)
-    web_panel = await _start_web_panel(kraab_userbot=kraab, perceptor=perceptor)
+    await _start_web_panel(kraab_userbot=kraab, perceptor=perceptor)
     stop_event = asyncio.Event()
     warmup_task: asyncio.Task | None = None
 

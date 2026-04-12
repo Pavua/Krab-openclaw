@@ -132,7 +132,10 @@ async def test_route_query_passes_preferred_cloud_model_and_forces_cloud():
         preferred_model="google-gemini-cli/gemini-3.1-pro-preview",
     )
 
-    assert router.openclaw_client.last_call["preferred_model"] == "google-gemini-cli/gemini-3.1-pro-preview"
+    assert (
+        router.openclaw_client.last_call["preferred_model"]
+        == "google-gemini-cli/gemini-3.1-pro-preview"
+    )
     assert router.openclaw_client.last_call["force_cloud"] is True
 
 
@@ -188,7 +191,9 @@ def test_local_preferred_model_restores_legacy_router_contract(monkeypatch):
         monkeypatch.setattr(config, "LOCAL_PREFERRED_MODEL", previous)
 
 
-def test_router_init_survives_onboard_config_with_null_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_router_init_survives_onboard_config_with_null_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """
     Чистый `openclaw onboard` может оставить `agents.defaults.model = null`.
     Compat-роутер не должен падать на таком runtime-конфиге.

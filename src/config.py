@@ -1,6 +1,7 @@
 """
 Конфигурация проекта Краб
 """
+
 import json
 import os
 from pathlib import Path
@@ -31,8 +32,12 @@ class Config:
     ).strip().lower() in ("1", "true", "yes")
 
     # OpenClaw
-    OPENCLAW_URL: str = os.getenv("OPENCLAW_URL", os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789"))
-    OPENCLAW_TOKEN: str = os.getenv("OPENCLAW_GATEWAY_TOKEN", os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", "")))
+    OPENCLAW_URL: str = os.getenv(
+        "OPENCLAW_URL", os.getenv("OPENCLAW_BASE_URL", "http://127.0.0.1:18789")
+    )
+    OPENCLAW_TOKEN: str = os.getenv(
+        "OPENCLAW_GATEWAY_TOKEN", os.getenv("OPENCLAW_TOKEN", os.getenv("OPENCLAW_API_KEY", ""))
+    )
 
     # LM Studio (trailing slash stripped for API calls)
     LM_STUDIO_URL: str = os.getenv("LM_STUDIO_URL", "http://192.168.0.171:1234").rstrip("/")
@@ -49,9 +54,17 @@ class Config:
     # Платный ключ НЕ используется пока GEMINI_PAID_KEY_ENABLED != 1.
     # Защита от случайных расходов: ключ в .env можно оставить, но без флага
     # он игнорируется. Включить: GEMINI_PAID_KEY_ENABLED=1 в .env.
-    GEMINI_PAID_KEY_ENABLED: bool = os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+    GEMINI_PAID_KEY_ENABLED: bool = os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     GEMINI_API_KEY: Optional[str] = (
-        (os.getenv("GEMINI_API_KEY_PAID") if os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in ("1", "true", "yes") else None)
+        (
+            os.getenv("GEMINI_API_KEY_PAID")
+            if os.getenv("GEMINI_PAID_KEY_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+            else None
+        )
         or os.getenv("GEMINI_API_KEY_FREE")
         or os.getenv("GEMINI_API_KEY")
     )
@@ -84,9 +97,7 @@ class Config:
     )
     # Минимальная пауза (сек) после любого запроса перед авто-выгрузкой модели.
     # Нужна, чтобы не выгружать модель "на стыке" между соседними сообщениями/каналами.
-    GUARDED_IDLE_UNLOAD_GRACE_SEC: float = float(
-        os.getenv("GUARDED_IDLE_UNLOAD_GRACE_SEC", "90")
-    )
+    GUARDED_IDLE_UNLOAD_GRACE_SEC: float = float(os.getenv("GUARDED_IDLE_UNLOAD_GRACE_SEC", "90"))
     # После idle-unload задачной/vision-модели автоматически загружать LOCAL_PREFERRED_MODEL обратно.
     # Полезно при активном использовании локальных моделей: после vision-задачи chat-модель
     # возвращается в память без ручного !model load.
@@ -119,9 +130,7 @@ class Config:
     #
     # None/пусто = не ограничивать buffered read-timeout на уровне клиента.
     OPENCLAW_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
-        float(x)
-        if (x := os.getenv("OPENCLAW_BUFFERED_READ_TIMEOUT_SEC", "").strip())
-        else None
+        float(x) if (x := os.getenv("OPENCLAW_BUFFERED_READ_TIMEOUT_SEC", "").strip()) else None
     )
     # CLI-провайдеры: по умолчанию None — OpenClaw Gateway сам управляет fallback/retry.
     # Двойной read-timeout (Gateway 180с + Краб 240с) вызывал ложные ошибки "Провайдер недоступен".
@@ -161,9 +170,7 @@ class Config:
     )
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
     USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
-    USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(
-        os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420")
-    )
+    USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420"))
     # Debounce-окно для склейки нескольких private-сообщений подряд в один запрос.
     # Почему это нужно:
     # - Telegram режет длинный recap на несколько сообщений;
@@ -191,10 +198,14 @@ class Config:
     # - reasoning по умолчанию отключаем только на API-уровне нашего клиента,
     #   чтобы скрытое "мышление" не съедало бюджет ответа в Telegram/user-facing каналах;
     # - при насыщении лимита можем автоматически запросить продолжение.
-    LM_STUDIO_NATIVE_REASONING_MODE: str = os.getenv(
-        "LM_STUDIO_NATIVE_REASONING_MODE",
-        "off",
-    ).strip().lower()
+    LM_STUDIO_NATIVE_REASONING_MODE: str = (
+        os.getenv(
+            "LM_STUDIO_NATIVE_REASONING_MODE",
+            "off",
+        )
+        .strip()
+        .lower()
+    )
     LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS: int = int(
         os.getenv("LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS", "2")
     )
@@ -203,7 +214,9 @@ class Config:
     )
 
     # Skills / APIs
-    BRAVE_SEARCH_API_KEY: Optional[str] = os.getenv("BRAVE_SEARCH_API_KEY", os.getenv("BRAVE_API_KEY"))
+    BRAVE_SEARCH_API_KEY: Optional[str] = os.getenv(
+        "BRAVE_SEARCH_API_KEY", os.getenv("BRAVE_API_KEY")
+    )
 
     # Memory limits
     MAX_RAM_GB: int = int(os.getenv("MAX_RAM_GB", "24"))
@@ -238,7 +251,11 @@ class Config:
     # Переводить ли браузерную вкладку на передний план при каждом обращении.
     # Дефолт 0 = тихий режим (Краб работает с браузером не переключая окно).
     # Включить: BROWSER_FOCUS_TAB=1 в .env или !config BROWSER_FOCUS_TAB=1
-    BROWSER_FOCUS_TAB: bool = os.getenv("BROWSER_FOCUS_TAB", "0").strip().lower() in ("1", "true", "yes")
+    BROWSER_FOCUS_TAB: bool = os.getenv("BROWSER_FOCUS_TAB", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     # Разрешать ли автоматический fallback cloud -> local при ошибках облака.
     # Важно: это НЕ отключает ручной local-режим (!model local), а только аварийный
     # автопереход в локаль из cloud-сценариев.
@@ -254,21 +271,27 @@ class Config:
 
     # User settings
     OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "@yung_nagato")
-    ALLOWED_USERS: list[str] = [u.strip().lstrip("@") for u in os.getenv("ALLOWED_USERS", "pablito,admin").split(",") if u.strip()]
+    ALLOWED_USERS: list[str] = [
+        u.strip().lstrip("@")
+        for u in os.getenv("ALLOWED_USERS", "pablito,admin").split(",")
+        if u.strip()
+    ]
     # Явные owner/full/partial ACL-списки для userbot.
     # Почему не убираем ALLOWED_USERS сразу:
     # - старый allowlist уже используется в runtime;
     # - в новой схеме он остаётся legacy-источником full-доступа до миграции UI.
-    OWNER_USER_IDS: list[str] = [u.strip() for u in os.getenv("OWNER_USER_IDS", "").split(",") if u.strip()]
+    OWNER_USER_IDS: list[str] = [
+        u.strip() for u in os.getenv("OWNER_USER_IDS", "").split(",") if u.strip()
+    ]
     FULL_ACCESS_USERS: list[str] = [
         u.strip().lstrip("@")
-        for u in os.getenv("FULL_ACCESS_USERS", os.getenv("ALLOWED_USERS", "pablito,admin")).split(",")
+        for u in os.getenv("FULL_ACCESS_USERS", os.getenv("ALLOWED_USERS", "pablito,admin")).split(
+            ","
+        )
         if u.strip()
     ]
     PARTIAL_ACCESS_USERS: list[str] = [
-        u.strip().lstrip("@")
-        for u in os.getenv("PARTIAL_ACCESS_USERS", "").split(",")
-        if u.strip()
+        u.strip().lstrip("@") for u in os.getenv("PARTIAL_ACCESS_USERS", "").split(",") if u.strip()
     ]
     # Ручной чёрный список: username-ы или числовые ID, которым Краб не отвечает автоматически.
     # Формат: "username1,@username2,123456" (@ необязателен, нормализуется к lower-case).
@@ -289,7 +312,11 @@ class Config:
             str(Path.home() / ".openclaw" / "workspace-main-messaging"),
         )
     )
-    TRIGGER_PREFIXES: list[str] = [p.strip() for p in os.getenv("TRIGGER_PREFIXES", "!краб,@краб,/краб,Краб,,краб,").split(",") if p.strip()]
+    TRIGGER_PREFIXES: list[str] = [
+        p.strip()
+        for p in os.getenv("TRIGGER_PREFIXES", "!краб,@краб,/краб,Краб,,краб,").split(",")
+        if p.strip()
+    ]
     # Опциональный дисклеймер в начале диалога: честный автоответчик без маскировки.
     AI_DISCLOSURE_ENABLED: bool = os.getenv("AI_DISCLOSURE_ENABLED", "0").strip().lower() in (
         "1",
@@ -355,9 +382,11 @@ class Config:
     # Автоматический mute когда owner сам пишет в чат (минуты).
     OWNER_AUTO_SILENCE_MINUTES: int = int(os.getenv("OWNER_AUTO_SILENCE_MINUTES", "5"))
     # Гостевой режим: запретить tools/exec для GUEST-уровня.
-    GUEST_TOOLS_DISABLED: bool = os.getenv(
-        "GUEST_TOOLS_DISABLED", "1"
-    ).strip().lower() in ("1", "true", "yes")
+    GUEST_TOOLS_DISABLED: bool = os.getenv("GUEST_TOOLS_DISABLED", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     # JSON-файл с настройками per-team Telegram аккаунтов для свёрма.
     # Формат: {"traders": {"session_name": "swarm_traders", "phone": "+34..."}, ...}
@@ -387,12 +416,10 @@ class Config:
     ).strip().lower() in ("1", "true", "yes")
     VOICE_REPLY_SPEED: float = float(os.getenv("VOICE_REPLY_SPEED", "1.5"))
     VOICE_REPLY_VOICE: str = (
-        os.getenv("VOICE_REPLY_VOICE", "ru-RU-DmitryNeural").strip()
-        or "ru-RU-DmitryNeural"
+        os.getenv("VOICE_REPLY_VOICE", "ru-RU-DmitryNeural").strip() or "ru-RU-DmitryNeural"
     )
     VOICE_REPLY_DELIVERY: str = (
-        os.getenv("VOICE_REPLY_DELIVERY", "text+voice").strip().lower()
-        or "text+voice"
+        os.getenv("VOICE_REPLY_DELIVERY", "text+voice").strip().lower() or "text+voice"
     )
     # Per-chat voice reply blocklist.
     # Причина: в некоторых группах TTS от userbot квалифицируется модерацией как spam
@@ -402,9 +429,7 @@ class Config:
     # даже если глобально включён voice_mode и delivery=text+voice.
     # Формат: comma-separated chat_id (отрицательные для супергрупп и каналов).
     VOICE_REPLY_BLOCKED_CHATS: list[str] = [
-        s.strip()
-        for s in os.getenv("VOICE_REPLY_BLOCKED_CHATS", "").split(",")
-        if s.strip()
+        s.strip() for s in os.getenv("VOICE_REPLY_BLOCKED_CHATS", "").split(",") if s.strip()
     ]
 
     # Session watchdog heartbeat (сек). Проверяет Telegram MTProto alive.
@@ -413,9 +438,11 @@ class Config:
 
     # Tool narration в Telegram (показывает какой инструмент вызывается).
     # Можно переключать через !notify on/off.
-    TOOL_NARRATION_ENABLED: bool = os.getenv(
-        "TOOL_NARRATION_ENABLED", "1"
-    ).strip().lower() in ("1", "true", "yes")
+    TOOL_NARRATION_ENABLED: bool = os.getenv("TOOL_NARRATION_ENABLED", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -444,11 +471,17 @@ class Config:
             # Обновляем в текущем процессе
             if hasattr(cls, key):
                 if key == "ALLOWED_USERS":
-                    cls.ALLOWED_USERS = [u.strip().lstrip("@") for u in value.split(",") if u.strip()]
+                    cls.ALLOWED_USERS = [
+                        u.strip().lstrip("@") for u in value.split(",") if u.strip()
+                    ]
                 elif key == "FULL_ACCESS_USERS":
-                    cls.FULL_ACCESS_USERS = [u.strip().lstrip("@") for u in value.split(",") if u.strip()]
+                    cls.FULL_ACCESS_USERS = [
+                        u.strip().lstrip("@") for u in value.split(",") if u.strip()
+                    ]
                 elif key == "PARTIAL_ACCESS_USERS":
-                    cls.PARTIAL_ACCESS_USERS = [u.strip().lstrip("@") for u in value.split(",") if u.strip()]
+                    cls.PARTIAL_ACCESS_USERS = [
+                        u.strip().lstrip("@") for u in value.split(",") if u.strip()
+                    ]
                 elif key == "OWNER_USER_IDS":
                     cls.OWNER_USER_IDS = [u.strip() for u in value.split(",") if u.strip()]
                 elif key == "MANUAL_BLOCKLIST":
@@ -480,7 +513,11 @@ class Config:
                 elif key == "GUARDED_IDLE_UNLOAD_GRACE_SEC":
                     cls.GUARDED_IDLE_UNLOAD_GRACE_SEC = float(value)
                 elif key == "RESTORE_PREFERRED_ON_IDLE_UNLOAD":
-                    cls.RESTORE_PREFERRED_ON_IDLE_UNLOAD = value.strip().lower() in ("1", "true", "yes")
+                    cls.RESTORE_PREFERRED_ON_IDLE_UNLOAD = value.strip().lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                    )
                 elif key == "OPENCLAW_CHUNK_TIMEOUT_SEC":
                     cls.OPENCLAW_CHUNK_TIMEOUT_SEC = float(value)
                 elif key == "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC":
@@ -500,7 +537,11 @@ class Config:
                 elif key == "USERBOT_PHOTO_MAX_OUTPUT_TOKENS":
                     cls.USERBOT_PHOTO_MAX_OUTPUT_TOKENS = int(value)
                 elif key == "USERBOT_FORCE_CLOUD_FOR_PHOTO":
-                    cls.USERBOT_FORCE_CLOUD_FOR_PHOTO = value.strip().lower() in ("1", "true", "yes")
+                    cls.USERBOT_FORCE_CLOUD_FOR_PHOTO = value.strip().lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                    )
                 elif key == "LM_STUDIO_NATIVE_REASONING_MODE":
                     cls.LM_STUDIO_NATIVE_REASONING_MODE = value.strip().lower()
                 elif key == "LM_STUDIO_NATIVE_AUTO_CONTINUE_MAX_ROUNDS":
@@ -520,7 +561,11 @@ class Config:
                 elif key == "SCHEDULER_ENABLED":
                     cls.SCHEDULER_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "DEFERRED_ACTION_GUARD_ENABLED":
-                    cls.DEFERRED_ACTION_GUARD_ENABLED = value.strip().lower() in ("1", "true", "yes")
+                    cls.DEFERRED_ACTION_GUARD_ENABLED = value.strip().lower() in (
+                        "1",
+                        "true",
+                        "yes",
+                    )
                 elif key == "GROUP_VOICE_FALLBACK_TRIGGER":
                     cls.GROUP_VOICE_FALLBACK_TRIGGER = value.strip().lower() in ("1", "true", "yes")
                 elif key == "VOICE_MODE_DEFAULT":
@@ -553,6 +598,7 @@ class Config:
                 example_path = cls.BASE_DIR / ".env.example"
                 if example_path.exists():
                     import shutil
+
                     shutil.copy(example_path, env_path)
                 else:
                     with open(env_path, "w") as f:

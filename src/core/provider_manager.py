@@ -23,7 +23,6 @@ import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from .logger import get_logger
 
@@ -32,21 +31,22 @@ logger = get_logger(__name__)
 
 class ProviderType(str, Enum):
     """Все типы провайдеров, поддерживаемых Крабом."""
-    GEMINI_OAUTH = "gemini_oauth"    # Google через OAuth (Antigravity/VSCode free quota)
-    GEMINI_API   = "gemini_api"      # Google через paid API key
-    OPENAI_OAUTH = "openai_oauth"    # ChatGPT Plus через OAuth
-    OPENAI_API   = "openai_api"      # OpenAI через paid API key
-    LM_STUDIO    = "lm_studio"       # Локальные модели LM Studio
-    AUTO         = "auto"            # Авторежим: роутер выбирает сам
+
+    GEMINI_OAUTH = "gemini_oauth"  # Google через OAuth (Antigravity/VSCode free quota)
+    GEMINI_API = "gemini_api"  # Google через paid API key
+    OPENAI_OAUTH = "openai_oauth"  # ChatGPT Plus через OAuth
+    OPENAI_API = "openai_api"  # OpenAI через paid API key
+    LM_STUDIO = "lm_studio"  # Локальные модели LM Studio
+    AUTO = "auto"  # Авторежим: роутер выбирает сам
 
 
 PROVIDER_DISPLAY_NAMES: dict[ProviderType, str] = {
     ProviderType.GEMINI_OAUTH: "☁️ Gemini OAuth (бесплатная квота)",
-    ProviderType.GEMINI_API:   "💳 Gemini API (платный ключ)",
+    ProviderType.GEMINI_API: "💳 Gemini API (платный ключ)",
     ProviderType.OPENAI_OAUTH: "🤖 OpenAI ChatGPT Plus (OAuth)",
-    ProviderType.OPENAI_API:   "💳 OpenAI API (платный ключ)",
-    ProviderType.LM_STUDIO:    "💻 LM Studio (локально, бесплатно)",
-    ProviderType.AUTO:         "🎯 Авто (роутер выбирает лучшее)",
+    ProviderType.OPENAI_API: "💳 OpenAI API (платный ключ)",
+    ProviderType.LM_STUDIO: "💻 LM Studio (локально, бесплатно)",
+    ProviderType.AUTO: "🎯 Авто (роутер выбирает лучшее)",
 }
 
 
@@ -55,97 +55,484 @@ PROVIDER_DISPLAY_NAMES: dict[ProviderType, str] = {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 PROVIDER_MODELS: dict[ProviderType, list[dict]] = {
-
     # ── Gemini OAuth (Antigravity free VSCode quota) ───────────────────────────
     ProviderType.GEMINI_OAUTH: [
         # Gemini 3.x серия (через маскировку под VSCode/Antigravity)
         # ИСПРАВЛЕНО: gemini-3.1-pro не существует → default=False, gemini-3-flash — реальная рабочая модель
-        {"id": "google-antigravity/gemini-3.1-pro",     "name": "Gemini 3.1 Pro ⭐",         "vision": True,  "thinking": True,  "default": False, "tier": "pro"},
-        {"id": "google-antigravity/gemini-3.1-ultra",   "name": "Gemini 3.1 Ultra 🧠",       "vision": True,  "thinking": True,  "default": False, "tier": "ultra"},
-        {"id": "google-antigravity/gemini-3-pro",       "name": "Gemini 3 Pro (умный)",      "vision": True,  "thinking": True,  "default": False, "tier": "pro"},
-        {"id": "google-antigravity/gemini-3-flash",     "name": "Gemini 3 Flash ✅ (быстрый)","vision": True,  "thinking": False, "default": False,  "tier": "flash"},
-        {"id": "google-antigravity/gemini-3-flash-thinking", "name": "Gemini 3 Flash Thinking 💭", "vision": True, "thinking": True, "default": False, "tier": "flash"},
+        {
+            "id": "google-antigravity/gemini-3.1-pro",
+            "name": "Gemini 3.1 Pro ⭐",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "google-antigravity/gemini-3.1-ultra",
+            "name": "Gemini 3.1 Ultra 🧠",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "ultra",
+        },
+        {
+            "id": "google-antigravity/gemini-3-pro",
+            "name": "Gemini 3 Pro (умный)",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "google-antigravity/gemini-3-flash",
+            "name": "Gemini 3 Flash ✅ (быстрый)",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "flash",
+        },
+        {
+            "id": "google-antigravity/gemini-3-flash-thinking",
+            "name": "Gemini 3 Flash Thinking 💭",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "flash",
+        },
         # Gemini 2.x серия
-        {"id": "google-antigravity/gemini-2.5-pro",     "name": "Gemini 2.5 Pro",            "vision": True,  "thinking": True,  "default": False, "tier": "pro"},
-        {"id": "google-antigravity/gemini-2.5-flash",   "name": "Gemini 2.5 Flash",          "vision": True,  "thinking": False, "default": False, "tier": "flash"},
-        {"id": "google-antigravity/gemini-2.0-flash-thinking", "name": "Gemini 2.0 Flash Thinking 💭", "vision": True, "thinking": True, "default": False, "tier": "flash"},
+        {
+            "id": "google-antigravity/gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "google-antigravity/gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "flash",
+        },
+        {
+            "id": "google-antigravity/gemini-2.0-flash-thinking",
+            "name": "Gemini 2.0 Flash Thinking 💭",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "flash",
+        },
         # Gemini 1.x / Exp серия
-        {"id": "google-antigravity/gemini-exp-1206",    "name": "Gemini Exp 1206",           "vision": True,  "thinking": False, "default": False, "tier": "exp"},
-        {"id": "google-antigravity/gemini-exp-1121",    "name": "Gemini Exp 1121",           "vision": True,  "thinking": False, "default": False, "tier": "exp"},
+        {
+            "id": "google-antigravity/gemini-exp-1206",
+            "name": "Gemini Exp 1206",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "exp",
+        },
+        {
+            "id": "google-antigravity/gemini-exp-1121",
+            "name": "Gemini Exp 1121",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "exp",
+        },
     ],
-
     # ── Gemini API (paid Google AI Studio key) ────────────────────────────────
     ProviderType.GEMINI_API: [
         # Gemini 3.x (Preview / GA)
         # ИСПРАВЛЕНО: gemini-3-pro-preview не существует реально → default снят
-        {"id": "gemini-3-pro-preview",              "name": "Gemini 3 Pro Preview",      "vision": True,  "thinking": True,  "default": False, "tier": "pro"},
-        {"id": "google/gemini-3-pro-preview",       "name": "Gemini 3 Pro Preview (pfx)","vision": True,  "thinking": True,  "default": False, "tier": "pro"},
-        {"id": "gemini-3-ultra",                    "name": "Gemini 3 Ultra 🧠",         "vision": True,  "thinking": True,  "default": False, "tier": "ultra"},
-        {"id": "gemini-3-flash",                    "name": "Gemini 3 Flash",             "vision": True,  "thinking": False, "default": False, "tier": "flash"},
-        {"id": "gemini-3-flash-thinking-exp",       "name": "Gemini 3 Flash Thinking 💭","vision": True,  "thinking": True,  "default": False, "tier": "flash"},
+        {
+            "id": "gemini-3-pro-preview",
+            "name": "Gemini 3 Pro Preview",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "google/gemini-3-pro-preview",
+            "name": "Gemini 3 Pro Preview (pfx)",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "gemini-3-ultra",
+            "name": "Gemini 3 Ultra 🧠",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "ultra",
+        },
+        {
+            "id": "gemini-3-flash",
+            "name": "Gemini 3 Flash",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "flash",
+        },
+        {
+            "id": "gemini-3-flash-thinking-exp",
+            "name": "Gemini 3 Flash Thinking 💭",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "flash",
+        },
         # Gemini 2.5 — реальные рабочие модели
-        {"id": "gemini-2.5-pro-preview",            "name": "Gemini 2.5 Pro Preview",    "vision": True,  "thinking": True,  "default": False, "tier": "pro"},
-        {"id": "gemini-2.5-flash-preview",          "name": "Gemini 2.5 Flash Preview",  "vision": True,  "thinking": False, "default": False, "tier": "flash"},
-        {"id": "gemini-2.5-flash",                  "name": "Gemini 2.5 Flash ✅",       "vision": True,  "thinking": False, "default": True,  "tier": "flash"},
-        {"id": "google/gemini-2.5-flash",           "name": "Gemini 2.5 Flash (pfx)",    "vision": False, "thinking": False, "default": False, "tier": "flash"},
+        {
+            "id": "gemini-2.5-pro-preview",
+            "name": "Gemini 2.5 Pro Preview",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "gemini-2.5-flash-preview",
+            "name": "Gemini 2.5 Flash Preview",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "flash",
+        },
+        {
+            "id": "gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash ✅",
+            "vision": True,
+            "thinking": False,
+            "default": True,
+            "tier": "flash",
+        },
+        {
+            "id": "google/gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash (pfx)",
+            "vision": False,
+            "thinking": False,
+            "default": False,
+            "tier": "flash",
+        },
         # Gemini 2.0
-        {"id": "gemini-2.0-flash",                  "name": "Gemini 2.0 Flash",          "vision": True,  "thinking": False, "default": False, "tier": "flash"},
-        {"id": "gemini-2.0-flash-thinking-exp",     "name": "Gemini 2.0 Flash Thinking 💭","vision": True, "thinking": True, "default": False, "tier": "flash"},
-        {"id": "gemini-2.0-pro-exp",                "name": "Gemini 2.0 Pro Exp",        "vision": True,  "thinking": False, "default": False, "tier": "pro"},
+        {
+            "id": "gemini-2.0-flash",
+            "name": "Gemini 2.0 Flash",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "flash",
+        },
+        {
+            "id": "gemini-2.0-flash-thinking-exp",
+            "name": "Gemini 2.0 Flash Thinking 💭",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "flash",
+        },
+        {
+            "id": "gemini-2.0-pro-exp",
+            "name": "Gemini 2.0 Pro Exp",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "pro",
+        },
         # Gemini 1.5
-        {"id": "gemini-1.5-pro",                    "name": "Gemini 1.5 Pro",            "vision": True,  "thinking": False, "default": False, "tier": "pro"},
-        {"id": "gemini-1.5-pro-latest",             "name": "Gemini 1.5 Pro Latest",     "vision": True,  "thinking": False, "default": False, "tier": "pro"},
-        {"id": "gemini-1.5-flash",                  "name": "Gemini 1.5 Flash",          "vision": True,  "thinking": False, "default": False, "tier": "flash"},
-        {"id": "gemini-pro-latest",                 "name": "Gemini Pro Latest",          "vision": True,  "thinking": False, "default": False, "tier": "pro"},
+        {
+            "id": "gemini-1.5-pro",
+            "name": "Gemini 1.5 Pro",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "gemini-1.5-pro-latest",
+            "name": "Gemini 1.5 Pro Latest",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "pro",
+        },
+        {
+            "id": "gemini-1.5-flash",
+            "name": "Gemini 1.5 Flash",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "flash",
+        },
+        {
+            "id": "gemini-pro-latest",
+            "name": "Gemini Pro Latest",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "pro",
+        },
     ],
-
     # ── OpenAI ChatGPT Plus (OAuth через openai-codex) ─────────────────────────
     ProviderType.OPENAI_OAUTH: [
         # GPT-5 серия (2026)
-        {"id": "openai/chatgpt-5",                  "name": "ChatGPT 5 ⭐ (новейший)",    "vision": True,  "thinking": True,  "default": True,  "tier": "flagship"},
-        {"id": "openai/chatgpt-5.4",                "name": "ChatGPT 5.4 🧠",             "vision": True,  "thinking": True,  "default": False, "tier": "flagship"},
-        {"id": "openai/chatgpt-5.3-codex",          "name": "ChatGPT 5.3 Codex 💻",       "vision": False, "thinking": True,  "default": False, "tier": "flagship"},
-        {"id": "openai/gpt-5",                      "name": "GPT-5",                      "vision": True,  "thinking": True,  "default": False, "tier": "flagship"},
+        {
+            "id": "openai/chatgpt-5",
+            "name": "ChatGPT 5 ⭐ (новейший)",
+            "vision": True,
+            "thinking": True,
+            "default": True,
+            "tier": "flagship",
+        },
+        {
+            "id": "openai/chatgpt-5.4",
+            "name": "ChatGPT 5.4 🧠",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "flagship",
+        },
+        {
+            "id": "openai/chatgpt-5.3-codex",
+            "name": "ChatGPT 5.3 Codex 💻",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "flagship",
+        },
+        {
+            "id": "openai/gpt-5",
+            "name": "GPT-5",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "flagship",
+        },
         # o-серия (reasoning)
-        {"id": "openai/o3",                         "name": "o3 🧠 (глубокое рассуждение)", "vision": True, "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "openai/o3-mini",                    "name": "o3 Mini (быстрое рассуждение)", "vision": False,"thinking": True, "default": False, "tier": "reasoning"},
-        {"id": "openai/o3-mini-high",               "name": "o3 Mini High (макс. глубина)","vision": False, "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "openai/o1",                         "name": "o1 (рассуждения)",           "vision": True,  "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "openai/o1-mini",                    "name": "o1 Mini",                    "vision": False, "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "openai/o1-preview",                 "name": "o1 Preview",                 "vision": False, "thinking": True,  "default": False, "tier": "reasoning"},
+        {
+            "id": "openai/o3",
+            "name": "o3 🧠 (глубокое рассуждение)",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o3-mini",
+            "name": "o3 Mini (быстрое рассуждение)",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o3-mini-high",
+            "name": "o3 Mini High (макс. глубина)",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o1",
+            "name": "o1 (рассуждения)",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o1-mini",
+            "name": "o1 Mini",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o1-preview",
+            "name": "o1 Preview",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
         # GPT-4.x серия
-        {"id": "openai/gpt-4o",                     "name": "GPT-4o (умный + быстрый)",   "vision": True,  "thinking": False, "default": False, "tier": "standard"},
-        {"id": "openai/gpt-4o-mini",                "name": "GPT-4o Mini (быстрый)",      "vision": True,  "thinking": False, "default": False, "tier": "standard"},
-        {"id": "openai/gpt-4-turbo",                "name": "GPT-4 Turbo",               "vision": True,  "thinking": False, "default": False, "tier": "standard"},
+        {
+            "id": "openai/gpt-4o",
+            "name": "GPT-4o (умный + быстрый)",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "standard",
+        },
+        {
+            "id": "openai/gpt-4o-mini",
+            "name": "GPT-4o Mini (быстрый)",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "standard",
+        },
+        {
+            "id": "openai/gpt-4-turbo",
+            "name": "GPT-4 Turbo",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "standard",
+        },
         # Codex / специализированные
-        {"id": "openai/codex-mini",                 "name": "Codex Mini (код)",           "vision": False, "thinking": False, "default": False, "tier": "code"},
-        {"id": "openai/codex",                      "name": "Codex (программирование)",   "vision": False, "thinking": False, "default": False, "tier": "code"},
+        {
+            "id": "openai/codex-mini",
+            "name": "Codex Mini (код)",
+            "vision": False,
+            "thinking": False,
+            "default": False,
+            "tier": "code",
+        },
+        {
+            "id": "openai/codex",
+            "name": "Codex (программирование)",
+            "vision": False,
+            "thinking": False,
+            "default": False,
+            "tier": "code",
+        },
     ],
-
     # ── OpenAI API (paid API key) ─────────────────────────────────────────────
     ProviderType.OPENAI_API: [
         # Флагманы
-        {"id": "openai/gpt-4o",                     "name": "GPT-4o ⭐",                  "vision": True,  "thinking": False, "default": True,  "tier": "standard"},
-        {"id": "openai/gpt-4o-mini",                "name": "GPT-4o Mini (быстрый)",      "vision": True,  "thinking": False, "default": False, "tier": "standard"},
-        {"id": "openai/gpt-4-turbo",                "name": "GPT-4 Turbo",               "vision": True,  "thinking": False, "default": False, "tier": "standard"},
+        {
+            "id": "openai/gpt-4o",
+            "name": "GPT-4o ⭐",
+            "vision": True,
+            "thinking": False,
+            "default": True,
+            "tier": "standard",
+        },
+        {
+            "id": "openai/gpt-4o-mini",
+            "name": "GPT-4o Mini (быстрый)",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "standard",
+        },
+        {
+            "id": "openai/gpt-4-turbo",
+            "name": "GPT-4 Turbo",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "standard",
+        },
         # o-серия
-        {"id": "openai/o3",                         "name": "o3 🧠",                      "vision": True,  "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "openai/o3-mini",                    "name": "o3 Mini",                    "vision": False, "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "openai/o1",                         "name": "o1",                         "vision": True,  "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "openai/o1-mini",                    "name": "o1 Mini",                    "vision": False, "thinking": True,  "default": False, "tier": "reasoning"},
+        {
+            "id": "openai/o3",
+            "name": "o3 🧠",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o3-mini",
+            "name": "o3 Mini",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o1",
+            "name": "o1",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "openai/o1-mini",
+            "name": "o1 Mini",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
         # GPT-5 (Future)
-        {"id": "openai/gpt-5",                      "name": "GPT-5 (если доступен)",      "vision": True,  "thinking": True,  "default": False, "tier": "flagship"},
+        {
+            "id": "openai/gpt-5",
+            "name": "GPT-5 (если доступен)",
+            "vision": True,
+            "thinking": True,
+            "default": False,
+            "tier": "flagship",
+        },
     ],
-
     # ── LM Studio (локальные модели) ──────────────────────────────────────────
     ProviderType.LM_STUDIO: [
-        {"id": "nvidia/nemotron-3-nano",            "name": "Nemotron 3 Nano ⭐ (быстрый)","vision": False, "thinking": False, "default": True,  "tier": "nano"},
-        {"id": "qwen/qwen2.5-7b-instruct",          "name": "Qwen 2.5 7B",                "vision": False, "thinking": False, "default": False, "tier": "small"},
-        {"id": "qwen/qwen2.5-14b-instruct",         "name": "Qwen 2.5 14B",              "vision": False, "thinking": False, "default": False, "tier": "medium"},
-        {"id": "qwen/qwen2.5-vl-7b-instruct",       "name": "Qwen 2.5 VL 7B 📷 (vision)","vision": True,  "thinking": False, "default": False, "tier": "small"},
-        {"id": "llama/llama-3.2-11b-vision",        "name": "Llama 3.2 11B Vision 📷",    "vision": True,  "thinking": False, "default": False, "tier": "medium"},
-        {"id": "deepseek/deepseek-r1",              "name": "DeepSeek R1 💭 (reasoning)", "vision": False, "thinking": True,  "default": False, "tier": "reasoning"},
-        {"id": "mistral/mistral-small",             "name": "Mistral Small",              "vision": False, "thinking": False, "default": False, "tier": "small"},
+        {
+            "id": "nvidia/nemotron-3-nano",
+            "name": "Nemotron 3 Nano ⭐ (быстрый)",
+            "vision": False,
+            "thinking": False,
+            "default": True,
+            "tier": "nano",
+        },
+        {
+            "id": "qwen/qwen2.5-7b-instruct",
+            "name": "Qwen 2.5 7B",
+            "vision": False,
+            "thinking": False,
+            "default": False,
+            "tier": "small",
+        },
+        {
+            "id": "qwen/qwen2.5-14b-instruct",
+            "name": "Qwen 2.5 14B",
+            "vision": False,
+            "thinking": False,
+            "default": False,
+            "tier": "medium",
+        },
+        {
+            "id": "qwen/qwen2.5-vl-7b-instruct",
+            "name": "Qwen 2.5 VL 7B 📷 (vision)",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "small",
+        },
+        {
+            "id": "llama/llama-3.2-11b-vision",
+            "name": "Llama 3.2 11B Vision 📷",
+            "vision": True,
+            "thinking": False,
+            "default": False,
+            "tier": "medium",
+        },
+        {
+            "id": "deepseek/deepseek-r1",
+            "name": "DeepSeek R1 💭 (reasoning)",
+            "vision": False,
+            "thinking": True,
+            "default": False,
+            "tier": "reasoning",
+        },
+        {
+            "id": "mistral/mistral-small",
+            "name": "Mistral Small",
+            "vision": False,
+            "thinking": False,
+            "default": False,
+            "tier": "small",
+        },
         # Динамически обнаруживаемые (добавляются при !model scan)
     ],
 }
@@ -155,30 +542,32 @@ PROVIDER_MODELS: dict[ProviderType, list[dict]] = {
 # THINKING / REASONING НАСТРОЙКИ
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class ThinkingDepth(str, Enum):
     """Глубина reasoning при поддерживаемых моделях."""
-    OFF    = "off"     # Без рассуждений
-    LOW    = "low"     # Минимальные токены думания (быстро)
+
+    OFF = "off"  # Без рассуждений
+    LOW = "low"  # Минимальные токены думания (быстро)
     MEDIUM = "medium"  # Баланс (по умолчанию)
-    HIGH   = "high"    # Максимальная глубина (медленно, но точнее)
-    AUTO   = "auto"    # Модель сама решает
+    HIGH = "high"  # Максимальная глубина (медленно, но точнее)
+    AUTO = "auto"  # Модель сама решает
 
 
 THINKING_DEPTH_DISPLAY: dict[ThinkingDepth, str] = {
-    ThinkingDepth.OFF:    "⬛ Выкл (нет рассуждений)",
-    ThinkingDepth.LOW:    "🟦 Низкий (быстро)",
+    ThinkingDepth.OFF: "⬛ Выкл (нет рассуждений)",
+    ThinkingDepth.LOW: "🟦 Низкий (быстро)",
     ThinkingDepth.MEDIUM: "🟨 Средний (баланс)",
-    ThinkingDepth.HIGH:   "🟥 Высокий (глубокий анализ)",
-    ThinkingDepth.AUTO:   "🎯 Авто (модель решает)",
+    ThinkingDepth.HIGH: "🟥 Высокий (глубокий анализ)",
+    ThinkingDepth.AUTO: "🎯 Авто (модель решает)",
 }
 
 # Маппинг глубины на параметры API
 THINKING_DEPTH_PARAMS: dict[ThinkingDepth, dict] = {
-    ThinkingDepth.OFF:    {"thinking": False, "budget_tokens": 0},
-    ThinkingDepth.LOW:    {"thinking": True,  "budget_tokens": 1024},
-    ThinkingDepth.MEDIUM: {"thinking": True,  "budget_tokens": 8192},
-    ThinkingDepth.HIGH:   {"thinking": True,  "budget_tokens": 32768},
-    ThinkingDepth.AUTO:   {"thinking": True,  "budget_tokens": None},
+    ThinkingDepth.OFF: {"thinking": False, "budget_tokens": 0},
+    ThinkingDepth.LOW: {"thinking": True, "budget_tokens": 1024},
+    ThinkingDepth.MEDIUM: {"thinking": True, "budget_tokens": 8192},
+    ThinkingDepth.HIGH: {"thinking": True, "budget_tokens": 32768},
+    ThinkingDepth.AUTO: {"thinking": True, "budget_tokens": None},
 }
 
 
@@ -186,15 +575,19 @@ THINKING_DEPTH_PARAMS: dict[ThinkingDepth, dict] = {
 # FALLBACK CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @dataclass
 class FallbackConfig:
     """Настройки fallback-цепочки провайдеров."""
-    chain: list[ProviderType] = field(default_factory=lambda: [
-        ProviderType.GEMINI_OAUTH,
-        ProviderType.GEMINI_API,
-        ProviderType.OPENAI_OAUTH,
-        ProviderType.LM_STUDIO,
-    ])
+
+    chain: list[ProviderType] = field(
+        default_factory=lambda: [
+            ProviderType.GEMINI_OAUTH,
+            ProviderType.GEMINI_API,
+            ProviderType.OPENAI_OAUTH,
+            ProviderType.LM_STUDIO,
+        ]
+    )
     max_attempts: int = 3
     lm_studio_as_last_resort: bool = False
 
@@ -202,6 +595,7 @@ class FallbackConfig:
 @dataclass
 class QuotaInfo:
     """Информация об использовании квоты (токены/запросы)."""
+
     used_tokens: int = 0
     limit_tokens: int = 0  # 0 = безлимит или неизвестно
     requests_count: int = 0
@@ -216,7 +610,7 @@ class QuotaInfo:
             "limit": limit,
             "requests": self.requests_count,
             "percentage": round(min(100.0, percent), 1),
-            "label": f"{used}/{limit or '∞'}"
+            "label": f"{used}/{limit or '∞'}",
         }
 
 
@@ -224,27 +618,30 @@ class QuotaInfo:
 # СОСТОЯНИЕ ПРОВАЙДЕРА
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @dataclass
 class ProviderState:
     """Текущее состояние: провайдер, модель, thinking-режим, fallback."""
-    provider: ProviderType          = ProviderType.AUTO
-    model_id: str                   = ""
-    vision_model_id: str            = ""
-    thinking_depth: ThinkingDepth   = ThinkingDepth.AUTO
+
+    provider: ProviderType = ProviderType.AUTO
+    model_id: str = ""
+    vision_model_id: str = ""
+    thinking_depth: ThinkingDepth = ThinkingDepth.AUTO
     # Максимальный output_tokens (0 = дефолт модели)
-    max_output_tokens: int          = 0
+    max_output_tokens: int = 0
     # Temperature (0.0-2.0, -1 = дефолт)
-    temperature: float              = -1.0
-    fallback: FallbackConfig        = field(default_factory=FallbackConfig)
+    temperature: float = -1.0
+    fallback: FallbackConfig = field(default_factory=FallbackConfig)
     # Квоты по типам провайдеров
-    quotas: dict[ProviderType, QuotaInfo] = field(default_factory=lambda: {
-        pt: QuotaInfo() for pt in ProviderType if pt != ProviderType.AUTO
-    })
+    quotas: dict[ProviderType, QuotaInfo] = field(
+        default_factory=lambda: {pt: QuotaInfo() for pt in ProviderType if pt != ProviderType.AUTO}
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PROVIDER MANAGER (SINGLETON)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class ProviderManager:
     """
@@ -277,7 +674,9 @@ class ProviderManager:
             self._state.max_output_tokens = int(data.get("max_output_tokens", 0))
             self._state.temperature = float(data.get("temperature", -1.0))
             try:
-                self._state.thinking_depth = ThinkingDepth(data.get("thinking_depth", ThinkingDepth.AUTO.value))
+                self._state.thinking_depth = ThinkingDepth(
+                    data.get("thinking_depth", ThinkingDepth.AUTO.value)
+                )
             except ValueError:
                 self._state.thinking_depth = ThinkingDepth.AUTO
             fb = data.get("fallback", {})
@@ -287,8 +686,10 @@ class ProviderManager:
                 except ValueError:
                     pass
             self._state.fallback.max_attempts = int(fb.get("max_attempts", 3))
-            self._state.fallback.lm_studio_as_last_resort = bool(fb.get("lm_studio_as_last_resort", False))
-            
+            self._state.fallback.lm_studio_as_last_resort = bool(
+                fb.get("lm_studio_as_last_resort", False)
+            )
+
             # Загрузка квот
             quotas_data = data.get("quotas", {})
             for pt_val, q_data in quotas_data.items():
@@ -327,10 +728,10 @@ class ProviderManager:
                         "used_tokens": q.used_tokens,
                         "limit_tokens": q.limit_tokens,
                         "requests_count": q.requests_count,
-                        "last_reset": q.last_reset
+                        "last_reset": q.last_reset,
                     }
                     for pt, q in self._state.quotas.items()
-                }
+                },
             }
             with open(self._STATE_FILE, "w") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -473,11 +874,10 @@ class ProviderManager:
     def get_fallback_chain(self) -> list[ProviderType]:
         available = set(self.get_available_providers())
         return [
-            p for p in self._state.fallback.chain
-            if p in available or (
-                p == ProviderType.LM_STUDIO and
-                self._state.fallback.lm_studio_as_last_resort
-            )
+            p
+            for p in self._state.fallback.chain
+            if p in available
+            or (p == ProviderType.LM_STUDIO and self._state.fallback.lm_studio_as_last_resort)
         ]
 
     # ── Резолвинг для openclaw_client ─────────────────────────────────────────
@@ -510,11 +910,15 @@ class ProviderManager:
                 "model_id": self.active_model_id,
                 "vision_model_id": self.active_vision_model_id,
                 "thinking_depth": self._state.thinking_depth.value,
-                "thinking_depth_display": THINKING_DEPTH_DISPLAY.get(self._state.thinking_depth, ""),
+                "thinking_depth_display": THINKING_DEPTH_DISPLAY.get(
+                    self._state.thinking_depth, ""
+                ),
                 "temperature": self._state.temperature,
                 "max_output_tokens": self._state.max_output_tokens,
                 "force_cloud": self._state.provider != ProviderType.LM_STUDIO,
-                "quota": self._state.quotas.get(self._state.provider, QuotaInfo()).to_dict() if self._state.provider != ProviderType.AUTO else {},
+                "quota": self._state.quotas.get(self._state.provider, QuotaInfo()).to_dict()
+                if self._state.provider != ProviderType.AUTO
+                else {},
             },
             "providers": [
                 {
@@ -525,18 +929,20 @@ class ProviderManager:
                     "models": PROVIDER_MODELS.get(p, []),
                     "quota": self._state.quotas.get(p, QuotaInfo()).to_dict(),
                 }
-                for p in ProviderType if p != ProviderType.AUTO
+                for p in ProviderType
+                if p != ProviderType.AUTO
             ],
             "fallback": {
                 "chain": [p.value for p in self._state.fallback.chain],
-                "chain_display": [PROVIDER_DISPLAY_NAMES.get(p, p.value) for p in self._state.fallback.chain],
+                "chain_display": [
+                    PROVIDER_DISPLAY_NAMES.get(p, p.value) for p in self._state.fallback.chain
+                ],
                 "effective_chain": [p.value for p in self.get_fallback_chain()],
                 "max_attempts": self._state.fallback.max_attempts,
                 "lm_studio_as_last_resort": self._state.fallback.lm_studio_as_last_resort,
             },
             "thinking_options": [
-                {"id": d.value, "display": THINKING_DEPTH_DISPLAY[d]}
-                for d in ThinkingDepth
+                {"id": d.value, "display": THINKING_DEPTH_DISPLAY[d]} for d in ThinkingDepth
             ],
         }
 
@@ -553,17 +959,24 @@ class ProviderManager:
 
         avail_lines = "\n".join(
             f"  {'✅' if p in available else '❌'} {PROVIDER_DISPLAY_NAMES.get(p, p.value)}"
-            for p in ProviderType if p != ProviderType.AUTO
+            for p in ProviderType
+            if p != ProviderType.AUTO
         )
-        
+
         quota = self._state.quotas.get(provider, QuotaInfo())
+        quota_dict = quota.to_dict()
         quota_str = f"{quota.used_tokens} / {quota.limit_tokens or '∞'}"
         if quota.limit_tokens > 0:
-            quota_str += f" ({quota.percentage}% 🔴)" if quota.percentage > 80 else f" ({quota.percentage}%)"
+            pct = quota_dict["percentage"]
+            quota_str += f" ({pct}% 🔴)" if pct > 80 else f" ({pct}%)"
 
         chain_str = " → ".join(p.value for p in chain) or "нет"
-        temp_str = f"  {self._state.temperature:.1f}" if self._state.temperature >= 0 else "  дефолт"
-        tokens_str = str(self._state.max_output_tokens) if self._state.max_output_tokens else "дефолт"
+        temp_str = (
+            f"  {self._state.temperature:.1f}" if self._state.temperature >= 0 else "  дефолт"
+        )
+        tokens_str = (
+            str(self._state.max_output_tokens) if self._state.max_output_tokens else "дефолт"
+        )
 
         return (
             f"🔌 **Активный провайдер:** {display}\n"
@@ -597,11 +1010,16 @@ class ProviderManager:
                 if tier != current_tier:
                     current_tier = tier
                     tier_labels = {
-                        "flagship": "🚀 Флагман", "ultra": "🔮 Ultra",
-                        "pro": "💼 Pro", "standard": "📊 Standard",
-                        "flash": "⚡ Flash", "reasoning": "💭 Reasoning",
-                        "code": "💻 Code", "exp": "🧪 Experimental",
-                        "nano": "⚡ Nano", "small": "🔹 Small",
+                        "flagship": "🚀 Флагман",
+                        "ultra": "🔮 Ultra",
+                        "pro": "💼 Pro",
+                        "standard": "📊 Standard",
+                        "flash": "⚡ Flash",
+                        "reasoning": "💭 Reasoning",
+                        "code": "💻 Code",
+                        "exp": "🧪 Experimental",
+                        "nano": "⚡ Nano",
+                        "small": "🔹 Small",
                         "medium": "🔷 Medium",
                     }
                     if tier in tier_labels:
@@ -610,7 +1028,9 @@ class ProviderManager:
                 vision_mark = " 📷" if m.get("vision") else ""
                 think_mark = " 💭" if m.get("thinking") else ""
                 cur = " ✅" if m["id"] == self._state.model_id else ""
-                lines.append(f"    `{m['id']}` — {m['name']}{default_mark}{vision_mark}{think_mark}{cur}")
+                lines.append(
+                    f"    `{m['id']}` — {m['name']}{default_mark}{vision_mark}{think_mark}{cur}"
+                )
             lines.append("")
         lines.append(
             "Легенда: ⭐ дефолтная · 📷 vision (фото) · 💭 thinking · ✅ текущая\n"
@@ -625,7 +1045,13 @@ class ProviderManager:
             cur = " ← **АКТИВЕН**" if d == current else ""
             params = THINKING_DEPTH_PARAMS[d]
             budget = params.get("budget_tokens")
-            budget_str = f"({budget} токенов)" if budget else "(авто)" if d == ThinkingDepth.AUTO else "(нет)"
+            budget_str = (
+                f"({budget} токенов)"
+                if budget
+                else "(авто)"
+                if d == ThinkingDepth.AUTO
+                else "(нет)"
+            )
             lines.append(f"  `{d.value}` — {display} {budget_str}{cur}")
         lines.append(
             "\nМодели с thinking: `o3`, `o1`, `gemini-3.*-thinking`, `deepseek-r1`\n"

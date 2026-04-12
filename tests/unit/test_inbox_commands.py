@@ -179,7 +179,9 @@ async def test_handle_inbox_taskfrom_creates_linked_owner_task(tmp_path) -> None
         chat_type="group",
         is_reply_to_me=True,
     )["item"]
-    message = _make_message(f"!inbox taskfrom {source['item_id']} | Проверить кейс | Нужен followup")
+    message = _make_message(
+        f"!inbox taskfrom {source['item_id']} | Проверить кейс | Нужен followup"
+    )
     bot = SimpleNamespace()
     original = command_handlers_module.inbox_service
     command_handlers_module.inbox_service = inbox

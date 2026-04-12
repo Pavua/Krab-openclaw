@@ -1,8 +1,9 @@
-
 import asyncio
 import os
-from playwright.async_api import async_playwright, BrowserContext, Page
+
+from playwright.async_api import BrowserContext, Page, async_playwright
 from structlog import get_logger
+
 from src.config import config
 
 logger = get_logger(__name__)
@@ -10,11 +11,13 @@ logger = get_logger(__name__)
 USER_DATA_DIR = os.path.join(os.getcwd(), "browser_data")
 os.makedirs(USER_DATA_DIR, exist_ok=True)
 
+
 class WebSessionManager:
     """
     Manages persistent browser sessions for Web Access (ChatGPT/Gemini).
     Uses Playwright with a persistent context to keep login cookies.
     """
+
     def __init__(self):
         self.playwright = None
         self.context: BrowserContext = None
@@ -35,17 +38,23 @@ class WebSessionManager:
             }
             try:
                 from .config import config as _app_cfg
+
                 if getattr(_app_cfg, "TOR_ENABLED", False):
                     _tor_port = int(getattr(_app_cfg, "TOR_SOCKS_PORT", 9050))
                     _launch_kwargs["proxy"] = {"server": f"socks5://127.0.0.1:{_tor_port}"}
             except ImportError:
                 pass
-            self.context = await self.playwright.chromium.launch_persistent_context(**_launch_kwargs)
-            self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+            self.context = await self.playwright.chromium.launch_persistent_context(
+                **_launch_kwargs
+            )
+            self.page = (
+                self.context.pages[0] if self.context.pages else await self.context.new_page()
+            )
             self.is_active = True
             logger.info("web_session_started", headless=headless)
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             logger.error("web_session_start_failed", error=str(e))
 
@@ -62,28 +71,30 @@ class WebSessionManager:
         """Sends a query to ChatGPT Web."""
         if not self.is_active:
             await self.start()
-        
+
         try:
             page = self.page
             await page.goto("https://chatgpt.com/")
-            
+
             # Wait for input (simplified selector, subject to change)
             # Need strict error handling here
             try:
                 await page.wait_for_selector("#prompt-textarea", timeout=5000)
-            except:
+            except Exception:
                 return "❌ ChatGPT Access Failed. Please login manually first using `!web login`."
 
             await page.fill("#prompt-textarea", prompt)
             await page.keyboard.press("Enter")
-            
+
             # Wait for response (very tricky dynamically)
             # For POC: wait 5s then grab last message
-            await asyncio.sleep(5) 
-            
+            await asyncio.sleep(5)
+
             # Validating if still generating...
             # This is a very rough implementation
-            responses = await page.locator("div[data-message-author-role='assistant']").all_inner_texts()
+            responses = await page.locator(
+                "div[data-message-author-role='assistant']"
+            ).all_inner_texts()
             if responses:
                 return responses[-1]
             return "❌ No response found."
@@ -116,13 +127,14 @@ class WebSessionManager:
     async def login_mode(self):
         """Starts browser in HEADFUL mode for manual login."""
         if self.is_active:
-             # If already active but headless, we might need to restart or just use it?
-             # For simplicity, if headless, restart headful.
-             # If already headful, just return.
-             pass 
-             
+            # If already active but headless, we might need to restart or just use it?
+            # For simplicity, if headless, restart headful.
+            # If already headful, just return.
+            pass
+
         await self.stop()
         await self.start(headless=False)
         return "🌍 Browser opened. Please login to ChatGPT/Gemini manually inside the window."
+
 
 web_manager = WebSessionManager()

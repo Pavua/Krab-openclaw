@@ -33,11 +33,11 @@ _STATE_PATH = Path.home() / ".openclaw" / "krab_runtime_state" / "swarm_channels
 
 # Эмодзи для топиков — Telegram принимает только определённые цвета
 _TOPIC_ICON_COLORS = {
-    "traders": 0x6FB9F0,   # голубой
-    "coders": 0xFFD67E,    # жёлтый
+    "traders": 0x6FB9F0,  # голубой
+    "coders": 0xFFD67E,  # жёлтый
     "analysts": 0xCB86DB,  # фиолетовый
     "creative": 0x8EEE98,  # зелёный
-    "crossteam": 0xFF93B2, # розовый
+    "crossteam": 0xFF93B2,  # розовый
 }
 
 # Определения топиков для авто-создания
@@ -311,30 +311,38 @@ class SwarmChannels:
                 if topic_def["title"].lower() in ex["title"].lower():
                     topic_ids[topic_def["key"]] = ex["id"]
                     matched = True
-                    logger.info("swarm_forum_topic_matched",
-                                team=topic_def["key"], topic_id=ex["id"])
+                    logger.info(
+                        "swarm_forum_topic_matched", team=topic_def["key"], topic_id=ex["id"]
+                    )
                     break
 
             if not matched:
                 try:
                     topic_result = await self._invoke_create_topic(
-                        peer, topic_def["title"], topic_def.get("icon_color"),
+                        peer,
+                        topic_def["title"],
+                        topic_def.get("icon_color"),
                     )
                     topic_id = _extract_topic_id(topic_result)
                     if topic_id:
                         topic_ids[topic_def["key"]] = topic_id
-                        logger.info("swarm_forum_topic_created",
-                                    team=topic_def["key"], topic_id=topic_id)
+                        logger.info(
+                            "swarm_forum_topic_created", team=topic_def["key"], topic_id=topic_id
+                        )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("swarm_forum_topic_create_failed",
-                                   team=topic_def["key"], error=repr(exc))
+                    logger.warning(
+                        "swarm_forum_topic_create_failed", team=topic_def["key"], error=repr(exc)
+                    )
                     if not topic_ids:
                         raise
 
         return topic_ids
 
     async def _invoke_create_topic(
-        self, peer: Any, title: str, icon_color: int | None,
+        self,
+        peer: Any,
+        title: str,
+        icon_color: int | None,
     ) -> Any:
         """Создаёт топик через raw API (pyrofork 2.3+)."""
         from pyrogram import raw  # noqa: PLC0415
@@ -347,9 +355,7 @@ class SwarmChannels:
         if icon_color is not None:
             kwargs["icon_color"] = icon_color
 
-        return await self._client.invoke(
-            raw.functions.messages.CreateForumTopic(**kwargs)
-        )
+        return await self._client.invoke(raw.functions.messages.CreateForumTopic(**kwargs))
 
     async def _get_existing_topics(self, chat_id: int) -> list[dict[str, Any]]:
         """Получает список существующих топиков в Forum-группе (pyrofork 2.3+)."""
@@ -359,16 +365,22 @@ class SwarmChannels:
             peer = await self._client.resolve_peer(chat_id)
             result = await self._client.invoke(
                 raw.functions.messages.GetForumTopics(
-                    peer=peer, offset_date=0, offset_id=0, offset_topic=0, limit=100,
+                    peer=peer,
+                    offset_date=0,
+                    offset_id=0,
+                    offset_topic=0,
+                    limit=100,
                 )
             )
             topics = []
             for t in getattr(result, "topics", []):
-                topics.append({
-                    "id": t.id,
-                    "title": t.title,
-                    "icon_color": getattr(t, "icon_color", None),
-                })
+                topics.append(
+                    {
+                        "id": t.id,
+                        "title": t.title,
+                        "icon_color": getattr(t, "icon_color", None),
+                    }
+                )
             return topics
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_channels_get_topics_failed", error=str(exc))
@@ -395,7 +407,9 @@ class SwarmChannels:
         if topic_id:
             try:
                 await _cl.send_message(
-                    chat_id, text, message_thread_id=topic_id,
+                    chat_id,
+                    text,
+                    message_thread_id=topic_id,
                 )
                 return
             except Exception as exc:  # noqa: BLE001
@@ -526,8 +540,9 @@ class SwarmChannels:
         try:
             await self._send_message(chat_id, msg, topic_id=topic_id, client=cl)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("swarm_channels_broadcast_failed",
-                           team=team, role=role_name, error=str(exc))
+            logger.warning(
+                "swarm_channels_broadcast_failed", team=team, role=role_name, error=str(exc)
+            )
 
     async def broadcast_round_start(self, *, team: str, topic: str) -> None:
         """Анонс начала раунда."""
@@ -563,9 +578,7 @@ class SwarmChannels:
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_channels_round_end_failed", team=team, error=str(exc))
 
-    async def broadcast_delegation(
-        self, *, source_team: str, target_team: str, topic: str
-    ) -> None:
+    async def broadcast_delegation(self, *, source_team: str, target_team: str, topic: str) -> None:
         """Уведомление о делегировании между командами."""
         # Шлём в crossteam топик (или source team если crossteam нет)
         chat_id, topic_id = self._resolve_destination("crossteam")

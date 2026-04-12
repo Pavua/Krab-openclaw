@@ -22,7 +22,6 @@ import stat
 from pathlib import Path
 from typing import Any, Iterator
 
-
 SKIP_DIR_NAMES = {
     ".venv",
     "venv",
@@ -220,7 +219,9 @@ def _normalized_mode_for_file(current_mode: int) -> int:
     return desired
 
 
-def normalize_shared_worktree_permissions(root: Path, *, dry_run: bool = False, limit: int = 40) -> dict[str, Any]:
+def normalize_shared_worktree_permissions(
+    root: Path, *, dry_run: bool = False, limit: int = 40
+) -> dict[str, Any]:
     """
     Нормализует права shared worktree без смены владельца.
 
@@ -273,7 +274,11 @@ def normalize_shared_worktree_permissions(root: Path, *, dry_run: bool = False, 
                     }
                 )
             continue
-        desired_mode = _normalized_mode_for_dir(current_mode) if stat.S_ISDIR(st.st_mode) else _normalized_mode_for_file(current_mode)
+        desired_mode = (
+            _normalized_mode_for_dir(current_mode)
+            if stat.S_ISDIR(st.st_mode)
+            else _normalized_mode_for_file(current_mode)
+        )
         if desired_mode == current_mode:
             continue
 

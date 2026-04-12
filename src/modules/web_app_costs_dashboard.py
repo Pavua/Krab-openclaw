@@ -26,7 +26,7 @@ COSTS_DASHBOARD_HTML = """<!DOCTYPE html>
             margin: 0 auto;
         }
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-        
+
         /* Status Bar */
         .status-bar {
             display: flex;
@@ -44,7 +44,7 @@ COSTS_DASHBOARD_HTML = """<!DOCTYPE html>
             box-shadow: 0 0 8px var(--success);
         }
         .status-title { color: var(--text); font-weight: 600; }
-        
+
         /* Cards */
         .card {
             background: var(--card-bg);
@@ -60,7 +60,7 @@ COSTS_DASHBOARD_HTML = """<!DOCTYPE html>
             margin-bottom: 16px;
         }
         h2 { font-size: 16px; font-weight: 600; }
-        
+
         /* Budget */
         .budget-amounts {
             font-size: 28px;
@@ -84,7 +84,7 @@ COSTS_DASHBOARD_HTML = """<!DOCTYPE html>
             transform: scaleX(0);
             transition: transform 0.8s ease-out;
         }
-        
+
         /* Stacked Bar */
         .stacked-bar {
             display: flex;
@@ -98,7 +98,7 @@ COSTS_DASHBOARD_HTML = """<!DOCTYPE html>
             height: 100%;
             transition: width 0.8s ease-out;
         }
-        
+
         /* Legend */
         .legend-grid { display: flex; flex-direction: column; gap: 8px; }
         .legend-item {
@@ -118,7 +118,7 @@ COSTS_DASHBOARD_HTML = """<!DOCTYPE html>
         .legend-info { flex-grow: 1; display: flex; flex-direction: column; gap: 4px; }
         .legend-name { font-weight: 600; font-size: 14px; }
         .legend-stats { font-size: 13px; color: var(--text-muted); }
-        
+
         /* Metrics */
         .metrics-grid {
             display: grid;
@@ -145,7 +145,7 @@ COSTS_DASHBOARD_HTML = """<!DOCTYPE html>
             font-weight: 600;
             color: var(--accent);
         }
-        
+
         @media (max-width: 480px) {
             .budget-amounts { font-size: 20px; }
             .metrics-grid { grid-template-columns: 1fr; }

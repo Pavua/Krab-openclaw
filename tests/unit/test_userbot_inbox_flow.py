@@ -65,8 +65,14 @@ def _make_message(
     reply_to_me: bool,
 ) -> tuple[SimpleNamespace, SimpleNamespace]:
     """Готовит входящее текстовое сообщение и placeholder reply."""
-    temp_msg = SimpleNamespace(chat=SimpleNamespace(id=chat_id), text="", caption="", delete=AsyncMock())
-    reply_from = SimpleNamespace(id=777, username="owner") if reply_to_me else SimpleNamespace(id=999, username="other")
+    temp_msg = SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id), text="", caption="", delete=AsyncMock()
+    )
+    reply_from = (
+        SimpleNamespace(id=777, username="owner")
+        if reply_to_me
+        else SimpleNamespace(id=999, username="other")
+    )
     incoming = SimpleNamespace(
         id=message_id,
         from_user=SimpleNamespace(id=42, username="trusted", is_bot=False),

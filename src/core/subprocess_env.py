@@ -1,4 +1,5 @@
 """Clean subprocess environment to suppress macOS malloc debugging noise."""
+
 from __future__ import annotations
 
 import os
@@ -37,5 +38,7 @@ def clean_subprocess_env() -> dict[str, str]:
     path_entries = current_path.split(os.pathsep) if current_path else []
     missing = [p for p in _HOMEBREW_PATH_PREFIXES if p not in path_entries]
     if missing:
-        env["PATH"] = os.pathsep.join([*missing, *path_entries]) if path_entries else os.pathsep.join(missing)
+        env["PATH"] = (
+            os.pathsep.join([*missing, *path_entries]) if path_entries else os.pathsep.join(missing)
+        )
     return env

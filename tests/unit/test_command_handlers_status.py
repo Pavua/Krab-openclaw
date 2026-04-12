@@ -54,7 +54,9 @@ async def test_handle_status_prefers_runtime_route_model(monkeypatch: pytest.Mon
         "get_runtime_primary_model",
         lambda: "google/gemini-3.1-pro-preview",
     )
-    monkeypatch.setattr(command_handlers_module.config, "MODEL", "openai-codex/gpt-5.4", raising=False)
+    monkeypatch.setattr(
+        command_handlers_module.config, "MODEL", "openai-codex/gpt-5.4", raising=False
+    )
 
     await handle_status(bot, message)
 

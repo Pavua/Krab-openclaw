@@ -11,7 +11,6 @@
 - ~/.openclaw/krab_runtime_state/ — user-specific runtime каталог, всегда rw для текущего юзера.
 """
 
-import os
 import sqlite3
 import time
 from pathlib import Path
@@ -19,8 +18,6 @@ from typing import Optional
 
 from src.core.exceptions import CacheError
 from src.core.logger import get_logger
-
-from .config import config
 
 logger = get_logger(__name__)
 
@@ -88,9 +85,7 @@ class CacheManager:
     def _backend_get(self, key: str) -> Optional[tuple[str, float]]:
         """Возвращает (value, expires_at) или None. Не логирует промахи."""
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
-                "SELECT value, expires_at FROM cache WHERE key = ?", (key,)
-            )
+            cursor = conn.execute("SELECT value, expires_at FROM cache WHERE key = ?", (key,))
             row = cursor.fetchone()
             return (row[0], row[1]) if row else None
 
@@ -151,7 +146,6 @@ class CacheManager:
             self._backend_clear_expired()
         except sqlite3.Error as e:
             logger.warning("cache_clear_expired_error", error=str(e))
-
 
     def delete(self, key: str) -> None:
         """Удаляет запись по ключу. При ошибке молча логирует."""

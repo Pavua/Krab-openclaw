@@ -10,7 +10,6 @@
 from dataclasses import dataclass
 from typing import Any, Optional
 
-
 # Коды ошибок для унификации диагностики (commands + web API)
 CODE_AUTH = "auth"
 CODE_QUOTA = "quota"

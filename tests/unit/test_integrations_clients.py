@@ -121,18 +121,25 @@ async def test_krab_ear_health_prefers_ipc(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_bridge_reads_ws_endpoint_from_devtools_active_port(monkeypatch, tmp_path: Path) -> None:
+async def test_browser_bridge_reads_ws_endpoint_from_devtools_active_port(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Browser bridge должен уметь собирать wsEndpoint из `DevToolsActivePort`."""
     bridge = BrowserBridge()
     active_port = tmp_path / "DevToolsActivePort"
     active_port.write_text("9222\n/devtools/browser/test-browser-id\n", encoding="utf-8")
     monkeypatch.setattr(bridge, "_devtools_active_port_candidates", lambda: [active_port])
 
-    assert bridge._read_devtools_ws_endpoint() == "ws://127.0.0.1:9222/devtools/browser/test-browser-id"
+    assert (
+        bridge._read_devtools_ws_endpoint()
+        == "ws://127.0.0.1:9222/devtools/browser/test-browser-id"
+    )
 
 
 @pytest.mark.asyncio
-async def test_browser_bridge_falls_back_to_ws_endpoint_when_http_cdp_returns_404(monkeypatch) -> None:
+async def test_browser_bridge_falls_back_to_ws_endpoint_when_http_cdp_returns_404(
+    monkeypatch,
+) -> None:
     """При 404 на `json/version` bridge должен пробовать wsEndpoint из профиля Chrome."""
     bridge = BrowserBridge()
     bridge._playwright = None
@@ -143,7 +150,9 @@ async def test_browser_bridge_falls_back_to_ws_endpoint_when_http_cdp_returns_40
         async def connect_over_cdp(self, endpoint: str):
             seen_endpoints.append(endpoint)
             if endpoint == bridge.CDP_URL:
-                raise RuntimeError("Unexpected status 404 when connecting to http://127.0.0.1:9222/json/version")
+                raise RuntimeError(
+                    "Unexpected status 404 when connecting to http://127.0.0.1:9222/json/version"
+                )
             if endpoint == "ws://127.0.0.1:9222/devtools/browser/test-browser-id":
                 return expected_browser
             raise AssertionError(f"Неожиданный endpoint: {endpoint}")
@@ -156,8 +165,14 @@ async def test_browser_bridge_falls_back_to_ws_endpoint_when_http_cdp_returns_40
         async def start(self):
             return _FakePlaywright()
 
-    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: _FakeAsyncPlaywrightFactory())
-    monkeypatch.setattr(bridge, "_read_devtools_ws_endpoint", lambda: "ws://127.0.0.1:9222/devtools/browser/test-browser-id")
+    monkeypatch.setattr(
+        "playwright.async_api.async_playwright", lambda: _FakeAsyncPlaywrightFactory()
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_read_devtools_ws_endpoint",
+        lambda: "ws://127.0.0.1:9222/devtools/browser/test-browser-id",
+    )
 
     browser = await bridge._get_browser()
 
@@ -221,7 +236,11 @@ async def test_browser_bridge_is_attached_falls_back_to_raw_cdp(monkeypatch) -> 
         return []
 
     monkeypatch.setattr(bridge, "_get_browser", _boom)
-    monkeypatch.setattr(bridge, "_read_devtools_ws_endpoint", lambda: "ws://127.0.0.1:9222/devtools/browser/test-browser-id")
+    monkeypatch.setattr(
+        bridge,
+        "_read_devtools_ws_endpoint",
+        lambda: "ws://127.0.0.1:9222/devtools/browser/test-browser-id",
+    )
     monkeypatch.setattr(bridge, "_list_tabs_via_raw_cdp", _raw_tabs)
 
     assert await bridge.is_attached() is True
@@ -247,7 +266,11 @@ async def test_browser_bridge_action_probe_falls_back_to_raw_cdp(monkeypatch) ->
         }
 
     monkeypatch.setattr(bridge, "_get_browser", _boom)
-    monkeypatch.setattr(bridge, "_read_devtools_ws_endpoint", lambda: "ws://127.0.0.1:9222/devtools/browser/test-browser-id")
+    monkeypatch.setattr(
+        bridge,
+        "_read_devtools_ws_endpoint",
+        lambda: "ws://127.0.0.1:9222/devtools/browser/test-browser-id",
+    )
     monkeypatch.setattr(bridge, "_action_probe_via_raw_cdp", _raw_probe)
 
     result = await bridge.action_probe("https://example.com")

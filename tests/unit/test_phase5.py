@@ -1,13 +1,13 @@
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import json
-import os
-from unittest.mock import AsyncMock, MagicMock, patch
+
 from src import employee_templates
 from src.openclaw_client import OpenClawClient
 
+
 class TestPhase5:
-    
     @pytest.fixture
     def mock_roles_file(self, tmp_path):
         # Mock ROLES_FILE
@@ -21,13 +21,13 @@ class TestPhase5:
     def test_save_role(self, mock_roles_file):
         """Test saving a new agent role"""
         assert employee_templates.save_role("test_agent", "You are a test agent")
-        
+
         # Verify in memory
         assert "test_agent" in employee_templates.ROLES
         assert employee_templates.ROLES["test_agent"] == "You are a test agent"
-        
+
         # Verify file
-        with open(mock_roles_file, 'r') as f:
+        with open(mock_roles_file, "r") as f:
             data = json.load(f)
             assert data["test_agent"] == "You are a test agent"
 
@@ -72,24 +72,31 @@ class TestPhase5:
         mock_mm.get_current_model = MagicMock(return_value=None)
         mock_mm._models_cache = {}
         mock_mm._local_candidates = AsyncMock(return_value=[])
-        
+
         with patch("src.model_manager.model_manager", mock_mm):
             gen = client.send_message_stream("Look at this", "123", images=["base64string"])
             async for _ in gen:
                 pass
-        
+
         # Verify payload construction — теперь используется .post (buffered), не .stream
         call_args = client._http_client.post.call_args
         assert call_args is not None
 
-        payload = call_args[1]['json']
+        payload = call_args[1]["json"]
         # Ищем user-сообщение с vision-контентом среди всех messages (история может расти)
         vision_msg = next(
-            (m for m in payload['messages']
-             if m.get('role') == 'user' and isinstance(m.get('content'), list)),
+            (
+                m
+                for m in payload["messages"]
+                if m.get("role") == "user" and isinstance(m.get("content"), list)
+            ),
             None,
         )
-        assert vision_msg is not None, f"Не найдено user-сообщение с vision в payload: {payload['messages']}"
-        assert {"type": "text", "text": "Look at this"} in vision_msg['content']
-        assert {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,base64string"}} in vision_msg['content']
-
+        assert vision_msg is not None, (
+            f"Не найдено user-сообщение с vision в payload: {payload['messages']}"
+        )
+        assert {"type": "text", "text": "Look at this"} in vision_msg["content"]
+        assert {
+            "type": "image_url",
+            "image_url": {"url": "data:image/jpeg;base64,base64string"},
+        } in vision_msg["content"]

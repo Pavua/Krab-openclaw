@@ -145,11 +145,27 @@ def build_repo_snapshot(repo_root: Path) -> dict[str, Any]:
     git_dir = repo_root / ".git"
     exists = repo_root.exists()
     git_dir_exists = git_dir.exists()
-    branch = _run_git(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"]).get("stdout", "") if git_dir_exists else ""
+    branch = (
+        _run_git(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"]).get("stdout", "")
+        if git_dir_exists
+        else ""
+    )
     head = _run_git(repo_root, ["rev-parse", "HEAD"]).get("stdout", "") if git_dir_exists else ""
-    status_short = _run_git(repo_root, ["status", "--short", "--branch"]).get("stdout", "") if git_dir_exists else ""
-    status_z = _run_git(repo_root, ["status", "--porcelain=v1", "-z"]).get("stdout", "") if git_dir_exists else ""
-    items = parse_git_status_porcelain_z(status_z) if status_z else parse_git_status_porcelain(status_short)
+    status_short = (
+        _run_git(repo_root, ["status", "--short", "--branch"]).get("stdout", "")
+        if git_dir_exists
+        else ""
+    )
+    status_z = (
+        _run_git(repo_root, ["status", "--porcelain=v1", "-z"]).get("stdout", "")
+        if git_dir_exists
+        else ""
+    )
+    items = (
+        parse_git_status_porcelain_z(status_z)
+        if status_z
+        else parse_git_status_porcelain(status_short)
+    )
     dirty_paths = [item["path"] for item in items]
     tracked_dirty = [item["path"] for item in items if item.get("tracked")]
     untracked = [item["path"] for item in items if item.get("untracked")]
@@ -208,13 +224,25 @@ def _git_no_index_numstat(path_a: Path, path_b: Path) -> dict[str, Any]:
         return {"ok": True, "added": 0, "deleted": 0, "binary": False}
     cols = line[0].split("\t")
     if len(cols) < 3:
-        return {"ok": False, "error": proc.stdout or proc.stderr or "", "added": None, "deleted": None, "binary": False}
+        return {
+            "ok": False,
+            "error": proc.stdout or proc.stderr or "",
+            "added": None,
+            "deleted": None,
+            "binary": False,
+        }
     if cols[0] == "-" or cols[1] == "-":
         return {"ok": True, "added": None, "deleted": None, "binary": True}
     try:
         return {"ok": True, "added": int(cols[0]), "deleted": int(cols[1]), "binary": False}
     except ValueError:
-        return {"ok": False, "error": proc.stdout or proc.stderr or "", "added": None, "deleted": None, "binary": False}
+        return {
+            "ok": False,
+            "error": proc.stdout or proc.stderr or "",
+            "added": None,
+            "deleted": None,
+            "binary": False,
+        }
 
 
 def analyze_overlap_paths(
@@ -277,7 +305,11 @@ def analyze_overlap_paths(
             else:
                 numstat = _git_no_index_numstat(current_path, shared_path)
                 item["numstat"] = numstat
-                if _is_probably_text(current_raw) and _is_probably_text(shared_raw) and not bool(numstat.get("binary")):
+                if (
+                    _is_probably_text(current_raw)
+                    and _is_probably_text(shared_raw)
+                    and not bool(numstat.get("binary"))
+                ):
                     item["category"] = "divergent_text"
                     counts["divergent_text"] += 1
                 else:

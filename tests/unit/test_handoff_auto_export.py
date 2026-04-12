@@ -98,7 +98,6 @@ def test_auto_export_connection_error_does_not_raise(tmp_path: Path) -> None:
 
 def test_auto_export_timeout_does_not_raise(tmp_path: Path) -> None:
     """Simulate a timeout by patching urlopen to raise an OSError."""
-    import urllib.error
 
     with (
         mock.patch.object(rsa, "ARTIFACTS_DIR", tmp_path),

@@ -56,7 +56,9 @@ def test_update_setting_updates_voice_fields_and_env(tmp_path, monkeypatch) -> N
 
         assert config_module.Config.update_setting("VOICE_MODE_DEFAULT", "0") is True
         assert config_module.Config.update_setting("VOICE_REPLY_SPEED", "1.2") is True
-        assert config_module.Config.update_setting("VOICE_REPLY_VOICE", "ru-RU-SvetlanaNeural") is True
+        assert (
+            config_module.Config.update_setting("VOICE_REPLY_VOICE", "ru-RU-SvetlanaNeural") is True
+        )
         assert config_module.Config.update_setting("VOICE_REPLY_DELIVERY", "voice-only") is True
 
         assert config_module.Config.VOICE_MODE_DEFAULT is False

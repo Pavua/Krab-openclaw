@@ -10,7 +10,6 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 import http.server
 import json
 import threading
@@ -28,7 +27,7 @@ with mock.patch("src.config.config") as mock_config:
     mock_config.TELEGRAM_SESSION_NAME = "test_session"
     mock_config.OPENCLAW_URL = "http://127.0.0.1:18789"
     mock_config.TRIGGER_PREFIXES = ["!краб", "@краб"]
-    
+
     from src.userbot_bridge import KraabUserbot
 
 
@@ -63,7 +62,7 @@ def _start_local_server() -> tuple[http.server.HTTPServer, int]:
 async def test_auto_export_on_stop_success(tmp_path: Path) -> None:
     """When userbot stops, handoff snapshot is exported automatically."""
     server, port = _start_local_server()
-    
+
     with (
         mock.patch("src.config.config.BASE_DIR", tmp_path),
         mock.patch("urllib.request.urlopen") as mock_urlopen,
@@ -74,10 +73,10 @@ async def test_auto_export_on_stop_success(tmp_path: Path) -> None:
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = None
         mock_urlopen.return_value = mock_response
-        
+
         bot = KraabUserbot()
         result = await bot._auto_export_handoff_snapshot(reason="test_stop")
-    
+
     assert result["exported"] is True
     assert result["reason"] == "test_stop"
     assert result["error"] is None
@@ -123,7 +122,7 @@ async def test_auto_export_connection_error_does_not_raise(tmp_path: Path) -> No
     ):
         bot = KraabUserbot()
         result = await bot._auto_export_handoff_snapshot(reason="test_error")
-    
+
     assert result["exported"] is False
     assert "connection refused" in result["error"]
     assert result["reason"] == "test_error"
@@ -138,7 +137,7 @@ async def test_auto_export_returns_correct_structure(tmp_path: Path) -> None:
     ):
         bot = KraabUserbot()
         result = await bot._auto_export_handoff_snapshot(reason="test")
-    
+
     assert set(result.keys()) == {"exported", "path", "error", "reason"}
     assert isinstance(result["exported"], bool)
     assert isinstance(result["path"], str)

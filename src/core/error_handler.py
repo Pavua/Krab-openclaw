@@ -19,10 +19,11 @@
 """
 
 import asyncio
+import functools
 import logging
 import traceback
-import functools
-from pyrogram.errors import FloodWait, UserNotParticipant, ChatWriteForbidden, MessageNotModified
+
+from pyrogram.errors import ChatWriteForbidden, FloodWait, MessageNotModified, UserNotParticipant
 
 logger = logging.getLogger("ErrorHandler")
 
@@ -41,6 +42,7 @@ def safe_handler(func):
     - ChatWriteForbidden: логирует и пропускает
     - Остальное: логирует полный traceback, уведомляет владельца
     """
+
     @functools.wraps(func)
     async def wrapper(client, update, *args, **kwargs):
         try:
@@ -91,10 +93,9 @@ def safe_handler(func):
 
             # Попытка уведомить пользователя о проблеме (если update — это Message)
             try:
-                if hasattr(update, 'reply_text'):
+                if hasattr(update, "reply_text"):
                     await update.reply_text(
-                        f"⚠️ Произошла ошибка: `{error_name}`\n"
-                        f"Подробности в логах."
+                        f"⚠️ Произошла ошибка: `{error_name}`\nПодробности в логах."
                     )
             except Exception:
                 pass  # Если даже ответить не можем — молча логируем

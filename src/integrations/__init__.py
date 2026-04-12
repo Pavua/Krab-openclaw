@@ -8,4 +8,3 @@
 - не смешивать orchestration/runtime-логику с HTTP-деталями внешних сервисов.
 - browser_ai_provider: взаимодействие с Gemini/ChatGPT через CDP (платные подписки).
 """
-

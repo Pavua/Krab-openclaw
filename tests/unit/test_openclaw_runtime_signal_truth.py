@@ -141,8 +141,7 @@ def test_recent_lines_filters_old(log_file: Path) -> None:
     old_ts = "2020-01-01T00:00:00Z"
     fresh_ts = _ts_iso()
     log_file.write_text(
-        f"{old_ts} [info] old event\n"
-        f"{fresh_ts} [info] fresh event\n",
+        f"{old_ts} [info] old event\n{fresh_ts} [info] fresh event\n",
         encoding="utf-8",
     )
     lines = recent_gateway_log_lines(log_file, max_age_sec=60)

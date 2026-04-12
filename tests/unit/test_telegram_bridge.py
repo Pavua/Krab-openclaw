@@ -19,10 +19,7 @@ import pytest
 def _load_bridge_module():
     """Импортирует telegram_bridge.py напрямую из mcp-servers."""
     module_path = (
-        Path(__file__).resolve().parents[2]
-        / "mcp-servers"
-        / "telegram"
-        / "telegram_bridge.py"
+        Path(__file__).resolve().parents[2] / "mcp-servers" / "telegram" / "telegram_bridge.py"
     )
     spec = importlib.util.spec_from_file_location("telegram_bridge_module", module_path)
     assert spec is not None

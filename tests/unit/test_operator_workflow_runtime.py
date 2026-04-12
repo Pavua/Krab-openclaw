@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from src.core.inbox_service import InboxService
 from src.modules.web_app import WebApp
@@ -143,7 +143,9 @@ def _seed_inbox(inbox: InboxService) -> None:
     )
 
 
-def test_inbox_status_returns_workflow_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_inbox_status_returns_workflow_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """`/api/inbox/status` должен отдавать workflow buckets вместе с summary."""
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     _seed_inbox(inbox)
@@ -157,15 +159,25 @@ def test_inbox_status_returns_workflow_snapshot(monkeypatch: pytest.MonkeyPatch,
     assert data["ok"] is True
     assert data["summary"]["pending_owner_tasks"] == 2
     assert data["workflow"]["recent_replied_requests"][0]["metadata"]["message_id"] == "55"
-    assert data["workflow"]["recent_replied_requests"][0]["metadata"]["reply_message_ids"] == ["7001"]
+    assert data["workflow"]["recent_replied_requests"][0]["metadata"]["reply_message_ids"] == [
+        "7001"
+    ]
     assert data["workflow"]["approval_history"][0]["identity"]["approval_scope"] == "money"
-    assert data["workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"] == "approved"
+    assert (
+        data["workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"]
+        == "approved"
+    )
     assert data["workflow"]["recent_owner_actions"][0]["action"] == "approved"
-    assert data["workflow"]["escalated_owner_items"][0]["metadata"]["followup_latest_kind"] == "owner_task"
+    assert (
+        data["workflow"]["escalated_owner_items"][0]["metadata"]["followup_latest_kind"]
+        == "owner_task"
+    )
     assert data["workflow"]["linked_followups"][0]["metadata"]["source_kind"] == "owner_request"
 
 
-def test_runtime_handoff_contains_operator_workflow(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_runtime_handoff_contains_operator_workflow(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """`/api/runtime/handoff` должен включать operator-workflow snapshot."""
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     _seed_inbox(inbox)
@@ -178,14 +190,22 @@ def test_runtime_handoff_contains_operator_workflow(monkeypatch: pytest.MonkeyPa
     data = resp.json()
     assert data["ok"] is True
     assert data["operator_workflow"]["summary"]["pending_owner_requests"] == 0
-    assert data["operator_workflow"]["pending_owner_tasks"][0]["metadata"]["task_key"] == "post-restart-followup"
+    assert (
+        data["operator_workflow"]["pending_owner_tasks"][0]["metadata"]["task_key"]
+        == "post-restart-followup"
+    )
     assert data["operator_workflow"]["recent_activity"][0]["action"] == "reply_sent"
-    assert data["operator_workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"] == "approved"
+    assert (
+        data["operator_workflow"]["recent_approval_decisions"][0]["metadata"]["approval_decision"]
+        == "approved"
+    )
     assert data["operator_workflow"]["linked_followups"][0]["metadata"]["source_item_id"]
     assert data["inbox_summary"]["pending_owner_tasks"] == 2
 
 
-def test_ops_runtime_snapshot_contains_operator_workflow(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_ops_runtime_snapshot_contains_operator_workflow(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """`/api/ops/runtime_snapshot` должен не терять workflow truth observability-среза."""
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     _seed_inbox(inbox)
@@ -204,7 +224,10 @@ def test_ops_runtime_snapshot_contains_operator_workflow(monkeypatch: pytest.Mon
     data = resp.json()
     assert data["ok"] is True
     assert data["operator_workflow"]["summary"]["pending_owner_tasks"] == 2
-    assert data["operator_workflow"]["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Transport persistence проверен."
+    assert (
+        data["operator_workflow"]["recent_replied_requests"][0]["metadata"]["reply_excerpt"]
+        == "Transport persistence проверен."
+    )
     assert data["operator_workflow"]["recent_owner_actions"][0]["action"] == "approved"
     assert data["operator_workflow"]["escalated_owner_items"][0]["metadata"]["followup_count"] == 1
     assert data["operator_workflow"]["trace_index"]

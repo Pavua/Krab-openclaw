@@ -99,7 +99,13 @@ class AccessControlMixin:
         Отвечать им бессмысленно — они не принимают входящие.
         """
         username = str(getattr(user, "username", "") or "").strip().lstrip("@")
-        phone = str(getattr(user, "phone", "") or "").strip().lstrip("+").replace(" ", "").replace("-", "")
+        phone = (
+            str(getattr(user, "phone", "") or "")
+            .strip()
+            .lstrip("+")
+            .replace(" ", "")
+            .replace("-", "")
+        )
         for candidate in (username, phone):
             if candidate and candidate.isdigit() and len(candidate) <= 5:
                 return True
@@ -140,7 +146,11 @@ class AccessControlMixin:
         from ..config import config  # noqa: PLC0415
         from ..core.access_control import AccessLevel  # noqa: PLC0415
 
-        resolved_level = str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "").strip().lower()
+        resolved_level = (
+            str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "")
+            .strip()
+            .lower()
+        )
         if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
             return str(chat_id)
         isolated_level = resolved_level or AccessLevel.GUEST.value
@@ -164,7 +174,11 @@ class AccessControlMixin:
         from ..core.openclaw_workspace import load_workspace_prompt_bundle  # noqa: PLC0415
         from ..employee_templates import get_role_prompt  # noqa: PLC0415
 
-        resolved_level = str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "").strip().lower()
+        resolved_level = (
+            str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "")
+            .strip()
+            .lower()
+        )
         if is_allowed_sender or not bool(getattr(config, "NON_OWNER_SAFE_MODE_ENABLED", True)):
             base_prompt = get_role_prompt(self.current_role)
             workspace_bundle = load_workspace_prompt_bundle()
@@ -177,7 +191,9 @@ class AccessControlMixin:
                 ).strip()
         elif resolved_level == AccessLevel.PARTIAL.value:
             partial_prompt = str(getattr(config, "PARTIAL_ACCESS_PROMPT", "") or "").strip()
-            base_prompt = partial_prompt or str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
+            base_prompt = (
+                partial_prompt or str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
+            )
         else:
             safe_prompt = str(getattr(config, "NON_OWNER_SAFE_PROMPT", "") or "").strip()
             if safe_prompt:

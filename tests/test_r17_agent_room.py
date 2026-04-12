@@ -6,8 +6,10 @@ R17: Тесты Multi-Agent Room MVP — AgentRoom в src/core/swarm.py.
 Проверяет последовательную оркестрацию 3 ролей через мок-роутер.
 """
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
+
 from src.core.swarm import AgentRoom
 
 
@@ -76,7 +78,12 @@ async def test_agent_room_custom_roles():
     """AgentRoom работает с кастомными ролями."""
     custom_roles = [
         {"name": "planner", "emoji": "📋", "title": "Планировщик", "system_hint": "Составь план."},
-        {"name": "executor", "emoji": "⚡", "title": "Исполнитель", "system_hint": "Реализуй план."},
+        {
+            "name": "executor",
+            "emoji": "⚡",
+            "title": "Исполнитель",
+            "system_hint": "Реализуй план.",
+        },
     ]
 
     call_count = 0

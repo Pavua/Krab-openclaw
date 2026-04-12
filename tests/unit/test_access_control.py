@@ -16,10 +16,10 @@ import pytest
 
 from src.config import config
 from src.core.access_control import (
-    AccessLevel,
     OWNER_ONLY_COMMANDS,
     PARTIAL_ACCESS_COMMANDS,
     USERBOT_KNOWN_COMMANDS,
+    AccessLevel,
     build_command_access_matrix,
     get_effective_owner_label,
     get_effective_owner_subjects,
@@ -29,13 +29,17 @@ from src.core.access_control import (
 )
 
 
-def test_resolve_access_profile_marks_self_as_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_access_profile_marks_self_as_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", tmp_path / "acl.json", raising=False)
     profile = resolve_access_profile(user_id=777, username="owner", self_user_id=777)
     assert profile.level == AccessLevel.OWNER
 
 
-def test_resolve_access_profile_uses_owner_username(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_resolve_access_profile_uses_owner_username(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", tmp_path / "acl.json", raising=False)
     monkeypatch.setattr(config, "OWNER_USERNAME", "@pablito", raising=False)
     profile = resolve_access_profile(user_id=42, username="pablito", self_user_id=777)
@@ -65,7 +69,9 @@ def test_get_effective_owner_subjects_prefers_runtime_acl(
     assert get_effective_owner_label() == "312322764, p0lrd"
 
 
-def test_resolve_access_profile_maps_legacy_allowed_users_to_full(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_resolve_access_profile_maps_legacy_allowed_users_to_full(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", tmp_path / "acl.json", raising=False)
     monkeypatch.setattr(config, "FULL_ACCESS_USERS", ["trusted_user"], raising=False)
     monkeypatch.setattr(config, "PARTIAL_ACCESS_USERS", [], raising=False)
@@ -74,7 +80,9 @@ def test_resolve_access_profile_maps_legacy_allowed_users_to_full(monkeypatch: p
     assert profile.level == AccessLevel.FULL
 
 
-def test_resolve_access_profile_supports_partial_acl_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_resolve_access_profile_supports_partial_acl_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     acl_path = tmp_path / "acl.json"
     acl_path.write_text('{"partial":["@reader"]}', encoding="utf-8")
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
@@ -85,7 +93,9 @@ def test_resolve_access_profile_supports_partial_acl_file(monkeypatch: pytest.Mo
     assert profile.level == AccessLevel.PARTIAL
 
 
-def test_partial_profile_can_execute_only_safe_commands(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_partial_profile_can_execute_only_safe_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     acl_path = tmp_path / "acl.json"
     acl_path.write_text('{"partial":["reader"]}', encoding="utf-8")
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
@@ -100,7 +110,9 @@ def test_partial_profile_can_execute_only_safe_commands(monkeypatch: pytest.Monk
     assert profile.can_execute_command("write", {"status", "help", "search", "write"}) is False
 
 
-def test_full_profile_cannot_execute_owner_only_commands(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_full_profile_cannot_execute_owner_only_commands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     acl_path = tmp_path / "acl.json"
     acl_path.write_text('{"full":["trusted"]}', encoding="utf-8")
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
@@ -142,7 +154,9 @@ def test_build_command_access_matrix_marks_owner_only_and_partial_counts() -> No
     assert matrix["roles"]["partial"]["commands"] == ["help", "search", "status"]
 
 
-def test_update_acl_subject_adds_and_removes_runtime_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_update_acl_subject_adds_and_removes_runtime_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     acl_path = tmp_path / "acl.json"
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", acl_path, raising=False)
 
@@ -159,7 +173,9 @@ def test_update_acl_subject_adds_and_removes_runtime_entries(tmp_path: Path, mon
     assert load_acl_runtime_state()["full"] == []
 
 
-def test_update_acl_subject_rejects_unsupported_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_update_acl_subject_rejects_unsupported_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(config, "USERBOT_ACL_FILE", tmp_path / "acl.json", raising=False)
     with pytest.raises(ValueError, match="unsupported_acl_level"):
         update_acl_subject("guest", "@reader", add=True)

@@ -2,15 +2,14 @@
 """
 Unit tests for routing_errors (Фаза 2.1 — таксономия ошибок роутинга).
 """
-import pytest
 
 from src.core.routing_errors import (
     CODE_AUTH,
     CODE_QUOTA,
     RouterAuthError,
-    RouterQuotaError,
     RouterModelNotLoadedError,
     RouterNetworkError,
+    RouterQuotaError,
     RouterTimeoutError,
     diagnostic_payload,
     is_fail_fast,

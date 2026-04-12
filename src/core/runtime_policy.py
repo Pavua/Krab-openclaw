@@ -22,7 +22,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-
 _RUNTIME_MODE_ALIASES = {
     "personal": "personal-runtime",
     "personal-runtime": "personal-runtime",
@@ -102,11 +101,15 @@ def current_runtime_mode() -> str:
       личного daily-use;
     - `release-safe` должен включаться явно, а не по молчаливому default.
     """
-    raw = str(
-        os.getenv("KRAB_RUNTIME_MODE", "")
-        or os.getenv("OPENCLAW_RUNTIME_MODE", "")
-        or "personal-runtime"
-    ).strip().lower()
+    raw = (
+        str(
+            os.getenv("KRAB_RUNTIME_MODE", "")
+            or os.getenv("OPENCLAW_RUNTIME_MODE", "")
+            or "personal-runtime"
+        )
+        .strip()
+        .lower()
+    )
     return _RUNTIME_MODE_ALIASES.get(raw, "personal-runtime")
 
 
@@ -161,7 +164,11 @@ def provider_runtime_policy(
         login_state = "attention"
         stability_score -= 0.18
     elif normalized_readiness == "blocked":
-        login_state = "login_required" if helper_available or normalized_auth_mode in {"oauth", "cli"} else "unavailable"
+        login_state = (
+            "login_required"
+            if helper_available or normalized_auth_mode in {"oauth", "cli"}
+            else "unavailable"
+        )
         stability_score -= 0.34
     else:
         login_state = "unknown"

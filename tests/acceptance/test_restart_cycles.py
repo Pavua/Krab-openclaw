@@ -39,6 +39,7 @@ def health_check() -> dict:
 def trigger_restart() -> bool:
     """Рестарт через API или через kill+wait если API timeout."""
     import subprocess
+
     # Сначала пробуем API
     try:
         req = urllib.request.Request(RESTART_URL, method="POST", data=b"{}")
@@ -52,7 +53,8 @@ def trigger_restart() -> bool:
     try:
         result = subprocess.run(
             ["pkill", "-f", "python.*src.main"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         print(f"    pkill fallback (exit={result.returncode})")
         return True  # pkill отправлен, ждём restart

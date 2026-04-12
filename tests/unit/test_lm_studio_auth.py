@@ -32,7 +32,9 @@ def test_lm_studio_auth_strips_wrapping_quotes() -> None:
     assert headers["x-api-key"] == "quoted-secret"
 
 
-def test_resolve_lm_studio_api_key_reads_project_env_when_process_env_missing(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_lm_studio_api_key_reads_project_env_when_process_env_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("LM_STUDIO_API_KEY=dotenv-token\n", encoding="utf-8")
 
@@ -46,7 +48,9 @@ def test_resolve_lm_studio_api_key_reads_project_env_when_process_env_missing(mo
     assert resolve_lm_studio_api_key() == "dotenv-token"
 
 
-def test_resolve_lm_studio_api_key_prefers_process_env_over_project_env(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_lm_studio_api_key_prefers_process_env_over_project_env(
+    monkeypatch, tmp_path: Path
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("LM_STUDIO_API_KEY=dotenv-token\n", encoding="utf-8")
 

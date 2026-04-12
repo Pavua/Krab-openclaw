@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger("KrabCore.VoiceGatewaySubscriber")
 
@@ -122,14 +122,17 @@ class VoiceGatewayEventSubscriber:
                     break
                 logger.warning(
                     "WS подписка оборвалась (попытка %d/%d): %s",
-                    attempt, self.max_reconnect_attempts, exc,
+                    attempt,
+                    self.max_reconnect_attempts,
+                    exc,
                 )
                 if attempt < self.max_reconnect_attempts:
                     await asyncio.sleep(self.reconnect_delay_sec * min(attempt, 5))
 
         if not self._stopped and attempt >= self.max_reconnect_attempts:
             logger.error(
-                "Subscriber: исчерпаны попытки reconnect для %s", session_id,
+                "Subscriber: исчерпаны попытки reconnect для %s",
+                session_id,
             )
 
     async def _connect_and_listen(self, session_id: str) -> None:
@@ -137,9 +140,7 @@ class VoiceGatewayEventSubscriber:
         try:
             import websockets
         except ImportError:
-            logger.error(
-                "websockets не установлен. Установите: pip install websockets"
-            )
+            logger.error("websockets не установлен. Установите: pip install websockets")
             self._stopped = True
             return
 

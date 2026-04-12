@@ -5,6 +5,7 @@ swarm_artifact_store.py — persist swarm round artifacts to files.
 Phase 8 Master Plan: artifact store для swarm execution layer.
 Сохраняет результаты раундов, delegation chains, verifier reports.
 """
+
 from __future__ import annotations
 
 import json
@@ -99,9 +100,13 @@ class SwarmArtifactStore:
         """Сохраняет результат как markdown report для service workflows (Phase 7)."""
         ts = int(time.time())
         safe_team = team.lower().replace("/", "_")[:20]
-        safe_topic = "".join(c if c.isalnum() or c in " _-" else "_" for c in topic[:50]).strip().replace(" ", "_")
+        safe_topic = (
+            "".join(c if c.isalnum() or c in " _-" else "_" for c in topic[:50])
+            .strip()
+            .replace(" ", "_")
+        )
         filename = f"{safe_team}_{safe_topic}_{ts}.md"
-        dest = (report_dir or self._base_dir.parent / "reports")
+        dest = report_dir or self._base_dir.parent / "reports"
         dest.mkdir(parents=True, exist_ok=True)
         path = dest / filename
 

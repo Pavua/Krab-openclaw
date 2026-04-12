@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 INDEX_HTML_PATH = Path(__file__).resolve().parents[2] / "src" / "web" / "index.html"
 
 
@@ -41,8 +40,14 @@ def test_openclaw_status_keeps_browser_probe_outside_fast_batch() -> None:
 
     source = _index_html_source()
 
-    assert 'const browserReadinessPromise = fetch("/api/openclaw/browser-mcp-readiness?url=https%3A%2F%2Fexample.com")' in source
-    assert "const [catalogRes, autoswitchRes, channelsRes, runtimeConfigRes] = await Promise.all([" in source
+    assert (
+        'const browserReadinessPromise = fetch("/api/openclaw/browser-mcp-readiness?url=https%3A%2F%2Fexample.com")'
+        in source
+    )
+    assert (
+        "const [catalogRes, autoswitchRes, channelsRes, runtimeConfigRes] = await Promise.all(["
+        in source
+    )
     assert "const browserReadinessRes = await browserReadinessPromise;" in source
 
 
@@ -56,7 +61,10 @@ def test_owner_panel_schedules_bootstrap_recovery_after_transient_restart_failur
     assert '"ocTranslatorReadinessBadge"' in source
     assert '"ocTranslatorFoundationBadge"' in source
     assert "scheduleBootstrapRecoveryPasses();" in source
-    assert 'refreshAll().catch((error) => console.error("refreshAll_visibility_recovery_failed", error));' in source
+    assert (
+        'refreshAll().catch((error) => console.error("refreshAll_visibility_recovery_failed", error));'
+        in source
+    )
 
 
 def test_owner_panel_reuses_last_good_dashboard_bootstrap_on_first_paint() -> None:
@@ -64,21 +72,27 @@ def test_owner_panel_reuses_last_good_dashboard_bootstrap_on_first_paint() -> No
 
     source = _index_html_source()
 
-    assert 'const OWNER_PANEL_DASHBOARD_CACHE_IDS = [' in source
-    assert 'const OWNER_PANEL_DASHBOARD_CACHE_HTML_IDS = [' in source
-    assert 'const OWNER_PANEL_DASHBOARD_CACHE_STYLE_ONLY_IDS = [' in source
-    assert 'function captureOwnerPanelDashboardSnapshot()' in source
-    assert 'function applyCachedDashboardStatsTruth(snapshot)' in source
-    assert 'function getCachedDashboardStatsSnapshot(maxAgeMs = OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS)' in source
-    assert 'function applyCachedCoreHealthFallbackFromBootstrap(kind)' in source
-    assert 'rememberOwnerPanelBootstrapPayload("dashboardStats", captureOwnerPanelDashboardSnapshot());' in source
-    assert 'if (cached.dashboardStats) {' in source
-    assert 'applyCachedDashboardStatsTruth(cached.dashboardStats);' in source
+    assert "const OWNER_PANEL_DASHBOARD_CACHE_IDS = [" in source
+    assert "const OWNER_PANEL_DASHBOARD_CACHE_HTML_IDS = [" in source
+    assert "const OWNER_PANEL_DASHBOARD_CACHE_STYLE_ONLY_IDS = [" in source
+    assert "function captureOwnerPanelDashboardSnapshot()" in source
+    assert "function applyCachedDashboardStatsTruth(snapshot)" in source
+    assert (
+        "function getCachedDashboardStatsSnapshot(maxAgeMs = OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS)"
+        in source
+    )
+    assert "function applyCachedCoreHealthFallbackFromBootstrap(kind)" in source
+    assert (
+        'rememberOwnerPanelBootstrapPayload("dashboardStats", captureOwnerPanelDashboardSnapshot());'
+        in source
+    )
+    assert "if (cached.dashboardStats) {" in source
+    assert "applyCachedDashboardStatsTruth(cached.dashboardStats);" in source
     assert 'if (!applyCachedCoreHealthFallbackFromBootstrap("lite")) {' in source
     assert 'if (!applyCachedCoreHealthFallbackFromBootstrap("deep")) {' in source
     assert "function ownerPanelHasResolvedValue(id)" in source
-    assert "} else if (!ownerPanelHasResolvedValue(\"ocForceMode\")) {" in source
-    assert "} else if (!ownerPanelHasResolvedValue(\"ocAutoswitchStatus\")) {" in source
+    assert '} else if (!ownerPanelHasResolvedValue("ocForceMode")) {' in source
+    assert '} else if (!ownerPanelHasResolvedValue("ocAutoswitchStatus")) {' in source
     assert 'if (!ownerPanelHasResolvedValue("ocLocalLifecycleStatus")) {' in source
 
 
@@ -89,9 +103,15 @@ def test_owner_panel_reuses_last_good_bootstrap_cache_before_live_refresh() -> N
 
     assert 'const OWNER_PANEL_BOOTSTRAP_CACHE_KEY = "krab:owner-panel-bootstrap:v1";' in source
     assert "function rememberOwnerPanelBootstrapPayload(section, payload)" in source
-    assert "function getCachedOwnerPanelBootstrapPayload(maxAgeMs = OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS)" in source
+    assert (
+        "function getCachedOwnerPanelBootstrapPayload(maxAgeMs = OWNER_PANEL_BOOTSTRAP_CACHE_MAX_AGE_MS)"
+        in source
+    )
     assert "function applyOwnerPanelBootstrapCache()" in source
-    assert 'window.localStorage.setItem(OWNER_PANEL_BOOTSTRAP_CACHE_KEY, JSON.stringify(ownerPanelBootstrapCache));' in source
+    assert (
+        "window.localStorage.setItem(OWNER_PANEL_BOOTSTRAP_CACHE_KEY, JSON.stringify(ownerPanelBootstrapCache));"
+        in source
+    )
     assert "applyOwnerPanelBootstrapCache();" in source
     assert 'rememberOwnerPanelBootstrapPayload("translatorBootstrap", bootstrapPayload);' in source
     assert 'rememberOwnerPanelBootstrapPayload("voiceRuntime", payload.voice || {});' in source
@@ -105,15 +125,15 @@ def test_inbox_widget_uses_truthful_summary_and_runtime_statuses() -> None:
     source = _index_html_source()
 
     assert 'fetch("/api/inbox/status")' in source
-    assert 'const pendingCount = Number(summary.fresh_open_items' in source
-    assert 'const staleOpen = Number(payload.stale_open_items || 0);' in source
-    assert 'const staleAcked = Number(payload.stale_processing_items || 0);' in source
+    assert "const pendingCount = Number(summary.fresh_open_items" in source
+    assert "const staleOpen = Number(payload.stale_open_items || 0);" in source
+    assert "const staleAcked = Number(payload.stale_processing_items || 0);" in source
     assert 'const safeId = String(item.item_id || item.id || "");' in source
-    assert 'const isStaleProcessing = _isInboxItemStaleProcessing(item);' in source
-    assert 'const isStaleOpen = _isInboxItemStaleOpen(item);' in source
+    assert "const isStaleProcessing = _isInboxItemStaleProcessing(item);" in source
+    assert "const isStaleOpen = _isInboxItemStaleOpen(item);" in source
     assert 'await postJson("/api/inbox/update", { item_id: itemId, status: action });' in source
-    assert 'onclick="remediateInboxStale(\'processing\', \'cancelled\')"' in source
-    assert 'onclick="remediateInboxStale(\'open\', \'cancelled\')"' in source
+    assert "onclick=\"remediateInboxStale('processing', 'cancelled')\"" in source
+    assert "onclick=\"remediateInboxStale('open', 'cancelled')\"" in source
     assert '"/api/inbox/stale-processing/remediate"' in source
     assert '"/api/inbox/stale-open/remediate"' in source
     assert '<option value="open">Открытые и в обработке</option>' in source

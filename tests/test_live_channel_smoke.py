@@ -30,7 +30,11 @@ def test_scan_patterns_marks_error_and_warning_severity():
     ]
     patterns = [
         ("model_crash", re.compile(r"model has crashed", re.IGNORECASE), "error"),
-        ("plugin_untracked", re.compile(r"without install/load-path provenance", re.IGNORECASE), "warn"),
+        (
+            "plugin_untracked",
+            re.compile(r"without install/load-path provenance", re.IGNORECASE),
+            "warn",
+        ),
     ]
 
     findings = module._scan_patterns(Path("/tmp/fake.log"), lines, patterns)
@@ -130,7 +134,9 @@ def test_fetch_channels_with_fallback_uses_probe_when_web_unavailable(monkeypatc
         ),
     )
 
-    payload, err, source = module._fetch_channels_with_fallback("http://127.0.0.1:8080/api/openclaw/channels/status")
+    payload, err, source = module._fetch_channels_with_fallback(
+        "http://127.0.0.1:8080/api/openclaw/channels/status"
+    )
     assert err is None
     assert source == "gateway_probe"
     assert payload["channels"][0]["name"] == "telegram"

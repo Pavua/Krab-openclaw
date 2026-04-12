@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Тесты SilenceManager — per-chat и глобальный mute."""
+
 import time
-from unittest.mock import patch
 
 import pytest
 

@@ -18,7 +18,6 @@ Hammerspoon bridge для Краба.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import httpx
@@ -27,7 +26,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 _DEFAULT_BASE_URL = "http://localhost:10101"
-_DEFAULT_TIMEOUT  = 5.0   # секунд
+_DEFAULT_TIMEOUT = 5.0  # секунд
 
 
 class HammerspoonBridgeError(Exception):
@@ -54,7 +53,7 @@ class HammerspoonBridge:
         pass_key: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.timeout  = timeout
+        self.timeout = timeout
         self._headers: dict[str, str] = {}
         if pass_key:
             self._headers["X-Krab-Pass"] = pass_key
@@ -107,9 +106,7 @@ class HammerspoonBridge:
                 f"invalid_json (HTTP {resp.status_code}): {resp.text[:200]}"
             ) from exc
         if resp.status_code >= 400:
-            raise HammerspoonBridgeError(
-                data.get("error") or f"http_error_{resp.status_code}"
-            )
+            raise HammerspoonBridgeError(data.get("error") or f"http_error_{resp.status_code}")
         return data
 
     # ─── Публичный API ────────────────────────────────────────────────────────
@@ -154,9 +151,7 @@ class HammerspoonBridge:
         Hammerspoon использует `moveToUnit()` — это надёжнее, чем пиксельное
         позиционирование при нескольких мониторах разного DPI.
         """
-        return await self._post(
-            "/window", {"action": "tile", "preset": preset, "app": app}
-        )
+        return await self._post("/window", {"action": "tile", "preset": preset, "app": app})
 
 
 # Глобальный синглтон

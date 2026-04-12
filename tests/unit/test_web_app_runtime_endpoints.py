@@ -10,15 +10,15 @@
 
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import json
 import subprocess
 import time
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from src.config import config
 from src.core.inbox_service import InboxService, inbox_service
@@ -103,9 +103,11 @@ class _FakeOpenClaw:
 
 def _build_fake_jwt(payload: dict) -> str:
     """Собирает минимальный JWT для тестов scope-диагностики."""
-    header = base64.urlsafe_b64encode(
-        json.dumps({"alg": "none", "typ": "JWT"}).encode("utf-8")
-    ).decode("utf-8").rstrip("=")
+    header = (
+        base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode("utf-8"))
+        .decode("utf-8")
+        .rstrip("=")
+    )
     body = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
     return f"{header}.{body}.signature"
 
@@ -196,8 +198,16 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
         }
         self._last_quick_phrase: dict = {}
         self._timeline_items = [
-            {"ts": "2026-03-14T05:00:01+00:00", "kind": "transcript.partial", "text": "Hola, escucho."},
-            {"ts": "2026-03-14T05:00:03+00:00", "kind": "translation.partial", "text": "Привет, я слушаю."},
+            {
+                "ts": "2026-03-14T05:00:01+00:00",
+                "kind": "transcript.partial",
+                "text": "Hola, escucho.",
+            },
+            {
+                "ts": "2026-03-14T05:00:03+00:00",
+                "kind": "translation.partial",
+                "text": "Привет, я слушаю.",
+            },
         ]
         self._mobile_devices: dict[str, dict] = {
             "iphone-dev-1": {
@@ -216,14 +226,20 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
             }
         }
 
-    async def list_sessions(self, *, status: str | None = None, source: str | None = None, limit: int = 20) -> dict:
+    async def list_sessions(
+        self, *, status: str | None = None, source: str | None = None, limit: int = 20
+    ) -> dict:
         del limit
         items = []
         if self._session is not None:
             session = dict(self._session)
             if status and str(session.get("status") or "").strip() != str(status).strip():
                 session = {}
-            if source and session and str(session.get("source") or "").strip() != str(source).strip():
+            if (
+                source
+                and session
+                and str(session.get("source") or "").strip() != str(source).strip()
+            ):
                 session = {}
             if session:
                 items.append(session)
@@ -287,8 +303,18 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
             "ok": True,
             "count": 2,
             "items": [
-                {"id": "greet", "category": "base", "source_text": "Привет", "translated_text": "Hola"},
-                {"id": "slow", "category": "call", "source_text": "Говорите медленнее", "translated_text": "Hable mas despacio"},
+                {
+                    "id": "greet",
+                    "category": "base",
+                    "source_text": "Привет",
+                    "translated_text": "Hola",
+                },
+                {
+                    "id": "slow",
+                    "category": "call",
+                    "source_text": "Говорите медленнее",
+                    "translated_text": "Hable mas despacio",
+                },
             ],
         }
 
@@ -319,14 +345,24 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
 
     async def patch_session(self, session_id: str, **patch) -> dict:
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         self._session.update({key: value for key, value in patch.items() if value is not None})
         self._session["updated_at"] = "2026-03-14T06:05:00+00:00"
         return {"ok": True, "session_id": session_id, "result": dict(self._session)}
 
     async def stop_session(self, session_id: str) -> dict:
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         previous = dict(self._session)
         self._session = None
         return {"ok": True, "session_id": session_id, "result": {"ok": True, "session": previous}}
@@ -340,7 +376,12 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
         vad_sensitivity: float | None = None,
     ) -> dict:
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         if buffering_mode is not None:
             self._runtime["buffering_mode"] = buffering_mode
         if target_latency_ms is not None:
@@ -364,7 +405,12 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
         style: str = "neutral",
     ) -> dict:
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         self._last_quick_phrase = {
             "source_text": text,
             "translated_text": "Hable mas despacio",
@@ -391,20 +437,38 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
             },
         }
 
-    async def get_timeline(self, session_id: str, *, kind: str = "", contains: str = "", limit: int = 40) -> dict:
+    async def get_timeline(
+        self, session_id: str, *, kind: str = "", contains: str = "", limit: int = 40
+    ) -> dict:
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         items = [dict(item) for item in self._timeline_items]
         if kind:
             items = [item for item in items if str(item.get("kind") or "") == kind]
         if contains:
-            items = [item for item in items if contains.lower() in str(item.get("text") or "").lower()]
+            items = [
+                item for item in items if contains.lower() in str(item.get("text") or "").lower()
+            ]
         items = items[-limit:]
-        return {"ok": True, "session_id": session_id, "result": {"ok": True, "count": len(items), "items": items}}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": {"ok": True, "count": len(items), "items": items},
+        }
 
     async def get_timeline_stats(self, session_id: str, *, limit: int = 400) -> dict:
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         items = self._timeline_items[-limit:]
         return {
             "ok": True,
@@ -413,16 +477,33 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
                 "ok": True,
                 "stats": {
                     "count": len(items),
-                    "translations": len([item for item in items if item.get("kind") == "translation.partial"]),
-                    "quick_phrase": len([item for item in items if item.get("kind") == "quick_phrase"]),
+                    "translations": len(
+                        [item for item in items if item.get("kind") == "translation.partial"]
+                    ),
+                    "quick_phrase": len(
+                        [item for item in items if item.get("kind") == "quick_phrase"]
+                    ),
                 },
             },
         }
 
-    async def export_timeline(self, session_id: str, *, format: str = "md", kind: str = "", contains: str = "", limit: int = 120) -> dict:
+    async def export_timeline(
+        self,
+        session_id: str,
+        *,
+        format: str = "md",
+        kind: str = "",
+        contains: str = "",
+        limit: int = 120,
+    ) -> dict:
         del format, kind, contains, limit
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         return {
             "ok": True,
             "session_id": session_id,
@@ -432,7 +513,12 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
     async def build_summary(self, session_id: str, *, max_items: int = 20) -> dict:
         del max_items
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "session_id": session_id,
+            }
         return {
             "ok": True,
             "session_id": session_id,
@@ -490,9 +576,20 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
     async def bind_mobile_device(self, device_id: str, *, session_id: str) -> dict:
         clean_id = str(device_id).strip().lower()
         if clean_id not in self._mobile_devices:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "device_not_found"}, "device_id": clean_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "device_not_found"},
+                "device_id": clean_id,
+            }
         if self._session is None or session_id != self._session["id"]:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "session_not_found"}, "device_id": clean_id, "session_id": session_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "session_not_found"},
+                "device_id": clean_id,
+                "session_id": session_id,
+            }
         self._mobile_devices[clean_id]["bound_session_id"] = session_id
         self._session.setdefault("meta", {})["device_bound"] = True
         return {
@@ -509,9 +606,17 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
     async def delete_mobile_device(self, device_id: str) -> dict:
         clean_id = str(device_id).strip().lower()
         if clean_id not in self._mobile_devices:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "device_not_found"}, "device_id": clean_id}
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "device_not_found"},
+                "device_id": clean_id,
+            }
         device = dict(self._mobile_devices.pop(clean_id))
-        if self._session is not None and str(device.get("bound_session_id") or "").strip() == self._session["id"]:
+        if (
+            self._session is not None
+            and str(device.get("bound_session_id") or "").strip() == self._session["id"]
+        ):
             self._session.setdefault("meta", {})["device_bound"] = False
         return {
             "ok": True,
@@ -523,12 +628,25 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
             },
         }
 
-    async def get_mobile_session_snapshot(self, device_id: str, *, session_id: str = "", limit: int = 20) -> dict:
+    async def get_mobile_session_snapshot(
+        self, device_id: str, *, session_id: str = "", limit: int = 20
+    ) -> dict:
         clean_id = str(device_id).strip().lower()
         if clean_id not in self._mobile_devices:
-            return {"ok": False, "error": "http_404", "detail": {"detail": "device_not_found"}, "device_id": clean_id}
-        target_session_id = session_id or str(self._mobile_devices[clean_id].get("bound_session_id") or "").strip()
-        if not target_session_id or self._session is None or target_session_id != self._session["id"]:
+            return {
+                "ok": False,
+                "error": "http_404",
+                "detail": {"detail": "device_not_found"},
+                "device_id": clean_id,
+            }
+        target_session_id = (
+            session_id or str(self._mobile_devices[clean_id].get("bound_session_id") or "").strip()
+        )
+        if (
+            not target_session_id
+            or self._session is None
+            or target_session_id != self._session["id"]
+        ):
             return {
                 "ok": True,
                 "device_id": clean_id,
@@ -553,11 +671,20 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
             },
         }
 
-    async def push_event(self, session_id: str, *, event_type: str, data: dict | None = None) -> dict:
+    async def push_event(
+        self, session_id: str, *, event_type: str, data: dict | None = None
+    ) -> dict:
         # Stub для удовлетворения VoiceGatewayControlPlane Protocol; не вызывается в текущих тестах.
-        return {"ok": True, "session_id": session_id, "event_type": event_type, "data": dict(data or {})}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "event_type": event_type,
+            "data": dict(data or {}),
+        }
 
-    async def session_tts(self, session_id: str, *, text: str, voice: str = "default", style: str = "neutral") -> dict:
+    async def session_tts(
+        self, session_id: str, *, text: str, voice: str = "default", style: str = "neutral"
+    ) -> dict:
         # Stub для удовлетворения VoiceGatewayControlPlane Protocol; не вызывается в текущих тестах.
         return {
             "ok": True,
@@ -569,7 +696,9 @@ class _FakeVoiceGatewayControlPlaneClient(_FakeHealthClient):
 class _FakeVoiceGatewayFreshSessionClient(_FakeVoiceGatewayControlPlaneClient):
     """Фейк для проверки выбора самой свежей active session."""
 
-    async def list_sessions(self, *, status: str | None = None, source: str | None = None, limit: int = 20) -> dict:
+    async def list_sessions(
+        self, *, status: str | None = None, source: str | None = None, limit: int = 20
+    ) -> dict:
         del limit
         items = [
             {
@@ -634,7 +763,9 @@ class _FakeVoiceGatewayNonRuEsQuickPhraseClient(_FakeVoiceGatewayControlPlaneCli
 class _FakePerceptor:
     """Минимальный perceptor для truthful STT статусов."""
 
-    def __init__(self, *, stt_isolated_worker: bool = True, whisper_model: str = "mlx-whisper-test") -> None:
+    def __init__(
+        self, *, stt_isolated_worker: bool = True, whisper_model: str = "mlx-whisper-test"
+    ) -> None:
         self.stt_isolated_worker = stt_isolated_worker
         self.whisper_model = whisper_model
 
@@ -995,7 +1126,11 @@ def test_runtime_cloud_presets_build_codex_cli_synthetic_catalog(monkeypatch) ->
     )
 
     presets = WebApp._build_runtime_cloud_presets({"chat": "codex-cli/gpt-5.4"})
-    preset_ids = [str(item.get("id") or "") for item in presets if str(item.get("provider") or "") == "codex-cli"]
+    preset_ids = [
+        str(item.get("id") or "")
+        for item in presets
+        if str(item.get("provider") or "") == "codex-cli"
+    ]
 
     assert "codex-cli/gpt-5.4" in preset_ids
     assert "codex-cli/gpt-5" in preset_ids
@@ -1019,7 +1154,9 @@ def test_transcriber_status_is_degraded_when_local_stt_ready_but_voice_gateway_d
         "reaction_engine": None,
         "voice_gateway_client": _FakeHealthClient(ok=False),
         "krab_ear_client": _FakeHealthClient(ok=True),
-        "perceptor": _FakePerceptor(stt_isolated_worker=True, whisper_model="mlx-community/whisper"),
+        "perceptor": _FakePerceptor(
+            stt_isolated_worker=True, whisper_model="mlx-community/whisper"
+        ),
         "watchdog": None,
         "queue": None,
     }
@@ -1049,7 +1186,9 @@ def test_transcriber_status_includes_voice_profile_and_live_flag() -> None:
         "reaction_engine": None,
         "voice_gateway_client": _FakeHealthClient(ok=True),
         "krab_ear_client": _FakeHealthClient(ok=True),
-        "perceptor": _FakePerceptor(stt_isolated_worker=True, whisper_model="mlx-community/whisper"),
+        "perceptor": _FakePerceptor(
+            stt_isolated_worker=True, whisper_model="mlx-community/whisper"
+        ),
         "watchdog": None,
         "queue": None,
         "kraab_userbot": _FakeUserbot(),
@@ -1509,7 +1648,10 @@ def test_runtime_lite_treats_sqlite_journal_as_ready_when_userbot_is_live(monkey
     assert snapshot["telegram_session_state"] == "ready"
     assert snapshot["telegram_session"]["state"] == "ready"
     assert snapshot["telegram_session"]["state_file_raw"] == "open_or_unclean"
-    assert snapshot["telegram_session"]["state_reason"] == "sqlite_sidecars_expected_while_userbot_running"
+    assert (
+        snapshot["telegram_session"]["state_reason"]
+        == "sqlite_sidecars_expected_while_userbot_running"
+    )
 
 
 def test_runtime_lite_keeps_open_or_unclean_when_userbot_is_not_live(monkeypatch):
@@ -1695,16 +1837,26 @@ def test_runtime_operator_profile_returns_machine_readable_state() -> None:
     assert profile["account_mode"] == "split_runtime_per_account"
     assert profile["project_exists"] is True
     assert profile["openclaw_config_path"].endswith("/.openclaw/openclaw.json")
-    assert profile["owner_chrome_helper_path"].endswith("new Open Owner Chrome Remote Debugging.command")
-    assert profile["debug_chrome_helper_path"].endswith("new Enable Chrome Remote Debugging.command")
-    assert profile["workspace_alignment"]["canonical_shared_root"].endswith("/Users/Shared/Antigravity_AGENTS/Краб")
-    assert profile["workspace_alignment"]["active_shared_root"].endswith("/Users/Shared/Antigravity_AGENTS/Краб-active")
+    assert profile["owner_chrome_helper_path"].endswith(
+        "new Open Owner Chrome Remote Debugging.command"
+    )
+    assert profile["debug_chrome_helper_path"].endswith(
+        "new Enable Chrome Remote Debugging.command"
+    )
+    assert profile["workspace_alignment"]["canonical_shared_root"].endswith(
+        "/Users/Shared/Antigravity_AGENTS/Краб"
+    )
+    assert profile["workspace_alignment"]["active_shared_root"].endswith(
+        "/Users/Shared/Antigravity_AGENTS/Краб-active"
+    )
     assert profile["workspace_alignment"]["recommended_project_root"]
     assert "active_shared_permission_health" in profile
     assert "non_writable_count" in profile["active_shared_permission_health"]
 
 
-def test_runtime_repair_active_shared_permissions_requires_web_key_and_returns_health(monkeypatch) -> None:
+def test_runtime_repair_active_shared_permissions_requires_web_key_and_returns_health(
+    monkeypatch,
+) -> None:
     """Repair endpoint должен работать только под web-key и возвращать обновлённый permission health."""
     monkeypatch.setenv("WEB_API_KEY", "secret")
     monkeypatch.setattr(
@@ -2088,7 +2240,9 @@ def test_translator_runtime_tune_and_quick_phrase_flow() -> None:
     assert quick_phrase_data["gateway_result"]["translated_text"] == "Hable mas despacio"
 
 
-def test_translator_session_inspector_aggregates_why_timeline_and_escalation(monkeypatch, tmp_path) -> None:
+def test_translator_session_inspector_aggregates_why_timeline_and_escalation(
+    monkeypatch, tmp_path
+) -> None:
     """Session inspector должен собирать why-report, timeline digest и escalation context."""
     monkeypatch.setattr(inbox_service, "state_path", tmp_path / "inbox_state.json")
     client = TestClient(
@@ -2187,7 +2341,9 @@ def test_translator_delivery_matrix_aggregates_product_tracks() -> None:
     assert data["ordinary_calls"]["ready_for_trial"] is True
     assert data["ordinary_calls"]["selected_device_id"] == "iphone-dev-1"
     assert data["internet_calls"]["status"] == "design_ready"
-    assert data["links"]["translator_mobile_readiness_endpoint"] == "/api/translator/mobile-readiness"
+    assert (
+        data["links"]["translator_mobile_readiness_endpoint"] == "/api/translator/mobile-readiness"
+    )
 
 
 def test_translator_delivery_matrix_truthfully_degrades_when_gateway_is_down() -> None:
@@ -2276,7 +2432,10 @@ def test_translator_mobile_register_and_bind_endpoints_return_fresh_snapshots() 
     assert register_data["mobile_readiness"]["summary"]["registered_devices"] == 1
     assert register_data["mobile_readiness"]["actions"]["bind_available"] is True
     assert register_data["delivery_matrix"]["ordinary_calls"]["status"] == "device_ready"
-    assert register_data["live_trial_preflight"]["status"] in {"session_pending", "companion_pending"}
+    assert register_data["live_trial_preflight"]["status"] in {
+        "session_pending",
+        "companion_pending",
+    }
 
     bind_resp = client.post(
         "/api/translator/mobile/bind",
@@ -2404,10 +2563,14 @@ def test_translator_mobile_onboarding_snapshot_aggregates_profiles_and_packet() 
     assert profile_map["ru_es_duplex"]["status"] == "ready"
     assert data["packet_preview"]["recommended_trial_profile"] == "subtitles_first"
     assert data["packet_preview"]["trial_prep_payload"]["source"] == "mobile"
-    assert data["helpers"]["build_packet"]["path"].endswith("Build Translator Mobile Onboarding Packet.command")
+    assert data["helpers"]["build_packet"]["path"].endswith(
+        "Build Translator Mobile Onboarding Packet.command"
+    )
 
 
-def test_translator_mobile_onboarding_export_writes_ops_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_translator_mobile_onboarding_export_writes_ops_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Export endpoint должен писать onboarding packet в latest/versioned ops artifacts."""
     project_root = tmp_path / "Krab"
     (project_root / "artifacts" / "ops").mkdir(parents=True)
@@ -2415,10 +2578,13 @@ def test_translator_mobile_onboarding_export_writes_ops_artifact(monkeypatch: py
     monkeypatch.setattr(
         WebApp,
         "_collect_runtime_lite_snapshot",
-        lambda self: asyncio.sleep(0, result={
-            "telegram_session_state": "ready",
-            "voice_gateway_configured": True,
-        }),
+        lambda self: asyncio.sleep(
+            0,
+            result={
+                "telegram_session_state": "ready",
+                "voice_gateway_configured": True,
+            },
+        ),
     )
 
     client = TestClient(
@@ -2589,7 +2755,9 @@ def test_model_local_status_uses_runtime_truth_when_router_state_stale(monkeypat
     assert data["details"]["is_loaded"] is True
 
 
-def test_model_local_status_does_not_double_probe_model_manager_when_snapshot_is_loaded(monkeypatch):
+def test_model_local_status_does_not_double_probe_model_manager_when_snapshot_is_loaded(
+    monkeypatch,
+):
     """Runtime truth не должен делать второй `/models` probe через model_manager, если snapshot уже loaded."""
 
     class _CountingModelManager:
@@ -2709,27 +2877,49 @@ def test_model_catalog_cloud_presets_expose_full_runtime_registry_and_provider_s
 
     runtime_payload = {
         "providers": {
-            "github-copilot": {
-                "models": []
-            },
+            "github-copilot": {"models": []},
             "openai-codex": {
                 "models": [
-                    {"id": "gpt-4.5-preview", "name": "ChatGPT 4.5 Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
+                    {
+                        "id": "gpt-4.5-preview",
+                        "name": "ChatGPT 4.5 Preview",
+                        "reasoning": False,
+                        "contextWindow": 128000,
+                        "maxTokens": 16384,
+                    }
                 ]
             },
             "google-antigravity": {
                 "models": [
-                    {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
+                    {
+                        "id": "gemini-3.1-pro-preview",
+                        "name": "Gemini 3.1 Pro Preview",
+                        "reasoning": False,
+                        "contextWindow": 128000,
+                        "maxTokens": 16384,
+                    }
                 ]
             },
             "google": {
                 "models": [
-                    {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "reasoning": False, "contextWindow": 128000, "maxTokens": 16384}
+                    {
+                        "id": "gemini-3.1-pro-preview",
+                        "name": "Gemini 3.1 Pro Preview",
+                        "reasoning": False,
+                        "contextWindow": 128000,
+                        "maxTokens": 16384,
+                    }
                 ]
             },
             "qwen-portal": {
                 "models": [
-                    {"id": "coder-model", "name": "Qwen Coder", "reasoning": False, "contextWindow": 128000, "maxTokens": 8192}
+                    {
+                        "id": "coder-model",
+                        "name": "Qwen Coder",
+                        "reasoning": False,
+                        "contextWindow": 128000,
+                        "maxTokens": 8192,
+                    }
                 ]
             },
         }
@@ -2758,15 +2948,50 @@ def test_model_catalog_cloud_presets_expose_full_runtime_registry_and_provider_s
         "count": 5,
         "providers": {
             "github-copilot": [
-                {"key": "github-copilot/gpt-5.4", "name": "GPT-5.4", "contextWindow": 400000, "maxTokens": 16384, "available": True, "tags": []},
+                {
+                    "key": "github-copilot/gpt-5.4",
+                    "name": "GPT-5.4",
+                    "contextWindow": 400000,
+                    "maxTokens": 16384,
+                    "available": True,
+                    "tags": [],
+                },
             ],
             "openai-codex": [
-                {"key": "openai-codex/gpt-4.5-preview", "name": "ChatGPT 4.5 Preview", "contextWindow": 128000, "maxTokens": 16384, "available": True, "tags": ["configured"]},
-                {"key": "openai-codex/gpt-5.4", "name": "GPT-5.4", "contextWindow": 272000, "maxTokens": 16384, "available": True, "tags": []},
+                {
+                    "key": "openai-codex/gpt-4.5-preview",
+                    "name": "ChatGPT 4.5 Preview",
+                    "contextWindow": 128000,
+                    "maxTokens": 16384,
+                    "available": True,
+                    "tags": ["configured"],
+                },
+                {
+                    "key": "openai-codex/gpt-5.4",
+                    "name": "GPT-5.4",
+                    "contextWindow": 272000,
+                    "maxTokens": 16384,
+                    "available": True,
+                    "tags": [],
+                },
             ],
             "google-gemini-cli": [
-                {"key": "google-gemini-cli/gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview (Cloud Code Assist)", "contextWindow": 1048576, "maxTokens": 16384, "available": True, "tags": ["configured", "default"]},
-                {"key": "google-gemini-cli/gemini-2.5-pro", "name": "Gemini 2.5 Pro (Cloud Code Assist)", "contextWindow": 1048576, "maxTokens": 8192, "available": True, "tags": []},
+                {
+                    "key": "google-gemini-cli/gemini-3.1-pro-preview",
+                    "name": "Gemini 3.1 Pro Preview (Cloud Code Assist)",
+                    "contextWindow": 1048576,
+                    "maxTokens": 16384,
+                    "available": True,
+                    "tags": ["configured", "default"],
+                },
+                {
+                    "key": "google-gemini-cli/gemini-2.5-pro",
+                    "name": "Gemini 2.5 Pro (Cloud Code Assist)",
+                    "contextWindow": 1048576,
+                    "maxTokens": 8192,
+                    "available": True,
+                    "tags": [],
+                },
             ],
         },
     }
@@ -2967,7 +3192,6 @@ def test_build_openclaw_runtime_controls_reads_context_and_thinking(monkeypatch)
     assert chain_items["lmstudio/local"]["explicit_thinking"] == "off"
 
 
-
 def test_build_openclaw_parallelism_truth_reads_queue_caps(monkeypatch):
     """Parallelism truth должен показывать queue caps отдельно от named modes."""
     runtime_config = {
@@ -3017,7 +3241,9 @@ def test_model_provider_action_launches_known_helper(monkeypatch, tmp_path: Path
     monkeypatch.setattr(
         WebApp,
         "_provider_repair_helper_path",
-        classmethod(lambda cls, provider_name: helper_path if provider_name == "google-gemini-cli" else None),
+        classmethod(
+            lambda cls, provider_name: helper_path if provider_name == "google-gemini-cli" else None
+        ),
     )
     monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
 
@@ -3038,7 +3264,9 @@ def test_model_provider_action_launches_known_helper(monkeypatch, tmp_path: Path
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
-    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(
+        WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: [])
+    )
     monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
     monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
 
@@ -3080,7 +3308,9 @@ def test_model_provider_action_launches_openai_codex_helper(monkeypatch, tmp_pat
     monkeypatch.setattr(
         WebApp,
         "_provider_repair_helper_path",
-        classmethod(lambda cls, provider_name: helper_path if provider_name == "openai-codex" else None),
+        classmethod(
+            lambda cls, provider_name: helper_path if provider_name == "openai-codex" else None
+        ),
     )
     monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
 
@@ -3101,7 +3331,9 @@ def test_model_provider_action_launches_openai_codex_helper(monkeypatch, tmp_pat
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
-    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(
+        WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: [])
+    )
     monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
     monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
 
@@ -3143,7 +3375,9 @@ def test_model_provider_action_launches_codex_cli_helper(monkeypatch, tmp_path: 
     monkeypatch.setattr(
         WebApp,
         "_provider_repair_helper_path",
-        classmethod(lambda cls, provider_name: helper_path if provider_name == "codex-cli" else None),
+        classmethod(
+            lambda cls, provider_name: helper_path if provider_name == "codex-cli" else None
+        ),
     )
     monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
 
@@ -3164,7 +3398,9 @@ def test_model_provider_action_launches_codex_cli_helper(monkeypatch, tmp_path: 
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
-    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(
+        WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: [])
+    )
     monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
     monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
 
@@ -3185,7 +3421,10 @@ def test_model_provider_action_launches_codex_cli_helper(monkeypatch, tmp_path: 
 
 def test_runtime_provider_state_marks_codex_cli_as_ready_when_cli_logged_in(monkeypatch):
     """Codex CLI не должен проваливаться в `Unavailable`, если локальный CLI уже залогинен."""
-    monkeypatch.setattr("src.modules.web_app.shutil.which", lambda name: "/opt/homebrew/bin/codex" if name == "codex" else "")
+    monkeypatch.setattr(
+        "src.modules.web_app.shutil.which",
+        lambda name: "/opt/homebrew/bin/codex" if name == "codex" else "",
+    )
 
     def _fake_run(cmd, capture_output, text, check, timeout):
         assert cmd == ["/opt/homebrew/bin/codex", "login", "status"]
@@ -3230,7 +3469,9 @@ def test_model_provider_action_launches_qwen_portal_helper(monkeypatch, tmp_path
     monkeypatch.setattr(
         WebApp,
         "_provider_repair_helper_path",
-        classmethod(lambda cls, provider_name: helper_path if provider_name == "qwen-portal" else None),
+        classmethod(
+            lambda cls, provider_name: helper_path if provider_name == "qwen-portal" else None
+        ),
     )
     monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
 
@@ -3251,7 +3492,9 @@ def test_model_provider_action_launches_qwen_portal_helper(monkeypatch, tmp_path
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
-    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(
+        WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: [])
+    )
     monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
     monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
 
@@ -3293,7 +3536,11 @@ def test_model_provider_action_launches_google_antigravity_helper(monkeypatch, t
     monkeypatch.setattr(
         WebApp,
         "_provider_repair_helper_path",
-        classmethod(lambda cls, provider_name: helper_path if provider_name == "google-antigravity" else None),
+        classmethod(
+            lambda cls, provider_name: (
+                helper_path if provider_name == "google-antigravity" else None
+            )
+        ),
     )
     monkeypatch.setattr(WebApp, "_launch_local_app", _fake_launch)
 
@@ -3314,7 +3561,9 @@ def test_model_provider_action_launches_google_antigravity_helper(monkeypatch, t
         }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
-    monkeypatch.setattr(WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: []))
+    monkeypatch.setattr(
+        WebApp, "_build_runtime_cloud_presets", classmethod(lambda cls, current_slots=None: [])
+    )
     monkeypatch.setattr(WebApp, "_build_openclaw_model_routing_status", lambda self: {})
     monkeypatch.setattr(WebApp, "_build_openclaw_runtime_controls", classmethod(lambda cls: {}))
 
@@ -3486,7 +3735,9 @@ def test_model_apply_set_runtime_chain_updates_live_openclaw_files(monkeypatch, 
     assert data["result"]["runtime"]["subagent_max_concurrent"] == 1
 
 
-def test_set_runtime_chain_returns_cached_catalog_when_post_apply_refresh_times_out(monkeypatch, tmp_path: Path):
+def test_set_runtime_chain_returns_cached_catalog_when_post_apply_refresh_times_out(
+    monkeypatch, tmp_path: Path
+):
     """Даже при медленном catalog refresh write-path должен быстро вернуть success и cache-backed catalog."""
     monkeypatch.setenv("WEB_API_KEY", "secret")
     monkeypatch.setenv("KRAB_WEB_MODEL_APPLY_CATALOG_TIMEOUT_SEC", "0.2")
@@ -3635,8 +3886,9 @@ def test_set_runtime_chain_returns_cached_catalog_when_post_apply_refresh_times_
     assert data["catalog"]["runtime_controls"]["fallbacks"] == ["google/gemini-2.5-flash"]
 
 
-
-def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antigravity_fallback(monkeypatch):
+def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antigravity_fallback(
+    monkeypatch,
+):
     """Routing status должен честно отражать сломанный primary и disabled Antigravity fallback."""
 
     runtime_config = {
@@ -3655,12 +3907,8 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antig
     }
     runtime_models = {
         "providers": {
-            "openai-codex": {
-                "models": [{"id": "gpt-4.5-preview"}]
-            },
-            "google-antigravity": {
-                "models": [{"id": "gemini-3.1-pro-preview"}]
-            },
+            "openai-codex": {"models": [{"id": "gpt-4.5-preview"}]},
+            "google-antigravity": {"models": [{"id": "gemini-3.1-pro-preview"}]},
         }
     }
     auth_profiles = {
@@ -3677,11 +3925,19 @@ def test_openclaw_model_routing_status_reports_broken_primary_and_disabled_antig
         },
     }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}})
+    )
     monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4")
 
     client = _make_client_with_router(_DummyRouter())
@@ -3718,20 +3974,22 @@ def test_openclaw_model_routing_status_checks_target_provider_runtime_for_codex_
     }
     runtime_models = {
         "providers": {
-            "openai-codex": {
-                "models": [{"id": "gpt-4.5-preview"}]
-            },
-            "codex-cli": {
-                "models": [{"id": "gpt-5.4"}]
-            },
+            "openai-codex": {"models": [{"id": "gpt-4.5-preview"}]},
+            "codex-cli": {"models": [{"id": "gpt-5.4"}]},
         }
     }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
     monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: {}))
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}})
+    )
     monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4")
 
     client = _make_client_with_router(_DummyRouter())
@@ -3743,7 +4001,9 @@ def test_openclaw_model_routing_status_checks_target_provider_runtime_for_codex_
     assert data["target_primary_in_runtime"] is True
 
 
-def test_openclaw_model_routing_status_prefers_live_antigravity_profile_over_disabled_legacy_profile(monkeypatch):
+def test_openclaw_model_routing_status_prefers_live_antigravity_profile_over_disabled_legacy_profile(
+    monkeypatch,
+):
     """Живой Antigravity-профиль не должен блокироваться старым disabled legacy-профилем."""
 
     runtime_config = {
@@ -3762,12 +4022,8 @@ def test_openclaw_model_routing_status_prefers_live_antigravity_profile_over_dis
     }
     runtime_models = {
         "providers": {
-            "openai-codex": {
-                "models": [{"id": "gpt-4.5-preview"}]
-            },
-            "google-antigravity": {
-                "models": [{"id": "claude-opus-4-5-thinking"}]
-            },
+            "openai-codex": {"models": [{"id": "gpt-4.5-preview"}]},
+            "google-antigravity": {"models": [{"id": "claude-opus-4-5-thinking"}]},
         }
     }
     auth_profiles = {
@@ -3799,11 +4055,19 @@ def test_openclaw_model_routing_status_prefers_live_antigravity_profile_over_dis
         }
     }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot)
+    )
     monkeypatch.setenv("OPENCLAW_TARGET_PRIMARY_MODEL", "openai-codex/gpt-5.4")
 
     client = _make_client_with_router(_DummyRouter())
@@ -3813,12 +4077,16 @@ def test_openclaw_model_routing_status_prefers_live_antigravity_profile_over_dis
     data = resp.json()["routing"]
     assert data["temporary_primary_recommendation"] == "google-antigravity/claude-opus-4-5-thinking"
     assert data["google_antigravity"]["readiness_label"] == "OAuth OK"
-    assert data["google_antigravity"]["healthy_profiles"] == ["google-antigravity:pavelr7@gmail.com"]
+    assert data["google_antigravity"]["healthy_profiles"] == [
+        "google-antigravity:pavelr7@gmail.com"
+    ]
     assert data["google_antigravity_legacy_removed"] is False
     assert any("дополнительный fallback" in item.lower() for item in data["warnings"])
 
 
-def test_openclaw_model_routing_status_normalizes_antigravity_oauth_status_when_live_profile_exists(monkeypatch):
+def test_openclaw_model_routing_status_normalizes_antigravity_oauth_status_when_live_profile_exists(
+    monkeypatch,
+):
     """Живой Antigravity-профиль должен нормализовать stale `expired` snapshot до `ok`."""
 
     runtime_config = {
@@ -3866,11 +4134,19 @@ def test_openclaw_model_routing_status_normalizes_antigravity_oauth_status_when_
         }
     }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot)
+    )
 
     client = _make_client_with_router(_DummyRouter())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -3934,11 +4210,19 @@ def test_openclaw_model_routing_status_exposes_observed_openai_codex_scopes(monk
         }
     }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: status_snapshot)
+    )
 
     client = _make_client_with_router(_DummyRouter())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -3997,11 +4281,19 @@ def test_openclaw_model_routing_status_skips_expired_google_gemini_cli_fallback(
         },
     }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}})
+    )
 
     client = _make_client_with_router(_DummyRouter())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -4059,15 +4351,23 @@ def test_openclaw_model_routing_status_clears_broken_flag_when_live_primary_veri
                 "status": "ok",
             }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(
         WebApp,
         "_runtime_signal_failed_providers",
         classmethod(lambda cls: {"openai-codex": "runtime_missing_scope_model_request"}),
     )
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}})
+    )
 
     client = _make_client_with_router(_DummyRouter(), openclaw_client=_PrimaryVerifiedOpenClaw())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -4080,10 +4380,14 @@ def test_openclaw_model_routing_status_clears_broken_flag_when_live_primary_veri
     assert data["openai_codex"]["signal_fail_code"] == ""
     assert data["openai_codex"]["readiness"] == "ready"
     assert data["openai_codex"]["readiness_label"] == "Live OK"
-    assert data["openai_codex"]["historical_signal_fail_code"] == "runtime_missing_scope_model_request"
+    assert (
+        data["openai_codex"]["historical_signal_fail_code"] == "runtime_missing_scope_model_request"
+    )
     assert data["openai_codex"]["historical_readiness_label"] == "Scope fail"
     assert not any("openai primary падает" in item.lower() for item in data["warnings"])
-    assert not any("openai primary блокируется по oauth scopes" in item.lower() for item in data["warnings"])
+    assert not any(
+        "openai primary блокируется по oauth scopes" in item.lower() for item in data["warnings"]
+    )
 
 
 def test_model_catalog_prefers_live_verified_primary_truth_for_openai_codex(monkeypatch):
@@ -4165,16 +4469,26 @@ def test_model_catalog_prefers_live_verified_primary_truth_for_openai_codex(monk
     }
 
     monkeypatch.setattr(WebApp, "_lmstudio_model_snapshot", _fake_lm_snapshot)
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_payload))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_payload)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(
         WebApp,
         "_runtime_signal_failed_providers",
         classmethod(lambda cls: {"openai-codex": "runtime_missing_scope_model_request"}),
     )
-    monkeypatch.setattr(WebApp, "_openclaw_models_full_catalog", classmethod(lambda cls: {"providers": {}}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_full_catalog", classmethod(lambda cls: {"providers": {}})
+    )
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}})
+    )
 
     client = _make_client_with_router(_TruthRouter(), openclaw_client=_PrimaryVerifiedOpenClaw())
 
@@ -4188,7 +4502,10 @@ def test_model_catalog_prefers_live_verified_primary_truth_for_openai_codex(monk
     assert data["routing_status"]["openai_codex"]["readiness_label"] == "Live OK"
     assert provider_groups["openai-codex"]["provider_readiness"] == "ready"
     assert provider_groups["openai-codex"]["provider_readiness_label"] == "Live OK"
-    assert "Последний live route подтвердил configured primary" in provider_groups["openai-codex"]["provider_detail"]
+    assert (
+        "Последний live route подтвердил configured primary"
+        in provider_groups["openai-codex"]["provider_detail"]
+    )
     assert inventory["openai-codex/gpt-5.4"]["provider_readiness_label"] == "Live OK"
 
 
@@ -4212,11 +4529,19 @@ def test_model_catalog_includes_auth_recovery_snapshot(monkeypatch):
     }
     auth_profiles = {"profiles": {}, "usageStats": {}}
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_payload))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_payload)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_full_catalog", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_full_catalog", classmethod(lambda cls: {"providers": {}})
+    )
     monkeypatch.setattr(
         WebApp,
         "_openclaw_models_status_snapshot",
@@ -4232,7 +4557,11 @@ def test_model_catalog_includes_auth_recovery_snapshot(monkeypatch):
                     "fallbacks": [],
                     "auth": {
                         "providers": [
-                            {"provider": "google", "effective": {"kind": "env"}, "profiles": {"count": 0}},
+                            {
+                                "provider": "google",
+                                "effective": {"kind": "env"},
+                                "profiles": {"count": 0},
+                            },
                         ],
                         "oauth": {
                             "providers": [
@@ -4289,8 +4618,14 @@ def test_model_catalog_includes_auth_recovery_snapshot(monkeypatch):
     data = resp.json()["catalog"]
     provider_groups = {item["provider"]: item for item in data["cloud_provider_groups"]}
     assert data["auth_recovery"]["summary"]["recovery_stage"] == "attention"
-    assert provider_groups["openai-codex"]["provider_auth_recovery"]["state_label"] == "OAuth не подтверждён"
-    assert provider_groups["openai-codex"]["provider_ui"]["auth_recovery"]["detail_short"] == "Codex OAuth на этой учётке не подтверждён."
+    assert (
+        provider_groups["openai-codex"]["provider_auth_recovery"]["state_label"]
+        == "OAuth не подтверждён"
+    )
+    assert (
+        provider_groups["openai-codex"]["provider_ui"]["auth_recovery"]["detail_short"]
+        == "Codex OAuth на этой учётке не подтверждён."
+    )
 
 
 def test_openclaw_model_routing_status_marks_live_fallback_as_active(monkeypatch):
@@ -4336,11 +4671,19 @@ def test_openclaw_model_routing_status_marks_live_fallback_as_active(monkeypatch
                 "route_detail": "Ответ получен через OpenClaw API; gateway fallback -> google/gemini-3.1-pro-preview",
             }
 
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config))
-    monkeypatch.setattr(WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models))
-    monkeypatch.setattr(WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles))
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_config", classmethod(lambda cls: runtime_config)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_runtime_models", classmethod(lambda cls: runtime_models)
+    )
+    monkeypatch.setattr(
+        WebApp, "_load_openclaw_auth_profiles", classmethod(lambda cls: auth_profiles)
+    )
     monkeypatch.setattr(WebApp, "_runtime_signal_failed_providers", classmethod(lambda cls: {}))
-    monkeypatch.setattr(WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}}))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_models_status_snapshot", classmethod(lambda cls: {"providers": {}})
+    )
 
     client = _make_client_with_router(_DummyRouter(), openclaw_client=_FallbackActiveOpenClaw())
     resp = client.get("/api/openclaw/model-routing/status")
@@ -4802,7 +5145,9 @@ Local loopback ws://127.0.0.1:18789
 """.strip()
         return _Proc(stdout_text, returncode=0)
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
     monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: ""))
     client = _make_client()
@@ -4864,7 +5209,9 @@ Local loopback ws://127.0.0.1:18789
 """.strip()
         return _Proc(stdout_text, returncode=0)
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
     monkeypatch.setattr(
         WebApp,
@@ -4930,14 +5277,19 @@ Local loopback ws://127.0.0.1:18789
 """.strip()
             return _Proc(stdout_text, returncode=0)
         if cmd[:4] == ("openclaw", "browser", "--json", "status"):
-            return _Proc(json.dumps({
-                "running": True,
-                "cdpReady": True,
-                "profile": "openclaw",
-                "cdpUrl": "http://127.0.0.1:18800",
-                "cdpPort": 18800,
-                "detectedBrowser": "chrome",
-            }), returncode=0)
+            return _Proc(
+                json.dumps(
+                    {
+                        "running": True,
+                        "cdpReady": True,
+                        "profile": "openclaw",
+                        "cdpUrl": "http://127.0.0.1:18800",
+                        "cdpPort": 18800,
+                        "detectedBrowser": "chrome",
+                    }
+                ),
+                returncode=0,
+            )
         if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
             return _Proc(json.dumps({"tabs": []}), returncode=0)
         raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
@@ -4967,7 +5319,9 @@ Local loopback ws://127.0.0.1:18789
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
     monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: ""))
     monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: managed_registry)
@@ -4984,6 +5338,7 @@ Local loopback ws://127.0.0.1:18789
             },
         ),
     )
+
     async def _fake_owner_probe(self, url: str = "https://example.com"):
         assert url == "https://example.com"
         return {
@@ -5016,7 +5371,9 @@ Local loopback ws://127.0.0.1:18789
     assert data["mcp"]["sync"]["status"] == "drift"
     assert data["mcp"]["summary"]["required_ready"] == 2
     assert data["mcp"]["summary"]["required_attention"] == 1
-    chrome_profile = next(item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile")
+    chrome_profile = next(
+        item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile"
+    )
     assert chrome_profile["state"] == "manual_setup_required"
 
 
@@ -5141,7 +5498,9 @@ def test_browser_access_paths_include_relay_and_chrome_devtools():
                 "readiness": "attention",
                 "state": "manual_setup_required",
                 "detail": "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging.",
-                "manual_setup": ["В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging."],
+                "manual_setup": [
+                    "В Chrome профиле включить Remote Debugging на chrome://inspect/#remote-debugging."
+                ],
             }
         ]
     }
@@ -5207,7 +5566,9 @@ def test_browser_access_paths_mark_owner_devtools_as_confirmed_when_action_probe
 def test_openclaw_runtime_config_exposes_runtime_policy(monkeypatch):
     """`/api/openclaw/runtime-config` должен отдавать read-only policy truth для панели."""
 
-    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "runtime-token-123"))
+    monkeypatch.setattr(
+        WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "runtime-token-123")
+    )
     monkeypatch.setattr("src.modules.web_app.config.OPENCLAW_URL", "http://127.0.0.1:18789")
     monkeypatch.setattr("src.modules.web_app.config.LM_STUDIO_NATIVE_REASONING_MODE", "off")
     monkeypatch.setattr("src.modules.web_app.config.USERBOT_MAX_OUTPUT_TOKENS", 1200)
@@ -5238,7 +5599,9 @@ def test_openclaw_runtime_config_exposes_runtime_policy(monkeypatch):
     assert data["runtime_policy"]["timeouts_sec"]["photo_first_chunk"] == 540.0
 
 
-def test_browser_mcp_readiness_promotes_owner_chrome_to_ready_after_action_probe(monkeypatch, tmp_path: Path):
+def test_browser_mcp_readiness_promotes_owner_chrome_to_ready_after_action_probe(
+    monkeypatch, tmp_path: Path
+):
     """`chrome-profile` должен переходить в ready, если owner Chrome уже проходит action probe."""
 
     class _Proc:
@@ -5269,7 +5632,10 @@ def test_browser_mcp_readiness_promotes_owner_chrome_to_ready_after_action_probe
 
         async def get(self, url: str, *, headers=None):
             assert url == "http://127.0.0.1:18791/"
-            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            assert headers == {
+                "Accept": "application/json",
+                "Authorization": "Bearer gateway-token-from-config",
+            }
             return _Resp(200)
 
     async def _fake_create_subprocess_exec(*cmd, **kwargs):
@@ -5302,7 +5668,17 @@ Local loopback ws://127.0.0.1:18789
             )
         if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
             return _Proc(
-                json.dumps({"tabs": [{"targetId": "abc", "title": "Example Domain", "url": "https://example.com/"}]}),
+                json.dumps(
+                    {
+                        "tabs": [
+                            {
+                                "targetId": "abc",
+                                "title": "Example Domain",
+                                "url": "https://example.com/",
+                            }
+                        ]
+                    }
+                ),
                 returncode=0,
             )
         raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
@@ -5343,20 +5719,42 @@ Local loopback ws://127.0.0.1:18789
 
     lmstudio_path = tmp_path / "mcp.json"
     lmstudio_path.write_text(
-        json.dumps({"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}}),
+        json.dumps(
+            {
+                "mcpServers": {
+                    "filesystem": {},
+                    "memory": {},
+                    "openclaw-browser": {},
+                    "chrome-profile": {},
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
-    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: "gateway-token-from-config"),
+    )
     monkeypatch.setattr(WebApp, "_probe_owner_chrome_devtools", _fake_owner_probe)
     monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: managed_registry)
     monkeypatch.setattr("src.modules.web_app.resolve_managed_server_launch", _fake_resolve)
     monkeypatch.setattr(
         "src.modules.web_app.build_lmstudio_mcp_json",
         lambda include_optional_missing=False, include_high_risk=False: (
-            {"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}},
+            {
+                "mcpServers": {
+                    "filesystem": {},
+                    "memory": {},
+                    "openclaw-browser": {},
+                    "chrome-profile": {},
+                }
+            },
             {
                 "included": ["filesystem", "memory", "openclaw-browser", "chrome-profile"],
                 "skipped_missing": [],
@@ -5371,8 +5769,12 @@ Local loopback ws://127.0.0.1:18789
     resp = client.get("/api/openclaw/browser-mcp-readiness")
     assert resp.status_code == 200
     data = resp.json()
-    chrome_profile = next(item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile")
-    devtools_path = next(item for item in data["browser"]["paths"] if item["kind"] == "chrome_devtools")
+    chrome_profile = next(
+        item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile"
+    )
+    devtools_path = next(
+        item for item in data["browser"]["paths"] if item["kind"] == "chrome_devtools"
+    )
     assert chrome_profile["readiness"] == "ready"
     assert chrome_profile["state"] == "action_probe_ok"
     assert chrome_profile["confirmed"] is True
@@ -5416,7 +5818,10 @@ def test_browser_mcp_readiness_marks_owner_chrome_blocked_when_chrome_policy_rej
 
         async def get(self, url: str, *, headers=None):
             assert url == "http://127.0.0.1:18791/"
-            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            assert headers == {
+                "Accept": "application/json",
+                "Authorization": "Bearer gateway-token-from-config",
+            }
             return _Resp(200)
 
     async def _fake_create_subprocess_exec(*cmd, **kwargs):
@@ -5487,20 +5892,42 @@ Local loopback ws://127.0.0.1:18789
 
     lmstudio_path = tmp_path / "mcp.json"
     lmstudio_path.write_text(
-        json.dumps({"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}}),
+        json.dumps(
+            {
+                "mcpServers": {
+                    "filesystem": {},
+                    "memory": {},
+                    "openclaw-browser": {},
+                    "chrome-profile": {},
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
-    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: "gateway-token-from-config"),
+    )
     monkeypatch.setattr(WebApp, "_probe_owner_chrome_devtools", _fake_owner_probe)
     monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: managed_registry)
     monkeypatch.setattr("src.modules.web_app.resolve_managed_server_launch", _fake_resolve)
     monkeypatch.setattr(
         "src.modules.web_app.build_lmstudio_mcp_json",
         lambda include_optional_missing=False, include_high_risk=False: (
-            {"mcpServers": {"filesystem": {}, "memory": {}, "openclaw-browser": {}, "chrome-profile": {}}},
+            {
+                "mcpServers": {
+                    "filesystem": {},
+                    "memory": {},
+                    "openclaw-browser": {},
+                    "chrome-profile": {},
+                }
+            },
             {
                 "included": ["filesystem", "memory", "openclaw-browser", "chrome-profile"],
                 "skipped_missing": [],
@@ -5515,8 +5942,12 @@ Local loopback ws://127.0.0.1:18789
     resp = client.get("/api/openclaw/browser-mcp-readiness")
     assert resp.status_code == 200
     data = resp.json()
-    chrome_profile = next(item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile")
-    devtools_path = next(item for item in data["browser"]["paths"] if item["kind"] == "chrome_devtools")
+    chrome_profile = next(
+        item for item in data["mcp"]["servers"] if item["name"] == "chrome-profile"
+    )
+    devtools_path = next(
+        item for item in data["browser"]["paths"] if item["kind"] == "chrome_devtools"
+    )
     assert chrome_profile["readiness"] == "blocked"
     assert chrome_profile["state"] == "chrome_policy_blocked"
     assert chrome_profile["confirmed"] is False
@@ -5524,7 +5955,9 @@ Local loopback ws://127.0.0.1:18789
     assert devtools_path["state"] == "chrome_policy_blocked"
 
 
-def test_browser_mcp_readiness_retries_transient_empty_cli_state_when_relay_authorized(monkeypatch, tmp_path: Path):
+def test_browser_mcp_readiness_retries_transient_empty_cli_state_when_relay_authorized(
+    monkeypatch, tmp_path: Path
+):
     """При `authorized` relay endpoint должен пережидать краткий CLI-флап status/tabs и не застревать в false attention."""
 
     class _Proc:
@@ -5555,7 +5988,10 @@ def test_browser_mcp_readiness_retries_transient_empty_cli_state_when_relay_auth
 
         async def get(self, url: str, *, headers=None):
             assert url == "http://127.0.0.1:18791/"
-            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            assert headers == {
+                "Accept": "application/json",
+                "Authorization": "Bearer gateway-token-from-config",
+            }
             return _Resp(200)
 
     status_calls = {"count": 0}
@@ -5593,7 +6029,15 @@ Local loopback ws://127.0.0.1:18789
             tabs_calls["count"] += 1
             payload = {"tabs": []}
             if tabs_calls["count"] >= 2:
-                payload = {"tabs": [{"targetId": "abc", "title": "Example Domain", "url": "https://example.com/"}]}
+                payload = {
+                    "tabs": [
+                        {
+                            "targetId": "abc",
+                            "title": "Example Domain",
+                            "url": "https://example.com/",
+                        }
+                    ]
+                }
             return _Proc(json.dumps(payload), returncode=0)
         raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
 
@@ -5603,13 +6047,28 @@ Local loopback ws://127.0.0.1:18789
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
-    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
-    monkeypatch.setattr("src.modules.web_app.get_managed_mcp_servers", lambda: {"filesystem": {}, "memory": {}, "openclaw-browser": {}})
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: "gateway-token-from-config"),
+    )
+    monkeypatch.setattr(
+        "src.modules.web_app.get_managed_mcp_servers",
+        lambda: {"filesystem": {}, "memory": {}, "openclaw-browser": {}},
+    )
     monkeypatch.setattr(
         "src.modules.web_app.resolve_managed_server_launch",
-        lambda name: {"name": name, "description": name, "risk": "medium", "missing_env": [], "manual_setup": []},
+        lambda name: {
+            "name": name,
+            "description": name,
+            "risk": "medium",
+            "missing_env": [],
+            "manual_setup": [],
+        },
     )
     monkeypatch.setattr(
         "src.modules.web_app.build_lmstudio_mcp_json",
@@ -5668,7 +6127,10 @@ def test_browser_start_endpoint_returns_updated_readiness(monkeypatch):
 
         async def get(self, url: str, *, headers=None):
             assert url == "http://127.0.0.1:18791/"
-            assert headers == {"Accept": "application/json", "Authorization": "Bearer gateway-token-from-config"}
+            assert headers == {
+                "Accept": "application/json",
+                "Authorization": "Bearer gateway-token-from-config",
+            }
             return _Resp(200)
 
     async def _fake_create_subprocess_exec(*cmd, **kwargs):
@@ -5715,14 +6177,30 @@ Local loopback ws://127.0.0.1:18789
             )
         if cmd[:4] == ("openclaw", "browser", "--json", "tabs"):
             return _Proc(
-                json.dumps({"tabs": [{"targetId": "abc", "title": "Example Domain", "url": "https://example.com/"}]}),
+                json.dumps(
+                    {
+                        "tabs": [
+                            {
+                                "targetId": "abc",
+                                "title": "Example Domain",
+                                "url": "https://example.com/",
+                            }
+                        ]
+                    }
+                ),
                 returncode=0,
             )
         raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     monkeypatch.setattr("src.modules.web_app.httpx.AsyncClient", _AsyncClient)
-    monkeypatch.setattr(WebApp, "_openclaw_gateway_token_from_config", staticmethod(lambda: "gateway-token-from-config"))
+    monkeypatch.setattr(
+        WebApp,
+        "_openclaw_gateway_token_from_config",
+        staticmethod(lambda: "gateway-token-from-config"),
+    )
     client = _make_client()
 
     resp = client.post("/api/openclaw/browser/start", json={})
@@ -5780,7 +6258,9 @@ def test_control_compat_status_returns_legacy_aliases(monkeypatch):
             return _Proc("Unsupported schema node in Control UI", returncode=0)
         raise AssertionError(f"Неожиданный вызов subprocess: {cmd}")
 
-    monkeypatch.setattr("src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        "src.modules.web_app.asyncio.create_subprocess_exec", _fake_create_subprocess_exec
+    )
     client = _make_client()
 
     resp = client.get("/api/openclaw/control-compat/status")
@@ -5973,7 +6453,10 @@ def test_diagnostics_smoke_endpoint_aggregates_browser_and_photo(monkeypatch):
     assert payload["checks"][0]["ok"] is True
     assert payload["checks"][1]["name"] == "photo_smoke"
     assert payload["checks"][1]["ok"] is True
-    assert payload["report"]["browser"]["report"]["browser_smoke"]["detail"] == "browser ok: https://example.com"
+    assert (
+        payload["report"]["browser"]["report"]["browser_smoke"]["detail"]
+        == "browser ok: https://example.com"
+    )
     assert payload["report"]["photo"]["report"]["photo_smoke"]["selected_model"] == "vision/local"
 
 
@@ -6175,7 +6658,9 @@ def test_userbot_acl_update_requires_web_key(monkeypatch: pytest.MonkeyPatch) ->
     assert resp.json()["detail"] == "forbidden: invalid WEB_API_KEY"
 
 
-def test_inbox_status_and_items_return_persisted_summary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_inbox_status_and_items_return_persisted_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Inbox endpoints должны отдавать persisted summary и open items."""
     inbox = InboxService(state_path=tmp_path / "inbox.json")
     inbox.upsert_reminder(
@@ -6311,8 +6796,8 @@ def test_inbox_stale_processing_preview_and_bulk_remediation(
     tmp_path: Path,
 ) -> None:
     """Owner UI должен получать stale preview и bulk-cancel только реально застрявшие item-ы."""
-    from datetime import datetime, timedelta, timezone
     import json
+    from datetime import datetime, timedelta, timezone
 
     monkeypatch.setenv("WEB_API_KEY", "secret")
     inbox = InboxService(state_path=tmp_path / "inbox.json")
@@ -6342,7 +6827,9 @@ def test_inbox_stale_processing_preview_and_bulk_remediation(
             continue
         item["updated_at_utc"] = stale_timestamp
         item.setdefault("metadata", {})["last_action_at_utc"] = stale_timestamp
-    inbox.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    inbox.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
     client = _make_client()
@@ -6376,8 +6863,8 @@ def test_inbox_stale_open_preview_and_bulk_remediation(
     tmp_path: Path,
 ) -> None:
     """Owner UI должен отдельно bulk-cancel только старые `open` item-ы."""
-    from datetime import datetime, timedelta, timezone
     import json
+    from datetime import datetime, timedelta, timezone
 
     monkeypatch.setenv("WEB_API_KEY", "secret")
     inbox = InboxService(state_path=tmp_path / "inbox.json")
@@ -6404,7 +6891,9 @@ def test_inbox_stale_open_preview_and_bulk_remediation(
         if item["item_id"] != stale_item["item_id"]:
             continue
         item["updated_at_utc"] = stale_timestamp
-    inbox.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    inbox.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     monkeypatch.setattr("src.modules.web_app.inbox_service", inbox)
     client = _make_client()

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -102,8 +101,7 @@ class TestSwarmMemoryRetrieval:
         assert tmp_memory.get_context_for_injection("traders") == ""
 
     def test_get_context_for_injection_format(self, tmp_memory: SwarmMemory):
-        tmp_memory.save_run(team="traders", topic="BTC", result="BTC = 60k",
-                            delegations=["coders"])
+        tmp_memory.save_run(team="traders", topic="BTC", result="BTC = 60k", delegations=["coders"])
         ctx = tmp_memory.get_context_for_injection("traders")
         assert "Память команды traders" in ctx
         assert "BTC" in ctx
@@ -128,8 +126,13 @@ class TestSwarmMemoryFormatting:
         assert "ещё не запускалась" in result
 
     def test_format_history_with_data(self, tmp_memory: SwarmMemory):
-        tmp_memory.save_run(team="traders", topic="BTC анализ", result="BTC на поддержке",
-                            delegations=["coders"], duration_sec=5.2)
+        tmp_memory.save_run(
+            team="traders",
+            topic="BTC анализ",
+            result="BTC на поддержке",
+            delegations=["coders"],
+            duration_sec=5.2,
+        )
         result = tmp_memory.format_history("traders")
         assert "Память команды traders" in result
         assert "BTC анализ" in result
@@ -155,7 +158,7 @@ class TestSwarmMemoryManagement:
 
 class TestSwarmMemoryCompression:
     def test_strips_swarm_header(self, tmp_memory: SwarmMemory):
-        result = '🐝 **Swarm Room: BTC**\n\nActual content here'
+        result = "🐝 **Swarm Room: BTC**\n\nActual content here"
         rec = tmp_memory.save_run(team="traders", topic="BTC", result=result)
         assert not rec.result_summary.startswith("🐝")
         assert "Actual content" in rec.result_summary

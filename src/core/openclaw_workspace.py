@@ -21,9 +21,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .logger import get_logger
 from ..config import config
-
+from .logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -127,7 +126,9 @@ def append_workspace_memory_entry(
             day_path.write_text(header + line + "\n", encoding="utf-8")
         return True
     except OSError as exc:
-        logger.warning("openclaw_workspace_memory_append_failed", path=str(day_path), error=str(exc))
+        logger.warning(
+            "openclaw_workspace_memory_append_failed", path=str(day_path), error=str(exc)
+        )
         return False
 
 

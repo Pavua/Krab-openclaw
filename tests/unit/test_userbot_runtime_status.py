@@ -82,7 +82,12 @@ def test_looks_like_runtime_truth_question_always_false() -> None:
 
 def test_build_runtime_model_status_openclaw_cloud() -> None:
     """Для openclaw_cloud отображает channel, model, provider, tier."""
-    route = {"channel": "openclaw_cloud", "model": "gemini-3.1", "provider": "google", "active_tier": "1"}
+    route = {
+        "channel": "openclaw_cloud",
+        "model": "gemini-3.1",
+        "provider": "google",
+        "active_tier": "1",
+    }
     txt = KraabUserbot._build_runtime_model_status(route)
     assert "openclaw_cloud" in txt
     assert "gemini-3.1" in txt
@@ -100,7 +105,12 @@ def test_build_runtime_model_status_local_direct_shows_lmstudio_label() -> None:
 
 def test_build_runtime_model_status_openclaw_local() -> None:
     """openclaw_local канал отображается без специальной подписи."""
-    route = {"channel": "openclaw_local", "model": "llama", "provider": "lmstudio", "active_tier": "-"}
+    route = {
+        "channel": "openclaw_local",
+        "model": "llama",
+        "provider": "lmstudio",
+        "active_tier": "-",
+    }
     txt = KraabUserbot._build_runtime_model_status(route)
     assert "openclaw_local" in txt
 
@@ -147,7 +157,9 @@ def test_build_capability_status_owner_contains_search_command(monkeypatch) -> N
     """Owner-контур включает упоминание !search и файловых инструментов."""
     bot = _make_bot_stub()
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", False, raising=False)
-    with patch.object(userbot_bridge_module.model_manager, "get_current_model", return_value="gemini"):
+    with patch.object(
+        userbot_bridge_module.model_manager, "get_current_model", return_value="gemini"
+    ):
         txt = bot._build_runtime_capability_status(is_allowed_sender=True)
     assert "!search" in txt
     assert "!voice" in txt

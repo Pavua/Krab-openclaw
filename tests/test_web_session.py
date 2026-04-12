@@ -1,4 +1,3 @@
-
 import asyncio
 import os
 import sys
@@ -6,16 +5,16 @@ import sys
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
-from web_session import web_manager
-import logging
+
 import structlog
 
+from web_session import web_manager
+
 structlog.configure(
-    processors=[
-        structlog.processors.JSONRenderer()
-    ],
+    processors=[structlog.processors.JSONRenderer()],
     logger_factory=structlog.PrintLoggerFactory(),
 )
+
 
 async def test_web():
     print("🌍 Testing Web Session Manager...")
@@ -29,12 +28,13 @@ async def test_web():
             print(f"📄 Page Title: {title}")
         else:
             print("❌ Browser failed to start.")
-            
+
         await web_manager.stop()
         print("✅ Browser stopped.")
-        
+
     except Exception as e:
         print(f"❌ Error: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(test_web())

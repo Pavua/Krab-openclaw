@@ -15,9 +15,9 @@ INBOX_DASHBOARD_HTML = """<!DOCTYPE html>
             --success: #22c55e;
             --error: #ef4444;
         }
-        
+
         * { box-sizing: border-box; }
-        
+
         body {
             background-color: var(--bg);
             color: var(--text);
@@ -171,17 +171,17 @@ INBOX_DASHBOARD_HTML = """<!DOCTYPE html>
         .sev-info { background: #2a2a2a; color: #e0e0e0; }
         .sev-warning { background: #854d0e; color: #fef08a; }
         .sev-error { background: #991b1b; color: #fecaca; }
-        .sev-critical { 
-            background: #dc2626; 
-            color: #ffffff; 
-            animation: pulse 1.5s infinite; 
+        .sev-critical {
+            background: #dc2626;
+            color: #ffffff;
+            animation: pulse 1.5s infinite;
         }
 
         /* Statuses */
         .stat-open { background: #1e3a8a; color: #bfdbfe; }
         .stat-acked { background: #166534; color: #bbf7d0; }
         .stat-processing { background: #9a3412; color: #fed7aa; }
-        
+
         .kind-label { background: #374151; color: #e5e7eb; border: 1px solid #4b5563; }
 
         .item-body-trunc {
@@ -289,7 +289,7 @@ INBOX_DASHBOARD_HTML = """<!DOCTYPE html>
             if (!dateStr) return 'Неизвестно';
             const date = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z');
             const seconds = Math.floor((new Date() - date) / 1000);
-            
+
             let interval = seconds / 86400;
             if (interval > 1) return Math.floor(interval) + ' дн. назад';
             interval = seconds / 3600;
@@ -318,7 +318,7 @@ INBOX_DASHBOARD_HTML = """<!DOCTYPE html>
                     fetch(`${API_BASE}/status`),
                     fetch(`${API_BASE}/items?limit=50`)
                 ]);
-                
+
                 const statusData = await statusRes.json();
                 const itemsData = await itemsRes.json();
 
@@ -371,10 +371,10 @@ INBOX_DASHBOARD_HTML = """<!DOCTYPE html>
                 const stat = i.status || 'open';
                 const sevText = translations.sev[sev] || sev;
                 const statText = translations.stat[stat] || stat;
-                
+
                 const bodyStr = i.body || '';
                 const bodyTrunc = bodyStr.length > 100 ? bodyStr.substring(0, 100) + '...' : bodyStr;
-                
+
                 const metaStr = i.metadata ? JSON.stringify(i.metadata, null, 2) : '{}';
                 const opId = i.identity?.operator_id || 'N/A';
                 const chId = i.identity?.channel_id || 'N/A';
@@ -419,7 +419,7 @@ ${escapeHtml(metaStr)}
 
         setInterval(updateClock, 1000);
         setInterval(fetchDashboard, 10000);
-        
+
         updateClock();
         fetchDashboard();
     </script>

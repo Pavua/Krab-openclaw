@@ -3,22 +3,25 @@
 Типы моделей для роутера (Фаза 4.1).
 Вынесены из model_manager для использования в local_health без циклических импортов.
 """
+
 from dataclasses import dataclass
 from enum import Enum
 
 
 class ModelStatus(Enum):
     """Статус модели"""
-    AVAILABLE = "available"      # Доступна для загрузки
-    LOADED = "loaded"           # Загружена и готова
-    LOADING = "loading"         # В процессе загрузки
-    UNLOADING = "unloading"     # В процессе выгрузки
-    ERROR = "error"             # Ошибка
+
+    AVAILABLE = "available"  # Доступна для загрузки
+    LOADED = "loaded"  # Загружена и готова
+    LOADING = "loading"  # В процессе загрузки
+    UNLOADING = "unloading"  # В процессе выгрузки
+    ERROR = "error"  # Ошибка
     UNKNOWN = "unknown"
 
 
 class ModelType(Enum):
     """Тип модели"""
+
     LOCAL_MLX = "mlx"
     LOCAL_GGUF = "gguf"
     CLI_BACKEND = "cli_backend"
@@ -29,6 +32,7 @@ class ModelType(Enum):
 @dataclass
 class ModelInfo:
     """Информация о модели"""
+
     id: str
     name: str
     type: ModelType

@@ -5,6 +5,7 @@
 Покрываем: save_round_artifact, list_artifacts (фильтр по team, лимит),
 get_artifact, cleanup_old, round-trip сохранения, edge cases.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,7 +20,14 @@ from src.core.swarm_artifact_store import SwarmArtifactStore
 def _write_artifact(base_dir: Path, filename: str, team: str, mtime: float) -> Path:
     """Вспомогательная функция: пишет минимальный артефакт с заданным mtime."""
     p = base_dir / filename
-    payload = {"team": team, "topic": "t", "result": "r", "delegations": [], "duration_sec": 0.0, "timestamp": int(mtime)}
+    payload = {
+        "team": team,
+        "topic": "t",
+        "result": "r",
+        "delegations": [],
+        "duration_sec": 0.0,
+        "timestamp": int(mtime),
+    }
     p.write_text(json.dumps(payload), encoding="utf-8")
     os.utime(p, (mtime, mtime))
     return p

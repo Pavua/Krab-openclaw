@@ -23,7 +23,9 @@ Name        Bundle Identifier                                           Version 
 KrabVoice   com.antigravity.krabvoice.user3.macbook.pro.pablito.local   0.2.0     1
 """.strip()
 
-    parsed = parse_devicectl_apps_output(stdout, "com.antigravity.krabvoice.user3.macbook.pro.pablito.local")
+    parsed = parse_devicectl_apps_output(
+        stdout, "com.antigravity.krabvoice.user3.macbook.pro.pablito.local"
+    )
 
     assert parsed["installed"] is True
     assert parsed["app_name"] == "KrabVoice"
@@ -38,7 +40,9 @@ Name        Bundle Identifier                                           Version 
 OtherApp    com.example.other                                           1.0       7
 """.strip()
 
-    parsed = parse_devicectl_apps_output(stdout, "com.antigravity.krabvoice.user3.macbook.pro.pablito.local")
+    parsed = parse_devicectl_apps_output(
+        stdout, "com.antigravity.krabvoice.user3.macbook.pro.pablito.local"
+    )
 
     assert parsed["installed"] is False
     assert parsed["bundle_id"] == "com.antigravity.krabvoice.user3.macbook.pro.pablito.local"
@@ -67,7 +71,9 @@ def test_classify_launch_attempt_marks_success() -> None:
 
 
 def test_parse_pytest_summary_counts_quiet_dots() -> None:
-    summary = parse_pytest_summary(".................                                                        [100%]")
+    summary = parse_pytest_summary(
+        ".................                                                        [100%]"
+    )
 
     assert summary["passed_count"] == 17
     assert summary["failed_count"] == 0

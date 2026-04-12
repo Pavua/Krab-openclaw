@@ -46,7 +46,9 @@ def build_trace_id(source: str, *parts: object) -> str:
     """
     normalized_source = str(source or "runtime").strip().lower() or "runtime"
     normalized_parts = [str(part or "").strip() for part in parts if str(part or "").strip()]
-    raw = "::".join([normalized_source, *normalized_parts]) if normalized_parts else normalized_source
+    raw = (
+        "::".join([normalized_source, *normalized_parts]) if normalized_parts else normalized_source
+    )
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
     return f"{normalized_source}:{digest}"
 

@@ -49,7 +49,9 @@ def test_http_post_sends_web_key_header(monkeypatch) -> None:
 
     monkeypatch.setattr(watchdog.urllib.request, "urlopen", _fake_urlopen)
 
-    payload = watchdog._http_post("http://127.0.0.1:8080/api/krab/restart_userbot", payload={"ping": True})  # noqa: SLF001
+    payload = watchdog._http_post(
+        "http://127.0.0.1:8080/api/krab/restart_userbot", payload={"ping": True}
+    )  # noqa: SLF001
 
     req = captured["request"]
     assert payload["ok"] is True
@@ -66,12 +68,15 @@ def test_is_gateway_ok_accepts_live_payload() -> None:
 
 def test_is_userbot_ok_requires_client_connected_when_field_present() -> None:
     """Если health/lite уже знает про `client_connected=false`, watchdog не должен считать transport healthy."""
-    assert watchdog._is_userbot_ok(  # noqa: SLF001
-        {
-            "telegram_userbot_state": "running",
-            "telegram_userbot_client_connected": False,
-        }
-    ) is False
+    assert (
+        watchdog._is_userbot_ok(  # noqa: SLF001
+            {
+                "telegram_userbot_state": "running",
+                "telegram_userbot_client_connected": False,
+            }
+        )
+        is False
+    )
 
 
 def test_try_restart_gateway_skips_when_openclaw_bin_missing(monkeypatch) -> None:

@@ -13,8 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.exceptions import UserInputError
 import src.handlers.command_handlers as command_handlers
+from src.core.exceptions import UserInputError
 
 
 class _StatusMessage:

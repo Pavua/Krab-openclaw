@@ -15,10 +15,10 @@ from fastapi.testclient import TestClient
 
 from src.modules.web_app import WebApp
 from tests.unit.test_web_app_runtime_endpoints import (
-    _FakeOpenClaw,
-    _FakeHealthClient,
-    _FakeUserbot,
     _DummyRouter,
+    _FakeHealthClient,
+    _FakeOpenClaw,
+    _FakeUserbot,
 )
 
 
@@ -56,7 +56,10 @@ def test_assistant_capabilities_expose_registry_and_policy_endpoints() -> None:
 
 def test_policy_matrix_endpoint_returns_acl_policy_truth(monkeypatch) -> None:
     """`/api/policy/matrix` должен возвращать unified ACL/policy snapshot."""
-    monkeypatch.setattr("src.modules.web_app.load_acl_runtime_state", lambda: {"owner": ["pablito"], "full": [], "partial": ["guest"]})
+    monkeypatch.setattr(
+        "src.modules.web_app.load_acl_runtime_state",
+        lambda: {"owner": ["pablito"], "full": [], "partial": ["guest"]},
+    )
     client = TestClient(_make_app().app)
 
     resp = client.get("/api/policy/matrix")
@@ -72,7 +75,10 @@ def test_policy_matrix_endpoint_returns_acl_policy_truth(monkeypatch) -> None:
 
 def test_capability_registry_endpoint_aggregates_contours(monkeypatch) -> None:
     """`/api/capabilities/registry` должен собирать unified capability registry."""
-    monkeypatch.setattr("src.modules.web_app.load_acl_runtime_state", lambda: {"owner": ["pablito"], "full": [], "partial": []})
+    monkeypatch.setattr(
+        "src.modules.web_app.load_acl_runtime_state",
+        lambda: {"owner": ["pablito"], "full": [], "partial": []},
+    )
     monkeypatch.setattr(
         WebApp,
         "_load_openclaw_runtime_config",
@@ -138,7 +144,10 @@ def test_channel_capabilities_endpoint_returns_primary_and_reserve_truth(monkeyp
     assert snapshot["summary"]["shared_workspace_dir"].endswith("workspace-main-messaging")
     assert "shared_workspace" in snapshot
     assert snapshot["channels"][0]["semantics"]["streaming"] == "buffered_edit_loop"
-    assert snapshot["channels"][0]["semantics"]["reasoning_visibility"] == "owner_optional_separate_trace"
+    assert (
+        snapshot["channels"][0]["semantics"]["reasoning_visibility"]
+        == "owner_optional_separate_trace"
+    )
     assert snapshot["channels"][1]["semantics"]["runtime_self_check"] == "not_confirmed"
 
 

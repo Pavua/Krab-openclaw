@@ -19,15 +19,14 @@ R20: каждый источник проверяется с индивидуа�
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
-import psutil
-import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-
+import psutil
 
 _PER_SOURCE_EXTRA_SEC = 0.0
 
@@ -50,11 +49,15 @@ class EcosystemHealthService:
         self.voice_gateway_client = voice_gateway_client
         self.krab_ear_client = krab_ear_client
         self.krab_ear_backend_url = (
-            (krab_ear_backend_url or os.getenv("KRAB_EAR_BACKEND_URL", "http://127.0.0.1:5005")).strip().rstrip("/")
+            (krab_ear_backend_url or os.getenv("KRAB_EAR_BACKEND_URL", "http://127.0.0.1:5005"))
+            .strip()
+            .rstrip("/")
         )
         # Позволяет верхнему слою переиспользовать уже собранный local runtime truth,
         # чтобы deep health не создавал ещё один лишний probe в LM Studio.
-        self.local_health_override = dict(local_health_override or {}) if local_health_override else None
+        self.local_health_override = (
+            dict(local_health_override or {}) if local_health_override else None
+        )
         # [R20] Гарантируем минимально вменяемый таймаут
         self.timeout_sec = max(0.5, float(timeout_sec))
 
@@ -87,7 +90,7 @@ class EcosystemHealthService:
                 return {
                     "ok": False,
                     "status": "timeout",
-                    "degraded": True,   # [R20] явная пометка деградации
+                    "degraded": True,  # [R20] явная пометка деградации
                     "latency_ms": elapsed_ms,
                     "source": name,
                 }
@@ -96,7 +99,7 @@ class EcosystemHealthService:
                 return {
                     "ok": False,
                     "status": f"error: {exc}",
-                    "degraded": True,   # [R20] явная пометка деградации
+                    "degraded": True,  # [R20] явная пометка деградации
                     "latency_ms": elapsed_ms,
                     "source": name,
                 }
@@ -104,6 +107,7 @@ class EcosystemHealthService:
         # [R20] Все источники проверяются параллельно; gather не бросает исключений
         # благодаря return_exceptions=True + _safe_run уже ловит всё сам.
         collect_started = time.monotonic()
+
         async def _return_local_override() -> dict[str, Any]:
             return dict(self.local_health_override or {})
 
@@ -115,7 +119,10 @@ class EcosystemHealthService:
         results = await asyncio.gather(
             _safe_run(self._check_client_health(self.openclaw_client, "openclaw"), "openclaw"),
             local_task,
-            _safe_run(self._check_client_health(self.voice_gateway_client, "voice_gateway"), "voice_gateway"),
+            _safe_run(
+                self._check_client_health(self.voice_gateway_client, "voice_gateway"),
+                "voice_gateway",
+            ),
             _safe_run(self._check_krab_ear_health(), "krab_ear"),
             return_exceptions=True,
         )
@@ -138,12 +145,14 @@ class EcosystemHealthService:
             return r
 
         openclaw_check = _get_res(0, "openclaw")
-        local_check    = _get_res(1, "local_lm")
-        voice_check    = _get_res(2, "voice_gateway")
-        ear_check      = _get_res(3, "krab_ear")
+        local_check = _get_res(1, "local_lm")
+        voice_check = _get_res(2, "voice_gateway")
+        ear_check = _get_res(3, "krab_ear")
 
         resources = self._collect_resource_metrics()
-        ca = getattr(self.router, "cost_analytics", None) or getattr(self.router, "cost_engine", None)
+        ca = getattr(self.router, "cost_analytics", None) or getattr(
+            self.router, "cost_engine", None
+        )
         budget = ca.get_budget_status() if ca and hasattr(ca, "get_budget_status") else {}
 
         queue_metrics = {}
@@ -180,19 +189,28 @@ class EcosystemHealthService:
 
         recommendations: list[str] = []
         if degradation == "degraded_to_local_fallback":
-            recommendations.append("OpenClaw offline: временно вести non-critical задачи через локальные модели.")
+            recommendations.append(
+                "OpenClaw offline: временно вести non-critical задачи через локальные модели."
+            )
         elif degradation == "critical_no_ai_backend":
-            recommendations.append("Нет доступного AI backend: проверить OpenClaw и LM Studio/Ollama.")
+            recommendations.append(
+                "Нет доступного AI backend: проверить OpenClaw и LM Studio/Ollama."
+            )
         if not voice_check["ok"]:
             recommendations.append("Voice Gateway недоступен: команды `!call*` будут ограничены.")
         if not ear_check["ok"]:
-            recommendations.append("Krab Ear backend недоступен: desktop call-assist поток неактивен.")
+            recommendations.append(
+                "Krab Ear backend недоступен: desktop call-assist поток неактивен."
+            )
 
         # [R20] Рекомендации по деградированным источникам
         degraded_sources = [
-            name for name, check in [
-                ("openclaw", openclaw_check), ("local_lm", local_check),
-                ("voice_gateway", voice_check), ("krab_ear", ear_check),
+            name
+            for name, check in [
+                ("openclaw", openclaw_check),
+                ("local_lm", local_check),
+                ("voice_gateway", voice_check),
+                ("krab_ear", ear_check),
             ]
             if check.get("degraded") and check.get("status") == "timeout"
         ]
@@ -203,11 +221,15 @@ class EcosystemHealthService:
 
         # [R12] Дополнительные рекомендации на основе бюджета
         if budget.get("is_economy_mode"):
-            recommendations.append(f"💰 Активен РЕЖИМ ЭКОНОМИИ: бюджет превышен или близок к лимиту ({budget.get('usage_percent')}%).")
+            recommendations.append(
+                f"💰 Активен РЕЖИМ ЭКОНОМИИ: бюджет превышен или близок к лимиту ({budget.get('usage_percent')}%)."
+            )
 
         runway = budget.get("runway_days", 30)
         if runway < 7:
-            recommendations.append(f"⚠️ КРИТИЧЕСКИЙ БЮДЖЕТ: средств хватит примерно на {runway} дн. Рекомендуется пополнить баланс.")
+            recommendations.append(
+                f"⚠️ КРИТИЧЕСКИЙ БЮДЖЕТ: средств хватит примерно на {runway} дн. Рекомендуется пополнить баланс."
+            )
 
         if not recommendations:
             recommendations.append("Экосистема в норме: поддерживай текущий режим мониторинга.")
@@ -216,10 +238,10 @@ class EcosystemHealthService:
         # Ключ _diagnostics изолирован и не используется UI-кнопками/скриптами,
         # поэтому добавление его не ломает существующий API контракт.
         all_latencies = {
-            "openclaw":      openclaw_check.get("latency_ms", 0),
-            "local_lm":      local_check.get("latency_ms", 0),
+            "openclaw": openclaw_check.get("latency_ms", 0),
+            "local_lm": local_check.get("latency_ms", 0),
             "voice_gateway": voice_check.get("latency_ms", 0),
-            "krab_ear":      ear_check.get("latency_ms", 0),
+            "krab_ear": ear_check.get("latency_ms", 0),
         }
         slowest_source = max(all_latencies, key=lambda k: all_latencies[k])
         diagnostics = {
@@ -232,35 +254,37 @@ class EcosystemHealthService:
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "status": "ok" if degradation == "normal" and voice_assist_ready else ("critical" if risk_level == "high" else "degraded"),
+            "status": "ok"
+            if degradation == "normal" and voice_assist_ready
+            else ("critical" if risk_level == "high" else "degraded"),
             "risk_level": risk_level,
             "degradation": degradation,
             "checks": {
-                "openclaw":      {**openclaw_check, "token_status": token_status},
-                "local_lm":      local_check,
+                "openclaw": {**openclaw_check, "token_status": token_status},
+                "local_lm": local_check,
                 "voice_gateway": voice_check,
-                "krab_ear":      ear_check,
+                "krab_ear": ear_check,
             },
             "chain": {
                 "active_ai_channel": ai_channel,
-                "fallback_ready":    local_ok,
+                "fallback_ready": local_ok,
                 "voice_assist_ready": voice_assist_ready,
             },
             "resources": resources,
-            "queue":  queue_metrics,   # R15
+            "queue": queue_metrics,  # R15
             "budget": budget,
             "recommendations": recommendations[:8],  # Лимит рекомендаций
-            "_diagnostics": diagnostics,             # [R20] Latency-диагностика
+            "_diagnostics": diagnostics,  # [R20] Latency-диагностика
         }
 
     def _collect_resource_metrics(self) -> dict[str, Any]:
         """[R11] Метрики потребления ресурсов macOS."""
         try:
             return {
-                "cpu_percent":      psutil.cpu_percent(),
-                "ram_percent":      psutil.virtual_memory().percent,
+                "cpu_percent": psutil.cpu_percent(),
+                "ram_percent": psutil.virtual_memory().percent,
                 "ram_available_gb": round(psutil.virtual_memory().available / (1024**3), 1),
-                "load_avg":         os.getloadavg() if hasattr(os, "getloadavg") else [0, 0, 0],
+                "load_avg": os.getloadavg() if hasattr(os, "getloadavg") else [0, 0, 0],
             }
         except Exception as e:
             return {"error": str(e)}
@@ -273,28 +297,28 @@ class EcosystemHealthService:
             ok = result.get("status") == "healthy" if isinstance(result, dict) else bool(result)
             latency_ms = int((time.monotonic() - started) * 1000)
             return {
-                "ok":         ok,
-                "status":     "ok" if ok else "unavailable",
+                "ok": ok,
+                "status": "ok" if ok else "unavailable",
                 "latency_ms": latency_ms,
-                "source":     "model_manager.health_check",
+                "source": "model_manager.health_check",
             }
         except Exception as exc:
             latency_ms = int((time.monotonic() - started) * 1000)
             return {
-                "ok":         False,
-                "status":     f"error: {exc}",
+                "ok": False,
+                "status": f"error: {exc}",
                 "latency_ms": latency_ms,
-                "source":     "model_manager.health_check",
+                "source": "model_manager.health_check",
             }
 
     async def _check_client_health(self, client: Any | None, source_name: str) -> dict[str, Any]:
         """Проверка health внешнего клиента (OpenClaw/Voice Gateway)."""
         if not client or not hasattr(client, "health_check"):
             return {
-                "ok":         False,
-                "status":     "not_configured",
+                "ok": False,
+                "status": "not_configured",
                 "latency_ms": 0,
-                "source":     source_name,
+                "source": source_name,
             }
 
         started = time.monotonic()
@@ -303,18 +327,18 @@ class EcosystemHealthService:
             latency_ms = int((time.monotonic() - started) * 1000)
             ok = bool(result)
             return {
-                "ok":         ok,
-                "status":     "ok" if ok else "unavailable",
+                "ok": ok,
+                "status": "ok" if ok else "unavailable",
                 "latency_ms": latency_ms,
-                "source":     source_name,
+                "source": source_name,
             }
         except Exception as exc:
             latency_ms = int((time.monotonic() - started) * 1000)
             return {
-                "ok":         False,
-                "status":     f"error: {exc}",
+                "ok": False,
+                "status": f"error: {exc}",
                 "latency_ms": latency_ms,
-                "source":     source_name,
+                "source": source_name,
             }
 
     async def _check_krab_ear_health(self) -> dict[str, Any]:
@@ -331,16 +355,16 @@ class EcosystemHealthService:
             latency_ms = int((time.monotonic() - started) * 1000)
             ok = status == 200
             return {
-                "ok":         ok,
-                "status":     "ok" if ok else f"http_{status}",
+                "ok": ok,
+                "status": "ok" if ok else f"http_{status}",
                 "latency_ms": latency_ms,
-                "source":     url,
+                "source": url,
             }
         except Exception as exc:
             latency_ms = int((time.monotonic() - started) * 1000)
             return {
-                "ok":         False,
-                "status":     f"error: {exc}",
+                "ok": False,
+                "status": f"error: {exc}",
                 "latency_ms": latency_ms,
-                "source":     url,
+                "source": url,
             }

@@ -7,21 +7,19 @@ from __future__ import annotations
 
 import pytest
 
-
 # Импортируем напрямую — константа и метод не зависят от Pyrogram/asyncio
-from src.userbot_bridge import _RELAY_INTENT_KEYWORDS, KraabUserbot as UserBotBridge
-
+from src.userbot_bridge import _RELAY_INTENT_KEYWORDS
+from src.userbot_bridge import KraabUserbot as UserBotBridge
 
 # ── Keyword coverage ─────────────────────────────────────────────────────────
+
 
 class TestDetectRelayIntentPositives:
     """Все ключевые слова должны триггерить relay intent."""
 
     @pytest.mark.parametrize("kw", sorted(_RELAY_INTENT_KEYWORDS))
     def test_bare_keyword_triggers(self, kw: str) -> None:
-        assert UserBotBridge._detect_relay_intent(kw) is True, (
-            f"keyword '{kw}' не задетектирован"
-        )
+        assert UserBotBridge._detect_relay_intent(kw) is True, f"keyword '{kw}' не задетектирован"
 
     def test_keyword_embedded_in_sentence(self) -> None:
         assert UserBotBridge._detect_relay_intent("привет, передай ему что я буду в 6") is True
@@ -65,6 +63,7 @@ class TestDetectRelayIntentNegatives:
 
 
 # ── Frozenset sanity ─────────────────────────────────────────────────────────
+
 
 def test_relay_keywords_is_frozenset() -> None:
     assert isinstance(_RELAY_INTENT_KEYWORDS, frozenset)

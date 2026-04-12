@@ -37,7 +37,7 @@ def test_build_runtime_report_detects_foreign_runtime() -> None:
                     "inbox_summary": {
                         "state_path": "/Users/USER2/.openclaw/krab_runtime_state/inbox_state.json",
                         "operator_id": "USER2",
-                    }
+                    },
                 },
             }
         if url.endswith("/health"):
@@ -89,7 +89,7 @@ def test_build_runtime_report_accepts_current_account_runtime() -> None:
                     "inbox_summary": {
                         "state_path": "/Users/pablito/.openclaw/krab_runtime_state/inbox_state.json",
                         "operator_id": "pablito",
-                    }
+                    },
                 },
             }
         if url.endswith("/health"):

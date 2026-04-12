@@ -5,6 +5,7 @@
 Содержит: is_lm_studio_available, fetch_lm_studio_models_list, discover_models.
 Вся логика, связанная с LM Studio, передаётся зависимостями (url, client, callbacks).
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
@@ -144,9 +145,7 @@ async def discover_models(
     Зависимости передаются аргументами (url, client, кэш, callback для Google).
     """
     models: list[ModelInfo] = []
-    model_list = await fetch_lm_studio_models_list(
-        lm_studio_url, client=client, timeout=timeout
-    )
+    model_list = await fetch_lm_studio_models_list(lm_studio_url, client=client, timeout=timeout)
     if not model_list:
         logger.warning("lm_studio_offline")
     else:

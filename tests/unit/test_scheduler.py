@@ -88,10 +88,13 @@ async def test_scheduler_reminder_delivers_via_bound_sender(tmp_path: Path) -> N
         assert scheduler.list_reminders() == []
         # The reminder item is resolved to "done"; new proactive_action trace stays open.
         open_non_proactive = [
-            item for item in inbox.list_items(limit=20)
+            item
+            for item in inbox.list_items(limit=20)
             if item["kind"] != "proactive_action" and item["status"] in {"open", "acked"}
         ]
-        assert open_non_proactive == [], f"Expected no open reminder items; found: {open_non_proactive}"
+        assert open_non_proactive == [], (
+            f"Expected no open reminder items; found: {open_non_proactive}"
+        )
         done_items = inbox.list_items(status="done", kind="reminder", limit=5)
         assert done_items
         assert done_items[0]["metadata"]["chat_id"] == "-10012345"
@@ -228,6 +231,7 @@ async def test_retry_or_fail_marks_failed_after_max_retries(
     try:
         future_iso = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
         from src.core.scheduler import ReminderRecord
+
         rec = ReminderRecord(
             reminder_id="fail_test",
             chat_id="999",
@@ -265,6 +269,7 @@ async def test_fire_reminder_no_sender_triggers_retry(
     try:
         future_iso = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
         from src.core.scheduler import ReminderRecord
+
         rec = ReminderRecord(
             reminder_id="fire_no_sender",
             chat_id="222",
@@ -319,15 +324,20 @@ async def test_persist_writes_only_scheduled_reminders(
     scheduler.start()
     try:
         from src.core.scheduler import ReminderRecord
+
         future_iso = (datetime.now().astimezone() + timedelta(hours=1)).isoformat()
         scheduler._reminders["r_scheduled"] = ReminderRecord(
-            reminder_id="r_scheduled", chat_id="1", text="active",
+            reminder_id="r_scheduled",
+            chat_id="1",
+            text="active",
             due_at_iso=future_iso,
             created_at_iso=datetime.now().astimezone().isoformat(),
             status="scheduled",
         )
         scheduler._reminders["r_failed"] = ReminderRecord(
-            reminder_id="r_failed", chat_id="2", text="failed one",
+            reminder_id="r_failed",
+            chat_id="2",
+            text="failed one",
             due_at_iso=future_iso,
             created_at_iso=datetime.now().astimezone().isoformat(),
             status="failed",
@@ -435,16 +445,33 @@ async def test_load_skips_records_with_missing_required_fields(
     future_iso = (datetime.now().astimezone() + timedelta(hours=2)).isoformat()
     state_path = tmp_path / "reminders.json"
     state_path.write_text(
-        json_module.dumps({
-            "reminders": [
-                # Пропущен chat_id — невалидная запись
-                {"reminder_id": "bad001", "chat_id": "", "text": "missing chat", "due_at_iso": future_iso},
-                # Пропущен text — невалидная запись
-                {"reminder_id": "bad002", "chat_id": "123", "text": "", "due_at_iso": future_iso},
-                # Полностью валидная запись
-                {"reminder_id": "good01", "chat_id": "456", "text": "напомнить", "due_at_iso": future_iso},
-            ]
-        }),
+        json_module.dumps(
+            {
+                "reminders": [
+                    # Пропущен chat_id — невалидная запись
+                    {
+                        "reminder_id": "bad001",
+                        "chat_id": "",
+                        "text": "missing chat",
+                        "due_at_iso": future_iso,
+                    },
+                    # Пропущен text — невалидная запись
+                    {
+                        "reminder_id": "bad002",
+                        "chat_id": "123",
+                        "text": "",
+                        "due_at_iso": future_iso,
+                    },
+                    # Полностью валидная запись
+                    {
+                        "reminder_id": "good01",
+                        "chat_id": "456",
+                        "text": "напомнить",
+                        "due_at_iso": future_iso,
+                    },
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     inbox = InboxService(state_path=tmp_path / "inbox.json")
@@ -469,16 +496,18 @@ async def test_load_past_due_reminder_marked_failed(
 
     state_path = tmp_path / "reminders.json"
     state_path.write_text(
-        json_module.dumps({
-            "reminders": [
-                {
-                    "reminder_id": "past01",
-                    "chat_id": "789",
-                    "text": "просроченное",
-                    "due_at_iso": "2024-01-01T00:00:00+00:00",  # давно в прошлом
-                }
-            ]
-        }),
+        json_module.dumps(
+            {
+                "reminders": [
+                    {
+                        "reminder_id": "past01",
+                        "chat_id": "789",
+                        "text": "просроченное",
+                        "due_at_iso": "2024-01-01T00:00:00+00:00",  # давно в прошлом
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     inbox = InboxService(state_path=tmp_path / "inbox.json")
@@ -489,7 +518,9 @@ async def test_load_past_due_reminder_marked_failed(
     try:
         # list_reminders возвращает только scheduled; failed record живёт в _reminders
         pending = scheduler.list_reminders()
-        assert not any(r["reminder_id"] == "past01" for r in pending), "Past-due item не должен быть в pending"
+        assert not any(r["reminder_id"] == "past01" for r in pending), (
+            "Past-due item не должен быть в pending"
+        )
         assert "past01" in scheduler._reminders
         assert scheduler._reminders["past01"].status == "failed"
     finally:

@@ -4,6 +4,7 @@ translator_live_trial_preflight.py — truthful preflight для controlled live
 """
 
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +35,22 @@ def build_translator_live_trial_preflight(
     readiness = dict(translator_readiness or {})
     delivery = dict(delivery_matrix or {})
     mobile = dict(mobile_readiness or {})
-    ordinary_calls = dict(delivery.get("ordinary_calls") or {}) if isinstance(delivery.get("ordinary_calls"), dict) else {}
-    services = dict(readiness.get("services") or {}) if isinstance(readiness.get("services"), dict) else {}
-    account_runtime = dict(readiness.get("account_runtime") or {}) if isinstance(readiness.get("account_runtime"), dict) else {}
-    mobile_actions = dict(mobile.get("actions") or {}) if isinstance(mobile.get("actions"), dict) else {}
+    ordinary_calls = (
+        dict(delivery.get("ordinary_calls") or {})
+        if isinstance(delivery.get("ordinary_calls"), dict)
+        else {}
+    )
+    services = (
+        dict(readiness.get("services") or {}) if isinstance(readiness.get("services"), dict) else {}
+    )
+    account_runtime = (
+        dict(readiness.get("account_runtime") or {})
+        if isinstance(readiness.get("account_runtime"), dict)
+        else {}
+    )
+    mobile_actions = (
+        dict(mobile.get("actions") or {}) if isinstance(mobile.get("actions"), dict) else {}
+    )
 
     ordinary_status = str(ordinary_calls.get("status") or "blocked").strip() or "blocked"
     mobile_status = str(mobile.get("status") or "unknown").strip() or "unknown"
@@ -60,7 +73,10 @@ def build_translator_live_trial_preflight(
         status = "ready_for_trial"
     elif mobile_status == "not_configured":
         status = "companion_pending"
-    elif mobile_status in {"registered", "attention"} or ordinary_status in {"device_ready", "in_progress"}:
+    elif mobile_status in {"registered", "attention"} or ordinary_status in {
+        "device_ready",
+        "in_progress",
+    }:
         status = "session_pending"
     else:
         status = "blocked"
@@ -105,7 +121,9 @@ def build_translator_live_trial_preflight(
         "checks": checks,
         "translator": {
             "ordinary_calls_status": ordinary_status,
-            "internet_calls_status": str(((delivery.get("internet_calls") or {}).get("status")) or "planned"),
+            "internet_calls_status": str(
+                ((delivery.get("internet_calls") or {}).get("status")) or "planned"
+            ),
             "selected_device_id": str(ordinary_calls.get("selected_device_id") or ""),
             "active_session_id": str(ordinary_calls.get("active_session_id") or ""),
             "active_session_status": str(ordinary_calls.get("active_session_status") or ""),
@@ -113,7 +131,9 @@ def build_translator_live_trial_preflight(
         "helpers": {
             "start_full_ecosystem": _helper(project_root, "Start Full Ecosystem.command"),
             "start_voice_gateway": _helper(project_root, "Start Voice Gateway.command"),
-            "prepare_xcode_project": _helper(project_root, "Prepare iPhone Companion Xcode Project.command"),
+            "prepare_xcode_project": _helper(
+                project_root, "Prepare iPhone Companion Xcode Project.command"
+            ),
             "release_gate": _helper(project_root, "Release Gate.command"),
         },
         "actions": {

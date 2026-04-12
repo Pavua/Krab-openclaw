@@ -6,7 +6,8 @@ import asyncio
 import sys
 
 from src.core.logger import get_logger, setup_logger
-from .bootstrap import validate_config, run_app
+
+from .bootstrap import run_app, validate_config
 
 setup_logger(level="INFO")
 logger = get_logger(__name__)

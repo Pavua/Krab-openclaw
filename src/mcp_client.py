@@ -9,51 +9,55 @@
   `list_directory`), но больше не хардкодит серверы прямо в коде.
 """
 
-from contextlib import AsyncExitStack
 import os
-from typing import Optional, List, Dict, Any
+from contextlib import AsyncExitStack
+from typing import Any, Dict, List, Optional
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from structlog import get_logger
+
 from .core.mcp_registry import get_managed_mcp_servers, resolve_managed_server_launch
 
 logger = get_logger(__name__)
+
 
 class MCPClientManager:
     """
     Управляет подключениями к MCP серверам.
     """
+
     def __init__(self):
         self.sessions: Dict[str, ClientSession] = {}
         self.exit_stack = AsyncExitStack()
         self.is_running = False
 
-    async def start_server(self, name: str, command: str, args: List[str], env: Optional[Dict[str, str]] = None):
+    async def start_server(
+        self, name: str, command: str, args: List[str], env: Optional[Dict[str, str]] = None
+    ):
         """Запускает MCP сервер и создает сессию"""
         logger.info("starting_mcp_server", name=name, command=command, args=args)
-        
+
         server_params = StdioServerParameters(
-            command=command,
-            args=args,
-            env={**os.environ, **(env or {})}
+            command=command, args=args, env={**os.environ, **(env or {})}
         )
-        
-        # Используем асинхронный контекстный менеджер через ExitStack если нужно, 
+
+        # Используем асинхронный контекстный менеджер через ExitStack если нужно,
         # но для простоты здесь сделаем прямое подключение.
         # В mcp-python SDK stdio_client возвращает контекстный менеджер.
-        
+
         try:
             # Важно: stdio_client должен оставаться открытым.
             # Для долгоживущего клиента мы можем запустить его в отдельной задаче или хранить контекст.
             # Но SDK mcp-python накладывает ограничения на использование сессии вне контекста.
-            
-            # Мы будем использовать паттерн "одна команда - одна сессия" для поиска, 
+
+            # Мы будем использовать паттерн "одна команда - одна сессия" для поиска,
             # или держать сессию открытой. Для поиска в юзерботе лучше держать открытой.
-            
+
             transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
             read, write = transport
             session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            
+
             await session.initialize()
             self.sessions[name] = session
             logger.info("mcp_server_ready", name=name)
@@ -68,7 +72,7 @@ class MCPClientManager:
         if not session:
             logger.warning("mcp_session_not_found", server=server_name)
             return None
-        
+
         try:
             result = await session.call_tool(tool_name, arguments)
             return result
@@ -148,12 +152,12 @@ class MCPClientManager:
         """Чтение файла через MCP"""
         if not await self.ensure_server("filesystem"):
             return "❌ Ошибка запуска файлового сервера MCP."
-            
+
         # MCP server-filesystem использует инструмент 'read_file'
         result = await self.call_tool("filesystem", "read_file", {"path": path})
-        if not result or not hasattr(result, 'content'):
+        if not result or not hasattr(result, "content"):
             return "❌ Ошибка чтения файла."
-        
+
         try:
             return result.content[0].text
         except (AttributeError, IndexError, KeyError, TypeError):
@@ -166,18 +170,20 @@ class MCPClientManager:
 
         # Используем инструмент 'write_file' (если доступен, иначе надо проверить список инструментов)
         # Обычно это write_file или edit_file. В server-filesystem это 'write_file'.
-        result = await self.call_tool("filesystem", "write_file", {"path": path, "content": content})
+        result = await self.call_tool(
+            "filesystem", "write_file", {"path": path, "content": content}
+        )
         return "✅ Файл записан." if result else "❌ Ошибка записи."
-        
+
     async def list_directory(self, path: str) -> str:
         """Список файлов через MCP"""
         if not await self.ensure_server("filesystem"):
             return "❌ Ошибка запуска файлового сервера MCP."
 
         result = await self.call_tool("filesystem", "list_directory", {"path": path})
-        if not result or not hasattr(result, 'content'):
+        if not result or not hasattr(result, "content"):
             return "❌ Ошибка листинга."
-            
+
         try:
             # Обычно возвращает список строк
             return result.content[0].text
@@ -196,64 +202,73 @@ class MCPClientManager:
                 # Обычно SDK mcp-python возвращает объект с полем .tools
                 tools = getattr(tools_result, "tools", [])
                 for tool in tools:
-                    manifest.append({
-                        "type": "function",
-                        "function": {
-                            "name": f"{server_name}__{tool.name}",
-                            "description": tool.description,
-                            "parameters": tool.inputSchema,
+                    manifest.append(
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": f"{server_name}__{tool.name}",
+                                "description": tool.description,
+                                "parameters": tool.inputSchema,
+                            },
                         }
-                    })
+                    )
             except Exception as e:
                 logger.error("mcp_list_tools_failed", server=server_name, error=str(e))
-        
+
         # Добавляем нативные инструменты Краба, если они еще не в MCP
         # peekaboo: скриншот через KrabEarAgent
-        manifest.append({
-            "type": "function",
-            "function": {
-                "name": "peekaboo",
-                "description": "Сделать скриншот экрана macOS для анализа визуального контекста.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "reason": {"type": "string", "description": "Зачем нужен скриншот"}
-                    }
-                }
-            }
-        })
-        # web_search: поиск в интернете через Brave / Firecrawl
-        manifest.append({
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Поиск информации в интернете. Используй для актуальных данных: цены, новости, факты, документация.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Поисковый запрос"}
-                    },
-                    "required": ["query"]
-                }
-            }
-        })
-        # tor_fetch: анонимный HTTP запрос через Tor (если включён)
-        from . import config as _cfg
-        if getattr(_cfg, "TOR_ENABLED", False):
-            manifest.append({
+        manifest.append(
+            {
                 "type": "function",
                 "function": {
-                    "name": "tor_fetch",
-                    "description": "Анонимный HTTP GET запрос через Tor SOCKS5 proxy. Для .onion сайтов и анонимного доступа.",
+                    "name": "peekaboo",
+                    "description": "Сделать скриншот экрана macOS для анализа визуального контекста.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "url": {"type": "string", "description": "URL для запроса"},
+                            "reason": {"type": "string", "description": "Зачем нужен скриншот"}
                         },
-                        "required": ["url"]
-                    }
+                    },
+                },
+            }
+        )
+        # web_search: поиск в интернете через Brave / Firecrawl
+        manifest.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Поиск информации в интернете. Используй для актуальных данных: цены, новости, факты, документация.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Поисковый запрос"}
+                        },
+                        "required": ["query"],
+                    },
+                },
+            }
+        )
+        # tor_fetch: анонимный HTTP запрос через Tor (если включён)
+        from . import config as _cfg
+
+        if getattr(_cfg, "TOR_ENABLED", False):
+            manifest.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "tor_fetch",
+                        "description": "Анонимный HTTP GET запрос через Tor SOCKS5 proxy. Для .onion сайтов и анонимного доступа.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string", "description": "URL для запроса"},
+                            },
+                            "required": ["url"],
+                        },
+                    },
                 }
-            })
+            )
         return manifest
 
     async def call_tool_unified(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -271,7 +286,7 @@ class MCPClientManager:
 
         if "__" not in full_tool_name:
             return f"❌ Неизвестный формат инструмента: {full_tool_name}"
-        
+
         server_name, tool_name = full_tool_name.split("__", 1)
         result = await self.call_tool(server_name, tool_name, arguments)
         return self._format_tool_result(result)
@@ -281,6 +296,7 @@ class MCPClientManager:
         Реализация peekaboo через локальный KrabEarAgent.
         """
         import httpx
+
         try:
             # KrabEarAgent работает на 5005 порту (согласно предыдущей сессии)
             url = "http://127.0.0.1:5005/screenshot"
@@ -314,6 +330,7 @@ class MCPClientManager:
             return "❌ URL не указан"
         try:
             from .integrations.tor_bridge import tor_fetch
+
             result = await tor_fetch(url, timeout=30.0)
             if result.get("ok"):
                 text = str(result.get("text", ""))
@@ -342,5 +359,6 @@ class MCPClientManager:
         await self.exit_stack.aclose()
         self.sessions.clear()
         logger.info("mcp_all_stopped")
+
 
 mcp_manager = MCPClientManager()

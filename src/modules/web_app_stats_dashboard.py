@@ -131,7 +131,7 @@ STATS_DASHBOARD_HTML = """<!DOCTYPE html>
 
         /* Animations */
         .updated { animation: flash 1s ease-out; }
-        
+
         @keyframes flash {
             0% { color: var(--accent); text-shadow: 0 0 10px var(--accent-glow); }
             100% { color: var(--text-main); text-shadow: none; }
@@ -261,7 +261,7 @@ STATS_DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="stat-row"><span class="label">Stale Open</span><span class="value" id="i-stale">-</span></div>
                 <div class="stat-row"><span class="label">Pending Approvals</span><span class="value" id="i-pend">-</span></div>
                 <div class="stat-row"><span class="label">New Owner Req</span><span class="value" id="i-req">-</span></div>
-                
+
                 <div class="sparkline-wrapper">
                     <div class="label">Attention Items <span id="i-att" style="color:var(--text-main); font-weight:bold; margin-left:6px;">-</span></div>
                     <div class="sparkline" id="sparkline">
@@ -329,16 +329,16 @@ STATS_DASHBOARD_HTML = """<!DOCTYPE html>
             const container = document.getElementById('sparkline');
             container.innerHTML = '';
             const base = parseInt(val) || 0;
-            
+
             // Generate 7 bars simulating recent history, ending with current value
             const heights = [
-                Math.max(2, base * 0.6), Math.max(4, base * 1.2), 
-                Math.max(1, base * 0.4), Math.max(5, base * 1.5), 
-                Math.max(3, base * 0.8), Math.max(4, base * 1.1), 
+                Math.max(2, base * 0.6), Math.max(4, base * 1.2),
+                Math.max(1, base * 0.4), Math.max(5, base * 1.5),
+                Math.max(3, base * 0.8), Math.max(4, base * 1.1),
                 Math.max(1, base)
             ];
             const maxH = Math.max(...heights, 10);
-            
+
             heights.forEach(h => {
                 const pct = Math.min(100, (h / maxH) * 100);
                 const bar = document.createElement('div');
@@ -364,7 +364,7 @@ STATS_DASHBOARD_HTML = """<!DOCTYPE html>
                 updateVal('rl-acq', rl.total_acquired);
                 updateVal('rl-wait', rl.total_waited);
                 updateVal('rl-wait-sec', rl.total_wait_sec);
-                
+
                 const max = parseFloat(rl.max_per_sec) || 1;
                 const curr = parseFloat(rl.current_in_window) || 0;
                 document.getElementById('rl-progress').style.width = Math.min(100, (curr / max) * 100) + '%';
@@ -417,7 +417,7 @@ STATS_DASHBOARD_HTML = """<!DOCTYPE html>
                 ['i-tot','i-open','i-fresh','i-stale','i-pend','i-req','i-att'].forEach(id => updateVal(id, null));
                 updateSparkline(0);
             }
-            
+
             countdown = 5; // Reset countdown on successful fetch cycle
         }
 

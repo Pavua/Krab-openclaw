@@ -55,9 +55,7 @@ def _reset_singletons(tmp_path: Path) -> None:
     chat_ban_cache.configure_default_path(tmp_path / "chat_ban_cache.json")
 
     # Chat capability cache: то же — redirect + очистка.
-    chat_capability_cache.configure_default_path(
-        tmp_path / "chat_capability_cache.json"
-    )
+    chat_capability_cache.configure_default_path(tmp_path / "chat_capability_cache.json")
 
     # Silence manager: чистим per-chat и глобальный mute.
     silence_manager._chat_mutes.clear()

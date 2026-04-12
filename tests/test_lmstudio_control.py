@@ -11,8 +11,8 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -71,7 +71,9 @@ def test_load_model_uses_post_for_all_endpoints() -> None:
     module = _load_module()
     seen_calls = []
 
-    module._fetch_models = lambda _base_url: module.HttpResult(ok=False, status=0, payload=None, error="offline")
+    module._fetch_models = lambda _base_url: module.HttpResult(
+        ok=False, status=0, payload=None, error="offline"
+    )
 
     def fake_http_json(method, url, body=None, timeout=10.0):
         seen_calls.append((method, url, body, timeout))
@@ -146,7 +148,9 @@ def test_http_json_adds_auth_headers_from_helper() -> None:
         seen_headers.update(dict(req.headers))
         return _FakeResponse()
 
-    with patch.object(module, "build_lm_studio_auth_headers", return_value={"Authorization": "Bearer lm-token"}):
+    with patch.object(
+        module, "build_lm_studio_auth_headers", return_value={"Authorization": "Bearer lm-token"}
+    ):
         with patch.object(module.urllib.request, "urlopen", side_effect=fake_urlopen):
             result = module._http_json("GET", "http://127.0.0.1:1234/v1/models")
 

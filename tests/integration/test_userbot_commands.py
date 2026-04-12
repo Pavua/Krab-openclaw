@@ -1,14 +1,13 @@
-
-import sys
 import os
-import pytest
-import asyncio
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Ensure src is in path
 sys.path.append(os.getcwd())
 
-with patch('src.userbot_bridge.Client') as MockClient:
+with patch("src.userbot_bridge.Client") as MockClient:
     mock_client_instance = MockClient.return_value
     mock_client_instance.on_message.return_value = lambda x: x
 
@@ -17,7 +16,7 @@ with patch('src.userbot_bridge.Client') as MockClient:
 
     @pytest.mark.asyncio
     async def test_diagnose_command():
-        with patch('src.userbot_bridge.Client') as MockClientInner:
+        with patch("src.userbot_bridge.Client") as MockClientInner:
             client_instance = MockClientInner.return_value
             client_instance.on_message.return_value = lambda x: x
 
@@ -32,7 +31,7 @@ with patch('src.userbot_bridge.Client') as MockClient:
             processing_msg = AsyncMock()
             message.reply.return_value = processing_msg
 
-            with patch('httpx.AsyncClient') as MockHttp:
+            with patch("httpx.AsyncClient") as MockHttp:
                 client_mock = AsyncMock()
                 MockHttp.return_value.__aenter__.return_value = client_mock
                 client_mock.get = AsyncMock(return_value=MagicMock(status_code=200))
@@ -50,7 +49,7 @@ with patch('src.userbot_bridge.Client') as MockClient:
 
     @pytest.mark.asyncio
     async def test_web_screen_command():
-        with patch('src.userbot_bridge.Client') as MockClientInner:
+        with patch("src.userbot_bridge.Client") as MockClientInner:
             client_instance = MockClientInner.return_value
             client_instance.on_message.return_value = lambda x: x
 
@@ -63,9 +62,9 @@ with patch('src.userbot_bridge.Client') as MockClient:
             message.reply = AsyncMock()
 
             with (
-                patch('src.web_session.web_manager') as mock_wm,
-                patch('os.remove') as mock_remove,
-                patch('os.path.exists', return_value=True),
+                patch("src.web_session.web_manager") as mock_wm,
+                patch("os.remove") as mock_remove,
+                patch("os.path.exists", return_value=True),
             ):
                 mock_wm.take_screenshot = AsyncMock(return_value="/tmp/test.png")
                 mock_wm.start = AsyncMock()
@@ -75,4 +74,3 @@ with patch('src.userbot_bridge.Client') as MockClient:
                 mock_wm.take_screenshot.assert_called()
                 message.reply_photo.assert_called_with("/tmp/test.png")
                 mock_remove.assert_called_with("/tmp/test.png")
-

@@ -189,7 +189,9 @@ class TestSplitText:
 
 
 class TestReserveBotBridgeInit:
-    def _make_bridge(self, token: str = "tok", owner_ids: list[int] | None = None) -> "ReserveBotBridge":  # noqa: F821
+    def _make_bridge(
+        self, token: str = "tok", owner_ids: list[int] | None = None
+    ) -> "ReserveBotBridge":  # noqa: F821
         """Создаёт ReserveBotBridge с инжектированным токеном и owner_ids."""
         from src.reserve_bot import ReserveBotBridge
 
@@ -236,7 +238,9 @@ class TestReserveBotBridgeInit:
 
 
 class TestReserveBotBridgeStartStop:
-    def _make_bridge(self, token: str = "tok", owner_ids: list[int] | None = None) -> "ReserveBotBridge":  # noqa: F821
+    def _make_bridge(
+        self, token: str = "tok", owner_ids: list[int] | None = None
+    ) -> "ReserveBotBridge":  # noqa: F821
         from src.reserve_bot import ReserveBotBridge
 
         bridge = ReserveBotBridge.__new__(ReserveBotBridge)
@@ -274,7 +278,9 @@ class TestReserveBotBridgeStartStop:
         mock_pyrogram = MagicMock()
         mock_pyrogram.Client = MagicMock(return_value=mock_client)
         mock_pyrogram.filters = MagicMock()
-        mock_pyrogram.filters.command = MagicMock(return_value=MagicMock(__and__=MagicMock(return_value=MagicMock())))
+        mock_pyrogram.filters.command = MagicMock(
+            return_value=MagicMock(__and__=MagicMock(return_value=MagicMock()))
+        )
         mock_pyrogram.filters.user = MagicMock(return_value=MagicMock())
         mock_pyrogram.filters.text = MagicMock()
         with (

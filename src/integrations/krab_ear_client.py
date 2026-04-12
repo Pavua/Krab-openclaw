@@ -40,7 +40,12 @@ class KrabEarClient:
         )
         # Krab Ear по умолчанию работает как IPC backend (unix socket), а не HTTP REST.
         self.socket_path = Path(
-            (socket_path or os.getenv("KRAB_EAR_SOCKET_PATH", "~/Library/Application Support/KrabEar/krabear.sock"))
+            (
+                socket_path
+                or os.getenv(
+                    "KRAB_EAR_SOCKET_PATH", "~/Library/Application Support/KrabEar/krabear.sock"
+                )
+            )
         ).expanduser()
         self.timeout_sec = max(0.5, float(timeout_sec or os.getenv("KRAB_EAR_TIMEOUT_SEC", "2.5")))
 
@@ -136,7 +141,11 @@ class KrabEarClient:
                 "status": "ok",
                 "latency_ms": int((time.monotonic() - started) * 1000),
                 "source": f"ipc:{self.socket_path}",
-                "detail": {"mode": "ipc", "socket_path": str(self.socket_path), "status": ipc_status},
+                "detail": {
+                    "mode": "ipc",
+                    "socket_path": str(self.socket_path),
+                    "status": ipc_status,
+                },
             }
         if not self.base_url:
             return {

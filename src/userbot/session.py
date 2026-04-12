@@ -251,10 +251,9 @@ class SessionMixin:
             try:
                 return await original_restart(*args, **kwargs)
             except Exception as exc:  # noqa: BLE001
-                if (
-                    getattr(session_self, "_krab_shutdown_requested", False)
-                    and self._is_sqlite_io_error(exc)
-                ):
+                if getattr(
+                    session_self, "_krab_shutdown_requested", False
+                ) and self._is_sqlite_io_error(exc):
                     logger.warning(
                         "telegram_session_restart_ignored_after_shutdown",
                         error=str(exc),
@@ -314,11 +313,7 @@ class SessionMixin:
             low = str(exc).lower()
             return "closed database" in low
         low = str(exc).lower()
-        return (
-            "disk i/o error" in low
-            or "database is locked" in low
-            or "closed database" in low
-        )
+        return "disk i/o error" in low or "database is locked" in low or "closed database" in low
 
     @staticmethod
     def _is_auth_key_invalid(exc: Exception) -> bool:
@@ -353,7 +348,9 @@ class SessionMixin:
                         target.unlink()
                         removed.append(str(target))
                     except OSError as exc:
-                        logger.warning("telegram_session_purge_failed", file=str(target), error=str(exc))
+                        logger.warning(
+                            "telegram_session_purge_failed", file=str(target), error=str(exc)
+                        )
         return removed
 
     def _cleanup_telegram_session_locks(self) -> list[str]:
@@ -371,7 +368,9 @@ class SessionMixin:
                         target.unlink()
                         removed.append(str(target))
                     except OSError as exc:
-                        logger.warning("telegram_session_lock_cleanup_failed", file=str(target), error=str(exc))
+                        logger.warning(
+                            "telegram_session_lock_cleanup_failed", file=str(target), error=str(exc)
+                        )
         return removed
 
     # ------------------------------------------------------------------
@@ -430,6 +429,7 @@ class SessionMixin:
                         )
                         # P1: auto-reconnect вместо пассивного ожидания
                         import time as _time  # noqa: PLC0415
+
                         now = _time.monotonic()
                         if now - _last_reconnect_ts >= _reconnect_cooldown_sec:
                             _last_reconnect_ts = now
@@ -460,9 +460,12 @@ class SessionMixin:
                 else:
                     self._telegram_probe_failures += 1
                     if self._telegram_probe_failures >= failure_limit:
-                        self._mark_transport_degraded(reason="watchdog_probe_failed", error=str(exc))
+                        self._mark_transport_degraded(
+                            reason="watchdog_probe_failed", error=str(exc)
+                        )
                         # P1: auto-reconnect при probe failure
                         import time as _time  # noqa: PLC0415
+
                         now = _time.monotonic()
                         if now - _last_reconnect_ts >= _reconnect_cooldown_sec:
                             _last_reconnect_ts = now

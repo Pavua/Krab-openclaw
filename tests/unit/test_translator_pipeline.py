@@ -89,7 +89,9 @@ class TestHandleTranslatorVoice:
         with (
             patch("src.core.language_detect.detect_language", return_value="es"),
             patch("src.core.language_detect.resolve_translation_pair", return_value=("es", "ru")),
-            patch("src.core.translator_engine.translate_text", new_callable=AsyncMock) as mock_translate,
+            patch(
+                "src.core.translator_engine.translate_text", new_callable=AsyncMock
+            ) as mock_translate,
         ):
             mock_translate.return_value = SimpleNamespace(
                 original="Hola mundo",

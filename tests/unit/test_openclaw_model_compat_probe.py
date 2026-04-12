@@ -14,7 +14,6 @@ import importlib.util
 import json
 from pathlib import Path
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "openclaw_model_compat_probe.py"
 
 
@@ -41,8 +40,7 @@ def _write_runtime_files(
 
     openclaw_path.write_text(
         json.dumps(
-            openclaw_payload
-            or {"gateway": {"auth": {"token": "gateway-test-token"}}},
+            openclaw_payload or {"gateway": {"auth": {"token": "gateway-test-token"}}},
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -77,7 +75,9 @@ def _write_runtime_files(
 
 def test_compat_probe_returns_blocked_when_target_missing_from_registry(tmp_path):
     mod = _load_script_module()
-    openclaw_path, models_path, auth_profiles_path, gateway_log_path = _write_runtime_files(tmp_path)
+    openclaw_path, models_path, auth_profiles_path, gateway_log_path = _write_runtime_files(
+        tmp_path
+    )
 
     result = asyncio.run(
         mod.main_async(
@@ -115,7 +115,9 @@ def test_compat_probe_returns_ready_when_registry_and_gateway_are_ok(tmp_path, m
         assert model == "openai-codex/gpt-5.4"
         return {"ok": True, "status": 400, "error": "ok_controlled_400"}
 
-    async def _fake_chat(base_url: str, token: str, model: str, *, reasoning: str, max_output_tokens: int) -> dict:
+    async def _fake_chat(
+        base_url: str, token: str, model: str, *, reasoning: str, max_output_tokens: int
+    ) -> dict:
         assert model == "openai-codex/gpt-5.4"
         return {
             "ok": True,

@@ -5,6 +5,7 @@
 Использует local_health для проверки LM Studio и cloud_gateway для облачного fallback.
 Типы из model_types.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional

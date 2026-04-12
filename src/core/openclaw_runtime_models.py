@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 _RUNTIME_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
 
 

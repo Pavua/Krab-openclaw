@@ -26,15 +26,19 @@ from typing import Any, Awaitable, Callable
 from ..config import config
 from ..integrations.macos_automation import macos_automation
 from ..memory_engine import memory_manager
-from ..model_manager import model_manager
 from ..openclaw_client import openclaw_client
-from .logger import get_logger
 from .inbox_service import inbox_service
+from .logger import get_logger
 from .openclaw_runtime_models import get_runtime_primary_model
 from .openclaw_workspace import append_workspace_memory_entry
-from .subprocess_env import clean_subprocess_env
 from .scheduler import krab_scheduler
+from .subprocess_env import clean_subprocess_env
 
+# Порог «критических» ошибок для alert inbox_critical
+_INBOX_CRITICAL_ERROR_THRESHOLD: int = 5
+
+# Коэффициент «зависания» swarm job: если не запускалась дольше interval * N — алерт
+_SWARM_STALL_FACTOR: float = 2.0
 
 logger = get_logger(__name__)
 
@@ -68,7 +72,11 @@ async def _fetch_openclaw_cron_jobs() -> list[dict[str, Any]]:
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            "openclaw", "cron", "list", "--json", "--all",
+            "openclaw",
+            "cron",
+            "list",
+            "--json",
+            "--all",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             env=clean_subprocess_env(),
@@ -164,7 +172,11 @@ class ProactiveWatchService:
         self.legacy_state_path = _legacy_state_path() if state_path is None else self.state_path
         self.alert_cooldown_sec = max(
             1800,
-            int(alert_cooldown_sec or getattr(config, "PROACTIVE_WATCH_ALERT_COOLDOWN_SEC", 1800) or 1800),
+            int(
+                alert_cooldown_sec
+                or getattr(config, "PROACTIVE_WATCH_ALERT_COOLDOWN_SEC", 1800)
+                or 1800
+            ),
         )
 
     async def collect_snapshot(self) -> ProactiveWatchSnapshot:
@@ -220,7 +232,9 @@ class ProactiveWatchService:
             try:
                 return json.loads(candidate.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
-                logger.warning("proactive_watch_state_read_failed", path=str(candidate), error=str(exc))
+                logger.warning(
+                    "proactive_watch_state_read_failed", path=str(candidate), error=str(exc)
+                )
         return {}
 
     def _save_state(self, payload: dict[str, Any]) -> None:
@@ -251,7 +265,10 @@ class ProactiveWatchService:
             return "scheduler_backlog_created"
         if previous.scheduler_pending > 0 and current.scheduler_pending == 0:
             return "scheduler_backlog_cleared"
-        if previous.macos_frontmost_app != current.macos_frontmost_app and current.macos_frontmost_app:
+        if (
+            previous.macos_frontmost_app != current.macos_frontmost_app
+            and current.macos_frontmost_app
+        ):
             return "frontmost_app_changed"
         return ""
 
@@ -262,9 +279,8 @@ class ProactiveWatchService:
         route_model = snapshot.route_model or snapshot.primary_model or "n/a"
         route_provider = snapshot.route_provider or "n/a"
         front_app = snapshot.macos_frontmost_app or "n/a"
-        scheduler_line = (
-            f"{snapshot.scheduler_pending} pending"
-            + (f", next `{snapshot.scheduler_next_due_at}`" if snapshot.scheduler_next_due_at else "")
+        scheduler_line = f"{snapshot.scheduler_pending} pending" + (
+            f", next `{snapshot.scheduler_next_due_at}`" if snapshot.scheduler_next_due_at else ""
         )
         return (
             "🦀 **Proactive Watch Digest**\n"
@@ -275,11 +291,7 @@ class ProactiveWatchService:
             f"- Scheduler: `{scheduler_line}`\n"
             f"- Memory facts: `{snapshot.memory_count}`\n"
             f"- macOS: `{front_app}`"
-            + (
-                f" / `{snapshot.macos_frontmost_window}`"
-                if snapshot.macos_frontmost_window
-                else ""
-            )
+            + (f" / `{snapshot.macos_frontmost_window}`" if snapshot.macos_frontmost_window else "")
             + "\n"
             f"- Sources: reminders `{snapshot.reminder_lists_count}`, notes `{snapshot.note_folders_count}`, calendars `{snapshot.calendars_count}`"
         )
@@ -331,9 +343,9 @@ class ProactiveWatchService:
                 continue  # нет нового выполнения
 
             severity = "warning" if last_status in ("error", "failed", "failure") else "info"
-            run_ts = datetime.fromtimestamp(
-                last_run_at_ms / 1000, tz=timezone.utc
-            ).isoformat(timespec="seconds")
+            run_ts = datetime.fromtimestamp(last_run_at_ms / 1000, tz=timezone.utc).isoformat(
+                timespec="seconds"
+            )
             try:
                 inbox_service.upsert_item(
                     dedupe_key=f"proactive:cron_run:{job_id}:{last_run_at_ms}",
@@ -427,9 +439,13 @@ class ProactiveWatchService:
         payload = {
             "last_snapshot": asdict(snapshot),
             "last_reason": reason,
-            "last_digest_ts": snapshot.ts_utc if (manual or reason) else str(state.get("last_digest_ts") or ""),
+            "last_digest_ts": snapshot.ts_utc
+            if (manual or reason)
+            else str(state.get("last_digest_ts") or ""),
             "last_alert_ts": snapshot.ts_utc if alerted else last_alert_ts,
-            "last_alerted_reason": reason if alerted else str(state.get("last_alerted_reason") or ""),
+            "last_alerted_reason": reason
+            if alerted
+            else str(state.get("last_alerted_reason") or ""),
             "last_cron_runs": updated_cron_runs,
         }
         self._save_state(payload)
@@ -442,7 +458,7 @@ class ProactiveWatchService:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("proactive_watch_inbox_sync_failed", reason=reason, error=str(exc))
-            
+
             # `proactive_action` нужен как owner-visible trace именно для активной проблемы.
             # Recovery-событие должно закрывать открытый trace проблемы, а не оставлять ещё
             # один `open` item с пометкой "всё восстановилось".
@@ -478,7 +494,9 @@ class ProactiveWatchService:
                         },
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("proactive_watch_action_trace_failed", reason=reason, error=str(exc))
+                    logger.warning(
+                        "proactive_watch_action_trace_failed", reason=reason, error=str(exc)
+                    )
             elif reason in close_trace_reasons:
                 try:
                     inbox_service.set_status_by_dedupe(
@@ -493,7 +511,9 @@ class ProactiveWatchService:
                         },
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("proactive_watch_action_trace_close_failed", reason=reason, error=str(exc))
+                    logger.warning(
+                        "proactive_watch_action_trace_close_failed", reason=reason, error=str(exc)
+                    )
         return {
             "snapshot": asdict(snapshot),
             "reason": reason,
@@ -507,7 +527,9 @@ class ProactiveWatchService:
     def get_status(self) -> dict[str, Any]:
         """Возвращает persisted статус watch-контура для команд/UI."""
         state = self._load_state()
-        snapshot = state.get("last_snapshot") if isinstance(state.get("last_snapshot"), dict) else {}
+        snapshot = (
+            state.get("last_snapshot") if isinstance(state.get("last_snapshot"), dict) else {}
+        )
         return {
             "enabled": bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)),
             "interval_sec": int(getattr(config, "PROACTIVE_WATCH_INTERVAL_SEC", 900) or 900),
@@ -518,6 +540,293 @@ class ProactiveWatchService:
             "last_alerted_reason": str(state.get("last_alerted_reason") or ""),
             "last_snapshot": snapshot,
         }
+
+    # Интервал Error Digest в секундах (6 часов)
+    ERROR_DIGEST_INTERVAL_SEC: int = 21600
+    # Максимум ошибок в сводке
+    ERROR_DIGEST_MAX_ITEMS: int = 10
+
+    async def run_error_digest(self) -> dict[str, Any]:
+        """
+        Собирает сводку открытых ошибок/предупреждений из inbox и записывает
+        digest-item. Вызывается периодически (каждые 6 часов).
+
+        Не бросает исключений — деградирует тихо при любых сбоях inbox.
+        """
+        try:
+            # Собираем открытые warning/error items
+            open_items = inbox_service.list_items(status="open", limit=200)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("error_digest_list_failed", error=str(exc))
+            return {"ok": False, "error": str(exc)}
+
+        # Фильтруем по severity
+        error_items = [it for it in open_items if it.get("severity") in ("error", "warning")]
+
+        total = len(error_items)
+        # Подсчёт по severity
+        counts: dict[str, int] = {}
+        for it in error_items:
+            sev = str(it.get("severity") or "unknown")
+            counts[sev] = counts.get(sev, 0) + 1
+
+        # Берём последние N (список отсортирован старые→новые, берём хвост)
+        recent = error_items[-self.ERROR_DIGEST_MAX_ITEMS :]
+
+        # Формируем тело сводки
+        ts_now = _now_utc_iso()
+        counts_str = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
+        lines = [f"**Error Digest (6h)** — {ts_now}"]
+        lines.append(f"Открытых issues: {total} ({counts_str or 'нет'})")
+        if recent:
+            lines.append("\nПоследние:")
+            for it in recent:
+                sev = it.get("severity", "?")
+                title = str(it.get("title") or "—")[:80]
+                created = str(it.get("created_at_utc") or "")[:19]
+                lines.append(f"- [{sev}] {title} ({created})")
+        else:
+            lines.append("Нет открытых ошибок/предупреждений.")
+
+        body = "\n".join(lines)
+
+        try:
+            inbox_service.upsert_item(
+                dedupe_key=f"proactive:error_digest:{ts_now[:13]}",  # уникально по часу
+                kind="proactive_action",
+                source="krab-internal",
+                title=f"Error Digest (6h): {total} open issues",
+                body=body,
+                severity="info",
+                status="open",
+                identity=inbox_service.build_identity(
+                    channel_id="system",
+                    team_id="owner",
+                    trace_id="error_digest",
+                    approval_scope="owner",
+                ),
+                metadata={
+                    "action_type": "error_digest",
+                    "total_issues": total,
+                    "counts_by_severity": counts,
+                    "digest_ts": ts_now,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("error_digest_upsert_failed", error=str(exc))
+            return {"ok": False, "error": str(exc)}
+
+        logger.info("error_digest_written", total=total, counts=counts)
+        return {"ok": True, "total": total, "counts": counts, "digest_ts": ts_now}
+
+    async def _error_digest_loop(self) -> None:
+        """Бесконечный цикл: каждые 6 часов запускает run_error_digest."""
+        while True:
+            await asyncio.sleep(self.ERROR_DIGEST_INTERVAL_SEC)
+            try:
+                await self.run_error_digest()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("error_digest_loop_error", error=str(exc))
+
+    def start_error_digest_loop(self) -> "asyncio.Task[None]":
+        """Запускает фоновую задачу Error Digest и возвращает Task."""
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(self._error_digest_loop(), name="krab_error_digest")
+        logger.info("error_digest_loop_started", interval_sec=self.ERROR_DIGEST_INTERVAL_SEC)
+        return task
+
+    # Интервал проверки alert-условий (30 минут)
+    ALERT_CHECKS_INTERVAL_SEC: int = 1800
+
+    async def run_alert_checks(self) -> dict[str, Any]:
+        """
+        Проверяет alert-условия и создаёт inbox items при срабатывании.
+
+        Алерты:
+        - inbox_critical: >5 открытых items с severity=error → уведомление владельца.
+        - swarm_job_stalled: swarm job не запускалась дольше interval*2 → уведомление.
+
+        Не бросает исключений — деградирует тихо.
+        Возвращает словарь {alert_name: triggered (bool)} для каждого алерта.
+        """
+        results: dict[str, Any] = {}
+
+        # -- inbox_critical -------------------------------------------------------
+        try:
+            results["inbox_critical"] = await self._check_inbox_critical()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("alert_check_inbox_critical_failed", error=str(exc))
+            results["inbox_critical"] = False
+
+        # -- swarm_job_stalled ----------------------------------------------------
+        try:
+            results["swarm_job_stalled"] = await self._check_swarm_job_stalled()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("alert_check_swarm_job_stalled_failed", error=str(exc))
+            results["swarm_job_stalled"] = False
+
+        logger.info("alert_checks_done", results=results)
+        return results
+
+    async def _check_inbox_critical(self) -> bool:
+        """
+        Если открытых items с severity=error больше порога — пишет алерт в inbox.
+        Возвращает True если алерт сработал.
+        """
+        open_items = inbox_service.list_items(status="open", limit=500)
+        error_items = [it for it in open_items if it.get("severity") == "error"]
+        count = len(error_items)
+
+        if count <= _INBOX_CRITICAL_ERROR_THRESHOLD:
+            return False
+
+        ts_now = _now_utc_iso()
+        titles = [str(it.get("title") or "—")[:60] for it in error_items[:5]]
+        body_lines = [f"**Inbox Critical Alert** — {ts_now}"]
+        body_lines.append(
+            f"Открытых error-items: {count} (порог: {_INBOX_CRITICAL_ERROR_THRESHOLD})"
+        )
+        body_lines.append("\nПримеры:")
+        for t in titles:
+            body_lines.append(f"- {t}")
+
+        inbox_service.upsert_item(
+            dedupe_key="proactive:alert:inbox_critical",
+            kind="proactive_action",
+            source="krab-internal",
+            title=f"Inbox Critical: {count} открытых ошибок",
+            body="\n".join(body_lines),
+            severity="error",
+            status="open",
+            identity=inbox_service.build_identity(
+                channel_id="system",
+                team_id="owner",
+                trace_id="alert:inbox_critical",
+                approval_scope="owner",
+            ),
+            metadata={
+                "action_type": "inbox_critical_alert",
+                "error_count": count,
+                "threshold": _INBOX_CRITICAL_ERROR_THRESHOLD,
+                "alert_ts": ts_now,
+            },
+        )
+        logger.warning("alert_inbox_critical_triggered", error_count=count)
+        return True
+
+    async def _check_swarm_job_stalled(self) -> bool:
+        """
+        Проверяет все рекуррентные swarm jobs.
+
+        Job считается зависшей, если:
+        - enabled=True;
+        - last_run_at задан (уже запускалась хотя бы раз);
+        - прошло больше interval_sec * _SWARM_STALL_FACTOR секунд без нового запуска.
+
+        Для каждой зависшей job создаёт отдельный inbox item (dedupe по job_id).
+        Возвращает True если хотя бы один алерт сработал.
+        """
+        from .swarm_scheduler import swarm_scheduler  # ленивый импорт (избегаем циклов)
+
+        jobs = swarm_scheduler.list_jobs()
+        now_ts = datetime.now(timezone.utc)
+        triggered_any = False
+
+        for job in jobs:
+            if not job.enabled:
+                continue
+            last_run_at_str = str(job.last_run_at or "").strip()
+            if not last_run_at_str:
+                # Job ещё ни разу не запускалась — не считаем зависшей
+                continue
+            interval_sec = int(job.interval_sec or 0)
+            if interval_sec <= 0:
+                continue
+
+            try:
+                last_run_dt = datetime.fromisoformat(last_run_at_str)
+                # Убеждаемся что datetime timezone-aware
+                if last_run_dt.tzinfo is None:
+                    last_run_dt = last_run_dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+
+            elapsed = (now_ts - last_run_dt).total_seconds()
+            stall_threshold = interval_sec * _SWARM_STALL_FACTOR
+
+            if elapsed < stall_threshold:
+                continue
+
+            # Job зависла
+            job_id = str(job.job_id or "unknown")
+            team = str(job.team or "?")
+            topic = str(job.topic or "?")
+            elapsed_min = int(elapsed // 60)
+            expected_min = int(stall_threshold // 60)
+
+            inbox_service.upsert_item(
+                dedupe_key=f"proactive:alert:swarm_stalled:{job_id}",
+                kind="proactive_action",
+                source="krab-internal",
+                title=f"Swarm Job Stalled: {team} / {topic[:40]}",
+                body=(
+                    f"**Swarm Job Stalled** — job_id={job_id}\n"
+                    f"Команда: `{team}`, тема: `{topic}`\n"
+                    f"Не запускался {elapsed_min} мин (ожидаемо каждые {expected_min} мин).\n"
+                    f"Последний запуск: {last_run_at_str}"
+                ),
+                severity="warning",
+                status="open",
+                identity=inbox_service.build_identity(
+                    channel_id="system",
+                    team_id="owner",
+                    trace_id=f"alert:swarm_stalled:{job_id}",
+                    approval_scope="owner",
+                ),
+                metadata={
+                    "action_type": "swarm_job_stalled_alert",
+                    "job_id": job_id,
+                    "team": team,
+                    "topic": topic,
+                    "elapsed_sec": int(elapsed),
+                    "interval_sec": interval_sec,
+                    "stall_threshold_sec": int(stall_threshold),
+                    "last_run_at": last_run_at_str,
+                },
+            )
+            logger.warning(
+                "alert_swarm_job_stalled",
+                job_id=job_id,
+                elapsed_min=elapsed_min,
+            )
+            triggered_any = True
+
+        return triggered_any
+
+    async def _run_alert_checks_loop(self) -> None:
+        """Бесконечный цикл: каждые 30 минут запускает run_alert_checks."""
+        while True:
+            await asyncio.sleep(self.ALERT_CHECKS_INTERVAL_SEC)
+            try:
+                await self.run_alert_checks()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("alert_checks_loop_error", error=str(exc))
+
+    def start_alert_checks_loop(self) -> "asyncio.Task[None]":
+        """Запускает фоновую задачу проверки alert-условий и возвращает Task."""
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(self._run_alert_checks_loop(), name="krab_alert_checks")
+        logger.info("alert_checks_loop_started", interval_sec=self.ALERT_CHECKS_INTERVAL_SEC)
+        return task
+
+    def start_weekly_digest_loop(self) -> "asyncio.Task[None]":
+        """Запускает фоновую задачу Weekly Digest (каждые 7 дней) и возвращает Task."""
+        from .weekly_digest import weekly_digest  # ленивый импорт во избежание циклов
+
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(weekly_digest._weekly_digest_loop(), name="krab_weekly_digest")
+        logger.info("weekly_digest_loop_started", interval_sec=weekly_digest.INTERVAL_SEC)
+        return task
 
 
 proactive_watch = ProactiveWatchService()

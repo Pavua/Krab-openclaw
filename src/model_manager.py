@@ -8,6 +8,7 @@ Model Manager - Умное управление моделями LM Studio
 - Загрузка/выгрузка моделей (Smart Loading)
 - Maintenance loop для авто-выгрузки
 """
+
 import asyncio
 import errno
 import time
@@ -34,7 +35,6 @@ from .core.cost_analytics import cost_analytics
 from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.local_health import discover_models as discover_models_impl
 from .core.local_health import is_lm_studio_available
-from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.model_config import (
     DEFAULT_UNKNOWN_MODEL_SIZE_GB,
     FALLBACK_CHAIN_LOCAL,
@@ -46,6 +46,7 @@ from .core.model_config import (
 )
 from .core.model_router import ModelRouter
 from .core.model_types import ModelInfo, ModelType
+from .core.openclaw_runtime_models import get_runtime_primary_model
 
 logger = structlog.get_logger(__name__)
 
@@ -69,7 +70,8 @@ class ModelManager:
             timeout=30.0,
             headers=build_lm_studio_auth_headers(
                 api_key=getattr(config, "LM_STUDIO_API_KEY", ""),
-            ) or None,
+            )
+            or None,
         )
         # Отдельный cloud-клиент без LM Studio auth headers.
         # Иначе Gemini получает чужой Authorization и может отвечать 401,
@@ -99,7 +101,9 @@ class ModelManager:
         self._loaded_models_cache_ts: float = 0.0
         # Discovery-state облачного Gemini для UI и короткого backoff.
         self._cloud_runtime_state: dict[str, object] = {
-            "active_tier": "free" if config.GEMINI_API_KEY_FREE else ("paid" if config.GEMINI_API_KEY_PAID else ""),
+            "active_tier": "free"
+            if config.GEMINI_API_KEY_FREE
+            else ("paid" if config.GEMINI_API_KEY_PAID else ""),
             "last_provider_status": "unknown",
             "last_error_code": "",
             "last_error_message": "",
@@ -242,7 +246,9 @@ class ModelManager:
         active_tier: str = "",
     ) -> None:
         """Обновляет локальный cloud discovery-state без секретов."""
-        tier = str(active_tier or self._cloud_runtime_state.get("active_tier") or "").strip().lower()
+        tier = (
+            str(active_tier or self._cloud_runtime_state.get("active_tier") or "").strip().lower()
+        )
         self._cloud_runtime_state = {
             "active_tier": tier,
             "last_provider_status": str(provider_status or "unknown").strip().lower() or "unknown",
@@ -284,7 +290,12 @@ class ModelManager:
                 break
         if selected is None:
             for item in diagnostics:
-                if str(item.get("error_kind") or "").strip().lower() in {"network", "timeout", "invalid", "parse"}:
+                if str(item.get("error_kind") or "").strip().lower() in {
+                    "network",
+                    "timeout",
+                    "invalid",
+                    "parse",
+                }:
                     selected = item
                     break
         if selected is None:
@@ -334,13 +345,16 @@ class ModelManager:
                 models_cache=self._models_cache,
                 diagnostics_sink=diagnostics,
             )
+
         models = await discover_models_impl(
             self.lm_studio_url,
             self._http_client,
             models_cache=self._models_cache,
             fetch_google_models_async=_fetch_google,
         )
-        cloud_models = [item for item in models if getattr(item, "type", None) == ModelType.CLOUD_GEMINI]
+        cloud_models = [
+            item for item in models if getattr(item, "type", None) == ModelType.CLOUD_GEMINI
+        ]
         self._update_cloud_runtime_state_from_discovery(
             diagnostics=diagnostics,
             models=cloud_models,
@@ -453,7 +467,9 @@ class ModelManager:
             return await self._router.get_best_model(has_photo=True)
 
         # В auto режиме local-first: если LM Studio жив, используем local/предпочтительную локальную.
-        if self.lm_studio_url and await is_lm_studio_available(self.lm_studio_url, client=self._http_client):
+        if self.lm_studio_url and await is_lm_studio_available(
+            self.lm_studio_url, client=self._http_client
+        ):
             preferred_local = await self.resolve_preferred_local_model(has_photo=False)
             if preferred_local:
                 return preferred_local
@@ -502,7 +518,9 @@ class ModelManager:
         preferred_vision = ""
         preferred_hints: list[str] = []
         if has_photo:
-            preferred_vision = str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
+            preferred_vision = (
+                str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
+            )
             if preferred_vision and preferred_vision not in {"auto", "smallest"}:
                 preferred_hints.append(preferred_vision)
 
@@ -557,7 +575,11 @@ class ModelManager:
             logger.error("local_primary_load_failed_no_fallback", model=resolved_model)
             return False
 
-        candidates = [mid for mid, _ in await self._local_candidates(has_photo=has_photo) if mid != resolved_model]
+        candidates = [
+            mid
+            for mid, _ in await self._local_candidates(has_photo=has_photo)
+            if mid != resolved_model
+        ]
         for candidate in candidates[:fallback_limit]:
             if await self.load_model(candidate):
                 logger.warning(
@@ -586,7 +608,7 @@ class ModelManager:
             "total_gb": round(mem.total / (1024**3), 2),
             "used_gb": round(mem.used / (1024**3), 2),
             "available_gb": round(mem.available / (1024**3), 2),
-            "percent": mem.percent
+            "percent": mem.percent,
         }
 
     def can_load_model(self, size_gb: float) -> bool:
@@ -602,7 +624,9 @@ class ModelManager:
 
     def _store_loaded_models_cache(self, loaded: list[str]) -> list[str]:
         """Обновляет cache и всегда возвращает дедуплицированный список."""
-        normalized = list(dict.fromkeys([str(item).strip() for item in loaded if str(item or "").strip()]))
+        normalized = list(
+            dict.fromkeys([str(item).strip() for item in loaded if str(item or "").strip()])
+        )
         self._loaded_models_cache = normalized
         self._loaded_models_cache_ts = time.time()
         return list(normalized)
@@ -727,14 +751,16 @@ class ModelManager:
         if self._legacy_load_endpoint_supported is not False:
             # Legacy fallback (старые версии LM Studio / OpenAI-compatible shim).
             load_endpoints.append(
-                ("legacy", f"{self.lm_studio_url}/v1/models/load", {"model": model_id, "ttl": LM_LOAD_TTL})
+                (
+                    "legacy",
+                    f"{self.lm_studio_url}/v1/models/load",
+                    {"model": model_id, "ttl": LM_LOAD_TTL},
+                )
             )
         strongest_failure = ""
         for endpoint_kind, url, payload in load_endpoints:
             try:
-                resp = await self._http_client.post(
-                    url, json=payload, timeout=LM_LOAD_TIMEOUT_SEC
-                )
+                resp = await self._http_client.post(url, json=payload, timeout=LM_LOAD_TIMEOUT_SEC)
                 if self._is_successful_lm_response(resp):
                     if endpoint_kind == "legacy" and self._legacy_load_endpoint_supported is None:
                         self._legacy_load_endpoint_supported = True
@@ -782,7 +808,9 @@ class ModelManager:
             ("v1", f"{self.lm_studio_url}/api/v1/models/unload", {"identifier": model_id}),
         ]
         if self._legacy_unload_endpoint_supported is not False:
-            unload_endpoints.append(("legacy", f"{self.lm_studio_url}/v1/models/unload", {"model": model_id}))
+            unload_endpoints.append(
+                ("legacy", f"{self.lm_studio_url}/v1/models/unload", {"model": model_id})
+            )
 
         for endpoint_kind, url, payload in unload_endpoints:
             try:
@@ -791,7 +819,10 @@ class ModelManager:
                     if endpoint_kind == "legacy" and self._legacy_unload_endpoint_supported is None:
                         self._legacy_unload_endpoint_supported = True
                     return True
-                if endpoint_kind == "legacy" and self._classify_lm_load_failure(resp) == "endpoint_unsupported":
+                if (
+                    endpoint_kind == "legacy"
+                    and self._classify_lm_load_failure(resp) == "endpoint_unsupported"
+                ):
                     self._legacy_unload_endpoint_supported = False
                 logger.warning(
                     "lm_unload_endpoint_failed",
@@ -850,11 +881,7 @@ class ModelManager:
 
                 # Политика single-model: не держим несколько локальных моделей в памяти.
                 # Это снижает риск ухода в swap на 36GB RAM машинах.
-                if (
-                    single_local_mode
-                    and self._current_model
-                    and self._current_model != model_id
-                ):
+                if single_local_mode and self._current_model and self._current_model != model_id:
                     await self._do_unload_model(self._current_model)
                     logger.info(
                         "model_unloaded_before_switch",
@@ -997,7 +1024,9 @@ class ModelManager:
                                     active_requests=self._active_requests,
                                 )
                                 continue
-                            grace_sec = float(getattr(config, "GUARDED_IDLE_UNLOAD_GRACE_SEC", 90.0))
+                            grace_sec = float(
+                                getattr(config, "GUARDED_IDLE_UNLOAD_GRACE_SEC", 90.0)
+                            )
                             any_idle = now - float(self._last_any_activity_ts or 0.0)
                             if any_idle < grace_sec:
                                 logger.info(
@@ -1017,7 +1046,9 @@ class ModelManager:
                         # Восстановить основную chat-модель после простоя task/vision-модели.
                         # Срабатывает только когда выгружалась не сама preferred-модель.
                         if getattr(config, "RESTORE_PREFERRED_ON_IDLE_UNLOAD", False):
-                            _preferred = str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
+                            _preferred = str(
+                                getattr(config, "LOCAL_PREFERRED_MODEL", "") or ""
+                            ).strip()
                             if (
                                 _preferred
                                 and _preferred.lower() not in {"auto", "smallest"}
@@ -1070,7 +1101,7 @@ class ModelManager:
                 "status": "healthy" if local_ok else "unavailable",
                 "models_count": len(self._models_cache),
                 "loaded_models": loaded_models,
-                "ram": self.get_ram_usage()
+                "ram": self.get_ram_usage(),
             }
         except (httpx.HTTPError, OSError, KeyError, ValueError) as e:
             return {"status": "error", "error": str(e)}

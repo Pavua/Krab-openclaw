@@ -245,7 +245,11 @@ class RuntimeStatusMixin:
 
         route_channel = str(route_meta.get("channel", "") or "").strip()
         route_model = str(route_meta.get("model", "") or "").strip()
-        active_model = current_model or route_model or str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
+        active_model = (
+            current_model
+            or route_model
+            or str(getattr(config, "LOCAL_PREFERRED_MODEL", "") or "").strip()
+        )
         access_mode = self._resolve_runtime_access_mode(
             is_allowed_sender=is_allowed_sender,
             access_level=access_level,
@@ -259,7 +263,9 @@ class RuntimeStatusMixin:
         ]
 
         if bool(getattr(config, "SCHEDULER_ENABLED", False)):
-            abilities.append("- Ставить напоминания и отложенные задачи через `!remind`, `!reminders`, `!rm_remind`.")
+            abilities.append(
+                "- Ставить напоминания и отложенные задачи через `!remind`, `!reminders`, `!rm_remind`."
+            )
         if access_mode in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
             abilities.extend(
                 [
@@ -378,14 +384,20 @@ class RuntimeStatusMixin:
             "`!ls [path]`, `!read <path>`, `!write <file> <content>`, `!sysinfo`, `!diagnose`, `!web`, `!panel`, `!voice ...`, `!translator ...`, `!mac ...`",
         ]
         if bool(getattr(config, "SCHEDULER_ENABLED", False)):
-            tool_commands.append("`!remind <время> | <текст>`, `!reminders`, `!rm_remind <id>`, `!cronstatus`")
+            tool_commands.append(
+                "`!remind <время> | <текст>`, `!reminders`, `!rm_remind <id>`, `!cronstatus`"
+            )
 
         body = (
             "🧭 **Команды, которые реально доступны сейчас**\n"
-            "\n**Core**\n- " + "\n- ".join(core_commands)
-            + "\n\n**AI / Model**\n- " + "\n- ".join(model_commands)
-            + "\n\n**Tools**\n- " + "\n- ".join(tool_commands)
-            + "\n\n**System / Dev**\n- " + "\n- ".join(system_commands)
+            "\n**Core**\n- "
+            + "\n- ".join(core_commands)
+            + "\n\n**AI / Model**\n- "
+            + "\n- ".join(model_commands)
+            + "\n\n**Tools**\n- "
+            + "\n- ".join(tool_commands)
+            + "\n\n**System / Dev**\n- "
+            + "\n- ".join(system_commands)
         )
         if access_mode == AccessLevel.OWNER.value:
             body += (
@@ -396,10 +408,12 @@ class RuntimeStatusMixin:
             )
         elif OWNER_ONLY_COMMANDS:
             body += (
-                "\n\n🔒 **Что оставлено только владельцу**\n"
-                "- `!set`, `!restart`, `!acl`, `!access`"
+                "\n\n🔒 **Что оставлено только владельцу**\n- `!set`, `!restart`, `!acl`, `!access`"
             )
-        return body + "\n\nЕсли хочешь, я могу следующим сообщением показать короткую шпаргалку **по каждой команде с примерами**."
+        return (
+            body
+            + "\n\nЕсли хочешь, я могу следующим сообщением показать короткую шпаргалку **по каждой команде с примерами**."
+        )
 
     async def _build_runtime_integrations_status(
         self,
@@ -415,9 +429,9 @@ class RuntimeStatusMixin:
         - внешние инструменты, требующие owner-доступ, не раскрываем в гостевом контуре.
         """
         # Ленивый импорт: тесты патчат resolve_managed_server_launch на
-        # модуле userbot_bridge; прямой import в mixin создаст отдельную ссылку,
+        # модуле mcp_registry; прямой import в mixin создаст отдельную ссылку,
         # невидимую для monkeypatch.
-        from ..userbot_bridge import resolve_managed_server_launch
+        from ..core.mcp_registry import resolve_managed_server_launch
 
         local_model = str(model_manager.get_current_model() or "").strip()
         openclaw_ok = await openclaw_client.health_check()
@@ -425,8 +439,12 @@ class RuntimeStatusMixin:
         brave_ready = not bool(resolve_managed_server_launch("brave-search").get("missing_env"))
         context7_ready = not bool(resolve_managed_server_launch("context7").get("missing_env"))
         firecrawl_ready = not bool(resolve_managed_server_launch("firecrawl").get("missing_env"))
-        browser_ready = not bool(resolve_managed_server_launch("openclaw-browser").get("missing_env"))
-        chrome_profile_ready = not bool(resolve_managed_server_launch("chrome-profile").get("missing_env"))
+        browser_ready = not bool(
+            resolve_managed_server_launch("openclaw-browser").get("missing_env")
+        )
+        chrome_profile_ready = not bool(
+            resolve_managed_server_launch("chrome-profile").get("missing_env")
+        )
         access_mode = self._resolve_runtime_access_mode(
             is_allowed_sender=is_allowed_sender,
             access_level=access_level,
@@ -434,7 +452,8 @@ class RuntimeStatusMixin:
 
         public_lines = [
             f"- OpenClaw Gateway: {'ON' if openclaw_ok else 'OFF'}",
-            f"- LM Studio local: {'ON' if local_model else 'IDLE'}" + (f" (`{local_model}`)" if local_model else ""),
+            f"- LM Studio local: {'ON' if local_model else 'IDLE'}"
+            + (f" (`{local_model}`)" if local_model else ""),
             f"- Scheduler / reminders: {'ON' if scheduler_on else 'OFF'}",
             "- Голосовой TTS-ответ: ON",
         ]
@@ -486,12 +505,9 @@ class RuntimeStatusMixin:
         - что можно утверждать про браузер и интернет без фантазий.
         """
         # Ленивые импорты: _current_runtime_primary_model — module-level helper
-        # в userbot_bridge.py; resolve_managed_server_launch — тесты патчат
-        # ссылку на модуле userbot_bridge, прямой import создаст отдельную ссылку.
-        from ..userbot_bridge import (
-            _current_runtime_primary_model,
-            resolve_managed_server_launch,
-        )
+        # в userbot_bridge.py; resolve_managed_server_launch — из mcp_registry.
+        from ..core.mcp_registry import resolve_managed_server_launch
+        from ..userbot_bridge import _current_runtime_primary_model
 
         route_meta = {}
         if hasattr(openclaw_client, "get_last_runtime_route"):
@@ -507,8 +523,12 @@ class RuntimeStatusMixin:
         route_provider = str(route_meta.get("provider", "") or "").strip()
         scheduler_on = bool(getattr(config, "SCHEDULER_ENABLED", False))
         scheduler_started = bool(getattr(krab_scheduler, "is_started", False))
-        browser_ready = not bool(resolve_managed_server_launch("openclaw-browser").get("missing_env"))
-        chrome_profile_ready = not bool(resolve_managed_server_launch("chrome-profile").get("missing_env"))
+        browser_ready = not bool(
+            resolve_managed_server_launch("openclaw-browser").get("missing_env")
+        )
+        chrome_profile_ready = not bool(
+            resolve_managed_server_launch("chrome-profile").get("missing_env")
+        )
         brave_ready = not bool(resolve_managed_server_launch("brave-search").get("missing_env"))
         access_mode = self._resolve_runtime_access_mode(
             is_allowed_sender=is_allowed_sender,
@@ -520,10 +540,16 @@ class RuntimeStatusMixin:
             if route_channel
             else "ещё не подтверждён в этом канале (self-check не гоняет LLM-маршрут)"
         )
-        model_line = f"`{route_model or local_model}`" if (route_model or local_model) else "ещё не подтверждена"
+        model_line = (
+            f"`{route_model or local_model}`"
+            if (route_model or local_model)
+            else "ещё не подтверждена"
+        )
         primary_hint = ""
         try:
-            model_info = self.router.get_model_info() if hasattr(self, "router") and self.router else {}
+            model_info = (
+                self.router.get_model_info() if hasattr(self, "router") and self.router else {}
+            )
         except Exception:
             model_info = {}
         if isinstance(model_info, dict):
@@ -560,16 +586,22 @@ class RuntimeStatusMixin:
             "- Интернет / веб-поиск: "
             + (
                 "доступен через инструментальный маршрут по явному запросу"
-                if access_mode in {AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value} and brave_ready
+                if access_mode
+                in {AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value}
+                and brave_ready
                 else "не подтверждается как постоянный фоновой доступ"
             )
         )
         if scheduler_on and scheduler_started and openclaw_ok:
             lines.append("- Cron / heartbeat: scheduler активен, transport живой.")
         elif scheduler_on and scheduler_started:
-            lines.append("- Cron / heartbeat: scheduler активен, но transport сейчас не подтверждён.")
+            lines.append(
+                "- Cron / heartbeat: scheduler активен, но transport сейчас не подтверждён."
+            )
         else:
-            lines.append("- Cron / heartbeat: без подтверждённого scheduler runtime не считаю их рабочими.")
+            lines.append(
+                "- Cron / heartbeat: без подтверждённого scheduler runtime не считаю их рабочими."
+            )
 
         return "\n".join(lines)
 

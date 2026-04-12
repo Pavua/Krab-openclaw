@@ -4,6 +4,7 @@ translator_mobile_onboarding.py — onboarding packet для iPhone companion.
 """
 
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,11 @@ def build_translator_mobile_onboarding_packet(
     preflight = dict(live_trial_preflight or {})
     summary = dict(mobile.get("summary") or {}) if isinstance(mobile.get("summary"), dict) else {}
     actions = dict(mobile.get("actions") or {}) if isinstance(mobile.get("actions"), dict) else {}
-    ordinary_calls = dict(delivery.get("ordinary_calls") or {}) if isinstance(delivery.get("ordinary_calls"), dict) else {}
+    ordinary_calls = (
+        dict(delivery.get("ordinary_calls") or {})
+        if isinstance(delivery.get("ordinary_calls"), dict)
+        else {}
+    )
 
     preflight_status = str(preflight.get("status") or "blocked").strip() or "blocked"
     mobile_status = str(mobile.get("status") or "unknown").strip() or "unknown"
@@ -65,14 +70,17 @@ def build_translator_mobile_onboarding_packet(
     subtitles_ready = ordinary_status in {"device_ready", "trial_ready"}
     ru_es_ready = bool(
         ordinary_status in {"device_ready", "trial_ready"}
-        and str(((control.get("runtime_policy") or {}).get("language_pair")) or "ru-es") in {"ru-es", "es-ru"}
+        and str(((control.get("runtime_policy") or {}).get("language_pair")) or "ru-es")
+        in {"ru-es", "es-ru"}
     )
     trial_profiles = [
         {
             "id": "subtitles_first",
             "label": "Subtitles First",
             "status": "ready" if subtitles_ready else "blocked",
-            "reason": "Самый безопасный стартовый профиль для daily-use companion." if subtitles_ready else "Нужен хотя бы registered/bound companion.",
+            "reason": "Самый безопасный стартовый профиль для daily-use companion."
+            if subtitles_ready
+            else "Нужен хотя бы registered/bound companion.",
         },
         {
             "id": "voice_first_guarded",
@@ -84,7 +92,9 @@ def build_translator_mobile_onboarding_packet(
             "id": "ru_es_duplex",
             "label": "RU-ES Duplex",
             "status": "ready" if ru_es_ready else "blocked",
-            "reason": "Целевой языковой профиль для Испании." if ru_es_ready else "Нужна активная RU-ES session/policy truth.",
+            "reason": "Целевой языковой профиль для Испании."
+            if ru_es_ready
+            else "Нужна активная RU-ES session/policy truth.",
         },
     ]
 
@@ -92,11 +102,17 @@ def build_translator_mobile_onboarding_packet(
     if not subtitles_ready and ru_es_ready:
         recommended_trial_profile = "ru_es_duplex"
 
-    draft_defaults = dict(actions.get("draft_defaults") or {}) if isinstance(actions.get("draft_defaults"), dict) else {}
+    draft_defaults = (
+        dict(actions.get("draft_defaults") or {})
+        if isinstance(actions.get("draft_defaults"), dict)
+        else {}
+    )
     trial_prep_payload = {
         "device_id": selected_device_id,
         "source": "mobile",
-        "translation_mode": str(((control.get("runtime_policy") or {}).get("translation_mode")) or "ru_es_duplex"),
+        "translation_mode": str(
+            ((control.get("runtime_policy") or {}).get("translation_mode")) or "ru_es_duplex"
+        ),
         "notify_mode": str(((control.get("runtime_policy") or {}).get("notify_mode")) or "auto_on"),
         "tts_mode": str(((control.get("runtime_policy") or {}).get("tts_mode")) or "hybrid"),
         "src_lang": str(((control.get("runtime_policy") or {}).get("source_lang")) or "auto"),
@@ -134,12 +150,20 @@ def build_translator_mobile_onboarding_packet(
         "packet_preview": {
             "recommended_trial_profile": recommended_trial_profile,
             "trial_prep_payload": trial_prep_payload,
-            "next_step": str((preflight.get("actions") or {}).get("next_step") or "register_companion"),
+            "next_step": str(
+                (preflight.get("actions") or {}).get("next_step") or "register_companion"
+            ),
         },
         "helpers": {
-            "build_packet": _helper(project_root, "Build Translator Mobile Onboarding Packet.command"),
-            "prepare_xcode_project": _helper(project_root, "Prepare iPhone Companion Xcode Project.command"),
-            "open_companion_skeleton": _helper(project_root, "Open iPhone Companion Skeleton.command"),
+            "build_packet": _helper(
+                project_root, "Build Translator Mobile Onboarding Packet.command"
+            ),
+            "prepare_xcode_project": _helper(
+                project_root, "Prepare iPhone Companion Xcode Project.command"
+            ),
+            "open_companion_skeleton": _helper(
+                project_root, "Open iPhone Companion Skeleton.command"
+            ),
             "start_full_ecosystem": _helper(project_root, "Start Full Ecosystem.command"),
         },
         "blockers": [

@@ -146,8 +146,12 @@ def _render_translator_session_state(state: dict[str, Any]) -> str:
     translation = str(state.get("last_translated_translation") or "—")
     last_event = str(state.get("last_event") or "session_idle")
     updated_at = str(state.get("updated_at") or "—")
-    timeline_summary = state.get("timeline_summary") if isinstance(state.get("timeline_summary"), dict) else {}
-    preview = state.get("timeline_preview") if isinstance(state.get("timeline_preview"), list) else []
+    timeline_summary = (
+        state.get("timeline_summary") if isinstance(state.get("timeline_summary"), dict) else {}
+    )
+    preview = (
+        state.get("timeline_preview") if isinstance(state.get("timeline_preview"), list) else []
+    )
     preview_lines: list[str] = []
     for item in preview[:3]:
         if not isinstance(item, dict):
@@ -226,7 +230,7 @@ def _split_text_for_telegram(text: str, limit: int = 3900) -> list[str]:
         else:
             # На случай сверхдлинной строки режем принудительно.
             for i in range(0, len(line), limit):
-                part = line[i:i + limit]
+                part = line[i : i + limit]
                 if len(part) == limit:
                     chunks.append(part)
                 else:
@@ -309,24 +313,28 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
 
     args = bot._get_command_args(message).strip()
     if not args:
-        raise UserInputError(user_message=(
-            "🐝 Как использовать Swarm:\n"
-            "`!swarm <тема>` — базовый room\n"
-            "`!swarm traders BTC анализ` — команда трейдеров\n"
-            "`!swarm teams` — список команд\n"
-            "`!swarm memory [команда]` — история прогонов\n"
-            "`!swarm schedule traders 4h BTC` — автозапуск\n"
-            "`!swarm jobs` — список задач\n"
-            "`!swarm unschedule <id>` — удалить задачу\n"
-            "`!swarm setup` — создать Forum-группу с топиками\n"
-            "`!swarm channels` — статус групп/топиков\n"
-            "`!swarm listen on|off` — team listeners\n"
-            "`!swarm task create|list|done|fail|assign|board` — task board\n"
-            "`!swarm artifacts [team]` — артефакты раундов\n"
-            "`!swarm report [team]` — markdown отчёты\n"
-            "`!swarm stats` — сводная статистика\n"
-            "`!swarm info <team>` — детальная инфо о команде"
-        ))
+        raise UserInputError(
+            user_message=(
+                "🐝 Как использовать Swarm:\n"
+                "`!swarm <тема>` — базовый room\n"
+                "`!swarm traders BTC анализ` — команда трейдеров\n"
+                "`!swarm teams` — список команд\n"
+                "`!swarm memory [команда]` — история прогонов\n"
+                "`!swarm schedule traders 4h BTC` — автозапуск\n"
+                "`!swarm jobs` — список задач\n"
+                "`!swarm unschedule <id>` — удалить задачу\n"
+                "`!swarm setup` — создать Forum-группу с топиками\n"
+                "`!swarm channels` — статус групп/топиков\n"
+                "`!swarm listen on|off` — team listeners\n"
+                "`!swarm task create|list|done|fail|assign|board` — task board\n"
+                "`!swarm artifacts [team]` — артефакты раундов\n"
+                "`!swarm report [team]` — markdown отчёты\n"
+                "`!swarm summary` — сводка сессии (задачи, артефакты, раунды)\n"
+                "`!swarm stats` — сводная статистика\n"
+                "`!swarm info <team>` — детальная инфо о команде\n"
+                "`!swarm research <тема>` — research pipeline с web_search"
+            )
+        )
 
     # !swarm teams — справка
     if args.lower() in {"teams", "команды", "help"}:
@@ -336,6 +344,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     # !swarm task — task board operations
     if args.lower().startswith("task"):
         from ..core.swarm_task_board import swarm_task_board
+
         task_tokens = args.split(maxsplit=2)
         sub = task_tokens[1].lower() if len(task_tokens) > 1 else "board"
 
@@ -343,7 +352,13 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             summary = swarm_task_board.get_board_summary()
             lines = ["📋 **Swarm Task Board**"]
             for status_name, count in sorted(summary.get("by_status", {}).items()):
-                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌", "blocked": "🚫"}.get(status_name, "•")
+                emoji = {
+                    "pending": "⏳",
+                    "in_progress": "🔄",
+                    "done": "✅",
+                    "failed": "❌",
+                    "blocked": "🚫",
+                }.get(status_name, "•")
                 lines.append(f"  {emoji} {status_name}: {count}")
             if summary.get("by_team"):
                 lines.append("**По командам:**")
@@ -361,7 +376,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 return
             lines = ["📋 **Tasks:**"]
             for t in tasks:
-                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(t.status, "•")
+                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(
+                    t.status, "•"
+                )
                 lines.append(f"{emoji} `{t.task_id[:8]}` [{t.team}] {t.title} ({t.priority})")
             await message.reply("\n".join(lines))
             return
@@ -374,8 +391,11 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             team_name = create_parts[0].lower()
             title = create_parts[1]
             task = swarm_task_board.create_task(
-                team=team_name, title=title, description="",
-                priority="medium", created_by="owner",
+                team=team_name,
+                title=title,
+                description="",
+                priority="medium",
+                created_by="owner",
             )
             await message.reply(f"✅ Task `{task.task_id[:8]}` создан для **{team_name}**: {title}")
             return
@@ -432,7 +452,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             match = next((t for t in all_tasks if t.task_id.startswith(tid)), None)
             if not match:
                 raise UserInputError(user_message=f"❌ Task `{tid}` не найден")
-            emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(match.status, "•")
+            emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(
+                match.status, "•"
+            )
             lines = [
                 f"{emoji} **Task: {match.task_id[:12]}**",
                 f"Team: {match.team}",
@@ -454,10 +476,14 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             # !swarm task priority <id> <level>
             parts = (task_tokens[2] if len(task_tokens) > 2 else "").split(maxsplit=1)
             if len(parts) < 2:
-                raise UserInputError(user_message="❌ Формат: `!swarm task priority <id> low|medium|high|critical`")
+                raise UserInputError(
+                    user_message="❌ Формат: `!swarm task priority <id> low|medium|high|critical`"
+                )
             tid, level = parts[0].strip(), parts[1].strip().lower()
             if level not in {"low", "medium", "high", "critical"}:
-                raise UserInputError(user_message="❌ Приоритеты: `low`, `medium`, `high`, `critical`")
+                raise UserInputError(
+                    user_message="❌ Приоритеты: `low`, `medium`, `high`, `critical`"
+                )
             all_tasks = swarm_task_board.list_tasks(limit=200)
             match = next((t for t in all_tasks if t.task_id.startswith(tid)), None)
             if not match:
@@ -488,23 +514,70 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             await message.reply(f"🧹 Очищено {cleared} done/failed tasks")
             return
 
-        raise UserInputError(user_message=(
-            "📋 Task Board:\n"
-            "`!swarm task board` — сводка\n"
-            "`!swarm task list [team]` — список задач\n"
-            "`!swarm task create <team> <title>` — создать\n"
-            "`!swarm task done <id>` — завершить\n"
-            "`!swarm task fail <id>` — отметить как failed\n"
-            "`!swarm task assign <id>` — запустить swarm round для задачи\n"
-            "`!swarm task status <id>` — детальный view\n"
-            "`!swarm task priority <id> <level>` — изменить приоритет\n"
-            "`!swarm task count` — быстрый count по статусам\n"
-            "`!swarm task clear` — очистить done/failed"
-        ))
+        raise UserInputError(
+            user_message=(
+                "📋 Task Board:\n"
+                "`!swarm task board` — сводка\n"
+                "`!swarm task list [team]` — список задач\n"
+                "`!swarm task create <team> <title>` — создать\n"
+                "`!swarm task done <id>` — завершить\n"
+                "`!swarm task fail <id>` — отметить как failed\n"
+                "`!swarm task assign <id>` — запустить swarm round для задачи\n"
+                "`!swarm task status <id>` — детальный view\n"
+                "`!swarm task priority <id> <level>` — изменить приоритет\n"
+                "`!swarm task count` — быстрый count по статусам\n"
+                "`!swarm task clear` — очистить done/failed"
+            )
+        )
+
+    # !swarm summary — сводка текущей сессии (задачи, артефакты, раунды)
+    if args.lower() in {"summary", "сводка"}:
+        from ..core.swarm_artifact_store import swarm_artifact_store
+        from ..core.swarm_task_board import swarm_task_board
+
+        board = swarm_task_board.get_board_summary()
+        by_status = board.get("by_status", {})
+        total_tasks = board.get("total", 0)
+
+        arts = swarm_artifact_store.list_artifacts(limit=200)
+        total_rounds = len(arts)
+        # суммируем время всех раундов
+        total_duration = sum(a.get("duration_sec", 0) for a in arts)
+
+        # команды, участвовавшие в сессии
+        teams_seen: set[str] = {a.get("team", "?") for a in arts}
+
+        lines = ["📊 **Swarm Summary**", ""]
+        # --- задачи ---
+        lines.append("**Задачи:**")
+        status_emoji = {
+            "done": "✅",
+            "pending": "⏳",
+            "in_progress": "🔄",
+            "failed": "❌",
+            "blocked": "🚫",
+        }
+        for st in ("done", "in_progress", "pending", "failed", "blocked"):
+            cnt = by_status.get(st, 0)
+            if cnt:
+                lines.append(f"  {status_emoji.get(st, '•')} {st}: {cnt}")
+        lines.append(f"  Итого задач: {total_tasks}")
+        lines.append("")
+        # --- артефакты ---
+        lines.append("**Артефакты:**")
+        lines.append(f"  📦 Раундов сохранено: {total_rounds}")
+        if total_duration:
+            lines.append(f"  ⏱ Суммарное время: {total_duration:.0f}с")
+        if teams_seen:
+            lines.append(f"  🐝 Команды: {', '.join(sorted(teams_seen))}")
+
+        await message.reply("\n".join(lines))
+        return
 
     # !swarm artifacts [team] — список артефактов
     if args.lower().startswith("artifacts") or args.lower().startswith("артефакт"):
         from ..core.swarm_artifact_store import swarm_artifact_store
+
         art_tokens = args.split(maxsplit=1)
         team_filter = art_tokens[1].strip().lower() if len(art_tokens) > 1 else None
         arts = swarm_artifact_store.list_artifacts(team=team_filter, limit=10)
@@ -523,8 +596,10 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
 
     # !swarm report [team] — последние markdown reports
     if args.lower().startswith("report") or args.lower().startswith("отчёт"):
-        from ..core.swarm_artifact_store import swarm_artifact_store
         from pathlib import Path
+
+        from ..core.swarm_artifact_store import swarm_artifact_store
+
         report_dir = Path.home() / ".openclaw" / "krab_runtime_state" / "reports"
         if not report_dir.exists():
             await message.reply("📄 Отчётов пока нет.")
@@ -545,12 +620,15 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     # !swarm listen on/off — управление team listeners
     if args.lower().startswith("listen"):
         from ..core.swarm_team_listener import is_listeners_enabled, set_listeners_enabled
+
         listen_tokens = args.split(maxsplit=1)
         if len(listen_tokens) > 1:
             val = listen_tokens[1].strip().lower()
             if val in {"on", "1", "true", "yes"}:
                 set_listeners_enabled(True)
-                await message.reply("🎧 Team listeners: **ON**\nTeam-аккаунты отвечают в ЛС и на mention.")
+                await message.reply(
+                    "🎧 Team listeners: **ON**\nTeam-аккаунты отвечают в ЛС и на mention."
+                )
             elif val in {"off", "0", "false", "no"}:
                 set_listeners_enabled(False)
                 await message.reply("🔇 Team listeners: **OFF**\nTeam-аккаунты молчат.")
@@ -571,8 +649,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         if not resolved:
             raise UserInputError(user_message=f"❌ Команда `{team_arg}` не найдена")
         roles = TEAM_REGISTRY.get(resolved, [])
-        from ..core.swarm_task_board import swarm_task_board
         from ..core.swarm_artifact_store import swarm_artifact_store
+        from ..core.swarm_task_board import swarm_task_board
+
         tasks = swarm_task_board.list_tasks(team=resolved, limit=5)
         arts = swarm_artifact_store.list_artifacts(team=resolved, limit=3)
         lines = [f"🐝 **Команда: {resolved}**", ""]
@@ -582,20 +661,25 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
         if tasks:
             lines.append(f"\n**Задачи ({len(tasks)}):**")
             for t in tasks:
-                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(t.status, "•")
+                emoji = {"pending": "⏳", "in_progress": "🔄", "done": "✅", "failed": "❌"}.get(
+                    t.status, "•"
+                )
                 lines.append(f"  {emoji} {t.title[:50]} ({t.status})")
         if arts:
             lines.append(f"\n**Артефакты ({len(arts)}):**")
             for a in arts:
-                lines.append(f"  📦 {(a.get('topic') or '?')[:40]} ({a.get('duration_sec', 0):.0f}s)")
+                lines.append(
+                    f"  📦 {(a.get('topic') or '?')[:40]} ({a.get('duration_sec', 0):.0f}s)"
+                )
         await message.reply("\n".join(lines))
         return
 
     # !swarm stats — сводная статистика по всем командам
     if args.lower().startswith("stats") or args.lower().startswith("стат"):
-        from ..core.swarm_task_board import swarm_task_board
         from ..core.swarm_artifact_store import swarm_artifact_store
+        from ..core.swarm_task_board import swarm_task_board
         from ..core.swarm_team_listener import is_listeners_enabled
+
         board = swarm_task_board.get_board_summary()
         arts = swarm_artifact_store.list_artifacts(limit=100)
         lines = [
@@ -644,6 +728,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     # !swarm schedule <team> <topic> <interval> — создание рекуррентной задачи
     if args.lower().startswith("schedule") or args.lower().startswith("расписание"):
         from ..core.swarm_scheduler import parse_interval, swarm_scheduler
+
         sched_tokens = args.split(maxsplit=3)  # schedule traders "BTC" 4h
         if len(sched_tokens) < 4:
             await message.reply(
@@ -654,7 +739,9 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             return
         sched_team = resolve_team_name(sched_tokens[1])
         if not sched_team:
-            await message.reply(f"❌ Команда '{sched_tokens[1]}' не найдена. Доступны: {', '.join(TEAM_REGISTRY)}")
+            await message.reply(
+                f"❌ Команда '{sched_tokens[1]}' не найдена. Доступны: {', '.join(TEAM_REGISTRY)}"
+            )
             return
         try:
             interval = parse_interval(sched_tokens[2])
@@ -679,6 +766,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     # !swarm unschedule <id> — удаление задачи
     if args.lower().startswith("unschedule") or args.lower().startswith("отмена"):
         from ..core.swarm_scheduler import swarm_scheduler
+
         unsched_tokens = args.split(maxsplit=1)
         if len(unsched_tokens) < 2:
             await message.reply("❌ Укажи ID задачи: `!swarm unschedule <id>`")
@@ -693,12 +781,14 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     # !swarm jobs — список рекуррентных задач
     if args.lower() in {"jobs", "задачи", "schedule"}:
         from ..core.swarm_scheduler import swarm_scheduler
+
         await message.reply(swarm_scheduler.format_jobs())
         return
 
     # !swarm channels — статус swarm-групп
     if args.lower() in {"channels", "группы", "каналы"}:
         from ..core.swarm_channels import swarm_channels
+
         await message.reply(swarm_channels.format_status())
         return
 
@@ -742,8 +832,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
                 result = await swarm_channels.setup_forum()
                 if result.get("topic_ids"):
                     topics_text = "\n".join(
-                        f"  **{team}** → topic `{tid}`"
-                        for team, tid in result["topic_ids"].items()
+                        f"  **{team}** → topic `{tid}`" for team, tid in result["topic_ids"].items()
                     )
                     await msg.edit_text(
                         f"✅ **Krab Swarm Forum создан!**\n\n"
@@ -763,6 +852,7 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
     # !swarm setchat <team> — привязать текущую группу к команде
     if args.lower().startswith("setchat") or args.lower().startswith("привязать"):
         from ..core.swarm_channels import swarm_channels
+
         setchat_tokens = args.split(maxsplit=1)
         if len(setchat_tokens) < 2:
             await message.reply(
@@ -773,11 +863,81 @@ async def handle_swarm(bot: "KraabUserbot", message: Message) -> None:
             return
         team = resolve_team_name(setchat_tokens[1].strip())
         if not team:
-            await message.reply(f"❌ Команда '{setchat_tokens[1]}' не найдена. Доступны: {', '.join(TEAM_REGISTRY)}")
+            await message.reply(
+                f"❌ Команда '{setchat_tokens[1]}' не найдена. Доступны: {', '.join(TEAM_REGISTRY)}"
+            )
             return
         chat_id = message.chat.id
         swarm_channels.register_team_chat(team, chat_id)
         await message.reply(f"📡 Группа привязана к команде **{team}**\nChat ID: `{chat_id}`")
+        return
+
+    # !swarm research <тема> — research pipeline с обязательным web_search
+    if args.lower().startswith("research") or args.lower().startswith("исследование"):
+        from ..core.swarm_artifact_store import swarm_artifact_store
+
+        research_tokens = args.split(maxsplit=1)
+        if len(research_tokens) < 2 or not research_tokens[1].strip():
+            raise UserInputError(
+                user_message=(
+                    "🔬 Укажи тему исследования.\nПример: `!swarm research тренды AI 2025`"
+                )
+            )
+        raw_topic = research_tokens[1].strip()
+        # Усиленный промпт: обязателен web_search + структурированный результат
+        research_topic = (
+            f"Проведи исследование по теме: {raw_topic}. "
+            "Обязательно используй web_search для поиска актуальной информации. "
+            "Структурируй результат: Summary, Key Findings, Sources."
+        )
+        team_key = "analysts"
+        msg = await message.reply(
+            f"🔬 **Research Pipeline** [analysts]\nТема: `{raw_topic}`\n_web_search обязателен_"
+        )
+        try:
+            chat_id = str(message.chat.id)
+            user = message.from_user
+            access_profile = bot._get_access_profile(user)
+            is_allowed_sender = bot._is_allowed_sender(user)
+            system_prompt = bot._build_system_prompt_for_sender(
+                is_allowed_sender=is_allowed_sender,
+                access_level=access_profile.level,
+            )
+            router = _AgentRoomRouterAdapter(
+                chat_id=f"swarm:{chat_id}:{team_key}",
+                system_prompt=system_prompt,
+            )
+            roles = TEAM_REGISTRY.get(team_key)
+            room = AgentRoom(roles=roles)
+            result_text = await room.run_round(
+                research_topic,
+                router,
+                _bus=swarm_bus,
+                _router_factory=lambda tn: _AgentRoomRouterAdapter(
+                    chat_id=f"swarm:{chat_id}:{tn}",
+                    system_prompt=system_prompt,
+                ),
+                _team_name=team_key,
+            )
+            # Сохраняем в artifact store с пометкой research
+            swarm_artifact_store.save_round_artifact(
+                team=team_key,
+                topic=f"[research] {raw_topic}",
+                result=result_text,
+            )
+            chunks = _split_text_for_telegram(result_text)
+            await msg.edit(chunks[0])
+            for part in chunks[1:]:
+                await message.reply(part)
+        except Exception as e:
+            logger.error("swarm_research_error", error=str(e), exc_info=True)
+            safe_err = str(e).replace("`", "'")[:500]
+            try:
+                await msg.edit(
+                    f"❌ Ошибка Research: {safe_err}" if safe_err else "❌ Ошибка Research"
+                )
+            except Exception:  # noqa: BLE001
+                pass
         return
 
     # Парсим: [team_name] [loop [N]] <topic>
@@ -986,7 +1146,9 @@ async def handle_status(bot: "KraabUserbot", message: Message) -> None:
     actual_channel = str(route_meta.get("channel") or "").strip()
     route_status = str(route_meta.get("status") or "").strip()
     route_error = str(route_meta.get("error_code") or "").strip()
-    declared_primary = str(get_runtime_primary_model() or getattr(config, "MODEL", "") or "").strip()
+    declared_primary = str(
+        get_runtime_primary_model() or getattr(config, "MODEL", "") or ""
+    ).strip()
     effective_model = actual_model or declared_primary or "unknown"
     bar = "▓" * int(ram["percent"] / 10) + "░" * (10 - int(ram["percent"] / 10))
     text = f"""
@@ -1023,10 +1185,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             return True
         try:
             models = await model_manager.discover_models()
-            return any(
-                m.id == model_id and m.type.name.startswith("LOCAL")
-                for m in models
-            )
+            return any(m.id == model_id and m.type.name.startswith("LOCAL") for m in models)
         except Exception:
             # Если discovery недоступен, используем безопасную эвристику.
             return normalized.startswith("local/") or "mlx" in normalized
@@ -1134,6 +1293,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
         try:
             models = await model_manager.discover_models()
             from ..core.cloud_gateway import get_cloud_fallback_chain
+
             cloud_ids = [c for c in get_cloud_fallback_chain() if "gemini" in c.lower()]
             local_models = [m for m in models if m.type.name.startswith("LOCAL")]
             cloud_from_api = [m for m in models if m.type.name.startswith("CLOUD")]
@@ -1141,6 +1301,7 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
             for cid in cloud_ids:
                 if cid not in cloud_seen:
                     from ..core.model_types import ModelInfo, ModelStatus, ModelType
+
                     cloud_from_api.append(
                         ModelInfo(
                             id=cid,
@@ -1152,14 +1313,21 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
                         )
                     )
                     cloud_seen.add(cid)
-            lines = [f"🔍 **Доступные модели** (local={len(local_models)}, cloud={len(cloud_from_api)})\n", "☁️ **Облачные**\n"]
+            lines = [
+                f"🔍 **Доступные модели** (local={len(local_models)}, cloud={len(cloud_from_api)})\n",
+                "☁️ **Облачные**\n",
+            ]
             for m in sorted(cloud_from_api, key=lambda x: x.id):
                 loaded = " ✅" if m.id == model_manager._current_model else ""
-                lines.append(f"☁️ `{m.id}` · `{_format_size_gb(getattr(m, 'size_gb', 0.0))}`{loaded}")
+                lines.append(
+                    f"☁️ `{m.id}` · `{_format_size_gb(getattr(m, 'size_gb', 0.0))}`{loaded}"
+                )
             lines.append("\n💻 **Локальные**\n")
             for m in sorted(local_models, key=lambda x: x.id):
                 loaded = " ✅" if m.id == model_manager._current_model else ""
-                lines.append(f"💻 `{m.id}` · `{_format_size_gb(getattr(m, 'size_gb', 0.0))}`{loaded}")
+                lines.append(
+                    f"💻 `{m.id}` · `{_format_size_gb(getattr(m, 'size_gb', 0.0))}`{loaded}"
+                )
             text = "\n".join(lines)
             chunks = _split_text_for_telegram(text)
             await msg.edit(chunks[0])
@@ -1270,8 +1438,7 @@ async def handle_acl(bot: "KraabUserbot", message: Message) -> None:
     if action not in {"grant", "revoke"}:
         raise UserInputError(
             user_message=(
-                "❌ Неизвестное действие ACL.\n"
-                "Используй: `status`, `list`, `grant`, `revoke`."
+                "❌ Неизвестное действие ACL.\nИспользуй: `status`, `list`, `grant`, `revoke`."
             )
         )
 
@@ -1288,9 +1455,7 @@ async def handle_acl(bot: "KraabUserbot", message: Message) -> None:
     level = str(parts[1] or "").strip().lower()
     subject = str(parts[2] or "").strip()
     if level not in {AccessLevel.FULL.value, AccessLevel.PARTIAL.value}:
-        raise UserInputError(
-            user_message="❌ Можно изменять только уровни `full` и `partial`."
-        )
+        raise UserInputError(user_message="❌ Можно изменять только уровни `full` и `partial`.")
 
     result = update_acl_subject(level, subject, add=(action == "grant"))
     state = result["state"]
@@ -1381,10 +1546,14 @@ async def handle_notify(bot: "KraabUserbot", message: Message) -> None:
     args = bot._get_command_args(message).strip().lower()
     if args in {"on", "1", "true", "yes"}:
         _cfg.update_setting("TOOL_NARRATION_ENABLED", "1")
-        await message.reply("🔔 Tool notifications: **ON**\nБуду показывать какой инструмент вызываю.")
+        await message.reply(
+            "🔔 Tool notifications: **ON**\nБуду показывать какой инструмент вызываю."
+        )
     elif args in {"off", "0", "false", "no"}:
         _cfg.update_setting("TOOL_NARRATION_ENABLED", "0")
-        await message.reply("🔕 Tool notifications: **OFF**\nИнструменты молча, только финальный ответ.")
+        await message.reply(
+            "🔕 Tool notifications: **OFF**\nИнструменты молча, только финальный ответ."
+        )
     else:
         status = "ON ✅" if getattr(_cfg, "TOOL_NARRATION_ENABLED", True) else "OFF 🔕"
         await message.reply(
@@ -1426,7 +1595,9 @@ async def handle_voice(bot: "KraabUserbot", message: Message) -> None:
         try:
             profile = bot.update_voice_runtime_profile(speed=float(args[2]), persist=True)
         except ValueError as exc:
-            raise UserInputError(user_message="❌ Скорость должна быть числом, например `1.25`.") from exc
+            raise UserInputError(
+                user_message="❌ Скорость должна быть числом, например `1.25`."
+            ) from exc
         await message.reply(_render_voice_profile(profile))
         return
 
@@ -1530,9 +1701,7 @@ def _render_chat_ban_entries(entries: list[dict[str, Any]]) -> str:
         code = entry.get("last_error_code") or entry.get("error_code") or "?"
         expires = entry.get("expires_at") or "permanent"
         hits = entry.get("hit_count", 1)
-        lines.append(
-            f"- `{chat_id}` · {code} · expires={expires} · hits={hits}"
-        )
+        lines.append(f"- `{chat_id}` · {code} · expires={expires} · hits={hits}")
     lines.append("\nСнять: `!chatban clear <chat_id>`")
     return "\n".join(lines)
 
@@ -1555,7 +1724,7 @@ async def handle_chatban(bot: "KraabUserbot", message: Message) -> None:
       (если уверен что ban снят).
     """
     args = str(message.text or "").split()
-    sub = (args[1].strip().lower() if len(args) >= 2 else "status")
+    sub = args[1].strip().lower() if len(args) >= 2 else "status"
 
     if sub in {"", "status", "show", "list"}:
         entries = chat_ban_cache.list_entries()
@@ -1564,9 +1733,7 @@ async def handle_chatban(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "clear":
         if len(args) < 3 or not args[2].strip():
-            raise UserInputError(
-                user_message="❌ Укажи chat_id: `!chatban clear <chat_id>`"
-            )
+            raise UserInputError(user_message="❌ Укажи chat_id: `!chatban clear <chat_id>`")
         target = args[2].strip()
         removed = chat_ban_cache.clear(target)
         if removed:
@@ -1575,9 +1742,7 @@ async def handle_chatban(bot: "KraabUserbot", message: Message) -> None:
                 f"Краб снова будет обрабатывать сообщения оттуда."
             )
         else:
-            await message.reply(
-                f"ℹ️ `{target}` не был в chat ban cache (уже снят или не помечен)."
-            )
+            await message.reply(f"ℹ️ `{target}` не был в chat ban cache (уже снят или не помечен).")
         return
 
     raise UserInputError(
@@ -1592,12 +1757,30 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
     Это не live call session-control. Команда управляет persisted owner-профилем,
     который потом читают owner UI, handoff и будущий iPhone companion flow.
     """
-    args = str(message.text or "").split(maxsplit=3)
-    if len(args) == 1 or str(args[1] or "").strip().lower() in {"status", "show"}:
+    # Парсим аргументы через message.command (Pyrogram заполняет его независимо от
+    # prefix: "!translator status" и "Краб translator status" дают одинаковый
+    # command=["translator","status"]). Fallback на split по text для тестов/совместимости.
+    if getattr(message, "command", None):
+        # message.command = ["translator", "sub", "arg2", "arg3"]
+        # args[0]=command, args[1]=sub, args[2]=arg2, args[3]=arg3 — совместимо с дальнейшим кодом
+        args = list(message.command)[:4]
+        while len(args) < 4:
+            args.append("")
+    else:
+        # fallback для тестов / нестандартных ситуаций
+        raw_text = str(message.text or "").split(maxsplit=3)
+        # Определяем смещение: если первое слово это command (начинается с !), offset=0 иначе 1
+        if len(raw_text) >= 2 and not raw_text[0].startswith(("!", "/", ".")):
+            # multi-word prefix: args[0]=prefix, args[1]=cmd, args[2]=sub, args[3]=arg2
+            args = ["_cmd"] + raw_text[1:]
+        else:
+            args = raw_text
+        while len(args) < 4:
+            args.append("")
+    sub = str(args[1] or "").strip().lower()
+    if not sub or sub in {"status", "show"}:
         await message.reply(_render_translator_profile(bot.get_translator_runtime_profile()))
         return
-
-    sub = str(args[1] or "").strip().lower()
 
     if sub in {"help", "?", "commands"}:
         await message.reply(
@@ -1615,7 +1798,9 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
     if sub == "auto":
         # !translator auto — shortcut для !translator lang auto-detect
         profile = bot.update_translator_runtime_profile(language_pair="auto-detect", persist=True)
-        await message.reply("🌐 Translator → **auto-detect** mode.\nЯзык будет определяться автоматически.")
+        await message.reply(
+            "🌐 Translator → **auto-detect** mode.\nЯзык будет определяться автоматически."
+        )
         return
 
     if sub in {"lang", "language"}:
@@ -1640,9 +1825,7 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "mode":
         if len(args) < 3:
-            raise UserInputError(
-                user_message="❌ Укажи mode: `!translator mode bilingual`."
-            )
+            raise UserInputError(user_message="❌ Укажи mode: `!translator mode bilingual`.")
         value = str(args[2] or "").strip().lower()
         if value not in ALLOWED_TRANSLATION_MODES:
             raise UserInputError(
@@ -1713,7 +1896,9 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
             try:
                 index = int(str(args[3]).strip()) - 1
             except ValueError as exc:
-                raise UserInputError(user_message="❌ Номер фразы должен быть целым числом.") from exc
+                raise UserInputError(
+                    user_message="❌ Номер фразы должен быть целым числом."
+                ) from exc
             if index < 0 or index >= len(quick_phrases):
                 raise UserInputError(
                     user_message=f"❌ Нет фразы с номером `{index + 1}`. Сейчас их: `{len(quick_phrases)}`."
@@ -1756,13 +1941,14 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
         # args split maxsplit=3 обрезает текст → берём всё после "!translator test "
         raw_text = str(message.text or "")
         test_idx = raw_text.lower().find("test")
-        test_text = raw_text[test_idx + 4:].strip() if test_idx >= 0 else ""
+        test_text = raw_text[test_idx + 4 :].strip() if test_idx >= 0 else ""
         if not test_text:
             raise UserInputError(user_message="❌ Формат: `!translator test Buenos días amigo`")
         try:
             from ..core.language_detect import detect_language, resolve_translation_pair
             from ..core.translator_engine import translate_text
             from ..openclaw_client import openclaw_client as _oc
+
             detected = detect_language(test_text)
             if not detected:
                 await message.reply("❌ Не удалось определить язык.")
@@ -1785,7 +1971,9 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
     if sub == "session":
         action = str(args[2] or "").strip().lower() if len(args) >= 3 else "status"
         if action in {"status", "show"}:
-            await message.reply(_render_translator_session_state(bot.get_translator_session_state()))
+            await message.reply(
+                _render_translator_session_state(bot.get_translator_session_state())
+            )
             return
         if action == "start":
             label = str(args[3] or "").strip() if len(args) >= 4 else ""
@@ -1827,7 +2015,9 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
             # Per-chat: убираем этот чат из active_chats
             current_chat_id = str(message.chat.id)
             current_state = bot.get_translator_session_state()
-            active_chats = [c for c in (current_state.get("active_chats") or []) if c != current_chat_id]
+            active_chats = [
+                c for c in (current_state.get("active_chats") or []) if c != current_chat_id
+            ]
             # Если active_chats пуст — полный stop; иначе только deactivate этот чат
             if not active_chats:
                 state = bot.update_translator_session_state(
@@ -1869,9 +2059,7 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
                 )
             original, translation = [part.strip() for part in raw.split("|", 1)]
             if not original or not translation:
-                raise UserInputError(
-                    user_message="❌ Для replay нужны и original, и translation."
-                )
+                raise UserInputError(user_message="❌ Для replay нужны и original, и translation.")
             profile = bot.get_translator_runtime_profile()
             state = bot.update_translator_session_state(
                 last_translated_original=original,
@@ -2013,11 +2201,7 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
             lines.append("- Видимые приложения: " + ", ".join(f"`{item}`" for item in running_apps))
         lines.append(
             f"- Clipboard: {int(status.get('clipboard_chars', 0) or 0)} символов"
-            + (
-                f" (`{status.get('clipboard_preview')}`)"
-                if status.get("clipboard_preview")
-                else ""
-            )
+            + (f" (`{status.get('clipboard_preview')}`)" if status.get("clipboard_preview") else "")
         )
         warnings = status.get("warnings") or []
         if warnings:
@@ -2026,7 +2210,9 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
         note_folders = status.get("note_folders") or []
         calendars = status.get("calendars") or []
         if reminder_lists:
-            lines.append("- Reminders lists: " + ", ".join(f"`{item}`" for item in reminder_lists[:5]))
+            lines.append(
+                "- Reminders lists: " + ", ".join(f"`{item}`" for item in reminder_lists[:5])
+            )
         if note_folders:
             lines.append("- Notes folders: " + ", ".join(f"`{item}`" for item in note_folders[:5]))
         if calendars:
@@ -2036,7 +2222,9 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "reminders":
         if len(parts) < 2:
-            raise UserInputError(user_message="🍎 Формат: `!mac reminders list` или `!mac reminders add <время> | <текст>`")
+            raise UserInputError(
+                user_message="🍎 Формат: `!mac reminders list` или `!mac reminders add <время> | <текст>`"
+            )
         rem_action = parts[1].lower()
         if rem_action == "list":
             rows = await macos_automation.list_reminders(limit=8)
@@ -2053,7 +2241,9 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
             payload = args.split(maxsplit=2)[2] if len(args.split(maxsplit=2)) > 2 else ""
             time_spec, reminder_text = split_reminder_input(payload)
             if not time_spec or not reminder_text:
-                raise UserInputError(user_message="🍎 Формат: `!mac reminders add <время> | <текст>`")
+                raise UserInputError(
+                    user_message="🍎 Формат: `!mac reminders add <время> | <текст>`"
+                )
             due_at = parse_due_time(time_spec)
             created = await macos_automation.create_reminder(title=reminder_text, due_at=due_at)
             due_label = due_at.astimezone().strftime("%d.%m.%Y %H:%M")
@@ -2065,11 +2255,15 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
                 f"- Текст: {reminder_text}"
             )
             return
-        raise UserInputError(user_message="🍎 Формат: `!mac reminders list` или `!mac reminders add <время> | <текст>`")
+        raise UserInputError(
+            user_message="🍎 Формат: `!mac reminders list` или `!mac reminders add <время> | <текст>`"
+        )
 
     if sub == "notes":
         if len(parts) < 2:
-            raise UserInputError(user_message="🍎 Формат: `!mac notes list` или `!mac notes add <заголовок> | <текст>`")
+            raise UserInputError(
+                user_message="🍎 Формат: `!mac notes list` или `!mac notes add <заголовок> | <текст>`"
+            )
         notes_action = parts[1].lower()
         if notes_action == "list":
             rows = await macos_automation.list_notes(limit=8)
@@ -2086,12 +2280,16 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
         if notes_action == "add":
             payload = args.split(maxsplit=2)[2] if len(args.split(maxsplit=2)) > 2 else ""
             if "|" not in payload:
-                raise UserInputError(user_message="🍎 Формат: `!mac notes add <заголовок> | <текст>`")
+                raise UserInputError(
+                    user_message="🍎 Формат: `!mac notes add <заголовок> | <текст>`"
+                )
             raw_title, raw_body = payload.split("|", 1)
             title = raw_title.strip()
             body = raw_body.strip()
             if not title or not body:
-                raise UserInputError(user_message="🍎 Заголовок и текст заметки не должны быть пустыми.")
+                raise UserInputError(
+                    user_message="🍎 Заголовок и текст заметки не должны быть пустыми."
+                )
             created = await macos_automation.create_note(title=title, body=body)
             await message.reply(
                 "✅ Заметка создана в Notes.\n"
@@ -2100,7 +2298,9 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
                 f"- Заголовок: `{title}`"
             )
             return
-        raise UserInputError(user_message="🍎 Формат: `!mac notes list` или `!mac notes add <заголовок> | <текст>`")
+        raise UserInputError(
+            user_message="🍎 Формат: `!mac notes list` или `!mac notes add <заголовок> | <текст>`"
+        )
 
     if sub == "calendar":
         if len(parts) < 2:
@@ -2131,9 +2331,13 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
             payload = args.split(maxsplit=2)[2] if len(args.split(maxsplit=2)) > 2 else ""
             time_spec, event_title = split_reminder_input(payload)
             if not time_spec or not event_title:
-                raise UserInputError(user_message="🍎 Формат: `!mac calendar add <время> | <название>`")
+                raise UserInputError(
+                    user_message="🍎 Формат: `!mac calendar add <время> | <название>`"
+                )
             start_at = parse_due_time(time_spec)
-            created = await macos_automation.create_calendar_event(title=event_title, start_at=start_at, duration_minutes=30)
+            created = await macos_automation.create_calendar_event(
+                title=event_title, start_at=start_at, duration_minutes=30
+            )
             start_label = start_at.astimezone().strftime("%d.%m.%Y %H:%M")
             await message.reply(
                 "✅ Событие создано в Calendar.\n"
@@ -2149,7 +2353,9 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
 
     if sub in {"clip", "clipboard"}:
         if len(parts) < 2:
-            raise UserInputError(user_message="🍎 Формат: `!mac clip get` или `!mac clip set <текст>`")
+            raise UserInputError(
+                user_message="🍎 Формат: `!mac clip get` или `!mac clip set <текст>`"
+            )
         clip_action = parts[1].lower()
         if clip_action == "get":
             content = await macos_automation.get_clipboard_text()
@@ -2170,7 +2376,9 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
     if sub == "notify":
         payload = args[len("notify") :].strip()
         if not payload:
-            raise UserInputError(user_message="🍎 Формат: `!mac notify <текст>` или `!mac notify <заголовок> | <текст>`")
+            raise UserInputError(
+                user_message="🍎 Формат: `!mac notify <текст>` или `!mac notify <заголовок> | <текст>`"
+            )
         title = "Краб"
         body = payload
         if "|" in payload:
@@ -2226,7 +2434,7 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
 
     # Phase 3 Шаг 4: UI automation
     if sub == "focus":
-        app_arg = args[len("focus"):].strip()
+        app_arg = args[len("focus") :].strip()
         if not app_arg:
             raise UserInputError(user_message="🍎 Формат: `!mac focus <имя приложения>`")
         result = await macos_automation.focus_app(app_arg)
@@ -2234,19 +2442,25 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if sub == "type":
-        text_arg = args[len("type"):].strip()
+        text_arg = args[len("type") :].strip()
         if not text_arg:
             raise UserInputError(user_message="🍎 Формат: `!mac type <текст>`")
         result = await macos_automation.type_text(text_arg)
-        await message.reply(f"⌨️ Напечатано {result['text_length']} символов в `{result['app_name']}`")
+        await message.reply(
+            f"⌨️ Напечатано {result['text_length']} символов в `{result['app_name']}`"
+        )
         return
 
     if sub == "typeclip":
-        text_arg = args[len("typeclip"):].strip()
+        text_arg = args[len("typeclip") :].strip()
         if not text_arg:
-            raise UserInputError(user_message="🍎 Формат: `!mac typeclip <текст>` (через clipboard, поддерживает Unicode)")
+            raise UserInputError(
+                user_message="🍎 Формат: `!mac typeclip <текст>` (через clipboard, поддерживает Unicode)"
+            )
         result = await macos_automation.type_text_via_clipboard(text_arg)
-        await message.reply(f"📋→⌨️ Вставлено {result['text_length']} символов в `{result['app_name']}`")
+        await message.reply(
+            f"📋→⌨️ Вставлено {result['text_length']} символов в `{result['app_name']}`"
+        )
         return
 
     if sub == "click":
@@ -2260,9 +2474,11 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if sub == "key":
-        key_arg = args[len("key"):].strip()
+        key_arg = args[len("key") :].strip()
         if not key_arg:
-            raise UserInputError(user_message="🍎 Формат: `!mac key <клавиша>` (return/tab/escape/...)")
+            raise UserInputError(
+                user_message="🍎 Формат: `!mac key <клавиша>` (return/tab/escape/...)"
+            )
         result = await macos_automation.press_key(key_arg)
         await message.reply(f"⌨️ Нажато: `{result['key']}`")
         return
@@ -2311,9 +2527,7 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
             is_loop = True
             loop_payload = swarm_args[4:].strip()
             if not loop_payload:
-                raise UserInputError(
-                    user_message="🐝 Формат: `!agent swarm loop [N] <тема>`"
-                )
+                raise UserInputError(user_message="🐝 Формат: `!agent swarm loop [N] <тема>`")
             first, *rest = loop_payload.split(" ", 1)
             if first.isdigit():
                 loop_rounds = int(first)
@@ -2321,9 +2535,7 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
             else:
                 topic = loop_payload
             if not topic:
-                raise UserInputError(
-                    user_message="🐝 Формат: `!agent swarm loop [N] <тема>`"
-                )
+                raise UserInputError(user_message="🐝 Формат: `!agent swarm loop [N] <тема>`")
 
         max_rounds = int(getattr(config, "SWARM_LOOP_MAX_ROUNDS", 3) or 3)
         next_round_clip = int(getattr(config, "SWARM_LOOP_NEXT_ROUND_CLIP", 4000) or 4000)
@@ -2334,7 +2546,9 @@ async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
                 f"🐝 Запускаю роевой loop: {safe_rounds} раунд(а), роли аналитик → критик → интегратор..."
             )
         else:
-            status = await message.reply("🐝 Запускаю роевой раунд: аналитик → критик → интегратор...")
+            status = await message.reply(
+                "🐝 Запускаю роевой раунд: аналитик → критик → интегратор..."
+            )
         room = AgentRoom()
         role_prompt = get_role_prompt(getattr(bot, "current_role", "default"))
         room_chat_id = f"swarm:{message.chat.id}"
@@ -2615,7 +2829,11 @@ async def handle_watch(bot: "KraabUserbot", message: Message) -> None:
 
     if action == "now":
         result = await proactive_watch.capture(manual=True, persist_memory=True, notify=False)
-        suffix = "\n- Память: записано в workspace memory" if result.get("wrote_memory") else "\n- Память: запись пропущена"
+        suffix = (
+            "\n- Память: записано в workspace memory"
+            if result.get("wrote_memory")
+            else "\n- Память: запись пропущена"
+        )
         await message.reply(str(result.get("digest") or "watch digest unavailable") + suffix)
         return
 
@@ -2700,7 +2918,11 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
             due = str(meta.get("due_at_iso") or "").strip()
             due_suffix = f" · due `{due}`" if due else ""
             approval_scope = str((item.get("identity") or {}).get("approval_scope") or "").strip()
-            approval_suffix = f" · scope `{approval_scope}`" if approval_scope and item["kind"] == "approval_request" else ""
+            approval_suffix = (
+                f" · scope `{approval_scope}`"
+                if approval_scope and item["kind"] == "approval_request"
+                else ""
+            )
             lines.append(
                 f"- `{item['item_id']}` · `{item['kind']}` · `{item['severity']}`{due_suffix}{approval_suffix}\n"
                 f"  {item['title']}"
@@ -2724,10 +2946,14 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
 
     if action == "taskfrom":
         if len(raw_args) < 3 or raw_args[2].count("|") < 2:
-            raise UserInputError(user_message="📥 Формат: `!inbox taskfrom <source_id> | <title> | <body>`")
+            raise UserInputError(
+                user_message="📥 Формат: `!inbox taskfrom <source_id> | <title> | <body>`"
+            )
         source_item_id, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=2)]
         if not source_item_id or not title or not body:
-            raise UserInputError(user_message="📥 Для taskfrom нужны source_id, заголовок и описание.")
+            raise UserInputError(
+                user_message="📥 Для taskfrom нужны source_id, заголовок и описание."
+            )
         created = inbox_service.escalate_item_to_owner_task(
             source_item_id=source_item_id,
             title=title,
@@ -2747,7 +2973,9 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
 
     if action == "approval":
         if len(raw_args) < 3 or raw_args[2].count("|") < 2:
-            raise UserInputError(user_message="📥 Формат: `!inbox approval <scope> | <title> | <body>`")
+            raise UserInputError(
+                user_message="📥 Формат: `!inbox approval <scope> | <title> | <body>`"
+            )
         scope, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=2)]
         if not scope or not title or not body:
             raise UserInputError(user_message="📥 Для approval нужны scope, заголовок и описание.")
@@ -2769,10 +2997,16 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
 
     if action == "approvalfrom":
         if len(raw_args) < 3 or raw_args[2].count("|") < 3:
-            raise UserInputError(user_message="📥 Формат: `!inbox approvalfrom <source_id> | <scope> | <title> | <body>`")
-        source_item_id, scope, title, body = [part.strip() for part in raw_args[2].split("|", maxsplit=3)]
+            raise UserInputError(
+                user_message="📥 Формат: `!inbox approvalfrom <source_id> | <scope> | <title> | <body>`"
+            )
+        source_item_id, scope, title, body = [
+            part.strip() for part in raw_args[2].split("|", maxsplit=3)
+        ]
         if not source_item_id or not scope or not title or not body:
-            raise UserInputError(user_message="📥 Для approvalfrom нужны source_id, scope, заголовок и описание.")
+            raise UserInputError(
+                user_message="📥 Для approvalfrom нужны source_id, scope, заголовок и описание."
+            )
         created = inbox_service.escalate_item_to_approval_request(
             source_item_id=source_item_id,
             title=title,
@@ -2802,11 +3036,19 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
         )
 
     if len(raw_args) < 3 or not raw_args[2].strip():
-        raise UserInputError(user_message="📥 Укажи item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`")
+        raise UserInputError(
+            user_message="📥 Укажи item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`"
+        )
     target_payload = raw_args[2].strip()
-    target_id, note = [part.strip() for part in target_payload.split("|", maxsplit=1)] if "|" in target_payload else (target_payload, "")
+    target_id, note = (
+        [part.strip() for part in target_payload.split("|", maxsplit=1)]
+        if "|" in target_payload
+        else (target_payload, "")
+    )
     if not target_id:
-        raise UserInputError(user_message="📥 Укажи корректный item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`")
+        raise UserInputError(
+            user_message="📥 Укажи корректный item id: `!inbox ack|done|cancel|approve|reject <id> [| note]`"
+        )
     if action in {"approve", "reject"}:
         result = inbox_service.resolve_approval(
             target_id,
@@ -2825,13 +3067,14 @@ async def handle_inbox(bot: "KraabUserbot", message: Message) -> None:
         )
     if not result.get("ok"):
         if result.get("error") == "inbox_item_not_approval":
-            raise UserInputError(user_message=f"📥 Item `{target_id}` не является approval-request.")
+            raise UserInputError(
+                user_message=f"📥 Item `{target_id}` не является approval-request."
+            )
         raise UserInputError(user_message=f"📥 Item `{target_id}` не найден.")
     await message.reply(
         "✅ Inbox item обновлён.\n"
         f"- ID: `{target_id}`\n"
-        f"- Новый статус: `{target_status}`"
-        + (f"\n- Note: {note}" if note else "")
+        f"- Новый статус: `{target_status}`" + (f"\n- Note: {note}" if note else "")
     )
 
 
@@ -2871,7 +3114,9 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
         if not tabs:
             await message.reply("🌐 Вкладок не найдено (браузер отключён или пуст).")
             return
-        lines = [f"{i + 1}. {t.get('title') or t.get('url')}\n   {t['url']}" for i, t in enumerate(tabs)]
+        lines = [
+            f"{i + 1}. {t.get('title') or t.get('url')}\n   {t['url']}" for i, t in enumerate(tabs)
+        ]
         await message.reply("🌐 Вкладки:\n" + "\n".join(lines))
         return
 
@@ -2897,6 +3142,7 @@ async def handle_browser(bot: "KraabUserbot", message: Message) -> None:
             await message.reply("❌ Не удалось сделать скриншот.")
             return
         import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmp:
             _tmp.write(data)
             _tmp_path = _tmp.name
@@ -3110,7 +3356,7 @@ async def handle_hs(bot: "KraabUserbot", message: Message) -> None:
     raw = str(message.text or "").split(maxsplit=1)
     args_str = raw[1].strip() if len(raw) > 1 else ""
 
-    _HELP = (
+    _HELP = (  # noqa: N806
         "🔨 **Hammerspoon window control**\n\n"
         "`!hs status` — версия и статус HS\n"
         "`!hs windows` — список видимых окон\n"
@@ -3170,7 +3416,7 @@ async def handle_hs(bot: "KraabUserbot", message: Message) -> None:
 
         elif sub == "tile":
             preset = parts[1].lower() if len(parts) > 1 else "left"
-            app    = " ".join(parts[2:]) if len(parts) > 2 else ""
+            app = " ".join(parts[2:]) if len(parts) > 2 else ""
             result = await hammerspoon.tile(preset=preset, app=app)
             await message.reply(
                 f"🔨 Раскладка `{preset}` применена: `{result.get('app', app or 'активное окно')}`"
@@ -3256,7 +3502,11 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "health":
         probe = await _bb.health_check()
-        status = "✅ CDP ready" if probe.get("ok") else ("🚫 blocked" if probe.get("blocked") else "⚠️ degraded")
+        status = (
+            "✅ CDP ready"
+            if probe.get("ok")
+            else ("🚫 blocked" if probe.get("blocked") else "⚠️ degraded")
+        )
         tabs = probe.get("tab_count", 0)
         err = probe.get("error", "")
         text = f"📡 **Browser CDP**\n{status} — {tabs} вкладок"
@@ -3282,6 +3532,7 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
             return
         try:
             from ..integrations.macos_automation import macos_automation as _ma
+
             if not _ma.is_ocr_available():
                 await message.reply(
                     "📄 **OCR**: tesseract не установлен.\n"
@@ -3305,7 +3556,9 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
     # Проверяем доступность перед снимком
     probe = await _bb.health_check(timeout_sec=4.0)
     if not probe.get("ok"):
-        err_detail = probe.get("error") or ("Chrome не запущен или CDP недоступен" if probe.get("blocked") else "неизвестная ошибка")
+        err_detail = probe.get("error") or (
+            "Chrome не запущен или CDP недоступен" if probe.get("blocked") else "неизвестная ошибка"
+        )
         await message.reply(f"📡 **!screenshot**: браузер недоступен\n`{err_detail[:300]}`")
         return
 
@@ -3324,6 +3577,7 @@ async def handle_screenshot(bot: "KraabUserbot", message: Message) -> None:
         return
 
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as _tmp:
         _tmp.write(png_bytes)
         _tmp_path = _tmp.name
@@ -3397,8 +3651,7 @@ async def handle_cap(bot: "KraabUserbot", message: Message) -> None:
     if "error" in result:
         valid = sorted(_VALID_CAPABILITIES)
         await message.reply(
-            f"❌ `{cap_name}` — неизвестная capability.\n"
-            f"Доступные: `{'`, `'.join(valid)}`"
+            f"❌ `{cap_name}` — неизвестная capability.\nДоступные: `{'`, `'.join(valid)}`"
         )
         return
 
@@ -3450,11 +3703,7 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     else:
         for entry in ban_entries[:3]:
             chat_id = entry.get("chat_id", "?")
-            code = (
-                entry.get("last_error_code")
-                or entry.get("error_code")
-                or "?"
-            )
+            code = entry.get("last_error_code") or entry.get("error_code") or "?"
             lines.append(f"- `{chat_id}` · {code}")
         if len(ban_entries) > 3:
             lines.append(f"- …ещё `{len(ban_entries) - 3}`")
@@ -3462,9 +3711,7 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
 
     # 3. Chat capability cache ────────────────────────────────────────
     cap_entries = chat_capability_cache.list_entries()
-    voice_forbidden = sum(
-        1 for entry in cap_entries if entry.get("voice_allowed") is False
-    )
+    voice_forbidden = sum(1 for entry in cap_entries if entry.get("voice_allowed") is False)
     slow_mode_active = 0
     for entry in cap_entries:
         slow = entry.get("slow_mode_seconds")
@@ -3482,18 +3729,12 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     silence = silence_manager.status()
     global_muted = bool(silence.get("global_muted"))
     muted_chats_raw = silence.get("muted_chats") or {}
-    muted_chats_count = (
-        len(muted_chats_raw) if isinstance(muted_chats_raw, dict) else 0
-    )
+    muted_chats_count = len(muted_chats_raw) if isinstance(muted_chats_raw, dict) else 0
     global_remaining_min = silence.get("global_remaining_min") or 0
     lines.append("🔇 **Silence mode**")
     lines.append(
         f"- Глобально: `{'ВКЛ' if global_muted else 'ВЫКЛ'}`"
-        + (
-            f" · осталось `{global_remaining_min} мин`"
-            if global_muted
-            else ""
-        )
+        + (f" · осталось `{global_remaining_min} мин`" if global_muted else "")
     )
     lines.append(f"- Заглушённых чатов: `{muted_chats_count}`")
     lines.append("")
@@ -3521,6 +3762,7 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
     lines.append("")
     try:
         from ..core.cost_analytics import cost_analytics as _ca
+
         report = _ca.build_usage_report_dict()
         cost = report.get("cost_session_usd", 0)
         calls = sum(m.get("calls", 0) for m in (report.get("by_model") or {}).values())
@@ -3538,8 +3780,11 @@ def _render_stats_panel(bot: "KraabUserbot") -> str:
         pass
     try:
         from ..core.swarm_task_board import swarm_task_board
+
         board = swarm_task_board.get_board_summary()
-        lines.append(f"🐝 **Swarm** · {board.get('total', 0)} tasks · done: {board.get('by_status', {}).get('done', 0)}")
+        lines.append(
+            f"🐝 **Swarm** · {board.get('total', 0)} tasks · done: {board.get('by_status', {}).get('done', 0)}"
+        )
     except Exception:
         pass
 
@@ -3586,7 +3831,9 @@ async def handle_silence(bot: "KraabUserbot", message: Message) -> None:
 
     if args.startswith("глобально"):
         rest = args.replace("глобально", "").strip()
-        minutes = int(rest) if rest.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 60))
+        minutes = (
+            int(rest) if rest.isdigit() else int(getattr(config, "SILENCE_DEFAULT_MINUTES", 60))
+        )
         silence_manager.mute_global(minutes)
         await message.reply(f"🤫 Глобальная тишина на **{minutes}** мин.")
         return

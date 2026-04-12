@@ -1,9 +1,10 @@
-
-from .mcp_client import mcp_manager
-from .cache_manager import search_cache
 from structlog import get_logger
 
+from .cache_manager import search_cache
+from .mcp_client import mcp_manager
+
 logger = get_logger(__name__)
+
 
 async def search_brave(query: str) -> str:
     """
@@ -17,15 +18,16 @@ async def search_brave(query: str) -> str:
             return f"{cached}\n\n_(восстановлено из кэша)_"
 
         results = await mcp_manager.search_web(query)
-        
+
         # Cache result
         if results and "❌" not in results:
             search_cache.set(query, results, ttl=3600)
-            
+
         return results
     except (OSError, ValueError, KeyError, AttributeError, RuntimeError) as e:
         logger.error("search_brave_failed", error=str(e))
         return f"❌ Ошибка поиска: {str(e)}"
+
 
 async def close_search():
     """Закрытие сессий поиска"""

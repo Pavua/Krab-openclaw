@@ -10,10 +10,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
-
-import importlib.util
 
 import pytest
 
@@ -23,11 +22,7 @@ from src.core.inbox_service import InboxService
 
 def _load_cleanup_module():
     """Импортирует CLI-скрипт как обычный модуль для unit-тестов."""
-    script_path = (
-        Path(__file__).resolve().parents[2]
-        / "scripts"
-        / "cleanup_old_inbox_items.py"
-    )
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "cleanup_old_inbox_items.py"
     spec = importlib.util.spec_from_file_location("cleanup_old_inbox_items", script_path)
     assert spec is not None
     assert spec.loader is not None

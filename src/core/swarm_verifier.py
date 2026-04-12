@@ -95,11 +95,15 @@ def quick_heuristic_check(result: str) -> VerificationResult:
                 pattern=pattern.pattern,
                 result_len=length,
             )
-            return VerificationResult(passed=False, score=0.1, issues=issues, suggestions=suggestions)
+            return VerificationResult(
+                passed=False, score=0.1, issues=issues, suggestions=suggestions
+            )
 
     # Проверяем минимальную длину
     if length < _MIN_MEANINGFUL_LEN:
-        issues.append(f"Результат слишком короткий ({length} символов, минимум {_MIN_MEANINGFUL_LEN})")
+        issues.append(
+            f"Результат слишком короткий ({length} символов, минимум {_MIN_MEANINGFUL_LEN})"
+        )
         suggestions.append("Увеличить SWARM_ROLE_MAX_OUTPUT_TOKENS или уточнить топик")
         return VerificationResult(passed=False, score=0.2, issues=issues, suggestions=suggestions)
 
@@ -107,12 +111,19 @@ def quick_heuristic_check(result: str) -> VerificationResult:
         issues.append(f"Результат короткий ({length} символов), возможно поверхностный анализ")
         suggestions.append("Добавить конкретику в формулировку темы")
         # Частично прошёл — проходим, но с пониженным score
-        score = 0.55 + (length - _MIN_MEANINGFUL_LEN) / (_MIN_ACCEPTABLE_LEN - _MIN_MEANINGFUL_LEN) * 0.1
-        return VerificationResult(passed=False, score=round(score, 2), issues=issues, suggestions=suggestions)
+        score = (
+            0.55
+            + (length - _MIN_MEANINGFUL_LEN) / (_MIN_ACCEPTABLE_LEN - _MIN_MEANINGFUL_LEN) * 0.1
+        )
+        return VerificationResult(
+            passed=False, score=round(score, 2), issues=issues, suggestions=suggestions
+        )
 
     # Базовый score по длине (насыщается после 2000 символов)
     score = min(1.0, 0.65 + (length - _MIN_ACCEPTABLE_LEN) / 2000 * 0.25)
-    return VerificationResult(passed=True, score=round(score, 2), issues=issues, suggestions=suggestions)
+    return VerificationResult(
+        passed=True, score=round(score, 2), issues=issues, suggestions=suggestions
+    )
 
 
 async def verify_round_result(

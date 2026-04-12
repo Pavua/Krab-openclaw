@@ -11,6 +11,7 @@
 6. fetch_google_models_with_fallback — fallback free -> paid.
 7. get_best_cloud_model — выбор модели по config/chain/verify.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -46,8 +47,7 @@ def _make_gemini_list_response(model_names: list[str]) -> dict:
     """Генерирует payload /v1beta/models с указанными именами."""
     return {
         "models": [
-            {"name": f"models/{n}", "displayName": n.replace("-", " ").title()}
-            for n in model_names
+            {"name": f"models/{n}", "displayName": n.replace("-", " ").title()} for n in model_names
         ]
     }
 
@@ -148,9 +148,7 @@ class TestGetCloudFallbackChain:
         assert chain == ["google/gemini-flash", "google/gemini-pro"]
 
     def test_default_model_appended_if_missing(self) -> None:
-        chain = get_cloud_fallback_chain(
-            tier_1=["a/x"], tier_2=[], tier_3=[], default="z/special"
-        )
+        chain = get_cloud_fallback_chain(tier_1=["a/x"], tier_2=[], tier_3=[], default="z/special")
         assert chain[-1] == "z/special"
 
     def test_default_model_not_duplicated(self) -> None:
@@ -181,9 +179,7 @@ async def test_fetch_google_models_success() -> None:
     """Успешный парсинг списка gemini-моделей."""
     payload = _make_gemini_list_response(["gemini-2.5-flash", "gemini-pro", "text-bison"])
 
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(200, json=payload)
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json=payload))
     async with httpx.AsyncClient(transport=transport) as client:
         cache: dict[str, ModelInfo] = {}
         result = await fetch_google_models(FAKE_KEY, client, models_cache=cache)
@@ -200,14 +196,10 @@ async def test_fetch_google_models_success() -> None:
 @pytest.mark.asyncio
 async def test_fetch_google_models_error_status() -> None:
     """HTTP 403 — пустой список, диагностика записана."""
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(403, text="Forbidden")
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(403, text="Forbidden"))
     async with httpx.AsyncClient(transport=transport) as client:
         diag: list[dict] = []
-        result = await fetch_google_models(
-            FAKE_KEY, client, models_cache={}, diagnostics_sink=diag
-        )
+        result = await fetch_google_models(FAKE_KEY, client, models_cache={}, diagnostics_sink=diag)
     assert result == []
     assert len(diag) == 1
     assert diag[0]["error_kind"] == "auth"
@@ -224,9 +216,7 @@ async def test_fetch_google_models_network_error() -> None:
     transport = httpx.MockTransport(_raise)
     async with httpx.AsyncClient(transport=transport) as client:
         diag: list[dict] = []
-        result = await fetch_google_models(
-            FAKE_KEY, client, models_cache={}, diagnostics_sink=diag
-        )
+        result = await fetch_google_models(FAKE_KEY, client, models_cache={}, diagnostics_sink=diag)
     assert result == []
     assert len(diag) == 1
     assert diag[0]["error_kind"] == "network"
@@ -236,9 +226,7 @@ async def test_fetch_google_models_network_error() -> None:
 async def test_fetch_google_models_vision_detection() -> None:
     """flash/pro модели помечаются supports_vision=True."""
     payload = _make_gemini_list_response(["gemini-2.5-flash", "gemini-1.0-nano"])
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(200, json=payload)
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json=payload))
     async with httpx.AsyncClient(transport=transport) as client:
         result = await fetch_google_models(FAKE_KEY, client, models_cache={})
 
@@ -262,7 +250,9 @@ async def test_verify_gemini_access_no_key() -> None:
 @pytest.mark.asyncio
 async def test_verify_gemini_access_success() -> None:
     transport = httpx.MockTransport(
-        lambda req: httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+        lambda req: httpx.Response(
+            200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+        )
     )
     async with httpx.AsyncClient(transport=transport) as client:
         assert await verify_gemini_access("google/gemini-2.5-flash", FAKE_KEY, client) is True
@@ -270,9 +260,7 @@ async def test_verify_gemini_access_success() -> None:
 
 @pytest.mark.asyncio
 async def test_verify_gemini_access_forbidden() -> None:
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(403, text="Forbidden")
-    )
+    transport = httpx.MockTransport(lambda req: httpx.Response(403, text="Forbidden"))
     async with httpx.AsyncClient(transport=transport) as client:
         assert await verify_gemini_access("google/gemini-2.5-flash", FAKE_KEY, client) is False
 
@@ -308,7 +296,9 @@ async def test_resolve_working_gemini_key_free_works(monkeypatch: pytest.MonkeyP
     transport = httpx.MockTransport(lambda req: httpx.Response(200))
     async with httpx.AsyncClient(transport=transport) as client:
         result = await resolve_working_gemini_key(
-            FAKE_KEY, FAKE_KEY_2, client,
+            FAKE_KEY,
+            FAKE_KEY_2,
+            client,
             _cache={},  # изолированный кеш
         )
     assert result == FAKE_KEY
@@ -328,7 +318,9 @@ async def test_resolve_working_gemini_key_fallback_to_paid(monkeypatch: pytest.M
     transport = httpx.MockTransport(lambda req: httpx.Response(200))
     async with httpx.AsyncClient(transport=transport) as client:
         result = await resolve_working_gemini_key(
-            FAKE_KEY, FAKE_KEY_2, client,
+            FAKE_KEY,
+            FAKE_KEY_2,
+            client,
             _cache={},
         )
     assert result == FAKE_KEY_2
@@ -346,14 +338,18 @@ async def test_resolve_working_gemini_key_none_if_all_fail(monkeypatch: pytest.M
     transport = httpx.MockTransport(lambda req: httpx.Response(200))
     async with httpx.AsyncClient(transport=transport) as client:
         result = await resolve_working_gemini_key(
-            FAKE_KEY, FAKE_KEY_2, client,
+            FAKE_KEY,
+            FAKE_KEY_2,
+            client,
             _cache={},
         )
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_working_gemini_key_bad_format_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resolve_working_gemini_key_bad_format_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Ключ с неверным форматом пропускается."""
 
     async def _mock_verify(model_id: str, key: str | None, client, **kw) -> bool:
@@ -364,7 +360,9 @@ async def test_resolve_working_gemini_key_bad_format_skipped(monkeypatch: pytest
     transport = httpx.MockTransport(lambda req: httpx.Response(200))
     async with httpx.AsyncClient(transport=transport) as client:
         result = await resolve_working_gemini_key(
-            BAD_KEY, FAKE_KEY_2, client,
+            BAD_KEY,
+            FAKE_KEY_2,
+            client,
             _cache={},
         )
     # BAD_KEY пропущен (формат), FAKE_KEY_2 прошёл
@@ -423,9 +421,7 @@ async def test_get_best_cloud_model_config_override() -> None:
     """Если config_model != 'auto' — возвращается как есть."""
     transport = httpx.MockTransport(lambda req: httpx.Response(200))
     async with httpx.AsyncClient(transport=transport) as client:
-        result = await get_best_cloud_model(
-            FAKE_KEY, client, config_model="my/custom-model"
-        )
+        result = await get_best_cloud_model(FAKE_KEY, client, config_model="my/custom-model")
     assert result == "my/custom-model"
 
 
@@ -447,7 +443,8 @@ async def test_get_best_cloud_model_auto_with_verify() -> None:
     transport = httpx.MockTransport(lambda req: httpx.Response(200))
     async with httpx.AsyncClient(transport=transport) as client:
         result = await get_best_cloud_model(
-            FAKE_KEY, client,
+            FAKE_KEY,
+            client,
             config_model="auto",
             fallback_chain=["google/gemini-flash", "google/gemini-pro"],
             verify_fn=_verify,
@@ -461,7 +458,8 @@ async def test_get_best_cloud_model_auto_no_verify() -> None:
     transport = httpx.MockTransport(lambda req: httpx.Response(200))
     async with httpx.AsyncClient(transport=transport) as client:
         result = await get_best_cloud_model(
-            FAKE_KEY, client,
+            FAKE_KEY,
+            client,
             config_model="auto",
             fallback_chain=["google/gemini-2.5-flash", "google/gemini-pro"],
         )
@@ -479,7 +477,8 @@ async def test_get_best_cloud_model_verify_all_fail() -> None:
     async with httpx.AsyncClient(transport=transport) as client:
         # config_model=None чтобы проверить чистый fallback на DEFAULT
         result = await get_best_cloud_model(
-            FAKE_KEY, client,
+            FAKE_KEY,
+            client,
             config_model=None,
             fallback_chain=["google/gemini-flash", "google/gemini-pro"],
             verify_fn=_verify,

@@ -95,6 +95,7 @@ _GEMINI_NON_PRO_KEYWORDS = ["flash", "nano", "lite"]
 # Helper
 # ---------------------------------------------------------------------------
 
+
 async def _try_selectors(page, selectors: list[str], timeout: float = 5_000):
     """Возвращает первый живой locator из списка селекторов или None."""
     for sel in selectors:
@@ -110,6 +111,7 @@ async def _try_selectors(page, selectors: list[str], timeout: float = 5_000):
 # ---------------------------------------------------------------------------
 # BrowserAIProvider
 # ---------------------------------------------------------------------------
+
 
 class BrowserAIProvider:
     """
@@ -248,7 +250,8 @@ class BrowserAIProvider:
         """
         try:
             # Читаем текущую модель через JS (ищем текст в model-switcher области)
-            current_model: str = await page.evaluate("""() => {
+            current_model: str = (
+                await page.evaluate("""() => {
                 // Попробуем найти кнопку/лейбл с именем текущей модели
                 const candidates = [
                     document.querySelector('bard-sidenav-item.active .item-label'),
@@ -262,7 +265,9 @@ class BrowserAIProvider:
                     if (el && el.textContent.trim()) return el.textContent.trim();
                 }
                 return '';
-            }""") or ""
+            }""")
+                or ""
+            )
 
             current_lower = current_model.lower()
             logger.debug("browser_ai_gemini_current_model", model=current_model)

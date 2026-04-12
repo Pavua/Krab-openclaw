@@ -20,7 +20,6 @@ import sqlite3
 import subprocess
 import sys
 import time
-import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -65,28 +64,28 @@ from src.core.model_aliases import (  # noqa: E402
     parse_model_set_request,
     render_model_presets_text,
 )
-from src.core.openclaw_workspace import build_workspace_state_snapshot  # noqa: E402
-from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
-    discover_gateway_signal_log,
-    runtime_auth_failed_providers_from_signal_log,
-)
 from src.core.observability import (  # noqa: E402
     build_ops_response,
     get_observability_snapshot,
     metrics,
     timeline,
 )
+from src.core.openclaw_runtime_signal_truth import (  # noqa: E402
+    discover_gateway_signal_log,
+    runtime_auth_failed_providers_from_signal_log,
+)
+from src.core.openclaw_workspace import build_workspace_state_snapshot  # noqa: E402
 from src.core.operator_identity import current_account_id, current_operator_id  # noqa: E402
 from src.core.runtime_policy import current_runtime_mode, provider_runtime_policy  # noqa: E402
 from src.core.shared_worktree_permissions import (  # noqa: E402
     normalize_shared_worktree_permissions,
     sample_non_writable_shared_items,
 )
-from src.core.translator_mobile_onboarding import (  # noqa: E402
-    build_translator_mobile_onboarding_packet,
-)
 from src.core.translator_live_trial_preflight import (  # noqa: E402
     build_translator_live_trial_preflight,
+)
+from src.core.translator_mobile_onboarding import (  # noqa: E402
+    build_translator_mobile_onboarding_packet,
 )
 from src.core.voice_gateway_control_plane import VoiceGatewayControlPlane  # noqa: E402
 from src.integrations.voice_gateway_subscriber import VoiceGatewayEventSubscriber  # noqa: E402
@@ -124,6 +123,11 @@ class WebApp:
         self._model_catalog_cache: tuple[float, dict[str, Any]] | None = None
         self._vg_subscriber: VoiceGatewayEventSubscriber | None = None
         self._setup_routes()
+
+    @property
+    def kraab(self):
+        """Быстрый доступ к kraab_userbot через deps."""
+        return self.deps.get("kraab_userbot")
 
     def _public_base_url(self) -> str:
         """Возвращает внешний base URL панели."""
@@ -230,7 +234,9 @@ class WebApp:
     def _json_backup_path(path: Path, *, label: str) -> Path:
         """Формирует timestamp backup path рядом с исходным JSON-файлом."""
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
-        safe_label = re.sub(r"[^a-z0-9_-]+", "_", str(label or "backup").strip().lower()) or "backup"
+        safe_label = (
+            re.sub(r"[^a-z0-9_-]+", "_", str(label or "backup").strip().lower()) or "backup"
+        )
         return path.with_suffix(path.suffix + f".bak_{safe_label}_{stamp}")
 
     @classmethod
@@ -489,10 +495,26 @@ class WebApp:
             return candidate_name
 
         normalized = re.sub(r"[_-]+", " ", tail)
-        normalized = re.sub(r"\b([a-z]+)\s+(\d+(?:\.\d+)?)\b", lambda m: f"{m.group(1).title()} {m.group(2)}", normalized)
-        normalized = normalized.replace("gpt ", "GPT-").replace("qwen ", "Qwen ").replace("gemini ", "Gemini ")
-        normalized = normalized.replace(" pro ", " Pro ").replace(" preview", " Preview").replace(" flash", " Flash")
-        normalized = normalized.replace(" lite", " Lite").replace(" vision", " Vision").replace(" coder", " Coder")
+        normalized = re.sub(
+            r"\b([a-z]+)\s+(\d+(?:\.\d+)?)\b",
+            lambda m: f"{m.group(1).title()} {m.group(2)}",
+            normalized,
+        )
+        normalized = (
+            normalized.replace("gpt ", "GPT-")
+            .replace("qwen ", "Qwen ")
+            .replace("gemini ", "Gemini ")
+        )
+        normalized = (
+            normalized.replace(" pro ", " Pro ")
+            .replace(" preview", " Preview")
+            .replace(" flash", " Flash")
+        )
+        normalized = (
+            normalized.replace(" lite", " Lite")
+            .replace(" vision", " Vision")
+            .replace(" coder", " Coder")
+        )
         normalized = re.sub(r"\s+", " ", normalized).strip()
         return normalized or tail
 
@@ -532,7 +554,9 @@ class WebApp:
     @classmethod
     def _provider_repair_helper_path(cls, provider_name: str) -> Path | None:
         """Возвращает helper `.command` для провайдера, если он уже есть или поддерживается."""
-        return provider_repair_helper_path(cls._project_root(), str(provider_name or "").strip().lower())
+        return provider_repair_helper_path(
+            cls._project_root(), str(provider_name or "").strip().lower()
+        )
 
     @classmethod
     def _provider_ui_metadata(cls, provider_name: str) -> dict[str, Any]:
@@ -686,7 +710,9 @@ class WebApp:
                     "oauth_expires_at": item.get("expiresAt"),
                     "oauth_remaining_ms": normalized_remaining_ms,
                     "oauth_remaining_human": cls._humanize_remaining_ms(normalized_remaining_ms),
-                    "oauth_profiles": item.get("profiles") if isinstance(item.get("profiles"), list) else [],
+                    "oauth_profiles": item.get("profiles")
+                    if isinstance(item.get("profiles"), list)
+                    else [],
                 }
             )
 
@@ -731,8 +757,14 @@ class WebApp:
         for items in provider_map.values():
             items.sort(
                 key=lambda item: (
-                    0 if "configured" in [str(tag or "").strip().lower() for tag in (item.get("tags") or [])] else 1,
-                    0 if "default" in [str(tag or "").strip().lower() for tag in (item.get("tags") or [])] else 1,
+                    0
+                    if "configured"
+                    in [str(tag or "").strip().lower() for tag in (item.get("tags") or [])]
+                    else 1,
+                    0
+                    if "default"
+                    in [str(tag or "").strip().lower() for tag in (item.get("tags") or [])]
+                    else 1,
                     str(item.get("name") or item.get("key") or "").lower(),
                 )
             )
@@ -747,12 +779,17 @@ class WebApp:
         """Грубая, но честная классификация quota-состояния по live failure counts."""
         raw = failure_counts if isinstance(failure_counts, dict) else {}
         lowered_keys = {str(key or "").strip().lower() for key in raw.keys()}
-        if any(token in lowered_keys for token in {"quota", "quota_exceeded", "insufficient_quota", "billing_error"}):
+        if any(
+            token in lowered_keys
+            for token in {"quota", "quota_exceeded", "insufficient_quota", "billing_error"}
+        ):
             return {
                 "quota_state": "blocked",
                 "quota_label": "Квота/баланс заблокировали запросы",
             }
-        if any(token in lowered_keys for token in {"rate_limit", "rate_limited", "too_many_requests"}):
+        if any(
+            token in lowered_keys for token in {"rate_limit", "rate_limited", "too_many_requests"}
+        ):
             return {
                 "quota_state": "limited",
                 "quota_label": "Провайдер упирался в rate limit",
@@ -800,7 +837,9 @@ class WebApp:
                     for tag in (model.get("tags") or [])
                     if str(tag or "").strip()
                 ]
-                filtered_tags = [tag for tag in raw_tags if tag.lower() not in {"configured", "default"}]
+                filtered_tags = [
+                    tag for tag in raw_tags if tag.lower() not in {"configured", "default"}
+                ]
                 filtered_tags.append("synthetic")
                 cloned["tags"] = filtered_tags
                 synthetic_items.append(cloned)
@@ -831,7 +870,11 @@ class WebApp:
         Для глобальной панели Краба показываем только подтверждённый queue truth,
         чтобы не выдавать это за единый глобальный переключатель.
         """
-        payload = runtime_config if isinstance(runtime_config, dict) else cls._load_openclaw_runtime_config()
+        payload = (
+            runtime_config
+            if isinstance(runtime_config, dict)
+            else cls._load_openclaw_runtime_config()
+        )
         agents = payload.get("agents") if isinstance(payload, dict) else {}
         defaults = agents.get("defaults") if isinstance(agents, dict) else {}
         subagents = defaults.get("subagents") if isinstance(defaults, dict) else {}
@@ -886,7 +929,11 @@ class WebApp:
         if not normalized_provider:
             return []
 
-        payload = runtime_config if isinstance(runtime_config, dict) else cls._load_openclaw_runtime_config()
+        payload = (
+            runtime_config
+            if isinstance(runtime_config, dict)
+            else cls._load_openclaw_runtime_config()
+        )
         agents = payload.get("agents") if isinstance(payload, dict) else {}
         defaults = agents.get("defaults") if isinstance(agents, dict) else {}
         model_defaults = defaults.get("model") if isinstance(defaults, dict) else {}
@@ -911,7 +958,7 @@ class WebApp:
             discovered.append(canonical)
 
         _remember(model_defaults.get("primary", ""))
-        for item in (model_defaults.get("fallbacks") or []):
+        for item in model_defaults.get("fallbacks") or []:
             _remember(str(item or ""))
 
         if isinstance(model_overrides, dict):
@@ -957,7 +1004,11 @@ class WebApp:
         provider_payload = {}
         providers = runtime_models.get("providers") if isinstance(runtime_models, dict) else {}
         if isinstance(providers, dict):
-            provider_payload = providers.get(normalized_provider) if isinstance(providers.get(normalized_provider), dict) else {}
+            provider_payload = (
+                providers.get(normalized_provider)
+                if isinstance(providers.get(normalized_provider), dict)
+                else {}
+            )
 
         model_entries = provider_payload.get("models") if isinstance(provider_payload, dict) else []
         runtime_model_ids: list[str] = []
@@ -965,7 +1016,9 @@ class WebApp:
             for item in model_entries:
                 if not isinstance(item, dict):
                     continue
-                canonical = cls._canonical_runtime_model_id(normalized_provider, str(item.get("id", "") or ""))
+                canonical = cls._canonical_runtime_model_id(
+                    normalized_provider, str(item.get("id", "") or "")
+                )
                 if canonical and canonical not in runtime_model_ids:
                     runtime_model_ids.append(canonical)
 
@@ -975,10 +1028,16 @@ class WebApp:
         usage_stats = auth_profiles.get("usageStats") if isinstance(auth_profiles, dict) else {}
         if not isinstance(usage_stats, dict):
             usage_stats = {}
-        status_providers = status_snapshot.get("providers") if isinstance(status_snapshot, dict) else {}
+        status_providers = (
+            status_snapshot.get("providers") if isinstance(status_snapshot, dict) else {}
+        )
         if not isinstance(status_providers, dict):
             status_providers = {}
-        status_meta = status_providers.get(normalized_provider) if isinstance(status_providers.get(normalized_provider), dict) else {}
+        status_meta = (
+            status_providers.get(normalized_provider)
+            if isinstance(status_providers.get(normalized_provider), dict)
+            else {}
+        )
         scope_truth = provider_oauth_scope_truth(
             normalized_provider,
             auth_profiles if isinstance(auth_profiles, dict) else {},
@@ -987,7 +1046,8 @@ class WebApp:
         profile_names = [
             profile_name
             for profile_name, profile_payload in profiles.items()
-            if isinstance(profile_payload, dict) and str(profile_payload.get("provider", "") or "").strip() == normalized_provider
+            if isinstance(profile_payload, dict)
+            and str(profile_payload.get("provider", "") or "").strip() == normalized_provider
         ]
 
         disabled_profiles: list[dict[str, str]] = []
@@ -1012,7 +1072,9 @@ class WebApp:
                     expired_profiles.append({"profile": profile_name, "reason": "expired"})
             disabled_reason = ""
             try:
-                cooldown_until = float(usage.get("cooldownUntil", 0) or 0) if isinstance(usage, dict) else 0.0
+                cooldown_until = (
+                    float(usage.get("cooldownUntil", 0) or 0) if isinstance(usage, dict) else 0.0
+                )
             except (TypeError, ValueError):
                 cooldown_until = 0.0
             if not isinstance(usage, dict):
@@ -1020,9 +1082,13 @@ class WebApp:
                     healthy_profiles.append(profile_name)
                     if expires_at > now_ms:
                         remaining_ms = int(expires_at - now_ms)
-                        healthy_oauth_remaining_ms = remaining_ms if healthy_oauth_remaining_ms is None else max(
-                            healthy_oauth_remaining_ms,
-                            remaining_ms,
+                        healthy_oauth_remaining_ms = (
+                            remaining_ms
+                            if healthy_oauth_remaining_ms is None
+                            else max(
+                                healthy_oauth_remaining_ms,
+                                remaining_ms,
+                            )
                         )
                 continue
             disabled_reason = str(usage.get("disabledReason", "") or "").strip()
@@ -1033,14 +1099,20 @@ class WebApp:
             failures = usage.get("failureCounts")
             if isinstance(failures, dict):
                 for failure_key, failure_value in failures.items():
-                    failure_counts[str(failure_key)] = failure_counts.get(str(failure_key), 0) + int(failure_value or 0)
+                    failure_counts[str(failure_key)] = failure_counts.get(
+                        str(failure_key), 0
+                    ) + int(failure_value or 0)
             if not disabled_reason and not expired:
                 healthy_profiles.append(profile_name)
                 if expires_at > now_ms:
                     remaining_ms = int(expires_at - now_ms)
-                    healthy_oauth_remaining_ms = remaining_ms if healthy_oauth_remaining_ms is None else max(
-                        healthy_oauth_remaining_ms,
-                        remaining_ms,
+                    healthy_oauth_remaining_ms = (
+                        remaining_ms
+                        if healthy_oauth_remaining_ms is None
+                        else max(
+                            healthy_oauth_remaining_ms,
+                            remaining_ms,
+                        )
                     )
 
         auth_mode = str(provider_payload.get("auth", "") or "").strip().lower()
@@ -1077,7 +1149,9 @@ class WebApp:
             auth_mode = "oauth"
         elif not auth_mode and effective_kind in {"env", "models.json"}:
             auth_mode = "api-key"
-        signal_fail_code = str((runtime_signal_failures or {}).get(normalized_provider, "") or "").strip()
+        signal_fail_code = str(
+            (runtime_signal_failures or {}).get(normalized_provider, "") or ""
+        ).strip()
         legacy = normalized_provider == "google-antigravity"
         oauth_status = str(status_meta.get("oauth_status", "") or "").strip().lower()
         oauth_remaining_ms = status_meta.get("oauth_remaining_ms")
@@ -1130,11 +1204,19 @@ class WebApp:
             readiness_label = "Disabled"
             detail = f"Профиль отключён: {disabled_profiles[0]['reason']}"
         elif auth_mode == "oauth" and healthy_profiles:
-            if oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 0:
+            if (
+                oauth_status == "ok"
+                and isinstance(oauth_remaining_ms, int)
+                and oauth_remaining_ms <= 0
+            ):
                 readiness = "attention"
                 readiness_label = "Re-auth soon"
                 detail = "OpenClaw ещё считает OAuth рабочим, но TTL уже на нуле или ниже; лучше сделать повторный логин до следующего флапа."
-            elif oauth_status == "ok" and isinstance(oauth_remaining_ms, int) and oauth_remaining_ms <= 15 * 60 * 1000:
+            elif (
+                oauth_status == "ok"
+                and isinstance(oauth_remaining_ms, int)
+                and oauth_remaining_ms <= 15 * 60 * 1000
+            ):
                 readiness = "attention"
                 readiness_label = "Expiring"
                 detail = "OAuth-профиль живой, но подходит к истечению и может скоро потребовать re-auth."
@@ -1157,7 +1239,9 @@ class WebApp:
         elif cooldown_active:
             readiness = "attention"
             readiness_label = "Cooldown"
-            detail = "Провайдер в cooldown после недавних ошибок; выбор возможен, но route нестабилен."
+            detail = (
+                "Провайдер в cooldown после недавних ошибок; выбор возможен, но route нестабилен."
+            )
         elif auth_mode == "oauth":
             readiness = "attention"
             readiness_label = "OAuth missing"
@@ -1183,7 +1267,11 @@ class WebApp:
             if readiness == "ready":
                 detail = "Legacy OAuth-провайдер подключён вручную и сейчас рабочий; держим его как дополнительный fallback, а не как единственный production primary."
             else:
-                detail = f"Legacy OAuth-провайдер подключён вручную; {detail[0].lower() + detail[1:]}" if detail else "Legacy OAuth-провайдер подключён вручную."
+                detail = (
+                    f"Legacy OAuth-провайдер подключён вручную; {detail[0].lower() + detail[1:]}"
+                    if detail
+                    else "Legacy OAuth-провайдер подключён вручную."
+                )
 
         runtime_policy = provider_runtime_policy(
             normalized_provider,
@@ -1214,7 +1302,8 @@ class WebApp:
             "detail": detail,
             "legacy": legacy,
             "effective_kind": effective_kind,
-            "effective_detail": cli_status_text or str(status_meta.get("effective_detail", "") or "").strip(),
+            "effective_detail": cli_status_text
+            or str(status_meta.get("effective_detail", "") or "").strip(),
             "oauth_status": oauth_status,
             "oauth_remaining_ms": oauth_remaining_ms,
             "oauth_remaining_human": oauth_remaining_human,
@@ -1291,7 +1380,7 @@ class WebApp:
         primary = str(model_defaults.get("primary", "") or "").strip()
         if primary:
             active.add(primary)
-        for item in (model_defaults.get("fallbacks") or []):
+        for item in model_defaults.get("fallbacks") or []:
             candidate = str(item or "").strip()
             if candidate:
                 active.add(candidate)
@@ -1325,7 +1414,9 @@ class WebApp:
             for item in (model_defaults.get("fallbacks") or [])
             if str(item or "").strip()
         ]
-        thinking_default = str(defaults.get("thinkingDefault", "off") or "off").strip().lower() or "off"
+        thinking_default = (
+            str(defaults.get("thinkingDefault", "off") or "off").strip().lower() or "off"
+        )
         try:
             thinking_default = cls._normalize_thinking_mode(thinking_default)
         except ValueError:
@@ -1336,7 +1427,9 @@ class WebApp:
         except (TypeError, ValueError):
             context_tokens = 128000
         try:
-            main_max_concurrent = cls._normalize_runtime_max_concurrent(defaults.get("maxConcurrent", 4) or 4)
+            main_max_concurrent = cls._normalize_runtime_max_concurrent(
+                defaults.get("maxConcurrent", 4) or 4
+            )
         except ValueError:
             main_max_concurrent = 4
         subagents = defaults.get("subagents") if isinstance(defaults, dict) else {}
@@ -1359,9 +1452,17 @@ class WebApp:
         for index, model_id in enumerate([primary, *fallbacks]):
             if not model_id:
                 continue
-            model_payload = models_defaults.get(model_id) if isinstance(models_defaults.get(model_id), dict) else {}
+            model_payload = (
+                models_defaults.get(model_id)
+                if isinstance(models_defaults.get(model_id), dict)
+                else {}
+            )
             params = model_payload.get("params") if isinstance(model_payload, dict) else {}
-            explicit_thinking = str(params.get("thinking", "") or "").strip().lower() if isinstance(params, dict) else ""
+            explicit_thinking = (
+                str(params.get("thinking", "") or "").strip().lower()
+                if isinstance(params, dict)
+                else ""
+            )
             if explicit_thinking:
                 try:
                     explicit_thinking = cls._normalize_thinking_mode(explicit_thinking)
@@ -1471,7 +1572,9 @@ class WebApp:
                 alias_notes.append(alias_note)
             if not canonical_model_id or canonical_model_id not in {primary, *fallbacks}:
                 continue
-            normalized_slot_thinking[canonical_model_id] = cls._normalize_thinking_mode(raw_thinking)
+            normalized_slot_thinking[canonical_model_id] = cls._normalize_thinking_mode(
+                raw_thinking
+            )
 
         openclaw_path = cls._openclaw_config_path()
         agent_path = cls._openclaw_agent_config_path()
@@ -1497,10 +1600,14 @@ class WebApp:
             defaults["subagents"] = subagents
 
         context_tokens = cls._normalize_context_tokens(
-            context_tokens_raw if context_tokens_raw is not None else defaults.get("contextTokens", 128000)
+            context_tokens_raw
+            if context_tokens_raw is not None
+            else defaults.get("contextTokens", 128000)
         )
         thinking_default = cls._normalize_thinking_mode(
-            thinking_default_raw if thinking_default_raw not in {None, ""} else defaults.get("thinkingDefault", "off")
+            thinking_default_raw
+            if thinking_default_raw not in {None, ""}
+            else defaults.get("thinkingDefault", "off")
         )
 
         execution_preset = str(execution_preset_raw or "").strip().lower()
@@ -1512,10 +1619,14 @@ class WebApp:
             subagent_max_concurrent = 8
         else:
             main_max_concurrent = cls._normalize_runtime_max_concurrent(
-                main_max_concurrent_raw if main_max_concurrent_raw is not None else defaults.get("maxConcurrent", 4)
+                main_max_concurrent_raw
+                if main_max_concurrent_raw is not None
+                else defaults.get("maxConcurrent", 4)
             )
             subagent_max_concurrent = cls._normalize_runtime_max_concurrent(
-                subagent_max_concurrent_raw if subagent_max_concurrent_raw is not None else subagents.get("maxConcurrent", 8)
+                subagent_max_concurrent_raw
+                if subagent_max_concurrent_raw is not None
+                else subagents.get("maxConcurrent", 8)
             )
             if main_max_concurrent == 1 and subagent_max_concurrent == 1:
                 execution_preset = "sequential"
@@ -1544,21 +1655,33 @@ class WebApp:
         prev_fallbacks = model_cfg.get("fallbacks")
         if prev_fallbacks != fallbacks:
             model_cfg["fallbacks"] = list(fallbacks)
-            changed["agents.defaults.model.fallbacks"] = {"from": prev_fallbacks, "to": list(fallbacks)}
+            changed["agents.defaults.model.fallbacks"] = {
+                "from": prev_fallbacks,
+                "to": list(fallbacks),
+            }
 
         prev_context_tokens = defaults.get("contextTokens")
         if prev_context_tokens != context_tokens:
             defaults["contextTokens"] = context_tokens
-            changed["agents.defaults.contextTokens"] = {"from": prev_context_tokens, "to": context_tokens}
+            changed["agents.defaults.contextTokens"] = {
+                "from": prev_context_tokens,
+                "to": context_tokens,
+            }
 
         prev_thinking_default = str(defaults.get("thinkingDefault") or "")
         if prev_thinking_default != thinking_default:
             defaults["thinkingDefault"] = thinking_default
-            changed["agents.defaults.thinkingDefault"] = {"from": prev_thinking_default, "to": thinking_default}
+            changed["agents.defaults.thinkingDefault"] = {
+                "from": prev_thinking_default,
+                "to": thinking_default,
+            }
         prev_main_max_concurrent = defaults.get("maxConcurrent")
         if prev_main_max_concurrent != main_max_concurrent:
             defaults["maxConcurrent"] = main_max_concurrent
-            changed["agents.defaults.maxConcurrent"] = {"from": prev_main_max_concurrent, "to": main_max_concurrent}
+            changed["agents.defaults.maxConcurrent"] = {
+                "from": prev_main_max_concurrent,
+                "to": main_max_concurrent,
+            }
         prev_subagent_max_concurrent = subagents.get("maxConcurrent")
         if prev_subagent_max_concurrent != subagent_max_concurrent:
             subagents["maxConcurrent"] = subagent_max_concurrent
@@ -1637,7 +1760,9 @@ class WebApp:
         }
 
     @classmethod
-    def _build_runtime_cloud_presets(cls, current_slots: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    def _build_runtime_cloud_presets(
+        cls, current_slots: dict[str, str] | None = None
+    ) -> list[dict[str, Any]]:
         """
         Строит cloud catalog из runtime OpenClaw models.json.
 
@@ -1659,7 +1784,9 @@ class WebApp:
             runtime_models_payload=runtime_models,
             runtime_config_payload=runtime_config,
         )
-        auth_recovery_by_name = auth_recovery.get("providers_by_name") if isinstance(auth_recovery, dict) else {}
+        auth_recovery_by_name = (
+            auth_recovery.get("providers_by_name") if isinstance(auth_recovery, dict) else {}
+        )
         if not isinstance(auth_recovery_by_name, dict):
             auth_recovery_by_name = {}
         providers = runtime_models.get("providers")
@@ -1671,7 +1798,8 @@ class WebApp:
         provider_names: set[str] = {
             str(name or "").strip()
             for name in providers.keys()
-            if str(name or "").strip() and str(name or "").strip().lower() not in {"lmstudio", "local"}
+            if str(name or "").strip()
+            and str(name or "").strip().lower() not in {"lmstudio", "local"}
         }
         profiles = auth_profiles.get("profiles") if isinstance(auth_profiles, dict) else {}
         if isinstance(profiles, dict):
@@ -1690,7 +1818,9 @@ class WebApp:
             provider_name = str(raw.split("/", 1)[0] if "/" in raw else "").strip()
             if provider_name and provider_name.lower() not in {"lmstudio", "local"}:
                 provider_names.add(provider_name)
-        full_catalog_providers = full_catalog.get("providers") if isinstance(full_catalog, dict) else {}
+        full_catalog_providers = (
+            full_catalog.get("providers") if isinstance(full_catalog, dict) else {}
+        )
         if isinstance(full_catalog_providers, dict):
             for provider_name in full_catalog_providers.keys():
                 normalized = str(provider_name or "").strip()
@@ -1700,7 +1830,11 @@ class WebApp:
         items_by_id: dict[str, dict[str, Any]] = {}
         for provider_name in sorted(provider_names, key=cls._provider_sort_rank):
             normalized_provider = str(provider_name or "").strip()
-            provider_payload = providers.get(normalized_provider) if isinstance(providers.get(normalized_provider), dict) else {}
+            provider_payload = (
+                providers.get(normalized_provider)
+                if isinstance(providers.get(normalized_provider), dict)
+                else {}
+            )
             provider_state = cls._runtime_provider_state(
                 normalized_provider,
                 runtime_models=runtime_models,
@@ -1715,7 +1849,11 @@ class WebApp:
                     **provider_ui,
                     "auth_recovery": dict(provider_auth_recovery),
                 }
-            configured_model_ids = set(str(item or "").strip() for item in (provider_state.get("runtime_models") or []) if str(item or "").strip())
+            configured_model_ids = set(
+                str(item or "").strip()
+                for item in (provider_state.get("runtime_models") or [])
+                if str(item or "").strip()
+            )
             configured_model_ids.update(
                 cls._runtime_provider_model_ids_from_config(
                     normalized_provider,
@@ -1731,7 +1869,11 @@ class WebApp:
                 # Не рисуем фантомные карточки только потому, что в runtime остался
                 # пустой stub провайдера без auth и без реально доступных моделей.
                 continue
-            full_catalog_models = full_catalog_providers.get(normalized_provider) if isinstance(full_catalog_providers, dict) else []
+            full_catalog_models = (
+                full_catalog_providers.get(normalized_provider)
+                if isinstance(full_catalog_providers, dict)
+                else []
+            )
             if normalized_provider == "codex-cli" and not isinstance(full_catalog_models, list):
                 full_catalog_models = []
             if normalized_provider == "codex-cli" and not full_catalog_models:
@@ -1767,7 +1909,8 @@ class WebApp:
                         not configured_runtime
                         and normalized_provider == "codex-cli"
                         and "synthetic" in lowered_tags
-                        and str(provider_state.get("readiness") or "").strip().lower() in {"ready", "attention"}
+                        and str(provider_state.get("readiness") or "").strip().lower()
+                        in {"ready", "attention"}
                     ):
                         # Для codex-cli runtime-каталог может быть пустым, но если CLI уже живой,
                         # synthetic OpenAI-derived модели должны быть доступны к выбору из панели.
@@ -1778,21 +1921,31 @@ class WebApp:
                         "provider_label": cls._provider_label(normalized_provider),
                         "provider_auth": str(provider_state.get("auth_mode") or "unknown"),
                         "provider_readiness": str(provider_state.get("readiness") or "unknown"),
-                        "provider_readiness_label": str(provider_state.get("readiness_label") or "Configured"),
+                        "provider_readiness_label": str(
+                            provider_state.get("readiness_label") or "Configured"
+                        ),
                         "provider_detail": str(provider_state.get("detail") or ""),
                         "provider_quota_state": str(provider_state.get("quota_state") or "unknown"),
                         "provider_quota_label": str(provider_state.get("quota_label") or ""),
                         "provider_effective_kind": str(provider_state.get("effective_kind") or ""),
-                        "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
+                        "provider_effective_detail": str(
+                            provider_state.get("effective_detail") or ""
+                        ),
                         "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
-                        "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_oauth_remaining_human": str(
+                            provider_state.get("oauth_remaining_human") or ""
+                        ),
                         "provider_runtime_mode": str(provider_state.get("runtime_mode") or ""),
                         "provider_primary_policy": str(provider_state.get("primary_policy") or ""),
-                        "provider_fallback_policy": str(provider_state.get("fallback_policy") or ""),
+                        "provider_fallback_policy": str(
+                            provider_state.get("fallback_policy") or ""
+                        ),
                         "provider_release_safe": bool(provider_state.get("release_safe")),
                         "provider_login_state": str(provider_state.get("login_state") or ""),
                         "provider_cost_tier": str(provider_state.get("cost_tier") or ""),
-                        "provider_stability_score": float(provider_state.get("stability_score") or 0.0),
+                        "provider_stability_score": float(
+                            provider_state.get("stability_score") or 0.0
+                        ),
                         "provider_auth_recovery": dict(provider_auth_recovery or {}),
                         "provider_ui": dict(provider_ui),
                         "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
@@ -1822,7 +1975,9 @@ class WebApp:
                     if not isinstance(model, dict):
                         continue
                     raw_model_id = str(model.get("id", "") or "").strip()
-                    canonical_id = cls._canonical_runtime_model_id(normalized_provider, raw_model_id)
+                    canonical_id = cls._canonical_runtime_model_id(
+                        normalized_provider, raw_model_id
+                    )
                     if not canonical_id:
                         continue
                     selected_slots = [
@@ -1836,25 +1991,37 @@ class WebApp:
                         "provider_label": cls._provider_label(normalized_provider),
                         "provider_auth": str(provider_state.get("auth_mode") or "unknown"),
                         "provider_readiness": str(provider_state.get("readiness") or "unknown"),
-                        "provider_readiness_label": str(provider_state.get("readiness_label") or "Configured"),
+                        "provider_readiness_label": str(
+                            provider_state.get("readiness_label") or "Configured"
+                        ),
                         "provider_detail": str(provider_state.get("detail") or ""),
                         "provider_quota_state": str(provider_state.get("quota_state") or "unknown"),
                         "provider_quota_label": str(provider_state.get("quota_label") or ""),
                         "provider_effective_kind": str(provider_state.get("effective_kind") or ""),
-                        "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
+                        "provider_effective_detail": str(
+                            provider_state.get("effective_detail") or ""
+                        ),
                         "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
-                        "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                        "provider_oauth_remaining_human": str(
+                            provider_state.get("oauth_remaining_human") or ""
+                        ),
                         "provider_runtime_mode": str(provider_state.get("runtime_mode") or ""),
                         "provider_primary_policy": str(provider_state.get("primary_policy") or ""),
-                        "provider_fallback_policy": str(provider_state.get("fallback_policy") or ""),
+                        "provider_fallback_policy": str(
+                            provider_state.get("fallback_policy") or ""
+                        ),
                         "provider_release_safe": bool(provider_state.get("release_safe")),
                         "provider_login_state": str(provider_state.get("login_state") or ""),
                         "provider_cost_tier": str(provider_state.get("cost_tier") or ""),
-                        "provider_stability_score": float(provider_state.get("stability_score") or 0.0),
+                        "provider_stability_score": float(
+                            provider_state.get("stability_score") or 0.0
+                        ),
                         "provider_auth_recovery": dict(provider_auth_recovery or {}),
                         "provider_ui": dict(provider_ui),
                         "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
-                        "name": cls._friendly_model_name(canonical_id, str(model.get("name", "") or "")),
+                        "name": cls._friendly_model_name(
+                            canonical_id, str(model.get("name", "") or "")
+                        ),
                         "raw_name": str(model.get("name", "") or ""),
                         "actual_model_id": canonical_id.split("/", 1)[-1],
                         "reasoning": bool(model.get("reasoning", False)),
@@ -1893,14 +2060,18 @@ class WebApp:
                     "provider_label": cls._provider_label(normalized_provider),
                     "provider_auth": str(provider_state.get("auth_mode") or "unknown"),
                     "provider_readiness": str(provider_state.get("readiness") or "unknown"),
-                    "provider_readiness_label": str(provider_state.get("readiness_label") or "Configured"),
+                    "provider_readiness_label": str(
+                        provider_state.get("readiness_label") or "Configured"
+                    ),
                     "provider_detail": str(provider_state.get("detail") or ""),
                     "provider_quota_state": str(provider_state.get("quota_state") or "unknown"),
                     "provider_quota_label": str(provider_state.get("quota_label") or ""),
                     "provider_effective_kind": str(provider_state.get("effective_kind") or ""),
                     "provider_effective_detail": str(provider_state.get("effective_detail") or ""),
                     "provider_oauth_status": str(provider_state.get("oauth_status") or ""),
-                    "provider_oauth_remaining_human": str(provider_state.get("oauth_remaining_human") or ""),
+                    "provider_oauth_remaining_human": str(
+                        provider_state.get("oauth_remaining_human") or ""
+                    ),
                     "provider_auth_recovery": dict(provider_auth_recovery or {}),
                     "provider_ui": dict(provider_ui),
                     "label": f"{cls._provider_label(normalized_provider)} • {canonical_id.split('/', 1)[-1]}",
@@ -2131,8 +2302,12 @@ class WebApp:
             status_snapshot=status_snapshot,
         )
 
-        target_primary = str(os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4") or "").strip()
-        target_provider = str(target_primary.split("/", 1)[0] if "/" in target_primary else "").strip().lower()
+        target_primary = str(
+            os.getenv("OPENCLAW_TARGET_PRIMARY_MODEL", "codex-cli/gpt-5.4") or ""
+        ).strip()
+        target_provider = (
+            str(target_primary.split("/", 1)[0] if "/" in target_primary else "").strip().lower()
+        )
         target_provider_state = {
             "openai-codex": openai_codex,
             "codex-cli": codex_cli,
@@ -2144,7 +2319,8 @@ class WebApp:
             (
                 current_primary.startswith("openai-codex/")
                 and (
-                    str(openai_codex.get("signal_fail_code") or "") == "runtime_missing_scope_model_request"
+                    str(openai_codex.get("signal_fail_code") or "")
+                    == "runtime_missing_scope_model_request"
                     or (
                         int(openai_codex["failure_counts"].get("model_not_found", 0) or 0) > 0
                         and bool(openai_codex.get("cooldown_active"))
@@ -2162,30 +2338,49 @@ class WebApp:
             or google_gemini_cli["cooldown_active"]
         )
         antigravity_healthy = bool(google_antigravity.get("healthy_profiles"))
-        antigravity_disabled = bool(google_antigravity["disabled_profiles"]) and not antigravity_healthy
-        antigravity_runtime_available = bool(google_antigravity["runtime_models"] or antigravity_healthy)
+        antigravity_disabled = (
+            bool(google_antigravity["disabled_profiles"]) and not antigravity_healthy
+        )
+        antigravity_runtime_available = bool(
+            google_antigravity["runtime_models"] or antigravity_healthy
+        )
         antigravity_legacy_removed = not antigravity_runtime_available
 
         warnings: list[str] = []
-        if current_primary.startswith("codex-cli/") and str(codex_cli.get("readiness") or "").strip().lower() not in {"ready"}:
-            warnings.append("Текущий Codex CLI primary не подтверждён на этой macOS-учётке и требует relogin/helper.")
+        if current_primary.startswith("codex-cli/") and str(
+            codex_cli.get("readiness") or ""
+        ).strip().lower() not in {"ready"}:
+            warnings.append(
+                "Текущий Codex CLI primary не подтверждён на этой macOS-учётке и требует relogin/helper."
+            )
         if current_primary_broken:
-            if str(openai_codex.get("signal_fail_code") or "") == "runtime_missing_scope_model_request":
-                warnings.append("Текущий OpenAI primary блокируется по OAuth scopes (`model.request`) и не годится как production primary.")
+            if (
+                str(openai_codex.get("signal_fail_code") or "")
+                == "runtime_missing_scope_model_request"
+            ):
+                warnings.append(
+                    "Текущий OpenAI primary блокируется по OAuth scopes (`model.request`) и не годится как production primary."
+                )
             elif current_primary.startswith("openai-codex/"):
-                warnings.append("Текущий OpenAI primary падает с model_not_found и не годится как production primary.")
+                warnings.append(
+                    "Текущий OpenAI primary падает с model_not_found и не годится как production primary."
+                )
         if google_gemini_cli_unavailable:
             warnings.append(
                 "Google Gemini CLI OAuth сейчас не является надёжным fallback: профиль в cooldown/expired и может требовать re-auth."
             )
         if not target_in_runtime:
-            warnings.append("GPT-5.4 пока не описан в runtime models.json OpenClaw и не готов к promotion.")
+            warnings.append(
+                "GPT-5.4 пока не описан в runtime models.json OpenClaw и не готов к promotion."
+            )
         if antigravity_legacy_removed:
             warnings.append(
                 "Legacy provider google-antigravity уже удалён в OpenClaw 2026.3.8+ и не должен использоваться как fallback; миграция идёт через google-gemini-cli или google/* API key."
             )
         elif antigravity_disabled:
-            warnings.append("Google Antigravity сейчас disabled в auth-profiles и не должен считаться надёжным fallback.")
+            warnings.append(
+                "Google Antigravity сейчас disabled в auth-profiles и не должен считаться надёжным fallback."
+            )
         elif bool(google_antigravity.get("legacy")) and antigravity_healthy:
             warnings.append(
                 "Google Antigravity подключён вручную через plugin и может использоваться как дополнительный fallback, но не как единственный production primary."
@@ -2202,8 +2397,7 @@ class WebApp:
                         and (antigravity_disabled or antigravity_legacy_removed)
                     )
                     and not (
-                        candidate.startswith("google-gemini-cli/")
-                        and google_gemini_cli_unavailable
+                        candidate.startswith("google-gemini-cli/") and google_gemini_cli_unavailable
                     )
                     and not (
                         candidate.startswith("codex-cli/")
@@ -2247,9 +2441,7 @@ class WebApp:
         route_status = str(route_payload.get("status", "") or "").strip().lower()
         current_primary = str(routing.get("current_primary", "") or "").strip()
         live_primary_verified = bool(
-            route_status == "ok"
-            and route_model
-            and route_model == current_primary
+            route_status == "ok" and route_model and route_model == current_primary
         )
         live_fallback_active = bool(
             route_status == "ok"
@@ -2269,9 +2461,13 @@ class WebApp:
             provider_key = route_provider.replace("-", "_")
             provider_state = routing.get(provider_key)
             if isinstance(provider_state, dict):
-                historical_signal_fail_code = str(provider_state.get("signal_fail_code", "") or "").strip()
+                historical_signal_fail_code = str(
+                    provider_state.get("signal_fail_code", "") or ""
+                ).strip()
                 historical_readiness = str(provider_state.get("readiness", "") or "").strip()
-                historical_readiness_label = str(provider_state.get("readiness_label", "") or "").strip()
+                historical_readiness_label = str(
+                    provider_state.get("readiness_label", "") or ""
+                ).strip()
                 historical_detail = str(provider_state.get("detail", "") or "").strip()
                 if historical_signal_fail_code:
                     provider_state["historical_signal_fail_code"] = historical_signal_fail_code
@@ -2333,12 +2529,20 @@ class WebApp:
             provider_state = routing_status.get(provider_name.replace("-", "_"))
             if not isinstance(provider_state, dict):
                 continue
-            item["provider_auth"] = str(provider_state.get("auth_mode") or item.get("provider_auth") or "unknown")
-            item["provider_readiness"] = str(provider_state.get("readiness") or item.get("provider_readiness") or "unknown")
-            item["provider_readiness_label"] = str(
-                provider_state.get("readiness_label") or item.get("provider_readiness_label") or "Configured"
+            item["provider_auth"] = str(
+                provider_state.get("auth_mode") or item.get("provider_auth") or "unknown"
             )
-            item["provider_detail"] = str(provider_state.get("detail") or item.get("provider_detail") or "")
+            item["provider_readiness"] = str(
+                provider_state.get("readiness") or item.get("provider_readiness") or "unknown"
+            )
+            item["provider_readiness_label"] = str(
+                provider_state.get("readiness_label")
+                or item.get("provider_readiness_label")
+                or "Configured"
+            )
+            item["provider_detail"] = str(
+                provider_state.get("detail") or item.get("provider_detail") or ""
+            )
             item["provider_quota_state"] = str(
                 provider_state.get("quota_state") or item.get("provider_quota_state") or "unknown"
             )
@@ -2349,13 +2553,17 @@ class WebApp:
                 provider_state.get("effective_kind") or item.get("provider_effective_kind") or ""
             )
             item["provider_effective_detail"] = str(
-                provider_state.get("effective_detail") or item.get("provider_effective_detail") or ""
+                provider_state.get("effective_detail")
+                or item.get("provider_effective_detail")
+                or ""
             )
             item["provider_oauth_status"] = str(
                 provider_state.get("oauth_status") or item.get("provider_oauth_status") or ""
             )
             item["provider_oauth_remaining_human"] = str(
-                provider_state.get("oauth_remaining_human") or item.get("provider_oauth_remaining_human") or ""
+                provider_state.get("oauth_remaining_human")
+                or item.get("provider_oauth_remaining_human")
+                or ""
             )
         return cloud_inventory
 
@@ -2483,7 +2691,9 @@ class WebApp:
             "updated_at_ms": int(job.get("updatedAtMs") or 0),
             "created_at_ms": int(job.get("createdAtMs") or 0),
             "last_run_at_ms": int(state.get("lastRunAtMs") or 0),
-            "last_status": str(state.get("lastStatus") or state.get("lastRunStatus") or "unknown").strip(),
+            "last_status": str(
+                state.get("lastStatus") or state.get("lastRunStatus") or "unknown"
+            ).strip(),
             "last_error": str(state.get("lastError") or "").strip(),
             "consecutive_errors": int(state.get("consecutiveErrors") or 0),
         }
@@ -2503,7 +2713,9 @@ class WebApp:
             return {
                 "ok": False,
                 "error": status_result.get("error") or "cron_status_failed",
-                "detail": status_result.get("detail") or status_result.get("raw") or "Не удалось прочитать cron status",
+                "detail": status_result.get("detail")
+                or status_result.get("raw")
+                or "Не удалось прочитать cron status",
             }
 
         list_args = ["cron", "list", "--json"]
@@ -2518,17 +2730,17 @@ class WebApp:
             return {
                 "ok": False,
                 "error": jobs_result.get("error") or "cron_jobs_failed",
-                "detail": jobs_result.get("detail") or jobs_result.get("raw") or "Не удалось прочитать cron jobs",
+                "detail": jobs_result.get("detail")
+                or jobs_result.get("raw")
+                or "Не удалось прочитать cron jobs",
             }
 
-        status_payload = status_result.get("data") if isinstance(status_result.get("data"), dict) else {}
+        status_payload = (
+            status_result.get("data") if isinstance(status_result.get("data"), dict) else {}
+        )
         jobs_payload = jobs_result.get("data") if isinstance(jobs_result.get("data"), dict) else {}
         jobs_raw = jobs_payload.get("jobs") if isinstance(jobs_payload.get("jobs"), list) else []
-        jobs = [
-            self._normalize_openclaw_cron_job(job)
-            for job in jobs_raw
-            if isinstance(job, dict)
-        ]
+        jobs = [self._normalize_openclaw_cron_job(job) for job in jobs_raw if isinstance(job, dict)]
         jobs.sort(key=lambda item: ((not item["enabled"]), item["name"].lower(), item["id"]))
         enabled_jobs = sum(1 for item in jobs if item["enabled"])
         disabled_jobs = max(0, len(jobs) - enabled_jobs)
@@ -2805,8 +3017,16 @@ class WebApp:
                 "\n".join(
                     item
                     for item in [
-                        (exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")),
-                        (exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")),
+                        (
+                            exc.stdout.decode("utf-8", errors="replace")
+                            if isinstance(exc.stdout, bytes)
+                            else (exc.stdout or "")
+                        ),
+                        (
+                            exc.stderr.decode("utf-8", errors="replace")
+                            if isinstance(exc.stderr, bytes)
+                            else (exc.stderr or "")
+                        ),
                     ]
                     if item
                 ),
@@ -2856,7 +3076,9 @@ class WebApp:
             project_root / "venv" / "bin" / "python",
             project_root / ".venv" / "bin" / "python",
         ]
-        python_bin = next((path for path in python_candidates if path.exists() and path.is_file()), None)
+        python_bin = next(
+            (path for path in python_candidates if path.exists() and path.is_file()), None
+        )
         if python_bin is None:
             python_bin = Path(sys.executable)
 
@@ -2886,8 +3108,16 @@ class WebApp:
                 "\n".join(
                     item
                     for item in [
-                        (exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")),
-                        (exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")),
+                        (
+                            exc.stdout.decode("utf-8", errors="replace")
+                            if isinstance(exc.stdout, bytes)
+                            else (exc.stdout or "")
+                        ),
+                        (
+                            exc.stderr.decode("utf-8", errors="replace")
+                            if isinstance(exc.stderr, bytes)
+                            else (exc.stderr or "")
+                        ),
                     ]
                     if item
                 ),
@@ -2931,6 +3161,7 @@ class WebApp:
 
     def _git_snapshot(self) -> dict[str, Any]:
         """Снимает минимальный git-срез (ветка/head/short status) для handoff."""
+
         def _run_git(args: list[str]) -> str:
             try:
                 proc = subprocess.run(
@@ -3005,7 +3236,9 @@ class WebApp:
         active_exists = active_shared_root.exists()
         canonical_exists = canonical_shared_root.exists()
         matches_active = active_exists and self._paths_match(project_root, active_shared_root)
-        matches_canonical = canonical_exists and self._paths_match(project_root, canonical_shared_root)
+        matches_canonical = canonical_exists and self._paths_match(
+            project_root, canonical_shared_root
+        )
 
         if active_exists:
             recommended_root = active_shared_root
@@ -3132,7 +3365,16 @@ class WebApp:
             "policy_matrix_endpoint": "/api/policy/matrix",
             "registry_endpoint": "/api/capabilities/registry",
             "auth": "X-Krab-Web-Key header or token query (if WEB_API_KEY configured)",
-            "task_types": ["chat", "coding", "reasoning", "creative", "moderation", "security", "infra", "review"],
+            "task_types": [
+                "chat",
+                "coding",
+                "reasoning",
+                "creative",
+                "moderation",
+                "security",
+                "infra",
+                "review",
+            ],
             "notes": [
                 "Работает без Telegram-интерфейса.",
                 "Использует тот же роутер моделей и policy, что и Telegram-бот.",
@@ -3203,9 +3445,17 @@ class WebApp:
     ) -> dict[str, Any]:
         """Собирает truthful channel capability snapshot для primary/reserve/runtime каналов."""
         runtime_state = runtime_lite or {}
-        policy_payload = policy_matrix if isinstance(policy_matrix, dict) else self._policy_matrix_snapshot(runtime_lite=runtime_state)
+        policy_payload = (
+            policy_matrix
+            if isinstance(policy_matrix, dict)
+            else self._policy_matrix_snapshot(runtime_lite=runtime_state)
+        )
         runtime_config = self._load_openclaw_runtime_config()
-        runtime_channels = runtime_config.get("channels") if isinstance(runtime_config.get("channels"), dict) else {}
+        runtime_channels = (
+            runtime_config.get("channels")
+            if isinstance(runtime_config.get("channels"), dict)
+            else {}
+        )
         return build_channel_capability_snapshot(
             operator_profile=self._runtime_operator_profile(),
             runtime_lite=runtime_state,
@@ -3242,16 +3492,19 @@ class WebApp:
         mcp_probe: dict | None = None
         try:
             from ..integrations.browser_bridge import browser_bridge as _bb
+
             browser_probe = await asyncio.wait_for(_bb.health_check(), timeout=5.0)
         except Exception:
             pass
         try:
             from ..integrations.macos_automation import macos_automation as _ma
+
             macos_probe = await asyncio.wait_for(_ma.health_check(), timeout=5.0)
         except Exception:
             pass
         try:
             from ..mcp_client import mcp_manager as _mcp
+
             mcp_probe = await asyncio.wait_for(_mcp.health_check(), timeout=3.0)
         except Exception:
             pass
@@ -3259,6 +3512,7 @@ class WebApp:
         try:
             if bool(getattr(config, "TOR_ENABLED", False)):
                 from ..integrations.tor_bridge import health_check as _tor_hc
+
                 tor_probe = await asyncio.wait_for(
                     _tor_hc(socks_port=int(getattr(config, "TOR_SOCKS_PORT", 9050))),
                     timeout=15.0,
@@ -3411,7 +3665,12 @@ class WebApp:
             if isinstance(runtime_state.get("last_runtime_route"), dict)
             else {}
         )
-        voice_gateway_health, voice_gateway_caps, krab_ear_health, krab_ear_caps = await asyncio.gather(
+        (
+            voice_gateway_health,
+            voice_gateway_caps,
+            krab_ear_health,
+            krab_ear_caps,
+        ) = await asyncio.gather(
             self._safe_client_health_summary(voice_gateway, source="voice_gateway"),
             self._safe_client_capabilities_summary(voice_gateway, source="voice_gateway"),
             self._safe_client_health_summary(krab_ear, source="krab_ear"),
@@ -3432,9 +3691,7 @@ class WebApp:
             else {}
         )
         krab_ear_caps_detail = (
-            krab_ear_caps.get("detail")
-            if isinstance(krab_ear_caps.get("detail"), dict)
-            else {}
+            krab_ear_caps.get("detail") if isinstance(krab_ear_caps.get("detail"), dict) else {}
         )
         voice_stack_ready = bool(voice_gateway_health.get("ok") and krab_ear_health.get("ok"))
         foundation_ready = bool(perceptor_ready and voice_stack_ready)
@@ -3448,22 +3705,36 @@ class WebApp:
 
         if foundation_ready:
             readiness = "ready"
-        elif perceptor_ready or bool(voice_gateway_health.get("ok")) or bool(krab_ear_health.get("ok")):
+        elif (
+            perceptor_ready
+            or bool(voice_gateway_health.get("ok"))
+            or bool(krab_ear_health.get("ok"))
+        ):
             readiness = "degraded"
         else:
             readiness = "planned"
 
         recommendations: list[str] = []
         if not perceptor_ready:
-            recommendations.append("Локальный STT/perceptor ещё не подтверждён для translator foundation.")
+            recommendations.append(
+                "Локальный STT/perceptor ещё не подтверждён для translator foundation."
+            )
         if not bool(voice_gateway_health.get("ok")):
-            recommendations.append("Krab Voice Gateway должен быть живым, потому что он канонический backend call translator трека.")
+            recommendations.append(
+                "Krab Voice Gateway должен быть живым, потому что он канонический backend call translator трека."
+            )
         if not bool(krab_ear_health.get("ok")):
-            recommendations.append("Krab Ear должен быть доступен как low-latency local perception/STT контур.")
+            recommendations.append(
+                "Krab Ear должен быть доступен как low-latency local perception/STT контур."
+            )
         if voice_profile and not bool(voice_profile.get("enabled")):
-            recommendations.append("Voice replies сейчас выключены; voice-first контур translator v1 останется неполным.")
+            recommendations.append(
+                "Voice replies сейчас выключены; voice-first контур translator v1 останется неполным."
+            )
         if not recommendations:
-            recommendations.append("Foundation translator-контура подтверждён; можно двигаться к iPhone companion и ordinary-call flow.")
+            recommendations.append(
+                "Foundation translator-контура подтверждён; можно двигаться к iPhone companion и ordinary-call flow."
+            )
 
         foundation_checks = {
             "perceptor": {
@@ -3511,7 +3782,9 @@ class WebApp:
                 "status": "ready" if voice_profile.get("input_transcription_ready") else "missing",
                 "label": "Voice ingress",
                 "detail": {
-                    "input_transcription_ready": bool(voice_profile.get("input_transcription_ready")),
+                    "input_transcription_ready": bool(
+                        voice_profile.get("input_transcription_ready")
+                    ),
                     "output_tts_ready": bool(voice_profile.get("output_tts_ready")),
                 },
             },
@@ -3523,17 +3796,14 @@ class WebApp:
         elif isinstance(voice_gateway_caps_detail.get("session"), dict):
             active_session_payload = dict(voice_gateway_caps_detail.get("session") or {})
 
-        active_session_status = (
-            str(active_session_payload.get("status") or "").strip()
-            or ("not_reported" if voice_gateway_caps.get("ok") else "gateway_unavailable")
+        active_session_status = str(active_session_payload.get("status") or "").strip() or (
+            "not_reported" if voice_gateway_caps.get("ok") else "gateway_unavailable"
         )
         active_shared_permission_health = self._active_shared_permission_health_snapshot()
         active_session = {
             "status": active_session_status,
             "session_id": str(
-                active_session_payload.get("session_id")
-                or active_session_payload.get("id")
-                or ""
+                active_session_payload.get("session_id") or active_session_payload.get("id") or ""
             ).strip(),
             "label": str(
                 active_session_payload.get("label")
@@ -3584,10 +3854,14 @@ class WebApp:
                 "operator_id": str(operator_profile.get("operator_id") or "").strip(),
                 "account_id": str(operator_profile.get("account_id") or "").strip(),
                 "account_mode": str(operator_profile.get("account_mode") or "").strip(),
-                "runtime_mode": str(operator_profile.get("runtime_mode") or current_runtime_mode()).strip(),
+                "runtime_mode": str(
+                    operator_profile.get("runtime_mode") or current_runtime_mode()
+                ).strip(),
                 "release_safe_mode": bool(operator_profile.get("release_safe_mode")),
                 "userbot_authorized": bool(telegram_userbot_state.get("client_connected")),
-                "userbot_authorized_user": str(telegram_userbot_state.get("authorized_user") or "").strip(),
+                "userbot_authorized_user": str(
+                    telegram_userbot_state.get("authorized_user") or ""
+                ).strip(),
                 "shared_workspace_attached": bool(workspace_state.get("shared_workspace_attached")),
                 "shared_memory_ready": bool(workspace_state.get("shared_memory_ready")),
                 "scheduler_enabled": bool(runtime_state.get("scheduler_enabled")),
@@ -3605,7 +3879,9 @@ class WebApp:
                 "runtime_snapshot_endpoint": "/api/ops/runtime_snapshot",
                 "capability_registry_endpoint": "/api/capabilities/registry",
                 "policy_matrix_endpoint": "/api/policy/matrix",
-                "translator_audit_doc": str(self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"),
+                "translator_audit_doc": str(
+                    self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"
+                ),
             },
             "services": {
                 "krab": {
@@ -3660,14 +3936,24 @@ class WebApp:
             if isinstance(readiness.get("services"), dict)
             else {}
         )
-        gateway_caps_detail = gateway_caps.get("detail") if isinstance(gateway_caps.get("detail"), dict) else {}
-        session_contract = gateway_caps_detail.get("session") if isinstance(gateway_caps_detail.get("session"), dict) else {}
+        gateway_caps_detail = (
+            gateway_caps.get("detail") if isinstance(gateway_caps.get("detail"), dict) else {}
+        )
+        session_contract = (
+            gateway_caps_detail.get("session")
+            if isinstance(gateway_caps_detail.get("session"), dict)
+            else {}
+        )
         translation_contract = (
             gateway_caps_detail.get("translation")
             if isinstance(gateway_caps_detail.get("translation"), dict)
             else {}
         )
-        mobile_contract = gateway_caps_detail.get("mobile") if isinstance(gateway_caps_detail.get("mobile"), dict) else {}
+        mobile_contract = (
+            gateway_caps_detail.get("mobile")
+            if isinstance(gateway_caps_detail.get("mobile"), dict)
+            else {}
+        )
         endpoints_contract = (
             ((gateway_caps_detail.get("api") or {}).get("endpoints") or {})
             if isinstance(gateway_caps_detail.get("api"), dict)
@@ -3689,9 +3975,7 @@ class WebApp:
 
         if isinstance(sessions_payload.get("items"), list):
             session_items_raw = [
-                dict(item)
-                for item in sessions_payload.get("items", [])
-                if isinstance(item, dict)
+                dict(item) for item in sessions_payload.get("items", []) if isinstance(item, dict)
             ]
 
         def _session_updated_sort_key(item: dict[str, Any]) -> float:
@@ -3734,9 +4018,15 @@ class WebApp:
                 if hasattr(voice_gateway, "get_timeline_summary")
                 else asyncio.sleep(0, result={"ok": False, "error": "not_supported"})
             )
-            diagnostics_payload, diagnostics_why_payload, timeline_summary_payload = await asyncio.gather(*diagnostics_tasks)
+            (
+                diagnostics_payload,
+                diagnostics_why_payload,
+                timeline_summary_payload,
+            ) = await asyncio.gather(*diagnostics_tasks)
 
-        quick_phrase_source_lang = current_source_lang if current_source_lang not in {"", "auto"} else "ru"
+        quick_phrase_source_lang = (
+            current_source_lang if current_source_lang not in {"", "auto"} else "ru"
+        )
         quick_phrase_target_lang = current_target_lang or "es"
         if quick_phrase_source_lang == quick_phrase_target_lang:
             if quick_phrase_source_lang == "ru":
@@ -3754,16 +4044,30 @@ class WebApp:
             except Exception as exc:  # noqa: BLE001
                 quick_phrases_payload = {"ok": False, "error": str(exc)}
 
-        current_meta = current_session.get("meta") if isinstance(current_session.get("meta"), dict) else {}
-        current_diag = diagnostics_payload.get("result") if isinstance(diagnostics_payload.get("result"), dict) else {}
-        current_why = diagnostics_why_payload.get("result") if isinstance(diagnostics_why_payload.get("result"), dict) else {}
+        current_meta = (
+            current_session.get("meta") if isinstance(current_session.get("meta"), dict) else {}
+        )
+        current_diag = (
+            diagnostics_payload.get("result")
+            if isinstance(diagnostics_payload.get("result"), dict)
+            else {}
+        )
+        current_why = (
+            diagnostics_why_payload.get("result")
+            if isinstance(diagnostics_why_payload.get("result"), dict)
+            else {}
+        )
         current_timeline_summary = (
             timeline_summary_payload.get("result")
             if isinstance(timeline_summary_payload.get("result"), dict)
             else {}
         )
 
-        active_count = sum(1 for item in session_items if str(item.get("status") or "").strip().lower() in {"running", "paused", "created"})
+        active_count = sum(
+            1
+            for item in session_items
+            if str(item.get("status") or "").strip().lower() in {"running", "paused", "created"}
+        )
         current_translation_mode = str(current_session.get("translation_mode") or "").strip()
         current_status = str(current_session.get("status") or "").strip().lower()
         current_source = str(current_session.get("source") or "").strip()
@@ -3777,8 +4081,10 @@ class WebApp:
         else:
             device_binding_status = "not_reported"
 
-        runtime_policy_status = "from_active_session" if current_session_id else (
-            "gateway_unavailable" if not bool(gateway_caps.get("ok")) else "not_reported"
+        runtime_policy_status = (
+            "from_active_session"
+            if current_session_id
+            else ("gateway_unavailable" if not bool(gateway_caps.get("ok")) else "not_reported")
         )
         runtime_policy = {
             "status": runtime_policy_status,
@@ -3789,12 +4095,12 @@ class WebApp:
             "src_lang": current_source_lang,
             "tgt_lang": current_target_lang,
             "language_pair": (
-                f"{current_source_lang}-{current_target_lang}"
-                if current_session_id
-                else ""
+                f"{current_source_lang}-{current_target_lang}" if current_session_id else ""
             ),
             "bilingual_mode": current_translation_mode == "ru_es_duplex",
-            "voice_strategy": "voice-first" if bool(readiness.get("live_voice_ready")) else "subtitles-first",
+            "voice_strategy": "voice-first"
+            if bool(readiness.get("live_voice_ready"))
+            else "subtitles-first",
             "summary_available": bool(translation_contract.get("summary")),
             "quick_phrases_available": bool(translation_contract.get("quick_phrases")),
             "supported_translation_modes": list(session_contract.get("translation_modes") or []),
@@ -3816,7 +4122,9 @@ class WebApp:
                     "src_lang": str(item.get("src_lang") or "").strip(),
                     "tgt_lang": str(item.get("tgt_lang") or "").strip(),
                     "device_bound": bool(meta.get("device_bound")),
-                    "updated_at": str(item.get("updated_at") or item.get("created_at") or "").strip(),
+                    "updated_at": str(
+                        item.get("updated_at") or item.get("created_at") or ""
+                    ).strip(),
                 }
             )
 
@@ -3848,19 +4156,28 @@ class WebApp:
             if isinstance(item, dict)
         ]
         runtime_tuning_contract = dict(session_contract.get("runtime_tuning") or {})
-        runtime_diag = current_diag.get("runtime") if isinstance(current_diag.get("runtime"), dict) else {}
-        supported_sources = [str(item).strip() for item in (session_contract.get("sources") or []) if str(item).strip()]
+        runtime_diag = (
+            current_diag.get("runtime") if isinstance(current_diag.get("runtime"), dict) else {}
+        )
+        supported_sources = [
+            str(item).strip()
+            for item in (session_contract.get("sources") or [])
+            if str(item).strip()
+        ]
         supported_translation_modes = [
-            str(item).strip() for item in (session_contract.get("translation_modes") or []) if str(item).strip()
+            str(item).strip()
+            for item in (session_contract.get("translation_modes") or [])
+            if str(item).strip()
         ]
         buffering_modes = [
-            str(item).strip() for item in (runtime_tuning_contract.get("buffering_modes") or []) if str(item).strip()
+            str(item).strip()
+            for item in (runtime_tuning_contract.get("buffering_modes") or [])
+            if str(item).strip()
         ]
         draft_defaults = {
             "source": current_source or (supported_sources[0] if supported_sources else "mic"),
-            "translation_mode": current_translation_mode or (
-                supported_translation_modes[0] if supported_translation_modes else "auto_to_ru"
-            ),
+            "translation_mode": current_translation_mode
+            or (supported_translation_modes[0] if supported_translation_modes else "auto_to_ru"),
             "notify_mode": str(current_session.get("notify_mode") or "").strip() or "auto_on",
             "tts_mode": str(current_session.get("tts_mode") or "").strip() or "hybrid",
             "src_lang": current_source_lang if current_session_id else "auto",
@@ -3884,7 +4201,9 @@ class WebApp:
             "resume_available": current_status in {"paused", "created"},
             "stop_available": bool(current_session_id),
             "runtime_tune_available": bool(current_session_id and runtime_tuning_contract),
-            "quick_phrase_available": bool(current_session_id and translation_contract.get("quick_phrases")),
+            "quick_phrase_available": bool(
+                current_session_id and translation_contract.get("quick_phrases")
+            ),
             "supported_status_actions": [
                 action
                 for action, enabled in (
@@ -3909,7 +4228,9 @@ class WebApp:
             "approval_state": {
                 "pending_approvals": int((workflow_summary or {}).get("pending_approvals") or 0),
                 "open_escalations": int((workflow_summary or {}).get("open_escalations") or 0),
-                "pending_owner_tasks": int((workflow_summary or {}).get("pending_owner_tasks") or 0),
+                "pending_owner_tasks": int(
+                    (workflow_summary or {}).get("pending_owner_tasks") or 0
+                ),
             },
             "gateway_contract": {
                 "status": str(gateway_caps.get("status") or "unknown"),
@@ -3918,16 +4239,39 @@ class WebApp:
                 "contract_version": str(gateway_caps_detail.get("contract_version") or "").strip(),
                 "translation_modes": list(session_contract.get("translation_modes") or []),
                 "session_sources": list(session_contract.get("sources") or []),
-                "timeline_supported": bool(((session_contract.get("timeline") or {}) if isinstance(session_contract.get("timeline"), dict) else {}).get("summary")),
-                "why_supported": bool(((gateway_caps_detail.get("diagnostics") or {}) if isinstance(gateway_caps_detail.get("diagnostics"), dict) else {}).get("why_endpoint")),
+                "timeline_supported": bool(
+                    (
+                        (session_contract.get("timeline") or {})
+                        if isinstance(session_contract.get("timeline"), dict)
+                        else {}
+                    ).get("summary")
+                ),
+                "why_supported": bool(
+                    (
+                        (gateway_caps_detail.get("diagnostics") or {})
+                        if isinstance(gateway_caps_detail.get("diagnostics"), dict)
+                        else {}
+                    ).get("why_endpoint")
+                ),
                 "device_binding_supported": bool(mobile_contract.get("session_binding")),
                 "quick_phrases_supported": bool(translation_contract.get("quick_phrases")),
                 "endpoints": {
                     "sessions": str(endpoints_contract.get("sessions") or "/v1/sessions"),
-                    "runtime": str(endpoints_contract.get("session_runtime") or "/v1/sessions/{session_id}/runtime"),
-                    "diagnostics": str(endpoints_contract.get("session_diagnostics") or "/v1/sessions/{session_id}/diagnostics"),
-                    "timeline": str(endpoints_contract.get("session_timeline") or "/v1/sessions/{session_id}/timeline"),
-                    "quick_phrases": str(endpoints_contract.get("quick_phrases") or "/v1/quick-phrases"),
+                    "runtime": str(
+                        endpoints_contract.get("session_runtime")
+                        or "/v1/sessions/{session_id}/runtime"
+                    ),
+                    "diagnostics": str(
+                        endpoints_contract.get("session_diagnostics")
+                        or "/v1/sessions/{session_id}/diagnostics"
+                    ),
+                    "timeline": str(
+                        endpoints_contract.get("session_timeline")
+                        or "/v1/sessions/{session_id}/timeline"
+                    ),
+                    "quick_phrases": str(
+                        endpoints_contract.get("quick_phrases") or "/v1/quick-phrases"
+                    ),
                 },
             },
             "sessions": {
@@ -3944,7 +4288,10 @@ class WebApp:
                 "source_lang": quick_phrase_source_lang,
                 "target_lang": quick_phrase_target_lang,
                 "selection_reason": (
-                    "active_session_pair" if current_session_id and current_source_lang in {"ru", "es"} and current_target_lang in {"ru", "es"}
+                    "active_session_pair"
+                    if current_session_id
+                    and current_source_lang in {"ru", "es"}
+                    and current_target_lang in {"ru", "es"}
                     else "gateway_library_default"
                 ),
                 "count": len(quick_phrase_items),
@@ -3973,7 +4320,9 @@ class WebApp:
         - snapshot должен честно работать и при `gateway_unavailable`, и при отсутствии session.
         """
         runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
-        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(
+            runtime_lite=runtime_state
+        )
         voice_gateway = self.deps.get("voice_gateway_client")
         current_session = (
             dict(control_plane.get("current_session") or {})
@@ -4014,7 +4363,11 @@ class WebApp:
                 if hasattr(voice_gateway, "export_timeline")
                 else asyncio.sleep(0, result={"ok": False, "error": "not_supported"})
             )
-            timeline_preview_payload, timeline_stats_payload, timeline_export_payload = await asyncio.gather(*tasks)
+            (
+                timeline_preview_payload,
+                timeline_stats_payload,
+                timeline_export_payload,
+            ) = await asyncio.gather(*tasks)
 
         why_raw = (
             dict(current_session.get("diagnostics_why") or {})
@@ -4023,9 +4376,11 @@ class WebApp:
         )
         why_items = [str(item).strip() for item in (why_raw.get("why") or []) if str(item).strip()]
         if why_raw and not why_items:
-            why_items = [str(why_raw.get("detail") or why_raw.get("status") or "").strip()] if (
-                str(why_raw.get("detail") or why_raw.get("status") or "").strip()
-            ) else []
+            why_items = (
+                [str(why_raw.get("detail") or why_raw.get("status") or "").strip()]
+                if (str(why_raw.get("detail") or why_raw.get("status") or "").strip())
+                else []
+            )
 
         timeline_preview_result = (
             dict(timeline_preview_payload.get("result") or {})
@@ -4043,7 +4398,7 @@ class WebApp:
             else {}
         )
         timeline_items = []
-        for item in (timeline_preview_result.get("items") or []):
+        for item in timeline_preview_result.get("items") or []:
             if not isinstance(item, dict):
                 continue
             timeline_items.append(
@@ -4060,11 +4415,17 @@ class WebApp:
             suggested_body_parts.append(f"Session: `{current_session_id}`")
             suggested_body_parts.append(f"Status: `{current_session_status}`")
         if why_items:
-            suggested_body_parts.append("Why-report:\n" + "\n".join(f"- {item}" for item in why_items[:4]))
+            suggested_body_parts.append(
+                "Why-report:\n" + "\n".join(f"- {item}" for item in why_items[:4])
+            )
         summary_text = str(timeline_summary.get("summary") or "").strip()
         if summary_text:
             suggested_body_parts.append(f"Timeline summary:\n{summary_text}")
-        stats_payload = timeline_stats_result.get("stats") if isinstance(timeline_stats_result.get("stats"), dict) else {}
+        stats_payload = (
+            timeline_stats_result.get("stats")
+            if isinstance(timeline_stats_result.get("stats"), dict)
+            else {}
+        )
         if stats_payload:
             stats_line = ", ".join(
                 f"{key}={value}"
@@ -4077,8 +4438,14 @@ class WebApp:
             suggested_body_parts.append(f"Timeline export preview:\n```md\n{export_preview}\n```")
 
         if current_session_id:
-            inspector_status = "ready" if timeline_preview_result or why_items or timeline_summary else "session_active"
-        elif gateway_status in {"error", "timeout", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
+            inspector_status = (
+                "ready"
+                if timeline_preview_result or why_items or timeline_summary
+                else "session_active"
+            )
+        elif gateway_status in {"error", "timeout", "gateway_unavailable"} or not bool(
+            gateway_contract.get("ok")
+        ):
             inspector_status = "gateway_unavailable"
         else:
             inspector_status = "idle"
@@ -4095,14 +4462,22 @@ class WebApp:
                 "status": (
                     "ready"
                     if why_items
-                    else ("gateway_unavailable" if inspector_status == "gateway_unavailable" else "not_reported")
+                    else (
+                        "gateway_unavailable"
+                        if inspector_status == "gateway_unavailable"
+                        else "not_reported"
+                    )
                 ),
                 "count": len(why_items),
                 "items": why_items[:6],
             },
             "timeline": {
-                "status": "ready" if timeline_preview_result else (
-                    "gateway_unavailable" if inspector_status == "gateway_unavailable" else "not_reported"
+                "status": "ready"
+                if timeline_preview_result
+                else (
+                    "gateway_unavailable"
+                    if inspector_status == "gateway_unavailable"
+                    else "not_reported"
                 ),
                 "count": int(timeline_preview_result.get("count") or len(timeline_items)),
                 "summary": summary_text,
@@ -4128,7 +4503,9 @@ class WebApp:
                     if current_session_id
                     else "Translator session: investigate degradation"
                 ),
-                "suggested_body": "\n\n".join(part for part in suggested_body_parts if part).strip(),
+                "suggested_body": "\n\n".join(
+                    part for part in suggested_body_parts if part
+                ).strip(),
                 "inbox_summary": inbox_service.get_summary(),
             },
             "links": {
@@ -4153,7 +4530,9 @@ class WebApp:
         - что реально вернёт device resume snapshot.
         """
         runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
-        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(
+            runtime_lite=runtime_state
+        )
         voice_gateway = self.deps.get("voice_gateway_client")
         gateway_contract = (
             dict(control_plane.get("gateway_contract") or {})
@@ -4166,8 +4545,12 @@ class WebApp:
             else {}
         )
         current_session_id = str(current_session.get("id") or "").strip()
-        current_session_status = str(current_session.get("status") or "not_reported").strip() or "not_reported"
-        current_device_binding_status = str(current_session.get("device_binding_status") or "not_reported").strip()
+        current_session_status = (
+            str(current_session.get("status") or "not_reported").strip() or "not_reported"
+        )
+        current_device_binding_status = str(
+            current_session.get("device_binding_status") or "not_reported"
+        ).strip()
         mobile_available = bool(gateway_contract.get("device_binding_supported"))
 
         devices_payload: dict[str, Any] = {"ok": False, "error": "voice_gateway_unavailable"}
@@ -4182,21 +4565,31 @@ class WebApp:
                 devices_payload = {"ok": False, "error": str(exc)}
 
         if isinstance(devices_payload.get("items"), list):
-            devices = [dict(item) for item in devices_payload.get("items") if isinstance(item, dict)]
-        devices.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+            devices = [
+                dict(item) for item in devices_payload.get("items") if isinstance(item, dict)
+            ]
+        devices.sort(
+            key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+            reverse=True,
+        )
 
         bound_device = next(
             (
                 item
                 for item in devices
-                if current_session_id and str(item.get("bound_session_id") or "").strip() == current_session_id
+                if current_session_id
+                and str(item.get("bound_session_id") or "").strip() == current_session_id
             ),
             None,
         )
         selected_device = dict(bound_device or (devices[0] if devices else {}))
         selected_device_id = str(selected_device.get("device_id") or "").strip().lower()
 
-        if selected_device_id and voice_gateway and hasattr(voice_gateway, "get_mobile_session_snapshot"):
+        if (
+            selected_device_id
+            and voice_gateway
+            and hasattr(voice_gateway, "get_mobile_session_snapshot")
+        ):
             try:
                 device_snapshot_payload = await voice_gateway.get_mobile_session_snapshot(
                     selected_device_id,
@@ -4213,13 +4606,17 @@ class WebApp:
             if isinstance(device_snapshot_payload.get("result"), dict)
             else {}
         )
-        snapshot_timeline = [dict(item) for item in (device_snapshot.get("timeline") or []) if isinstance(item, dict)]
+        snapshot_timeline = [
+            dict(item) for item in (device_snapshot.get("timeline") or []) if isinstance(item, dict)
+        ]
         snapshot_why = (
             dict(device_snapshot.get("why") or {})
             if isinstance(device_snapshot.get("why"), dict)
             else {}
         )
-        snapshot_why_items = [str(item).strip() for item in (snapshot_why.get("why") or []) if str(item).strip()]
+        snapshot_why_items = [
+            str(item).strip() for item in (snapshot_why.get("why") or []) if str(item).strip()
+        ]
 
         if not bool(gateway_contract.get("ok")):
             status = "gateway_unavailable"
@@ -4245,9 +4642,18 @@ class WebApp:
             "device_id": selected_device_id,
             "app_version": str(selected_device.get("app_version") or "0.1.0").strip() or "0.1.0",
             "locale": str(selected_device.get("locale") or "ru").strip() or "ru",
-            "preferred_source_lang": str(selected_device.get("preferred_source_lang") or "auto").strip() or "auto",
-            "preferred_target_lang": str(selected_device.get("preferred_target_lang") or "ru").strip() or "ru",
-            "apns_environment": str(selected_device.get("apns_environment") or "development").strip() or "development",
+            "preferred_source_lang": str(
+                selected_device.get("preferred_source_lang") or "auto"
+            ).strip()
+            or "auto",
+            "preferred_target_lang": str(
+                selected_device.get("preferred_target_lang") or "ru"
+            ).strip()
+            or "ru",
+            "apns_environment": str(
+                selected_device.get("apns_environment") or "development"
+            ).strip()
+            or "development",
             "notify_default": bool(selected_device.get("notify_default", True)),
         }
 
@@ -4267,17 +4673,22 @@ class WebApp:
             },
             "actions": {
                 "register_available": bool(gateway_contract.get("ok")) and mobile_available,
-                "bind_available": bool(gateway_contract.get("ok")) and mobile_available and bool(current_session_id) and bool(devices),
+                "bind_available": bool(gateway_contract.get("ok"))
+                and mobile_available
+                and bool(current_session_id)
+                and bool(devices),
                 "trial_prep_available": bool(gateway_contract.get("ok")) and mobile_available,
-                "remove_available": bool(gateway_contract.get("ok")) and mobile_available and bool(devices),
+                "remove_available": bool(gateway_contract.get("ok"))
+                and mobile_available
+                and bool(devices),
                 "session_snapshot_available": bool(device_snapshot),
                 "recommended_next_step": recommended_next_step,
                 "draft_defaults": draft_defaults,
             },
             "devices": {
-                "status": "ready" if devices_payload.get("ok") else (
-                    "gateway_unavailable" if status == "gateway_unavailable" else "unavailable"
-                ),
+                "status": "ready"
+                if devices_payload.get("ok")
+                else ("gateway_unavailable" if status == "gateway_unavailable" else "unavailable"),
                 "count": len(devices),
                 "selected_device_id": selected_device_id,
                 "items": [
@@ -4290,20 +4701,28 @@ class WebApp:
                         "notify_default": bool(item.get("notify_default", True)),
                         "bound_session_id": str(item.get("bound_session_id") or "").strip(),
                         "updated_at": str(item.get("updated_at") or "").strip(),
-                        "preferred_source_lang": str(item.get("preferred_source_lang") or "").strip(),
-                        "preferred_target_lang": str(item.get("preferred_target_lang") or "").strip(),
-                        "voip_push_token_masked": str(item.get("voip_push_token_masked") or "").strip(),
+                        "preferred_source_lang": str(
+                            item.get("preferred_source_lang") or ""
+                        ).strip(),
+                        "preferred_target_lang": str(
+                            item.get("preferred_target_lang") or ""
+                        ).strip(),
+                        "voip_push_token_masked": str(
+                            item.get("voip_push_token_masked") or ""
+                        ).strip(),
                     }
                     for item in devices[:6]
                 ],
             },
             "selected_device_snapshot": {
-                "status": "ready" if device_snapshot else (
-                    "gateway_unavailable" if status == "gateway_unavailable" else "not_reported"
-                ),
+                "status": "ready"
+                if device_snapshot
+                else ("gateway_unavailable" if status == "gateway_unavailable" else "not_reported"),
                 "device_id": selected_device_id,
                 "active_session": bool(device_snapshot.get("active_session")),
-                "timeline_count": int(device_snapshot.get("timeline_count") or len(snapshot_timeline)),
+                "timeline_count": int(
+                    device_snapshot.get("timeline_count") or len(snapshot_timeline)
+                ),
                 "why_items": snapshot_why_items[:4],
                 "timeline_preview": [
                     {
@@ -4339,14 +4758,25 @@ class WebApp:
         но и "какой именно call-track готов, чем он ограничен и что делать дальше".
         """
         runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
-        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_state)
-        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
-        mobile_readiness = current_mobile_readiness or await self._translator_mobile_readiness_snapshot(
-            runtime_lite=runtime_state,
-            current_control_plane=control_plane,
+        readiness = current_readiness or await self._translator_readiness_snapshot(
+            runtime_lite=runtime_state
+        )
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(
+            runtime_lite=runtime_state
+        )
+        mobile_readiness = (
+            current_mobile_readiness
+            or await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_state,
+                current_control_plane=control_plane,
+            )
         )
 
-        services = dict(readiness.get("services") or {}) if isinstance(readiness.get("services"), dict) else {}
+        services = (
+            dict(readiness.get("services") or {})
+            if isinstance(readiness.get("services"), dict)
+            else {}
+        )
         account_runtime = (
             dict(readiness.get("account_runtime") or {})
             if isinstance(readiness.get("account_runtime"), dict)
@@ -4378,42 +4808,71 @@ class WebApp:
             else {}
         )
 
-        gateway_status = str(
-            gateway_contract.get("status")
-            or (services.get("voice_gateway") or {}).get("status")
+        gateway_status = (
+            str(
+                gateway_contract.get("status")
+                or (services.get("voice_gateway") or {}).get("status")
+                or "unknown"
+            ).strip()
             or "unknown"
-        ).strip() or "unknown"
+        )
         mobile_status = str(mobile_readiness.get("status") or "unknown").strip() or "unknown"
         session_id = str(current_session.get("id") or "").strip()
-        session_status = str(current_session.get("status") or "not_reported").strip() or "not_reported"
+        session_status = (
+            str(current_session.get("status") or "not_reported").strip() or "not_reported"
+        )
         selected_device_id = str(mobile_devices.get("selected_device_id") or "").strip()
 
         ordinary_blockers: list[str] = []
         ordinary_next_steps: list[str] = []
 
-        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
-            ordinary_blockers.append("Krab Voice Gateway сейчас недоступен, поэтому ordinary-call track не может перейти в live trial.")
+        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(
+            gateway_contract.get("ok")
+        ):
+            ordinary_blockers.append(
+                "Krab Voice Gateway сейчас недоступен, поэтому ordinary-call track не может перейти в live trial."
+            )
         if not bool(account_runtime.get("userbot_authorized")):
-            ordinary_blockers.append("Telegram userbot этой учётки ещё не авторизован, поэтому owner-runtime truth неполный.")
+            ordinary_blockers.append(
+                "Telegram userbot этой учётки ещё не авторизован, поэтому owner-runtime truth неполный."
+            )
         if not bool(account_runtime.get("shared_workspace_attached")):
-            ordinary_blockers.append("Shared workspace не прикреплён; restart-proof state для translator track не подтверждён.")
+            ordinary_blockers.append(
+                "Shared workspace не прикреплён; restart-proof state для translator track не подтверждён."
+            )
         if mobile_status == "not_configured":
             ordinary_blockers.append("iPhone companion ещё не зарегистрирован в device registry.")
         elif mobile_status == "registered":
-            ordinary_blockers.append("Companion зарегистрирован, но ещё не привязан к активной translator session.")
+            ordinary_blockers.append(
+                "Companion зарегистрирован, но ещё не привязан к активной translator session."
+            )
         elif mobile_status == "attention":
-            ordinary_blockers.append("Companion виден частично: push/device binding truth требует донастройки.")
+            ordinary_blockers.append(
+                "Companion виден частично: push/device binding truth требует донастройки."
+            )
 
-        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
-            ordinary_next_steps.append("Поднять Krab Voice Gateway и повторно обновить translator card.")
+        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(
+            gateway_contract.get("ok")
+        ):
+            ordinary_next_steps.append(
+                "Поднять Krab Voice Gateway и повторно обновить translator card."
+            )
         if mobile_status == "not_configured":
-            ordinary_next_steps.append("Зарегистрировать iPhone companion через owner panel или gateway helper.")
+            ordinary_next_steps.append(
+                "Зарегистрировать iPhone companion через owner panel или gateway helper."
+            )
         elif mobile_status == "registered":
-            ordinary_next_steps.append("Создать или возобновить translator session и привязать companion к active session.")
+            ordinary_next_steps.append(
+                "Создать или возобновить translator session и привязать companion к active session."
+            )
         elif mobile_status == "bound":
-            ordinary_next_steps.append("Ordinary-call track готов к controlled live trial на companion architecture.")
+            ordinary_next_steps.append(
+                "Ordinary-call track готов к controlled live trial на companion architecture."
+            )
         if not ordinary_next_steps:
-            ordinary_next_steps.append("Уточнить live gateway/mobile truth и повторить readiness refresh.")
+            ordinary_next_steps.append(
+                "Уточнить live gateway/mobile truth и повторить readiness refresh."
+            )
 
         if ordinary_blockers:
             if mobile_status == "registered" and bool(mobile_actions.get("bind_available")):
@@ -4434,8 +4893,12 @@ class WebApp:
             "Сначала подтвердить ordinary-call flow через iPhone companion architecture.",
             "Потом проектировать channel-specific adapters для Telegram, WhatsApp и Meet как отдельный Gateway слой.",
         ]
-        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(gateway_contract.get("ok")):
-            internet_blockers.append("Без живого Krab Voice Gateway нельзя подтвердить adapter contracts и realtime event flow.")
+        if gateway_status in {"error", "down", "gateway_unavailable"} or not bool(
+            gateway_contract.get("ok")
+        ):
+            internet_blockers.append(
+                "Без живого Krab Voice Gateway нельзя подтвердить adapter contracts и realtime event flow."
+            )
             internet_status = "blocked"
         elif ordinary_status in {"trial_ready", "device_ready"}:
             internet_status = "design_ready"
@@ -4445,8 +4908,12 @@ class WebApp:
         return {
             "ok": True,
             "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "status": ordinary_status if ordinary_status == "trial_ready" else (
-                "blocked" if ordinary_status == "blocked" or internet_status == "blocked" else "in_progress"
+            "status": ordinary_status
+            if ordinary_status == "trial_ready"
+            else (
+                "blocked"
+                if ordinary_status == "blocked" or internet_status == "blocked"
+                else "in_progress"
             ),
             "primary_delivery_path": "iphone_companion",
             "canonical_backend": "krab_voice_gateway",
@@ -4508,14 +4975,22 @@ class WebApp:
     ) -> dict[str, Any]:
         """Собирает truthful preflight для controlled live trial ordinary-call translator path."""
         runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
-        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_state)
-        mobile_readiness = current_mobile_readiness or await self._translator_mobile_readiness_snapshot(
-            runtime_lite=runtime_state,
+        readiness = current_readiness or await self._translator_readiness_snapshot(
+            runtime_lite=runtime_state
         )
-        delivery_matrix = current_delivery_matrix or await self._translator_delivery_matrix_snapshot(
-            runtime_lite=runtime_state,
-            current_readiness=readiness,
-            current_mobile_readiness=mobile_readiness,
+        mobile_readiness = (
+            current_mobile_readiness
+            or await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_state,
+            )
+        )
+        delivery_matrix = (
+            current_delivery_matrix
+            or await self._translator_delivery_matrix_snapshot(
+                runtime_lite=runtime_state,
+                current_readiness=readiness,
+                current_mobile_readiness=mobile_readiness,
+            )
         )
         return build_translator_live_trial_preflight(
             project_root=self._project_root(),
@@ -4537,23 +5012,36 @@ class WebApp:
     ) -> dict[str, Any]:
         """Собирает truthful onboarding packet для реального выхода на iPhone companion."""
         runtime_state = runtime_lite or await self._collect_runtime_lite_snapshot()
-        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_state)
-        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_state)
-        mobile_readiness = current_mobile_readiness or await self._translator_mobile_readiness_snapshot(
-            runtime_lite=runtime_state,
-            current_control_plane=control_plane,
+        readiness = current_readiness or await self._translator_readiness_snapshot(
+            runtime_lite=runtime_state
         )
-        delivery_matrix = current_delivery_matrix or await self._translator_delivery_matrix_snapshot(
-            runtime_lite=runtime_state,
-            current_readiness=readiness,
-            current_control_plane=control_plane,
-            current_mobile_readiness=mobile_readiness,
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(
+            runtime_lite=runtime_state
         )
-        live_trial_preflight = current_live_trial_preflight or await self._translator_live_trial_preflight_snapshot(
-            runtime_lite=runtime_state,
-            current_readiness=readiness,
-            current_delivery_matrix=delivery_matrix,
-            current_mobile_readiness=mobile_readiness,
+        mobile_readiness = (
+            current_mobile_readiness
+            or await self._translator_mobile_readiness_snapshot(
+                runtime_lite=runtime_state,
+                current_control_plane=control_plane,
+            )
+        )
+        delivery_matrix = (
+            current_delivery_matrix
+            or await self._translator_delivery_matrix_snapshot(
+                runtime_lite=runtime_state,
+                current_readiness=readiness,
+                current_control_plane=control_plane,
+                current_mobile_readiness=mobile_readiness,
+            )
+        )
+        live_trial_preflight = (
+            current_live_trial_preflight
+            or await self._translator_live_trial_preflight_snapshot(
+                runtime_lite=runtime_state,
+                current_readiness=readiness,
+                current_delivery_matrix=delivery_matrix,
+                current_mobile_readiness=mobile_readiness,
+            )
         )
         return build_translator_mobile_onboarding_packet(
             project_root=self._project_root(),
@@ -4574,7 +5062,9 @@ class WebApp:
           поэтому для lite/handoff читаем факт состояния через файловый слой.
         """
         project_root = self._project_root()
-        session_name = str(os.getenv("TELEGRAM_SESSION_NAME", "kraab") or "kraab").strip() or "kraab"
+        session_name = (
+            str(os.getenv("TELEGRAM_SESSION_NAME", "kraab") or "kraab").strip() or "kraab"
+        )
         session_dir = project_root / "data" / "sessions"
         session_file = session_dir / f"{session_name}.session"
         wal_file = session_dir / f"{session_name}.session-wal"
@@ -4638,7 +5128,9 @@ class WebApp:
         client_connected = bool((userbot_state or {}).get("client_connected"))
         sqlite_ok = snapshot.get("sqlite_quick_check_ok")
         sidecars_present = bool(
-            snapshot.get("wal_exists") or snapshot.get("shm_exists") or snapshot.get("journal_exists")
+            snapshot.get("wal_exists")
+            or snapshot.get("shm_exists")
+            or snapshot.get("journal_exists")
         )
 
         snapshot["state_file_raw"] = raw_state
@@ -4674,9 +5166,17 @@ class WebApp:
         - `idle`     -> сервер доступен, но инстансов нет;
         - `down`     -> API недоступен/ошибка транспорта.
         """
-        base_url = str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234") or "").strip().rstrip("/")
+        base_url = (
+            str(os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234") or "").strip().rstrip("/")
+        )
         if not base_url:
-            return {"state": "down", "base_url": "", "loaded_count": 0, "loaded_models": [], "error": "lm_url_missing"}
+            return {
+                "state": "down",
+                "base_url": "",
+                "loaded_count": 0,
+                "loaded_models": [],
+                "error": "lm_url_missing",
+            }
 
         endpoints = [f"{base_url}/api/v1/models", f"{base_url}/v1/models"]
         errors: list[str] = []
@@ -4763,7 +5263,9 @@ class WebApp:
             self._lmstudio_snapshot_cache = (time.time(), self._clone_jsonish_dict(payload))
             return self._clone_jsonish_dict(payload)
 
-    async def _resolve_local_runtime_truth(self, router_obj: Any, *, force_refresh: bool = False) -> dict[str, Any]:
+    async def _resolve_local_runtime_truth(
+        self, router_obj: Any, *, force_refresh: bool = False
+    ) -> dict[str, Any]:
         """
         Возвращает authoritative truth для локального runtime.
 
@@ -4794,7 +5296,9 @@ class WebApp:
             # Повторный вызов `model_manager.get_loaded_models()` делаем только когда
             # source-of-truth probe не смог дать полезную картину. Иначе web-запрос
             # сам создавал второй лишний GET `/api/v1/models` к LM Studio.
-            should_query_manager_loaded = force_refresh or (probe_state == "down" and not probe_loaded)
+            should_query_manager_loaded = force_refresh or (
+                probe_state == "down" and not probe_loaded
+            )
             if hasattr(mm, "get_loaded_models") and should_query_manager_loaded:
                 try:
                     try:
@@ -4803,11 +5307,7 @@ class WebApp:
                         raw_loaded = await mm.get_loaded_models()
                     if isinstance(raw_loaded, list):
                         loaded_models.extend(
-                            [
-                                str(item).strip()
-                                for item in raw_loaded
-                                if str(item or "").strip()
-                            ]
+                            [str(item).strip() for item in raw_loaded if str(item or "").strip()]
                         )
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"get_loaded_models:{exc}")
@@ -4851,12 +5351,16 @@ class WebApp:
             "engine": engine_raw,
             "runtime_url": runtime_url or "n/a",
             "error": self._tail_text(
-                "\n".join([item for item in [str(probe.get("error") or "").strip(), *errors] if item]),
+                "\n".join(
+                    [item for item in [str(probe.get("error") or "").strip(), *errors] if item]
+                ),
                 max_chars=400,
             ),
         }
 
-    def _build_cloud_keys_payload(self, openclaw_obj: Any, router_obj: Any | None = None) -> dict[str, Any]:
+    def _build_cloud_keys_payload(
+        self, openclaw_obj: Any, router_obj: Any | None = None
+    ) -> dict[str, Any]:
         """
         Собирает совместимый cloud-диагностический payload для `/api/stats`.
 
@@ -4901,20 +5405,25 @@ class WebApp:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("web_stats_cloud_keys_mm_state_failed", error=str(exc))
 
-        active_tier = str(
-            tier_state.get("active_tier") or token_info.get("active_tier") or "free"
-        ).strip().lower() or "free"
+        active_tier = (
+            str(tier_state.get("active_tier") or token_info.get("active_tier") or "free")
+            .strip()
+            .lower()
+            or "free"
+        )
         tiers = token_info.get("tiers") if isinstance(token_info.get("tiers"), dict) else {}
-        active_tier_info = tiers.get(active_tier) if isinstance(tiers.get(active_tier), dict) else {}
+        active_tier_info = (
+            tiers.get(active_tier) if isinstance(tiers.get(active_tier), dict) else {}
+        )
         if not active_tier_info and isinstance(tiers.get("free"), dict):
             active_tier_info = tiers.get("free") or {}
 
         current_google_masked = str(
-            token_info.get("current_google_key_masked")
-            or active_tier_info.get("masked_key")
-            or ""
+            token_info.get("current_google_key_masked") or active_tier_info.get("masked_key") or ""
         ).strip()
-        gemini_configured = bool(active_tier_info.get("is_configured")) or bool(current_google_masked)
+        gemini_configured = bool(active_tier_info.get("is_configured")) or bool(
+            current_google_masked
+        )
 
         provider_status = str(tier_state.get("last_provider_status") or "").strip().lower()
         last_probe_at = float(tier_state.get("last_probe_at") or 0.0)
@@ -4940,7 +5449,8 @@ class WebApp:
         if (
             mm_error_is_fresh
             and mm_last_error_code
-            and provider_status not in {"ok", "auth", "unauthorized", "forbidden", "quota", "error", "timeout"}
+            and provider_status
+            not in {"ok", "auth", "unauthorized", "forbidden", "quota", "error", "timeout"}
             and not (last_error_code and error_is_fresh)
         ):
             provider_status = mm_provider_status or provider_status
@@ -4991,8 +5501,12 @@ class WebApp:
         - при отсутствии Gemini, но наличии gateway, показываем OpenClaw как активный cloud-источник.
         """
         gemini = cloud_keys.get("gemini") if isinstance(cloud_keys.get("gemini"), dict) else {}
-        openclaw = cloud_keys.get("openclaw") if isinstance(cloud_keys.get("openclaw"), dict) else {}
-        last_error = cloud_keys.get("last_error") if isinstance(cloud_keys.get("last_error"), dict) else {}
+        openclaw = (
+            cloud_keys.get("openclaw") if isinstance(cloud_keys.get("openclaw"), dict) else {}
+        )
+        last_error = (
+            cloud_keys.get("last_error") if isinstance(cloud_keys.get("last_error"), dict) else {}
+        )
 
         configured_labels: list[str] = []
         if bool(gemini.get("is_configured")):
@@ -5054,7 +5568,11 @@ class WebApp:
                     last_route = dict(raw_last_route)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("web_stats_router_last_route_failed", error=str(exc))
-        if (not last_route or not str(last_route.get("model") or "").strip()) and openclaw and hasattr(openclaw, "get_last_runtime_route"):
+        if (
+            (not last_route or not str(last_route.get("model") or "").strip())
+            and openclaw
+            and hasattr(openclaw, "get_last_runtime_route")
+        ):
             try:
                 raw_last_runtime_route = openclaw.get_last_runtime_route() or {}
                 if isinstance(raw_last_runtime_route, dict):
@@ -5230,7 +5748,9 @@ class WebApp:
             ),
         }
 
-    async def _collect_runtime_lite_snapshot(self, *, force_refresh: bool = False) -> dict[str, Any]:
+    async def _collect_runtime_lite_snapshot(
+        self, *, force_refresh: bool = False
+    ) -> dict[str, Any]:
         """
         Возвращает runtime-lite snapshot с коротким TTL-cache.
 
@@ -5393,11 +5913,7 @@ class WebApp:
                 status = "FAIL"
             elif "warn" in meta_low:
                 status = "WARN"
-            elif (
-                "running" in meta_low
-                or "connected" in meta_low
-                or "enabled" in meta_low
-            ):
+            elif "running" in meta_low or "connected" in meta_low or "enabled" in meta_low:
                 status = "OK"
             else:
                 status = "WARN"
@@ -5454,7 +5970,9 @@ class WebApp:
         }
 
     @staticmethod
-    def _classify_browser_http_probe(status_code: int | None, error_text: str = "") -> dict[str, Any]:
+    def _classify_browser_http_probe(
+        status_code: int | None, error_text: str = ""
+    ) -> dict[str, Any]:
         """
         Классифицирует HTTP-пробу browser relay в прозрачное runtime-состояние.
 
@@ -5669,7 +6187,9 @@ class WebApp:
 
         return status_payload, status_error, tabs_payload, tabs_error
 
-    async def _collect_openclaw_browser_smoke_report(self, url: str = "https://example.com") -> dict[str, Any]:
+    async def _collect_openclaw_browser_smoke_report(
+        self, url: str = "https://example.com"
+    ) -> dict[str, Any]:
         """Собирает browser smoke report в одном месте для reuse в нескольких endpoint'ах."""
         gateway_probe_raw = ""
         gateway_probe_error = ""
@@ -5794,7 +6314,9 @@ class WebApp:
             discovery_error = str(exc)
 
         try:
-            selected_model = str(await asyncio.wait_for(mm.get_best_model(has_photo=True), timeout=20.0) or "")
+            selected_model = str(
+                await asyncio.wait_for(mm.get_best_model(has_photo=True), timeout=20.0) or ""
+            )
             selected_local = bool(mm.is_local_model(selected_model)) if selected_model else False
             if "/" in selected_model:
                 selected_provider = selected_model.split("/", 1)[0]
@@ -5911,7 +6433,8 @@ class WebApp:
         active_contour = str(contour.get("active_contour") or "unknown")
         active_contour_label = str(contour.get("active_contour_label") or "Не определён")
         attached_by_runtime = bool(
-            (running and cdp_ready and relay_reachable and tabs_count > 0 and not auth_required) or tab_attached
+            (running and cdp_ready and relay_reachable and tabs_count > 0 and not auth_required)
+            or tab_attached
         )
         owner_attach_confirmed = bool(active_contour == "my_chrome" and attached_by_runtime)
         debug_attach_confirmed = bool(active_contour == "debug_browser" and attached_by_runtime)
@@ -5938,7 +6461,9 @@ class WebApp:
                 "Сейчас активен отдельный OpenClaw Debug browser. "
                 "Это не обычный Chrome владельца и не его профиль/расширения."
             )
-            warnings.append("Сейчас активен dedicated debug browser, а не обычный Chrome владельца.")
+            warnings.append(
+                "Сейчас активен dedicated debug browser, а не обычный Chrome владельца."
+            )
             next_step = (
                 "Если нужен attach к обычному Chrome владельца, включи его отдельно "
                 "с Remote Debugging. Эта кнопка owner UI открывает только Debug Chrome."
@@ -5974,26 +6499,37 @@ class WebApp:
             stage_label = "Не удалось прочитать вкладки"
             blockers.append(tabs_error)
             next_step = "Проверь `openclaw browser tabs --json`."
-        elif relay_reachable and browser_http_state == "authorized" and scope_limited and tabs_count == 0:
+        elif (
+            relay_reachable
+            and browser_http_state == "authorized"
+            and scope_limited
+            and tabs_count == 0
+        ):
             state = "relay_scope_limited"
             readiness = "attention"
             if active_contour == "debug_browser":
                 stage_label = "Debug browser c ограниченным probe"
-                warnings.append("Relay уже авторизован, но gateway probe ограничен scope `operator.read`.")
+                warnings.append(
+                    "Relay уже авторизован, но gateway probe ограничен scope `operator.read`."
+                )
                 next_step = (
                     "Если нужен точный staged status вкладок, выдай scope `operator.read` "
                     "или подключи обычный Chrome владельца отдельным attach-path."
                 )
             else:
                 stage_label = "Relay авторизован, но probe ограничен"
-                warnings.append("HTTP relay авторизован, но CLI probe ограничен scope `operator.read`.")
+                warnings.append(
+                    "HTTP relay авторизован, но CLI probe ограничен scope `operator.read`."
+                )
                 next_step = "Выдай gateway scope `operator.read` или проверь отдельный attach к обычному Chrome владельца."
         elif relay_reachable and tabs_count == 0:
             state = "tab_not_connected"
             readiness = "attention"
             if active_contour == "debug_browser":
                 stage_label = "Debug browser без вкладки"
-                warnings.append("Dedicated debug browser жив, но обычный Chrome владельца ещё не attach-нут.")
+                warnings.append(
+                    "Dedicated debug browser жив, но обычный Chrome владельца ещё не attach-нут."
+                )
                 next_step = (
                     "Открой вкладку в отдельном debug browser или подними отдельный attach "
                     "к обычному Chrome владельца, если нужен его профиль."
@@ -6007,7 +6543,9 @@ class WebApp:
             readiness = "blocked"
             stage_label = "Browser relay остановлен"
             blockers.append("OpenClaw browser сейчас не запущен.")
-            next_step = "Запусти `openclaw browser start` или включи `OPENCLAW_BROWSER_AUTOSTART=1`."
+            next_step = (
+                "Запусти `openclaw browser start` или включи `OPENCLAW_BROWSER_AUTOSTART=1`."
+            )
         elif not cdp_ready and not relay_reachable:
             state = "starting"
             readiness = "blocked"
@@ -6030,11 +6568,15 @@ class WebApp:
         if running and not cdp_ready:
             warnings.append("OpenClaw browser запущен, но CDP ещё не готов.")
         if not running and relay_reachable:
-            warnings.append("CLI сообщает running=false, но HTTP relay уже отвечает. Возможен stale status в OpenClaw CLI.")
+            warnings.append(
+                "CLI сообщает running=false, но HTTP relay уже отвечает. Возможен stale status в OpenClaw CLI."
+            )
         if tabs_count > 0 and not tab_attached and state != "attached":
             warnings.append("CLI видит вкладки, но HTTP relay пока не подтвердил attach.")
         if active_contour == "debug_browser" and not owner_attach_confirmed:
-            warnings.append("Runtime сейчас смотрит в dedicated OpenClaw profile, а не в обычный Chrome владельца.")
+            warnings.append(
+                "Runtime сейчас смотрит в dedicated OpenClaw profile, а не в обычный Chrome владельца."
+            )
 
         return {
             "state": state,
@@ -6084,7 +6626,9 @@ class WebApp:
             return "llm"
         return "integrations"
 
-    async def _probe_owner_chrome_devtools(self, url: str = "https://example.com") -> dict[str, Any]:
+    async def _probe_owner_chrome_devtools(
+        self, url: str = "https://example.com"
+    ) -> dict[str, Any]:
         """
         Проверяет ordinary Chrome path через локальный BrowserBridge/CDP.
 
@@ -6122,7 +6666,10 @@ class WebApp:
                 return {
                     "readiness": "blocked",
                     "state": "chrome_policy_blocked",
-                    "detail": str(helper_log.get("detail") or "Chrome policy blocks default-profile remote debugging."),
+                    "detail": str(
+                        helper_log.get("detail")
+                        or "Chrome policy blocks default-profile remote debugging."
+                    ),
                     "next_step": (
                         "Для Chrome 146+ ordinary attach к default profile недоступен. "
                         "Используй OpenClaw Debug browser или отдельный non-default Chrome data dir."
@@ -6173,7 +6720,9 @@ class WebApp:
         return {
             "readiness": "attention",
             "state": str(action_probe.get("state") or "action_probe_failed"),
-            "detail": str(action_probe.get("detail") or "Chrome attach есть, но action probe не завершился."),
+            "detail": str(
+                action_probe.get("detail") or "Chrome attach есть, но action probe не завершился."
+            ),
             "next_step": "Повтори helper для обычного Chrome и затем обнови Browser / MCP Readiness.",
             "attached": True,
             "confirmed": False,
@@ -6222,7 +6771,11 @@ class WebApp:
             elif name == "openclaw-browser":
                 state = str(browser.get("state") or "unknown")
                 readiness = str(browser.get("readiness") or "attention")
-                detail = str(browser.get("summary") or browser.get("next_step") or "Browser relay state unknown.")
+                detail = str(
+                    browser.get("summary")
+                    or browser.get("next_step")
+                    or "Browser relay state unknown."
+                )
             elif name == "chrome-profile" and owner_chrome:
                 state = str(owner_chrome.get("state") or "unknown")
                 readiness = str(owner_chrome.get("readiness") or "attention")
@@ -6309,7 +6862,9 @@ class WebApp:
         }
 
     @staticmethod
-    def _build_browser_access_paths(browser: dict[str, Any], mcp: dict[str, Any]) -> list[dict[str, Any]]:
+    def _build_browser_access_paths(
+        browser: dict[str, Any], mcp: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """
         Строит два канонических пути доступа к браузеру без изобретения нового стека.
 
@@ -6319,7 +6874,9 @@ class WebApp:
         """
         runtime = browser.get("runtime") if isinstance(browser, dict) else {}
         runtime = runtime if isinstance(runtime, dict) else {}
-        summary = str(browser.get("summary") or browser.get("next_step") or "Browser path unavailable")
+        summary = str(
+            browser.get("summary") or browser.get("next_step") or "Browser path unavailable"
+        )
         next_step = str(browser.get("next_step") or "")
         active_contour = str(runtime.get("active_contour") or "unknown")
         active_label = str(runtime.get("active_contour_label") or "Не определён")
@@ -6336,10 +6893,16 @@ class WebApp:
         if not isinstance(servers, list):
             servers = []
         chrome_profile = next(
-            (item for item in servers if isinstance(item, dict) and str(item.get("name") or "") == "chrome-profile"),
+            (
+                item
+                for item in servers
+                if isinstance(item, dict) and str(item.get("name") or "") == "chrome-profile"
+            ),
             {},
         )
-        chrome_manual_setup = chrome_profile.get("manual_setup") if isinstance(chrome_profile, dict) else []
+        chrome_manual_setup = (
+            chrome_profile.get("manual_setup") if isinstance(chrome_profile, dict) else []
+        )
         if not isinstance(chrome_manual_setup, list):
             chrome_manual_setup = []
         chrome_next_step = str(
@@ -6375,7 +6938,9 @@ class WebApp:
                 "state": str(chrome_profile.get("state") or "unknown"),
                 "active": devtools_attached,
                 "active_label": devtools_active_label,
-                "detail": str(chrome_profile.get("detail") or "Обычный Chrome профиль пока не подтверждён."),
+                "detail": str(
+                    chrome_profile.get("detail") or "Обычный Chrome профиль пока не подтверждён."
+                ),
                 "next_step": chrome_next_step,
                 "preferred_for": "Полный owner-контур поверх обычного Chrome профиля владельца.",
                 "confirmed": devtools_confirmed,
@@ -6440,7 +7005,9 @@ class WebApp:
         except Exception:
             return ""
 
-    def _build_attachment_prompt(self, *, file_name: str, content_type: str, raw_bytes: bytes, stored_path: Path) -> dict:
+    def _build_attachment_prompt(
+        self, *, file_name: str, content_type: str, raw_bytes: bytes, stored_path: Path
+    ) -> dict:
         """
         Преобразует загруженный файл в prompt-совместимый контекст.
         Поддержка:
@@ -6454,8 +7021,24 @@ class WebApp:
         fingerprint = hashlib.sha256(raw_bytes).hexdigest()[:16]
 
         text_extensions = {
-            ".txt", ".md", ".json", ".csv", ".tsv", ".py", ".js", ".ts", ".tsx",
-            ".yaml", ".yml", ".xml", ".html", ".htm", ".log", ".ini", ".toml", ".env",
+            ".txt",
+            ".md",
+            ".json",
+            ".csv",
+            ".tsv",
+            ".py",
+            ".js",
+            ".ts",
+            ".tsx",
+            ".yaml",
+            ".yml",
+            ".xml",
+            ".html",
+            ".htm",
+            ".log",
+            ".ini",
+            ".toml",
+            ".env",
         }
         is_text_like = content_type.startswith("text/") or ext in text_extensions
 
@@ -6479,14 +7062,8 @@ class WebApp:
 
         if extracted:
             trimmed, was_trimmed = self._trim_prompt_text(extracted, max_chars=24000)
-            suffix = (
-                "\n\n[...контент обрезан для стабильности web-prompt]"
-                if was_trimmed else ""
-            )
-            prompt_snippet = (
-                f"Контекст из файла `{file_name}`:\n"
-                f"```text\n{trimmed}{suffix}\n```"
-            )
+            suffix = "\n\n[...контент обрезан для стабильности web-prompt]" if was_trimmed else ""
+            prompt_snippet = f"Контекст из файла `{file_name}`:\n```text\n{trimmed}{suffix}\n```"
         else:
             prompt_snippet = (
                 f"Вложение `{file_name}` ({content_type}, {size_kb} KB, sha256:{fingerprint}) "
@@ -6506,7 +7083,9 @@ class WebApp:
         }
 
     @staticmethod
-    def _translator_gateway_error_detail(result: dict[str, Any], *, fallback: str) -> tuple[int, str]:
+    def _translator_gateway_error_detail(
+        result: dict[str, Any], *, fallback: str
+    ) -> tuple[int, str]:
         """Нормализует ошибку Voice Gateway клиента в HTTP-код и короткий detail."""
         error = str(result.get("error") or fallback).strip() or fallback
         detail_payload = result.get("detail")
@@ -6518,7 +7097,11 @@ class WebApp:
         if not detail:
             detail = error
 
-        if error in {"session_id_required", "quick_phrase_text_required", "translator_session_required"}:
+        if error in {
+            "session_id_required",
+            "quick_phrase_text_required",
+            "translator_session_required",
+        }:
             return 400, detail
         if error.startswith("http_"):
             try:
@@ -6530,11 +7113,14 @@ class WebApp:
             return 503, "translator_gateway_unavailable"
         return 503, detail
 
-    async def _start_vg_subscriber(self, session_id: str, voice_gateway: VoiceGatewayControlPlane) -> None:
+    async def _start_vg_subscriber(
+        self, session_id: str, voice_gateway: VoiceGatewayControlPlane
+    ) -> None:
         """Запускает WS-подписчик на поток сессии Voice Gateway для LLM reasoning."""
         await self._stop_vg_subscriber()
         try:
             from src.integrations.voice_gateway_client import VoiceGatewayClient
+
             if not isinstance(voice_gateway, VoiceGatewayClient):
                 return
             subscriber = VoiceGatewayEventSubscriber(
@@ -6580,11 +7166,15 @@ class WebApp:
         if client is None:
             raise HTTPException(status_code=503, detail="translator_gateway_not_available")
         if not isinstance(client, VoiceGatewayControlPlane):
-            raise HTTPException(status_code=503, detail="translator_gateway_control_plane_incomplete")
+            raise HTTPException(
+                status_code=503, detail="translator_gateway_control_plane_incomplete"
+            )
         return client
 
     @staticmethod
-    def _translator_mobile_gateway_error_detail(result: dict[str, Any], *, fallback: str) -> tuple[int, str]:
+    def _translator_mobile_gateway_error_detail(
+        result: dict[str, Any], *, fallback: str
+    ) -> tuple[int, str]:
         """Нормализует mobile/companion ошибки Voice Gateway для owner-facing API."""
         error = str(result.get("error") or fallback).strip() or fallback
         detail_payload = result.get("detail")
@@ -6621,9 +7211,10 @@ class WebApp:
         """
         runtime_lite = await self._collect_runtime_lite_snapshot()
         control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
-        session_id = str(requested_session_id or "").strip() or str(
-            ((control_plane.get("sessions") or {}).get("current_session_id") or "")
-        ).strip()
+        session_id = (
+            str(requested_session_id or "").strip()
+            or str(((control_plane.get("sessions") or {}).get("current_session_id") or "")).strip()
+        )
         if not session_id:
             raise HTTPException(status_code=400, detail="translator_session_required")
         return session_id, runtime_lite, control_plane
@@ -6663,7 +7254,9 @@ class WebApp:
             "ok": True,
             "action": action,
             "session_id": str(gateway_result.get("session_id") or "").strip(),
-            "gateway_result": gateway_result.get("result") if isinstance(gateway_result.get("result"), dict) else {},
+            "gateway_result": gateway_result.get("result")
+            if isinstance(gateway_result.get("result"), dict)
+            else {},
             "readiness": readiness,
             "control_plane": control_plane,
             "session_inspector": session_inspector,
@@ -6691,8 +7284,12 @@ class WebApp:
           дублирования кода по route-функциям.
         """
         runtime_payload = runtime_lite or await self._collect_runtime_lite_snapshot()
-        readiness = current_readiness or await self._translator_readiness_snapshot(runtime_lite=runtime_payload)
-        control_plane = current_control_plane or await self._translator_control_plane_snapshot(runtime_lite=runtime_payload)
+        readiness = current_readiness or await self._translator_readiness_snapshot(
+            runtime_lite=runtime_payload
+        )
+        control_plane = current_control_plane or await self._translator_control_plane_snapshot(
+            runtime_lite=runtime_payload
+        )
         session_inspector = await self._translator_session_inspector_snapshot(
             runtime_lite=runtime_payload,
             current_control_plane=control_plane,
@@ -6718,7 +7315,9 @@ class WebApp:
             "action": action,
             "device_id": str(gateway_result.get("device_id") or "").strip(),
             "session_id": str(gateway_result.get("session_id") or "").strip(),
-            "gateway_result": gateway_result.get("result") if isinstance(gateway_result.get("result"), dict) else {},
+            "gateway_result": gateway_result.get("result")
+            if isinstance(gateway_result.get("result"), dict)
+            else {},
             "readiness": readiness,
             "control_plane": control_plane,
             "session_inspector": session_inspector,
@@ -6748,6 +7347,7 @@ class WebApp:
                 return FileResponse(self._index_path, headers=_no_store_headers())
             # Иначе — Gemini-generated landing page с навигацией по sub-dashboards.
             from .web_app_landing_page import LANDING_PAGE_HTML
+
             return HTMLResponse(
                 LANDING_PAGE_HTML,
                 headers=_no_store_headers(),
@@ -6782,7 +7382,9 @@ class WebApp:
             text = str(payload.get("text") or "").strip()
             if not text:
                 raise HTTPException(status_code=400, detail="text_required")
-            chat_id = str(payload.get("chat_id") or "").strip() or os.getenv("OPENCLAW_ALERT_TARGET", "")
+            chat_id = str(payload.get("chat_id") or "").strip() or os.getenv(
+                "OPENCLAW_ALERT_TARGET", ""
+            )
             if not chat_id:
                 raise HTTPException(status_code=400, detail="chat_id_required")
             userbot = self.deps.get("kraab_userbot")
@@ -6801,8 +7403,12 @@ class WebApp:
             rag = router.rag if hasattr(router, "rag") else None
             return {
                 "router": await self._build_stats_router_payload(router),
-                "black_box": black_box.get_stats() if black_box and hasattr(black_box, "get_stats") else {"enabled": False},
-                "rag": rag.get_stats() if rag and hasattr(rag, "get_stats") else {"enabled": False, "count": 0},
+                "black_box": black_box.get_stats()
+                if black_box and hasattr(black_box, "get_stats")
+                else {"enabled": False},
+                "rag": rag.get_stats()
+                if rag and hasattr(rag, "get_stats")
+                else {"enabled": False, "count": 0},
             }
 
         @self.app.get("/api/health")
@@ -6856,6 +7462,7 @@ class WebApp:
             # B.7 (session 4): telegram_rate_limiter stats для /stats dashboard.
             try:
                 from ..core.telegram_rate_limiter import telegram_rate_limiter as _trl
+
                 _rate_limiter_stats = _trl.stats()
             except Exception:
                 _rate_limiter_stats = None
@@ -6896,6 +7503,7 @@ class WebApp:
             """
             try:
                 from ..core.chat_ban_cache import chat_ban_cache as _cbc
+
                 ban_entries = _cbc.list_entries()
                 ban_count = len(ban_entries)
             except Exception:
@@ -6904,13 +7512,13 @@ class WebApp:
 
             try:
                 from ..core.chat_capability_cache import chat_capability_cache as _ccc
+
                 cap_entries = _ccc.list_entries()
                 cap_count = len(cap_entries)
-                voice_disallowed = sum(
-                    1 for e in cap_entries if e.get("voice_allowed") is False
-                )
+                voice_disallowed = sum(1 for e in cap_entries if e.get("voice_allowed") is False)
                 slow_mode = sum(
-                    1 for e in cap_entries
+                    1
+                    for e in cap_entries
                     if isinstance(e.get("slow_mode_seconds"), (int, float))
                     and e["slow_mode_seconds"] > 0
                 )
@@ -6921,9 +7529,7 @@ class WebApp:
 
             try:
                 userbot = self.deps.get("kraab_userbot")
-                blocked = (
-                    userbot.get_voice_blocked_chats() if userbot else []
-                )
+                blocked = userbot.get_voice_blocked_chats() if userbot else []
                 voice_blocked_count = len(blocked)
             except Exception:
                 voice_blocked_count = 0
@@ -6940,6 +7546,7 @@ class WebApp:
         async def stats_dashboard():
             """Runtime stats dashboard (Gemini 3.1 Pro frontend)."""
             from .web_app_stats_dashboard import STATS_DASHBOARD_HTML
+
             return HTMLResponse(
                 STATS_DASHBOARD_HTML,
                 headers=_no_store_headers(),
@@ -6949,6 +7556,7 @@ class WebApp:
         async def inbox_dashboard():
             """Inbox items dashboard с фильтрами и карточками (Gemini 3.1 Pro)."""
             from .web_app_inbox_dashboard import INBOX_DASHBOARD_HTML
+
             return HTMLResponse(
                 INBOX_DASHBOARD_HTML,
                 headers=_no_store_headers(),
@@ -6958,6 +7566,7 @@ class WebApp:
         async def costs_dashboard():
             """Cost analytics dashboard с бюджетом и breakdown (Gemini 3.1 Pro)."""
             from .web_app_costs_dashboard import COSTS_DASHBOARD_HTML
+
             return HTMLResponse(
                 COSTS_DASHBOARD_HTML,
                 headers=_no_store_headers(),
@@ -6967,6 +7576,7 @@ class WebApp:
         async def swarm_dashboard():
             """Swarm multi-agent teams visualizer (Gemini 3.1 Pro)."""
             from .web_app_swarm_dashboard import SWARM_DASHBOARD_HTML
+
             return HTMLResponse(
                 SWARM_DASHBOARD_HTML,
                 headers=_no_store_headers(),
@@ -7000,13 +7610,12 @@ class WebApp:
             """Отчёт по расходам для /costs dashboard (Gemini field names)."""
             try:
                 from ..core.cost_analytics import cost_analytics as _ca
+
                 raw = _ca.build_usage_report_dict()
                 # Адаптируем поля под Gemini JS dashboard naming convention.
                 total_cost = float(raw.get("cost_session_usd") or 0)
                 budget = float(raw.get("monthly_budget_usd") or 0) or 50.0
-                total_calls = sum(
-                    m.get("calls", 0) for m in (raw.get("by_model") or {}).values()
-                )
+                total_calls = sum(m.get("calls", 0) for m in (raw.get("by_model") or {}).values())
                 report = {
                     "total_cost_usd": total_cost,
                     "total_calls": total_calls,
@@ -7015,9 +7624,9 @@ class WebApp:
                     "budget_used_pct": round(total_cost / budget * 100, 2) if budget else 0,
                     "by_model": raw.get("by_model", {}),
                     "period_start": "2026-04-01T00:00:00Z",
-                    "period_end": __import__("datetime").datetime.now(
-                        __import__("datetime").timezone.utc
-                    ).isoformat(),
+                    "period_end": __import__("datetime")
+                    .datetime.now(__import__("datetime").timezone.utc)
+                    .isoformat(),
                     "input_tokens": raw.get("input_tokens", 0),
                     "output_tokens": raw.get("output_tokens", 0),
                 }
@@ -7030,12 +7639,14 @@ class WebApp:
             """Статус мультиагентного свёрма для /swarm dashboard."""
             try:
                 from ..core.swarm_channels import swarm_channels as _sc
-                from ..core.swarm_scheduler import swarm_scheduler as _ss
                 from ..core.swarm_memory import swarm_memory as _sm
+                from ..core.swarm_scheduler import swarm_scheduler as _ss
 
                 teams_data = {}
                 for team_name in ["traders", "coders", "analysts", "creative"]:
-                    is_active = _sc.is_round_active(team_name) if hasattr(_sc, "is_round_active") else False
+                    is_active = (
+                        _sc.is_round_active(team_name) if hasattr(_sc, "is_round_active") else False
+                    )
                     teams_data[team_name] = {
                         "active": bool(is_active),
                         "rounds_total": 0,
@@ -7070,6 +7681,7 @@ class WebApp:
             """Последние записи памяти свёрма для конкретной команды."""
             try:
                 from ..core.swarm_memory import swarm_memory as _sm
+
                 entries = _sm.recall(team, limit=limit) if hasattr(_sm, "recall") else []
                 return {
                     "ok": True,
@@ -7080,7 +7692,9 @@ class WebApp:
                             "timestamp": str(e.get("timestamp", "")),
                         }
                         for e in (entries or [])[:limit]
-                    ] if entries else [],
+                    ]
+                    if entries
+                    else [],
                 }
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
@@ -7093,17 +7707,39 @@ class WebApp:
         @self.app.get("/api/browser/status")
         async def browser_status():
             try:
-                attached = await asyncio.wait_for(_browser_bridge.is_attached(), timeout=browser_bridge_timeout_sec)
-                tabs = await asyncio.wait_for(_browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec) if attached else []
+                attached = await asyncio.wait_for(
+                    _browser_bridge.is_attached(), timeout=browser_bridge_timeout_sec
+                )
+                tabs = (
+                    await asyncio.wait_for(
+                        _browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec
+                    )
+                    if attached
+                    else []
+                )
             except Exception as exc:
-                return {"ok": False, "error": "browser_timeout", "detail": str(exc), "attached": False, "tab_count": 0, "active_url": None}
+                return {
+                    "ok": False,
+                    "error": "browser_timeout",
+                    "detail": str(exc),
+                    "attached": False,
+                    "tab_count": 0,
+                    "active_url": None,
+                }
             active_url = tabs[-1]["url"] if tabs else None
-            return {"ok": True, "attached": attached, "tab_count": len(tabs), "active_url": active_url}
+            return {
+                "ok": True,
+                "attached": attached,
+                "tab_count": len(tabs),
+                "active_url": active_url,
+            }
 
         @self.app.get("/api/browser/tabs")
         async def browser_tabs():
             try:
-                tabs = await asyncio.wait_for(_browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec)
+                tabs = await asyncio.wait_for(
+                    _browser_bridge.list_tabs(), timeout=browser_bridge_timeout_sec
+                )
             except Exception as exc:
                 return {"ok": False, "error": "browser_timeout", "detail": str(exc), "tabs": []}
             return tabs
@@ -7114,7 +7750,9 @@ class WebApp:
             if not url:
                 raise HTTPException(status_code=400, detail="url required")
             try:
-                current_url = await asyncio.wait_for(_browser_bridge.navigate(url), timeout=browser_bridge_timeout_sec)
+                current_url = await asyncio.wait_for(
+                    _browser_bridge.navigate(url), timeout=browser_bridge_timeout_sec
+                )
             except Exception as exc:
                 return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
             return {"ok": True, "current_url": current_url}
@@ -7122,7 +7760,9 @@ class WebApp:
         @self.app.post("/api/browser/screenshot")
         async def browser_screenshot():
             try:
-                data = await asyncio.wait_for(_browser_bridge.screenshot_base64(), timeout=browser_bridge_timeout_sec)
+                data = await asyncio.wait_for(
+                    _browser_bridge.screenshot_base64(), timeout=browser_bridge_timeout_sec
+                )
             except Exception as exc:
                 return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
             if data is None:
@@ -7132,7 +7772,9 @@ class WebApp:
         @self.app.post("/api/browser/read")
         async def browser_read():
             try:
-                text = await asyncio.wait_for(_browser_bridge.get_page_text(), timeout=browser_bridge_timeout_sec)
+                text = await asyncio.wait_for(
+                    _browser_bridge.get_page_text(), timeout=browser_bridge_timeout_sec
+                )
             except Exception as exc:
                 return {"ok": False, "error": "browser_timeout", "detail": str(exc), "text": ""}
             return {"ok": True, "text": text}
@@ -7143,7 +7785,9 @@ class WebApp:
             if not code:
                 raise HTTPException(status_code=400, detail="code required")
             try:
-                result = await asyncio.wait_for(_browser_bridge.execute_js(code), timeout=browser_bridge_timeout_sec)
+                result = await asyncio.wait_for(
+                    _browser_bridge.execute_js(code), timeout=browser_bridge_timeout_sec
+                )
             except Exception as exc:
                 return {"ok": False, "error": "browser_timeout", "detail": str(exc)}
             return {"ok": True, "result": result}
@@ -7170,7 +7814,9 @@ class WebApp:
             except Exception:
                 openclaw_ok = False
             try:
-                voice_gateway_ok = bool(await voice_gateway.health_check()) if voice_gateway else False
+                voice_gateway_ok = (
+                    bool(await voice_gateway.health_check()) if voice_gateway else False
+                )
             except Exception:
                 voice_gateway_ok = False
             try:
@@ -7183,8 +7829,12 @@ class WebApp:
 
             stt_isolated_worker = _env_on("STT_ISOLATED_WORKER", "1")
             perceptor_ready = bool(perceptor) and hasattr(perceptor, "transcribe")
-            perceptor_isolated_worker = bool(getattr(perceptor, "stt_isolated_worker", stt_isolated_worker))
-            stt_worker_timeout = int(str(os.getenv("STT_WORKER_TIMEOUT_SECONDS", "240")).strip() or "240")
+            perceptor_isolated_worker = bool(
+                getattr(perceptor, "stt_isolated_worker", stt_isolated_worker)
+            )
+            stt_worker_timeout = int(
+                str(os.getenv("STT_WORKER_TIMEOUT_SECONDS", "240")).strip() or "240"
+            )
             voice_stack_ready = bool(voice_gateway_ok and krab_ear_ok)
             voice_profile = {}
             if kraab_userbot and hasattr(kraab_userbot, "get_voice_runtime_profile"):
@@ -7192,7 +7842,9 @@ class WebApp:
                     voice_profile = dict(kraab_userbot.get_voice_runtime_profile() or {})
                 except Exception:
                     voice_profile = {}
-            live_voice_ready = bool(perceptor_ready and voice_stack_ready and voice_profile.get("enabled"))
+            live_voice_ready = bool(
+                perceptor_ready and voice_stack_ready and voice_profile.get("enabled")
+            )
 
             if perceptor_ready and perceptor_isolated_worker and voice_stack_ready:
                 readiness = "ready"
@@ -7202,19 +7854,29 @@ class WebApp:
                 readiness = "down"
             recommendations: list[str] = []
             if not perceptor_ready:
-                recommendations.append("Perceptor/STT не подключён: voice notes не будут транскрибироваться")
+                recommendations.append(
+                    "Perceptor/STT не подключён: voice notes не будут транскрибироваться"
+                )
                 recommendations.append("Запусти ./transcriber_doctor.command --heal")
             if perceptor_ready and not perceptor_isolated_worker:
                 recommendations.append("Включи STT_ISOLATED_WORKER=1 и перезапусти Krab")
             if not voice_gateway_ok:
-                recommendations.append("Voice Gateway недоступен: звонки и live voice-stream будут ограничены")
+                recommendations.append(
+                    "Voice Gateway недоступен: звонки и live voice-stream будут ограничены"
+                )
             if not krab_ear_ok:
-                recommendations.append("Krab Ear недоступен: wake/call-часть voice-контура деградировала")
+                recommendations.append(
+                    "Krab Ear недоступен: wake/call-часть voice-контура деградировала"
+                )
             if voice_profile:
                 if not bool(voice_profile.get("enabled")):
-                    recommendations.append("Voice replies выключены: входящий voice ingress готов, но ответы голосом отключены")
+                    recommendations.append(
+                        "Voice replies выключены: входящий voice ingress готов, но ответы голосом отключены"
+                    )
                 elif live_voice_ready:
-                    recommendations.append("Voice replies включены: foundation для live voice готова")
+                    recommendations.append(
+                        "Voice replies включены: foundation для live voice готова"
+                    )
             if not recommendations:
                 recommendations.append("Система транскрибации в рабочем режиме")
 
@@ -7290,7 +7952,18 @@ class WebApp:
         @self.app.get("/api/openclaw/cron/status")
         async def openclaw_cron_status():
             """Возвращает truthful snapshot scheduler и recurring jobs из OpenClaw CLI."""
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
+            # Верхний guard: если CLI не отвечает — не зависаем бесконечно.
+            try:
+                snapshot = await asyncio.wait_for(
+                    self._collect_openclaw_cron_snapshot(include_all=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False,
+                    "error": "OpenClaw timeout (5s)",
+                    "detail": "gateway not responding",
+                }
             if not snapshot.get("ok"):
                 return snapshot
             return snapshot
@@ -7298,7 +7971,18 @@ class WebApp:
         @self.app.get("/api/openclaw/cron/jobs")
         async def openclaw_cron_jobs(include_all: bool = Query(default=True)):
             """Возвращает recurring jobs для owner UI без дублирования cron-движка."""
-            snapshot = await self._collect_openclaw_cron_snapshot(include_all=bool(include_all))
+            # Верхний guard: если CLI не отвечает — не зависаем бесконечно.
+            try:
+                snapshot = await asyncio.wait_for(
+                    self._collect_openclaw_cron_snapshot(include_all=bool(include_all)),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False,
+                    "error": "OpenClaw timeout (5s)",
+                    "detail": "gateway not responding",
+                }
             if not snapshot.get("ok"):
                 return snapshot
             return {
@@ -7538,8 +8222,10 @@ class WebApp:
                             body=body,
                             request_key=str(payload.get("request_key") or "").strip(),
                             source=source,
-                            severity=str(payload.get("severity") or "warning").strip().lower() or "warning",
-                            approval_scope=str(payload.get("approval_scope") or "owner").strip() or "owner",
+                            severity=str(payload.get("severity") or "warning").strip().lower()
+                            or "warning",
+                            approval_scope=str(payload.get("approval_scope") or "owner").strip()
+                            or "owner",
                             requested_action=str(payload.get("requested_action") or "").strip(),
                             metadata=metadata,
                         )
@@ -7549,18 +8235,22 @@ class WebApp:
                             body=body,
                             request_key=str(payload.get("request_key") or "").strip(),
                             source=source,
-                            severity=str(payload.get("severity") or "warning").strip().lower() or "warning",
+                            severity=str(payload.get("severity") or "warning").strip().lower()
+                            or "warning",
                             channel_id=channel_id,
                             team_id=team_id,
                             trace_id=str(payload.get("trace_id") or "").strip(),
-                            approval_scope=str(payload.get("approval_scope") or "owner").strip() or "owner",
+                            approval_scope=str(payload.get("approval_scope") or "owner").strip()
+                            or "owner",
                             requested_action=str(payload.get("requested_action") or "").strip(),
                             metadata=metadata,
                         )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not result.get("ok"):
-                raise HTTPException(status_code=404, detail=str(result.get("error") or "inbox_item_not_found"))
+                raise HTTPException(
+                    status_code=404, detail=str(result.get("error") or "inbox_item_not_found")
+                )
 
             return {
                 "ok": True,
@@ -7640,7 +8330,9 @@ class WebApp:
                 return {
                     "ok": False,
                     "error": create_result.get("error") or "cron_create_failed",
-                    "detail": create_result.get("detail") or create_result.get("raw") or "Не удалось создать recurring job",
+                    "detail": create_result.get("detail")
+                    or create_result.get("raw")
+                    or "Не удалось создать recurring job",
                 }
 
             snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
@@ -7682,7 +8374,9 @@ class WebApp:
                 return {
                     "ok": False,
                     "error": toggle_result.get("error") or "cron_toggle_failed",
-                    "detail": toggle_result.get("detail") or toggle_result.get("raw") or "Не удалось изменить состояние recurring job",
+                    "detail": toggle_result.get("detail")
+                    or toggle_result.get("raw")
+                    or "Не удалось изменить состояние recurring job",
                 }
 
             snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
@@ -7723,7 +8417,9 @@ class WebApp:
                 return {
                     "ok": False,
                     "error": remove_result.get("error") or "cron_remove_failed",
-                    "detail": remove_result.get("detail") or remove_result.get("raw") or "Не удалось удалить recurring job",
+                    "detail": remove_result.get("detail")
+                    or remove_result.get("raw")
+                    or "Не удалось удалить recurring job",
                 }
 
             snapshot = await self._collect_openclaw_cron_snapshot(include_all=True)
@@ -7827,7 +8523,11 @@ class WebApp:
             Runtime-конфиг OpenClaw для UI.
             Важно: секрет не отдаём целиком, только masked + флаг присутствия.
             """
-            base_url = str(getattr(config, "OPENCLAW_URL", "") or "http://127.0.0.1:18789").strip().rstrip("/")
+            base_url = (
+                str(getattr(config, "OPENCLAW_URL", "") or "http://127.0.0.1:18789")
+                .strip()
+                .rstrip("/")
+            )
             raw_key = str(self._openclaw_gateway_token_from_config() or "").strip()
             key_present = False
             key_masked = ""
@@ -7853,28 +8553,47 @@ class WebApp:
                     "local_fallback_enabled": bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True)),
                     "native_reasoning_mode": str(
                         getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or "off"
-                    ).strip().lower(),
-                    "photo_force_cloud": bool(getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)),
+                    )
+                    .strip()
+                    .lower(),
+                    "photo_force_cloud": bool(
+                        getattr(config, "USERBOT_FORCE_CLOUD_FOR_PHOTO", True)
+                    ),
                     "output_tokens": {
                         "text": int(getattr(config, "USERBOT_MAX_OUTPUT_TOKENS", 1200) or 1200),
-                        "photo": int(getattr(config, "USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420) or 420),
+                        "photo": int(
+                            getattr(config, "USERBOT_PHOTO_MAX_OUTPUT_TOKENS", 420) or 420
+                        ),
                     },
                     "history_budget": {
-                        "dialog_messages": int(getattr(config, "HISTORY_WINDOW_MESSAGES", 50) or 50),
+                        "dialog_messages": int(
+                            getattr(config, "HISTORY_WINDOW_MESSAGES", 50) or 50
+                        ),
                         "dialog_max_chars": getattr(config, "HISTORY_WINDOW_MAX_CHARS", None),
-                        "local_messages": int(getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18) or 18),
+                        "local_messages": int(
+                            getattr(config, "LOCAL_HISTORY_WINDOW_MESSAGES", 18) or 18
+                        ),
                         "local_max_chars": getattr(config, "LOCAL_HISTORY_WINDOW_MAX_CHARS", None),
-                        "retry_messages": int(getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8),
-                        "retry_max_chars": int(getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000),
-                        "retry_message_max_chars": int(getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200),
+                        "retry_messages": int(
+                            getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8
+                        ),
+                        "retry_max_chars": int(
+                            getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000
+                        ),
+                        "retry_message_max_chars": int(
+                            getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200
+                        ),
                     },
                     "timeouts_sec": {
-                        "chunk": float(getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0) or 180.0),
+                        "chunk": float(
+                            getattr(config, "OPENCLAW_CHUNK_TIMEOUT_SEC", 180.0) or 180.0
+                        ),
                         "first_chunk": float(
                             getattr(config, "OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC", 420.0) or 420.0
                         ),
                         "photo_first_chunk": float(
-                            getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0) or 540.0
+                            getattr(config, "OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC", 540.0)
+                            or 540.0
                         ),
                     },
                 },
@@ -7921,11 +8640,15 @@ class WebApp:
             run = self._run_local_script(script_path, timeout_seconds=180)
             if not bool(run.get("ok")):
                 detail = str(run.get("error") or f"exit_code={run.get('exit_code', 1)}")
-                raise HTTPException(status_code=500, detail=f"context_transition_pack_failed:{detail}")
+                raise HTTPException(
+                    status_code=500, detail=f"context_transition_pack_failed:{detail}"
+                )
 
             pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
             if pack_dir is None:
-                raise HTTPException(status_code=500, detail="context_transition_pack_failed:no_pack_dir")
+                raise HTTPException(
+                    status_code=500, detail="context_transition_pack_failed:no_pack_dir"
+                )
 
             transfer_prompt = pack_dir / "TRANSFER_PROMPT_RU.md"
             files_to_attach = pack_dir / "FILES_TO_ATTACH.txt"
@@ -7952,8 +8675,12 @@ class WebApp:
                 "ok": True,
                 "latest_checkpoint_path": str(checkpoint) if checkpoint else None,
                 "latest_pack_dir": str(pack_dir) if pack_dir else None,
-                "latest_transfer_prompt_path": str(transfer_prompt) if transfer_prompt and transfer_prompt.exists() else None,
-                "latest_files_to_attach_path": str(files_to_attach) if files_to_attach and files_to_attach.exists() else None,
+                "latest_transfer_prompt_path": str(transfer_prompt)
+                if transfer_prompt and transfer_prompt.exists()
+                else None,
+                "latest_files_to_attach_path": str(files_to_attach)
+                if files_to_attach and files_to_attach.exists()
+                else None,
             }
 
         @self.app.get("/api/runtime/operator-profile")
@@ -8028,19 +8755,29 @@ class WebApp:
             self._assert_write_access(x_krab_web_key, token)
             state = self.kraab.get_translator_session_state()
             if state.get("session_status") == "active":
-                new_state = self.kraab.update_translator_session_state(
-                    session_status="idle", active_chats=[], last_event="session_stopped_api", persist=True,
+                self.kraab.update_translator_session_state(
+                    session_status="idle",
+                    active_chats=[],
+                    last_event="session_stopped_api",
+                    persist=True,
                 )
                 return {"ok": True, "action": "stopped", "status": "idle"}
             profile = self.kraab.get_translator_runtime_profile()
             chat_id = str(payload.get("chat_id") or "").strip()
             active_chats = [chat_id] if chat_id else []
-            new_state = self.kraab.update_translator_session_state(
-                session_status="active", active_chats=active_chats,
+            self.kraab.update_translator_session_state(
+                session_status="active",
+                active_chats=active_chats,
                 last_language_pair=profile.get("language_pair"),
-                last_event="session_started_api", persist=True,
+                last_event="session_started_api",
+                persist=True,
             )
-            return {"ok": True, "action": "started", "status": "active", "active_chats": active_chats}
+            return {
+                "ok": True,
+                "action": "started",
+                "status": "active",
+                "active_chats": active_chats,
+            }
 
         @self.app.post("/api/translator/auto")
         async def translator_auto(
@@ -8061,10 +8798,14 @@ class WebApp:
             """Сменить языковую пару через API."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
+
             pair = str(payload.get("language_pair") or "").strip().lower()
             if pair not in ALLOWED_LANGUAGE_PAIRS:
-                return {"ok": False, "error": f"invalid pair, use: {sorted(ALLOWED_LANGUAGE_PAIRS)}"}
-            profile = self.kraab.update_translator_runtime_profile(language_pair=pair, persist=True)
+                return {
+                    "ok": False,
+                    "error": f"invalid pair, use: {sorted(ALLOWED_LANGUAGE_PAIRS)}",
+                }
+            self.kraab.update_translator_runtime_profile(language_pair=pair, persist=True)
             return {"ok": True, "language_pair": pair}
 
         @self.app.get("/api/translator/history")
@@ -8077,7 +8818,10 @@ class WebApp:
                     "ok": True,
                     "total_translations": stats.get("total_translations", 0),
                     "total_latency_ms": stats.get("total_latency_ms", 0),
-                    "avg_latency_ms": round(stats.get("total_latency_ms", 0) / max(1, stats.get("total_translations", 1))),
+                    "avg_latency_ms": round(
+                        stats.get("total_latency_ms", 0)
+                        / max(1, stats.get("total_translations", 1))
+                    ),
                     "last_pair": state.get("last_language_pair", ""),
                     "last_original": state.get("last_translated_original", ""),
                     "last_translation": state.get("last_translated_translation", ""),
@@ -8102,13 +8846,16 @@ class WebApp:
                 from ..core.language_detect import detect_language, resolve_translation_pair
                 from ..core.translator_engine import translate_text
                 from ..openclaw_client import openclaw_client as _oc
+
                 if not src_lang:
                     src_lang = detect_language(text)
                 if not src_lang:
                     return {"ok": False, "error": "language not detected"}
                 profile = self.kraab.get_translator_runtime_profile()
                 if not tgt_lang or tgt_lang == "auto":
-                    src_lang, tgt_lang = resolve_translation_pair(src_lang, profile.get("language_pair", "es-ru"))
+                    src_lang, tgt_lang = resolve_translation_pair(
+                        src_lang, profile.get("language_pair", "es-ru")
+                    )
                 result = await translate_text(text, src_lang, tgt_lang, openclaw_client=_oc)
                 return {
                     "ok": True,
@@ -8323,7 +9070,9 @@ class WebApp:
                 latest_error = str(exc)
                 raw_user = str(os.getenv("USER") or Path.home().name or "user").strip().lower()
                 safe_user = re.sub(r"[^a-z0-9_-]+", "_", raw_user) or "user"
-                fallback_latest_path = ops_dir / f"translator_mobile_onboarding_latest_{safe_user}.json"
+                fallback_latest_path = (
+                    ops_dir / f"translator_mobile_onboarding_latest_{safe_user}.json"
+                )
                 try:
                     self._write_json_file(fallback_latest_path, onboarding)
                     effective_latest_path = fallback_latest_path
@@ -8354,10 +9103,14 @@ class WebApp:
             voice_gateway = self._translator_gateway_client_or_raise()
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_session_start_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_session_start_body_required"
+                )
 
             source = str(body.get("source") or "mic").strip() or "mic"
-            translation_mode = str(body.get("translation_mode") or "auto_to_ru").strip() or "auto_to_ru"
+            translation_mode = (
+                str(body.get("translation_mode") or "auto_to_ru").strip() or "auto_to_ru"
+            )
             notify_mode = str(body.get("notify_mode") or "auto_on").strip() or "auto_on"
             tts_mode = str(body.get("tts_mode") or "hybrid").strip() or "hybrid"
             src_lang = str(body.get("src_lang") or "auto").strip() or "auto"
@@ -8391,7 +9144,9 @@ class WebApp:
             if new_session_id:
                 await self._start_vg_subscriber(new_session_id, voice_gateway)
 
-            return await self._translator_action_response(action="start_session", gateway_result=result)
+            return await self._translator_action_response(
+                action="start_session", gateway_result=result
+            )
 
         @self.app.post("/api/translator/session/policy")
         async def translator_session_policy_update(
@@ -8404,9 +9159,15 @@ class WebApp:
             voice_gateway = self._translator_gateway_client_or_raise()
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_session_policy_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_session_policy_body_required"
+                )
 
-            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+            (
+                session_id,
+                runtime_lite,
+                _control_plane,
+            ) = await self._translator_resolve_session_context(
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             patch: dict[str, Any] = {}
@@ -8417,7 +9178,9 @@ class WebApp:
                     if clean:
                         patch[key] = clean
             if not patch:
-                raise HTTPException(status_code=400, detail="translator_session_policy_patch_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_session_policy_patch_required"
+                )
 
             result = await voice_gateway.patch_session(session_id, **patch)
             if not result.get("ok"):
@@ -8443,13 +9206,19 @@ class WebApp:
             voice_gateway = self._translator_gateway_client_or_raise()
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_session_action_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_session_action_body_required"
+                )
 
             action = str(body.get("action") or "").strip().lower()
             if action not in {"pause", "resume", "stop"}:
                 raise HTTPException(status_code=400, detail="translator_session_action_invalid")
 
-            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+            (
+                session_id,
+                runtime_lite,
+                _control_plane,
+            ) = await self._translator_resolve_session_context(
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             if action == "stop":
@@ -8484,7 +9253,11 @@ class WebApp:
             if not isinstance(body, dict):
                 raise HTTPException(status_code=400, detail="translator_runtime_tune_body_required")
 
-            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+            (
+                session_id,
+                runtime_lite,
+                _control_plane,
+            ) = await self._translator_resolve_session_context(
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             buffering_mode = str(body.get("buffering_mode") or "").strip() or None
@@ -8496,17 +9269,23 @@ class WebApp:
                 try:
                     target_latency_ms = int(target_latency_raw)
                 except (TypeError, ValueError) as exc:
-                    raise HTTPException(status_code=400, detail="translator_target_latency_invalid") from exc
+                    raise HTTPException(
+                        status_code=400, detail="translator_target_latency_invalid"
+                    ) from exc
 
             vad_sensitivity = None
             if vad_raw not in (None, ""):
                 try:
                     vad_sensitivity = float(vad_raw)
                 except (TypeError, ValueError) as exc:
-                    raise HTTPException(status_code=400, detail="translator_vad_sensitivity_invalid") from exc
+                    raise HTTPException(
+                        status_code=400, detail="translator_vad_sensitivity_invalid"
+                    ) from exc
 
             if buffering_mode is None and target_latency_ms is None and vad_sensitivity is None:
-                raise HTTPException(status_code=400, detail="translator_runtime_tune_patch_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_runtime_tune_patch_required"
+                )
 
             result = await voice_gateway.tune_runtime(
                 session_id,
@@ -8539,7 +9318,11 @@ class WebApp:
             if not isinstance(body, dict):
                 raise HTTPException(status_code=400, detail="translator_quick_phrase_body_required")
 
-            session_id, runtime_lite, control_plane = await self._translator_resolve_session_context(
+            (
+                session_id,
+                runtime_lite,
+                control_plane,
+            ) = await self._translator_resolve_session_context(
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             text = str(body.get("text") or "").strip()
@@ -8551,10 +9334,26 @@ class WebApp:
                 if isinstance(control_plane.get("operator_actions"), dict)
                 else {}
             )
-            source_lang = str(body.get("source_lang") or defaults.get("quick_phrase_source_lang") or "ru").strip() or "ru"
-            target_lang = str(body.get("target_lang") or defaults.get("quick_phrase_target_lang") or "es").strip() or "es"
-            voice = str(body.get("voice") or defaults.get("quick_phrase_voice") or "default").strip() or "default"
-            style = str(body.get("style") or defaults.get("quick_phrase_style") or "neutral").strip() or "neutral"
+            source_lang = (
+                str(
+                    body.get("source_lang") or defaults.get("quick_phrase_source_lang") or "ru"
+                ).strip()
+                or "ru"
+            )
+            target_lang = (
+                str(
+                    body.get("target_lang") or defaults.get("quick_phrase_target_lang") or "es"
+                ).strip()
+                or "es"
+            )
+            voice = (
+                str(body.get("voice") or defaults.get("quick_phrase_voice") or "default").strip()
+                or "default"
+            )
+            style = (
+                str(body.get("style") or defaults.get("quick_phrase_style") or "neutral").strip()
+                or "neutral"
+            )
 
             result = await voice_gateway.send_quick_phrase(
                 session_id,
@@ -8587,15 +9386,23 @@ class WebApp:
             voice_gateway = self._translator_gateway_client_or_raise()
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_session_summary_body_required")
-            session_id, runtime_lite, _control_plane = await self._translator_resolve_session_context(
+                raise HTTPException(
+                    status_code=400, detail="translator_session_summary_body_required"
+                )
+            (
+                session_id,
+                runtime_lite,
+                _control_plane,
+            ) = await self._translator_resolve_session_context(
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             max_items_raw = body.get("max_items", 20)
             try:
                 max_items = int(max_items_raw)
             except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail="translator_summary_max_items_invalid") from exc
+                raise HTTPException(
+                    status_code=400, detail="translator_summary_max_items_invalid"
+                ) from exc
             result = await voice_gateway.build_summary(session_id, max_items=max_items)
             if not result.get("ok"):
                 status_code, detail = self._translator_gateway_error_detail(
@@ -8619,9 +9426,15 @@ class WebApp:
             self._assert_write_access(x_krab_web_key, token)
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_session_escalate_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_session_escalate_body_required"
+                )
 
-            session_id, runtime_lite, control_plane = await self._translator_resolve_session_context(
+            (
+                session_id,
+                runtime_lite,
+                control_plane,
+            ) = await self._translator_resolve_session_context(
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             inspector = await self._translator_session_inspector_snapshot(
@@ -8636,15 +9449,27 @@ class WebApp:
             title = str(body.get("title") or escalation.get("suggested_title") or "").strip()
             summary_body = str(body.get("body") or escalation.get("suggested_body") or "").strip()
             if not title or not summary_body:
-                raise HTTPException(status_code=400, detail="translator_session_escalation_title_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_session_escalation_title_body_required"
+                )
 
             why_items = (
-                [str(item).strip() for item in ((inspector.get("why_report") or {}).get("items") or []) if str(item).strip()]
+                [
+                    str(item).strip()
+                    for item in ((inspector.get("why_report") or {}).get("items") or [])
+                    if str(item).strip()
+                ]
                 if isinstance(inspector.get("why_report"), dict)
                 else []
             )
-            severity = "warning" if why_items or str(inspector.get("status") or "") == "gateway_unavailable" else "info"
-            task_key = str(body.get("task_key") or f"translator-session:{session_id}:diagnostics").strip()
+            severity = (
+                "warning"
+                if why_items or str(inspector.get("status") or "") == "gateway_unavailable"
+                else "info"
+            )
+            task_key = str(
+                body.get("task_key") or f"translator-session:{session_id}:diagnostics"
+            ).strip()
             result = inbox_service.upsert_owner_task(
                 title=title,
                 body=summary_body,
@@ -8667,13 +9492,18 @@ class WebApp:
                 },
             )
             if not result.get("ok"):
-                raise HTTPException(status_code=500, detail=str(result.get("error") or "translator_session_escalation_failed"))
+                raise HTTPException(
+                    status_code=500,
+                    detail=str(result.get("error") or "translator_session_escalation_failed"),
+                )
             readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
             return {
                 "ok": True,
                 "action": "escalate_session",
                 "session_id": session_id,
-                "inbox_result": result.get("item") if isinstance(result.get("item"), dict) else result,
+                "inbox_result": result.get("item")
+                if isinstance(result.get("item"), dict)
+                else result,
                 "readiness": readiness,
                 "control_plane": control_plane,
                 "session_inspector": inspector,
@@ -8691,16 +9521,21 @@ class WebApp:
             voice_gateway = self._translator_gateway_client_or_raise()
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_mobile_register_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_mobile_register_body_required"
+                )
 
             result = await voice_gateway.register_mobile_device(
                 device_id=str(body.get("device_id") or "").strip(),
                 voip_push_token=str(body.get("voip_push_token") or "").strip(),
-                apns_environment=str(body.get("apns_environment") or "development").strip() or "development",
+                apns_environment=str(body.get("apns_environment") or "development").strip()
+                or "development",
                 app_version=str(body.get("app_version") or "").strip(),
                 locale=str(body.get("locale") or "ru").strip() or "ru",
-                preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip() or "auto",
-                preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip() or "ru",
+                preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip()
+                or "auto",
+                preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip()
+                or "ru",
                 notify_default=bool(body.get("notify_default", True)),
             )
             if not result.get("ok"):
@@ -8741,7 +9576,9 @@ class WebApp:
             voice_gateway = self._translator_gateway_client_or_raise()
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_mobile_trial_prep_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_mobile_trial_prep_body_required"
+                )
 
             runtime_lite = await self._collect_runtime_lite_snapshot()
             readiness = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
@@ -8752,15 +9589,21 @@ class WebApp:
             )
 
             requested_device_id = str(body.get("device_id") or "").strip().lower()
-            selected_device_id = str(
-                ((mobile_readiness.get("devices") or {}).get("selected_device_id") or "")
-            ).strip().lower()
+            selected_device_id = (
+                str(((mobile_readiness.get("devices") or {}).get("selected_device_id") or ""))
+                .strip()
+                .lower()
+            )
             device_id = requested_device_id or selected_device_id
             if not device_id:
                 raise HTTPException(status_code=400, detail="device_id_required_for_trial_prep")
 
             existing_devices = (
-                [dict(item) for item in ((mobile_readiness.get("devices") or {}).get("items") or []) if isinstance(item, dict)]
+                [
+                    dict(item)
+                    for item in ((mobile_readiness.get("devices") or {}).get("items") or [])
+                    if isinstance(item, dict)
+                ]
                 if isinstance(mobile_readiness.get("devices"), dict)
                 else []
             )
@@ -8783,11 +9626,14 @@ class WebApp:
                 register_result = await voice_gateway.register_mobile_device(
                     device_id=device_id,
                     voip_push_token=str(body.get("voip_push_token") or "").strip(),
-                    apns_environment=str(body.get("apns_environment") or "development").strip() or "development",
+                    apns_environment=str(body.get("apns_environment") or "development").strip()
+                    or "development",
                     app_version=str(body.get("app_version") or "").strip(),
                     locale=str(body.get("locale") or "ru").strip() or "ru",
-                    preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip() or "auto",
-                    preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip() or "ru",
+                    preferred_source_lang=str(body.get("preferred_source_lang") or "auto").strip()
+                    or "auto",
+                    preferred_target_lang=str(body.get("preferred_target_lang") or "ru").strip()
+                    or "ru",
                     notify_default=bool(body.get("notify_default", True)),
                 )
                 if not register_result.get("ok"):
@@ -8799,19 +9645,24 @@ class WebApp:
                 last_gateway_result = register_result
                 performed_steps.append("device_registered")
 
-            session_id = str(body.get("session_id") or "").strip() or str(
-                ((control_plane.get("sessions") or {}).get("current_session_id") or "")
-            ).strip()
+            session_id = (
+                str(body.get("session_id") or "").strip()
+                or str(
+                    ((control_plane.get("sessions") or {}).get("current_session_id") or "")
+                ).strip()
+            )
             if not session_id:
                 start_result = await voice_gateway.start_session(
                     source=str(body.get("source") or "mobile").strip() or "mobile",
-                    translation_mode=str(body.get("translation_mode") or "auto_to_ru").strip() or "auto_to_ru",
+                    translation_mode=str(body.get("translation_mode") or "auto_to_ru").strip()
+                    or "auto_to_ru",
                     notify_mode=str(body.get("notify_mode") or "auto_on").strip() or "auto_on",
                     tts_mode=str(body.get("tts_mode") or "hybrid").strip() or "hybrid",
                     src_lang=str(body.get("src_lang") or "auto").strip() or "auto",
                     tgt_lang=str(body.get("tgt_lang") or "ru").strip() or "ru",
                     meta={
-                        "label": str(body.get("label") or "Companion Trial").strip() or "Companion Trial",
+                        "label": str(body.get("label") or "Companion Trial").strip()
+                        or "Companion Trial",
                         "prepared_via": "owner_mobile_trial_prep",
                         "device_id": device_id,
                     },
@@ -8827,7 +9678,9 @@ class WebApp:
                     "ok": True,
                     "device_id": device_id,
                     "session_id": session_id,
-                    "result": start_result.get("result") if isinstance(start_result.get("result"), dict) else {},
+                    "result": start_result.get("result")
+                    if isinstance(start_result.get("result"), dict)
+                    else {},
                 }
                 performed_steps.append("session_created")
 
@@ -8866,7 +9719,11 @@ class WebApp:
             device_id = str(body.get("device_id") or "").strip().lower()
             if not device_id:
                 raise HTTPException(status_code=400, detail="device_id_required")
-            session_id, runtime_lite, control_plane = await self._translator_resolve_session_context(
+            (
+                session_id,
+                runtime_lite,
+                control_plane,
+            ) = await self._translator_resolve_session_context(
                 requested_session_id=str(body.get("session_id") or "").strip()
             )
             result = await voice_gateway.bind_mobile_device(device_id, session_id=session_id)
@@ -8877,14 +9734,18 @@ class WebApp:
                 )
                 raise HTTPException(status_code=status_code, detail=detail)
 
-            refreshed_control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            refreshed_control_plane = await self._translator_control_plane_snapshot(
+                runtime_lite=runtime_lite
+            )
             return await self._translator_mobile_action_response(
                 action="bind_mobile_device",
                 gateway_result={
                     "ok": True,
                     "device_id": device_id,
                     "session_id": session_id,
-                    "result": result.get("result") if isinstance(result.get("result"), dict) else {},
+                    "result": result.get("result")
+                    if isinstance(result.get("result"), dict)
+                    else {},
                 },
                 runtime_lite=runtime_lite,
                 current_control_plane=refreshed_control_plane,
@@ -8901,7 +9762,9 @@ class WebApp:
             voice_gateway = self._translator_gateway_client_or_raise()
             body = await request.json()
             if not isinstance(body, dict):
-                raise HTTPException(status_code=400, detail="translator_mobile_remove_body_required")
+                raise HTTPException(
+                    status_code=400, detail="translator_mobile_remove_body_required"
+                )
 
             runtime_lite = await self._collect_runtime_lite_snapshot()
             control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
@@ -8909,9 +9772,12 @@ class WebApp:
                 runtime_lite=runtime_lite,
                 current_control_plane=control_plane,
             )
-            device_id = str(body.get("device_id") or "").strip().lower() or str(
-                ((mobile_readiness.get("devices") or {}).get("selected_device_id") or "")
-            ).strip().lower()
+            device_id = (
+                str(body.get("device_id") or "").strip().lower()
+                or str(((mobile_readiness.get("devices") or {}).get("selected_device_id") or ""))
+                .strip()
+                .lower()
+            )
             if not device_id:
                 raise HTTPException(status_code=400, detail="device_id_required")
 
@@ -8923,14 +9789,25 @@ class WebApp:
                 )
                 raise HTTPException(status_code=status_code, detail=detail)
 
-            refreshed_control_plane = await self._translator_control_plane_snapshot(runtime_lite=runtime_lite)
+            refreshed_control_plane = await self._translator_control_plane_snapshot(
+                runtime_lite=runtime_lite
+            )
             return await self._translator_mobile_action_response(
                 action="remove_mobile_device",
                 gateway_result={
                     "ok": True,
                     "device_id": device_id,
-                    "session_id": str(((refreshed_control_plane.get("sessions") or {}).get("current_session_id") or "")).strip(),
-                    "result": result.get("result") if isinstance(result.get("result"), dict) else {},
+                    "session_id": str(
+                        (
+                            (refreshed_control_plane.get("sessions") or {}).get(
+                                "current_session_id"
+                            )
+                            or ""
+                        )
+                    ).strip(),
+                    "result": result.get("result")
+                    if isinstance(result.get("result"), dict)
+                    else {},
                 },
                 runtime_lite=runtime_lite,
                 current_control_plane=refreshed_control_plane,
@@ -8951,8 +9828,12 @@ class WebApp:
 
             runtime_lite = await self._collect_runtime_lite_snapshot()
             operator_profile = self._runtime_operator_profile()
-            translator_snapshot = await self._translator_readiness_snapshot(runtime_lite=runtime_lite)
-            capability_registry = await self._capability_registry_snapshot(runtime_lite=runtime_lite)
+            translator_snapshot = await self._translator_readiness_snapshot(
+                runtime_lite=runtime_lite
+            )
+            capability_registry = await self._capability_registry_snapshot(
+                runtime_lite=runtime_lite
+            )
             openclaw_health = await self._safe_client_health_summary(
                 openclaw,
                 source="openclaw",
@@ -8976,7 +9857,9 @@ class WebApp:
                 cloud_runtime = {"available": False, "skipped": True, "reason": "probe_disabled"}
             elif openclaw and hasattr(openclaw, "get_cloud_runtime_check"):
                 try:
-                    cloud_report = await asyncio.wait_for(openclaw.get_cloud_runtime_check(), timeout=18.0)
+                    cloud_report = await asyncio.wait_for(
+                        openclaw.get_cloud_runtime_check(), timeout=18.0
+                    )
                     cloud_runtime = {"available": True, "report": cloud_report}
                     # После cloud-probe `openclaw_client` может обновить tier/auth truth.
                     # Переснимаем lightweight runtime, чтобы handoff не уносил stale
@@ -8990,7 +9873,9 @@ class WebApp:
                 cloud_runtime = {"available": False, "error": "not_supported"}
 
             latest_bundle = self._latest_path_by_glob("artifacts/handoff_*")
-            latest_checkpoint = self._latest_path_by_glob("artifacts/context_checkpoints/checkpoint_*.md")
+            latest_checkpoint = self._latest_path_by_glob(
+                "artifacts/context_checkpoints/checkpoint_*.md"
+            )
             latest_pack_dir = self._latest_path_by_glob("artifacts/context_transition/pack_*")
             latest_transfer_prompt = (
                 str(latest_pack_dir / "TRANSFER_PROMPT_RU.md")
@@ -9011,21 +9896,28 @@ class WebApp:
                     "lmstudio_model_state": runtime_lite.get("lmstudio_model_state"),
                     "openclaw_auth_state": runtime_lite.get("openclaw_auth_state"),
                     "workspace_attached": bool(
-                        ((runtime_lite.get("workspace_state") or {}) if isinstance(runtime_lite, dict) else {}).get(
-                            "shared_workspace_attached"
-                        )
+                        (
+                            (runtime_lite.get("workspace_state") or {})
+                            if isinstance(runtime_lite, dict)
+                            else {}
+                        ).get("shared_workspace_attached")
                     ),
                     "last_runtime_route": runtime_lite.get("last_runtime_route"),
-                    "inbox_summary": operator_workflow.get("summary") or runtime_lite.get("inbox_summary"),
+                    "inbox_summary": operator_workflow.get("summary")
+                    or runtime_lite.get("inbox_summary"),
                 },
                 "runtime": runtime_lite,
                 "inbox_summary": operator_workflow.get("summary") or {},
                 "operator_workflow": operator_workflow,
                 "operator_profile": operator_profile,
                 "capability_registry_summary": capability_registry.get("summary") or {},
-                "policy_matrix_summary": (capability_registry.get("policy_matrix") or {}).get("summary") or {},
+                "policy_matrix_summary": (capability_registry.get("policy_matrix") or {}).get(
+                    "summary"
+                )
+                or {},
                 "channel_capabilities_summary": (
-                    (capability_registry.get("contours") or {}).get("channels", {}).get("summary") or {}
+                    (capability_registry.get("contours") or {}).get("channels", {}).get("summary")
+                    or {}
                 ),
                 "translator_readiness": translator_snapshot,
                 "services": {
@@ -9048,13 +9940,23 @@ class WebApp:
                 },
                 "artifacts": {
                     "latest_handoff_bundle_dir": str(latest_bundle) if latest_bundle else None,
-                    "latest_context_checkpoint": str(latest_checkpoint) if latest_checkpoint else None,
+                    "latest_context_checkpoint": str(latest_checkpoint)
+                    if latest_checkpoint
+                    else None,
                     "latest_transition_pack_dir": str(latest_pack_dir) if latest_pack_dir else None,
                     "latest_transfer_prompt": latest_transfer_prompt,
-                    "master_plan_doc": str(self._project_root() / "docs" / "MASTER_PLAN_VNEXT_RU.md"),
-                    "translator_audit_doc": str(self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"),
-                    "multi_account_doc": str(self._project_root() / "docs" / "MULTI_ACCOUNT_SWITCHOVER_RU.md"),
-                    "parallel_dialog_doc": str(self._project_root() / "docs" / "PARALLEL_DIALOG_PROTOCOL_RU.md"),
+                    "master_plan_doc": str(
+                        self._project_root() / "docs" / "MASTER_PLAN_VNEXT_RU.md"
+                    ),
+                    "translator_audit_doc": str(
+                        self._project_root() / "docs" / "CALL_TRANSLATOR_AUDIT_RU.md"
+                    ),
+                    "multi_account_doc": str(
+                        self._project_root() / "docs" / "MULTI_ACCOUNT_SWITCHOVER_RU.md"
+                    ),
+                    "parallel_dialog_doc": str(
+                        self._project_root() / "docs" / "PARALLEL_DIALOG_PROTOCOL_RU.md"
+                    ),
                 },
             }
 
@@ -9073,7 +9975,11 @@ class WebApp:
             """
             self._assert_write_access(x_krab_web_key, token)
             kraab_userbot = self.deps.get("kraab_userbot")
-            if not kraab_userbot or not hasattr(kraab_userbot, "start") or not hasattr(kraab_userbot, "stop"):
+            if (
+                not kraab_userbot
+                or not hasattr(kraab_userbot, "start")
+                or not hasattr(kraab_userbot, "stop")
+            ):
                 return {
                     "ok": False,
                     "error": "userbot_restart_unavailable",
@@ -9135,6 +10041,7 @@ class WebApp:
         async def translator_languages():
             """Доступные языковые пары."""
             from ..core.translator_runtime_profile import ALLOWED_LANGUAGE_PAIRS
+
             profile = self.kraab.get_translator_runtime_profile()
             return {
                 "ok": True,
@@ -9146,11 +10053,18 @@ class WebApp:
         async def swarm_teams_list():
             """Список swarm команд с ролями."""
             from ..core.swarm_bus import TEAM_REGISTRY
+
             return {
                 "ok": True,
                 "teams": {
-                    team: [{"name": r["name"], "title": r.get("title", ""), "emoji": r.get("emoji", "")}
-                           for r in roles]
+                    team: [
+                        {
+                            "name": r["name"],
+                            "title": r.get("title", ""),
+                            "emoji": r.get("emoji", ""),
+                        }
+                        for r in roles
+                    ]
                     for team, roles in TEAM_REGISTRY.items()
                 },
             }
@@ -9179,6 +10093,7 @@ class WebApp:
             from ..core.swarm_task_board import swarm_task_board
             from ..core.swarm_team_listener import is_listeners_enabled
             from ..openclaw_client import openclaw_client as _oc
+
             try:
                 health = await self._collect_runtime_lite_snapshot()
             except Exception:
@@ -9203,34 +10118,40 @@ class WebApp:
         @self.app.get("/api/commands")
         async def list_commands():
             """Список доступных Telegram команд."""
-            return {"ok": True, "commands": [
-                {"cmd": "!status", "desc": "статус системы"},
-                {"cmd": "!model", "desc": "маршрутизация модели"},
-                {"cmd": "!clear", "desc": "очистить историю"},
-                {"cmd": "!voice", "desc": "голосовой профиль"},
-                {"cmd": "!notify", "desc": "toggle tool narrations"},
-                {"cmd": "!тишина", "desc": "режим тишины"},
-                {"cmd": "!translator", "desc": "переводчик"},
-                {"cmd": "!swarm", "desc": "multi-agent teams"},
-                {"cmd": "!search", "desc": "веб-поиск"},
-                {"cmd": "!inbox", "desc": "owner inbox"},
-                {"cmd": "!watch", "desc": "proactive watch"},
-                {"cmd": "!remember", "desc": "запомнить"},
-                {"cmd": "!recall", "desc": "вспомнить"},
-                {"cmd": "!help", "desc": "справка"},
-            ]}
+            return {
+                "ok": True,
+                "commands": [
+                    {"cmd": "!status", "desc": "статус системы"},
+                    {"cmd": "!model", "desc": "маршрутизация модели"},
+                    {"cmd": "!clear", "desc": "очистить историю"},
+                    {"cmd": "!voice", "desc": "голосовой профиль"},
+                    {"cmd": "!notify", "desc": "toggle tool narrations"},
+                    {"cmd": "!тишина", "desc": "режим тишины"},
+                    {"cmd": "!translator", "desc": "переводчик"},
+                    {"cmd": "!swarm", "desc": "multi-agent teams"},
+                    {"cmd": "!search", "desc": "веб-поиск"},
+                    {"cmd": "!inbox", "desc": "owner inbox"},
+                    {"cmd": "!watch", "desc": "proactive watch"},
+                    {"cmd": "!remember", "desc": "запомнить"},
+                    {"cmd": "!recall", "desc": "вспомнить"},
+                    {"cmd": "!help", "desc": "справка"},
+                ],
+            }
 
         @self.app.get("/api/model/status")
         async def model_status():
             """Текущий статус модели и маршрутизации."""
-            from ..openclaw_client import openclaw_client as _oc
             from ..model_manager import model_manager as _mm
+            from ..openclaw_client import openclaw_client as _oc
+
             route = _oc.get_last_runtime_route()
             return {
                 "ok": True,
                 "route": route,
                 "provider": _mm.format_status() if hasattr(_mm, "format_status") else str(_mm),
-                "active_model": str(getattr(_mm, "active_model_id", None) or route.get("model", "")),
+                "active_model": str(
+                    getattr(_mm, "active_model_id", None) or route.get("model", "")
+                ),
             }
 
         @self.app.get("/api/endpoints")
@@ -9242,7 +10163,11 @@ class WebApp:
                     for method in route.methods:
                         if method in {"GET", "POST", "DELETE", "PUT"}:
                             routes.append({"method": method, "path": route.path})
-            return {"ok": True, "count": len(routes), "endpoints": sorted(routes, key=lambda r: r["path"])}
+            return {
+                "ok": True,
+                "count": len(routes),
+                "endpoints": sorted(routes, key=lambda r: r["path"]),
+            }
 
         @self.app.get("/api/version")
         async def version_info():
@@ -9253,13 +10178,20 @@ class WebApp:
                 "commits": 113,
                 "tests": 2043,
                 "api_endpoints": 184,
-                "features": ["translator_mvp", "swarm_execution", "channel_parity", "finops", "hammerspoon_mcp"],
+                "features": [
+                    "translator_mvp",
+                    "swarm_execution",
+                    "channel_parity",
+                    "finops",
+                    "hammerspoon_mcp",
+                ],
             }
 
         @self.app.get("/api/uptime")
         async def uptime():
             """Uptime Краба в секундах."""
             import time as _t
+
             boot = getattr(self, "_boot_ts", None)
             if not boot:
                 self._boot_ts = _t.time()
@@ -9270,7 +10202,9 @@ class WebApp:
         async def system_info():
             """Системная информация о хосте."""
             import platform
+
             import psutil
+
             return {
                 "ok": True,
                 "hostname": platform.node(),
@@ -9291,16 +10225,25 @@ class WebApp:
                 from ..core.language_detect import detect_language, resolve_translation_pair
                 from ..core.translator_engine import translate_text
                 from ..openclaw_client import openclaw_client as _oc
+
                 detected = detect_language(text)
                 if not detected:
                     return {"ok": False, "error": "language not detected"}
                 profile = self.kraab.get_translator_runtime_profile()
-                src, tgt_lang = resolve_translation_pair(detected, profile.get("language_pair", "es-ru"))
+                src, tgt_lang = resolve_translation_pair(
+                    detected, profile.get("language_pair", "es-ru")
+                )
                 if tgt:
                     tgt_lang = tgt
                 result = await translate_text(text, src, tgt_lang, openclaw_client=_oc)
-                return {"ok": True, "src": src, "tgt": tgt_lang, "original": result.original,
-                        "translated": result.translated, "latency_ms": result.latency_ms}
+                return {
+                    "ok": True,
+                    "src": src,
+                    "tgt": tgt_lang,
+                    "original": result.original,
+                    "translated": result.translated,
+                    "latency_ms": result.latency_ms,
+                }
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
@@ -9313,9 +10256,13 @@ class WebApp:
             """Переключить модель через API."""
             self._assert_write_access(x_krab_web_key, token)
             from ..model_manager import model_manager as _mm
+
             model = str(payload.get("model") or "").strip()
             if not model:
-                return {"ok": False, "error": "model required (e.g. 'auto', 'local', 'cloud', model_id)"}
+                return {
+                    "ok": False,
+                    "error": "model required (e.g. 'auto', 'local', 'cloud', model_id)",
+                }
             if model == "auto":
                 _mm.set_provider("auto")
             elif model == "local":
@@ -9324,7 +10271,11 @@ class WebApp:
                 _mm.set_provider("cloud")
             else:
                 _mm.set_model(model)
-            return {"ok": True, "model": model, "active": str(getattr(_mm, "active_model_id", model))}
+            return {
+                "ok": True,
+                "model": model,
+                "active": str(getattr(_mm, "active_model_id", model)),
+            }
 
         @self.app.get("/api/notify/status")
         async def notify_status():
@@ -9339,7 +10290,9 @@ class WebApp:
         ):
             """Toggle tool narration через API."""
             self._assert_write_access(x_krab_web_key, token)
-            enabled = bool(payload.get("enabled", not getattr(config, "TOOL_NARRATION_ENABLED", True)))
+            enabled = bool(
+                payload.get("enabled", not getattr(config, "TOOL_NARRATION_ENABLED", True))
+            )
             config.update_setting("TOOL_NARRATION_ENABLED", "1" if enabled else "0")
             return {"ok": True, "enabled": enabled}
 
@@ -9352,34 +10305,57 @@ class WebApp:
         async def swarm_task_board_status():
             """Сводка task board."""
             from ..core.swarm_task_board import swarm_task_board
+
             return {"ok": True, "summary": swarm_task_board.get_board_summary()}
 
         @self.app.get("/api/swarm/tasks")
         async def swarm_tasks_list(team: str = Query(default=""), limit: int = Query(default=20)):
             """Список задач task board."""
             from ..core.swarm_task_board import swarm_task_board
+
             tasks = swarm_task_board.list_tasks(team=team or None, limit=limit)
-            return {"ok": True, "tasks": [
-                {"task_id": t.task_id, "team": t.team, "title": t.title,
-                 "status": t.status, "priority": t.priority, "created_at": t.created_at}
-                for t in tasks
-            ]}
+            return {
+                "ok": True,
+                "tasks": [
+                    {
+                        "task_id": t.task_id,
+                        "team": t.team,
+                        "title": t.title,
+                        "status": t.status,
+                        "priority": t.priority,
+                        "created_at": t.created_at,
+                    }
+                    for t in tasks
+                ],
+            }
 
         @self.app.get("/api/swarm/artifacts")
-        async def swarm_artifacts_list(team: str = Query(default=""), limit: int = Query(default=10)):
+        async def swarm_artifacts_list(
+            team: str = Query(default=""), limit: int = Query(default=10)
+        ):
             """Список swarm artifacts."""
             from ..core.swarm_artifact_store import swarm_artifact_store
+
             arts = swarm_artifact_store.list_artifacts(team=team or None, limit=limit)
-            return {"ok": True, "artifacts": [
-                {"team": a.get("team"), "topic": a.get("topic"), "timestamp_iso": a.get("timestamp_iso"),
-                 "duration_sec": a.get("duration_sec"), "result_preview": (a.get("result") or "")[:200]}
-                for a in arts
-            ]}
+            return {
+                "ok": True,
+                "artifacts": [
+                    {
+                        "team": a.get("team"),
+                        "topic": a.get("topic"),
+                        "timestamp_iso": a.get("timestamp_iso"),
+                        "duration_sec": a.get("duration_sec"),
+                        "result_preview": (a.get("result") or "")[:200],
+                    }
+                    for a in arts
+                ],
+            }
 
         @self.app.get("/api/swarm/task/{task_id}")
         async def swarm_task_detail(task_id: str):
             """Детальная инфо о задаче."""
             from ..core.swarm_task_board import swarm_task_board
+
             all_tasks = swarm_task_board.list_tasks(limit=500)
             match = next((t for t in all_tasks if t.task_id.startswith(task_id)), None)
             if not match:
@@ -9387,12 +10363,19 @@ class WebApp:
             return {
                 "ok": True,
                 "task": {
-                    "task_id": match.task_id, "team": match.team, "title": match.title,
-                    "description": match.description, "status": match.status,
-                    "priority": match.priority, "created_by": match.created_by,
-                    "assigned_to": match.assigned_to, "created_at": match.created_at,
-                    "updated_at": match.updated_at, "result": match.result,
-                    "artifacts": match.artifacts, "parent_task_id": match.parent_task_id,
+                    "task_id": match.task_id,
+                    "team": match.team,
+                    "title": match.title,
+                    "description": match.description,
+                    "status": match.status,
+                    "priority": match.priority,
+                    "created_by": match.created_by,
+                    "assigned_to": match.assigned_to,
+                    "created_at": match.created_at,
+                    "updated_at": match.updated_at,
+                    "result": match.result,
+                    "artifacts": match.artifacts,
+                    "parent_task_id": match.parent_task_id,
                 },
             }
 
@@ -9405,12 +10388,14 @@ class WebApp:
             """Создать task в swarm board через API."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.swarm_task_board import swarm_task_board
+
             team = str(payload.get("team") or "").strip()
             title = str(payload.get("title") or "").strip()
             if not team or not title:
                 return {"ok": False, "error": "team and title required"}
             task = swarm_task_board.create_task(
-                team=team, title=title,
+                team=team,
+                title=title,
                 description=str(payload.get("description") or ""),
                 priority=str(payload.get("priority") or "medium"),
                 created_by=str(payload.get("created_by") or "api"),
@@ -9423,6 +10408,7 @@ class WebApp:
             from ..core.swarm_artifact_store import swarm_artifact_store
             from ..core.swarm_bus import TEAM_REGISTRY, resolve_team_name
             from ..core.swarm_task_board import swarm_task_board
+
             resolved = resolve_team_name(team_name)
             if not resolved:
                 return {"ok": False, "error": f"team '{team_name}' not found"}
@@ -9432,9 +10418,16 @@ class WebApp:
             return {
                 "ok": True,
                 "team": resolved,
-                "roles": [{"name": r["name"], "title": r.get("title", ""), "emoji": r.get("emoji", "")} for r in roles],
-                "tasks": [{"task_id": t.task_id, "title": t.title, "status": t.status} for t in tasks],
-                "artifacts": [{"topic": a.get("topic"), "timestamp_iso": a.get("timestamp_iso")} for a in arts],
+                "roles": [
+                    {"name": r["name"], "title": r.get("title", ""), "emoji": r.get("emoji", "")}
+                    for r in roles
+                ],
+                "tasks": [
+                    {"task_id": t.task_id, "title": t.title, "status": t.status} for t in tasks
+                ],
+                "artifacts": [
+                    {"topic": a.get("topic"), "timestamp_iso": a.get("timestamp_iso")} for a in arts
+                ],
             }
 
         @self.app.get("/api/swarm/stats")
@@ -9443,6 +10436,7 @@ class WebApp:
             from ..core.swarm_artifact_store import swarm_artifact_store
             from ..core.swarm_task_board import swarm_task_board
             from ..core.swarm_team_listener import is_listeners_enabled
+
             board = swarm_task_board.get_board_summary()
             arts = swarm_artifact_store.list_artifacts(limit=100)
             return {
@@ -9455,16 +10449,25 @@ class WebApp:
         @self.app.get("/api/swarm/reports")
         async def swarm_reports_list(limit: int = Query(default=10)):
             """Список markdown reports."""
-            from pathlib import Path as _P
+            from pathlib import Path as _P  # noqa: N814
+
             report_dir = _P.home() / ".openclaw" / "krab_runtime_state" / "reports"
             if not report_dir.exists():
                 return {"ok": True, "reports": []}
-            files = sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
-            return {"ok": True, "reports": [
-                {"name": f.stem, "size_kb": round(f.stat().st_size / 1024, 1),
-                 "modified": f.stat().st_mtime}
-                for f in files
-            ]}
+            files = sorted(report_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[
+                :limit
+            ]
+            return {
+                "ok": True,
+                "reports": [
+                    {
+                        "name": f.stem,
+                        "size_kb": round(f.stat().st_size / 1024, 1),
+                        "modified": f.stat().st_mtime,
+                    }
+                    for f in files
+                ],
+            }
 
         @self.app.post("/api/swarm/task/{task_id}/update")
         async def swarm_task_update(
@@ -9476,6 +10479,7 @@ class WebApp:
             """Обновить task status/result через API."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.swarm_task_board import swarm_task_board
+
             status = str(payload.get("status") or "").strip()
             result = str(payload.get("result") or "").strip()
             if status == "done" and result:
@@ -9497,6 +10501,7 @@ class WebApp:
             """Удалить task из board."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.swarm_task_board import swarm_task_board
+
             # Помечаем как failed для FIFO cleanup
             try:
                 swarm_task_board.fail_task(task_id, reason="deleted via API")
@@ -9514,6 +10519,7 @@ class WebApp:
             """Change task priority via API."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.swarm_task_board import swarm_task_board
+
             level = str(payload.get("priority") or "").strip().lower()
             if level not in {"low", "medium", "high", "critical"}:
                 return {"ok": False, "error": "priority must be low/medium/high/critical"}
@@ -9529,6 +10535,7 @@ class WebApp:
             """Toggle team listeners через API."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.swarm_team_listener import is_listeners_enabled, set_listeners_enabled
+
             enabled = bool(payload.get("enabled", not is_listeners_enabled()))
             set_listeners_enabled(enabled)
             return {"ok": True, "listeners_enabled": enabled}
@@ -9541,6 +10548,7 @@ class WebApp:
             """Очистка старых артефактов."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.swarm_artifact_store import swarm_artifact_store
+
             removed = swarm_artifact_store.cleanup_old(max_files=50)
             return {"ok": True, "removed": removed}
 
@@ -9548,12 +10556,14 @@ class WebApp:
         async def swarm_listeners_status():
             """Статус team listeners."""
             from ..core.swarm_team_listener import is_listeners_enabled
+
             return {"ok": True, "listeners_enabled": is_listeners_enabled()}
 
         @self.app.get("/api/silence/status")
         async def silence_status():
             """Текущий статус тишины."""
             from ..core.silence_mode import silence_manager
+
             return {"ok": True, **silence_manager.status()}
 
         @self.app.post("/api/silence/toggle")
@@ -9565,6 +10575,7 @@ class WebApp:
             """Toggle silence mode через API."""
             self._assert_write_access(x_krab_web_key, token)
             from ..core.silence_mode import silence_manager
+
             chat_id = str(payload.get("chat_id") or "").strip()
             minutes = int(payload.get("minutes") or 30)
             global_mode = bool(payload.get("global", False))
@@ -9688,10 +10699,15 @@ class WebApp:
             cloud_runtime: dict[str, Any] | None = None
             if probe_cloud:
                 if not openclaw or not hasattr(openclaw, "get_cloud_runtime_check"):
-                    cloud_runtime = {"available": False, "error": "cloud_runtime_check_not_supported"}
+                    cloud_runtime = {
+                        "available": False,
+                        "error": "cloud_runtime_check_not_supported",
+                    }
                 else:
                     try:
-                        probe = await asyncio.wait_for(openclaw.get_cloud_runtime_check(), timeout=18.0)
+                        probe = await asyncio.wait_for(
+                            openclaw.get_cloud_runtime_check(), timeout=18.0
+                        )
                         cloud_runtime = {"available": True, "report": probe}
                     except asyncio.TimeoutError:
                         cloud_runtime = {"available": False, "error": "timeout"}
@@ -9736,7 +10752,9 @@ class WebApp:
             try:
                 openclaw.clear_session(chat_id)
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"chat_session_clear_failed: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"chat_session_clear_failed: {exc}"
+                ) from exc
 
             runtime_after = await self._collect_runtime_lite_snapshot()
             return {
@@ -9753,10 +10771,14 @@ class WebApp:
             Выполняет 'openclaw channels status --probe' и возвращает
             сырой вывод + распарсенные предупреждения.
             """
-            try:
+
+            async def _inner() -> dict:
                 # [R9] Безопасный запуск через asyncio subprocess с таймаутом.
                 proc = await asyncio.create_subprocess_exec(
-                    "openclaw", "channels", "status", "--probe",
+                    "openclaw",
+                    "channels",
+                    "status",
+                    "--probe",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     env=self._openclaw_cli_env(),
@@ -9793,6 +10815,16 @@ class WebApp:
                     "channels": parsed.get("channels") or [],
                     "gateway_reachable": bool(parsed.get("gateway_reachable")),
                 }
+
+            # Верхний guard: не зависаем если CLI не стартует.
+            try:
+                return await asyncio.wait_for(_inner(), timeout=5.0)
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False,
+                    "error": "OpenClaw timeout (5s)",
+                    "detail": "gateway not responding",
+                }
             except Exception as exc:
                 logger.error("openclaw_status_failed", error=str(exc))
                 return {
@@ -9827,7 +10859,11 @@ class WebApp:
                     "exit_code": proc.returncode,
                 }
             except asyncio.TimeoutError:
-                return {"ok": False, "error": "timeout", "detail": "Скрипт выполнялся слишком долго (60с)"}
+                return {
+                    "ok": False,
+                    "error": "timeout",
+                    "detail": "Скрипт выполнялся слишком долго (60с)",
+                }
             except Exception as exc:
                 return {"ok": False, "error": "system_error", "detail": str(exc)}
 
@@ -9846,7 +10882,9 @@ class WebApp:
             try:
                 # Запускаем с флагом --once для разовой проверки
                 proc = await asyncio.create_subprocess_exec(
-                    sys.executable, script_path, "--once",
+                    sys.executable,
+                    script_path,
+                    "--once",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                 )
@@ -9858,7 +10896,11 @@ class WebApp:
                     "exit_code": proc.returncode,
                 }
             except asyncio.TimeoutError:
-                return {"ok": False, "error": "timeout", "detail": "Signal Guard выполнялся слишком долго (60с)"}
+                return {
+                    "ok": False,
+                    "error": "timeout",
+                    "detail": "Signal Guard выполнялся слишком долго (60с)",
+                }
             except Exception as exc:
                 return {"ok": False, "error": "system_error", "detail": str(exc)}
 
@@ -9891,7 +10933,7 @@ class WebApp:
             """[R11] Глубокая диагностика сервера (RAM, CPU, Бюджет, Локальные LLM)."""
             router = self.deps.get("router")
             if not router:
-                 return {"ok": False, "error": "router_not_found"}
+                return {"ok": False, "error": "router_not_found"}
 
             # Получаем свежие данные через health_service
             health_service = self.deps.get("health_service")
@@ -9922,8 +10964,10 @@ class WebApp:
                     "loaded_models": local_truth.get("loaded_models", []),
                 },
                 "watchdog": {
-                    "last_recoveries": getattr(self.deps.get("watchdog"), "last_recovery_attempt", {})
-                }
+                    "last_recoveries": getattr(
+                        self.deps.get("watchdog"), "last_recovery_attempt", {}
+                    )
+                },
             }
 
         @self.app.get("/api/ops/diagnostics")
@@ -9938,9 +10982,16 @@ class WebApp:
 
         @self.app.get("/api/ops/timeline")
         @self.app.get("/api/timeline")
-        async def ops_timeline(limit: int = 200, min_severity: Optional[str] = None, channel: Optional[str] = None):
+        async def ops_timeline(
+            limit: int = 200, min_severity: Optional[str] = None, channel: Optional[str] = None
+        ):
             """Export recent event timeline."""
-            return {"ok": True, "events": timeline.get_events(limit=limit, min_severity=min_severity, channel=channel)}
+            return {
+                "ok": True,
+                "events": timeline.get_events(
+                    limit=limit, min_severity=min_severity, channel=channel
+                ),
+            }
 
         @self.app.get("/api/sla")
         async def get_sla_metrics():
@@ -9974,10 +11025,16 @@ class WebApp:
             local_truth = await self._resolve_local_runtime_truth(router)
 
             task_queue = self.deps.get("queue")
-            queue_stats = task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
+            queue_stats = (
+                task_queue.get_metrics() if getattr(task_queue, "get_metrics", None) else {}
+            )
 
             openclaw = router.openclaw_client
-            tier_state = openclaw.get_tier_state_export() if getattr(openclaw, "get_tier_state_export", None) else {}
+            tier_state = (
+                openclaw.get_tier_state_export()
+                if getattr(openclaw, "get_tier_state_export", None)
+                else {}
+            )
             operator_workflow = inbox_service.get_workflow_snapshot()
             workspace_state = build_workspace_state_snapshot()
 
@@ -9990,17 +11047,21 @@ class WebApp:
                     "loaded_local_models": local_truth.get("loaded_models", []),
                     "active_tier": getattr(router, "active_tier", "default"),
                     "local_failures": router._stats.get("local_failures", 0),
-                    "cloud_failures": router._stats.get("cloud_failures", 0)
+                    "cloud_failures": router._stats.get("cloud_failures", 0),
                 },
                 "tier_state": tier_state,
                 "breaker_state": {
-                    "preflight_cache": {k: {"expires_in": v[0] - time.time(), "error": v[1]} for k, v in getattr(router, "_preflight_cache", {}).items() if v[0] > time.time()}
+                    "preflight_cache": {
+                        k: {"expires_in": v[0] - time.time(), "error": v[1]}
+                        for k, v in getattr(router, "_preflight_cache", {}).items()
+                        if v[0] > time.time()
+                    }
                 },
                 "operator_workflow": operator_workflow,
                 "workspace_state": workspace_state,
                 "queue_depth": queue_stats.get("active_tasks", 0),
                 "queue_stats": queue_stats,
-                "observability": get_observability_snapshot()
+                "observability": get_observability_snapshot(),
             }
 
         @self.app.post("/api/ops/models")
@@ -10039,7 +11100,11 @@ class WebApp:
                     return {"ok": True, "action": action}
 
                 else:
-                    return {"ok": False, "error": "invalid_action", "supported": ["load", "unload", "unload_all"]}
+                    return {
+                        "ok": False,
+                        "error": "invalid_action",
+                        "supported": ["load", "unload", "unload_all"],
+                    }
             except Exception as e:
                 logger.error("ops_models_control_failed", error=str(e))
                 return {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -10070,7 +11135,9 @@ class WebApp:
             )
 
         @self.app.get("/api/model/recommend")
-        async def model_recommend(profile: str = Query(default="chat", description="Профиль задачи")):
+        async def model_recommend(
+            profile: str = Query(default="chat", description="Профиль задачи"),
+        ):
             router = self.deps["router"]
             return router.get_profile_recommendation(profile)
 
@@ -10187,7 +11254,9 @@ class WebApp:
                         return {"ok": True, "unloaded": active}
 
                 # Если активной нет, но есть загруженные (по данным _evict_idle_models)
-                freed_gb = await router._evict_idle_models(needed_gb=100.0) # Попытаемся выгрузить всё
+                freed_gb = await router._evict_idle_models(
+                    needed_gb=100.0
+                )  # Попытаемся выгрузить всё
                 self._invalidate_lmstudio_snapshot_cache()
 
             return {"ok": True, "freed_gb_estimate": round(freed_gb, 1)}
@@ -10195,9 +11264,15 @@ class WebApp:
         @self.app.get("/api/model/explain")
         async def model_explain(
             task_type: str = Query(default="chat", description="Тип задачи для preflight"),
-            prompt: str = Query(default="", description="Опциональный prompt для preflight explain"),
-            preferred_model: str = Query(default="", description="Опциональная предпочтительная модель"),
-            confirm_expensive: bool = Query(default=False, description="Флаг подтверждения дорогого cloud пути"),
+            prompt: str = Query(
+                default="", description="Опциональный prompt для preflight explain"
+            ),
+            preferred_model: str = Query(
+                default="", description="Опциональная предпочтительная модель"
+            ),
+            confirm_expensive: bool = Query(
+                default=False, description="Флаг подтверждения дорогого cloud пути"
+            ),
         ):
             """
             Explainability endpoint: почему выбран канал/модель.
@@ -10244,7 +11319,9 @@ class WebApp:
                     "policy": {
                         "force_mode": str(getattr(router, "force_mode", "auto")),
                         "routing_policy": str(getattr(router, "routing_policy", "unknown")),
-                        "cloud_soft_cap_reached": bool(getattr(router, "cloud_soft_cap_reached", False)),
+                        "cloud_soft_cap_reached": bool(
+                            getattr(router, "cloud_soft_cap_reached", False)
+                        ),
                         "local_available": bool(getattr(router, "is_local_available", False)),
                     },
                     "preflight": preflight,
@@ -10266,17 +11343,59 @@ class WebApp:
             """
             Собирает каталог моделей и текущих настроек для web-панели.
             Нужен для кнопочного UX без ручных `!model` команд.
+            Защита от краша: любая ошибка → пустой каталог вместо 500.
             """
+            try:
+                return await _build_model_catalog_inner(router_obj)
+            except Exception as exc:  # noqa: BLE001
+                # Graceful fallback — не крашим Krab при холодном запросе
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "_build_model_catalog failed (cold start?): %s", exc
+                )
+                return {
+                    "force_mode": "auto",
+                    "slots": [],
+                    "cloud_slots": {},
+                    "local_engine": "",
+                    "local_available": False,
+                    "local_active_model": "",
+                    "local_models": [],
+                    "local_models_error": str(exc),
+                    "cloud_presets": [],
+                    "cloud_inventory": [],
+                    "cloud_provider_groups": [],
+                    "aliases": [],
+                    "quick_presets": [],
+                    "runtime_model_count": 0,
+                    "cloud_inventory_count": 0,
+                    "runtime_registry_source": "fallback_empty",
+                    "router_usage": {},
+                    "routing_status": {},
+                    "runtime_controls": {},
+                    "parallelism_truth": {},
+                    "auth_recovery": {},
+                    "catalog_guidance": {},
+                    "_error": str(exc),
+                }
+
+        async def _build_model_catalog_inner(router_obj) -> dict:
+            """Внутренняя реализация каталога. Вызывается из _build_model_catalog."""
             cloud_slots_raw = getattr(router_obj, "models", {}) or {}
             cloud_slots = (
                 {str(k): str(v) for k, v in cloud_slots_raw.items()}
                 if isinstance(cloud_slots_raw, dict)
                 else {}
             )
-            slot_list = sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
+            slot_list = (
+                sorted(cloud_slots.keys()) if cloud_slots else ["chat", "thinking", "pro", "coding"]
+            )
             force_mode = _normalize_force_mode(getattr(router_obj, "force_mode", "auto"))
             local_truth = await self._resolve_local_runtime_truth(router_obj)
-            local_engine = str(local_truth.get("engine") or getattr(router_obj, "local_engine", "") or "")
+            local_engine = str(
+                local_truth.get("engine") or getattr(router_obj, "local_engine", "") or ""
+            )
             local_active_model = str(local_truth.get("active_model") or "")
             local_available = bool(local_truth.get("runtime_reachable"))
             loaded_model_ids = {
@@ -10312,7 +11431,9 @@ class WebApp:
                 except Exception as exc:  # noqa: BLE001
                     local_models_error = str(exc)
 
-            if local_active_model and not any(str(item.get("id")) == local_active_model for item in local_models):
+            if local_active_model and not any(
+                str(item.get("id")) == local_active_model for item in local_models
+            ):
                 local_models.insert(
                     0,
                     {
@@ -10329,11 +11450,13 @@ class WebApp:
             try:
                 cloud_inventory = self._build_runtime_cloud_presets(cloud_slots)
                 cloud_presets = [
-                    item
-                    for item in cloud_inventory
-                    if bool(item.get("configured_runtime", True))
+                    item for item in cloud_inventory if bool(item.get("configured_runtime", True))
                 ]
-                runtime_model_ids = {str(item.get("id", "")).strip() for item in cloud_presets if str(item.get("id", "")).strip()}
+                runtime_model_ids = {
+                    str(item.get("id", "")).strip()
+                    for item in cloud_presets
+                    if str(item.get("id", "")).strip()
+                }
                 for alias_key in sorted(MODEL_FRIENDLY_ALIASES.keys()):
                     resolved_id, _ = normalize_model_alias(alias_key)
                     if resolved_id not in runtime_model_ids:
@@ -10353,16 +11476,19 @@ class WebApp:
                 cloud_inventory = self._build_runtime_cloud_presets({})
             if not cloud_presets:
                 cloud_presets = [
-                    item
-                    for item in cloud_inventory
-                    if bool(item.get("configured_runtime", True))
+                    item for item in cloud_inventory if bool(item.get("configured_runtime", True))
                 ]
             if not cloud_presets:
                 cloud_presets = list(cloud_inventory)
 
-            local_override = local_active_model or str(
-                getattr(router_obj, "active_local_model", "") or getattr(config, "LOCAL_PREFERRED_MODEL", "") or ""
-            ).strip()
+            local_override = (
+                local_active_model
+                or str(
+                    getattr(router_obj, "active_local_model", "")
+                    or getattr(config, "LOCAL_PREFERRED_MODEL", "")
+                    or ""
+                ).strip()
+            )
             if not local_override:
                 local_override = "nvidia/nemotron-3-nano"
 
@@ -10421,14 +11547,18 @@ class WebApp:
                         "provider_label": str(item.get("provider_label", provider_name)),
                         "provider_auth": str(item.get("provider_auth", "unknown")),
                         "provider_readiness": str(item.get("provider_readiness", "unknown")),
-                        "provider_readiness_label": str(item.get("provider_readiness_label", "Configured")),
+                        "provider_readiness_label": str(
+                            item.get("provider_readiness_label", "Configured")
+                        ),
                         "provider_detail": str(item.get("provider_detail", "")),
                         "provider_quota_state": str(item.get("provider_quota_state", "unknown")),
                         "provider_quota_label": str(item.get("provider_quota_label", "")),
                         "provider_effective_kind": str(item.get("provider_effective_kind", "")),
                         "provider_effective_detail": str(item.get("provider_effective_detail", "")),
                         "provider_oauth_status": str(item.get("provider_oauth_status", "")),
-                        "provider_oauth_remaining_human": str(item.get("provider_oauth_remaining_human", "")),
+                        "provider_oauth_remaining_human": str(
+                            item.get("provider_oauth_remaining_human", "")
+                        ),
                         "provider_auth_recovery": dict(item.get("provider_auth_recovery") or {}),
                         "provider_ui": dict(item.get("provider_ui") or {}),
                         "legacy": bool(item.get("legacy")),
@@ -10447,7 +11577,9 @@ class WebApp:
                     "catalog_only_model_count": sum(
                         1 for model in group["models"] if not bool(model.get("configured_runtime"))
                     ),
-                    "active_count": sum(1 for model in group["models"] if bool(model.get("active_runtime"))),
+                    "active_count": sum(
+                        1 for model in group["models"] if bool(model.get("active_runtime"))
+                    ),
                     "selected_slots": sorted(
                         {
                             slot_name
@@ -10667,7 +11799,9 @@ class WebApp:
                 if mode not in {"auto", "local", "cloud"}:
                     raise HTTPException(status_code=400, detail="model_apply_invalid_mode")
                 if not hasattr(router, "set_force_mode"):
-                    raise HTTPException(status_code=400, detail="model_apply_set_mode_not_supported")
+                    raise HTTPException(
+                        status_code=400, detail="model_apply_set_mode_not_supported"
+                    )
                 update_result = router.set_force_mode(mode)
                 result_payload = {
                     "mode": _normalize_force_mode(getattr(router, "force_mode", "auto")),
@@ -10679,7 +11813,9 @@ class WebApp:
                 slot = str(payload.get("slot", "")).strip().lower()
                 raw_model = str(payload.get("model", "")).strip()
                 if not slot or not raw_model:
-                    raise HTTPException(status_code=400, detail="model_apply_slot_and_model_required")
+                    raise HTTPException(
+                        status_code=400, detail="model_apply_slot_and_model_required"
+                    )
                 if not hasattr(router, "models") or not isinstance(getattr(router, "models"), dict):
                     raise HTTPException(status_code=400, detail="model_apply_slots_not_supported")
                 if slot not in router.models:
@@ -10710,7 +11846,10 @@ class WebApp:
                     getattr(router, "active_local_model", "") or ""
                 )
                 if not local_override:
-                    local_override = os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip() or "nvidia/nemotron-3-nano"
+                    local_override = (
+                        os.getenv("LOCAL_PREFERRED_MODEL", "nvidia/nemotron-3-nano").strip()
+                        or "nvidia/nemotron-3-nano"
+                    )
 
                 presets = self._build_runtime_quick_presets(
                     current_slots={str(k): str(v) for k, v in router.models.items()},
@@ -10718,7 +11857,9 @@ class WebApp:
                 )
                 chosen = presets.get(preset_id)
                 if not chosen:
-                    raise HTTPException(status_code=400, detail=f"model_apply_unknown_preset: {preset_id}")
+                    raise HTTPException(
+                        status_code=400, detail=f"model_apply_unknown_preset: {preset_id}"
+                    )
 
                 applied_changes: list[dict[str, str]] = []
                 for slot, model_id in dict(chosen.get("slots", {})).items():
@@ -10735,7 +11876,12 @@ class WebApp:
                         }
                     )
 
-                target_mode = str(payload.get("mode_override", "") or chosen.get("mode", "auto")).strip().lower() or "auto"
+                target_mode = (
+                    str(payload.get("mode_override", "") or chosen.get("mode", "auto"))
+                    .strip()
+                    .lower()
+                    or "auto"
+                )
                 if hasattr(router, "set_force_mode"):
                     router.set_force_mode(target_mode)
 
@@ -10748,7 +11894,9 @@ class WebApp:
 
             elif action == "set_runtime_chain":
                 primary_raw = payload.get("primary")
-                fallbacks_raw = payload.get("fallbacks") if isinstance(payload.get("fallbacks"), list) else []
+                fallbacks_raw = (
+                    payload.get("fallbacks") if isinstance(payload.get("fallbacks"), list) else []
+                )
                 context_tokens_raw = payload.get("context_tokens")
                 thinking_default_raw = payload.get("thinking_default", "off")
                 execution_preset_raw = payload.get("execution_preset", "")
@@ -10764,7 +11912,9 @@ class WebApp:
                         execution_preset_raw=execution_preset_raw,
                         main_max_concurrent_raw=main_max_concurrent_raw,
                         subagent_max_concurrent_raw=subagent_max_concurrent_raw,
-                        slot_thinking_raw=slot_thinking_raw if isinstance(slot_thinking_raw, dict) else {},
+                        slot_thinking_raw=slot_thinking_raw
+                        if isinstance(slot_thinking_raw, dict)
+                        else {},
                     )
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -10885,7 +12035,9 @@ class WebApp:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"feedback_submit_failed: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"feedback_submit_failed: {exc}"
+                ) from exc
 
             response_payload = {"ok": True, "result": result}
             self._idempotency_set("model_feedback_submit", idem_key, response_payload)
@@ -10900,11 +12052,16 @@ class WebApp:
             return {"ok": False, "error": "usage_summary_not_supported"}
 
         @self.app.get("/api/ops/cost-report")
-        async def ops_cost_report(monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000)):
+        async def ops_cost_report(
+            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
+        ):
             """Оценочный отчет по затратам local/cloud маршрутизации."""
             router = self.deps["router"]
             if hasattr(router, "get_cost_report"):
-                return {"ok": True, "report": router.get_cost_report(monthly_calls_forecast=monthly_calls_forecast)}
+                return {
+                    "ok": True,
+                    "report": router.get_cost_report(monthly_calls_forecast=monthly_calls_forecast),
+                }
             return {"ok": False, "error": "cost_report_not_supported"}
 
         @self.app.get("/api/ops/runway")
@@ -10929,11 +12086,18 @@ class WebApp:
             return {"ok": False, "error": "ops_runway_not_supported"}
 
         @self.app.get("/api/ops/executive-summary")
-        async def ops_executive_summary(monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000)):
+        async def ops_executive_summary(
+            monthly_calls_forecast: int = Query(default=5000, ge=0, le=200000),
+        ):
             """Компактный ops executive summary: KPI + риски + рекомендации."""
             router = self.deps["router"]
             if hasattr(router, "get_ops_executive_summary"):
-                return {"ok": True, "summary": router.get_ops_executive_summary(monthly_calls_forecast=monthly_calls_forecast)}
+                return {
+                    "ok": True,
+                    "summary": router.get_ops_executive_summary(
+                        monthly_calls_forecast=monthly_calls_forecast
+                    ),
+                }
             return {"ok": False, "error": "ops_executive_summary_not_supported"}
 
         @self.app.get("/api/ops/report")
@@ -11137,7 +12301,9 @@ class WebApp:
                 raise HTTPException(status_code=400, detail="assistant_attachment_file_required")
             original_name = str(file.filename or "").strip()
             if not original_name:
-                raise HTTPException(status_code=400, detail="assistant_attachment_filename_required")
+                raise HTTPException(
+                    status_code=400, detail="assistant_attachment_filename_required"
+                )
 
             raw = await file.read()
             if not raw:
@@ -11217,7 +12383,11 @@ class WebApp:
             preferred_model_str = str(preferred_model).strip() if preferred_model else None
             confirm_expensive = bool(payload.get("confirm_expensive", False))
             requested_force_mode_raw = str(payload.get("force_mode", "")).strip().lower()
-            requested_force_mode = requested_force_mode_raw if requested_force_mode_raw in {"auto", "local", "cloud"} else ""
+            requested_force_mode = (
+                requested_force_mode_raw
+                if requested_force_mode_raw in {"auto", "local", "cloud"}
+                else ""
+            )
 
             def _is_model_status_question(text: str) -> bool:
                 low = str(text or "").strip().lower()
@@ -11270,7 +12440,9 @@ class WebApp:
                         "task_type": task_type,
                         "profile": "chat",
                         "command_mode": True,
-                        "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                        "last_route": router.get_last_route()
+                        if hasattr(router, "get_last_route")
+                        else {},
                         "reply": render_model_presets_text(),
                     }
                     self._idempotency_set("assistant_query", idem_key, response_payload)
@@ -11284,7 +12456,9 @@ class WebApp:
                         "task_type": task_type,
                         "profile": "chat",
                         "command_mode": True,
-                        "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                        "last_route": router.get_last_route()
+                        if hasattr(router, "get_last_route")
+                        else {},
                         "reply": f"✅ Режим обновлен: {result}",
                     }
                     self._idempotency_set("assistant_query", idem_key, response_payload)
@@ -11302,7 +12476,9 @@ class WebApp:
                             "task_type": task_type,
                             "profile": "chat",
                             "command_mode": True,
-                            "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                            "last_route": router.get_last_route()
+                            if hasattr(router, "get_last_route")
+                            else {},
                             "reply": str(parsed.get("error") or "❌ Некорректная команда"),
                         }
                         self._idempotency_set("assistant_query", idem_key, response_payload)
@@ -11330,7 +12506,9 @@ class WebApp:
                         "task_type": task_type,
                         "profile": "chat",
                         "command_mode": True,
-                        "last_route": router.get_last_route() if hasattr(router, "get_last_route") else {},
+                        "last_route": router.get_last_route()
+                        if hasattr(router, "get_last_route")
+                        else {},
                         "reply": "\n".join(reply_lines),
                     }
                     self._idempotency_set("assistant_query", idem_key, response_payload)
@@ -11340,9 +12518,7 @@ class WebApp:
                 # Если UI передал force_mode, синхронизируем режим до выполнения запроса.
                 if requested_force_mode and hasattr(router, "set_force_mode"):
                     router.set_force_mode(requested_force_mode)
-                effective_force_mode = _normalize_force_mode(
-                    getattr(router, "force_mode", "auto")
-                )
+                effective_force_mode = _normalize_force_mode(getattr(router, "force_mode", "auto"))
 
                 reply = await router.route_query(
                     prompt=prompt,
@@ -11389,9 +12565,15 @@ class WebApp:
                         finally:
                             router.force_mode = previous_mode
             except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"assistant_query_failed: {exc}") from exc
+                raise HTTPException(
+                    status_code=500, detail=f"assistant_query_failed: {exc}"
+                ) from exc
 
-            profile = router.classify_task_profile(prompt, task_type) if hasattr(router, "classify_task_profile") else task_type
+            profile = (
+                router.classify_task_profile(prompt, task_type)
+                if hasattr(router, "classify_task_profile")
+                else task_type
+            )
             recommendation = (
                 router.get_profile_recommendation(profile)
                 if hasattr(router, "get_profile_recommendation")
@@ -11408,20 +12590,40 @@ class WebApp:
                 except Exception:
                     preflight = {}
                 if isinstance(preflight, dict):
-                    execution = preflight.get("execution") if isinstance(preflight.get("execution"), dict) else {}
-                    recommended_model = str(execution.get("model") or recommendation.get("model") or recommendation.get("recommended_model") or "").strip()
-                    recommended_channel = str(execution.get("channel") or recommendation.get("channel") or "").strip()
-                    reason_lines = preflight.get("reasons") if isinstance(preflight.get("reasons"), list) else []
+                    execution = (
+                        preflight.get("execution")
+                        if isinstance(preflight.get("execution"), dict)
+                        else {}
+                    )
+                    recommended_model = str(
+                        execution.get("model")
+                        or recommendation.get("model")
+                        or recommendation.get("recommended_model")
+                        or ""
+                    ).strip()
+                    recommended_channel = str(
+                        execution.get("channel") or recommendation.get("channel") or ""
+                    ).strip()
+                    reason_lines = (
+                        preflight.get("reasons")
+                        if isinstance(preflight.get("reasons"), list)
+                        else []
+                    )
                     recommendation = {
                         **(recommendation if isinstance(recommendation, dict) else {}),
                         "profile": str(preflight.get("profile") or profile),
                         "model": recommended_model,
                         "recommended_model": recommended_model,
                         "channel": recommended_channel,
-                        "reasoning": "; ".join(str(item) for item in reason_lines if str(item).strip())
+                        "reasoning": "; ".join(
+                            str(item) for item in reason_lines if str(item).strip()
+                        )
                         or str((recommendation or {}).get("reasoning") or ""),
                         "local_available": bool(
-                            preflight.get("local_available", (recommendation or {}).get("local_available", False))
+                            preflight.get(
+                                "local_available",
+                                (recommendation or {}).get("local_available", False),
+                            )
                         ),
                         "force_mode": str(
                             execution.get("force_mode")
@@ -11429,11 +12631,7 @@ class WebApp:
                             or "auto"
                         ),
                     }
-            last_route = (
-                router.get_last_route()
-                if hasattr(router, "get_last_route")
-                else {}
-            )
+            last_route = router.get_last_route() if hasattr(router, "get_last_route") else {}
             black_box = self.deps.get("black_box")
             if black_box and hasattr(black_box, "log_event"):
                 black_box.log_event(
@@ -11453,7 +12651,11 @@ class WebApp:
                 "reply": reply,
             }
             # Для вопросов о модели отдаём authoritative-ответ из last_route.
-            if _is_model_status_question(prompt) and isinstance(last_route, dict) and last_route.get("model"):
+            if (
+                _is_model_status_question(prompt)
+                and isinstance(last_route, dict)
+                and last_route.get("model")
+            ):
                 response_payload["reply"] = _build_model_status_from_route(last_route)
             self._idempotency_set("assistant_query", idem_key, response_payload)
             return response_payload
@@ -11483,7 +12685,11 @@ class WebApp:
             try:
                 report = await openclaw.get_deep_health_report()
             except Exception as exc:
-                return {"available": False, "error": "openclaw_deep_check_failed", "detail": str(exc)}
+                return {
+                    "available": False,
+                    "error": "openclaw_deep_check_failed",
+                    "detail": str(exc),
+                }
             return {"available": True, "report": report}
 
         @self.app.get("/api/openclaw/remediation-plan")
@@ -11497,7 +12703,11 @@ class WebApp:
             try:
                 report = await openclaw.get_remediation_plan()
             except Exception as exc:
-                return {"available": False, "error": "openclaw_remediation_failed", "detail": str(exc)}
+                return {
+                    "available": False,
+                    "error": "openclaw_remediation_failed",
+                    "detail": str(exc),
+                }
             return {"available": True, "report": report}
 
         @self.app.get("/api/openclaw/browser-smoke")
@@ -11509,9 +12719,21 @@ class WebApp:
             1) `openclaw gateway probe` (reachability gateway ws),
             2) HTTP probe browser-server (`http://127.0.0.1:18791/`).
             """
+            # Верхний guard: не зависаем если gateway не отвечает.
+            try:
+                report = await asyncio.wait_for(
+                    self._collect_openclaw_browser_smoke_report(url),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                return {
+                    "available": False,
+                    "error": "OpenClaw timeout (5s)",
+                    "detail": "gateway not responding",
+                }
             return {
                 "available": True,
-                "report": await self._collect_openclaw_browser_smoke_report(url),
+                "report": report,
             }
 
         @self.app.post("/api/diagnostics/smoke")
@@ -11591,13 +12813,18 @@ class WebApp:
                 self._probe_owner_chrome_devtools("https://example.com"),
             )
             smoke = dict(smoke_report.get("browser_smoke", {}) or {})
-            browser_status, browser_status_error, tabs_payload, tabs_error = (
-                await self._collect_stable_browser_cli_runtime(
-                    relay_reachable=bool(smoke.get("relay_reachable") or smoke.get("browser_http_reachable")),
-                    auth_required=bool(smoke.get("browser_auth_required")),
-                    attempts=3,
-                    settle_delay_sec=0.8,
-                )
+            (
+                browser_status,
+                browser_status_error,
+                tabs_payload,
+                tabs_error,
+            ) = await self._collect_stable_browser_cli_runtime(
+                relay_reachable=bool(
+                    smoke.get("relay_reachable") or smoke.get("browser_http_reachable")
+                ),
+                auth_required=bool(smoke.get("browser_auth_required")),
+                attempts=3,
+                settle_delay_sec=0.8,
             )
             browser = self._classify_browser_stage(
                 browser_status,
@@ -11633,58 +12860,75 @@ class WebApp:
         @self.app.get("/api/openclaw/browser-mcp-readiness")
         async def openclaw_browser_mcp_readiness(url: str = "https://example.com"):
             """Агрегированный staged readiness для browser-контура владельца и managed MCP."""
-            # Важный UX-момент: ordinary Chrome probe и relay-smoke не зависят друг от
-            # друга напрямую, поэтому нет смысла ждать их строго последовательно.
-            smoke_report, owner_chrome = await asyncio.gather(
-                self._collect_openclaw_browser_smoke_report(url),
-                self._probe_owner_chrome_devtools(url),
-            )
-            smoke = dict(smoke_report.get("browser_smoke", {}) or {})
-            browser_status, browser_status_error, tabs_payload, tabs_error = (
-                await self._collect_stable_browser_cli_runtime(
-                    relay_reachable=bool(smoke.get("relay_reachable") or smoke.get("browser_http_reachable")),
+
+            async def _run_readiness() -> dict:
+                # Важный UX-момент: ordinary Chrome probe и relay-smoke не зависят друг от
+                # друга напрямую, поэтому нет смысла ждать их строго последовательно.
+                smoke_report, owner_chrome = await asyncio.gather(
+                    self._collect_openclaw_browser_smoke_report(url),
+                    self._probe_owner_chrome_devtools(url),
+                )
+                smoke = dict(smoke_report.get("browser_smoke", {}) or {})
+                (
+                    browser_status,
+                    browser_status_error,
+                    tabs_payload,
+                    tabs_error,
+                ) = await self._collect_stable_browser_cli_runtime(
+                    relay_reachable=bool(
+                        smoke.get("relay_reachable") or smoke.get("browser_http_reachable")
+                    ),
                     auth_required=bool(smoke.get("browser_auth_required")),
                     attempts=3,
                     settle_delay_sec=0.8,
                 )
-            )
-            browser = self._classify_browser_stage(
-                browser_status,
-                tabs_payload,
-                smoke,
-                browser_status_error=browser_status_error,
-                tabs_error=tabs_error,
-            )
-            mcp = self._build_mcp_readiness_snapshot(browser, owner_chrome=owner_chrome)
-            browser["paths"] = self._build_browser_access_paths(browser, mcp)
+                browser = self._classify_browser_stage(
+                    browser_status,
+                    tabs_payload,
+                    smoke,
+                    browser_status_error=browser_status_error,
+                    tabs_error=tabs_error,
+                )
+                mcp = self._build_mcp_readiness_snapshot(browser, owner_chrome=owner_chrome)
+                browser["paths"] = self._build_browser_access_paths(browser, mcp)
 
-            overall = "ready"
-            if "blocked" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
-                overall = "blocked"
-            elif "attention" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
-                overall = "attention"
+                overall = "ready"
+                if "blocked" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
+                    overall = "blocked"
+                elif "attention" in {str(browser.get("readiness")), str(mcp.get("readiness"))}:
+                    overall = "attention"
 
-            return {
-                "available": True,
-                "overall": {
-                    "readiness": overall,
-                    "detail": (
-                        "Browser relay и managed MCP готовы."
-                        if overall == "ready"
-                        else "Есть оставшиеся шаги для browser/MCP readiness."
-                    ),
-                },
-                "browser": browser,
-                "mcp": mcp,
-                "raw": {
-                    "browser_status": browser_status,
-                    "browser_status_error": browser_status_error,
-                    "tabs": tabs_payload,
-                    "tabs_error": tabs_error,
-                    "browser_smoke": smoke_report,
-                    "owner_chrome": owner_chrome,
-                },
-            }
+                return {
+                    "available": True,
+                    "overall": {
+                        "readiness": overall,
+                        "detail": (
+                            "Browser relay и managed MCP готовы."
+                            if overall == "ready"
+                            else "Есть оставшиеся шаги для browser/MCP readiness."
+                        ),
+                    },
+                    "browser": browser,
+                    "mcp": mcp,
+                    "raw": {
+                        "browser_status": browser_status,
+                        "browser_status_error": browser_status_error,
+                        "tabs": tabs_payload,
+                        "tabs_error": tabs_error,
+                        "browser_smoke": smoke_report,
+                        "owner_chrome": owner_chrome,
+                    },
+                }
+
+            # Верхний guard: не зависаем если gateway/browser не отвечает.
+            try:
+                return await asyncio.wait_for(_run_readiness(), timeout=5.0)
+            except asyncio.TimeoutError:
+                return {
+                    "available": False,
+                    "error": "OpenClaw timeout (5s)",
+                    "detail": "gateway not responding",
+                }
 
         @self.app.get("/api/openclaw/photo-smoke")
         async def openclaw_photo_smoke():
@@ -11736,7 +12980,11 @@ class WebApp:
             try:
                 report = await openclaw.get_cloud_runtime_check()
             except Exception as exc:
-                return {"available": False, "error": "cloud_runtime_check_failed", "detail": str(exc)}
+                return {
+                    "available": False,
+                    "error": "cloud_runtime_check_failed",
+                    "detail": str(exc),
+                }
             # После truthful runtime-check tier-state может измениться с stale `free`
             # на фактический `paid`, поэтому lightweight runtime snapshot нужно
             # пересобрать заново, а не держать старый TTL-cache.
@@ -11779,13 +13027,23 @@ class WebApp:
             try:
                 openclaw = self.deps.get("openclaw_client")
                 if not openclaw:
-                    return build_ops_response(status="failed", error_code="openclaw_client_not_configured", summary="Openclaw client not configured")
+                    return build_ops_response(
+                        status="failed",
+                        error_code="openclaw_client_not_configured",
+                        summary="Openclaw client not configured",
+                    )
                 if not hasattr(openclaw, "get_tier_state_export"):
-                    return build_ops_response(status="failed", error_code="tier_state_not_supported", summary="Tier state not supported")
+                    return build_ops_response(
+                        status="failed",
+                        error_code="tier_state_not_supported",
+                        summary="Tier state not supported",
+                    )
                 tier_state = openclaw.get_tier_state_export()
                 return build_ops_response(status="ok", data={"tier_state": tier_state})
             except Exception as exc:
-                return build_ops_response(status="failed", error_code="system_error", summary=str(exc))
+                return build_ops_response(
+                    status="failed", error_code="system_error", summary=str(exc)
+                )
 
         @self.app.post("/api/openclaw/cloud/tier/reset")
         async def openclaw_cloud_tier_reset(
@@ -11802,19 +13060,31 @@ class WebApp:
             try:
                 self._assert_write_access(x_krab_web_key, token)
             except HTTPException as exc:
-                return build_ops_response(status="failed", error_code="forbidden", summary=exc.detail)
+                return build_ops_response(
+                    status="failed", error_code="forbidden", summary=exc.detail
+                )
 
             try:
                 openclaw = self.deps.get("openclaw_client")
                 if not openclaw:
-                    return build_ops_response(status="failed", error_code="openclaw_client_not_configured", summary="Openclaw client not configured")
+                    return build_ops_response(
+                        status="failed",
+                        error_code="openclaw_client_not_configured",
+                        summary="Openclaw client not configured",
+                    )
                 if not hasattr(openclaw, "reset_cloud_tier"):
-                    return build_ops_response(status="failed", error_code="tier_reset_not_supported", summary="Tier reset not supported")
+                    return build_ops_response(
+                        status="failed",
+                        error_code="tier_reset_not_supported",
+                        summary="Tier reset not supported",
+                    )
 
                 result = await openclaw.reset_cloud_tier()
                 return build_ops_response(status="ok", data={"result": result})
             except Exception as exc:
-                return build_ops_response(status="failed", error_code="tier_reset_error", summary=str(exc))
+                return build_ops_response(
+                    status="failed", error_code="tier_reset_error", summary=str(exc)
+                )
 
         def _run_openclaw_model_autoswitch(
             *,
@@ -11829,7 +13099,9 @@ class WebApp:
             project_root = Path(__file__).resolve().parents[2]
             script_path = project_root / "scripts" / "openclaw_model_autoswitch.py"
             if not script_path.exists():
-                raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_script_missing")
+                raise HTTPException(
+                    status_code=500, detail="openclaw_model_autoswitch_script_missing"
+                )
 
             # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
             python_bin = project_root / "venv" / "bin" / "python"
@@ -11866,7 +13138,9 @@ class WebApp:
 
             lines = [line.strip() for line in stdout.splitlines() if line.strip()]
             if not lines:
-                raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_empty_output")
+                raise HTTPException(
+                    status_code=500, detail="openclaw_model_autoswitch_empty_output"
+                )
             try:
                 payload = json.loads(lines[-1])
             except Exception as exc:
@@ -11875,7 +13149,9 @@ class WebApp:
                     detail=f"openclaw_model_autoswitch_invalid_json: {exc}",
                 ) from exc
             if not isinstance(payload, dict):
-                raise HTTPException(status_code=500, detail="openclaw_model_autoswitch_invalid_payload")
+                raise HTTPException(
+                    status_code=500, detail="openclaw_model_autoswitch_invalid_payload"
+                )
             return payload
 
         def _run_openclaw_model_compat_probe(
@@ -11890,7 +13166,9 @@ class WebApp:
             project_root = Path(__file__).resolve().parents[2]
             script_path = project_root / "scripts" / "openclaw_model_compat_probe.py"
             if not script_path.exists():
-                raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_script_missing")
+                raise HTTPException(
+                    status_code=500, detail="openclaw_model_compat_probe_script_missing"
+                )
 
             # Единый venv (Py 3.13) в приоритете; legacy .venv — фолбек.
             python_bin = project_root / "venv" / "bin" / "python"
@@ -11926,7 +13204,9 @@ class WebApp:
 
             lines = [line.strip() for line in stdout.splitlines() if line.strip()]
             if not lines:
-                raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_empty_output")
+                raise HTTPException(
+                    status_code=500, detail="openclaw_model_compat_probe_empty_output"
+                )
             try:
                 payload = json.loads(lines[-1])
             except Exception as exc:
@@ -11935,7 +13215,9 @@ class WebApp:
                     detail=f"openclaw_model_compat_probe_invalid_json: {exc}",
                 ) from exc
             if not isinstance(payload, dict):
-                raise HTTPException(status_code=500, detail="openclaw_model_compat_probe_invalid_payload")
+                raise HTTPException(
+                    status_code=500, detail="openclaw_model_compat_probe_invalid_payload"
+                )
             return payload
 
         @self.app.get("/api/openclaw/model-autoswitch/status")
@@ -11997,88 +13279,110 @@ class WebApp:
             - runtime fail + warnings → "runtime_risk"  (нужна диагностика)
             - runtime ok, warnings нет → "none"
             """
-            # --- Шаг 1: проверяем runtime каналов ---
-            runtime_ok = False
-            try:
-                proc_channels = await asyncio.create_subprocess_exec(
-                    "openclaw", "channels", "status", "--probe",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                try:
-                    stdout_ch, _ = await asyncio.wait_for(proc_channels.communicate(), timeout=30.0)
-                    runtime_ok = proc_channels.returncode == 0
-                except asyncio.TimeoutError:
-                    try:
-                        proc_channels.terminate()
-                    except ProcessLookupError:
-                        pass
-                    runtime_ok = False
-            except Exception:
+
+            async def _inner() -> dict:
+                # --- Шаг 1: проверяем runtime каналов ---
                 runtime_ok = False
-
-            # --- Шаг 2: получаем последние логи OpenClaw для поиска schema-маркеров ---
-            schema_markers = {"unsupported schema node", "schema", "validation"}
-            control_schema_warnings: list[str] = []
-            try:
-                proc_logs = await asyncio.create_subprocess_exec(
-                    "openclaw", "logs", "--tail", "200",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
                 try:
-                    stdout_logs, _ = await asyncio.wait_for(proc_logs.communicate(), timeout=10.0)
-                    raw_logs = stdout_logs.decode("utf-8", errors="replace")
-                    for line in raw_logs.splitlines():
-                        line_lower = line.lower()
-                        # Ищем строки, содержащие хотя бы один из маркеров схемы
-                        if any(marker in line_lower for marker in schema_markers):
-                            stripped = line.strip()
-                            if stripped:
-                                control_schema_warnings.append(stripped)
-                except asyncio.TimeoutError:
+                    proc_channels = await asyncio.create_subprocess_exec(
+                        "openclaw",
+                        "channels",
+                        "status",
+                        "--probe",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
                     try:
-                        proc_logs.terminate()
-                    except ProcessLookupError:
-                        pass
-                    # При таймауте логов — не считаем это runtime-риском
-            except Exception:
-                # CLI openclaw logs недоступен — просто нет данных для schema-анализа
-                pass
+                        stdout_ch, _ = await asyncio.wait_for(
+                            proc_channels.communicate(), timeout=30.0
+                        )
+                        runtime_ok = proc_channels.returncode == 0
+                    except asyncio.TimeoutError:
+                        try:
+                            proc_channels.terminate()
+                        except ProcessLookupError:
+                            pass
+                        runtime_ok = False
+                except Exception:
+                    runtime_ok = False
 
-            # --- Шаг 3: определяем impact_level и рекомендацию ---
-            has_warnings = bool(control_schema_warnings)
-            if runtime_ok and has_warnings:
-                impact_level = "ui_only"
-                recommended_action = (
-                    "Предупреждения ограничены UI Control. Runtime каналов работает нормально. "
-                    "Для редактирования затронутых полей используй Raw-режим в Control Dashboard."
-                )
-            elif not runtime_ok and has_warnings:
-                impact_level = "runtime_risk"
-                recommended_action = (
-                    "Обнаружены schema-предупреждения И проблемы runtime. "
-                    "Запусти: openclaw doctor --fix  или  ./openclaw_runtime_repair.command"
-                )
-            elif not runtime_ok:
-                impact_level = "runtime_risk"
-                recommended_action = (
-                    "Runtime каналов недоступен. Schema-предупреждения не обнаружены. "
-                    "Запусти: openclaw doctor --fix"
-                )
-            else:
-                impact_level = "none"
-                recommended_action = "Все каналы работают нормально. Предупреждений нет."
+                # --- Шаг 2: получаем последние логи OpenClaw для поиска schema-маркеров ---
+                schema_markers = {"unsupported schema node", "schema", "validation"}
+                control_schema_warnings: list[str] = []
+                try:
+                    proc_logs = await asyncio.create_subprocess_exec(
+                        "openclaw",
+                        "logs",
+                        "--tail",
+                        "200",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    try:
+                        stdout_logs, _ = await asyncio.wait_for(
+                            proc_logs.communicate(), timeout=10.0
+                        )
+                        raw_logs = stdout_logs.decode("utf-8", errors="replace")
+                        for line in raw_logs.splitlines():
+                            line_lower = line.lower()
+                            # Ищем строки, содержащие хотя бы один из маркеров схемы
+                            if any(marker in line_lower for marker in schema_markers):
+                                stripped = line.strip()
+                                if stripped:
+                                    control_schema_warnings.append(stripped)
+                    except asyncio.TimeoutError:
+                        try:
+                            proc_logs.terminate()
+                        except ProcessLookupError:
+                            pass
+                        # При таймауте логов — не считаем это runtime-риском
+                except Exception:
+                    # CLI openclaw logs недоступен — просто нет данных для schema-анализа
+                    pass
 
-            return {
-                "ok": runtime_ok or not has_warnings,
-                "runtime_channels_ok": runtime_ok,
-                "runtime_status": "OK" if runtime_ok else "FAIL",
-                "control_schema_warnings": control_schema_warnings,
-                "has_schema_warning": has_warnings,
-                "impact_level": impact_level,
-                "recommended_action": recommended_action,
-            }
+                # --- Шаг 3: определяем impact_level и рекомендацию ---
+                has_warnings = bool(control_schema_warnings)
+                if runtime_ok and has_warnings:
+                    impact_level = "ui_only"
+                    recommended_action = (
+                        "Предупреждения ограничены UI Control. Runtime каналов работает нормально. "
+                        "Для редактирования затронутых полей используй Raw-режим в Control Dashboard."
+                    )
+                elif not runtime_ok and has_warnings:
+                    impact_level = "runtime_risk"
+                    recommended_action = (
+                        "Обнаружены schema-предупреждения И проблемы runtime. "
+                        "Запусти: openclaw doctor --fix  или  ./openclaw_runtime_repair.command"
+                    )
+                elif not runtime_ok:
+                    impact_level = "runtime_risk"
+                    recommended_action = (
+                        "Runtime каналов недоступен. Schema-предупреждения не обнаружены. "
+                        "Запусти: openclaw doctor --fix"
+                    )
+                else:
+                    impact_level = "none"
+                    recommended_action = "Все каналы работают нормально. Предупреждений нет."
+
+                return {
+                    "ok": runtime_ok or not has_warnings,
+                    "runtime_channels_ok": runtime_ok,
+                    "runtime_status": "OK" if runtime_ok else "FAIL",
+                    "control_schema_warnings": control_schema_warnings,
+                    "has_schema_warning": has_warnings,
+                    "impact_level": impact_level,
+                    "recommended_action": recommended_action,
+                }
+
+            # Верхний guard: не зависаем если CLI не стартует.
+            try:
+                return await asyncio.wait_for(_inner(), timeout=5.0)
+            except asyncio.TimeoutError:
+                return {
+                    "ok": False,
+                    "error": "OpenClaw timeout (5s)",
+                    "detail": "gateway not responding",
+                }
 
         @self.app.get("/api/openclaw/routing/effective")
         async def openclaw_routing_effective():
@@ -12104,7 +13408,9 @@ class WebApp:
             if isinstance(raw_models, dict):
                 cloud_slots = {str(k): str(v) for k, v in raw_models.items()}
             # Приоритет: "chat" → первый ключ → пусто
-            default_slot = "chat" if "chat" in cloud_slots else (next(iter(cloud_slots), None) or "")
+            default_slot = (
+                "chat" if "chat" in cloud_slots else (next(iter(cloud_slots), None) or "")
+            )
             default_model = cloud_slots.get(default_slot, "")
 
             # --- Cloud fallback включен если НЕ принудительный local ---
@@ -12121,10 +13427,14 @@ class WebApp:
 
             # --- Строим decision_notes из фактического состояния runtime ---
             local_truth = await self._resolve_local_runtime_truth(router)
-            local_engine = str(local_truth.get("engine") or getattr(router, "local_engine", "") or "")
+            local_engine = str(
+                local_truth.get("engine") or getattr(router, "local_engine", "") or ""
+            )
             local_available = bool(local_truth.get("runtime_reachable"))
             active_local_model = str(local_truth.get("active_model") or "")
-            routing_policy = str(getattr(router, "routing_policy", "free_first_hybrid") or "free_first_hybrid")
+            routing_policy = str(
+                getattr(router, "routing_policy", "free_first_hybrid") or "free_first_hybrid"
+            )
             cloud_cap_reached = bool(getattr(router, "cloud_soft_cap_reached", False))
             last_route_status = str(last_route.get("status") or "").strip().lower()
             last_route_channel = str(last_route.get("channel") or "").strip().lower()
@@ -12143,7 +13453,12 @@ class WebApp:
                 # Считаем fallback активным только если фактическая модель маршрута
                 # отличается от configured default cloud-model либо пришлось уйти
                 # в cloud при force_local=off и отсутствии рабочей local-модели.
-                if current_route_uses_cloud and default_model and last_route_model and last_route_model != default_model:
+                if (
+                    current_route_uses_cloud
+                    and default_model
+                    and last_route_model
+                    and last_route_model != default_model
+                ):
                     current_fallback_active = True
                 elif (
                     not current_route_uses_cloud
@@ -12172,9 +13487,7 @@ class WebApp:
                     "Принудительный cloud-режим активен — локальный движок пропускается."
                 )
             else:
-                decision_notes.append(
-                    f"Routing policy: {routing_policy} — auto-routing включен."
-                )
+                decision_notes.append(f"Routing policy: {routing_policy} — auto-routing включен.")
 
             if local_available:
                 decision_notes.append(
@@ -12182,9 +13495,7 @@ class WebApp:
                     + (f" Активная модель: '{active_local_model}'." if active_local_model else "")
                 )
             else:
-                decision_notes.append(
-                    "Локальный движок недоступен — fallback только на cloud."
-                )
+                decision_notes.append("Локальный движок недоступен — fallback только на cloud.")
 
             if cloud_cap_reached:
                 decision_notes.append(
@@ -12196,9 +13507,7 @@ class WebApp:
                     "Cloud fallback ОТКЛЮЧЕН: force_local режим запрещает обращение к cloud."
                 )
             elif cloud_fallback_state == "active":
-                decision_notes.append(
-                    "Cloud fallback сейчас задействован как активный маршрут."
-                )
+                decision_notes.append("Cloud fallback сейчас задействован как активный маршрут.")
             else:
                 decision_notes.append(
                     "Cloud fallback доступен как резерв, но сейчас не задействован."
@@ -12208,10 +13517,7 @@ class WebApp:
             # Иначе после hot-reload/runtime-fallback верхние виджеты показывают правду,
             # а блок "Эффективный роутинг" остаётся на старом default-model.
             active_slot_or_model = (
-                last_route_model
-                or active_local_model
-                or default_model
-                or default_slot
+                last_route_model or active_local_model or default_model or default_slot
             )
 
             return {
@@ -12336,7 +13642,9 @@ class WebApp:
         if self._server_task and not self._server_task.done():
             return
 
-        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="warning", loop="asyncio")
+        config = uvicorn.Config(
+            self.app, host=self.host, port=self.port, log_level="warning", loop="asyncio"
+        )
         # Prevent uvicorn from overriding signal handlers (managed by Pyrogram/Main)
         # Note: "server.serve()" will invoke "config.setup_event_loop()" which might still interfere unless configured correctly.
         # But setting explicit loop above helps.
@@ -12350,7 +13658,9 @@ class WebApp:
         # Actually Config DOES have it in recent versions? Let's assume standard 0.20+ has it?
         # Let's try passing it. If it fails, we catch TypeError.
         try:
-            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="warning", loop="asyncio")
+            config = uvicorn.Config(
+                self.app, host=self.host, port=self.port, log_level="warning", loop="asyncio"
+            )
             # We must monkeypatch to prevent signal install? Or just hope it works?
             # Actually simplest way is to NOT use Server.serve() directly if we can avoid signal handlers?
             # But serve() calls install_signal_handlers().

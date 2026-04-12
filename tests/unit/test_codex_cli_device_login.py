@@ -22,7 +22,9 @@ MODULE = importlib.util.module_from_spec(SPEC)
 try:
     SPEC.loader.exec_module(MODULE)
 except (ImportError, ModuleNotFoundError, FileNotFoundError):
-    pytest.skip("scripts/codex_cli_device_login.py dependencies not available", allow_module_level=True)
+    pytest.skip(
+        "scripts/codex_cli_device_login.py dependencies not available", allow_module_level=True
+    )
 
 
 def test_extract_device_url_reads_exact_codex_device_path() -> None:

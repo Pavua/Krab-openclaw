@@ -21,7 +21,9 @@ from src.core.capability_registry import (
 
 def test_resolve_access_mode_prefers_explicit_level_and_safe_fallback() -> None:
     """Explicit access-level должен побеждать fallback по allowed-sender."""
-    assert resolve_access_mode(is_allowed_sender=True, access_level=AccessLevel.PARTIAL) == "partial"
+    assert (
+        resolve_access_mode(is_allowed_sender=True, access_level=AccessLevel.PARTIAL) == "partial"
+    )
     assert resolve_access_mode(is_allowed_sender=False, access_level="owner") == "owner"
     assert resolve_access_mode(is_allowed_sender=True, access_level=None) == "full"
     assert resolve_access_mode(is_allowed_sender=False, access_level=None) == "guest"
@@ -156,8 +158,13 @@ def test_build_channel_capability_snapshot_marks_reserve_safe_and_parity_gaps() 
     assert snapshot["shared_workspace"]["shared_memory_ready"] is True
     assert snapshot["channels"][0]["identity"]["operator_id"] == "USER2"
     assert snapshot["channels"][0]["semantics"]["streaming"] == "buffered_edit_loop"
-    assert snapshot["channels"][0]["semantics"]["reasoning_visibility"] == "owner_optional_separate_trace"
+    assert (
+        snapshot["channels"][0]["semantics"]["reasoning_visibility"]
+        == "owner_optional_separate_trace"
+    )
     assert snapshot["channels"][0]["capabilities"]["shared_workspace_attached"] is True
     assert snapshot["channels"][1]["policy"]["dm_policy"] == "allowlist"
-    assert snapshot["channels"][1]["capabilities"]["shared_workspace_path"].endswith("workspace-main-messaging")
+    assert snapshot["channels"][1]["capabilities"]["shared_workspace_path"].endswith(
+        "workspace-main-messaging"
+    )
     assert any("parity semantics" in item.lower() for item in snapshot["parity_gaps"])

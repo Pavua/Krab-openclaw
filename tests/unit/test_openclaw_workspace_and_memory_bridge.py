@@ -24,7 +24,12 @@ from src.core.openclaw_workspace import (
     load_workspace_prompt_bundle,
     recall_workspace_memory,
 )
-from src.handlers.command_handlers import handle_memory, handle_recall, handle_remember, handle_watch
+from src.handlers.command_handlers import (
+    handle_memory,
+    handle_recall,
+    handle_remember,
+    handle_watch,
+)
 
 
 def test_load_workspace_prompt_bundle_reads_canonical_files(tmp_path):
@@ -96,13 +101,14 @@ def test_list_workspace_memory_entries_returns_recent_rows(tmp_path):
         encoding="utf-8",
     )
     (memory_dir / "2026-03-11.md").write_text(
-        "# Memory 2026-03-11\n\n"
-        "- 09:15 [userbot] старый факт\n",
+        "# Memory 2026-03-11\n\n- 09:15 [userbot] старый факт\n",
         encoding="utf-8",
     )
 
     rows = list_workspace_memory_entries(workspace_dir=tmp_path, limit=2)
-    filtered = list_workspace_memory_entries(workspace_dir=tmp_path, limit=5, source_filter="proactive-watch")
+    filtered = list_workspace_memory_entries(
+        workspace_dir=tmp_path, limit=5, source_filter="proactive-watch"
+    )
 
     assert rows[0]["source"] == "proactive-watch"
     assert rows[0]["date"] == "2026-03-12"
@@ -140,7 +146,9 @@ async def test_handle_remember_succeeds_when_shared_workspace_saved(monkeypatch)
     )
     bot = SimpleNamespace(_get_command_args=lambda _: "запомни это")
 
-    monkeypatch.setattr(command_handlers_module, "append_workspace_memory_entry", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        command_handlers_module, "append_workspace_memory_entry", lambda *args, **kwargs: True
+    )
     monkeypatch.setattr(command_handlers_module.memory_manager, "save_fact", lambda text: False)
 
     await handle_remember(bot, message)
@@ -183,7 +191,10 @@ async def test_handle_watch_status_renders_state(monkeypatch):
             "last_reason": "route_model_changed",
             "last_digest_ts": "2026-03-12T05:00:00+00:00",
             "last_alert_ts": "",
-            "last_snapshot": {"route_model": "openai-codex/gpt-5.4", "primary_model": "openai-codex/gpt-5.4"},
+            "last_snapshot": {
+                "route_model": "openai-codex/gpt-5.4",
+                "primary_model": "openai-codex/gpt-5.4",
+            },
         },
     )
 

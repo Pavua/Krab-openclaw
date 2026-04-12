@@ -87,7 +87,9 @@ def test_normalize_speed_non_numeric_returns_default() -> None:
 
 def test_normalize_voice_valid_id() -> None:
     """Корректный voice id возвращается без изменений."""
-    assert KraabUserbot._normalize_voice_reply_voice("ru-RU-SvetlanaNeural") == "ru-RU-SvetlanaNeural"
+    assert (
+        KraabUserbot._normalize_voice_reply_voice("ru-RU-SvetlanaNeural") == "ru-RU-SvetlanaNeural"
+    )
 
 
 def test_normalize_voice_empty_returns_default() -> None:
@@ -98,7 +100,9 @@ def test_normalize_voice_empty_returns_default() -> None:
 
 def test_normalize_voice_strips_whitespace() -> None:
     """Пробелы вокруг voice id обрезаются."""
-    assert KraabUserbot._normalize_voice_reply_voice("  ru-RU-DmitryNeural  ") == "ru-RU-DmitryNeural"
+    assert (
+        KraabUserbot._normalize_voice_reply_voice("  ru-RU-DmitryNeural  ") == "ru-RU-DmitryNeural"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +134,16 @@ def test_get_voice_runtime_profile_structure() -> None:
     """Профиль содержит все обязательные ключи."""
     bot = _make_bot_stub()
     profile = bot.get_voice_runtime_profile()
-    for key in ("enabled", "delivery", "speed", "voice", "input_transcription_ready", "output_tts_ready", "live_voice_foundation", "blocked_chats"):
+    for key in (
+        "enabled",
+        "delivery",
+        "speed",
+        "voice",
+        "input_transcription_ready",
+        "output_tts_ready",
+        "live_voice_foundation",
+        "blocked_chats",
+    ):
         assert key in profile, f"ключ '{key}' отсутствует в voice profile"
 
 

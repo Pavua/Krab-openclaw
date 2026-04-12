@@ -13,6 +13,7 @@
 8. AttributeError из mcp_manager — возвращает строку с ❌.
 9. close_search вызывает mcp_manager.stop_all.
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,8 +48,10 @@ class TestSearchBrave:
         mock_mcp = MagicMock()
         mock_mcp.search_web = AsyncMock(return_value="Свежий результат")
 
-        with patch.object(search_engine_module, "search_cache", mock_cache), \
-             patch.object(search_engine_module, "mcp_manager", mock_mcp):
+        with (
+            patch.object(search_engine_module, "search_cache", mock_cache),
+            patch.object(search_engine_module, "mcp_manager", mock_mcp),
+        ):
             result = await search_brave("новый запрос")
 
         mock_mcp.search_web.assert_called_once_with("новый запрос")
@@ -63,8 +66,10 @@ class TestSearchBrave:
         mock_mcp = MagicMock()
         mock_mcp.search_web = AsyncMock(return_value="Хороший результат")
 
-        with patch.object(search_engine_module, "search_cache", mock_cache), \
-             patch.object(search_engine_module, "mcp_manager", mock_mcp):
+        with (
+            patch.object(search_engine_module, "search_cache", mock_cache),
+            patch.object(search_engine_module, "mcp_manager", mock_mcp),
+        ):
             await search_brave("запрос для кэша")
 
         mock_cache.set.assert_called_once_with("запрос для кэша", "Хороший результат", ttl=3600)
@@ -78,8 +83,10 @@ class TestSearchBrave:
         mock_mcp = MagicMock()
         mock_mcp.search_web = AsyncMock(return_value="❌ Ошибка поиска")
 
-        with patch.object(search_engine_module, "search_cache", mock_cache), \
-             patch.object(search_engine_module, "mcp_manager", mock_mcp):
+        with (
+            patch.object(search_engine_module, "search_cache", mock_cache),
+            patch.object(search_engine_module, "mcp_manager", mock_mcp),
+        ):
             result = await search_brave("провальный запрос")
 
         mock_cache.set.assert_not_called()
@@ -94,8 +101,10 @@ class TestSearchBrave:
         mock_mcp = MagicMock()
         mock_mcp.search_web = AsyncMock(return_value="")
 
-        with patch.object(search_engine_module, "search_cache", mock_cache), \
-             patch.object(search_engine_module, "mcp_manager", mock_mcp):
+        with (
+            patch.object(search_engine_module, "search_cache", mock_cache),
+            patch.object(search_engine_module, "mcp_manager", mock_mcp),
+        ):
             await search_brave("пустой запрос")
 
         mock_cache.set.assert_not_called()
@@ -109,8 +118,10 @@ class TestSearchBrave:
         mock_mcp = MagicMock()
         mock_mcp.search_web = AsyncMock(side_effect=OSError("connection refused"))
 
-        with patch.object(search_engine_module, "search_cache", mock_cache), \
-             patch.object(search_engine_module, "mcp_manager", mock_mcp):
+        with (
+            patch.object(search_engine_module, "search_cache", mock_cache),
+            patch.object(search_engine_module, "mcp_manager", mock_mcp),
+        ):
             result = await search_brave("запрос с ошибкой")
 
         assert "❌" in result
@@ -125,8 +136,10 @@ class TestSearchBrave:
         mock_mcp = MagicMock()
         mock_mcp.search_web = AsyncMock(side_effect=ValueError("invalid query"))
 
-        with patch.object(search_engine_module, "search_cache", mock_cache), \
-             patch.object(search_engine_module, "mcp_manager", mock_mcp):
+        with (
+            patch.object(search_engine_module, "search_cache", mock_cache),
+            patch.object(search_engine_module, "mcp_manager", mock_mcp),
+        ):
             result = await search_brave("невалидный запрос")
 
         assert "❌" in result
@@ -141,8 +154,10 @@ class TestSearchBrave:
         mock_mcp = MagicMock()
         mock_mcp.search_web = AsyncMock(side_effect=AttributeError("NoneType has no attribute"))
 
-        with patch.object(search_engine_module, "search_cache", mock_cache), \
-             patch.object(search_engine_module, "mcp_manager", mock_mcp):
+        with (
+            patch.object(search_engine_module, "search_cache", mock_cache),
+            patch.object(search_engine_module, "mcp_manager", mock_mcp),
+        ):
             result = await search_brave("запрос attribute error")
 
         assert "❌" in result

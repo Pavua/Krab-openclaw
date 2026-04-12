@@ -11,20 +11,20 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-import src.core.scheduler as scheduler_module
 import src.core.proactive_watch as proactive_watch_module
+import src.core.scheduler as scheduler_module
 from src.core.inbox_service import InboxService
-from src.core.scheduler import KrabScheduler
 from src.core.proactive_watch import ProactiveWatchService, ProactiveWatchSnapshot
-
+from src.core.scheduler import KrabScheduler
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _snapshot(**overrides):
     payload = {
@@ -56,6 +56,7 @@ def _snapshot(**overrides):
 # Test 1: reminder delivery writes kind="proactive_action" to inbox
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_reminder_fire_writes_proactive_action_trace(tmp_path: Path) -> None:
     """
@@ -85,7 +86,9 @@ async def test_reminder_fire_writes_proactive_action_trace(tmp_path: Path) -> No
 
         # A proactive_action trace must exist
         proactive_items = inbox.list_items(kind="proactive_action", limit=10)
-        assert proactive_items, "Expected at least one proactive_action inbox item after reminder delivery"
+        assert proactive_items, (
+            "Expected at least one proactive_action inbox item after reminder delivery"
+        )
         item = proactive_items[0]
         assert item["kind"] == "proactive_action"
         assert item["metadata"]["action_type"] == "reminder_fired"
@@ -98,6 +101,7 @@ async def test_reminder_fire_writes_proactive_action_trace(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 # Test 2: proactive_watch trigger writes kind="proactive_action" to inbox
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_proactive_watch_trigger_writes_proactive_action_trace(
@@ -113,9 +117,7 @@ async def test_proactive_watch_trigger_writes_proactive_action_trace(
     verify the proactive_action trace mechanism.
     """
     inbox = InboxService(state_path=tmp_path / "inbox.json")
-    service = ProactiveWatchService(
-        state_path=tmp_path / "state.json", alert_cooldown_sec=60
-    )
+    service = ProactiveWatchService(state_path=tmp_path / "state.json", alert_cooldown_sec=60)
 
     snapshots = [
         _snapshot(gateway_ok=True),
@@ -145,7 +147,9 @@ async def test_proactive_watch_trigger_writes_proactive_action_trace(
 
         # Actionable reasons must create proactive_action inbox items
         proactive_items = inbox.list_items(kind="proactive_action", limit=10)
-        assert proactive_items, "Expected at least one proactive_action inbox item from watch trigger"
+        assert proactive_items, (
+            "Expected at least one proactive_action inbox item from watch trigger"
+        )
         item = proactive_items[0]
         assert item["kind"] == "proactive_action"
         assert item["metadata"]["action_type"] == "watch_trigger"
@@ -157,6 +161,7 @@ async def test_proactive_watch_trigger_writes_proactive_action_trace(
 # ---------------------------------------------------------------------------
 # Test 3: upsert_item called with correct kind via mock (unit-level)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_reminder_fire_calls_upsert_item_with_proactive_action_kind(

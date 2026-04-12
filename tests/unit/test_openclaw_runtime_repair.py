@@ -17,37 +17,37 @@ import pytest
 
 try:
     from scripts.openclaw_runtime_repair import (
-    apply_group_policy,
-    apply_dm_policy,
-    bootstrap_missing_channels,
-    choose_target_key,
-    choose_lmstudio_token,
-    detect_active_channels,
-    normalize_allowlist,
-    repair_cron_jobs,
-    repair_output_sanitizer_plugin_config,
-    repair_agent_model_overrides,
-    repair_channel_health_monitor,
-    repair_codex_cli_backend,
-    repair_compaction_memory_flush,
-    repair_external_reasoning_defaults,
-    repair_group_policy_allowlist,
-    repair_imessage_reply_tag_patch,
-    repair_lmstudio_provider_catalog,
-    repair_main_agent_messaging_profile,
-    repair_reply_to_modes,
-    repair_hooks_config,
-    repair_sessions,
-    resolve_telegram_bot_token,
-    sync_plugin_allowlist,
-    sync_managed_output_sanitizer_install_record,
-    sync_managed_output_sanitizer_plugin,
-    sync_auth_profiles_json,
-    sync_models_json,
-    sync_openclaw_json,
-    sync_telegram_channel_token,
-    should_restart_gateway,
-)
+        apply_dm_policy,
+        apply_group_policy,
+        bootstrap_missing_channels,
+        choose_lmstudio_token,
+        choose_target_key,
+        detect_active_channels,
+        normalize_allowlist,
+        repair_agent_model_overrides,
+        repair_channel_health_monitor,
+        repair_codex_cli_backend,
+        repair_compaction_memory_flush,
+        repair_cron_jobs,
+        repair_external_reasoning_defaults,
+        repair_group_policy_allowlist,
+        repair_hooks_config,
+        repair_imessage_reply_tag_patch,
+        repair_lmstudio_provider_catalog,
+        repair_main_agent_messaging_profile,
+        repair_output_sanitizer_plugin_config,
+        repair_reply_to_modes,
+        repair_sessions,
+        resolve_telegram_bot_token,
+        should_restart_gateway,
+        sync_auth_profiles_json,
+        sync_managed_output_sanitizer_install_record,
+        sync_managed_output_sanitizer_plugin,
+        sync_models_json,
+        sync_openclaw_json,
+        sync_plugin_allowlist,
+        sync_telegram_channel_token,
+    )
 except (ImportError, ModuleNotFoundError, FileNotFoundError):
     pytest.skip("scripts.openclaw_runtime_repair not available", allow_module_level=True)
 
@@ -87,9 +87,14 @@ def test_resolve_telegram_bot_token_prefers_openclaw_specific_env(monkeypatch) -
     assert resolve_telegram_bot_token() == "123:preferred"
 
 
-def test_sync_telegram_channel_token_writes_native_runtime_token(monkeypatch, tmp_path: Path) -> None:
+def test_sync_telegram_channel_token_writes_native_runtime_token(
+    monkeypatch, tmp_path: Path
+) -> None:
     openclaw_path = tmp_path / "openclaw.json"
-    openclaw_path.write_text(json.dumps({"channels": {"telegram": {"enabled": True}}}, ensure_ascii=False), encoding="utf-8")
+    openclaw_path.write_text(
+        json.dumps({"channels": {"telegram": {"enabled": True}}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("OPENCLAW_TELEGRAM_BOT_TOKEN", "123:abc")
 
     report = sync_telegram_channel_token(openclaw_path)
@@ -127,7 +132,9 @@ def test_sync_plugin_allowlist_includes_managed_and_enabled_plugins(tmp_path: Pa
     ]
 
 
-def test_sync_managed_output_sanitizer_install_record_writes_path_provenance(tmp_path: Path) -> None:
+def test_sync_managed_output_sanitizer_install_record_writes_path_provenance(
+    tmp_path: Path,
+) -> None:
     openclaw_root = tmp_path / "runtime"
     openclaw_path = openclaw_root / "openclaw.json"
     openclaw_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,7 +263,9 @@ def test_sync_managed_output_sanitizer_plugin_copies_repo_files(tmp_path: Path) 
     source_dir = repo_root / "plugins" / "krab-output-sanitizer"
     source_dir.mkdir(parents=True)
     (source_dir / "index.mjs").write_text("// managed plugin\n", encoding="utf-8")
-    (source_dir / "openclaw.plugin.json").write_text('{"id":"krab-output-sanitizer"}\n', encoding="utf-8")
+    (source_dir / "openclaw.plugin.json").write_text(
+        '{"id":"krab-output-sanitizer"}\n', encoding="utf-8"
+    )
 
     openclaw_root = tmp_path / "runtime"
 
@@ -268,10 +277,14 @@ def test_sync_managed_output_sanitizer_plugin_copies_repo_files(tmp_path: Path) 
     assert report["changed"] is True
     target_dir = openclaw_root / "extensions" / "krab-output-sanitizer"
     assert (target_dir / "index.mjs").read_text(encoding="utf-8") == "// managed plugin\n"
-    assert (target_dir / "openclaw.plugin.json").read_text(encoding="utf-8") == '{"id":"krab-output-sanitizer"}\n'
+    assert (target_dir / "openclaw.plugin.json").read_text(
+        encoding="utf-8"
+    ) == '{"id":"krab-output-sanitizer"}\n'
 
 
-def test_repair_output_sanitizer_plugin_config_enforces_truthful_external_defaults(tmp_path: Path) -> None:
+def test_repair_output_sanitizer_plugin_config_enforces_truthful_external_defaults(
+    tmp_path: Path,
+) -> None:
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(
         json.dumps(
@@ -308,12 +321,19 @@ def test_repair_output_sanitizer_plugin_config_enforces_truthful_external_defaul
     assert entry["config"]["externalChannelGuardEnabled"] is True
     assert entry["config"]["externalChannelToolGuardEnabled"] is True
     assert entry["config"]["guestAllowedTools"] == ["web_search", "web_fetch", "weather", "time"]
-    assert entry["config"]["externalChannelAllowedTools"] == ["web_search", "web_fetch", "weather", "time"]
+    assert entry["config"]["externalChannelAllowedTools"] == [
+        "web_search",
+        "web_fetch",
+        "weather",
+        "time",
+    ]
     assert isinstance(entry["config"]["ownerAliases"], list)
     assert isinstance(entry["config"]["trustedPeers"], dict)
 
 
-def test_repair_output_sanitizer_plugin_config_seeds_telegram_trusted_peers(monkeypatch, tmp_path: Path) -> None:
+def test_repair_output_sanitizer_plugin_config_seeds_telegram_trusted_peers(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Telegram trusted peers должны подтягиваться в sanitizer config из repair foundation."""
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(
@@ -344,7 +364,9 @@ def test_repair_output_sanitizer_plugin_config_seeds_telegram_trusted_peers(monk
 
     assert report["changed"] is True
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
-    assert payload["plugins"]["entries"]["krab-output-sanitizer"]["config"]["trustedPeers"]["telegram"] == [
+    assert payload["plugins"]["entries"]["krab-output-sanitizer"]["config"]["trustedPeers"][
+        "telegram"
+    ] == [
         "312322764",
         "p0lrd",
     ]
@@ -377,7 +399,9 @@ def test_sync_auth_profiles_json_updates_lmstudio_and_google_tokens(tmp_path: Pa
     assert payload["lmstudio"]["apiKey"] == "sk-lm-real-token"
 
 
-def test_repair_lmstudio_provider_catalog_replaces_stale_glm_with_primary_model(tmp_path: Path) -> None:
+def test_repair_lmstudio_provider_catalog_replaces_stale_glm_with_primary_model(
+    tmp_path: Path,
+) -> None:
     models_path = tmp_path / "models.json"
     models_path.write_text(
         json.dumps(
@@ -438,7 +462,9 @@ def test_repair_lmstudio_provider_catalog_replaces_stale_glm_with_primary_model(
     assert catalog[0]["input"] == ["text"]
 
 
-def test_repair_lmstudio_provider_catalog_does_not_copy_cloud_primary_into_local_catalog(tmp_path: Path) -> None:
+def test_repair_lmstudio_provider_catalog_does_not_copy_cloud_primary_into_local_catalog(
+    tmp_path: Path,
+) -> None:
     models_path = tmp_path / "models.json"
     models_path.write_text(
         json.dumps(
@@ -573,7 +599,9 @@ def test_repair_sessions_resets_legacy_owner_bootstrap_metadata(tmp_path: Path) 
     assert item["model"] == "nvidia/nemotron-3-nano"
 
 
-def test_repair_sessions_replaces_pinned_local_model_for_channels_and_openai_scope(tmp_path: Path) -> None:
+def test_repair_sessions_replaces_pinned_local_model_for_channels_and_openai_scope(
+    tmp_path: Path,
+) -> None:
     sessions_path = tmp_path / "sessions.json"
     payload = {
         "agent:main:telegram:direct:1": {
@@ -647,7 +675,9 @@ def test_repair_sessions_replaces_stale_cloud_pins_when_primary_is_local(tmp_pat
     assert updated["agent:main:telegram:direct:1"]["modelProvider"] == "lmstudio"
     assert updated["agent:main:telegram:direct:1"]["model"] == "nvidia/nemotron-3-nano"
     assert updated["agent:main:imessage:direct:user@example.com"]["modelProvider"] == "lmstudio"
-    assert updated["agent:main:imessage:direct:user@example.com"]["model"] == "nvidia/nemotron-3-nano"
+    assert (
+        updated["agent:main:imessage:direct:user@example.com"]["model"] == "nvidia/nemotron-3-nano"
+    )
     assert updated["agent:main:main"]["modelProvider"] == "lmstudio"
     assert updated["agent:main:main"]["model"] == "nvidia/nemotron-3-nano"
 
@@ -729,7 +759,10 @@ def test_should_restart_gateway_ignores_allowlist_only_changes() -> None:
 def test_normalize_allowlist_removes_wildcards_and_duplicates(tmp_path: Path) -> None:
     allow_path = tmp_path / "imessage-allowFrom.json"
     allow_path.write_text(
-        json.dumps(["+", "", "user@example.com", "user@example.com", "*", "+34600000000"], ensure_ascii=False),
+        json.dumps(
+            ["+", "", "user@example.com", "user@example.com", "*", "+34600000000"],
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     report = normalize_allowlist(allow_path)
@@ -794,7 +827,9 @@ def test_apply_dm_policy_allowlist_replaces_wildcard_with_trusted_peers(tmp_path
     assert payload["channels"]["telegram"]["allowFrom"] == ["312322764"]
 
 
-def test_apply_dm_policy_allowlist_for_telegram_does_not_switch_without_numeric_ids(tmp_path: Path) -> None:
+def test_apply_dm_policy_allowlist_for_telegram_does_not_switch_without_numeric_ids(
+    tmp_path: Path,
+) -> None:
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(
         json.dumps(
@@ -827,7 +862,9 @@ def test_apply_dm_policy_allowlist_for_telegram_does_not_switch_without_numeric_
     assert payload["channels"]["telegram"]["allowFrom"] == ["p0lrd"]
 
 
-def test_bootstrap_missing_channels_creates_telegram_reserve_block(monkeypatch, tmp_path: Path) -> None:
+def test_bootstrap_missing_channels_creates_telegram_reserve_block(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Bootstrap должен материализовать отсутствующий `channels.telegram` для reserve-safe repair path."""
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
@@ -850,7 +887,9 @@ def test_bootstrap_missing_channels_creates_telegram_reserve_block(monkeypatch, 
     assert telegram_cfg["groupAllowFrom"] == ["312322764"]
 
 
-def test_apply_group_policy_allowlist_uses_dm_allowlist_for_telegram_senders(tmp_path: Path) -> None:
+def test_apply_group_policy_allowlist_uses_dm_allowlist_for_telegram_senders(
+    tmp_path: Path,
+) -> None:
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(
         json.dumps(
@@ -881,7 +920,9 @@ def test_apply_group_policy_allowlist_uses_dm_allowlist_for_telegram_senders(tmp
     assert payload["channels"]["telegram"]["groupAllowFrom"] == ["312322764"]
 
 
-def test_apply_group_policy_allowlist_for_telegram_ignores_usernames_and_group_ids(tmp_path: Path) -> None:
+def test_apply_group_policy_allowlist_for_telegram_ignores_usernames_and_group_ids(
+    tmp_path: Path,
+) -> None:
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(
         json.dumps(
@@ -949,7 +990,11 @@ def test_repair_group_policy_allowlist_switches_to_open_when_empty(tmp_path: Pat
             {
                 "channels": {
                     "imessage": {"enabled": True, "groupPolicy": "allowlist", "groupAllowFrom": []},
-                    "telegram": {"enabled": True, "groupPolicy": "allowlist", "groupAllowFrom": ["123"]},
+                    "telegram": {
+                        "enabled": True,
+                        "groupPolicy": "allowlist",
+                        "groupAllowFrom": ["123"],
+                    },
                 }
             },
             ensure_ascii=False,
@@ -965,7 +1010,9 @@ def test_repair_group_policy_allowlist_switches_to_open_when_empty(tmp_path: Pat
     assert payload["channels"]["telegram"]["groupPolicy"] == "allowlist"
 
 
-def test_repair_group_policy_allowlist_switches_telegram_to_open_when_only_group_ids_left(tmp_path: Path) -> None:
+def test_repair_group_policy_allowlist_switches_telegram_to_open_when_only_group_ids_left(
+    tmp_path: Path,
+) -> None:
     openclaw_path = tmp_path / "openclaw.json"
     openclaw_path.write_text(
         json.dumps(
@@ -1122,7 +1169,7 @@ def test_repair_main_agent_messaging_profile_sets_safe_tools_and_workspace(tmp_p
                             },
                         }
                     ],
-                }
+                },
             },
             ensure_ascii=False,
         ),
@@ -1174,7 +1221,9 @@ def test_repair_reply_to_modes_sets_off_for_channels(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    report = repair_reply_to_modes(openclaw_path, ("telegram", "imessage", "whatsapp", "slack"), "off")
+    report = repair_reply_to_modes(
+        openclaw_path, ("telegram", "imessage", "whatsapp", "slack"), "off"
+    )
     assert report["changed"] is True
     payload = json.loads(openclaw_path.read_text(encoding="utf-8"))
     assert payload["channels"]["telegram"]["replyToMode"] == "off"
@@ -1214,11 +1263,11 @@ def test_repair_imessage_reply_tag_patch_patches_send_bundle(tmp_path: Path) -> 
     assert "function prependReplyTagIfNeeded(message, replyToId)" in patched
     assert "\treturn message;" in patched
     assert "const replyTag" not in patched
-    assert 'replace(/^\\s*\\[\\[' in patched
+    assert "replace(/^\\s*\\[\\[" in patched
     assert 'message = String(message ?? "").replace(' in patched
     assert "function prependReplyTagIfNeeded(message, replyToId)" in patched_plugin
     assert "\treturn message;" in patched_plugin
-    assert 'replace(/^\\s*\\[\\[' in patched_plugin
+    assert "replace(/^\\s*\\[\\[" in patched_plugin
     assert "Краб: iMessage показывает [[reply_to:*]] как обычный текст" in patched
     assert str(send_bundle) in report["patched_paths"]
     assert str(plugin_send_bundle) in report["patched_paths"]
@@ -1238,7 +1287,7 @@ def test_repair_imessage_reply_tag_patch_upgrades_legacy_noop_line(tmp_path: Pat
             "  return result;\n"
             "}\n"
             "async function sendMessageIMessage(text, opts) {\n"
-            "  let message = text ?? \"\";\n"
+            '  let message = text ?? "";\n'
             "  message = message; /* Краб: iMessage показывает [[reply_to:*]] как обычный текст: отключаем reply-tag перед отправкой. */\n"
             "  return message;\n"
             "}\n"
@@ -1252,11 +1301,13 @@ def test_repair_imessage_reply_tag_patch_upgrades_legacy_noop_line(tmp_path: Pat
     patched = send_bundle.read_text(encoding="utf-8")
     assert 'let message = String(text ?? "").replace(' in patched
     assert 'message = String(message ?? "").replace(' in patched
-    assert 'replace(/^\\s*\\[\\[' in patched
+    assert "replace(/^\\s*\\[\\[" in patched
     assert "message = message;" not in patched
 
 
-def test_repair_imessage_reply_tag_patch_normalizes_broken_double_let_bundle(tmp_path: Path) -> None:
+def test_repair_imessage_reply_tag_patch_normalizes_broken_double_let_bundle(
+    tmp_path: Path,
+) -> None:
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir(parents=True)
     send_bundle = dist_dir / "send-imessage.js"
@@ -1270,11 +1321,11 @@ def test_repair_imessage_reply_tag_patch_normalizes_broken_double_let_bundle(tmp
             "  return result;\n"
             "}\n"
             "async function sendMessageIMessage(to, text, opts = {}) {\n"
-            "  let message = String(message ?? \"\").replace(/^\\s*\\[\\[\\s*(?:reply_to_current|reply_to\\s*:[^\\]]+|reply_to_[^\\]]+)\\s*\\]\\]\\s*/i, \"\"); /* Краб: iMessage показывает [[reply_to:*]] как обычный текст: вырезаем reply-tag из готового текста перед отправкой. */\n"
+            '  let message = String(message ?? "").replace(/^\\s*\\[\\[\\s*(?:reply_to_current|reply_to\\s*:[^\\]]+|reply_to_[^\\]]+)\\s*\\]\\]\\s*/i, ""); /* Краб: iMessage показывает [[reply_to:*]] как обычный текст: вырезаем reply-tag из готового текста перед отправкой. */\n'
             "  if (message.trim()) {\n"
-            "    message = convertMarkdownTables(message, \"off\");\n"
+            '    message = convertMarkdownTables(message, "off");\n'
             "  }\n"
-            "  let message = String(message ?? \"\").replace(/^\\s*\\[\\[\\s*(?:reply_to_current|reply_to\\s*:[^\\]]+|reply_to_[^\\]]+)\\s*\\]\\]\\s*/i, \"\"); /* Краб: iMessage показывает [[reply_to:*]] как обычный текст: вырезаем reply-tag из готового текста перед отправкой. */\n"
+            '  let message = String(message ?? "").replace(/^\\s*\\[\\[\\s*(?:reply_to_current|reply_to\\s*:[^\\]]+|reply_to_[^\\]]+)\\s*\\]\\]\\s*/i, ""); /* Краб: iMessage показывает [[reply_to:*]] как обычный текст: вырезаем reply-tag из готового текста перед отправкой. */\n'
             "  const params = { text: message };\n"
             "  return params;\n"
             "}\n"
@@ -1291,7 +1342,9 @@ def test_repair_imessage_reply_tag_patch_normalizes_broken_double_let_bundle(tmp
     assert 'let message = String(message ?? "").replace(' not in patched
 
 
-def test_repair_imessage_reply_tag_patch_replaces_function_even_if_marker_exists_elsewhere(tmp_path: Path) -> None:
+def test_repair_imessage_reply_tag_patch_replaces_function_even_if_marker_exists_elsewhere(
+    tmp_path: Path,
+) -> None:
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir(parents=True)
     send_bundle = dist_dir / "send-imessage.js"
@@ -1306,7 +1359,7 @@ def test_repair_imessage_reply_tag_patch_replaces_function_even_if_marker_exists
             "  return result;\n"
             "}\n"
             "async function sendMessageIMessage(text, opts) {\n"
-            "  let message = String(text ?? \"\").replace(/^\\s*\\[\\[\\s*(?:reply_to_current|reply_to\\s*:[^\\]]+|reply_to_[^\\]]+)\\s*\\]\\]\\s*/i, \"\"); /* Краб: iMessage показывает [[reply_to:*]] как обычный текст: вырезаем reply-tag из готового текста перед отправкой. */\n"
+            '  let message = String(text ?? "").replace(/^\\s*\\[\\[\\s*(?:reply_to_current|reply_to\\s*:[^\\]]+|reply_to_[^\\]]+)\\s*\\]\\]\\s*/i, ""); /* Краб: iMessage показывает [[reply_to:*]] как обычный текст: вырезаем reply-tag из готового текста перед отправкой. */\n'
             "  message = prependReplyTagIfNeeded(message, opts.replyToId);\n"
             "  return message;\n"
             "}\n"
@@ -1458,7 +1511,7 @@ def test_repair_sessions_resets_tool_packet_with_false_capability_pollution(tmp_
     session_file = sessions_dir / "capability-polluted.jsonl"
     session_file.write_text(
         '{"role":"toolCall","path":"heartbeat-state.json","action":"read"}\n'
-        'browser cron voice tts session_status\n',
+        "browser cron voice tts session_status\n",
         encoding="utf-8",
     )
     sessions_path = sessions_dir / "sessions.json"
@@ -1492,14 +1545,16 @@ def test_repair_sessions_resets_tool_packet_with_false_capability_pollution(tmp_
     assert len(archived) == 1
 
 
-def test_repair_sessions_resets_tool_packet_with_false_runtime_selfcheck_claims(tmp_path: Path) -> None:
+def test_repair_sessions_resets_tool_packet_with_false_runtime_selfcheck_claims(
+    tmp_path: Path,
+) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True)
     session_file = sessions_dir / "runtime-selfcheck-polluted.jsonl"
     session_file.write_text(
         '{"role":"toolCall","path":"heartbeat-state.json","action":"read"}\n'
-        'Мой доступ к твоей вкладке Chrome теперь работает корректно. Я могу использовать браузер.\n'
-        'Крон работает. Хардбит настроен.\n',
+        "Мой доступ к твоей вкладке Chrome теперь работает корректно. Я могу использовать браузер.\n"
+        "Крон работает. Хардбит настроен.\n",
         encoding="utf-8",
     )
     sessions_path = sessions_dir / "sessions.json"
@@ -1544,7 +1599,9 @@ def test_repair_cron_jobs_disables_broken_announce_without_target(tmp_path: Path
                         "id": "broken-announce",
                         "enabled": True,
                         "delivery": {"mode": "announce"},
-                        "state": {"lastError": "Delivering to WhatsApp requires target <E.164|group JID>"},
+                        "state": {
+                            "lastError": "Delivering to WhatsApp requires target <E.164|group JID>"
+                        },
                     },
                     {
                         "id": "healthy",
@@ -1569,7 +1626,9 @@ def test_repair_cron_jobs_disables_broken_announce_without_target(tmp_path: Path
     assert payload["jobs"][1]["enabled"] is True
 
 
-def test_repair_cron_jobs_disables_orphan_system_event_without_delivery_target(tmp_path: Path) -> None:
+def test_repair_cron_jobs_disables_orphan_system_event_without_delivery_target(
+    tmp_path: Path,
+) -> None:
     cron_jobs_path = tmp_path / "jobs.json"
     cron_jobs_path.write_text(
         json.dumps(
@@ -1805,13 +1864,13 @@ def test_repair_sessions_resets_direct_session_from_legacy_workspace(tmp_path: P
     sessions_dir.mkdir()
     session_file = sessions_dir / "legacy-workspace.jsonl"
     session_file.write_text(
-        '\n'.join(
+        "\n".join(
             [
                 '{"type":"session","version":3,"id":"legacy-workspace","cwd":"/Users/pablito/.openclaw/workspace"}',
                 '{"role":"assistant","content":"ok"}',
             ]
         )
-        + '\n',
+        + "\n",
         encoding="utf-8",
     )
     sessions_path = sessions_dir / "sessions.json"
@@ -1911,13 +1970,13 @@ def test_repair_sessions_resets_main_session_from_legacy_workspace(tmp_path: Pat
     sessions_dir.mkdir()
     session_file = sessions_dir / "legacy-main.jsonl"
     session_file.write_text(
-        '\n'.join(
+        "\n".join(
             [
                 '{"type":"session","version":3,"id":"legacy-main","cwd":"/Users/pablito/.openclaw/workspace"}',
                 '{"role":"assistant","content":"ok"}',
             ]
         )
-        + '\n',
+        + "\n",
         encoding="utf-8",
     )
     sessions_path = sessions_dir / "sessions.json"
@@ -1956,13 +2015,13 @@ def test_repair_sessions_resets_cron_session_from_legacy_workspace(tmp_path: Pat
     sessions_dir.mkdir()
     session_file = sessions_dir / "legacy-cron.jsonl"
     session_file.write_text(
-        '\n'.join(
+        "\n".join(
             [
                 '{"type":"session","version":3,"id":"legacy-cron","cwd":"/Users/pablito/.openclaw/workspace"}',
                 '{"role":"assistant","content":"cron ok"}',
             ]
         )
-        + '\n',
+        + "\n",
         encoding="utf-8",
     )
     sessions_path = sessions_dir / "sessions.json"

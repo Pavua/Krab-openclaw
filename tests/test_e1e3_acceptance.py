@@ -82,7 +82,11 @@ def test_normalize_probe_channels_payload_maps_cli_probe_contract():
         "channels": {
             "telegram": {"configured": True, "running": True, "probe": {"ok": True}},
             "bluebubbles": {"configured": False, "running": False, "probe": {"ok": False}},
-            "slack": {"configured": True, "running": True, "probe": {"ok": False, "error": "unauthorized"}},
+            "slack": {
+                "configured": True,
+                "running": True,
+                "probe": {"ok": False, "error": "unauthorized"},
+            },
         }
     }
 
@@ -99,7 +103,9 @@ def test_normalize_probe_channels_payload_maps_cli_probe_contract():
 def test_fetch_channels_with_fallback_returns_probe_source_and_web_error(monkeypatch):
     module = _load_module()
 
-    monkeypatch.setattr(module, "_fetch_stable_channels_payload", lambda _url: ({}, "connection reset"))
+    monkeypatch.setattr(
+        module, "_fetch_stable_channels_payload", lambda _url: ({}, "connection reset")
+    )
     monkeypatch.setattr(
         module,
         "_fetch_probe_channels_payload",

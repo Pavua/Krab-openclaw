@@ -90,9 +90,7 @@ class VoiceProfileMixin:
             "delivery": self._normalize_voice_reply_delivery(
                 getattr(self, "voice_reply_delivery", "text+voice")
             ),
-            "speed": self._normalize_voice_reply_speed(
-                getattr(self, "voice_reply_speed", 1.5)
-            ),
+            "speed": self._normalize_voice_reply_speed(getattr(self, "voice_reply_speed", 1.5)),
             "voice": self._normalize_voice_reply_voice(
                 getattr(self, "voice_reply_voice", "ru-RU-DmitryNeural")
             ),

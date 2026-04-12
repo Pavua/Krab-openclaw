@@ -18,12 +18,11 @@
 
 from __future__ import annotations
 
-import pytest
+from unittest.mock import MagicMock, patch
+
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.modules.web_app import WebApp
-
 
 # ---------------------------------------------------------------------------
 # Заглушки
@@ -114,9 +113,8 @@ def _make_app(*, kraab: _FakeKraab | None = None) -> WebApp:
         "queue": None,
         "kraab_userbot": None,
     }
+    deps["kraab_userbot"] = kraab or _FakeKraab()
     app = WebApp(deps, port=18090, host="127.0.0.1")
-    # Устанавливаем kraab напрямую — атрибут используется в closure endpoint'ов.
-    app.kraab = kraab or _FakeKraab()
     return app
 
 
@@ -514,3 +512,124 @@ def test_runtime_summary_translator_has_profile_and_session(monkeypatch) -> None
     translator = resp.json()["translator"]
     assert "profile" in translator
     assert "session" in translator
+
+
+# ---------------------------------------------------------------------------
+# Таймаут-тесты для 6 зависающих OpenClaw proxy endpoints
+# ---------------------------------------------------------------------------
+
+import asyncio as _asyncio
+
+
+def _timeout_coro():
+    """Coroutine, которая всегда бросает TimeoutError (имитирует зависание)."""
+
+    async def _raise():
+        raise _asyncio.TimeoutError()
+
+    return _raise()
+
+
+class _TimeoutCronSnapshot:
+    """Подменяет _collect_openclaw_cron_snapshot бесконечным ожиданием."""
+
+    async def __call__(self, *, include_all: bool = True):
+        raise _asyncio.TimeoutError()
+
+
+def test_cron_status_returns_timeout_error() -> None:
+    """GET /api/openclaw/cron/status должен вернуть ok=False при таймауте OpenClaw."""
+    app = _make_app()
+
+    async def _hang(*args, **kwargs):
+        raise _asyncio.TimeoutError()
+
+    app._collect_openclaw_cron_snapshot = _hang  # type: ignore[method-assign]
+    client = TestClient(app.app, raise_server_exceptions=False)
+    resp = client.get("/api/openclaw/cron/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "timeout" in data.get("error", "").lower() or "timeout" in data.get("detail", "").lower()
+
+
+def test_cron_jobs_returns_timeout_error() -> None:
+    """GET /api/openclaw/cron/jobs должен вернуть ok=False при таймауте OpenClaw."""
+    app = _make_app()
+
+    async def _hang(*args, **kwargs):
+        raise _asyncio.TimeoutError()
+
+    app._collect_openclaw_cron_snapshot = _hang  # type: ignore[method-assign]
+    client = TestClient(app.app, raise_server_exceptions=False)
+    resp = client.get("/api/openclaw/cron/jobs")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "timeout" in data.get("error", "").lower() or "timeout" in data.get("detail", "").lower()
+
+
+def test_channels_status_returns_timeout_error() -> None:
+    """GET /api/openclaw/channels/status должен вернуть ok=False при таймауте OpenClaw."""
+    with patch("asyncio.create_subprocess_exec", side_effect=_asyncio.TimeoutError):
+        resp = _client().get("/api/openclaw/channels/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+
+
+def test_control_compat_status_returns_timeout_error() -> None:
+    """GET /api/openclaw/control-compat/status должен вернуть ok=False при таймауте."""
+    # Имитируем asyncio.wait_for, который бросает TimeoutError на уровне верхнего guard.
+    original_wait_for = _asyncio.wait_for
+
+    call_count = 0
+
+    async def _mock_wait_for(coro, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        # Первый вызов — верхний guard: бросаем TimeoutError
+        if call_count == 1:
+            # Закрываем coroutine чтобы избежать RuntimeWarning
+            coro.close()
+            raise _asyncio.TimeoutError()
+        return await original_wait_for(coro, timeout=timeout)
+
+    with patch("asyncio.wait_for", side_effect=_mock_wait_for):
+        resp = _client().get("/api/openclaw/control-compat/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "timeout" in data.get("error", "").lower() or "timeout" in data.get("detail", "").lower()
+
+
+def test_browser_smoke_returns_timeout_error() -> None:
+    """GET /api/openclaw/browser-smoke должен вернуть available=False при таймауте."""
+    app = _make_app()
+
+    async def _hang(*args, **kwargs):
+        raise _asyncio.TimeoutError()
+
+    app._collect_openclaw_browser_smoke_report = _hang  # type: ignore[method-assign]
+    client = TestClient(app.app, raise_server_exceptions=False)
+    resp = client.get("/api/openclaw/browser-smoke")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("available") is False
+    assert "timeout" in data.get("error", "").lower() or "timeout" in data.get("detail", "").lower()
+
+
+def test_browser_mcp_readiness_returns_timeout_error() -> None:
+    """GET /api/openclaw/browser-mcp-readiness должен вернуть available=False при таймауте."""
+    app = _make_app()
+
+    async def _hang(*args, **kwargs):
+        raise _asyncio.TimeoutError()
+
+    app._collect_openclaw_browser_smoke_report = _hang  # type: ignore[method-assign]
+    client = TestClient(app.app, raise_server_exceptions=False)
+    resp = client.get("/api/openclaw/browser-mcp-readiness")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("available") is False
+    assert "timeout" in data.get("error", "").lower() or "timeout" in data.get("detail", "").lower()

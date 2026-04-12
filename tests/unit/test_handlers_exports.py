@@ -11,4 +11,3 @@ from src import handlers
 def test_handlers_exports_handle_shop() -> None:
     """Пакет `src.handlers` должен реэкспортировать `handle_shop`."""
     assert handlers.handle_shop is not None
-

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Тесты для src/core/logger.py — structlog setup и get_logger."""
+
 from __future__ import annotations
 
 from src.core.logger import get_logger, setup_logger

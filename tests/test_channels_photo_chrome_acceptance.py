@@ -9,7 +9,9 @@ from pathlib import Path
 
 
 def _load_module():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "channels_photo_chrome_acceptance.py"
+    script_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "channels_photo_chrome_acceptance.py"
+    )
     spec = importlib.util.spec_from_file_location("channels_photo_chrome_acceptance", script_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -38,7 +40,10 @@ def test_build_report_adds_auth_required_warning(monkeypatch):
 
     responses = {
         "/api/health/lite": ({"ok": True}, None),
-        "/api/openclaw/channels/status": ({"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]}, None),
+        "/api/openclaw/channels/status": (
+            {"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]},
+            None,
+        ),
         "/api/openclaw/browser-smoke": (
             {
                 "available": True,
@@ -52,8 +57,14 @@ def test_build_report_adds_auth_required_warning(monkeypatch):
             },
             None,
         ),
-        "/api/openclaw/photo-smoke": ({"available": True, "report": {"photo_smoke": {"ok": True}}}, None),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/photo-smoke": (
+            {"available": True, "report": {"photo_smoke": {"ok": True}}},
+            None,
+        ),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):
@@ -79,7 +90,10 @@ def test_build_report_accepts_authorized_browser_relay(monkeypatch):
 
     responses = {
         "/api/health/lite": ({"ok": True}, None),
-        "/api/openclaw/channels/status": ({"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]}, None),
+        "/api/openclaw/channels/status": (
+            {"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]},
+            None,
+        ),
         "/api/openclaw/browser-smoke": (
             {
                 "available": True,
@@ -93,8 +107,14 @@ def test_build_report_accepts_authorized_browser_relay(monkeypatch):
             },
             None,
         ),
-        "/api/openclaw/photo-smoke": ({"available": True, "report": {"photo_smoke": {"ok": True}}}, None),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/photo-smoke": (
+            {"available": True, "report": {"photo_smoke": {"ok": True}}},
+            None,
+        ),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):
@@ -121,7 +141,10 @@ def test_build_report_auth_required_with_gateway_probe_flap_is_non_blocking(monk
 
     responses = {
         "/api/health/lite": ({"ok": True}, None),
-        "/api/openclaw/channels/status": ({"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]}, None),
+        "/api/openclaw/channels/status": (
+            {"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]},
+            None,
+        ),
         "/api/openclaw/browser-smoke": (
             {
                 "available": True,
@@ -135,8 +158,14 @@ def test_build_report_auth_required_with_gateway_probe_flap_is_non_blocking(monk
             },
             None,
         ),
-        "/api/openclaw/photo-smoke": ({"available": True, "report": {"photo_smoke": {"ok": True}}}, None),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/photo-smoke": (
+            {"available": True, "report": {"photo_smoke": {"ok": True}}},
+            None,
+        ),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):
@@ -164,7 +193,10 @@ def test_build_report_tab_not_connected_is_non_blocking_by_default(monkeypatch):
 
     responses = {
         "/api/health/lite": ({"ok": True}, None),
-        "/api/openclaw/channels/status": ({"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]}, None),
+        "/api/openclaw/channels/status": (
+            {"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]},
+            None,
+        ),
         "/api/openclaw/browser-smoke": (
             {
                 "available": True,
@@ -178,8 +210,14 @@ def test_build_report_tab_not_connected_is_non_blocking_by_default(monkeypatch):
             },
             None,
         ),
-        "/api/openclaw/photo-smoke": ({"available": True, "report": {"photo_smoke": {"ok": True}}}, None),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/photo-smoke": (
+            {"available": True, "report": {"photo_smoke": {"ok": True}}},
+            None,
+        ),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):
@@ -212,7 +250,10 @@ def test_build_report_tab_not_connected_is_blocking_in_strict_mode(monkeypatch):
 
     responses = {
         "/api/health/lite": ({"ok": True}, None),
-        "/api/openclaw/channels/status": ({"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]}, None),
+        "/api/openclaw/channels/status": (
+            {"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]},
+            None,
+        ),
         "/api/openclaw/browser-smoke": (
             {
                 "available": True,
@@ -226,8 +267,14 @@ def test_build_report_tab_not_connected_is_blocking_in_strict_mode(monkeypatch):
             },
             None,
         ),
-        "/api/openclaw/photo-smoke": ({"available": True, "report": {"photo_smoke": {"ok": True}}}, None),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/photo-smoke": (
+            {"available": True, "report": {"photo_smoke": {"ok": True}}},
+            None,
+        ),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):
@@ -259,7 +306,10 @@ def test_build_report_snapshot_auth_not_allowed_is_non_blocking(monkeypatch):
 
     responses = {
         "/api/health/lite": ({"ok": True}, None),
-        "/api/openclaw/channels/status": ({"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]}, None),
+        "/api/openclaw/channels/status": (
+            {"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]},
+            None,
+        ),
         "/api/openclaw/browser-smoke": (
             {
                 "available": True,
@@ -273,8 +323,14 @@ def test_build_report_snapshot_auth_not_allowed_is_non_blocking(monkeypatch):
             },
             None,
         ),
-        "/api/openclaw/photo-smoke": ({"available": True, "report": {"photo_smoke": {"ok": True}}}, None),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/photo-smoke": (
+            {"available": True, "report": {"photo_smoke": {"ok": True}}},
+            None,
+        ),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):
@@ -308,7 +364,10 @@ def test_build_report_retries_photo_smoke_timeout(monkeypatch):
 
     responses = {
         "/api/health/lite": ({"ok": True}, None),
-        "/api/openclaw/channels/status": ({"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]}, None),
+        "/api/openclaw/channels/status": (
+            {"channels": [{"name": "Telegram", "status": "OK", "meta": "works"}]},
+            None,
+        ),
         "/api/openclaw/browser-smoke": (
             {
                 "available": True,
@@ -322,7 +381,10 @@ def test_build_report_retries_photo_smoke_timeout(monkeypatch):
             },
             None,
         ),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):
@@ -368,8 +430,14 @@ def test_build_report_retries_channels_status_timeout(monkeypatch):
             },
             None,
         ),
-        "/api/openclaw/photo-smoke": ({"available": True, "report": {"photo_smoke": {"ok": True}}}, None),
-        "/api/openclaw/control-compat/status": ({"runtime_channels_ok": True, "impact_level": "none"}, None),
+        "/api/openclaw/photo-smoke": (
+            {"available": True, "report": {"photo_smoke": {"ok": True}}},
+            None,
+        ),
+        "/api/openclaw/control-compat/status": (
+            {"runtime_channels_ok": True, "impact_level": "none"},
+            None,
+        ),
     }
 
     def _fake_fetch(url: str, timeout_sec: float = 10.0):

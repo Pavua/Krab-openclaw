@@ -20,7 +20,6 @@ from typing import Any
 
 from .subprocess_env import clean_subprocess_env
 
-
 _DEFAULT_OPENCLAW_BIN_CANDIDATES = (
     "/opt/homebrew/bin/openclaw",
     "/usr/local/bin/openclaw",

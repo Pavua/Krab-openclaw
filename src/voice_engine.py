@@ -55,7 +55,7 @@ async def text_to_speech(
     temp_mp3 = os.path.join(VOICE_OUTPUT_DIR, f"temp_{uuid4().hex}.mp3")
     output_ogg = os.path.join(VOICE_OUTPUT_DIR, filename)
     selected_voice = str(voice or DEFAULT_VOICE).strip() or DEFAULT_VOICE
-    
+
     try:
         # edge-tts принимает скорость в процентах относительно baseline.
         rate_str = f"+{int((speed - 1) * 100)}%"
@@ -73,18 +73,24 @@ async def text_to_speech(
 
         communicate = edge_tts.Communicate(tts_text, selected_voice, rate=rate_str)
         await communicate.save(temp_mp3)
-        
+
         # Telegram лучше всего переваривает именно OGG/Opus voice message.
         cmd = [
-            "ffmpeg", "-y",
-            "-i", temp_mp3,
-            "-c:a", "libopus",
-            "-b:a", "32k",
-            "-vbr", "on",
-            "-compression_level", "10",
-            output_ogg
+            "ffmpeg",
+            "-y",
+            "-i",
+            temp_mp3,
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "32k",
+            "-vbr",
+            "on",
+            "-compression_level",
+            "10",
+            output_ogg,
         ]
-        
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.DEVNULL,
@@ -104,7 +110,7 @@ async def text_to_speech(
         else:
             logger.error("ffmpeg_failed", path=output_ogg)
             return ""
-            
+
     except Exception as e:  # noqa: BLE001
         # Ловим всё: edge_tts.exceptions.NoAudioReceived, aiohttp.ClientError, и т.д.
         # не наследуются от OSError/ValueError/RuntimeError, поэтому предыдущий narrow

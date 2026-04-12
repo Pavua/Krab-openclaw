@@ -81,10 +81,20 @@ async def test_health_check_failure(client: OpenClawClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_warmup_runtime_route_runs_short_probe_and_clears_temp_session(client: OpenClawClient) -> None:
+async def test_warmup_runtime_route_runs_short_probe_and_clears_temp_session(
+    client: OpenClawClient,
+) -> None:
     captured: dict[str, object] = {}
 
-    async def _fake_stream(*, message, chat_id, system_prompt=None, force_cloud=False, max_output_tokens=None, images=None):
+    async def _fake_stream(
+        *,
+        message,
+        chat_id,
+        system_prompt=None,
+        force_cloud=False,
+        max_output_tokens=None,
+        images=None,
+    ):
         captured["message"] = message
         captured["chat_id"] = chat_id
         captured["system_prompt"] = system_prompt
@@ -101,7 +111,9 @@ async def test_warmup_runtime_route_runs_short_probe_and_clears_temp_session(cli
         yield "OK"
 
     with patch.object(client, "health_check", new=AsyncMock(return_value=True)):
-        with patch("src.openclaw_client.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"):
+        with patch(
+            "src.openclaw_client.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"
+        ):
             with patch.object(client, "send_message_stream", new=_fake_stream):
                 with patch.object(client, "clear_session") as clear_session:
                     report = await client.warmup_runtime_route(force_refresh=True)
@@ -119,9 +131,13 @@ async def test_warmup_runtime_route_runs_short_probe_and_clears_temp_session(cli
 async def test_send_message_stream_success_buffered(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
-            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Hello World")):
+            with patch.object(
+                client, "_openclaw_completion_once", new=AsyncMock(return_value="Hello World")
+            ):
                 chunks = []
                 async for chunk in client.send_message_stream("Hi", "chat-1"):
                     chunks.append(chunk)
@@ -135,7 +151,9 @@ async def test_send_message_stream_success_buffered(client: OpenClawClient) -> N
 
 
 @pytest.mark.asyncio
-async def test_send_message_stream_strips_reasoning_before_history_cache(client: OpenClawClient) -> None:
+async def test_send_message_stream_strips_reasoning_before_history_cache(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     noisy_response = (
@@ -146,15 +164,22 @@ async def test_send_message_stream_strips_reasoning_before_history_cache(client:
         "🦀 Контекст восстановлен. Продолжаем работу."
     )
 
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
-            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value=noisy_response)):
+            with patch.object(
+                client, "_openclaw_completion_once", new=AsyncMock(return_value=noisy_response)
+            ):
                 chunks = []
                 async for chunk in client.send_message_stream("Hi", "chat-reasoning-clean"):
                     chunks.append(chunk)
 
     assert "".join(chunks) == "🦀 Контекст восстановлен. Продолжаем работу."
-    assert client._sessions["chat-reasoning-clean"][-1]["content"] == "🦀 Контекст восстановлен. Продолжаем работу."
+    assert (
+        client._sessions["chat-reasoning-clean"][-1]["content"]
+        == "🦀 Контекст восстановлен. Продолжаем работу."
+    )
 
 
 @pytest.mark.asyncio
@@ -171,15 +196,22 @@ async def test_send_message_stream_strips_agentic_scratchpad_before_history_cach
         "🦀 `codex` найден. Продолжаем работу."
     )
 
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
-            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value=noisy_response)):
+            with patch.object(
+                client, "_openclaw_completion_once", new=AsyncMock(return_value=noisy_response)
+            ):
                 chunks = []
                 async for chunk in client.send_message_stream("Hi", "chat-agentic-clean"):
                     chunks.append(chunk)
 
     assert "".join(chunks) == "🦀 `codex` найден. Продолжаем работу."
-    assert client._sessions["chat-agentic-clean"][-1]["content"] == "🦀 `codex` найден. Продолжаем работу."
+    assert (
+        client._sessions["chat-agentic-clean"][-1]["content"]
+        == "🦀 `codex` найден. Продолжаем работу."
+    )
 
 
 @pytest.mark.asyncio
@@ -199,9 +231,17 @@ async def test_send_message_stream_sanitizes_restored_history_cache(client: Open
 
     with patch("src.openclaw_client.history_cache.get", return_value=cached_history):
         with patch("src.openclaw_client.history_cache.set") as cache_set:
-            with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(
+                model_manager,
+                "get_best_model",
+                new=AsyncMock(return_value="google/gemini-2.5-flash"),
+            ):
                 with patch.object(model_manager, "is_local_model", return_value=False):
-                    with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Новый ответ")):
+                    with patch.object(
+                        client,
+                        "_openclaw_completion_once",
+                        new=AsyncMock(return_value="Новый ответ"),
+                    ):
                         chunks = []
                         async for chunk in client.send_message_stream("Hi", "chat-restored-cache"):
                             chunks.append(chunk)
@@ -214,7 +254,9 @@ async def test_send_message_stream_sanitizes_restored_history_cache(client: Open
 
 
 @pytest.mark.asyncio
-async def test_send_message_stream_sanitizes_existing_in_memory_session(client: OpenClawClient) -> None:
+async def test_send_message_stream_sanitizes_existing_in_memory_session(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     client._sessions["chat-existing-session"] = [
@@ -226,9 +268,13 @@ async def test_send_message_stream_sanitizes_existing_in_memory_session(client: 
     ]
 
     with patch("src.openclaw_client.history_cache.set") as cache_set:
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        ):
             with patch.object(model_manager, "is_local_model", return_value=False):
-                with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")):
+                with patch.object(
+                    client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")
+                ):
                     chunks = []
                     async for chunk in client.send_message_stream("Hi", "chat-existing-session"):
                         chunks.append(chunk)
@@ -246,7 +292,9 @@ async def test_send_message_stream_honors_preferred_cloud_model(client: OpenClaw
     from src.model_manager import model_manager
 
     completion = AsyncMock(return_value="Cloud preferred OK")
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")) as get_best:
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ) as get_best:
         with patch.object(model_manager, "is_local_model", return_value=False):
             with patch.object(client, "_openclaw_completion_once", new=completion):
                 chunks = []
@@ -265,27 +313,57 @@ async def test_send_message_stream_honors_preferred_cloud_model(client: OpenClaw
     assert route.get("channel") == "openclaw_cloud"
 
 
-def test_resolve_buffered_read_timeout_uses_provider_specific_budgets(client: OpenClawClient) -> None:
+def test_resolve_buffered_read_timeout_uses_provider_specific_budgets(
+    client: OpenClawClient,
+) -> None:
     """Для зависающих buffered cloud-маршрутов должен включаться отдельный budget ожидания."""
     with patch("src.openclaw_client.config.OPENCLAW_BUFFERED_READ_TIMEOUT_SEC", None):
-        with patch("src.openclaw_client.config.OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", 210.0):
-            with patch("src.openclaw_client.config.OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", 195.0):
-                with patch("src.openclaw_client.config.OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC", 180.0):
-                    assert client._resolve_buffered_read_timeout_sec(model_id="codex-cli/gpt-5.4") == 210.0  # noqa: SLF001
-                    assert client._resolve_buffered_read_timeout_sec(model_id="google-gemini-cli/gemini-3.1-pro-preview") == 195.0  # noqa: SLF001
-                    assert client._resolve_buffered_read_timeout_sec(model_id="openai-codex/gpt-5.4") == 180.0  # noqa: SLF001
-                    assert client._resolve_buffered_read_timeout_sec(model_id="google/gemini-3.1-pro-preview") is None  # noqa: SLF001
+        with patch(
+            "src.openclaw_client.config.OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", 210.0
+        ):
+            with patch(
+                "src.openclaw_client.config.OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC",
+                195.0,
+            ):
+                with patch(
+                    "src.openclaw_client.config.OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC",
+                    180.0,
+                ):
+                    assert (
+                        client._resolve_buffered_read_timeout_sec(model_id="codex-cli/gpt-5.4")
+                        == 210.0
+                    )  # noqa: SLF001
+                    assert (
+                        client._resolve_buffered_read_timeout_sec(
+                            model_id="google-gemini-cli/gemini-3.1-pro-preview"
+                        )
+                        == 195.0
+                    )  # noqa: SLF001
+                    assert (
+                        client._resolve_buffered_read_timeout_sec(model_id="openai-codex/gpt-5.4")
+                        == 180.0
+                    )  # noqa: SLF001
+                    assert (
+                        client._resolve_buffered_read_timeout_sec(
+                            model_id="google/gemini-3.1-pro-preview"
+                        )
+                        is None
+                    )  # noqa: SLF001
 
 
 @pytest.mark.asyncio
-async def test_openclaw_completion_once_passes_request_timeout_for_google_gemini_cli(client: OpenClawClient) -> None:
+async def test_openclaw_completion_once_passes_request_timeout_for_google_gemini_cli(
+    client: OpenClawClient,
+) -> None:
     """Buffered-запрос к google-gemini-cli должен иметь отдельный request-level read-timeout."""
     response = MagicMock()
     response.status_code = 200
     response.json.return_value = {"choices": [{"message": {"content": "OK"}}]}
     client._http_client.post.return_value = response
 
-    with patch("src.openclaw_client.config.OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", 205.0):
+    with patch(
+        "src.openclaw_client.config.OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", 205.0
+    ):
         text = await client._openclaw_completion_once(
             model_id="google-gemini-cli/gemini-3.1-pro-preview",
             messages_to_send=[{"role": "user", "content": "ping"}],
@@ -298,7 +376,9 @@ async def test_openclaw_completion_once_passes_request_timeout_for_google_gemini
 
 
 @pytest.mark.asyncio
-async def test_openclaw_completion_once_passes_request_timeout_for_codex_cli(client: OpenClawClient) -> None:
+async def test_openclaw_completion_once_passes_request_timeout_for_codex_cli(
+    client: OpenClawClient,
+) -> None:
     """Buffered-запрос к codex-cli должен иметь отдельный request-level read-timeout."""
     response = MagicMock()
     response.status_code = 200
@@ -346,11 +426,19 @@ async def test_send_message_stream_marks_request_lifecycle(client: OpenClawClien
 
     with patch.object(model_manager, "mark_request_started", new=started):
         with patch.object(model_manager, "mark_request_finished", new=finished):
-            with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+            with patch.object(
+                model_manager,
+                "get_best_model",
+                new=AsyncMock(return_value="google/gemini-2.5-flash"),
+            ):
                 with patch.object(model_manager, "is_local_model", return_value=False):
-                    with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")):
+                    with patch.object(
+                        client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")
+                    ):
                         chunks = []
-                        async for chunk in client.send_message_stream("Lifecycle", "chat-lifecycle"):
+                        async for chunk in client.send_message_stream(
+                            "Lifecycle", "chat-lifecycle"
+                        ):
                             chunks.append(chunk)
 
     assert "".join(chunks) == "OK"
@@ -359,7 +447,9 @@ async def test_send_message_stream_marks_request_lifecycle(client: OpenClawClien
 
 
 @pytest.mark.asyncio
-async def test_send_message_stream_text_request_strips_legacy_image_parts(client: OpenClawClient) -> None:
+async def test_send_message_stream_text_request_strips_legacy_image_parts(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     client._sessions["chat-with-image"] = [
@@ -371,7 +461,9 @@ async def test_send_message_stream_text_request_strips_legacy_image_parts(client
         }
     ]
     completion = AsyncMock(return_value="OK")
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
             with patch.object(client, "_openclaw_completion_once", new=completion):
                 chunks = []
@@ -389,7 +481,9 @@ async def test_send_message_stream_retries_on_lm_empty_stream(client: OpenClawCl
     from src.model_manager import model_manager
 
     completion = AsyncMock(side_effect=["<EMPTY MESSAGE>", "Нормальный ответ после retry"])
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
             with patch.object(client, "_openclaw_completion_once", new=completion):
                 chunks = []
@@ -400,7 +494,9 @@ async def test_send_message_stream_retries_on_lm_empty_stream(client: OpenClawCl
     assert completion.await_count == 2
 
 
-def test_build_retry_messages_truncates_middle_and_applies_char_budget(client: OpenClawClient) -> None:
+def test_build_retry_messages_truncates_middle_and_applies_char_budget(
+    client: OpenClawClient,
+) -> None:
     messages = [
         {"role": "system", "content": "S" * 500},
         {"role": "user", "content": "A" * 900},
@@ -420,7 +516,9 @@ def test_build_retry_messages_truncates_middle_and_applies_char_budget(client: O
     assert any("[...TRUNCATED MIDDLE...]" in str(item.get("content")) for item in compacted)
 
 
-def test_normalize_usage_snapshot_accepts_openai_and_fallback_fields(client: OpenClawClient) -> None:
+def test_normalize_usage_snapshot_accepts_openai_and_fallback_fields(
+    client: OpenClawClient,
+) -> None:
     assert client._normalize_usage_snapshot({}) is None  # noqa: SLF001
     assert client._normalize_usage_snapshot(None) is None  # noqa: SLF001
 
@@ -435,7 +533,9 @@ def test_normalize_usage_snapshot_accepts_openai_and_fallback_fields(client: Ope
     }
 
 
-def test_commit_usage_snapshot_updates_compat_stats_and_cost_analytics(client: OpenClawClient) -> None:
+def test_commit_usage_snapshot_updates_compat_stats_and_cost_analytics(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     fake_analytics = MagicMock()
@@ -457,7 +557,9 @@ def test_commit_usage_snapshot_updates_compat_stats_and_cost_analytics(client: O
 
 
 @pytest.mark.asyncio
-async def test_openclaw_completion_once_estimates_usage_when_response_has_no_usage(client: OpenClawClient) -> None:
+async def test_openclaw_completion_once_estimates_usage_when_response_has_no_usage(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     response = MagicMock()
@@ -511,17 +613,37 @@ async def test_local_empty_stream_retry_uses_compact_retry_context(client: OpenC
     completion = AsyncMock(side_effect=["<EMPTY MESSAGE>", "Локальный retry ок"])
     with patch("src.openclaw_client.config.LOCAL_HISTORY_WINDOW_MESSAGES", 12):
         with patch("src.openclaw_client.config.LOCAL_HISTORY_WINDOW_MAX_CHARS", 12000):
-                        with patch("src.openclaw_client.config.RETRY_HISTORY_WINDOW_MESSAGES", 3):
-                            with patch("src.openclaw_client.config.RETRY_HISTORY_WINDOW_MAX_CHARS", 650):
-                                with patch("src.openclaw_client.config.RETRY_MESSAGE_MAX_CHARS", 160):
-                                    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")):
-                                        with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-                                            with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)):
-                                                with patch.object(client, "_direct_lm_fallback", new=AsyncMock(return_value=None)):
-                                                    with patch.object(client, "_openclaw_completion_once", new=completion):
-                                                        chunks = []
-                                                        async for chunk in client.send_message_stream("Новый запрос", "chat-local-retry"):
-                                                            chunks.append(chunk)
+            with patch("src.openclaw_client.config.RETRY_HISTORY_WINDOW_MESSAGES", 3):
+                with patch("src.openclaw_client.config.RETRY_HISTORY_WINDOW_MAX_CHARS", 650):
+                    with patch("src.openclaw_client.config.RETRY_MESSAGE_MAX_CHARS", 160):
+                        with patch.object(
+                            model_manager,
+                            "get_best_model",
+                            new=AsyncMock(return_value="local/nemotron"),
+                        ):
+                            with patch.object(
+                                model_manager,
+                                "is_local_model",
+                                side_effect=lambda mid: str(mid).startswith("local"),
+                            ):
+                                with patch.object(
+                                    model_manager,
+                                    "ensure_model_loaded",
+                                    new=AsyncMock(return_value=True),
+                                ):
+                                    with patch.object(
+                                        client,
+                                        "_direct_lm_fallback",
+                                        new=AsyncMock(return_value=None),
+                                    ):
+                                        with patch.object(
+                                            client, "_openclaw_completion_once", new=completion
+                                        ):
+                                            chunks = []
+                                            async for chunk in client.send_message_stream(
+                                                "Новый запрос", "chat-local-retry"
+                                            ):
+                                                chunks.append(chunk)
 
     assert "".join(chunks) == "Локальный retry ок"
     assert completion.await_count == 2
@@ -535,10 +657,15 @@ async def test_session_management_respects_window(client: OpenClawClient) -> Non
     client._sessions["chat-1"] = [{"role": "user", "content": "1"}] * 25
 
     from src.model_manager import model_manager
+
     with patch("src.openclaw_client.config.HISTORY_WINDOW_MESSAGES", 20):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        ):
             with patch.object(model_manager, "is_local_model", return_value=False):
-                with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")):
+                with patch.object(
+                    client, "_openclaw_completion_once", new=AsyncMock(return_value="OK")
+                ):
                     async for _ in client.send_message_stream("New", "chat-1"):
                         pass
 
@@ -555,9 +682,15 @@ def test_clear_session(client: OpenClawClient) -> None:
 async def test_semantic_error_returns_user_message_when_force_cloud(client: OpenClawClient) -> None:
     from src.model_manager import model_manager
 
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
-            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="400 No models loaded. Please load a model")):
+            with patch.object(
+                client,
+                "_openclaw_completion_once",
+                new=AsyncMock(return_value="400 No models loaded. Please load a model"),
+            ):
                 chunks = []
                 async for chunk in client.send_message_stream("Hi", "chat-1", force_cloud=True):
                     chunks.append(chunk)
@@ -570,10 +703,20 @@ async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenCl
     from src.model_manager import model_manager
 
     with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local")):
-        with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-            with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=False)):
-                with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
-                    with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")) as completion:
+        with patch.object(
+            model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")
+        ):
+            with patch.object(
+                model_manager, "ensure_model_loaded", new=AsyncMock(return_value=False)
+            ):
+                with patch.object(
+                    client,
+                    "_pick_cloud_retry_model",
+                    new=AsyncMock(return_value="google/gemini-2.5-flash"),
+                ):
+                    with patch.object(
+                        client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")
+                    ) as completion:
                         chunks = []
                         async for chunk in client.send_message_stream("Hi", "chat-local-fallback"):
                             chunks.append(chunk)
@@ -584,16 +727,30 @@ async def test_local_autoload_failure_switches_to_cloud_candidate(client: OpenCl
 
 
 @pytest.mark.asyncio
-async def test_force_cloud_remaps_local_selected_model_to_cloud_candidate(client: OpenClawClient) -> None:
+async def test_force_cloud_remaps_local_selected_model_to_cloud_candidate(
+    client: OpenClawClient,
+) -> None:
     """При force_cloud локальная первичная модель должна быть заменена на cloud-кандидат."""
     from src.model_manager import model_manager
 
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")):
-        with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-            with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
-                with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")) as completion:
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")
+    ):
+        with patch.object(
+            model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")
+        ):
+            with patch.object(
+                client,
+                "_pick_cloud_retry_model",
+                new=AsyncMock(return_value="google/gemini-2.5-flash"),
+            ):
+                with patch.object(
+                    client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud OK")
+                ) as completion:
                     chunks = []
-                    async for chunk in client.send_message_stream("Hi", "chat-force-cloud", force_cloud=True):
+                    async for chunk in client.send_message_stream(
+                        "Hi", "chat-force-cloud", force_cloud=True
+                    ):
                         chunks.append(chunk)
 
     assert "".join(chunks) == "Cloud OK"
@@ -610,7 +767,9 @@ async def test_send_message_stream_passes_text_max_output_tokens(client: OpenCla
 
     completion = AsyncMock(return_value="Короткий ответ")
     with patch("src.openclaw_client.config.USERBOT_MAX_OUTPUT_TOKENS", 333):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        ):
             with patch.object(model_manager, "is_local_model", return_value=False):
                 with patch.object(client, "_openclaw_completion_once", new=completion):
                     chunks = []
@@ -630,7 +789,9 @@ async def test_send_message_stream_passes_photo_max_output_tokens(client: OpenCl
     from src.model_manager import model_manager
 
     completion = AsyncMock(return_value="Фото-ответ")
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
             with patch.object(client, "_openclaw_completion_once", new=completion):
                 chunks = []
@@ -647,22 +808,42 @@ async def test_send_message_stream_passes_photo_max_output_tokens(client: OpenCl
 
 
 @pytest.mark.asyncio
-async def test_vision_addon_missing_auto_mode_skips_alt_local_vision_and_goes_to_cloud(client: OpenClawClient) -> None:
+async def test_vision_addon_missing_auto_mode_skips_alt_local_vision_and_goes_to_cloud(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     completion = AsyncMock(return_value="Cloud vision OK")
     with patch("src.openclaw_client.config.LOCAL_PREFERRED_VISION_MODEL", "auto"):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")):
-            with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-                with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)) as ensure_loaded:
-                    with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="local/nemotron")
+        ):
+            with patch.object(
+                model_manager,
+                "is_local_model",
+                side_effect=lambda mid: str(mid).startswith("local"),
+            ):
+                with patch.object(
+                    model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)
+                ) as ensure_loaded:
+                    with patch.object(
+                        client,
+                        "_pick_cloud_retry_model",
+                        new=AsyncMock(return_value="google/gemini-2.5-flash"),
+                    ):
                         with patch.object(
                             model_manager,
                             "_local_candidates",
-                            new=AsyncMock(return_value=[("qwen2-vl-2b-instruct-abliterated-mlx", MagicMock())]),
+                            new=AsyncMock(
+                                return_value=[("qwen2-vl-2b-instruct-abliterated-mlx", MagicMock())]
+                            ),
                         ) as local_candidates:
-                            with patch.object(client, "_direct_lm_fallback", new=AsyncMock(return_value=None)) as direct_fallback:
-                                with patch.object(client, "_openclaw_completion_once", new=completion):
+                            with patch.object(
+                                client, "_direct_lm_fallback", new=AsyncMock(return_value=None)
+                            ) as direct_fallback:
+                                with patch.object(
+                                    client, "_openclaw_completion_once", new=completion
+                                ):
                                     chunks = []
                                     async for chunk in client.send_message_stream(
                                         "Посмотри фото",
@@ -680,20 +861,42 @@ async def test_vision_addon_missing_auto_mode_skips_alt_local_vision_and_goes_to
 
 
 @pytest.mark.asyncio
-async def test_photo_auto_mode_remaps_accidental_local_vision_selection_to_cloud(client: OpenClawClient) -> None:
+async def test_photo_auto_mode_remaps_accidental_local_vision_selection_to_cloud(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     with patch("src.openclaw_client.config.LOCAL_PREFERRED_VISION_MODEL", "auto"):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="qwen2-vl-2b-instruct-abliterated-mlx")):
+        with patch.object(
+            model_manager,
+            "get_best_model",
+            new=AsyncMock(return_value="qwen2-vl-2b-instruct-abliterated-mlx"),
+        ):
             with patch.object(
                 model_manager,
                 "is_local_model",
-                side_effect=lambda mid: str(mid).startswith("qwen2-vl") or str(mid).startswith("local"),
+                side_effect=lambda mid: (
+                    str(mid).startswith("qwen2-vl") or str(mid).startswith("local")
+                ),
             ):
-                with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
-                    with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)) as ensure_loaded:
-                        with patch.object(client, "_direct_lm_fallback", new=AsyncMock(return_value="Локальный vision")) as direct_fallback:
-                            with patch.object(client, "_openclaw_completion_once", new=AsyncMock(return_value="Cloud vision OK")) as completion:
+                with patch.object(
+                    client,
+                    "_pick_cloud_retry_model",
+                    new=AsyncMock(return_value="google/gemini-2.5-flash"),
+                ):
+                    with patch.object(
+                        model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)
+                    ) as ensure_loaded:
+                        with patch.object(
+                            client,
+                            "_direct_lm_fallback",
+                            new=AsyncMock(return_value="Локальный vision"),
+                        ) as direct_fallback:
+                            with patch.object(
+                                client,
+                                "_openclaw_completion_once",
+                                new=AsyncMock(return_value="Cloud vision OK"),
+                            ) as completion:
                                 chunks = []
                                 async for chunk in client.send_message_stream(
                                     "Опиши фото",
@@ -710,19 +913,35 @@ async def test_photo_auto_mode_remaps_accidental_local_vision_selection_to_cloud
 
 
 @pytest.mark.asyncio
-async def test_photo_auto_mode_without_cloud_candidate_does_not_fall_back_to_direct_local(client: OpenClawClient) -> None:
+async def test_photo_auto_mode_without_cloud_candidate_does_not_fall_back_to_direct_local(
+    client: OpenClawClient,
+) -> None:
     from src.model_manager import model_manager
 
     with patch("src.openclaw_client.config.LOCAL_PREFERRED_VISION_MODEL", "auto"):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="qwen2-vl-2b-instruct-abliterated-mlx")):
+        with patch.object(
+            model_manager,
+            "get_best_model",
+            new=AsyncMock(return_value="qwen2-vl-2b-instruct-abliterated-mlx"),
+        ):
             with patch.object(
                 model_manager,
                 "is_local_model",
-                side_effect=lambda mid: str(mid).startswith("qwen2-vl") or str(mid).startswith("local"),
+                side_effect=lambda mid: (
+                    str(mid).startswith("qwen2-vl") or str(mid).startswith("local")
+                ),
             ):
-                with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="")):
-                    with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)) as ensure_loaded:
-                        with patch.object(client, "_direct_lm_fallback", new=AsyncMock(return_value="Локальный vision")) as direct_fallback:
+                with patch.object(
+                    client, "_pick_cloud_retry_model", new=AsyncMock(return_value="")
+                ):
+                    with patch.object(
+                        model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)
+                    ) as ensure_loaded:
+                        with patch.object(
+                            client,
+                            "_direct_lm_fallback",
+                            new=AsyncMock(return_value="Локальный vision"),
+                        ) as direct_fallback:
                             with patch.object(
                                 client,
                                 "_openclaw_completion_once",
@@ -748,7 +967,9 @@ def test_local_recovery_disabled_for_photo_in_auto_vision_mode(client: OpenClawC
             assert client._local_recovery_enabled(force_cloud=False, has_photo=True) is False
 
 
-def test_local_recovery_enabled_for_text_route_even_in_auto_vision_mode(client: OpenClawClient) -> None:
+def test_local_recovery_enabled_for_text_route_even_in_auto_vision_mode(
+    client: OpenClawClient,
+) -> None:
     with patch("src.openclaw_client.config.LOCAL_PREFERRED_VISION_MODEL", "auto"):
         with patch("src.openclaw_client.config.LOCAL_FALLBACK_ENABLED", True):
             assert client._local_recovery_enabled(force_cloud=False, has_photo=False) is True
@@ -760,14 +981,30 @@ async def test_auth_error_without_cloud_retry_falls_back_to_local(client: OpenCl
 
     completion = AsyncMock(side_effect=["401 Unauthorized: invalid api key", "Локальный ответ"])
     with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
-            with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-                with patch.object(client, "_pick_cloud_retry_model", new=AsyncMock(return_value="")):
-                    with patch.object(client, "_resolve_local_model_for_retry", new=AsyncMock(return_value="local/qwen")):
-                        with patch.object(model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        ):
+            with patch.object(
+                model_manager,
+                "is_local_model",
+                side_effect=lambda mid: str(mid).startswith("local"),
+            ):
+                with patch.object(
+                    client, "_pick_cloud_retry_model", new=AsyncMock(return_value="")
+                ):
+                    with patch.object(
+                        client,
+                        "_resolve_local_model_for_retry",
+                        new=AsyncMock(return_value="local/qwen"),
+                    ):
+                        with patch.object(
+                            model_manager, "ensure_model_loaded", new=AsyncMock(return_value=True)
+                        ):
                             with patch.object(client, "_openclaw_completion_once", new=completion):
                                 chunks = []
-                                async for chunk in client.send_message_stream("Hi", "chat-auth-local-fallback"):
+                                async for chunk in client.send_message_stream(
+                                    "Hi", "chat-auth-local-fallback"
+                                ):
                                     chunks.append(chunk)
 
     assert "".join(chunks) == "Локальный ответ"
@@ -776,7 +1013,9 @@ async def test_auth_error_without_cloud_retry_falls_back_to_local(client: OpenCl
 
 
 @pytest.mark.asyncio
-async def test_provider_timeout_does_not_use_local_recovery_when_disabled(client: OpenClawClient) -> None:
+async def test_provider_timeout_does_not_use_local_recovery_when_disabled(
+    client: OpenClawClient,
+) -> None:
     """
     Если LOCAL_FALLBACK_ENABLED=0, cloud-ошибка не должна запускать
     автопереход в локальный recovery.
@@ -784,17 +1023,29 @@ async def test_provider_timeout_does_not_use_local_recovery_when_disabled(client
     from src.model_manager import model_manager
 
     with patch("src.openclaw_client.config.LOCAL_FALLBACK_ENABLED", False):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        ):
             with patch.object(model_manager, "is_local_model", return_value=False):
                 with patch.object(
                     client,
                     "_openclaw_completion_once",
                     new=AsyncMock(return_value="provider timeout"),
                 ):
-                    with patch.object(client, "_resolve_local_model_for_retry", new=AsyncMock(return_value="local/qwen")) as to_local:
-                        with patch.object(client, "_direct_lm_fallback", new=AsyncMock(return_value="Локальный ответ")) as direct_local:
+                    with patch.object(
+                        client,
+                        "_resolve_local_model_for_retry",
+                        new=AsyncMock(return_value="local/qwen"),
+                    ) as to_local:
+                        with patch.object(
+                            client,
+                            "_direct_lm_fallback",
+                            new=AsyncMock(return_value="Локальный ответ"),
+                        ) as direct_local:
                             chunks = []
-                            async for chunk in client.send_message_stream("Hi", "chat-no-local-recovery"):
+                            async for chunk in client.send_message_stream(
+                                "Hi", "chat-no-local-recovery"
+                            ):
                                 chunks.append(chunk)
 
     text = "".join(chunks).lower()
@@ -828,7 +1079,9 @@ async def test_cloud_retry_updates_runtime_route_to_current_attempt(client: Open
             return "provider timeout"
         return "Cloud retry OK"
 
-    with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="codex-cli/gpt-5.4")):
+    with patch.object(
+        model_manager, "get_best_model", new=AsyncMock(return_value="codex-cli/gpt-5.4")
+    ):
         with patch.object(model_manager, "is_local_model", return_value=False):
             with patch.object(
                 client,
@@ -860,7 +1113,10 @@ async def test_cloud_retry_updates_runtime_route_to_current_attempt(client: Open
 
 @pytest.mark.asyncio
 async def test_tier_export_contains_required_fields(client: OpenClawClient) -> None:
-    with patch("src.openclaw_client.get_openclaw_cli_runtime_status", return_value={"can_reload": True, "error": ""}):
+    with patch(
+        "src.openclaw_client.get_openclaw_cli_runtime_status",
+        return_value={"can_reload": True, "error": ""},
+    ):
         export = client.get_tier_state_export()
     assert "active_tier" in export
     assert "last_error_code" in export
@@ -870,7 +1126,10 @@ async def test_tier_export_contains_required_fields(client: OpenClawClient) -> N
 
 @pytest.mark.asyncio
 async def test_cloud_runtime_check_updates_tier_state_from_probe(client: OpenClawClient) -> None:
-    with patch("src.openclaw_client.get_openclaw_cli_runtime_status", return_value={"can_reload": True, "error": ""}):
+    with patch(
+        "src.openclaw_client.get_openclaw_cli_runtime_status",
+        return_value={"can_reload": True, "error": ""},
+    ):
         with patch(
             "src.openclaw_client.probe_gemini_key",
             new=AsyncMock(
@@ -915,11 +1174,15 @@ def test_runtime_google_key_state_detects_placeholder(client: OpenClawClient) ->
     assert state["masked"].startswith("GEMI")
 
 
-def test_effective_runtime_google_key_state_resolves_paid_placeholder_from_env(client: OpenClawClient) -> None:
+def test_effective_runtime_google_key_state_resolves_paid_placeholder_from_env(
+    client: OpenClawClient,
+) -> None:
     client.gemini_tiers["paid"] = "AIzaPAID1234567890123456789012345"
     client.gemini_tiers["free"] = "AIzaFREE1234567890123456789012345"
     with patch("src.openclaw_client.get_google_api_key_from_models", return_value="GEMINI_API_KEY"):
-        with patch.dict("os.environ", {"GEMINI_API_KEY": "AIzaPAID1234567890123456789012345"}, clear=False):
+        with patch.dict(
+            "os.environ", {"GEMINI_API_KEY": "AIzaPAID1234567890123456789012345"}, clear=False
+        ):
             state = client._effective_runtime_google_key_state()  # noqa: SLF001
 
     assert state["state"] == "paid"
@@ -931,7 +1194,9 @@ def test_effective_runtime_google_key_state_resolves_paid_placeholder_from_env(c
 
 
 @pytest.mark.asyncio
-async def test_cloud_runtime_check_syncs_active_tier_from_models_json(client: OpenClawClient) -> None:
+async def test_cloud_runtime_check_syncs_active_tier_from_models_json(
+    client: OpenClawClient,
+) -> None:
     client.active_tier = "free"
     client._cloud_tier_state["active_tier"] = "free"
     client._set_last_runtime_route(  # noqa: SLF001
@@ -950,7 +1215,11 @@ async def test_cloud_runtime_check_syncs_active_tier_from_models_json(client: Op
     ):
         with patch(
             "src.openclaw_client.get_openclaw_cli_runtime_status",
-            return_value={"can_reload": False, "error": "cli_not_executable", "cli_path": "/opt/homebrew/bin/openclaw"},
+            return_value={
+                "can_reload": False,
+                "error": "cli_not_executable",
+                "cli_path": "/opt/homebrew/bin/openclaw",
+            },
         ):
             with patch(
                 "src.openclaw_client.probe_gemini_key",
@@ -988,7 +1257,9 @@ async def test_cloud_runtime_check_syncs_active_tier_from_models_json(client: Op
 
 
 @pytest.mark.asyncio
-async def test_cloud_runtime_check_reports_effective_paid_key_when_models_json_keeps_placeholder(client: OpenClawClient) -> None:
+async def test_cloud_runtime_check_reports_effective_paid_key_when_models_json_keeps_placeholder(
+    client: OpenClawClient,
+) -> None:
     client.active_tier = "free"
     client._cloud_tier_state["active_tier"] = "free"
     client._set_last_runtime_route(  # noqa: SLF001
@@ -1002,10 +1273,16 @@ async def test_cloud_runtime_check_reports_effective_paid_key_when_models_json_k
     client.gemini_tiers["paid"] = "AIzaPAID1234567890123456789012345"
 
     with patch("src.openclaw_client.get_google_api_key_from_models", return_value="GEMINI_API_KEY"):
-        with patch.dict("os.environ", {"GEMINI_API_KEY": "AIzaPAID1234567890123456789012345"}, clear=False):
+        with patch.dict(
+            "os.environ", {"GEMINI_API_KEY": "AIzaPAID1234567890123456789012345"}, clear=False
+        ):
             with patch(
                 "src.openclaw_client.get_openclaw_cli_runtime_status",
-                return_value={"can_reload": True, "error": "", "cli_path": "/opt/homebrew/bin/openclaw"},
+                return_value={
+                    "can_reload": True,
+                    "error": "",
+                    "cli_path": "/opt/homebrew/bin/openclaw",
+                },
             ):
                 with patch(
                     "src.openclaw_client.probe_gemini_key",
@@ -1044,7 +1321,9 @@ async def test_cloud_runtime_check_reports_effective_paid_key_when_models_json_k
 
 
 @pytest.mark.asyncio
-async def test_switch_cloud_tier_syncs_last_runtime_route_active_tier(client: OpenClawClient) -> None:
+async def test_switch_cloud_tier_syncs_last_runtime_route_active_tier(
+    client: OpenClawClient,
+) -> None:
     client._set_last_runtime_route(  # noqa: SLF001
         channel="openclaw_cloud",
         model="google-gemini-cli/gemini-3.1-pro-preview",
@@ -1056,7 +1335,10 @@ async def test_switch_cloud_tier_syncs_last_runtime_route_active_tier(client: Op
 
     with patch.object(client, "_set_google_key_in_models", return_value=True):
         with patch("src.openclaw_client.is_ai_studio_key", return_value=True):
-            with patch("src.openclaw_client.reload_openclaw_secrets", new=AsyncMock(return_value={"ok": True})):
+            with patch(
+                "src.openclaw_client.reload_openclaw_secrets",
+                new=AsyncMock(return_value={"ok": True}),
+            ):
                 result = await client.switch_cloud_tier("paid")
 
     assert result["ok"] is True
@@ -1098,7 +1380,9 @@ def test_detect_semantic_error_unauthorized_returns_canonical_code(client: OpenC
 
 
 def test_semantic_from_provider_auth_exception_uses_canonical_code(client: OpenClawClient) -> None:
-    semantic = client._semantic_from_provider_exception(ProviderAuthError(message="401", user_message="auth failed"))
+    semantic = client._semantic_from_provider_exception(
+        ProviderAuthError(message="401", user_message="auth failed")
+    )
     assert semantic["code"] == "openclaw_auth_unauthorized"
 
 
@@ -1112,7 +1396,9 @@ def test_semantic_from_provider_exception_maps_vision_addon_missing(client: Open
     assert semantic["code"] == "vision_addon_missing"
 
 
-def test_refresh_gateway_token_from_runtime_updates_auth_header(client: OpenClawClient, tmp_path: Path) -> None:
+def test_refresh_gateway_token_from_runtime_updates_auth_header(
+    client: OpenClawClient, tmp_path: Path
+) -> None:
     cfg_path = tmp_path / "openclaw.json"
     cfg_path.write_text(
         '{"gateway":{"auth":{"mode":"token","token":"runtime-token-123"}}}',
@@ -1129,7 +1415,9 @@ def test_refresh_gateway_token_from_runtime_updates_auth_header(client: OpenClaw
     assert client._http_client.headers["Authorization"] == "Bearer runtime-token-123"
 
 
-def test_resolve_gateway_reported_model_prefers_recent_fallback_log(client: OpenClawClient, tmp_path: Path) -> None:
+def test_resolve_gateway_reported_model_prefers_recent_fallback_log(
+    client: OpenClawClient, tmp_path: Path
+) -> None:
     log_path = tmp_path / "openclaw.log"
     log_path.write_text(
         '2026-03-11T04:09:15.775+01:00 [model-fallback] Model "openai-codex/gpt-5.4" not found. Fell back to "google/gemini-3.1-pro-preview".\n',
@@ -1195,7 +1483,9 @@ async def test_direct_lm_fallback_uses_lm_studio_auth_headers(client: OpenClawCl
 
     with patch("src.openclaw_client.config.LM_STUDIO_API_KEY", "lm-secret"):
         with patch("src.openclaw_client.is_lm_studio_available", new=AsyncMock(return_value=True)):
-            with patch("src.openclaw_client.httpx.AsyncClient", return_value=fake_client) as mock_async_client:
+            with patch(
+                "src.openclaw_client.httpx.AsyncClient", return_value=fake_client
+            ) as mock_async_client:
                 result = await client._direct_lm_fallback(  # noqa: SLF001
                     chat_id="chat-lm-auth",
                     messages_to_send=[{"role": "user", "content": "Привет"}],
@@ -1266,7 +1556,9 @@ async def test_direct_lm_fallback_native_chat_reuses_response_id(client: OpenCla
 
 
 @pytest.mark.asyncio
-async def test_direct_lm_fallback_falls_back_to_compat_if_native_has_no_message(client: OpenClawClient) -> None:
+async def test_direct_lm_fallback_falls_back_to_compat_if_native_has_no_message(
+    client: OpenClawClient,
+) -> None:
     native_response = MagicMock()
     native_response.status_code = 200
     native_response.json.return_value = {
@@ -1299,7 +1591,9 @@ async def test_direct_lm_fallback_falls_back_to_compat_if_native_has_no_message(
 
 
 @pytest.mark.asyncio
-async def test_direct_lm_fallback_native_chat_auto_continues_on_output_cap(client: OpenClawClient) -> None:
+async def test_direct_lm_fallback_native_chat_auto_continues_on_output_cap(
+    client: OpenClawClient,
+) -> None:
     first_response = MagicMock()
     first_response.status_code = 200
     first_response.json.return_value = {
@@ -1345,17 +1639,35 @@ async def test_empty_response_does_not_override_last_auth_error(client: OpenClaw
     from src.model_manager import model_manager
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
-        with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
-            with patch.object(model_manager, "is_local_model", side_effect=lambda mid: str(mid).startswith("local")):
-                with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="google/gemini-2.5-flash")):
-                    with patch.object(client, "_resolve_local_model_for_retry", new=AsyncMock(return_value=None)):
+        with patch.object(
+            model_manager, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        ):
+            with patch.object(
+                model_manager,
+                "is_local_model",
+                side_effect=lambda mid: str(mid).startswith("local"),
+            ):
+                with patch.object(
+                    model_manager,
+                    "get_best_cloud_model",
+                    new=AsyncMock(return_value="google/gemini-2.5-flash"),
+                ):
+                    with patch.object(
+                        client, "_resolve_local_model_for_retry", new=AsyncMock(return_value=None)
+                    ):
                         with patch.object(
                             client,
                             "_openclaw_completion_once",
-                            new=AsyncMock(side_effect=ProviderAuthError(message="401", user_message="auth failed")),
+                            new=AsyncMock(
+                                side_effect=ProviderAuthError(
+                                    message="401", user_message="auth failed"
+                                )
+                            ),
                         ):
                             chunks = []
-                            async for chunk in client.send_message_stream("Hi", "chat-auth-priority"):
+                            async for chunk in client.send_message_stream(
+                                "Hi", "chat-auth-priority"
+                            ):
                                 chunks.append(chunk)
 
     text = "".join(chunks).lower()
@@ -1364,7 +1676,9 @@ async def test_empty_response_does_not_override_last_auth_error(client: OpenClaw
 
 
 @pytest.mark.asyncio
-async def test_force_cloud_empty_stream_switches_to_runtime_cloud_retry(client: OpenClawClient) -> None:
+async def test_force_cloud_empty_stream_switches_to_runtime_cloud_retry(
+    client: OpenClawClient,
+) -> None:
     """
     При force_cloud и пустом облачном ответе пробуем следующий live fallback
     из runtime-цепочки, а не старый hardcoded OpenAI API fallback.
@@ -1378,14 +1692,22 @@ async def test_force_cloud_empty_stream_switches_to_runtime_cloud_retry(client: 
             "Cloud recovery OK",
         ]
     )
-    with patch("src.openclaw_client.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"):
+    with patch(
+        "src.openclaw_client.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"
+    ):
         with patch(
             "src.openclaw_client.get_runtime_fallback_models",
             return_value=["google/gemini-3.1-pro-preview", "qwen-portal/coder-model"],
         ):
-            with patch.object(model_manager, "get_best_model", new=AsyncMock(return_value="openai-codex/gpt-5.4")):
+            with patch.object(
+                model_manager, "get_best_model", new=AsyncMock(return_value="openai-codex/gpt-5.4")
+            ):
                 with patch.object(model_manager, "is_local_model", return_value=False):
-                    with patch.object(model_manager, "get_best_cloud_model", new=AsyncMock(return_value="openai-codex/gpt-5.4")):
+                    with patch.object(
+                        model_manager,
+                        "get_best_cloud_model",
+                        new=AsyncMock(return_value="openai-codex/gpt-5.4"),
+                    ):
                         with patch.object(client, "_openclaw_completion_once", new=completion):
                             chunks = []
                             async for chunk in client.send_message_stream(

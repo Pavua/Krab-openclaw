@@ -19,9 +19,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .access_control import AccessLevel, PARTIAL_ACCESS_COMMANDS, build_command_access_matrix
+from .access_control import PARTIAL_ACCESS_COMMANDS, AccessLevel, build_command_access_matrix
 from .operator_identity import build_identity_envelope
-
 
 _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
     AccessLevel.OWNER.value: {
@@ -39,7 +38,7 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
         "ui_automation": True,
         "clipboard_read": True,
         "clipboard_write": True,
-        "tor_proxy": False,       # wishlist — не реализован (Phase 3 Шаг 7)
+        "tor_proxy": False,  # wishlist — не реализован (Phase 3 Шаг 7)
         "voice_runtime": True,
         "model_routing": True,
         "acl_admin": True,
@@ -57,7 +56,7 @@ _ROLE_CAPABILITIES: dict[str, dict[str, bool]] = {
         "macos_control": True,
         "screenshots": True,
         "ocr": True,
-        "ui_automation": False,   # только owner
+        "ui_automation": False,  # только owner
         "clipboard_read": True,
         "clipboard_write": True,
         "tor_proxy": False,
@@ -171,14 +170,24 @@ def build_policy_matrix(
         roles[role] = {
             "label": role.upper(),
             "trusted": role in {AccessLevel.OWNER.value, AccessLevel.FULL.value},
-            "subjects": sorted({str(item).strip() for item in acl_payload.get(role, []) if str(item).strip()}),
+            "subjects": sorted(
+                {str(item).strip() for item in acl_payload.get(role, []) if str(item).strip()}
+            ),
             "capabilities": dict(_ROLE_CAPABILITIES[role]),
             "commands": dict((command_access.get("roles") or {}).get(role) or {}),
             "notes": list(_ROLE_NOTES[role]),
         }
 
-    last_route = runtime_state.get("last_runtime_route") if isinstance(runtime_state.get("last_runtime_route"), dict) else {}
-    telegram_state = runtime_state.get("telegram_userbot") if isinstance(runtime_state.get("telegram_userbot"), dict) else {}
+    last_route = (
+        runtime_state.get("last_runtime_route")
+        if isinstance(runtime_state.get("last_runtime_route"), dict)
+        else {}
+    )
+    telegram_state = (
+        runtime_state.get("telegram_userbot")
+        if isinstance(runtime_state.get("telegram_userbot"), dict)
+        else {}
+    )
 
     return {
         "ok": True,
@@ -203,7 +212,9 @@ def build_policy_matrix(
                 or runtime_state.get("telegram_userbot_state")
                 or "unknown"
             ).strip(),
-            "openclaw_auth_state": str(runtime_state.get("openclaw_auth_state") or "unknown").strip(),
+            "openclaw_auth_state": str(
+                runtime_state.get("openclaw_auth_state") or "unknown"
+            ).strip(),
             "current_route_model": str(last_route.get("model") or "").strip(),
             "current_route_channel": str(last_route.get("channel") or "").strip(),
         },
@@ -212,7 +223,9 @@ def build_policy_matrix(
             "full_subjects": len(roles[AccessLevel.FULL.value]["subjects"]),
             "partial_subjects": len(roles[AccessLevel.PARTIAL.value]["subjects"]),
             "guest_policy": "implicit_default",
-            "owner_only_command_count": int((command_access.get("summary") or {}).get("owner_only_count") or 0),
+            "owner_only_command_count": int(
+                (command_access.get("summary") or {}).get("owner_only_count") or 0
+            ),
         },
     }
 
@@ -232,26 +245,45 @@ def build_channel_capability_snapshot(
     policy_payload = policy_matrix if isinstance(policy_matrix, dict) else {}
     workspace_payload = workspace_state if isinstance(workspace_state, dict) else {}
 
-    operator_id = str(operator_payload.get("operator_id") or operator_payload.get("operator_name") or "").strip()
+    operator_id = str(
+        operator_payload.get("operator_id") or operator_payload.get("operator_name") or ""
+    ).strip()
     account_id = str(operator_payload.get("account_id") or "").strip()
 
-    telegram_userbot = runtime_state.get("telegram_userbot") if isinstance(runtime_state.get("telegram_userbot"), dict) else {}
-    userbot_status = str(
-        telegram_userbot.get("startup_state")
-        or telegram_userbot.get("state")
-        or runtime_state.get("telegram_userbot_state")
+    telegram_userbot = (
+        runtime_state.get("telegram_userbot")
+        if isinstance(runtime_state.get("telegram_userbot"), dict)
+        else {}
+    )
+    userbot_status = (
+        str(
+            telegram_userbot.get("startup_state")
+            or telegram_userbot.get("state")
+            or runtime_state.get("telegram_userbot_state")
+            or "unknown"
+        ).strip()
         or "unknown"
-    ).strip() or "unknown"
+    )
 
-    telegram_cfg = channels_config.get("telegram") if isinstance(channels_config.get("telegram"), dict) else {}
+    telegram_cfg = (
+        channels_config.get("telegram") if isinstance(channels_config.get("telegram"), dict) else {}
+    )
     reserve_enabled = bool(telegram_cfg.get("enabled"))
     reserve_dm_policy = str(telegram_cfg.get("dmPolicy") or "unknown").strip().lower() or "unknown"
-    reserve_group_policy = str(telegram_cfg.get("groupPolicy") or "unknown").strip().lower() or "unknown"
-    reserve_allow_from = telegram_cfg.get("allowFrom") if isinstance(telegram_cfg.get("allowFrom"), list) else []
-    reserve_group_allow_from = (
-        telegram_cfg.get("groupAllowFrom") if isinstance(telegram_cfg.get("groupAllowFrom"), list) else []
+    reserve_group_policy = (
+        str(telegram_cfg.get("groupPolicy") or "unknown").strip().lower() or "unknown"
     )
-    reserve_safe = reserve_enabled and reserve_dm_policy == "allowlist" and reserve_group_policy == "allowlist"
+    reserve_allow_from = (
+        telegram_cfg.get("allowFrom") if isinstance(telegram_cfg.get("allowFrom"), list) else []
+    )
+    reserve_group_allow_from = (
+        telegram_cfg.get("groupAllowFrom")
+        if isinstance(telegram_cfg.get("groupAllowFrom"), list)
+        else []
+    )
+    reserve_safe = (
+        reserve_enabled and reserve_dm_policy == "allowlist" and reserve_group_policy == "allowlist"
+    )
 
     reserve_status = "disabled"
     if reserve_enabled and reserve_safe:
@@ -285,7 +317,9 @@ def build_channel_capability_snapshot(
                 "inbound_owner_requests": True,
                 "reply_trace": True,
                 "shared_memory": True,
-                "shared_workspace_attached": bool(workspace_payload.get("shared_workspace_attached")),
+                "shared_workspace_attached": bool(
+                    workspace_payload.get("shared_workspace_attached")
+                ),
                 "shared_workspace_path": str(workspace_payload.get("workspace_dir") or "").strip(),
                 "owner_tools_confirmed": True,
                 "access_roles": list(policy_payload.get("role_order") or []),
@@ -320,7 +354,9 @@ def build_channel_capability_snapshot(
                 "inbound_owner_requests": False,
                 "reply_trace": False,
                 "shared_memory": True,
-                "shared_workspace_attached": bool(workspace_payload.get("shared_workspace_attached")),
+                "shared_workspace_attached": bool(
+                    workspace_payload.get("shared_workspace_attached")
+                ),
                 "shared_workspace_path": str(workspace_payload.get("workspace_dir") or "").strip(),
                 "owner_tools_confirmed": False,
                 "reserve_safe": reserve_safe,
@@ -387,16 +423,25 @@ def build_channel_capability_snapshot(
     parity_gaps: list[str] = []
     if not reserve_safe:
         parity_gaps.append("Reserve Telegram Bot ещё не подтверждён в reserve-safe parity режиме.")
-    parity_gaps.append("Reserve Telegram Bot пока не подтверждает streaming и полноценный runtime self-check.")
-    parity_gaps.append("Primary Telegram userbot пока даёт buffered edit-loop, а не полноценный provider chunk-stream.")
-    parity_gaps.append("Attachment normalization и approval semantics пока richest только в Python userbot.")
+    parity_gaps.append(
+        "Reserve Telegram Bot пока не подтверждает streaming и полноценный runtime self-check."
+    )
+    parity_gaps.append(
+        "Primary Telegram userbot пока даёт buffered edit-loop, а не полноценный provider chunk-stream."
+    )
+    parity_gaps.append(
+        "Attachment normalization и approval semantics пока richest только в Python userbot."
+    )
     if extra_runtime_channels:
-        parity_gaps.append("Дополнительные runtime channels найдены, но их parity semantics ещё не сведены к общему контракту.")
+        parity_gaps.append(
+            "Дополнительные runtime channels найдены, но их parity semantics ещё не сведены к общему контракту."
+        )
 
     ready_channels = sum(
         1
         for row in channels
-        if str(row.get("status") or "").strip().lower() in {"running", "ready", "enabled", "reserve_safe"}
+        if str(row.get("status") or "").strip().lower()
+        in {"running", "ready", "enabled", "reserve_safe"}
     )
 
     return {
@@ -411,7 +456,9 @@ def build_channel_capability_snapshot(
             "shared_workspace_attached": bool(workspace_payload.get("shared_workspace_attached")),
             "shared_memory_ready": bool(workspace_payload.get("shared_memory_ready")),
             "shared_workspace_dir": str(workspace_payload.get("workspace_dir") or "").strip(),
-            "shared_memory_recent_entries": int(workspace_payload.get("recent_memory_entries_count") or 0),
+            "shared_memory_recent_entries": int(
+                workspace_payload.get("recent_memory_entries_count") or 0
+            ),
             "configured_runtime_channels": len(extra_runtime_channels),
             "total_channels": len(channels),
             "ready_channels": ready_channels,
@@ -508,8 +555,12 @@ def build_system_control_snapshot(
             "role_requirement": "owner_or_full",
         },
         "ocr": {
-            "status": "ready" if macos_payload.get("ocr_available") else (
-                "unavailable" if macos_payload and not macos_payload.get("ocr_available") else "unknown"
+            "status": "ready"
+            if macos_payload.get("ocr_available")
+            else (
+                "unavailable"
+                if macos_payload and not macos_payload.get("ocr_available")
+                else "unknown"
             ),
             "depends_on": "macos_control",
             "role_requirement": "owner_or_full",
@@ -522,8 +573,12 @@ def build_system_control_snapshot(
             "note": "SOCKS5 :9050 через tor_bridge; TOR_ENABLED в .env",
         },
         "hammerspoon": {
-            "status": _probe_status(hammerspoon_probe if isinstance(hammerspoon_probe, dict) else {})[0],
-            "error": _probe_status(hammerspoon_probe if isinstance(hammerspoon_probe, dict) else {})[1],
+            "status": _probe_status(
+                hammerspoon_probe if isinstance(hammerspoon_probe, dict) else {}
+            )[0],
+            "error": _probe_status(
+                hammerspoon_probe if isinstance(hammerspoon_probe, dict) else {}
+            )[1],
             "role_requirement": "owner_only",
             "note": "Window management через HTTP :10101; MCP server в mcp_hammerspoon_server.py",
         },
@@ -531,7 +586,11 @@ def build_system_control_snapshot(
 
     ready_count = sum(1 for c in capabilities.values() if c.get("status") == "ready")
     unknown_count = sum(1 for c in capabilities.values() if c.get("status") == "unknown")
-    unavailable_count = sum(1 for c in capabilities.values() if c.get("status") in {"unavailable", "degraded", "blocked"})
+    unavailable_count = sum(
+        1
+        for c in capabilities.values()
+        if c.get("status") in {"unavailable", "degraded", "blocked"}
+    )
     not_impl_count = sum(1 for c in capabilities.values() if c.get("status") == "not_implemented")
 
     if ready_count > 0:
@@ -585,34 +644,68 @@ def build_capability_registry(
     runtime_state = runtime_lite if isinstance(runtime_lite, dict) else {}
     operator_payload = operator_profile if isinstance(operator_profile, dict) else {}
 
-    ecosystem_services = ecosystem_payload.get("services") if isinstance(ecosystem_payload.get("services"), dict) else {}
+    ecosystem_services = (
+        ecosystem_payload.get("services")
+        if isinstance(ecosystem_payload.get("services"), dict)
+        else {}
+    )
     channel_payload = channel_capabilities if isinstance(channel_capabilities, dict) else {}
     assistant_status = "ok"
-    ecosystem_status = "ok" if all(
-        bool((service or {}).get("ok", False))
-        for name, service in ecosystem_services.items()
-        if name != "krab"
-    ) else "degraded"
+    ecosystem_status = (
+        "ok"
+        if all(
+            bool((service or {}).get("ok", False))
+            for name, service in ecosystem_services.items()
+            if name != "krab"
+        )
+        else "degraded"
+    )
     translator_status = str(translator_payload.get("readiness") or "unknown").strip() or "unknown"
-    telegram_userbot = runtime_state.get("telegram_userbot") if isinstance(runtime_state.get("telegram_userbot"), dict) else {}
-    telegram_status = str(
-        telegram_userbot.get("startup_state")
-        or telegram_userbot.get("state")
-        or runtime_state.get("telegram_userbot_state")
+    telegram_userbot = (
+        runtime_state.get("telegram_userbot")
+        if isinstance(runtime_state.get("telegram_userbot"), dict)
+        else {}
+    )
+    telegram_status = (
+        str(
+            telegram_userbot.get("startup_state")
+            or telegram_userbot.get("state")
+            or runtime_state.get("telegram_userbot_state")
+            or "unknown"
+        ).strip()
         or "unknown"
-    ).strip() or "unknown"
-    browser_readiness = runtime_state.get("browser_readiness") if isinstance(runtime_state.get("browser_readiness"), dict) else {}
-    voice_profile = translator_payload.get("runtime", {}).get("voice_profile") if isinstance(translator_payload.get("runtime"), dict) else {}
+    )
+    browser_readiness = (
+        runtime_state.get("browser_readiness")
+        if isinstance(runtime_state.get("browser_readiness"), dict)
+        else {}
+    )
+    voice_profile = (
+        translator_payload.get("runtime", {}).get("voice_profile")
+        if isinstance(translator_payload.get("runtime"), dict)
+        else {}
+    )
     system_control_payload = system_control if isinstance(system_control, dict) else {}
     system_status = "ok"
-    if str(runtime_state.get("openclaw_auth_state") or "").strip().lower() not in {"ok", "configured", "ready"}:
+    if str(runtime_state.get("openclaw_auth_state") or "").strip().lower() not in {
+        "ok",
+        "configured",
+        "ready",
+    }:
         system_status = "degraded"
-    if browser_readiness and str(browser_readiness.get("readiness") or "").strip().lower() == "blocked":
+    if (
+        browser_readiness
+        and str(browser_readiness.get("readiness") or "").strip().lower() == "blocked"
+    ):
         system_status = "degraded"
     # Если есть live system_control snapshot — он переопределяет system_status
-    if system_control_payload and str(system_control_payload.get("status") or "").strip().lower() in {"ready", "degraded", "unknown"}:
+    if system_control_payload and str(
+        system_control_payload.get("status") or ""
+    ).strip().lower() in {"ready", "degraded", "unknown"}:
         system_status = str(system_control_payload.get("status")).strip().lower()
-    channel_summary = channel_payload.get("summary") if isinstance(channel_payload.get("summary"), dict) else {}
+    channel_summary = (
+        channel_payload.get("summary") if isinstance(channel_payload.get("summary"), dict) else {}
+    )
     channels_status = "degraded"
     if bool(channel_summary.get("reserve_safe")) and bool(channel_summary.get("ready_channels")):
         channels_status = "ready"
@@ -625,7 +718,9 @@ def build_capability_registry(
             "mode": str(assistant_payload.get("mode") or "unknown").strip(),
             "endpoint": str(assistant_payload.get("endpoint") or "").strip(),
             "task_types": list(assistant_payload.get("task_types") or []),
-            "policy_matrix_endpoint": str(assistant_payload.get("policy_matrix_endpoint") or "").strip(),
+            "policy_matrix_endpoint": str(
+                assistant_payload.get("policy_matrix_endpoint") or ""
+            ).strip(),
         },
         "telegram_userbot": {
             "status": telegram_status,
@@ -645,7 +740,9 @@ def build_capability_registry(
         },
         "system": {
             "status": system_status,
-            "browser_readiness": str(browser_readiness.get("readiness") or "unknown").strip() if browser_readiness else "unknown",
+            "browser_readiness": str(browser_readiness.get("readiness") or "unknown").strip()
+            if browser_readiness
+            else "unknown",
             "scheduler_enabled": bool(runtime_state.get("scheduler_enabled")),
             "voice_delivery": str(voice_profile.get("delivery") or "").strip(),
             "voice_enabled": bool(voice_profile.get("enabled")),
@@ -661,7 +758,8 @@ def build_capability_registry(
         }
 
     ready_contours = sum(
-        1 for contour in contours.values()
+        1
+        for contour in contours.values()
         if str(contour.get("status") or "").strip().lower() in {"ok", "ready", "running"}
     )
 
@@ -669,7 +767,9 @@ def build_capability_registry(
         "ok": True,
         "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "operator": {
-            "operator_id": str(operator_payload.get("operator_id") or operator_payload.get("operator_name") or "").strip(),
+            "operator_id": str(
+                operator_payload.get("operator_id") or operator_payload.get("operator_name") or ""
+            ).strip(),
             "account_id": str(operator_payload.get("account_id") or "").strip(),
             "account_mode": str(operator_payload.get("account_mode") or "").strip(),
         },

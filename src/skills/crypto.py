@@ -1,7 +1,9 @@
 """
 Crypto Skill - Получение курсов криптовалют
 """
+
 import httpx
+
 
 async def get_crypto_price(symbol: str = "bitcoin") -> str:
     """Получает текущую цену криптовалюты"""
@@ -12,7 +14,7 @@ async def get_crypto_price(symbol: str = "bitcoin") -> str:
             )
             data = response.json()
             if symbol in data:
-                price = data[symbol]['usd']
+                price = data[symbol]["usd"]
                 return f"💰 {symbol.upper()}: ${price}"
             return f"❌ Не нашел {symbol}"
     except (httpx.HTTPError, OSError, KeyError) as e:

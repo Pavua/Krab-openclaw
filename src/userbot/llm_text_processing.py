@@ -229,7 +229,9 @@ class LLMTextProcessingMixin:
         if not raw.strip():
             return ""
 
-        fragments = [str(match.group(1) or "").strip() for match in cls._think_capture_pattern.finditer(raw)]
+        fragments = [
+            str(match.group(1) or "").strip() for match in cls._think_capture_pattern.finditer(raw)
+        ]
         if not fragments and "<think>" in raw.lower():
             start = raw.lower().rfind("<think>")
             partial = raw[start + len("<think>") :]
@@ -288,7 +290,11 @@ class LLMTextProcessingMixin:
         - не хочется писать потенциально чувствительные рассуждения в обычную память Краба;
         - при перезапуске runtime trace может честно пропасть без риска для source-of-truth.
         """
-        level = str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "").strip().lower()
+        level = (
+            str(access_level.value if isinstance(access_level, AccessLevel) else access_level or "")
+            .strip()
+            .lower()
+        )
         if level not in {AccessLevel.OWNER.value, AccessLevel.FULL.value}:
             return
 
@@ -308,7 +314,9 @@ class LLMTextProcessingMixin:
             "available": bool(trace_text),
             "query": str(query or "").strip(),
             "reasoning": trace_text,
-            "answer_preview": textwrap.shorten(str(final_response or "").strip(), width=400, placeholder="..."),
+            "answer_preview": textwrap.shorten(
+                str(final_response or "").strip(), width=400, placeholder="..."
+            ),
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "transport_mode": "buffered_edit_loop",
             "route_channel": str(route_meta.get("channel") or "").strip(),
@@ -564,7 +572,9 @@ class LLMTextProcessingMixin:
             return False
         now = time.monotonic()
         ttl_sec = 600.0
-        expired = [mid for mid, saved_at in bucket.items() if now - float(saved_at or 0.0) > ttl_sec]
+        expired = [
+            mid for mid, saved_at in bucket.items() if now - float(saved_at or 0.0) > ttl_sec
+        ]
         for expired_id in expired:
             bucket.pop(expired_id, None)
         if not bucket:
@@ -744,11 +754,7 @@ class LLMTextProcessingMixin:
         self_user_id = int(getattr(self.me, "id", 0) or 0)
 
         ordered_rows = sorted(
-            (
-                row
-                for row in history_rows
-                if int(getattr(row, "id", 0) or 0) >= current_message_id
-            ),
+            (row for row in history_rows if int(getattr(row, "id", 0) or 0) >= current_message_id),
             key=lambda row: int(getattr(row, "id", 0) or 0),
         )
         if not ordered_rows:
@@ -779,7 +785,11 @@ class LLMTextProcessingMixin:
             ):
                 break
 
-            clean_text = normalized_query if row_id == current_message_id else self._get_clean_text(self._extract_message_text(row))
+            clean_text = (
+                normalized_query
+                if row_id == current_message_id
+                else self._get_clean_text(self._extract_message_text(row))
+            )
             if not clean_text:
                 if row_id == current_message_id:
                     return message, normalized_query
@@ -787,7 +797,11 @@ class LLMTextProcessingMixin:
 
             row_ts = _message_unix_ts(row)
             if combined_messages:
-                if row_ts is not None and previous_ts is not None and (row_ts - previous_ts) > max_gap_sec:
+                if (
+                    row_ts is not None
+                    and previous_ts is not None
+                    and (row_ts - previous_ts) > max_gap_sec
+                ):
                     break
                 if row_ts is not None and base_ts is not None and (row_ts - base_ts) > max_span_sec:
                     break

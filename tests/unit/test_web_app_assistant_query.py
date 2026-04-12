@@ -42,7 +42,11 @@ class _FakeRouter:
     def get_task_preflight(self, **kwargs):
         preferred_model = str(kwargs.get("preferred_model") or "").strip()
         model = preferred_model or "nvidia/nemotron-3-nano"
-        channel = "cloud" if model.startswith(("google/", "google-gemini-cli/", "openai/", "openai-codex/")) else "local"
+        channel = (
+            "cloud"
+            if model.startswith(("google/", "google-gemini-cli/", "openai/", "openai-codex/"))
+            else "local"
+        )
         return {
             "profile": str(kwargs.get("task_type") or "chat"),
             "execution": {
@@ -50,7 +54,11 @@ class _FakeRouter:
                 "channel": channel,
                 "force_mode": "auto",
             },
-            "reasons": ["Использована явно запрошенная модель." if preferred_model else "Использована модель по умолчанию."],
+            "reasons": [
+                "Использована явно запрошенная модель."
+                if preferred_model
+                else "Использована модель по умолчанию."
+            ],
             "local_available": True,
         }
 

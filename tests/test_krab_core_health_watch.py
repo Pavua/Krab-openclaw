@@ -22,8 +22,20 @@ def _load_module():
 def test_analyze_all_up() -> None:
     m = _load_module()
     samples = [
-        m.HealthSample(ts_utc="2026-01-01T00:00:00+00:00", http_up=True, http_status=200, error="", core_pids=[1]),
-        m.HealthSample(ts_utc="2026-01-01T00:00:02+00:00", http_up=True, http_status=200, error="", core_pids=[1]),
+        m.HealthSample(
+            ts_utc="2026-01-01T00:00:00+00:00",
+            http_up=True,
+            http_status=200,
+            error="",
+            core_pids=[1],
+        ),
+        m.HealthSample(
+            ts_utc="2026-01-01T00:00:02+00:00",
+            http_up=True,
+            http_status=200,
+            error="",
+            core_pids=[1],
+        ),
     ]
     res = m._analyze(samples)
     assert res["ok"] is True
@@ -34,9 +46,27 @@ def test_analyze_all_up() -> None:
 def test_analyze_detects_down_and_flaps() -> None:
     m = _load_module()
     samples = [
-        m.HealthSample(ts_utc="2026-01-01T00:00:00+00:00", http_up=True, http_status=200, error="", core_pids=[1]),
-        m.HealthSample(ts_utc="2026-01-01T00:00:02+00:00", http_up=False, http_status=0, error="timeout", core_pids=[]),
-        m.HealthSample(ts_utc="2026-01-01T00:00:04+00:00", http_up=True, http_status=200, error="", core_pids=[1]),
+        m.HealthSample(
+            ts_utc="2026-01-01T00:00:00+00:00",
+            http_up=True,
+            http_status=200,
+            error="",
+            core_pids=[1],
+        ),
+        m.HealthSample(
+            ts_utc="2026-01-01T00:00:02+00:00",
+            http_up=False,
+            http_status=0,
+            error="timeout",
+            core_pids=[],
+        ),
+        m.HealthSample(
+            ts_utc="2026-01-01T00:00:04+00:00",
+            http_up=True,
+            http_status=200,
+            error="",
+            core_pids=[1],
+        ),
     ]
     res = m._analyze(samples)
     assert res["ok"] is False

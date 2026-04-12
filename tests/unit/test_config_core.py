@@ -25,6 +25,7 @@ import src.config as config_module
 # Вспомогательная функция — создать минимальный .env в tmp_path
 # ---------------------------------------------------------------------------
 
+
 def _make_env(tmp_path, extra: str = "") -> None:
     (tmp_path / ".env").write_text(extra + "\n", encoding="utf-8")
 

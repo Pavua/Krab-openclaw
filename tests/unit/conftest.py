@@ -47,14 +47,18 @@ def _align_config_after_reload(monkeypatch: pytest.MonkeyPatch) -> Iterator[None
 
 
 @pytest.fixture(autouse=True)
-def isolate_userbot_inbox_capture(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Iterator[None]:
+def isolate_userbot_inbox_capture(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> Iterator[None]:
     """
     Отключает inbox-capture в unit-тестах по умолчанию.
 
     Оставляем живой capture только там, где он и является предметом проверки.
     """
     node_path = str(getattr(request.node, "fspath", "") or "")
-    if node_path.endswith("test_userbot_inbox_flow.py") or node_path.endswith("test_userbot_reply_trace_flow.py"):
+    if node_path.endswith("test_userbot_inbox_flow.py") or node_path.endswith(
+        "test_userbot_reply_trace_flow.py"
+    ):
         yield
         return
 

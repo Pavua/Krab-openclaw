@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Тесты для src/core/model_config.py — константы и конфигурация моделей."""
+
 from __future__ import annotations
 
 from src.core.model_config import (

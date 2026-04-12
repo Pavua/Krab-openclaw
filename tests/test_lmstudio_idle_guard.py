@@ -11,9 +11,9 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -57,10 +57,14 @@ def test_run_http_unload_fallbacks_from_all_to_instance(monkeypatch: pytest.Monk
 
     def fake_http_json(method: str, url: str, body=None, timeout: float = 6.0):  # noqa: ARG001
         if body == {"all": True}:
-            return guard.HttpResult(ok=False, status=400, payload={"error": "bad_request"}, error="http_400")
+            return guard.HttpResult(
+                ok=False, status=400, payload={"error": "bad_request"}, error="http_400"
+            )
         if body == {"instance_id": "inst-1"}:
             return guard.HttpResult(ok=True, status=200, payload={"ok": True}, error="")
-        return guard.HttpResult(ok=False, status=404, payload={"error": "not_found"}, error="http_404")
+        return guard.HttpResult(
+            ok=False, status=404, payload={"error": "not_found"}, error="http_404"
+        )
 
     monkeypatch.setattr(guard, "_http_json", fake_http_json)
     unloaded, err, attempts = guard._run_http_unload("http://127.0.0.1:1234", loaded)

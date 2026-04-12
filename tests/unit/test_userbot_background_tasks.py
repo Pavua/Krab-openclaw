@@ -331,7 +331,9 @@ async def test_background_task_reaper_cancels_stale(monkeypatch) -> None:
     import src.userbot.background_tasks as bt_module
 
     bot = _make_bot()
-    monkeypatch.setattr(bt_module.config, "USERBOT_BACKGROUND_TASK_STALE_TIMEOUT_SEC", 60, raising=False)
+    monkeypatch.setattr(
+        bt_module.config, "USERBOT_BACKGROUND_TASK_STALE_TIMEOUT_SEC", 60, raising=False
+    )
 
     async def _long() -> None:
         await asyncio.sleep(100)

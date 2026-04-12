@@ -8,6 +8,7 @@
 - Обработка специфичных ошибок облачных провайдеров (quota, auth, timeout).
 Зависимости передаются аргументами (api_key, client, cache).
 """
+
 from __future__ import annotations
 
 import json
@@ -47,8 +48,9 @@ DEFAULT_CLOUD_MODEL = "google/gemini-2.5-flash"
 
 class CloudErrorKind(Enum):
     """Категория ошибки облачного провайдера."""
-    AUTH = "auth"           # 401/403
-    QUOTA = "quota"         # 429
+
+    AUTH = "auth"  # 401/403
+    QUOTA = "quota"  # 429
     TIMEOUT = "timeout"
     NETWORK = "network"
     UNKNOWN = "unknown"
@@ -163,9 +165,7 @@ async def fetch_google_models(
             continue
         name = m.get("name", "")
         m_id = name.replace("models/", "google/")
-        is_vision = (
-            "vision" in m_id or "flash" in m_id or "pro" in m_id
-        )
+        is_vision = "vision" in m_id or "flash" in m_id or "pro" in m_id
         model = ModelInfo(
             id=m_id,
             name=m.get("displayName", m_id),
@@ -194,16 +194,12 @@ async def verify_gemini_access(
     if not api_key:
         return False
     model_name = model_id.replace("google/", "")
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     params = {"key": api_key}
     body = {"contents": [{"parts": [{"text": "Hi"}]}]}
 
     try:
-        response = await client.post(
-            url, params=params, json=body, timeout=timeout
-        )
+        response = await client.post(url, params=params, json=body, timeout=timeout)
         if response.status_code == 200:
             return True
         kind = classify_gemini_error(status_code=response.status_code)
@@ -329,9 +325,7 @@ async def get_best_cloud_model(
     *,
     fallback_chain: Optional[list[str]] = None,
     config_model: Optional[str] = None,
-    verify_fn: Optional[
-        Callable[[str, Optional[str], "AsyncClient"], object]
-    ] = None,
+    verify_fn: Optional[Callable[[str, Optional[str], "AsyncClient"], object]] = None,
 ) -> str:
     """
     Возвращает лучшую доступную облачную модель из цепочки fallback.

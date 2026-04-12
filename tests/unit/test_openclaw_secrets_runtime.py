@@ -28,7 +28,13 @@ class _FakeProcess:
 async def test_reload_openclaw_secrets_reports_missing_cli() -> None:
     with patch(
         "src.core.openclaw_secrets_runtime._resolve_openclaw_cli",
-        return_value={"ok": False, "error": "cli_not_found", "path": "", "source": "", "checked": []},
+        return_value={
+            "ok": False,
+            "error": "cli_not_found",
+            "path": "",
+            "source": "",
+            "checked": [],
+        },
     ):
         result = await reload_openclaw_secrets()
 
@@ -47,7 +53,13 @@ async def test_reload_openclaw_secrets_reports_non_executable_cli() -> None:
             "error": "cli_not_executable",
             "path": "/opt/homebrew/bin/openclaw",
             "source": "fallback",
-            "checked": [{"path": "/opt/homebrew/bin/openclaw", "source": "fallback", "reason": "not_executable"}],
+            "checked": [
+                {
+                    "path": "/opt/homebrew/bin/openclaw",
+                    "source": "fallback",
+                    "reason": "not_executable",
+                }
+            ],
         },
     ):
         result = await reload_openclaw_secrets()
@@ -65,7 +77,12 @@ async def test_reload_openclaw_secrets_uses_resolved_cli_path() -> None:
 
     with patch(
         "src.core.openclaw_secrets_runtime._resolve_openclaw_cli",
-        return_value={"ok": True, "path": "/custom/bin/openclaw", "source": "env:OPENCLAW_BIN", "checked": []},
+        return_value={
+            "ok": True,
+            "path": "/custom/bin/openclaw",
+            "source": "env:OPENCLAW_BIN",
+            "checked": [],
+        },
     ):
         with patch(
             "src.core.openclaw_secrets_runtime.asyncio.create_subprocess_exec",
@@ -88,7 +105,13 @@ def test_get_openclaw_cli_runtime_status_returns_safe_failure_payload() -> None:
             "error": "cli_not_executable",
             "path": "/opt/homebrew/bin/openclaw",
             "source": "fallback",
-            "checked": [{"path": "/opt/homebrew/bin/openclaw", "source": "fallback", "reason": "not_executable"}],
+            "checked": [
+                {
+                    "path": "/opt/homebrew/bin/openclaw",
+                    "source": "fallback",
+                    "reason": "not_executable",
+                }
+            ],
         },
     ):
         status = get_openclaw_cli_runtime_status()
@@ -98,5 +121,7 @@ def test_get_openclaw_cli_runtime_status_returns_safe_failure_payload() -> None:
         "error": "cli_not_executable",
         "cli_path": "/opt/homebrew/bin/openclaw",
         "cli_source": "fallback",
-        "checked": [{"path": "/opt/homebrew/bin/openclaw", "source": "fallback", "reason": "not_executable"}],
+        "checked": [
+            {"path": "/opt/homebrew/bin/openclaw", "source": "fallback", "reason": "not_executable"}
+        ],
     }

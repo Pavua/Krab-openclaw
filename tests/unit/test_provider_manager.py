@@ -40,6 +40,7 @@ from src.core.provider_manager import (
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _make_manager(tmp_path: Path) -> ProviderManager:
     """Создаёт ProviderManager с изолированным state-файлом."""
     pm = ProviderManager.__new__(ProviderManager)
@@ -52,8 +53,8 @@ def _make_manager(tmp_path: Path) -> ProviderManager:
 # 1. Перечисления и константы
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestEnumsAndConstants:
 
+class TestEnumsAndConstants:
     def test_provider_type_values(self) -> None:
         """Все ProviderType содержат ожидаемые строки."""
         assert ProviderType.AUTO.value == "auto"
@@ -107,8 +108,8 @@ class TestEnumsAndConstants:
 # 2. QuotaInfo dataclass
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestQuotaInfo:
 
+class TestQuotaInfo:
     def test_to_dict_unlimited(self) -> None:
         """limit=0 → percentage=0, label содержит ∞."""
         q = QuotaInfo(used_tokens=500, limit_tokens=0, requests_count=3)
@@ -141,8 +142,8 @@ class TestQuotaInfo:
 # 3. FallbackConfig / ProviderState defaults
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestDataclassDefaults:
 
+class TestDataclassDefaults:
     def test_fallback_config_defaults(self) -> None:
         fc = FallbackConfig()
         assert len(fc.chain) == 4
@@ -170,8 +171,8 @@ class TestDataclassDefaults:
 # 4. ProviderManager: set / get
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestProviderManagerSetGet:
 
+class TestProviderManagerSetGet:
     def test_set_provider(self, tmp_path: Path) -> None:
         pm = _make_manager(tmp_path)
         pm.set_provider(ProviderType.GEMINI_API, "gemini-2.5-flash")
@@ -243,8 +244,8 @@ class TestProviderManagerSetGet:
 # 5. resolve_config_for_provider
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestResolveConfig:
 
+class TestResolveConfig:
     def test_cloud_provider_force_cloud_true(self, tmp_path: Path) -> None:
         pm = _make_manager(tmp_path)
         cfg = pm.resolve_config_for_provider(ProviderType.GEMINI_API)
@@ -291,8 +292,8 @@ class TestResolveConfig:
 # 6. report_usage
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestReportUsage:
 
+class TestReportUsage:
     def test_report_usage_accumulates(self, tmp_path: Path) -> None:
         pm = _make_manager(tmp_path)
         pm.report_usage(ProviderType.GEMINI_API, 100)
@@ -321,8 +322,8 @@ class TestReportUsage:
 # 7. Fallback chain
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestFallbackChain:
 
+class TestFallbackChain:
     def test_set_fallback_chain(self, tmp_path: Path) -> None:
         pm = _make_manager(tmp_path)
         new_chain = [ProviderType.LM_STUDIO, ProviderType.GEMINI_API]
@@ -334,11 +335,13 @@ class TestFallbackChain:
     ) -> None:
         """get_fallback_chain убирает недоступных провайдеров из цепочки."""
         pm = _make_manager(tmp_path)
-        pm.set_fallback_chain([
-            ProviderType.GEMINI_OAUTH,
-            ProviderType.GEMINI_API,
-            ProviderType.LM_STUDIO,
-        ])
+        pm.set_fallback_chain(
+            [
+                ProviderType.GEMINI_OAUTH,
+                ProviderType.GEMINI_API,
+                ProviderType.LM_STUDIO,
+            ]
+        )
         # GEMINI_OAUTH и GEMINI_API недоступны без ключей/файлов.
         # LM_STUDIO всегда доступен.
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -347,7 +350,9 @@ class TestFallbackChain:
         chain = pm.get_fallback_chain()
         assert ProviderType.LM_STUDIO in chain
 
-    def test_lm_studio_last_resort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_lm_studio_last_resort_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         pm = _make_manager(tmp_path)
         pm.set_lm_studio_last_resort(True)
         assert pm._state.fallback.lm_studio_as_last_resort is True
@@ -357,8 +362,8 @@ class TestFallbackChain:
 # 8. is_provider_available
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestIsProviderAvailable:
 
+class TestIsProviderAvailable:
     def test_lm_studio_always_available(self, tmp_path: Path) -> None:
         pm = _make_manager(tmp_path)
         assert pm.is_provider_available(ProviderType.LM_STUDIO) is True
@@ -401,8 +406,8 @@ class TestIsProviderAvailable:
 # 9. to_api_dict
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestToApiDict:
 
+class TestToApiDict:
     def test_structure_keys(self, tmp_path: Path) -> None:
         pm = _make_manager(tmp_path)
         d = pm.to_api_dict()
@@ -449,8 +454,8 @@ class TestToApiDict:
 # 10. format_status
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestFormatStatus:
 
+class TestFormatStatus:
     def test_format_status_contains_key_info(self, tmp_path: Path) -> None:
         """format_status возвращает строку с ключевой информацией."""
         pm = _make_manager(tmp_path)
@@ -480,8 +485,8 @@ class TestFormatStatus:
 # 11. Персистентность
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestPersistence:
 
+class TestPersistence:
     def test_save_and_reload_round_trip(self, tmp_path: Path) -> None:
         """set_provider → новый instance → state восстановлен."""
         state_path = str(tmp_path / "provider_state.json")
@@ -537,10 +542,15 @@ class TestPersistence:
     def test_invalid_thinking_depth_falls_back_to_auto(self, tmp_path: Path) -> None:
         """Невалидное значение thinking_depth в JSON → AUTO."""
         state_path = tmp_path / "provider_state.json"
-        state_path.write_text(json.dumps({
-            "provider": "auto",
-            "thinking_depth": "nonexistent_depth",
-        }), encoding="utf-8")
+        state_path.write_text(
+            json.dumps(
+                {
+                    "provider": "auto",
+                    "thinking_depth": "nonexistent_depth",
+                }
+            ),
+            encoding="utf-8",
+        )
 
         pm = ProviderManager.__new__(ProviderManager)
         pm._state = ProviderState()
@@ -551,10 +561,15 @@ class TestPersistence:
     def test_invalid_fallback_chain_keeps_default(self, tmp_path: Path) -> None:
         """Невалидные провайдеры в fallback chain → chain не меняется."""
         state_path = tmp_path / "provider_state.json"
-        state_path.write_text(json.dumps({
-            "provider": "auto",
-            "fallback": {"chain": ["invalid_provider", "also_bad"]},
-        }), encoding="utf-8")
+        state_path.write_text(
+            json.dumps(
+                {
+                    "provider": "auto",
+                    "fallback": {"chain": ["invalid_provider", "also_bad"]},
+                }
+            ),
+            encoding="utf-8",
+        )
 
         pm = ProviderManager.__new__(ProviderManager)
         pm._state = ProviderState()
@@ -568,8 +583,8 @@ class TestPersistence:
 # 12. Синглтон
 # ═════════════════════════════════════════════════════════════════════════════
 
-class TestSingleton:
 
+class TestSingleton:
     def test_module_singleton_exists(self) -> None:
         """Модульный синглтон provider_manager — instance ProviderManager."""
         assert isinstance(provider_manager, ProviderManager)

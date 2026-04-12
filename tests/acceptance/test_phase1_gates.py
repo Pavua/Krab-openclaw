@@ -39,11 +39,12 @@ GATE_FREEZES = int(os.getenv("GATE_FREEZES", "3"))
 KRAB_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_SWITCH_SCRIPT = KRAB_ROOT / "scripts" / "runtime_switch_assistant.py"
 
-HEALTH_TIMEOUT = 30   # секунд ожидания после рестарта
+HEALTH_TIMEOUT = 30  # секунд ожидания после рестарта
 ROUNDTRIP_TIMEOUT = 60  # таймаут одного round-trip запроса
 
 
 # ── Хелперы ─────────────────────────────────────────────────────────────────
+
 
 def _get(path: str, timeout: float = 10.0) -> dict[str, Any]:
     resp = httpx.get(f"{BASE_URL}{path}", timeout=timeout)
@@ -81,6 +82,7 @@ def _runtime_switch(action: str) -> dict[str, Any]:
         cwd=str(KRAB_ROOT),
     )
     import json
+
     try:
         return json.loads(result.stdout.strip()) if result.stdout.strip() else {}
     except (json.JSONDecodeError, ValueError):
@@ -89,13 +91,16 @@ def _runtime_switch(action: str) -> dict[str, Any]:
 
 # ── Gate 1: Restart Cycles ───────────────────────────────────────────────────
 
+
 @pytest.mark.acceptance
 class TestRestartCycles:
     """Gate 1: 10 controlled restart cycles — userbot должен подниматься после каждого."""
 
     def test_initial_health(self) -> None:
         """Предусловие: Краб живой перед началом тестов."""
-        assert _wait_for_health(timeout_sec=5), "Краб недоступен перед тестами. Запусти его вручную."
+        assert _wait_for_health(timeout_sec=5), (
+            "Краб недоступен перед тестами. Запусти его вручную."
+        )
 
     @pytest.mark.parametrize("cycle", range(1, GATE_RESTARTS + 1))
     def test_restart_cycle(self, cycle: int) -> None:
@@ -118,10 +123,13 @@ class TestRestartCycles:
         assert health.get("openclaw_auth_state") in ("configured", "ok"), (
             f"Цикл {cycle}: openclaw_auth_state плохой: {health.get('openclaw_auth_state')}"
         )
-        print(f"  ✓ Cycle {cycle} OK — route: {health.get('last_runtime_route', {}).get('provider', '?')}")
+        print(
+            f"  ✓ Cycle {cycle} OK — route: {health.get('last_runtime_route', {}).get('provider', '?')}"
+        )
 
 
 # ── Gate 2: Round-Trips ──────────────────────────────────────────────────────
+
 
 @pytest.mark.acceptance
 class TestRoundTrips:
@@ -195,6 +203,7 @@ class TestRoundTrips:
 
 # ── Gate 3: Freeze/Reclaim ───────────────────────────────────────────────────
 
+
 @pytest.mark.acceptance
 class TestFreezeReclaim:
     """Gate 3: 3 freeze/reclaim multi-account цикла — state изолирован."""
@@ -256,6 +265,7 @@ class TestFreezeReclaim:
 
 # ── Smoke summary ────────────────────────────────────────────────────────────
 
+
 @pytest.mark.acceptance
 def test_phase1_identity_envelope_in_inbox() -> None:
     """Smoke: inbox items должны содержать полный identity envelope (6 полей)."""
@@ -270,8 +280,17 @@ def test_phase1_identity_envelope_in_inbox() -> None:
     if not items:
         pytest.skip("inbox пустой — нечего проверять")
 
-    required_fields = {"operator_id", "account_id", "channel_id", "team_id", "trace_id", "approval_scope"}
+    required_fields = {
+        "operator_id",
+        "account_id",
+        "channel_id",
+        "team_id",
+        "trace_id",
+        "approval_scope",
+    }
     for item in items[:5]:
         identity = item.get("identity") or {}
         missing = required_fields - set(identity.keys())
-        assert not missing, f"item {item.get('item_id')}: в identity envelope отсутствуют поля: {missing}"
+        assert not missing, (
+            f"item {item.get('item_id')}: в identity envelope отсутствуют поля: {missing}"
+        )

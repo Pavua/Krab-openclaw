@@ -16,11 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.test_web_app_runtime_endpoints import _DummyRouter, _make_client_with_router
 from src.modules.web_app import WebApp
+from tests.unit.test_web_app_runtime_endpoints import _DummyRouter, _make_client_with_router
 
 
-def test_build_openclaw_runtime_controls_maps_legacy_auto_to_adaptive(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_openclaw_runtime_controls_maps_legacy_auto_to_adaptive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Legacy `auto` должен читаться как `adaptive`, иначе runtime reload снова сломает gateway."""
     runtime_config = {
         "agents": {
@@ -48,7 +50,15 @@ def test_build_openclaw_runtime_controls_maps_legacy_auto_to_adaptive(monkeypatc
     payload = WebApp._build_openclaw_runtime_controls()
 
     assert payload["thinking_default"] == "adaptive"
-    assert payload["thinking_modes"] == ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
+    assert payload["thinking_modes"] == [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "adaptive",
+    ]
     chain_items = {item["model_id"]: item for item in payload["chain_items"]}
     assert chain_items["google/gemini-2.5-flash"]["explicit_thinking"] == "adaptive"
     assert chain_items["google/gemini-2.5-flash"]["effective_thinking"] == "adaptive"
@@ -79,7 +89,9 @@ def test_model_apply_set_runtime_chain_converts_legacy_auto_to_adaptive(
         ),
         encoding="utf-8",
     )
-    agent_path.write_text(json.dumps({"model": "openai-codex/gpt-5.4"}, ensure_ascii=False), encoding="utf-8")
+    agent_path.write_text(
+        json.dumps({"model": "openai-codex/gpt-5.4"}, ensure_ascii=False), encoding="utf-8"
+    )
 
     monkeypatch.setattr(WebApp, "_openclaw_config_path", classmethod(lambda cls: openclaw_path))
     monkeypatch.setattr(WebApp, "_openclaw_agent_config_path", classmethod(lambda cls: agent_path))

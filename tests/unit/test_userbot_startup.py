@@ -42,7 +42,9 @@ def _build_bot_stub() -> KraabUserbot:
 
 
 @pytest.mark.asyncio
-async def test_start_non_interactive_missing_session_goes_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_non_interactive_missing_session_goes_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Если session отсутствует и нет TTY — старт не должен падать.
     Ожидаем controlled-state: `login_required`.
@@ -74,7 +76,9 @@ async def test_start_non_interactive_missing_session_goes_degraded(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_start_non_interactive_eof_prompt_goes_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_non_interactive_eof_prompt_goes_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Если Pyrogram всё же запрашивает интерактивный ввод и ловим EOF,
     runtime не падает, а уходит в controlled-state.
@@ -149,7 +153,9 @@ async def test_start_interactive_invalid_session_requires_manual_relogin(
 
 
 @pytest.mark.asyncio
-async def test_stop_awaits_background_tasks_and_clears_references(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stop_awaits_background_tasks_and_clears_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     `stop()` должен не только отменять watchdog/proactive tasks, но и дожидаться их завершения.
     Это защищает restart от гонки со старым Pyrogram probe.
@@ -291,4 +297,7 @@ def test_is_sqlite_io_error_matches_closed_database_programming_error() -> None:
     """
     bot = _build_bot_stub()
 
-    assert bot._is_sqlite_io_error(sqlite3.ProgrammingError("Cannot operate on a closed database.")) is True
+    assert (
+        bot._is_sqlite_io_error(sqlite3.ProgrammingError("Cannot operate on a closed database."))
+        is True
+    )

@@ -8,6 +8,7 @@
 - Захват stdout+stderr в единый вывод
 - Структурированный результат с кодом выхода
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,21 +28,21 @@ _KILL_GRACE_SEC = 3.0
 
 class CliResult(NamedTuple):
     exit_code: int
-    output: str           # stdout + stderr объединены
+    output: str  # stdout + stderr объединены
     timed_out: bool
     tool: str
-    prompt_preview: str   # первые 80 символов промпта — для логов
+    prompt_preview: str  # первые 80 символов промпта — для логов
 
 
 # Флаги "тихого" (non-interactive) запуска для каждого инструмента.
 # asyncio.create_subprocess_exec передаёт аргументы напрямую без shell —
 # командная инъекция через prompt невозможна.
 _TOOL_FLAGS: dict[str, list[str]] = {
-    "codex": ["-q"],         # quiet: без интерактивного UI
-    "gemini": ["-p"],        # -p prompt: non-interactive режим
-    "claude": ["-p"],        # claude -p: non-interactive с одним запросом
-    "opencode": ["--print"], # opencode --print: non-interactive вывод
-    "cursor": ["--repl"],    # cursor repl-режим
+    "codex": ["-q"],  # quiet: без интерактивного UI
+    "gemini": ["-p"],  # -p prompt: non-interactive режим
+    "claude": ["-p"],  # claude -p: non-interactive с одним запросом
+    "opencode": ["--print"],  # opencode --print: non-interactive вывод
+    "cursor": ["--repl"],  # cursor repl-режим
 }
 
 

@@ -11,7 +11,6 @@ Phase 2.1 Master Plan v3:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -108,11 +107,15 @@ class ReserveBotBridge:
 
             @client.on_message(filters.command("silence") & filters.user(owner_ids))
             async def _handle_silence(_, message: Message) -> None:  # type: ignore[misc]
-                await self._handle_api_toggle(message, "/api/silence/toggle", "/api/silence/status", "Silence")
+                await self._handle_api_toggle(
+                    message, "/api/silence/toggle", "/api/silence/status", "Silence"
+                )
 
             @client.on_message(filters.command("notify") & filters.user(owner_ids))
             async def _handle_notify(_, message: Message) -> None:  # type: ignore[misc]
-                await self._handle_api_toggle(message, "/api/notify/toggle", "/api/notify/status", "Notify")
+                await self._handle_api_toggle(
+                    message, "/api/notify/toggle", "/api/notify/status", "Notify"
+                )
 
             @client.on_message(filters.command("voice") & filters.user(owner_ids))
             async def _handle_voice(_, message: Message) -> None:  # type: ignore[misc]
@@ -125,8 +128,7 @@ class ReserveBotBridge:
             @client.on_message(filters.text & filters.user(owner_ids))
             async def _handle_text(_, message: Message) -> None:  # type: ignore[misc]
                 await message.reply_text(
-                    "⚡ Reserve bot активен.\n"
-                    "Команды: /status /silence /notify /voice /tasks"
+                    "⚡ Reserve bot активен.\nКоманды: /status /silence /notify /voice /tasks"
                 )
 
             await client.start()
@@ -178,10 +180,17 @@ class ReserveBotBridge:
         """Отвечает на /status — пингует Owner Panel."""
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as http:
                 resp = await http.get("http://127.0.0.1:8080/api/health/lite")
-                body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text
-            await message.reply_text(f"✅ Краб online\n```json\n{json.dumps(body, ensure_ascii=False, indent=2)}\n```")
+                body = (
+                    resp.json()
+                    if resp.headers.get("content-type", "").startswith("application/json")
+                    else resp.text
+                )
+            await message.reply_text(
+                f"✅ Краб online\n```json\n{json.dumps(body, ensure_ascii=False, indent=2)}\n```"
+            )
         except Exception as exc:  # noqa: BLE001
             await message.reply_text(f"⚠️ Краб недоступен: {exc}")
 
@@ -189,6 +198,7 @@ class ReserveBotBridge:
         """GET endpoint и показать результат."""
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as http:
                 resp = await http.get(f"http://127.0.0.1:8080{endpoint}")
                 body = resp.json()
@@ -197,10 +207,13 @@ class ReserveBotBridge:
         except Exception as exc:  # noqa: BLE001
             await message.reply_text(f"⚠️ {label} недоступен: {exc}")
 
-    async def _handle_api_toggle(self, message: Any, toggle_ep: str, status_ep: str, label: str) -> None:
+    async def _handle_api_toggle(
+        self, message: Any, toggle_ep: str, status_ep: str, label: str
+    ) -> None:
         """Toggle через POST, показать status через GET."""
         try:
             import httpx
+
             async with httpx.AsyncClient(timeout=5.0) as http:
                 # Сначала toggle
                 resp = await http.post(f"http://127.0.0.1:8080{toggle_ep}", json={})

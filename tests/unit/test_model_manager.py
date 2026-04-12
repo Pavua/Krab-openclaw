@@ -73,7 +73,12 @@ async def test_memory_pressure_triggers_unload_with_identifier(manager: ModelMan
 
         # single-model unload -> free_vram unload -> load_model load
         manager._http_client.post.side_effect = [unload_resp_1, unload_resp_2, load_resp]
-        manager._http_client.get.return_value = MagicMock(status_code=200, json=lambda: {"models": [{"key": "big-model", "loaded_instances": [{"id": "big-model"}]}]})
+        manager._http_client.get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "models": [{"key": "big-model", "loaded_instances": [{"id": "big-model"}]}]
+            },
+        )
 
         result = await manager.load_model("new-model")
         assert result is True
@@ -132,7 +137,9 @@ async def test_load_model_requires_post_load_confirmation(manager: ModelManager)
 
 
 @pytest.mark.asyncio
-async def test_get_loaded_models_reuses_short_cache_for_repeated_truth_reads(manager: ModelManager) -> None:
+async def test_get_loaded_models_reuses_short_cache_for_repeated_truth_reads(
+    manager: ModelManager,
+) -> None:
     """Повторные read-only truth-запросы не должны каждый раз долбить LM Studio."""
     models_resp = MagicMock()
     models_resp.status_code = 200
@@ -157,7 +164,9 @@ async def test_get_loaded_models_reuses_short_cache_for_repeated_truth_reads(man
 @pytest.mark.asyncio
 async def test_wait_until_model_loaded_bypasses_short_cache(manager: ModelManager) -> None:
     """Post-load verify обязан читать свежий статус, а не короткий truth-cache."""
-    manager._wait_until_model_loaded = ModelManager._wait_until_model_loaded.__get__(manager, ModelManager)  # type: ignore[method-assign]
+    manager._wait_until_model_loaded = ModelManager._wait_until_model_loaded.__get__(
+        manager, ModelManager
+    )  # type: ignore[method-assign]
     manager.get_loaded_models = AsyncMock(side_effect=[[], ["model-1"]])  # type: ignore[method-assign]
 
     ok = await manager._wait_until_model_loaded("model-1", timeout_sec=1.0, poll_sec=0.01)
@@ -169,7 +178,9 @@ async def test_wait_until_model_loaded_bypasses_short_cache(manager: ModelManage
 
 
 @pytest.mark.asyncio
-async def test_discover_models_records_cloud_auth_error_and_short_backoff(manager: ModelManager) -> None:
+async def test_discover_models_records_cloud_auth_error_and_short_backoff(
+    manager: ModelManager,
+) -> None:
     """Cloud discovery должен запоминать auth-ошибку и не долбить провайдера повторно в backoff-окне."""
 
     async def _fake_cloud_fetch(*args, diagnostics_sink=None, **kwargs):
@@ -185,12 +196,19 @@ async def test_discover_models_records_cloud_auth_error_and_short_backoff(manage
             )
         return []
 
-    async def _fake_discover(_lm_url, _client, *, models_cache, fetch_google_models_async, timeout=None):
+    async def _fake_discover(
+        _lm_url, _client, *, models_cache, fetch_google_models_async, timeout=None
+    ):
         await fetch_google_models_async()
         return []
 
-    with patch("src.model_manager.cloud_fetch_google_models_fb", new=AsyncMock(side_effect=_fake_cloud_fetch)) as fetch_mock:
-        with patch("src.model_manager.discover_models_impl", new=AsyncMock(side_effect=_fake_discover)):
+    with patch(
+        "src.model_manager.cloud_fetch_google_models_fb",
+        new=AsyncMock(side_effect=_fake_cloud_fetch),
+    ) as fetch_mock:
+        with patch(
+            "src.model_manager.discover_models_impl", new=AsyncMock(side_effect=_fake_discover)
+        ):
             await manager.discover_models()
             state = manager.get_cloud_runtime_state_export()
             assert state["last_provider_status"] == "auth"
@@ -202,16 +220,24 @@ async def test_discover_models_records_cloud_auth_error_and_short_backoff(manage
 
 
 @pytest.mark.asyncio
-async def test_discover_models_uses_dedicated_cloud_client_without_lm_headers(manager: ModelManager) -> None:
+async def test_discover_models_uses_dedicated_cloud_client_without_lm_headers(
+    manager: ModelManager,
+) -> None:
     """Cloud discovery должен ходить отдельным клиентом, а local truth-read — LM клиентом."""
 
-    async def _fake_discover(_lm_url, local_client, *, models_cache, fetch_google_models_async, timeout=None):
+    async def _fake_discover(
+        _lm_url, local_client, *, models_cache, fetch_google_models_async, timeout=None
+    ):
         assert local_client is manager._http_client
         await fetch_google_models_async()
         return []
 
-    with patch("src.model_manager.cloud_fetch_google_models_fb", new=AsyncMock(return_value=[])) as fetch_mock:
-        with patch("src.model_manager.discover_models_impl", new=AsyncMock(side_effect=_fake_discover)):
+    with patch(
+        "src.model_manager.cloud_fetch_google_models_fb", new=AsyncMock(return_value=[])
+    ) as fetch_mock:
+        with patch(
+            "src.model_manager.discover_models_impl", new=AsyncMock(side_effect=_fake_discover)
+        ):
             await manager.discover_models()
 
     assert fetch_mock.await_count == 1
@@ -229,13 +255,17 @@ async def test_get_best_model_local_first_in_auto(manager: ModelManager) -> None
         mock_config.LOCAL_PREFERRED_VISION_MODEL = ""
         # lm_studio_url уже установлен в fixture, но config.FORCE_CLOUD — нет
         with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)):
-            with patch.object(manager, "resolve_preferred_local_model", new=AsyncMock(return_value="local/abc")):
+            with patch.object(
+                manager, "resolve_preferred_local_model", new=AsyncMock(return_value="local/abc")
+            ):
                 best = await manager.get_best_model()
     assert best == "local/abc"
 
 
 @pytest.mark.asyncio
-async def test_get_best_model_force_cloud_prefers_runtime_primary_over_stale_env(manager: ModelManager) -> None:
+async def test_get_best_model_force_cloud_prefers_runtime_primary_over_stale_env(
+    manager: ModelManager,
+) -> None:
     """Cloud-маршрут должен брать primary из live runtime, а не из старого `.env`."""
     with patch("src.model_manager.get_runtime_primary_model", return_value="openai-codex/gpt-5.4"):
         with patch("src.model_manager.config") as mock_config:
@@ -245,7 +275,11 @@ async def test_get_best_model_force_cloud_prefers_runtime_primary_over_stale_env
             mock_config.LM_STUDIO_API_KEY = ""
             mock_config.LOCAL_PREFERRED_MODEL = ""
             mock_config.LOCAL_PREFERRED_VISION_MODEL = ""
-            with patch.object(manager._router, "get_best_model", new=AsyncMock(return_value="openai-codex/gpt-5.4")):
+            with patch.object(
+                manager._router,
+                "get_best_model",
+                new=AsyncMock(return_value="openai-codex/gpt-5.4"),
+            ):
                 best = await manager.get_best_model()
 
     assert best == "openai-codex/gpt-5.4"
@@ -253,9 +287,13 @@ async def test_get_best_model_force_cloud_prefers_runtime_primary_over_stale_env
 
 
 @pytest.mark.asyncio
-async def test_get_best_model_photo_falls_back_to_cloud_when_no_local_vision_is_selected(manager: ModelManager) -> None:
+async def test_get_best_model_photo_falls_back_to_cloud_when_no_local_vision_is_selected(
+    manager: ModelManager,
+) -> None:
     with patch.object(manager, "resolve_preferred_local_model", new=AsyncMock(return_value=None)):
-        with patch.object(manager._router, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")) as router_best:
+        with patch.object(
+            manager._router, "get_best_model", new=AsyncMock(return_value="google/gemini-2.5-flash")
+        ) as router_best:
             best = await manager.get_best_model(has_photo=True)
 
     assert best == "google/gemini-2.5-flash"
@@ -274,22 +312,33 @@ def test_is_local_model_treats_openai_codex_as_cloud(manager: ModelManager) -> N
 
 
 @pytest.mark.asyncio
-async def test_verify_model_access_accepts_non_gemini_cloud_model_without_local_cache(manager: ModelManager) -> None:
+async def test_verify_model_access_accepts_non_gemini_cloud_model_without_local_cache(
+    manager: ModelManager,
+) -> None:
     """Нелокальные non-Gemini модели не должны заваливаться на проверке как будто это LM Studio cache miss."""
     ok = await manager.verify_model_access("openai-codex/gpt-5.4")
     assert ok is True
 
 
 @pytest.mark.asyncio
-async def test_health_check_uses_fresh_loaded_cache_without_discovery(manager: ModelManager) -> None:
+async def test_health_check_uses_fresh_loaded_cache_without_discovery(
+    manager: ModelManager,
+) -> None:
     manager._models_cache = {
         "model-1": ModelInfo("model-1", "Model 1", ModelType.LOCAL_MLX, size_gb=5.0)
     }
     manager._loaded_models_cache = ["model-1"]
     manager._loaded_models_cache_ts = time.time()
 
-    with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(side_effect=AssertionError("availability probe не должен вызываться"))):
-        with patch.object(manager, "discover_models", new=AsyncMock(side_effect=AssertionError("discover_models не должен вызываться"))):
+    with patch(
+        "src.model_manager.is_lm_studio_available",
+        new=AsyncMock(side_effect=AssertionError("availability probe не должен вызываться")),
+    ):
+        with patch.object(
+            manager,
+            "discover_models",
+            new=AsyncMock(side_effect=AssertionError("discover_models не должен вызываться")),
+        ):
             result = await manager.health_check()
 
     assert result["status"] == "healthy"
@@ -298,9 +347,17 @@ async def test_health_check_uses_fresh_loaded_cache_without_discovery(manager: M
 
 
 @pytest.mark.asyncio
-async def test_health_check_uses_lightweight_availability_probe_when_loaded_cache_empty(manager: ModelManager) -> None:
-    with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)) as probe:
-        with patch.object(manager, "discover_models", new=AsyncMock(side_effect=AssertionError("discover_models не должен вызываться"))):
+async def test_health_check_uses_lightweight_availability_probe_when_loaded_cache_empty(
+    manager: ModelManager,
+) -> None:
+    with patch(
+        "src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)
+    ) as probe:
+        with patch.object(
+            manager,
+            "discover_models",
+            new=AsyncMock(side_effect=AssertionError("discover_models не должен вызываться")),
+        ):
             result = await manager.health_check()
 
     assert result["status"] == "healthy"
@@ -319,22 +376,30 @@ async def test_get_best_model_cloud_when_force_cloud(manager: ModelManager) -> N
         mock_config.LOCAL_PREFERRED_MODEL = ""
         mock_config.MODEL = "google/gemini-2.0-flash"
         mm = ModelManager()
-        with patch.object(mm._router, "get_best_model", new=AsyncMock(return_value="google/gemini-2.0-flash")):
+        with patch.object(
+            mm._router, "get_best_model", new=AsyncMock(return_value="google/gemini-2.0-flash")
+        ):
             best = await mm.get_best_model()
             assert best.startswith("google/")
 
 
 @pytest.mark.asyncio
-async def test_ensure_model_loaded_fallbacks_to_lighter_local_candidate(manager: ModelManager) -> None:
+async def test_ensure_model_loaded_fallbacks_to_lighter_local_candidate(
+    manager: ModelManager,
+) -> None:
     manager._models_cache = {
-        "nvidia/nemotron-3-nano": ModelInfo("nvidia/nemotron-3-nano", "Heavy", ModelType.LOCAL_MLX, size_gb=16.57),
+        "nvidia/nemotron-3-nano": ModelInfo(
+            "nvidia/nemotron-3-nano", "Heavy", ModelType.LOCAL_MLX, size_gb=16.57
+        ),
         "text-embedding-nomic-embed-text-v1.5": ModelInfo(
             "text-embedding-nomic-embed-text-v1.5",
             "Embedding",
             ModelType.LOCAL_MLX,
             size_gb=0.4,
         ),
-        "qwen2.5-coder-7b-instruct-mlx": ModelInfo("qwen2.5-coder-7b-instruct-mlx", "Light", ModelType.LOCAL_MLX, size_gb=4.0),
+        "qwen2.5-coder-7b-instruct-mlx": ModelInfo(
+            "qwen2.5-coder-7b-instruct-mlx", "Light", ModelType.LOCAL_MLX, size_gb=4.0
+        ),
     }
 
     with patch("src.model_manager.config") as mock_config:
@@ -353,7 +418,9 @@ async def test_ensure_model_loaded_fallbacks_to_lighter_local_candidate(manager:
 
 
 @pytest.mark.asyncio
-async def test_resolve_preferred_local_model_skips_embedding_only_candidates(manager: ModelManager) -> None:
+async def test_resolve_preferred_local_model_skips_embedding_only_candidates(
+    manager: ModelManager,
+) -> None:
     manager._models_cache = {
         "text-embedding-nomic-embed-text-v1.5": ModelInfo(
             "text-embedding-nomic-embed-text-v1.5",
@@ -485,7 +552,9 @@ async def test_resolve_preferred_local_model_photo_smallest_keeps_explicit_local
 
 
 @pytest.mark.asyncio
-async def test_missing_local_model_path_is_temporarily_excluded_from_candidates(manager: ModelManager) -> None:
+async def test_missing_local_model_path_is_temporarily_excluded_from_candidates(
+    manager: ModelManager,
+) -> None:
     manager._models_cache = {
         "broken-local-model": ModelInfo(
             "broken-local-model",
@@ -575,7 +644,9 @@ async def test_single_local_mode_unloads_extra_models_when_target_already_loaded
 
 
 @pytest.mark.asyncio
-async def test_health_check_returns_unavailable_when_lm_studio_unreachable(manager: ModelManager) -> None:
+async def test_health_check_returns_unavailable_when_lm_studio_unreachable(
+    manager: ModelManager,
+) -> None:
     """health_check возвращает unavailable, если LM Studio недоступен и кэш пуст."""
     manager._loaded_models_cache = []
     manager._loaded_models_cache_ts = 0.0
@@ -611,7 +682,9 @@ async def test_health_check_stale_loaded_cache_triggers_probe(manager: ModelMana
     manager._loaded_models_cache = ["old-model"]
     manager._loaded_models_cache_ts = time.time() - 10.0  # протух
 
-    with patch("src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)) as probe:
+    with patch(
+        "src.model_manager.is_lm_studio_available", new=AsyncMock(return_value=True)
+    ) as probe:
         result = await manager.health_check()
 
     assert probe.await_count == 1
@@ -644,6 +717,7 @@ def test_can_load_model_respects_ram_buffer(manager: ModelManager) -> None:
 
         # модель 4 GB: 4 + buffer > 5 → зависит от RAM_BUFFER_GB
         from src.model_manager import RAM_BUFFER_GB
+
         too_large = 5.0 - RAM_BUFFER_GB + 0.1
         fits = 5.0 - RAM_BUFFER_GB - 0.1
 

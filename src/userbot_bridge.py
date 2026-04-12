@@ -14,13 +14,8 @@ import base64
 import json
 import os
 import re
-import shutil
-import sqlite3
 import sys
-import textwrap
 import time
-import traceback
-import types
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -30,31 +25,25 @@ from pyrogram.types import Message
 
 from .config import config
 from .core.access_control import (
+    USERBOT_KNOWN_COMMANDS,
     AccessLevel,
     AccessProfile,
-    OWNER_ONLY_COMMANDS,
-    USERBOT_KNOWN_COMMANDS,
-    resolve_access_profile,
 )
-from .core.capability_registry import resolve_access_mode
-from .core.chat_ban_cache import BANNED_ERROR_CODES, chat_ban_cache
+from .core.chat_ban_cache import chat_ban_cache
 from .core.chat_capability_cache import chat_capability_cache
 from .core.exceptions import KrabError, UserInputError
-from .core.telegram_rate_limiter import telegram_rate_limiter
 from .core.inbox_service import inbox_service
-from .core.operator_identity import build_trace_id
 from .core.logger import get_logger
-from .core.mcp_registry import resolve_managed_server_launch
+from .core.operator_identity import build_trace_id
 from .core.proactive_watch import proactive_watch
-from .reserve_bot import reserve_bot
-from .core.openclaw_workspace import load_workspace_prompt_bundle
-from .core.openclaw_runtime_models import get_runtime_primary_model
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
+from .core.silence_mode import silence_manager
+from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
 from .core.swarm_channels import swarm_channels
 from .core.swarm_scheduler import swarm_scheduler
+from .core.telegram_rate_limiter import telegram_rate_limiter
 from .core.translator_runtime_profile import (
-    default_translator_runtime_profile,
     load_translator_runtime_profile,
     normalize_translator_runtime_profile,
     save_translator_runtime_profile,
@@ -65,104 +54,126 @@ from .core.translator_session_state import (
     load_translator_session_state,
     save_translator_session_state,
 )
-from .employee_templates import ROLES, get_role_prompt
-from .integrations.macos_automation import macos_automation
+from .employee_templates import ROLES
 from .handlers import (
-    handle_agent,
     handle_acl,
+    handle_agent,
     handle_browser,
+    handle_cap,
     handle_chatban,
     handle_claude_cli,
     handle_clear,
     handle_codex,
-    handle_gemini_cli,
-    handle_hs,
-    handle_opencode,
     handle_config,
     handle_cronstatus,
     handle_diagnose,
+    handle_gemini_cli,
     handle_help,
+    handle_hs,
     handle_inbox,
     handle_ls,
     handle_macos,
     handle_memory,
     handle_model,
+    handle_notify,
+    handle_opencode,
     handle_panel,
     handle_read,
     handle_reasoning,
     handle_recall,
+    handle_remember,
     handle_remind,
     handle_reminders,
-    handle_remember,
     handle_restart,
-    handle_role,
     handle_rm_remind,
+    handle_role,
+    handle_screenshot,
     handle_search,
     handle_set,
     handle_shop,
+    handle_silence,
     handle_stats,
     handle_status,
     handle_swarm,
     handle_sysinfo,
-    handle_notify,
     handle_translator,
     handle_voice,
     handle_watch,
     handle_web,
     handle_write,
-    handle_screenshot,
-    handle_cap,
-    handle_silence,
 )
-from .core.silence_mode import silence_manager
-from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
+from .reserve_bot import reserve_bot
 from .search_engine import close_search
-from .userbot.llm_text_processing import LLMTextProcessingMixin
-from .userbot.runtime_status import RuntimeStatusMixin
-from .userbot.voice_profile import VoiceProfileMixin
 from .userbot.access_control import AccessControlMixin
 from .userbot.background_tasks import BackgroundTasksMixin
-from .userbot.session import SessionMixin
 from .userbot.llm_flow import (
     LLMFlowMixin,
-    _build_openclaw_progress_wait_notice,
-    _build_openclaw_route_notice_line,
-    _build_openclaw_slow_wait_notice,
-    _current_runtime_primary_model,
-    _resolve_openclaw_buffered_response_timeout,
-    _resolve_openclaw_progress_notice_schedule,
-    _resolve_openclaw_stream_timeouts,
 )
-from .voice_engine import text_to_speech
+from .userbot.llm_text_processing import LLMTextProcessingMixin
+from .userbot.runtime_status import RuntimeStatusMixin
+from .userbot.session import SessionMixin
+from .userbot.voice_profile import VoiceProfileMixin
 
 logger = get_logger(__name__)
 
 
-_RELAY_INTENT_KEYWORDS: frozenset[str] = frozenset({
-    "передай", "передайте", "передать", "перешли", "переслать",
-    "скажи", "скажите", "сообщи", "сообщите",
-    "расскажи", "расскажите",
-    "передайте ему", "передай ему",
-    "напомни", "напомните", "напоминание",
-    "запомни", "запомните", "запомнить",
-    "хозяину", "хозяин", "хозяином",
-    "владельцу", "владелец", "владельцу",
-    "let know", "tell him", "tell her", "notify",
-    "pass along", "pass it on",
-    "tell pablo", "tell the owner",
-})
+_RELAY_INTENT_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "передай",
+        "передайте",
+        "передать",
+        "перешли",
+        "переслать",
+        "скажи",
+        "скажите",
+        "сообщи",
+        "сообщите",
+        "расскажи",
+        "расскажите",
+        "передайте ему",
+        "передай ему",
+        "напомни",
+        "напомните",
+        "напоминание",
+        "запомни",
+        "запомните",
+        "запомнить",
+        "хозяину",
+        "хозяин",
+        "хозяином",
+        "владельцу",
+        "владелец",
+        "владельцу",
+        "let know",
+        "tell him",
+        "tell her",
+        "notify",
+        "pass along",
+        "pass it on",
+        "tell pablo",
+        "tell the owner",
+    }
+)
 
 # Слова в ОТВЕТЕ Краба, указывающие на обещание передать/запомнить.
 # Используется как backup-триггер: если входящее не попало в _RELAY_INTENT_KEYWORDS,
 # но Краб всё равно пообещал передать — форсируем relay после доставки.
-_RELAY_PROMISE_IN_RESPONSE: frozenset[str] = frozenset({
-    "передам", "передаю", "передал",
-    "сообщу", "уведомлю",
-    "запомнил", "запомню", "запомнил это",
-    "хозяину передам", "передам владельцу",
-})
+_RELAY_PROMISE_IN_RESPONSE: frozenset[str] = frozenset(
+    {
+        "передам",
+        "передаю",
+        "передал",
+        "сообщу",
+        "уведомлю",
+        "запомнил",
+        "запомню",
+        "запомнил это",
+        "хозяину передам",
+        "передам владельцу",
+    }
+)
 
 
 class _TelegramSendQueue:
@@ -263,7 +274,7 @@ class _TelegramSendQueue:
                     is_flood = "FLOOD" in err_upper
                     is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
                     if (is_flood or is_timeout) and attempt < self._MAX_RETRIES - 1:
-                        delay = self._BASE_BACKOFF_SEC * (2 ** attempt)
+                        delay = self._BASE_BACKOFF_SEC * (2**attempt)
                         if is_flood:
                             m = re.search(r"A wait of (\d+) seconds", str(exc), re.I)
                             if m:
@@ -300,7 +311,15 @@ def _message_unix_ts(message: Message | Any) -> float | None:
     return None
 
 
-class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin, AccessControlMixin, LLMFlowMixin, BackgroundTasksMixin, SessionMixin):
+class KraabUserbot(
+    LLMTextProcessingMixin,
+    RuntimeStatusMixin,
+    VoiceProfileMixin,
+    AccessControlMixin,
+    LLMFlowMixin,
+    BackgroundTasksMixin,
+    SessionMixin,
+):
     """
     Класс KraabUserbot.
     Основной мост между Telegram и AI-движком OpenClaw.
@@ -327,12 +346,8 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         r"\[\[\s*(?:reply_to_current|reply_to\s*:[^\]]+|reply_to_[^\]]+)\s*\]\]\s*",
         re.IGNORECASE,
     )
-    _tool_response_block_pattern = re.compile(
-        r"(?is)<tool_response>.*?(?:<\|im_end\|>|$)"
-    )
-    _llm_transport_tokens_pattern = re.compile(
-        r"(?i)<\|[^|>]+?\|>|</?tool_response>"
-    )
+    _tool_response_block_pattern = re.compile(r"(?is)<tool_response>.*?(?:<\|im_end\|>|$)")
+    _llm_transport_tokens_pattern = re.compile(r"(?i)<\|[^|>]+?\|>|</?tool_response>")
     _think_block_pattern = re.compile(r"(?is)<think>.*?</think>")
     _think_capture_pattern = re.compile(r"(?is)<think>(.*?)</think>")
     _final_block_pattern = re.compile(r"(?is)<final>(.*?)</final>")
@@ -385,6 +400,7 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
+        self._error_digest_task: Optional[asyncio.Task] = None
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -456,39 +472,57 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 m.stop_propagation()
 
         # Регистрация командных оберток (Фаза 4.4: модульные хендлеры)
-        @self.client.on_message(filters.command("status", prefixes=prefixes) & _make_command_filter("status"), group=-1)
+        @self.client.on_message(
+            filters.command("status", prefixes=prefixes) & _make_command_filter("status"), group=-1
+        )
         async def wrap_status(c, m):
             await run_cmd(handle_status, m)
 
-        @self.client.on_message(filters.command("swarm", prefixes=prefixes) & _make_command_filter("swarm"), group=-1)
+        @self.client.on_message(
+            filters.command("swarm", prefixes=prefixes) & _make_command_filter("swarm"), group=-1
+        )
         async def wrap_swarm(c, m):
             await run_cmd(handle_swarm, m)
 
-        @self.client.on_message(filters.command("model", prefixes=prefixes) & _make_command_filter("model"), group=-1)
+        @self.client.on_message(
+            filters.command("model", prefixes=prefixes) & _make_command_filter("model"), group=-1
+        )
         async def wrap_model(c, m):
             await run_cmd(handle_model, m)
 
-        @self.client.on_message(filters.command("clear", prefixes=prefixes) & _make_command_filter("clear"), group=-1)
+        @self.client.on_message(
+            filters.command("clear", prefixes=prefixes) & _make_command_filter("clear"), group=-1
+        )
         async def wrap_clear(c, m):
             await run_cmd(handle_clear, m)
 
-        @self.client.on_message(filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1)
+        @self.client.on_message(
+            filters.command("config", prefixes=prefixes) & _make_command_filter("config"), group=-1
+        )
         async def wrap_config(c, m):
             await run_cmd(handle_config, m)
 
-        @self.client.on_message(filters.command("set", prefixes=prefixes) & _make_command_filter("set"), group=-1)
+        @self.client.on_message(
+            filters.command("set", prefixes=prefixes) & _make_command_filter("set"), group=-1
+        )
         async def wrap_set(c, m):
             await run_cmd(handle_set, m)
 
-        @self.client.on_message(filters.command("role", prefixes=prefixes) & _make_command_filter("role"), group=-1)
+        @self.client.on_message(
+            filters.command("role", prefixes=prefixes) & _make_command_filter("role"), group=-1
+        )
         async def wrap_role(c, m):
             await run_cmd(handle_role, m)
 
-        @self.client.on_message(filters.command("voice", prefixes=prefixes) & _make_command_filter("voice"), group=-1)
+        @self.client.on_message(
+            filters.command("voice", prefixes=prefixes) & _make_command_filter("voice"), group=-1
+        )
         async def wrap_voice(c, m):
             await run_cmd(handle_voice, m)
 
-        @self.client.on_message(filters.command("notify", prefixes=prefixes) & _make_command_filter("notify"), group=-1)
+        @self.client.on_message(
+            filters.command("notify", prefixes=prefixes) & _make_command_filter("notify"), group=-1
+        )
         async def wrap_notify(c, m):
             await run_cmd(handle_notify, m)
 
@@ -499,23 +533,35 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         async def wrap_chatban(c, m):
             await run_cmd(handle_chatban, m)
 
-        @self.client.on_message(filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"), group=-1)
+        @self.client.on_message(
+            filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"),
+            group=-1,
+        )
         async def wrap_translator(c, m):
             await run_cmd(handle_translator, m)
 
-        @self.client.on_message(filters.command("web", prefixes=prefixes) & _make_command_filter("web"), group=-1)
+        @self.client.on_message(
+            filters.command("web", prefixes=prefixes) & _make_command_filter("web"), group=-1
+        )
         async def wrap_web(c, m):
             await run_cmd(handle_web, m)
 
-        @self.client.on_message(filters.command("mac", prefixes=prefixes) & _make_command_filter("mac"), group=-1)
+        @self.client.on_message(
+            filters.command("mac", prefixes=prefixes) & _make_command_filter("mac"), group=-1
+        )
         async def wrap_mac(c, m):
             await run_cmd(handle_macos, m)
 
-        @self.client.on_message(filters.command("screenshot", prefixes=prefixes) & _make_command_filter("screenshot"), group=-1)
+        @self.client.on_message(
+            filters.command("screenshot", prefixes=prefixes) & _make_command_filter("screenshot"),
+            group=-1,
+        )
         async def wrap_screenshot(c, m):
             await run_cmd(handle_screenshot, m)
 
-        @self.client.on_message(filters.command("cap", prefixes=prefixes) & _make_command_filter("cap"), group=-1)
+        @self.client.on_message(
+            filters.command("cap", prefixes=prefixes) & _make_command_filter("cap"), group=-1
+        )
         async def wrap_cap(c, m):
             await run_cmd(handle_cap, m)
 
@@ -533,85 +579,116 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         async def wrap_stats(c, m):
             await run_cmd(handle_stats, m)
 
-        @self.client.on_message(filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1)
+        @self.client.on_message(
+            filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1
+        )
         async def wrap_watch(c, m):
             await run_cmd(handle_watch, m)
 
-        @self.client.on_message(filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1)
+        @self.client.on_message(
+            filters.command("memory", prefixes=prefixes) & _make_command_filter("memory"), group=-1
+        )
         async def wrap_memory(c, m):
             await run_cmd(handle_memory, m)
 
-        @self.client.on_message(filters.command("inbox", prefixes=prefixes) & _make_command_filter("inbox"), group=-1)
+        @self.client.on_message(
+            filters.command("inbox", prefixes=prefixes) & _make_command_filter("inbox"), group=-1
+        )
         async def wrap_inbox(c, m):
             await run_cmd(handle_inbox, m)
 
         @self.client.on_message(
-            filters.command("sysinfo", prefixes=prefixes) & _make_command_filter("sysinfo"), group=-1
+            filters.command("sysinfo", prefixes=prefixes) & _make_command_filter("sysinfo"),
+            group=-1,
         )
         async def wrap_sysinfo(c, m):
             await run_cmd(handle_sysinfo, m)
 
-        @self.client.on_message(filters.command("panel", prefixes=prefixes) & _make_command_filter("panel"), group=-1)
+        @self.client.on_message(
+            filters.command("panel", prefixes=prefixes) & _make_command_filter("panel"), group=-1
+        )
         async def wrap_panel(c, m):
             await run_cmd(handle_panel, m)
 
         @self.client.on_message(
-            filters.command("restart", prefixes=prefixes) & _make_command_filter("restart"), group=-1
+            filters.command("restart", prefixes=prefixes) & _make_command_filter("restart"),
+            group=-1,
         )
         async def wrap_restart(c, m):
             await run_cmd(handle_restart, m)
 
-        @self.client.on_message(filters.command("search", prefixes=prefixes) & _make_command_filter("search"), group=-1)
+        @self.client.on_message(
+            filters.command("search", prefixes=prefixes) & _make_command_filter("search"), group=-1
+        )
         async def wrap_search(c, m):
             await run_cmd(handle_search, m)
 
-        @self.client.on_message(filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1)
+        @self.client.on_message(
+            filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1
+        )
         async def wrap_shop(c, m):
             await run_cmd(handle_shop, m)
 
         @self.client.on_message(
-            filters.command("remember", prefixes=prefixes) & _make_command_filter("remember"), group=-1
+            filters.command("remember", prefixes=prefixes) & _make_command_filter("remember"),
+            group=-1,
         )
         async def wrap_remember(c, m):
             await run_cmd(handle_remember, m)
 
-        @self.client.on_message(filters.command("recall", prefixes=prefixes) & _make_command_filter("recall"), group=-1)
+        @self.client.on_message(
+            filters.command("recall", prefixes=prefixes) & _make_command_filter("recall"), group=-1
+        )
         async def wrap_recall(c, m):
             await run_cmd(handle_recall, m)
 
-        @self.client.on_message(filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1)
+        @self.client.on_message(
+            filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1
+        )
         async def wrap_ls(c, m):
             await run_cmd(handle_ls, m)
 
-        @self.client.on_message(filters.command("read", prefixes=prefixes) & _make_command_filter("read"), group=-1)
+        @self.client.on_message(
+            filters.command("read", prefixes=prefixes) & _make_command_filter("read"), group=-1
+        )
         async def wrap_read(c, m):
             await run_cmd(handle_read, m)
 
-        @self.client.on_message(filters.command("write", prefixes=prefixes) & _make_command_filter("write"), group=-1)
+        @self.client.on_message(
+            filters.command("write", prefixes=prefixes) & _make_command_filter("write"), group=-1
+        )
         async def wrap_write(c, m):
             await run_cmd(handle_write, m)
 
-        @self.client.on_message(filters.command("agent", prefixes=prefixes) & _make_command_filter("agent"), group=-1)
+        @self.client.on_message(
+            filters.command("agent", prefixes=prefixes) & _make_command_filter("agent"), group=-1
+        )
         async def wrap_agent(c, m):
             await run_cmd(handle_agent, m)
 
         # CLI runner команды
-        @self.client.on_message(filters.command("codex", prefixes=prefixes) & _make_command_filter("codex"), group=-1)
+        @self.client.on_message(
+            filters.command("codex", prefixes=prefixes) & _make_command_filter("codex"), group=-1
+        )
         async def wrap_codex(c, m):
             await run_cmd(handle_codex, m)
 
-        @self.client.on_message(filters.command("gemini", prefixes=prefixes) & _make_command_filter("gemini"), group=-1)
+        @self.client.on_message(
+            filters.command("gemini", prefixes=prefixes) & _make_command_filter("gemini"), group=-1
+        )
         async def wrap_gemini_cli(c, m):
             await run_cmd(handle_gemini_cli, m)
 
         @self.client.on_message(
-            filters.command("claude_cli", prefixes=prefixes) & _make_command_filter("claude_cli"), group=-1
+            filters.command("claude_cli", prefixes=prefixes) & _make_command_filter("claude_cli"),
+            group=-1,
         )
         async def wrap_claude_cli(c, m):
             await run_cmd(handle_claude_cli, m)
 
         @self.client.on_message(
-            filters.command("opencode", prefixes=prefixes) & _make_command_filter("opencode"), group=-1
+            filters.command("opencode", prefixes=prefixes) & _make_command_filter("opencode"),
+            group=-1,
         )
         async def wrap_opencode(c, m):
             await run_cmd(handle_opencode, m)
@@ -622,11 +699,15 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         async def wrap_hs(c, m):
             await run_cmd(handle_hs, m)
 
-        @self.client.on_message(filters.command("acl", prefixes=prefixes) & _make_command_filter("acl"), group=-1)
+        @self.client.on_message(
+            filters.command("acl", prefixes=prefixes) & _make_command_filter("acl"), group=-1
+        )
         async def wrap_acl(c, m):
             await run_cmd(handle_acl, m)
 
-        @self.client.on_message(filters.command("access", prefixes=prefixes) & _make_command_filter("access"), group=-1)
+        @self.client.on_message(
+            filters.command("access", prefixes=prefixes) & _make_command_filter("access"), group=-1
+        )
         async def wrap_access(c, m):
             # Alias для тех, кто интуитивно ищет именно access-management.
             await run_cmd(handle_acl, m)
@@ -639,39 +720,60 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             await run_cmd(handle_reasoning, m)
 
         @self.client.on_message(
-            filters.command("diagnose", prefixes=prefixes) & _make_command_filter("diagnose"), group=-1
+            filters.command("diagnose", prefixes=prefixes) & _make_command_filter("diagnose"),
+            group=-1,
         )
         async def wrap_diagnose(c, m):
             await run_cmd(handle_diagnose, m)
 
-        @self.client.on_message(filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1)
+        @self.client.on_message(
+            filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1
+        )
         async def wrap_help(c, m):
             await run_cmd(handle_help, m)
 
-        @self.client.on_message(filters.command("remind", prefixes=prefixes) & _make_command_filter("remind"), group=-1)
+        @self.client.on_message(
+            filters.command("remind", prefixes=prefixes) & _make_command_filter("remind"), group=-1
+        )
         async def wrap_remind(c, m):
             await run_cmd(handle_remind, m)
 
-        @self.client.on_message(filters.command("reminders", prefixes=prefixes) & _make_command_filter("reminders"), group=-1)
+        @self.client.on_message(
+            filters.command("reminders", prefixes=prefixes) & _make_command_filter("reminders"),
+            group=-1,
+        )
         async def wrap_reminders(c, m):
             await run_cmd(handle_reminders, m)
 
-        @self.client.on_message(filters.command("rm_remind", prefixes=prefixes) & _make_command_filter("rm_remind"), group=-1)
+        @self.client.on_message(
+            filters.command("rm_remind", prefixes=prefixes) & _make_command_filter("rm_remind"),
+            group=-1,
+        )
         async def wrap_rm_remind(c, m):
             await run_cmd(handle_rm_remind, m)
 
-        @self.client.on_message(filters.command("cronstatus", prefixes=prefixes) & _make_command_filter("cronstatus"), group=-1)
+        @self.client.on_message(
+            filters.command("cronstatus", prefixes=prefixes) & _make_command_filter("cronstatus"),
+            group=-1,
+        )
         async def wrap_cronstatus(c, m):
             await run_cmd(handle_cronstatus, m)
 
-        @self.client.on_message(filters.command("browser", prefixes=prefixes) & _make_command_filter("browser"), group=-1)
+        @self.client.on_message(
+            filters.command("browser", prefixes=prefixes) & _make_command_filter("browser"),
+            group=-1,
+        )
         async def wrap_browser(c, m):
             await run_cmd(handle_browser, m)
 
         # Обработка обычных сообщений, медиа, голосовых и документов.
         # Voice/audio проходят в _process_message → _transcribe_audio_message
         # (устаревший wrap_audio с stop_propagation() удалён — он блокировал AI pipeline).
-        @self.client.on_message((filters.text | filters.photo | filters.voice | filters.audio | filters.document) & ~filters.bot, group=0)
+        @self.client.on_message(
+            (filters.text | filters.photo | filters.voice | filters.audio | filters.document)
+            & ~filters.bot,
+            group=0,
+        )
         async def wrap_message(c, m):
             await self._process_message(m)
 
@@ -749,16 +851,16 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
     async def _auto_export_handoff_snapshot(self, *, reason: str) -> dict[str, Any]:
         """
         Auto-export handoff snapshot before shutdown or session change (Phase 2.2).
-        
+
         Never raises — if export fails, logs warning and returns exported=False.
         """
         import urllib.request
         from datetime import datetime, timezone
-        
+
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         artifacts_dir = config.BASE_DIR / "artifacts"
         dest = artifacts_dir / f"auto_handoff_{timestamp}.json"
-        
+
         try:
             artifacts_dir.mkdir(parents=True, exist_ok=True)
             # Для периодического auto-export нам нужен быстрый truthful snapshot,
@@ -837,6 +939,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         if self._proactive_watch_task and not self._proactive_watch_task.done():
             return
         self._proactive_watch_task = asyncio.create_task(self._run_proactive_watch_loop())
+        # Запускаем периодическую сводку ошибок (каждые 6 часов)
+        if self._error_digest_task is None or self._error_digest_task.done():
+            self._error_digest_task = proactive_watch.start_error_digest_loop()
 
     async def _run_proactive_watch_loop(self) -> None:
         """
@@ -894,11 +999,13 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             if config.SWARM_AUTONOMOUS_ENABLED and self.me:
                 owner_chat_id = str(self.me.id)
                 system_prompt = self._build_system_prompt_for_sender(
-                    is_allowed_sender=True, access_level="owner",
+                    is_allowed_sender=True,
+                    access_level="owner",
                 )
 
                 def _swarm_router_factory(team_name: str):
                     from .handlers.command_handlers import _AgentRoomRouterAdapter
+
                     return _AgentRoomRouterAdapter(
                         chat_id=f"swarm:scheduled:{team_name}",
                         system_prompt=system_prompt,
@@ -1071,7 +1178,7 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 transcript,
                 src_lang,
                 tgt_lang,
-                openclaw_client=self.openclaw,
+                openclaw_client=openclaw_client,
                 chat_id=f"translator_{chat_id}",
             )
         except Exception as exc:  # noqa: BLE001
@@ -1086,11 +1193,7 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             return False
 
         # Формируем ответ
-        reply_text = (
-            f"🔄 {src_lang}→{tgt_lang}\n"
-            f"**{result.original}**\n"
-            f"_{result.translated}_"
-        )
+        reply_text = f"🔄 {src_lang}→{tgt_lang}\n**{result.original}**\n_{result.translated}_"
         await self._safe_reply_or_send_new(message, reply_text)
 
         # Обновляем session stats
@@ -1242,7 +1345,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                     try:
                         await self._safe_stop_client(reason="start_db_locked")
                     except Exception as stop_exc:  # noqa: BLE001
-                        logger.debug("telegram_client_stop_after_dblock_failed", error=str(stop_exc))
+                        logger.debug(
+                            "telegram_client_stop_after_dblock_failed", error=str(stop_exc)
+                        )
                     self._recreate_client()
                     await asyncio.sleep(1.0)
                     continue
@@ -1266,7 +1371,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                     try:
                         await self._safe_stop_client(reason="non_interactive_login_required")
                     except Exception as stop_exc:  # noqa: BLE001
-                        logger.debug("telegram_stop_after_login_required_failed", error=str(stop_exc))
+                        logger.debug(
+                            "telegram_stop_after_login_required_failed", error=str(stop_exc)
+                        )
                     self._mark_manual_relogin_required(
                         reason="interactive_prompt_in_non_tty",
                         error=str(exc),
@@ -1438,18 +1545,18 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         """Безопасный запуск maintenance с периодическим handoff export (Phase 2.2)"""
         try:
             logger.info("maintenance_task_start")
-            
+
             # Периодический handoff export (каждые 4 часа)
             last_export_time = time.time()
             export_interval_sec = 4 * 3600  # 4 hours
-            
+
             while True:
                 # Запускаем model_manager maintenance
                 try:
                     await model_manager.start_maintenance()
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("model_manager_maintenance_error", error=str(exc))
-                
+
                 # Проверяем нужен ли периодический экспорт
                 current_time = time.time()
                 if current_time - last_export_time >= export_interval_sec:
@@ -1458,10 +1565,10 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                         last_export_time = current_time
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("periodic_handoff_export_failed", error=str(exc))
-                
+
                 # Ждем перед следующей итерацией
                 await asyncio.sleep(300)  # 5 минут между проверками
-                
+
         except asyncio.CancelledError:
             logger.info("maintenance_task_cancelled")
         except Exception as e:
@@ -1486,17 +1593,19 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         # Phase 2: pre-shutdown memory flush — persist swarm state
         try:
             from .core.swarm_memory import swarm_memory as _sm  # noqa: PLC0415
+
             _sm._persist()
             logger.info("pre_shutdown_swarm_memory_flushed")
         except Exception:  # noqa: BLE001
             pass
         try:
             from .core.swarm_task_board import swarm_task_board as _tb  # noqa: PLC0415
+
             _tb._persist()
             logger.info("pre_shutdown_task_board_flushed")
         except Exception:  # noqa: BLE001
             pass
-        
+
         if krab_scheduler.is_started:
             try:
                 krab_scheduler.stop()
@@ -1568,19 +1677,21 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 updated = await self._safe_edit(source_message, placeholder)
                 return {
                     "delivery_mode": "placeholder_only",
-                    "text_message_ids": [str(getattr(updated, "id", "") or "")] if getattr(updated, "id", None) else [],
+                    "text_message_ids": [str(getattr(updated, "id", "") or "")]
+                    if getattr(updated, "id", None)
+                    else [],
                     "parts_count": 1,
                 }
             updated = await self._safe_edit(temp_message, placeholder)
             return {
                 "delivery_mode": "placeholder_only",
-                "text_message_ids": [str(getattr(updated, "id", "") or "")] if getattr(updated, "id", None) else [],
+                "text_message_ids": [str(getattr(updated, "id", "") or "")]
+                if getattr(updated, "id", None)
+                else [],
                 "parts_count": 1,
             }
 
-        parts = self._split_message(
-            f"🦀 {query}\n\n{full_response}" if is_self else full_response
-        )
+        parts = self._split_message(f"🦀 {query}\n\n{full_response}" if is_self else full_response)
         delivered_ids: list[str] = []
 
         if is_self and not force_new_message:
@@ -1597,7 +1708,11 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 "parts_count": len(parts),
             }
 
-        if self._should_send_voice_reply() or prefer_send_message_for_background or force_new_message:
+        if (
+            self._should_send_voice_reply()
+            or prefer_send_message_for_background
+            or force_new_message
+        ):
             # Для связки `text+voice` делаем явную текстовую отправку отдельным
             # сообщением: edit плейсхолдера в некоторых клиентах теряется
             # визуально, а send_message даёт надёжный финальный event доставки.
@@ -1674,7 +1789,10 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             chat_id=chat_id,
             message_id=message_id,
             response_text=response_text,
-            delivery_mode=str((delivery_result or {}).get("delivery_mode") or "text").strip().lower() or "text",
+            delivery_mode=str((delivery_result or {}).get("delivery_mode") or "text")
+            .strip()
+            .lower()
+            or "text",
             reply_message_ids=self._message_ids_from_delivery(delivery_result),
             actor="kraab",
             note=note,
@@ -1859,7 +1977,11 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         - это надёжнее любого бота/вебхука и работает без дополнительных токенов;
         - владелец увидит уведомление через обычный Telegram.
         """
-        sender_display = f"@{user.username}" if getattr(user, "username", None) else f"id:{getattr(user, 'id', '?')}"
+        sender_display = (
+            f"@{user.username}"
+            if getattr(user, "username", None)
+            else f"id:{getattr(user, 'id', '?')}"
+        )
         chat_id_str = str(getattr(getattr(message, "chat", None), "id", "") or "")
         message_id_str = str(getattr(message, "id", "") or "")
         excerpt = str(query or "")[:1500]
@@ -1945,7 +2067,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             username = str(getattr(user, "username", "") or "").strip()
             sender_name = f"{fname} {lname}".strip() or ""
             if username:
-                sender_name = f"{sender_name} (@{username})".strip() if sender_name else f"@{username}"
+                sender_name = (
+                    f"{sender_name} (@{username})".strip() if sender_name else f"@{username}"
+                )
             if not sender_name:
                 sender_name = f"id:{getattr(user, 'id', '?')}"
 
@@ -1971,15 +2095,49 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             logger.warning("guest_incoming_forward_failed", error=str(exc))
 
     # Расширения, которые обрабатываем как plain-text (встраиваем содержимое в запрос).
-    _TEXT_EXTENSIONS: frozenset[str] = frozenset({
-        ".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".yaml", ".yml",
-        ".toml", ".ini", ".cfg", ".sh", ".bash", ".zsh", ".log", ".csv", ".xml",
-        ".html", ".css", ".scss", ".sql", ".rs", ".go", ".java", ".kt", ".swift",
-        ".c", ".cpp", ".h", ".hpp", ".rb", ".php", ".env", ".conf",
-    })
+    _TEXT_EXTENSIONS: frozenset[str] = frozenset(
+        {
+            ".txt",
+            ".md",
+            ".py",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".ini",
+            ".cfg",
+            ".sh",
+            ".bash",
+            ".zsh",
+            ".log",
+            ".csv",
+            ".xml",
+            ".html",
+            ".css",
+            ".scss",
+            ".sql",
+            ".rs",
+            ".go",
+            ".java",
+            ".kt",
+            ".swift",
+            ".c",
+            ".cpp",
+            ".h",
+            ".hpp",
+            ".rb",
+            ".php",
+            ".env",
+            ".conf",
+        }
+    )
     # Максимальный размер файла и инлайн-вставки.
-    _DOC_MAX_BYTES: int = 5 * 1024 * 1024   # 5 MB — не скачиваем больше
-    _DOC_INLINE_BYTES: int = 80 * 1024       # 80 KB — встраиваем содержимое текстом
+    _DOC_MAX_BYTES: int = 5 * 1024 * 1024  # 5 MB — не скачиваем больше
+    _DOC_INLINE_BYTES: int = 80 * 1024  # 80 KB — встраиваем содержимое текстом
 
     async def _process_document_message(
         self,
@@ -2216,7 +2374,10 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         # Phase 3: capability enforcement — проверяем право на chat
         if not is_self:
             from .core.capability_registry import check_capability  # noqa: PLC0415
-            access_level_str = str(getattr(access_profile.level, "value", access_profile.level) or "guest")
+
+            access_level_str = str(
+                getattr(access_profile.level, "value", access_profile.level) or "guest"
+            )
             if not check_capability(access_level_str, "chat"):
                 logger.info("capability_denied_chat", chat_id=chat_id, level=access_level_str)
                 return
@@ -2268,7 +2429,13 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 query=query,
             )
             text = query
-        if not query and not message.photo and not has_audio_message and not is_reply_to_me and not has_document:
+        if (
+            not query
+            and not message.photo
+            and not has_audio_message
+            and not is_reply_to_me
+            and not has_document
+        ):
             return
 
         incoming_item_result: dict[str, Any] | None = None
@@ -2293,8 +2460,10 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             or self._is_manually_blocked(user)
         ):
             _block_reason = (
-                "manual_blocklist" if self._is_manually_blocked(user)
-                else "bulk_sender" if _is_bulk_sender_ext(user)
+                "manual_blocklist"
+                if self._is_manually_blocked(user)
+                else "bulk_sender"
+                if _is_bulk_sender_ext(user)
                 else "notification_sender"
             )
             logger.info("auto_reply_skipped_blocked_sender", chat_id=chat_id, reason=_block_reason)
@@ -2376,7 +2545,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 f"🦀 {query}\n\n🛠️ Собираю контекст и запускаю маршрут...",
             )
 
-        if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(query):
+        if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(
+            query
+        ):
             runtime_text = await self._build_runtime_truth_status(
                 is_allowed_sender=is_allowed_sender,
                 access_level=access_profile.level,
@@ -2490,7 +2661,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         if message.photo:
             try:
                 if is_self:
-                    message = await self._safe_edit(message, f"🦀 {query}\n\n👀 *Разглядываю фото...*")
+                    message = await self._safe_edit(
+                        message, f"🦀 {query}\n\n👀 *Разглядываю фото...*"
+                    )
                 else:
                     temp_msg = await self._safe_edit(temp_msg, "👀 *Разглядываю фото...*")
 
@@ -2521,19 +2694,25 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
         # это исключает зависание на «Разглядываю фото...» и пустые/необъяснимые ответы.
         if message.photo and not images:
             safe_query = (query or "(Фото)").strip()
-            safe_error = photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
+            safe_error = (
+                photo_error or "❌ Фото не удалось обработать. Отправь изображение повторно."
+            )
             if is_self:
                 message = await self._safe_edit(message, f"🦀 {safe_query}\n\n{safe_error}")
                 delivery_result = {
                     "delivery_mode": "edit_error",
-                    "text_message_ids": [str(getattr(message, "id", "") or "")] if getattr(message, "id", None) else [],
+                    "text_message_ids": [str(getattr(message, "id", "") or "")]
+                    if getattr(message, "id", None)
+                    else [],
                     "parts_count": 1,
                 }
             else:
                 temp_msg = await self._safe_edit(temp_msg, safe_error)
                 delivery_result = {
                     "delivery_mode": "edit_error",
-                    "text_message_ids": [str(getattr(temp_msg, "id", "") or "")] if getattr(temp_msg, "id", None) else [],
+                    "text_message_ids": [str(getattr(temp_msg, "id", "") or "")]
+                    if getattr(temp_msg, "id", None)
+                    else [],
                     "parts_count": 1,
                 }
             self._record_incoming_reply_to_inbox(
@@ -2549,7 +2728,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
 
         # DOCUMENT: Скачиваем и встраиваем содержимое файла в запрос
         if has_document:
-            query = await self._process_document_message(message=message, query=query, temp_msg=temp_msg, is_self=is_self)
+            query = await self._process_document_message(
+                message=message, query=query, temp_msg=temp_msg, is_self=is_self
+            )
             if query is None:
                 _typing_stop_event.set()
                 _typing_task.cancel()
@@ -2577,8 +2758,7 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             force_cloud = True
         should_defer_background = (
             bool(getattr(config, "USERBOT_BACKGROUND_LLM_HANDOFF", True))
-            and
-            not is_self
+            and not is_self
             and not bool(images)
             and not bool(has_audio_message)
             and not bool(message.photo)
@@ -2657,20 +2837,21 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                 return
 
             # Swarm intervention: если owner пишет в swarm-группу — перехватываем
-            if (
-                self.me
-                and user.id == self.me.id
-                and message.chat
-                and message.text
-            ):
+            if self.me and user.id == self.me.id and message.chat and message.text:
                 swarm_team = swarm_channels.is_swarm_chat(message.chat.id)
                 if swarm_team:
                     # Forum mode: определяем команду по topic_id
                     if swarm_team == "_forum":
-                        topic_id = getattr(message, "message_thread_id", None) or getattr(message, "reply_to_top_message_id", None)
+                        topic_id = getattr(message, "message_thread_id", None) or getattr(
+                            message, "reply_to_top_message_id", None
+                        )
                         if topic_id:
                             swarm_team = swarm_channels.resolve_team_from_topic(topic_id)
-                    if swarm_team and swarm_team != "_forum" and swarm_channels.is_round_active(swarm_team):
+                    if (
+                        swarm_team
+                        and swarm_team != "_forum"
+                        and swarm_channels.is_round_active(swarm_team)
+                    ):
                         swarm_channels.add_intervention(swarm_team, message.text)
                         await message.reply(f"👑 Директива принята для **{swarm_team}**")
                         return
@@ -2729,9 +2910,7 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
                     _cap_refresh_task = asyncio.create_task(
                         self._refresh_chat_capabilities_background(chat_id)
                     )
-                    _cap_refresh_task.add_done_callback(
-                        self._log_background_task_exception_cb
-                    )
+                    _cap_refresh_task.add_done_callback(self._log_background_task_exception_cb)
                 except RuntimeError as _no_loop_exc:
                     # Нет running loop — маловероятно внутри pyrogram handler,
                     # но safe-guard против падения обработки. Явно логгируем
@@ -2795,7 +2974,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             try:
                 await self._safe_reply_or_send_new(
                     message,
-                    f"🦀❌ Ошибка: {safe_error}" if safe_error else "🦀❌ Внутренняя ошибка. Детали в логах.",
+                    f"🦀❌ Ошибка: {safe_error}"
+                    if safe_error
+                    else "🦀❌ Внутренняя ошибка. Детали в логах.",
                 )
             except Exception:  # noqa: BLE001
                 pass  # reply сам может упасть (ChatWriteForbidden etc.)
@@ -2810,7 +2991,9 @@ class KraabUserbot(LLMTextProcessingMixin, RuntimeStatusMixin, VoiceProfileMixin
             stderr=asyncio.subprocess.DEVNULL,
         )
         asyncio.create_task(proc.wait())  # reap in background
-        await self._safe_reply_or_send_new(message, "✅ Тест запущен в фоне. Проверьте `health_check.log`.")
+        await self._safe_reply_or_send_new(
+            message, "✅ Тест запущен в фоне. Проверьте `health_check.log`."
+        )
 
     async def _get_chat_context(self, chat_id: int, limit: int = 20, max_chars: int = 8000) -> str:
         """

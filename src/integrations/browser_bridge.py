@@ -17,6 +17,8 @@ from typing import Any
 
 import structlog
 
+from src.config import config
+
 logger = structlog.get_logger(__name__)
 
 
@@ -187,9 +189,17 @@ class BrowserBridge:
             try:
                 if not candidate.exists():
                     continue
-                lines = [line.strip() for line in candidate.read_text(encoding="utf-8").splitlines() if line.strip()]
+                lines = [
+                    line.strip()
+                    for line in candidate.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
             except OSError as exc:
-                logger.warning("browser_bridge_devtools_active_port_unreadable", path=str(candidate), error=str(exc))
+                logger.warning(
+                    "browser_bridge_devtools_active_port_unreadable",
+                    path=str(candidate),
+                    error=str(exc),
+                )
                 continue
             if len(lines) < 2:
                 continue
@@ -361,10 +371,14 @@ class BrowserBridge:
     async def _action_probe_via_raw_cdp(self, ws_endpoint: str, url: str) -> dict[str, Any]:
         """Делает action probe через прямой websocket CDP без Playwright."""
 
-        async def _handler(conn: RawCDPConnection, session_id: str, _target_id: str) -> dict[str, Any]:
+        async def _handler(
+            conn: RawCDPConnection, session_id: str, _target_id: str
+        ) -> dict[str, Any]:
             await conn.call("Page.navigate", {"url": url}, session_id=session_id)
             try:
-                await conn.wait_for_event("Page.loadEventFired", session_id=session_id, timeout_sec=6.0)
+                await conn.wait_for_event(
+                    "Page.loadEventFired", session_id=session_id, timeout_sec=6.0
+                )
             except Exception:
                 # Не каждый target честно шлёт load event; итог всё равно проверяем через Runtime.evaluate.
                 pass
@@ -388,7 +402,9 @@ class BrowserBridge:
             }
 
         try:
-            return await self._with_page_session_via_raw_cdp(ws_endpoint, _handler, create_new_target=True)
+            return await self._with_page_session_via_raw_cdp(
+                ws_endpoint, _handler, create_new_target=True
+            )
         except Exception as exc:
             logger.warning("browser_action_probe_raw_failed", error=repr(exc), url=url)
             return {
@@ -404,7 +420,9 @@ class BrowserBridge:
         async def _handler(conn: RawCDPConnection, session_id: str, _target_id: str) -> str:
             await conn.call("Page.navigate", {"url": url}, session_id=session_id)
             try:
-                await conn.wait_for_event("Page.loadEventFired", session_id=session_id, timeout_sec=6.0)
+                await conn.wait_for_event(
+                    "Page.loadEventFired", session_id=session_id, timeout_sec=6.0
+                )
             except Exception:
                 pass
             href_payload = await conn.call(
@@ -451,8 +469,12 @@ class BrowserBridge:
     async def _screenshot_via_raw_cdp(self, ws_endpoint: str) -> bytes | None:
         """Делает PNG-скриншот активной вкладки через raw CDP."""
 
-        async def _handler(conn: RawCDPConnection, session_id: str, _target_id: str) -> bytes | None:
-            payload = await conn.call("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
+        async def _handler(
+            conn: RawCDPConnection, session_id: str, _target_id: str
+        ) -> bytes | None:
+            payload = await conn.call(
+                "Page.captureScreenshot", {"format": "png"}, session_id=session_id
+            )
             data = str(payload.get("data") or "")
             if not data:
                 return None
@@ -538,11 +560,21 @@ class BrowserBridge:
                         try:
                             await self._list_tabs_via_raw_cdp(fresh)
                             self._prefer_raw_cdp = True
-                            logger.info("browser_bridge_raw_cdp_connected_after_refresh", ws_endpoint=fresh)
+                            logger.info(
+                                "browser_bridge_raw_cdp_connected_after_refresh", ws_endpoint=fresh
+                            )
                             return True
                         except Exception as retry_exc:
-                            logger.warning("browser_bridge_raw_cdp_probe_failed_after_refresh", ws_endpoint=fresh, error=repr(retry_exc))
-                logger.warning("browser_bridge_raw_cdp_probe_failed", ws_endpoint=ws_endpoint, error=repr(raw_exc))
+                            logger.warning(
+                                "browser_bridge_raw_cdp_probe_failed_after_refresh",
+                                ws_endpoint=fresh,
+                                error=repr(retry_exc),
+                            )
+                logger.warning(
+                    "browser_bridge_raw_cdp_probe_failed",
+                    ws_endpoint=ws_endpoint,
+                    error=repr(raw_exc),
+                )
                 return False
 
     async def _active_page(self):
@@ -645,7 +677,9 @@ class BrowserBridge:
                             return await self._screenshot_via_raw_cdp(fresh)
                         except Exception:
                             pass
-                logger.warning("browser_screenshot_failed", error=repr(exc), raw_error=repr(raw_exc))
+                logger.warning(
+                    "browser_screenshot_failed", error=repr(exc), raw_error=repr(raw_exc)
+                )
                 return None
 
     async def get_page_text(self) -> str:
@@ -835,6 +869,7 @@ class BrowserBridge:
         Возвращает итоговый текст.
         """
         import time
+
         page = await self._active_page()
         last_text = ""
         last_change_time = time.monotonic()
@@ -846,7 +881,9 @@ class BrowserBridge:
         while True:
             elapsed = time.monotonic() - start_time
             if elapsed > max_sec:
-                logger.warning("browser_wait_stable_text_timeout", selector=selector, elapsed=elapsed)
+                logger.warning(
+                    "browser_wait_stable_text_timeout", selector=selector, elapsed=elapsed
+                )
                 break
             await asyncio.sleep(poll_sec)
             try:
@@ -899,12 +936,30 @@ class BrowserBridge:
         try:
             attached = await asyncio.wait_for(self.is_attached(), timeout=timeout_sec)
         except asyncio.TimeoutError:
-            return {"ok": False, "blocked": False, "error": f"health_check timeout {timeout_sec}s", "tab_count": 0, "cdp_url": self.CDP_URL}
+            return {
+                "ok": False,
+                "blocked": False,
+                "error": f"health_check timeout {timeout_sec}s",
+                "tab_count": 0,
+                "cdp_url": self.CDP_URL,
+            }
         except Exception as exc:
-            return {"ok": False, "blocked": False, "error": repr(exc), "tab_count": 0, "cdp_url": self.CDP_URL}
+            return {
+                "ok": False,
+                "blocked": False,
+                "error": repr(exc),
+                "tab_count": 0,
+                "cdp_url": self.CDP_URL,
+            }
 
         if not attached:
-            return {"ok": False, "blocked": True, "error": "CDP not reachable", "tab_count": 0, "cdp_url": self.CDP_URL}
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": "CDP not reachable",
+                "tab_count": 0,
+                "cdp_url": self.CDP_URL,
+            }
 
         tab_count = 0
         try:
@@ -913,7 +968,13 @@ class BrowserBridge:
         except Exception:
             pass
 
-        return {"ok": True, "blocked": False, "error": "", "tab_count": tab_count, "cdp_url": self.CDP_URL}
+        return {
+            "ok": True,
+            "blocked": False,
+            "error": "",
+            "tab_count": tab_count,
+            "cdp_url": self.CDP_URL,
+        }
 
 
 browser_bridge = BrowserBridge()

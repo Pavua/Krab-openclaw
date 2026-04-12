@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import src.handlers.command_handlers as command_handlers_module
 import src.skills.mercadona as mercadona_module
 from src.core.exceptions import UserInputError
 from src.handlers.command_handlers import handle_shop

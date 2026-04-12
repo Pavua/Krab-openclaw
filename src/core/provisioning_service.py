@@ -241,7 +241,9 @@ class ProvisioningService:
         if not isinstance(current_items, list):
             current_items = []
 
-        existing = next((item for item in current_items if item.get("name") == draft.get("name")), None)
+        existing = next(
+            (item for item in current_items if item.get("name") == draft.get("name")), None
+        )
         candidate = self._draft_to_catalog_entry(draft)
 
         before_text = yaml.safe_dump(existing or {}, allow_unicode=True, sort_keys=False)

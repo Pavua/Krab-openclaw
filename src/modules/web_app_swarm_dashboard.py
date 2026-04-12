@@ -294,7 +294,7 @@ SWARM_DASHBOARD_HTML = """
             if (!dateString) return 'Никогда';
             const date = new Date(dateString);
             const diffSec = Math.floor((new Date() - date) / 1000);
-            
+
             if (diffSec < 60) return 'Только что';
             const diffMin = Math.floor(diffSec / 60);
             if (diffMin < 60) return `${diffMin} мин назад`;
@@ -341,7 +341,7 @@ SWARM_DASHBOARD_HTML = """
                 const data = teamsData[key] || { active: false, rounds_total: 0, last_round_at: null };
                 const card = document.createElement('div');
                 card.className = `team-card ${key === currentTeam ? 'selected' : ''}`;
-                
+
                 card.onclick = async () => {
                     currentTeam = key;
                     document.getElementById('selected-team-name').innerText = config.name;
@@ -405,9 +405,9 @@ SWARM_DASHBOARD_HTML = """
                 const item = document.createElement('div');
                 const isLong = entry.summary.length > 150;
                 const shortText = isLong ? entry.summary.substring(0, 150) + '...' : entry.summary;
-                
+
                 item.className = `memory-item ${isLong ? 'expandable' : ''}`;
-                
+
                 item.innerHTML = `
                     <div class="memory-header">
                         <div class="memory-topic">
@@ -436,7 +436,7 @@ SWARM_DASHBOARD_HTML = """
             const statusData = await fetchStatus();
             renderTeams(statusData.teams);
             renderStats(statusData);
-            
+
             const memoryData = await fetchMemory(currentTeam);
             renderMemory(memoryData);
 

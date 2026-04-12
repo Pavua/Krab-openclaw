@@ -21,7 +21,9 @@ import src.core.inbox_service as inbox_service_module
 from src.core.inbox_service import InboxService
 
 
-def test_default_state_path_uses_openclaw_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_default_state_path_uses_openclaw_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Inbox-state должен жить в per-account `~/.openclaw`, а не в shared repo."""
     monkeypatch.setattr(inbox_service_module.Path, "home", classmethod(lambda cls: tmp_path))
 
@@ -152,7 +154,9 @@ def test_resolve_approval_rejects_non_approval_item(tmp_path: Path) -> None:
     assert result["error"] == "inbox_item_not_approval"
 
 
-def test_incoming_owner_request_and_mention_update_summary_without_duplicates(tmp_path: Path) -> None:
+def test_incoming_owner_request_and_mention_update_summary_without_duplicates(
+    tmp_path: Path,
+) -> None:
     """Incoming request/mention должны попадать в отдельные summary buckets и не дублироваться по message id."""
     service = InboxService(state_path=tmp_path / "inbox.json")
 
@@ -279,7 +283,9 @@ def test_summary_marks_old_acked_items_as_stale_processing(tmp_path: Path) -> No
             continue
         item["updated_at_utc"] = stale_timestamp
         item.setdefault("metadata", {})["last_action_at_utc"] = stale_timestamp
-    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    service.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     summary = service.get_summary()
 
@@ -320,7 +326,9 @@ def test_summary_marks_old_open_items_as_stale_open(tmp_path: Path) -> None:
         if item["item_id"] != stale_request["item"]["item_id"]:
             continue
         item["updated_at_utc"] = stale_timestamp
-    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    service.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     summary = service.get_summary()
 
@@ -351,7 +359,9 @@ def test_list_stale_processing_items_returns_oldest_acked_items_with_age(tmp_pat
         chat_type="private",
     )
     service.set_item_status(first["item"]["item_id"], status="acked", actor="kraab", note="started")
-    service.set_item_status(second["item"]["item_id"], status="acked", actor="kraab", note="started")
+    service.set_item_status(
+        second["item"]["item_id"], status="acked", actor="kraab", note="started"
+    )
 
     state = service._load_state()
     old_timestamp = (
@@ -362,13 +372,17 @@ def test_list_stale_processing_items_returns_oldest_acked_items_with_age(tmp_pat
             continue
         item["updated_at_utc"] = old_timestamp
         item.setdefault("metadata", {})["last_action_at_utc"] = old_timestamp
-    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    service.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     items = service.list_stale_processing_items(kind="owner_request", limit=10)
 
     assert len(items) == 1
     assert items[0]["item_id"] == first["item"]["item_id"]
-    assert items[0]["processing_age_sec"] >= int(InboxService._stale_processing_after.total_seconds())
+    assert items[0]["processing_age_sec"] >= int(
+        InboxService._stale_processing_after.total_seconds()
+    )
 
 
 def test_list_stale_open_items_returns_oldest_open_items_with_age(tmp_path: Path) -> None:
@@ -397,7 +411,9 @@ def test_list_stale_open_items_returns_oldest_open_items_with_age(tmp_path: Path
         if item["item_id"] != first["item"]["item_id"]:
             continue
         item["updated_at_utc"] = old_timestamp
-    service.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    service.state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     items = service.list_stale_open_items(kind="owner_request", limit=10)
 
@@ -469,12 +485,17 @@ def test_record_incoming_owner_reply_persists_reply_and_recent_activity(tmp_path
     assert result["item"]["status"] == "done"
     assert result["item"]["metadata"]["reply_delivery_mode"] == "edit_and_reply"
     assert result["item"]["metadata"]["reply_message_ids"] == ["501", "502"]
-    assert workflow["recent_replied_requests"][0]["metadata"]["reply_excerpt"] == "Handoff truth синхронизирован."
+    assert (
+        workflow["recent_replied_requests"][0]["metadata"]["reply_excerpt"]
+        == "Handoff truth синхронизирован."
+    )
     assert workflow["recent_activity"][0]["action"] == "reply_sent"
     assert workflow["recent_activity"][0]["note"] == "llm_response_delivered"
 
 
-def test_record_relay_delivery_closes_relay_request_and_persists_delivery_metadata(tmp_path: Path) -> None:
+def test_record_relay_delivery_closes_relay_request_and_persists_delivery_metadata(
+    tmp_path: Path,
+) -> None:
     """Успешный relay в Saved Messages должен закрывать relay_request как выполненный."""
     service = InboxService(state_path=tmp_path / "inbox.json")
     service.upsert_item(
@@ -543,7 +564,9 @@ def test_set_item_status_persists_owner_resolution_metadata(tmp_path: Path) -> N
     assert workflow["recent_owner_actions"][0]["note"] == "smoke подтвержден"
 
 
-def test_escalate_owner_mention_to_followup_preserves_trace_and_links_source(tmp_path: Path) -> None:
+def test_escalate_owner_mention_to_followup_preserves_trace_and_links_source(
+    tmp_path: Path,
+) -> None:
     """Эскалация mention/request должна наследовать trace и оставлять link на исходный item."""
     service = InboxService(state_path=tmp_path / "inbox.json")
     source = service.upsert_incoming_owner_request(
@@ -587,10 +610,20 @@ def test_bulk_update_status_updates_multiple_items(tmp_path: Path) -> None:
     """bulk_update_status должен обновить все переданные items за один вызов."""
     service = InboxService(state_path=tmp_path / "inbox.json")
     id1 = service.upsert_item(
-        dedupe_key="bulk-1", kind="watch_alert", source="test", title="T1", body="b1", severity="info"
+        dedupe_key="bulk-1",
+        kind="watch_alert",
+        source="test",
+        title="T1",
+        body="b1",
+        severity="info",
     )["item"]["item_id"]
     id2 = service.upsert_item(
-        dedupe_key="bulk-2", kind="watch_alert", source="test", title="T2", body="b2", severity="info"
+        dedupe_key="bulk-2",
+        kind="watch_alert",
+        source="test",
+        title="T2",
+        body="b2",
+        severity="info",
     )["item"]["item_id"]
 
     result = service.bulk_update_status(
@@ -630,17 +663,33 @@ def test_bulk_update_status_empty_list_returns_ok(tmp_path: Path) -> None:
     assert result["success_count"] == 0
 
 
-def test_filter_by_age_returns_only_older_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_filter_by_age_returns_only_older_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """filter_by_age должен возвращать только items старше cutoff даты."""
     import src.core.inbox_service as inbox_module
 
     service = InboxService(state_path=tmp_path / "inbox.json")
 
     monkeypatch.setattr(inbox_module, "_now_utc_iso", lambda: "2026-01-15T00:00:00+00:00")
-    service.upsert_item(dedupe_key="old-item", kind="watch_alert", source="test", title="Old", body="old", severity="info")
+    service.upsert_item(
+        dedupe_key="old-item",
+        kind="watch_alert",
+        source="test",
+        title="Old",
+        body="old",
+        severity="info",
+    )
 
     monkeypatch.setattr(inbox_module, "_now_utc_iso", lambda: "2026-03-20T00:00:00+00:00")
-    service.upsert_item(dedupe_key="new-item", kind="watch_alert", source="test", title="New", body="new", severity="info")
+    service.upsert_item(
+        dedupe_key="new-item",
+        kind="watch_alert",
+        source="test",
+        title="New",
+        body="new",
+        severity="info",
+    )
 
     result = service.filter_by_age(older_than_date="2026-02-01T00:00:00+00:00")
 
@@ -651,7 +700,9 @@ def test_filter_by_age_returns_only_older_items(tmp_path: Path, monkeypatch: pyt
 def test_filter_by_age_invalid_date_returns_empty(tmp_path: Path) -> None:
     """filter_by_age с невалидной датой должен возвращать пустой список."""
     service = InboxService(state_path=tmp_path / "inbox.json")
-    service.upsert_item(dedupe_key="item-x", kind="watch_alert", source="test", title="X", body="x", severity="info")
+    service.upsert_item(
+        dedupe_key="item-x", kind="watch_alert", source="test", title="X", body="x", severity="info"
+    )
     result = service.filter_by_age(older_than_date="not-a-valid-date")
     assert result == []
 
@@ -659,11 +710,34 @@ def test_filter_by_age_invalid_date_returns_empty(tmp_path: Path) -> None:
 def test_archive_by_kind_cancels_matching_items(tmp_path: Path) -> None:
     """archive_by_kind должен отменить все items нужного kind, не трогая остальные."""
     service = InboxService(state_path=tmp_path / "inbox.json")
-    service.upsert_item(dedupe_key="req-1", kind="owner_request", source="test", title="R1", body="b", severity="info")
-    service.upsert_item(dedupe_key="req-2", kind="owner_request", source="test", title="R2", body="b", severity="info")
-    service.upsert_item(dedupe_key="alert-1", kind="watch_alert", source="test", title="A1", body="b", severity="info")
+    service.upsert_item(
+        dedupe_key="req-1",
+        kind="owner_request",
+        source="test",
+        title="R1",
+        body="b",
+        severity="info",
+    )
+    service.upsert_item(
+        dedupe_key="req-2",
+        kind="owner_request",
+        source="test",
+        title="R2",
+        body="b",
+        severity="info",
+    )
+    service.upsert_item(
+        dedupe_key="alert-1",
+        kind="watch_alert",
+        source="test",
+        title="A1",
+        body="b",
+        severity="info",
+    )
 
-    result = service.archive_by_kind(kind="owner_request", actor="system-cleanup", note="migration test")
+    result = service.archive_by_kind(
+        kind="owner_request", actor="system-cleanup", note="migration test"
+    )
 
     assert result["ok"] is True
     assert result["archived_count"] == 2
@@ -684,10 +758,20 @@ def test_list_items_open_filter_excludes_all_closed_statuses(tmp_path: Path) -> 
     """Фильтр status='open' должен исключать done, cancelled, approved, rejected."""
     service = InboxService(state_path=tmp_path / "inbox.json")
     open_id = service.upsert_item(
-        dedupe_key="open-item", kind="watch_alert", source="test", title="Open", body="b", severity="info"
+        dedupe_key="open-item",
+        kind="watch_alert",
+        source="test",
+        title="Open",
+        body="b",
+        severity="info",
     )["item"]["item_id"]
     close_id = service.upsert_item(
-        dedupe_key="done-item", kind="watch_alert", source="test", title="Done", body="b", severity="info"
+        dedupe_key="done-item",
+        kind="watch_alert",
+        source="test",
+        title="Done",
+        body="b",
+        severity="info",
     )["item"]["item_id"]
     service.set_item_status(close_id, status="done", actor="test")
 

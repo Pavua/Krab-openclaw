@@ -27,7 +27,6 @@ from typing import Any
 from .logger import get_logger
 from .operator_identity import build_trace_id, current_account_id, current_operator_id
 
-
 logger = get_logger(__name__)
 
 
@@ -79,7 +78,9 @@ class InboxItem:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "InboxItem":
         """Восстанавливает item из persisted JSON."""
-        identity_payload = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+        identity_payload = (
+            payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+        )
         return cls(
             item_id=str(payload.get("item_id") or ""),
             dedupe_key=str(payload.get("dedupe_key") or ""),
@@ -207,7 +208,11 @@ class InboxService:
         """
         normalized = InboxService._normalize_metadata(metadata)
         events_raw = normalized.get("workflow_events")
-        events = [dict(row) for row in events_raw if isinstance(row, dict)] if isinstance(events_raw, list) else []
+        events = (
+            [dict(row) for row in events_raw if isinstance(row, dict)]
+            if isinstance(events_raw, list)
+            else []
+        )
         event = {
             "ts_utc": _now_utc_iso(),
             "action": str(action or "updated").strip().lower() or "updated",
@@ -288,7 +293,7 @@ class InboxService:
     ) -> list[dict[str, Any]]:
         """
         Возвращает items старше указанной даты, отсортированные по created_at_utc (старые первыми).
-        
+
         Args:
             older_than_date: ISO timestamp для фильтрации (items старше этой даты)
             kind: Опциональный фильтр по типу item-а
@@ -297,27 +302,29 @@ class InboxService:
         """
         try:
             # Парсим ISO timestamp
-            cutoff_date = datetime.fromisoformat(str(older_than_date or "").strip().replace("Z", "+00:00"))
+            cutoff_date = datetime.fromisoformat(
+                str(older_than_date or "").strip().replace("Z", "+00:00")
+            )
         except (ValueError, TypeError) as exc:
             logger.warning("filter_by_age_invalid_date", date=older_than_date, error=str(exc))
             return []
-        
+
         normalized_kind = str(kind or "").strip().lower()
         normalized_status = str(status or "").strip().lower()
-        
+
         # Загружаем все items и фильтруем
         all_items = self._load_items()
         filtered_items: list[InboxItem] = []
-        
+
         for item in all_items:
             try:
                 # Парсим created_at_utc item-а
                 item_date = datetime.fromisoformat(item.created_at_utc.replace("Z", "+00:00"))
-                
+
                 # Проверяем, что item старше cutoff_date
                 if item_date >= cutoff_date:
                     continue
-                    
+
                 # Применяем фильтры kind и status
                 if normalized_kind and item.kind != normalized_kind:
                     continue
@@ -325,18 +332,23 @@ class InboxService:
                     continue
                 elif normalized_status and item.status != normalized_status:
                     continue
-                    
+
                 filtered_items.append(item)
-                
+
             except (ValueError, TypeError) as exc:
-                logger.warning("filter_by_age_invalid_item_date", item_id=item.item_id, date=item.created_at_utc, error=str(exc))
+                logger.warning(
+                    "filter_by_age_invalid_item_date",
+                    item_id=item.item_id,
+                    date=item.created_at_utc,
+                    error=str(exc),
+                )
                 continue
-        
+
         # Сортируем по created_at_utc (старые первыми)
         filtered_items.sort(key=lambda item: item.created_at_utc)
-        
+
         # Применяем лимит и возвращаем как dict
-        return [item.to_dict() for item in filtered_items[:max(1, int(limit or 50))]]
+        return [item.to_dict() for item in filtered_items[: max(1, int(limit or 50))]]
 
     def list_stale_processing_items(
         self,
@@ -414,31 +426,31 @@ class InboxService:
     ) -> dict[str, Any]:
         """
         Архивирует все items указанного kind, устанавливая статус "cancelled".
-        
+
         Args:
             kind: Тип items для архивирования
             actor: Актор для записи в workflow events (по умолчанию "system-cleanup")
             note: Опциональная заметка для workflow event
-            
+
         Returns:
             dict с archived_count и item_ids списком
         """
         normalized_kind = str(kind or "").strip().lower()
         if not normalized_kind:
             return {"ok": False, "error": "inbox_empty_kind", "archived_count": 0, "item_ids": []}
-        
+
         normalized_actor = str(actor or "system-cleanup").strip().lower() or "system-cleanup"
         items = self._load_items()
         archived_items: list[InboxItem] = []
         archived_ids: list[str] = []
-        
+
         # Находим все items указанного kind
         for item in items:
             if item.kind == normalized_kind:
                 # Обновляем статус на "cancelled"
                 item.status = "cancelled"
                 item.updated_at_utc = _now_utc_iso()
-                
+
                 # Обновляем metadata с resolution информацией
                 metadata = self._normalize_metadata(item.metadata)
                 metadata["last_action_actor"] = normalized_actor
@@ -446,11 +458,11 @@ class InboxService:
                 metadata["last_action_at_utc"] = item.updated_at_utc
                 metadata["resolved_at_utc"] = item.updated_at_utc
                 metadata["resolved_by"] = normalized_actor
-                
+
                 if note:
                     metadata["last_action_note"] = str(note).strip()
                     metadata["resolution_note"] = str(note).strip()
-                
+
                 # Добавляем workflow event
                 item.metadata = self._append_workflow_event(
                     metadata,
@@ -459,14 +471,14 @@ class InboxService:
                     status="cancelled",
                     note=note,
                 )
-                
+
                 archived_items.append(item)
                 archived_ids.append(item.item_id)
-        
+
         # Сохраняем обновленные items
         if archived_items:
             self._save_items(items)
-        
+
         return {
             "ok": True,
             "archived_count": len(archived_items),
@@ -484,22 +496,24 @@ class InboxService:
     ) -> dict[str, Any]:
         """
         Обновляет статус для множества items в одной операции.
-        
+
         Args:
             item_ids: Список ID items для обновления
             status: Новый статус для всех items
             actor: Актор для записи в workflow events
             note: Опциональная заметка для workflow events
             max_batch_size: Максимальный размер batch (по умолчанию 50)
-            
+
         Returns:
             dict с success_count, error_count и details списком
         """
         normalized_status = self._normalize_status(status)
         normalized_actor = str(actor or "owner").strip().lower() or "owner"
-        
+
         # Валидируем размер batch
-        ids_list = [str(item_id or "").strip() for item_id in (item_ids or []) if str(item_id or "").strip()]
+        ids_list = [
+            str(item_id or "").strip() for item_id in (item_ids or []) if str(item_id or "").strip()
+        ]
         if len(ids_list) > max_batch_size:
             return {
                 "ok": False,
@@ -508,7 +522,7 @@ class InboxService:
                 "error_count": len(ids_list),
                 "details": [],
             }
-        
+
         if not ids_list:
             return {
                 "ok": True,
@@ -516,10 +530,10 @@ class InboxService:
                 "error_count": 0,
                 "details": [],
             }
-        
+
         items = self._load_items()
         items_by_id = {item.item_id: item for item in items}
-        
+
         # Валидируем что все items существуют
         missing_ids = [item_id for item_id in ids_list if item_id not in items_by_id]
         if missing_ids:
@@ -530,37 +544,37 @@ class InboxService:
                 "error_count": len(ids_list),
                 "details": [{"item_id": item_id, "error": "not_found"} for item_id in missing_ids],
             }
-        
+
         # Обновляем все items
         success_count = 0
         error_count = 0
         details = []
         now_iso = _now_utc_iso()
-        
+
         for item_id in ids_list:
             try:
                 item = items_by_id[item_id]
-                
+
                 # Обновляем статус и timestamp
                 item.status = normalized_status
                 item.updated_at_utc = now_iso
-                
+
                 # Обновляем metadata
                 metadata = self._normalize_metadata(item.metadata)
                 metadata["last_action_actor"] = normalized_actor
                 metadata["last_action_status"] = normalized_status
                 metadata["last_action_at_utc"] = now_iso
-                
+
                 if note:
                     metadata["last_action_note"] = str(note).strip()
-                
+
                 # Для закрытых статусов записываем resolution metadata
                 if normalized_status in self._closed_statuses:
                     metadata["resolved_at_utc"] = now_iso
                     metadata["resolved_by"] = normalized_actor
                     if note:
                         metadata["resolution_note"] = str(note).strip()
-                
+
                 # Добавляем workflow event
                 item.metadata = self._append_workflow_event(
                     metadata,
@@ -569,19 +583,19 @@ class InboxService:
                     status=normalized_status,
                     note=note,
                 )
-                
+
                 success_count += 1
                 details.append({"item_id": item_id, "status": "updated"})
-                
+
             except Exception as exc:
                 logger.warning("bulk_update_status_item_failed", item_id=item_id, error=str(exc))
                 error_count += 1
                 details.append({"item_id": item_id, "error": str(exc)})
-        
+
         # Сохраняем обновленные items
         if success_count > 0:
             self._save_items(items)
-        
+
         return {
             "ok": error_count == 0,
             "success_count": success_count,
@@ -592,8 +606,12 @@ class InboxService:
     def _build_summary(self, items: list[InboxItem]) -> dict[str, Any]:
         """Собирает owner-facing summary из уже загруженного набора item-ов."""
         open_items = [item for item in items if item.status in self._open_statuses]
-        fresh_open_items = [item for item in open_items if item.status == "open" and not self._is_open_stale(item)]
-        stale_open_items = [item for item in open_items if item.status == "open" and self._is_open_stale(item)]
+        fresh_open_items = [
+            item for item in open_items if item.status == "open" and not self._is_open_stale(item)
+        ]
+        stale_open_items = [
+            item for item in open_items if item.status == "open" and self._is_open_stale(item)
+        ]
         acked_items = [item for item in open_items if item.status == "acked"]
         stale_acked_items = [item for item in acked_items if self._is_processing_stale(item)]
         warning_items = [item for item in open_items if item.severity in {"warning", "error"}]
@@ -603,16 +621,32 @@ class InboxService:
         approval_items = [item for item in open_items if item.kind == "approval_request"]
         owner_request_items = [item for item in open_items if item.kind == "owner_request"]
         owner_mention_items = [item for item in open_items if item.kind == "owner_mention"]
-        new_owner_request_items = [item for item in owner_request_items if item.status == "open" and not self._is_open_stale(item)]
+        new_owner_request_items = [
+            item
+            for item in owner_request_items
+            if item.status == "open" and not self._is_open_stale(item)
+        ]
         stale_open_owner_request_items = [
-            item for item in owner_request_items if item.status == "open" and self._is_open_stale(item)
+            item
+            for item in owner_request_items
+            if item.status == "open" and self._is_open_stale(item)
         ]
-        processing_owner_request_items = [item for item in owner_request_items if item.status == "acked"]
-        new_owner_mention_items = [item for item in owner_mention_items if item.status == "open" and not self._is_open_stale(item)]
+        processing_owner_request_items = [
+            item for item in owner_request_items if item.status == "acked"
+        ]
+        new_owner_mention_items = [
+            item
+            for item in owner_mention_items
+            if item.status == "open" and not self._is_open_stale(item)
+        ]
         stale_open_owner_mention_items = [
-            item for item in owner_mention_items if item.status == "open" and self._is_open_stale(item)
+            item
+            for item in owner_mention_items
+            if item.status == "open" and self._is_open_stale(item)
         ]
-        processing_owner_mention_items = [item for item in owner_mention_items if item.status == "acked"]
+        processing_owner_mention_items = [
+            item for item in owner_mention_items if item.status == "acked"
+        ]
         stale_owner_request_items = [
             item for item in processing_owner_request_items if self._is_processing_stale(item)
         ]
@@ -753,10 +787,14 @@ class InboxService:
             selected_metadata["source_excerpt"] = source_excerpt[:140]
         reply_message_ids = metadata.get("reply_message_ids")
         if isinstance(reply_message_ids, list) and reply_message_ids:
-            selected_metadata["reply_message_ids"] = [str(row).strip() for row in reply_message_ids if str(row).strip()]
+            selected_metadata["reply_message_ids"] = [
+                str(row).strip() for row in reply_message_ids if str(row).strip()
+            ]
         followup_ids = metadata.get("followup_ids")
         if isinstance(followup_ids, list) and followup_ids:
-            selected_metadata["followup_ids"] = [str(row).strip() for row in followup_ids if str(row).strip()]
+            selected_metadata["followup_ids"] = [
+                str(row).strip() for row in followup_ids if str(row).strip()
+            ]
         if item.kind == "owner_task" and item.dedupe_key.startswith("task:"):
             task_key = str(item.dedupe_key.partition(":")[2] or "").strip()
             if task_key:
@@ -783,7 +821,8 @@ class InboxService:
             "metadata": selected_metadata,
             "last_event": (
                 dict(item.metadata.get("workflow_events")[0])
-                if isinstance(item.metadata.get("workflow_events"), list) and item.metadata.get("workflow_events")
+                if isinstance(item.metadata.get("workflow_events"), list)
+                and item.metadata.get("workflow_events")
                 else None
             ),
         }
@@ -814,9 +853,7 @@ class InboxService:
             return [self._compact_item(item) for item in rows[:bucket_limit]]
 
         attention_items = [
-            self._compact_item(item)
-            for item in open_items
-            if item.severity in {"warning", "error"}
+            self._compact_item(item) for item in open_items if item.severity in {"warning", "error"}
         ][:bucket_limit]
 
         approval_history = _bucket(kind="approval_request", statuses={"approved", "rejected"})
@@ -828,7 +865,8 @@ class InboxService:
         escalated_owner_items = [
             self._compact_item(item)
             for item in items
-            if item.kind in {"owner_request", "owner_mention"} and int((item.metadata or {}).get("followup_count", 0) or 0) > 0
+            if item.kind in {"owner_request", "owner_mention"}
+            and int((item.metadata or {}).get("followup_count", 0) or 0) > 0
         ][:bucket_limit]
         linked_followups = [
             self._compact_item(item)
@@ -838,7 +876,8 @@ class InboxService:
         replied_requests = [
             self._compact_item(item)
             for item in items
-            if item.kind in {"owner_request", "owner_mention"} and str((item.metadata or {}).get("reply_sent_at_utc") or "").strip()
+            if item.kind in {"owner_request", "owner_mention"}
+            and str((item.metadata or {}).get("reply_sent_at_utc") or "").strip()
         ][:bucket_limit]
         trace_index: list[dict[str, Any]] = []
         seen_traces: set[str] = set()
@@ -1035,7 +1074,8 @@ class InboxService:
         metadata.update(self._normalize_metadata(metadata_updates))
         item.metadata = self._append_workflow_event(
             metadata,
-            action=str(event_action or normalized_status or "status_changed").strip().lower() or "status_changed",
+            action=str(event_action or normalized_status or "status_changed").strip().lower()
+            or "status_changed",
             actor=normalized_actor,
             status=normalized_status,
             note=note,
@@ -1079,7 +1119,8 @@ class InboxService:
         metadata.update(self._normalize_metadata(metadata_updates))
         item.metadata = self._append_workflow_event(
             metadata,
-            action=str(event_action or normalized_status or "status_changed").strip().lower() or "status_changed",
+            action=str(event_action or normalized_status or "status_changed").strip().lower()
+            or "status_changed",
             actor=normalized_actor,
             status=normalized_status,
             note=note,
@@ -1131,7 +1172,9 @@ class InboxService:
 
     def resolve_reminder(self, reminder_id: str, *, status: str = "done") -> dict[str, Any]:
         """Закрывает inbox item reminder-а."""
-        return self.set_status_by_dedupe(f"reminder:{str(reminder_id or '').strip()}", status=status)
+        return self.set_status_by_dedupe(
+            f"reminder:{str(reminder_id or '').strip()}", status=status
+        )
 
     def upsert_owner_task(
         self,
@@ -1182,8 +1225,14 @@ class InboxService:
         payload.setdefault("source_kind", source_item.kind)
         payload.setdefault("source_trace_id", source_item.identity.trace_id)
         payload.setdefault("source_title", source_item.title)
-        payload.setdefault("source_excerpt", str(source_meta.get("text_excerpt") or source_item.title or "").strip()[:500])
-        payload.setdefault("source_chat_id", str(source_meta.get("chat_id") or source_item.identity.channel_id or "").strip())
+        payload.setdefault(
+            "source_excerpt",
+            str(source_meta.get("text_excerpt") or source_item.title or "").strip()[:500],
+        )
+        payload.setdefault(
+            "source_chat_id",
+            str(source_meta.get("chat_id") or source_item.identity.channel_id or "").strip(),
+        )
         payload.setdefault("source_message_id", str(source_meta.get("message_id") or "").strip())
         return payload
 
@@ -1205,13 +1254,19 @@ class InboxService:
         if source_item is None:
             return {"ok": False, "error": "inbox_item_not_found"}
         metadata = self._normalize_metadata(source_item.metadata)
-        followup_ids = [str(row).strip() for row in metadata.get("followup_ids", []) if str(row).strip()] if isinstance(metadata.get("followup_ids"), list) else []
+        followup_ids = (
+            [str(row).strip() for row in metadata.get("followup_ids", []) if str(row).strip()]
+            if isinstance(metadata.get("followup_ids"), list)
+            else []
+        )
         normalized_followup_id = str(followup_item_id or "").strip()
         already_linked = normalized_followup_id in followup_ids if normalized_followup_id else False
         if normalized_followup_id and normalized_followup_id not in followup_ids:
             followup_ids.insert(0, normalized_followup_id)
         metadata["followup_ids"] = followup_ids[:8]
-        metadata["followup_count"] = int(metadata.get("followup_count", 0) or 0) + (0 if already_linked else 1)
+        metadata["followup_count"] = int(metadata.get("followup_count", 0) or 0) + (
+            0 if already_linked else 1
+        )
         metadata["followup_latest_item_id"] = normalized_followup_id
         metadata["followup_latest_kind"] = str(followup_kind or "").strip().lower()
         metadata["followup_latest_status"] = str(followup_status or "").strip().lower()
@@ -1341,7 +1396,8 @@ class InboxService:
             identity=self.build_identity(
                 channel_id=channel_id,
                 team_id=team_id or "owner",
-                trace_id=str(trace_id or "").strip() or build_trace_id("approval", request_key or title, requested_action),
+                trace_id=str(trace_id or "").strip()
+                or build_trace_id("approval", request_key or title, requested_action),
                 approval_scope=str(approval_scope or "owner").strip() or "owner",
             ),
             metadata=payload_metadata,
@@ -1461,7 +1517,9 @@ class InboxService:
         relay_ids = [str(row).strip() for row in (relay_message_ids or []) if str(row).strip()]
         metadata = self._normalize_metadata(item.metadata)
         metadata["relay_delivered_at_utc"] = _now_utc_iso()
-        metadata["relay_delivery_mode"] = str(delivery_mode or "saved_messages").strip().lower() or "saved_messages"
+        metadata["relay_delivery_mode"] = (
+            str(delivery_mode or "saved_messages").strip().lower() or "saved_messages"
+        )
         metadata["relay_delivery_excerpt"] = excerpt[:500]
         metadata["relay_actor"] = str(actor or "kraab").strip().lower() or "kraab"
         metadata["relay_message_ids"] = relay_ids
@@ -1519,7 +1577,11 @@ class InboxService:
         normalized_message_id = str(message_id or "").strip()
         excerpt = str(text or "").strip()
         kind = "owner_request" if normalized_chat_type == "private" else "owner_mention"
-        title = "Входящий owner request" if kind == "owner_request" else "Упоминание / owner request в чате"
+        title = (
+            "Входящий owner request"
+            if kind == "owner_request"
+            else "Упоминание / owner request в чате"
+        )
         body_lines = [
             f"Чат: `{normalized_chat_id}`",
             f"Сообщение: `{normalized_message_id}`",

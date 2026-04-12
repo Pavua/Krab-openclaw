@@ -48,6 +48,7 @@ class TestResolveMainWorkspaceDir:
     def test_config_attribute_used_when_no_arg(self, tmp_path):
         """Если config.OPENCLAW_MAIN_WORKSPACE_DIR задан, используем его."""
         from src import config as config_module
+
         with patch.object(config_module.config, "OPENCLAW_MAIN_WORKSPACE_DIR", tmp_path):
             result = resolve_main_workspace_dir()
         assert result == tmp_path

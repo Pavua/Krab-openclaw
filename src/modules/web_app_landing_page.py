@@ -69,7 +69,7 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
         }
 
         .nav-bar a:hover { color: var(--text); }
-        
+
         .nav-bar a.active {
             color: var(--accent);
             border-bottom: 2px solid var(--accent);
@@ -247,19 +247,19 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
                 <h2>Runtime Stats</h2>
                 <p>Лимиты, кэши, голос, инбокс<br>и маршрутизация запросов.</p>
             </a>
-            
+
             <a href="/inbox" class="card" style="animation-delay: 0.2s;">
                 <div class="emoji">📥</div>
                 <h2>Inbox</h2>
                 <p>Входящие элементы с фильтрами<br>и расширяемыми карточками.</p>
             </a>
-            
+
             <a href="/costs" class="card" style="animation-delay: 0.3s;">
                 <div class="emoji">💰</div>
                 <h2>Costs</h2>
                 <p>Бюджет, разбивка по моделям<br>и метрики использования.</p>
             </a>
-            
+
             <a href="/swarm" class="card" style="animation-delay: 0.4s;">
                 <div class="emoji">🐝</div>
                 <h2>Swarm</h2>
@@ -305,19 +305,19 @@ LANDING_PAGE_HTML = """<!DOCTYPE html>
             if (data.last_runtime_route && data.last_runtime_route.model) {
                 document.getElementById('model-name').textContent = data.last_runtime_route.model;
             }
-            
+
             if (data.telegram) {
                 document.getElementById('stat-tg').textContent = data.telegram.session_state || 'unknown';
             }
-            
+
             if (data.inbox_summary) {
                 document.getElementById('stat-inbox').textContent = data.inbox_summary.open_items ?? 0;
             }
-            
+
             if (data.voice) {
                 document.getElementById('stat-voice').textContent = data.voice.enabled ? 'ВКЛ' : 'ВЫКЛ';
             }
-            
+
             if (data.scheduler) {
                 document.getElementById('stat-sched').textContent = data.scheduler.enabled ? 'ВКЛ' : 'ВЫКЛ';
             }

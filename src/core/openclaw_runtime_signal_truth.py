@@ -13,21 +13,19 @@ from __future__ import annotations
 
 import glob
 import json
-import os
 import re
 import time
 from pathlib import Path
 from typing import Any
 
-
 _LOG_TIMESTAMP_RE = re.compile(
-    r'^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))'
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))"
 )
 _MODEL_FALLBACK_RE = re.compile(
     r'^(?P<ts>\S+)\s+\[model-fallback\]\s+Model "(?P<requested>[^"]+)"[\s\S]*?Fell back to "(?P<fallback>[^"]+)"\.'
 )
 _LANE_TASK_ERROR_RE = re.compile(
-    r'^(?P<ts>\S+)\s+\[diagnostic\]\s+lane task error:\s+lane=session:agent:main:openai:(?P<session>[a-z0-9-]+)\s+durationMs='
+    r"^(?P<ts>\S+)\s+\[diagnostic\]\s+lane task error:\s+lane=session:agent:main:openai:(?P<session>[a-z0-9-]+)\s+durationMs="
 )
 
 
@@ -56,6 +54,7 @@ def _session_updated_at_epoch(session_meta: dict[str, Any]) -> float:
         if isinstance(raw, str):
             try:
                 import datetime
+
                 dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
                 return dt.timestamp()
             except Exception:
@@ -96,6 +95,7 @@ def parse_gateway_log_epoch(line: str) -> float | None:
         return None
     try:
         import datetime
+
         ts = m.group("ts")
         dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
         return dt.timestamp()
@@ -182,7 +182,7 @@ def broken_models_from_signal_log(gateway_log_path: Path) -> set[str]:
     lines = recent_gateway_log_lines(gateway_log_path)
     broken: set[str] = set()
     not_found_re = re.compile(r'Model "([^"]+)" not found')
-    not_exist_re = re.compile(r'model `([^`]+)` does not exist')
+    not_exist_re = re.compile(r"model `([^`]+)` does not exist")
     for line in lines:
         for m in not_found_re.finditer(line):
             broken.add(m.group(1))
@@ -201,7 +201,7 @@ def runtime_auth_failed_providers_from_signal_log(
         return set()
     lines = recent_gateway_log_lines(gateway_log_path)
     failed: set[str] = set()
-    scope_re = re.compile(r'runtime_missing_scope_model_request\s+model=([^\s]+)')
+    scope_re = re.compile(r"runtime_missing_scope_model_request\s+model=([^\s]+)")
     for line in lines:
         for m in scope_re.finditer(line):
             provider = provider_from_model(m.group(1))
@@ -288,5 +288,7 @@ def resolve_probe_runtime_truth(
         except Exception:
             pass
 
-    result["reason"] = "signal_log_unavailable" if not gateway_log_path else "requested_model_confirmed"
+    result["reason"] = (
+        "signal_log_unavailable" if not gateway_log_path else "requested_model_confirmed"
+    )
     return result

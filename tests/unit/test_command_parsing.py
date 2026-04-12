@@ -1,13 +1,14 @@
+import os
+import sys
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock
-import sys
-import os
 
 # Add src to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.userbot_bridge import KraabUserbot
+
 
 class TestCommandParsing:
     @pytest.fixture
@@ -36,7 +37,7 @@ class TestCommandParsing:
         message.text = "!write file.txt content here"
         args = bot._get_command_args(message)
         assert args == "file.txt content here"
-        
+
     def test_get_command_args_with_prefix(self, bot):
         """Test command with different prefix"""
         message = MagicMock()
@@ -49,11 +50,11 @@ class TestCommandParsing:
         # We need to mock config
         with pytest.MonkeyPatch.context() as m:
             # Mock config.TRIGGER_PREFIXES
-             bot.voice_mode = False # attribute needed
-             pass
+            bot.voice_mode = False  # attribute needed
+            pass
 
         # Since _get_clean_text depends on config, and strict mocking is hard without importing config,
-        # we rely on the implementation details. 
+        # we rely on the implementation details.
         # Actually _get_clean_text uses config.TRIGGER_PREFIXES.
         # For now let's focus on _get_command_args which is pure logic.
         pass

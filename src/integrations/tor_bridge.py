@@ -17,6 +17,7 @@ Tor Bridge — SOCKS5 proxy через локальный Tor daemon.
 - .onion сайты нестабильны
 - DNS resolution через Tor (не локально) — для этого нужен socks5h://
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,7 +48,9 @@ def build_tor_client(
         proxy=proxy_url,
         timeout=httpx.Timeout(connect=15.0, read=timeout, write=15.0, pool=15.0),
         follow_redirects=True,
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0"},
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0"
+        },
     )
 
 
@@ -102,6 +105,7 @@ async def get_tor_ip(socks_port: int = 9050) -> str | None:
     result = await tor_fetch(_HEALTH_CHECK_URL, socks_port=socks_port, timeout=10.0)
     if result.get("ok") and result.get("status") == 200:
         import json
+
         try:
             data = json.loads(result["text"])
             return str(data.get("IP", ""))

@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -48,13 +47,15 @@ class TestParseInterval:
 
 class TestRecurringJob:
     def test_from_dict(self):
-        job = RecurringJob.from_dict({
-            "job_id": "abc123",
-            "team": "traders",
-            "topic": "BTC",
-            "interval_sec": 3600,
-            "total_runs": 5,
-        })
+        job = RecurringJob.from_dict(
+            {
+                "job_id": "abc123",
+                "team": "traders",
+                "topic": "BTC",
+                "interval_sec": 3600,
+                "total_runs": 5,
+            }
+        )
         assert job.job_id == "abc123"
         assert job.team == "traders"
         assert job.total_runs == 5

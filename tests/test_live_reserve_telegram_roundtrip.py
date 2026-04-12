@@ -12,7 +12,9 @@ from types import SimpleNamespace
 
 
 def _load_module():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "live_reserve_telegram_roundtrip.py"
+    script_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "live_reserve_telegram_roundtrip.py"
+    )
     spec = importlib.util.spec_from_file_location("live_reserve_telegram_roundtrip", script_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -37,10 +39,13 @@ def test_normalize_bot_username_strips_prefix_and_spaces():
 
 def test_reply_contains_expected_marker_matches_case_insensitively():
     module = _load_module()
-    assert module._reply_contains_expected_marker(
-        "В этом диалоге отвечает reserve Telegram Bot.",
-        ("reserve telegram bot",),
-    ) is True
+    assert (
+        module._reply_contains_expected_marker(
+            "В этом диалоге отвечает reserve Telegram Bot.",
+            ("reserve telegram bot",),
+        )
+        is True
+    )
 
 
 def test_find_bot_reply_ignores_older_and_non_bot_messages():

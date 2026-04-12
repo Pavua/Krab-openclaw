@@ -36,13 +36,13 @@ from .core.exceptions import ProviderAuthError, ProviderError
 from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.lm_studio_health import is_lm_studio_available
 from .core.logger import get_logger
-from .core.openclaw_secrets_runtime import (
-    get_openclaw_cli_runtime_status,
-    reload_openclaw_secrets,
-)
 from .core.openclaw_runtime_models import (
     get_runtime_fallback_models,
     get_runtime_primary_model,
+)
+from .core.openclaw_secrets_runtime import (
+    get_openclaw_cli_runtime_status,
+    reload_openclaw_secrets,
 )
 from .core.routing_errors import RouterError, RouterQuotaError
 
@@ -120,7 +120,9 @@ class OpenClawClient:
         # doctor --fix при каждом старте Краба может ротировать gateway token,
         # поэтому .env может устареть — runtime openclaw.json всегда актуальнее.
         self._sync_token_from_runtime_on_init()
-        self._openclaw_sessions_index_path = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
+        self._openclaw_sessions_index_path = (
+            Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
+        )
         self._gateway_log_path = Path(getattr(config, "BASE_DIR", Path.cwd())) / "openclaw.log"
 
         self.gemini_tiers = {
@@ -157,7 +159,9 @@ class OpenClawClient:
             payload = json.loads(cfg_path.read_text(encoding="utf-8"))
             gateway = payload.get("gateway", {}) if isinstance(payload, dict) else {}
             auth = gateway.get("auth", {}) if isinstance(gateway, dict) else {}
-            runtime_token = str(auth.get("token", "") or "").strip() if isinstance(auth, dict) else ""
+            runtime_token = (
+                str(auth.get("token", "") or "").strip() if isinstance(auth, dict) else ""
+            )
             if runtime_token and runtime_token != self.token:
                 self.token = runtime_token
                 self._http_client.headers["Authorization"] = f"Bearer {runtime_token}"
@@ -315,7 +319,9 @@ class OpenClawClient:
         if force_cloud:
             return False
         if has_photo:
-            preferred_vision = str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
+            preferred_vision = (
+                str(getattr(config, "LOCAL_PREFERRED_VISION_MODEL", "") or "").strip().lower()
+            )
             if preferred_vision in {"", "auto"}:
                 return False
         return bool(getattr(config, "LOCAL_FALLBACK_ENABLED", True))
@@ -808,7 +814,9 @@ class OpenClawClient:
                 json.dumps(sanitized_messages, ensure_ascii=False),
                 ttl=HISTORY_CACHE_TTL,
             )
-            logger.info("history_cache_sanitized", chat_id=chat_id, messages=len(sanitized_messages))
+            logger.info(
+                "history_cache_sanitized", chat_id=chat_id, messages=len(sanitized_messages)
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("history_cache_sanitize_set_failed", chat_id=chat_id, error=str(exc))
 
@@ -829,10 +837,17 @@ class OpenClawClient:
         - char-budget учитывает размер сохранённого system prompt, иначе можно
           формально "обрезать" хвост и всё равно отправить слишком большой пакет.
         """
-        max_msgs = max(1, int(max_msgs if max_msgs is not None else getattr(config, "HISTORY_WINDOW_MESSAGES", 50)))
+        max_msgs = max(
+            1,
+            int(
+                max_msgs if max_msgs is not None else getattr(config, "HISTORY_WINDOW_MESSAGES", 50)
+            ),
+        )
         if max_chars is None:
             max_chars = getattr(config, "HISTORY_WINDOW_MAX_CHARS", None)
-        if len(messages) <= max_msgs and (max_chars is None or self._messages_size(messages) <= max_chars):
+        if len(messages) <= max_msgs and (
+            max_chars is None or self._messages_size(messages) <= max_chars
+        ):
             return messages
 
         out: list[dict[str, Any]] = []
@@ -904,7 +919,9 @@ class OpenClawClient:
             max_chars=max_chars,
             trim_reason=trim_reason,
         )
-        if len(trimmed) != len(messages) or self._messages_size(trimmed) != self._messages_size(messages):
+        if len(trimmed) != len(messages) or self._messages_size(trimmed) != self._messages_size(
+            messages
+        ):
             logger.info(
                 "local_route_history_budget_applied",
                 chat_id=chat_id,
@@ -1091,7 +1108,9 @@ class OpenClawClient:
             )
             return True
         except OSError as exc:
-            logger.error("openclaw_models_write_failed", error=str(exc), path=str(self._models_path))
+            logger.error(
+                "openclaw_models_write_failed", error=str(exc), path=str(self._models_path)
+            )
             return False
 
     def _set_google_key_in_models(self, key_value: str) -> bool:
@@ -1162,7 +1181,11 @@ class OpenClawClient:
             ("unauthorized", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
             ("401", AUTH_UNAUTHORIZED_CODE, "Ошибка авторизации облачного ключа"),
             ("timeout", "provider_timeout", "Таймаут облачного провайдера"),
-            ("an unknown error occurred", "gateway_unknown_error", "OpenClaw вернул неизвестную ошибку"),
+            (
+                "an unknown error occurred",
+                "gateway_unknown_error",
+                "OpenClaw вернул неизвестную ошибку",
+            ),
         ]
         for pattern, code, message in semantic_patterns:
             if pattern in low:
@@ -1210,14 +1233,22 @@ class OpenClawClient:
             return []
         max_msgs = max(1, int(getattr(config, "RETRY_HISTORY_WINDOW_MESSAGES", 8) or 8))
         max_chars = max(400, int(getattr(config, "RETRY_HISTORY_WINDOW_MAX_CHARS", 4000) or 4000))
-        per_message_max_chars = max(120, int(getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200))
+        per_message_max_chars = max(
+            120, int(getattr(config, "RETRY_MESSAGE_MAX_CHARS", 1200) or 1200)
+        )
 
-        system_message = messages_to_send[0] if messages_to_send and messages_to_send[0].get("role") == "system" else None
+        system_message = (
+            messages_to_send[0]
+            if messages_to_send and messages_to_send[0].get("role") == "system"
+            else None
+        )
         tail_source = messages_to_send[1:] if system_message else messages_to_send
         tail = tail_source[-max_msgs:]
         out: list[dict[str, Any]] = []
         if system_message:
-            out.append(self._compact_message_for_retry(system_message, max_chars=per_message_max_chars))
+            out.append(
+                self._compact_message_for_retry(system_message, max_chars=per_message_max_chars)
+            )
         out.extend(
             [
                 self._compact_message_for_retry(message, max_chars=per_message_max_chars)
@@ -1231,7 +1262,9 @@ class OpenClawClient:
             max_chars=max_chars,
             trim_reason="semantic_retry_window",
         )
-        if len(compacted) != len(messages_to_send) or self._messages_size(compacted) != self._messages_size(messages_to_send):
+        if len(compacted) != len(messages_to_send) or self._messages_size(
+            compacted
+        ) != self._messages_size(messages_to_send):
             logger.warning(
                 "retry_context_compacted",
                 before_count=len(messages_to_send),
@@ -1265,7 +1298,9 @@ class OpenClawClient:
         tail_len = max(8, limit - len(marker) - head_len)
         return f"{payload[:head_len]}{marker}{payload[-tail_len:]}"
 
-    def _compact_message_for_retry(self, message: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+    def _compact_message_for_retry(
+        self, message: dict[str, Any], *, max_chars: int
+    ) -> dict[str, Any]:
         """
         Поджимает отдельное сообщение для retry-бюджета.
 
@@ -1291,7 +1326,9 @@ class OpenClawClient:
                     compacted_parts.append(
                         {
                             **part,
-                            "text": self._truncate_middle_text(str(part.get("text", "") or ""), max_chars=max_chars),
+                            "text": self._truncate_middle_text(
+                                str(part.get("text", "") or ""), max_chars=max_chars
+                            ),
                         }
                     )
                     continue
@@ -1334,7 +1371,9 @@ class OpenClawClient:
 
             replacement = "\n".join(text_chunks).strip()
             if had_image:
-                replacement = (replacement + "\n" if replacement else "") + "[Изображение в контексте пропущено для текстовой модели]"
+                replacement = (
+                    replacement + "\n" if replacement else ""
+                ) + "[Изображение в контексте пропущено для текстовой модели]"
             cloned = dict(msg)
             cloned["content"] = replacement
             sanitized.append(cloned)
@@ -1404,8 +1443,12 @@ class OpenClawClient:
         """
         payload = usage or {}
         prompt_tokens = int(payload.get("prompt_tokens", payload.get("input_tokens", 0)) or 0)
-        completion_tokens = int(payload.get("completion_tokens", payload.get("output_tokens", 0)) or 0)
-        total_tokens = int(payload.get("total_tokens", 0) or 0) or (prompt_tokens + completion_tokens)
+        completion_tokens = int(
+            payload.get("completion_tokens", payload.get("output_tokens", 0)) or 0
+        )
+        total_tokens = int(payload.get("total_tokens", 0) or 0) or (
+            prompt_tokens + completion_tokens
+        )
         if prompt_tokens <= 0 and completion_tokens <= 0 and total_tokens <= 0:
             return None
         return {
@@ -1680,9 +1723,9 @@ class OpenClawClient:
                 payload["previous_response_id"] = prev_response_id
             if isinstance(max_output_tokens, int) and max_output_tokens > 0:
                 payload["max_output_tokens"] = max_output_tokens
-            reasoning_mode = str(
-                getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or ""
-            ).strip().lower()
+            reasoning_mode = (
+                str(getattr(config, "LM_STUDIO_NATIVE_REASONING_MODE", "off") or "").strip().lower()
+            )
             if reasoning_mode:
                 payload["reasoning"] = reasoning_mode
             response = await client.post("/api/v1/chat", json=payload)
@@ -1811,6 +1854,7 @@ class OpenClawClient:
         stream=False, напротив, работает корректно и возвращает полный JSON-ответ.
         """
         from .mcp_client import mcp_manager  # lazy import
+
         _dt = disable_tools or getattr(self, "_request_disable_tools", False)
         tools = [] if _dt else await mcp_manager.get_tool_manifest()
 
@@ -1918,11 +1962,11 @@ class OpenClawClient:
             data = response.json()
         except Exception:  # noqa: BLE001
             data = {}
-        
+
         normalized_usage = self._normalize_usage_snapshot(data.get("usage"))
         if normalized_usage:
             usage_snapshot = normalized_usage
-        
+
         choices = data.get("choices") or [{}]
         message_obj = choices[0].get("message") or {}
         full_response = message_obj.get("content", "") or ""
@@ -1939,13 +1983,18 @@ class OpenClawClient:
                 func = tc.get("function") or {}
                 func_name = func.get("name")
                 import json
+
                 try:
                     args = json.loads(func.get("arguments", "{}"))
                 except Exception:
                     args = {}
 
                 # Трекинг для Telegram progress notices
-                tool_entry = {"name": func_name, "status": "running", "started_at": time.monotonic()}
+                tool_entry = {
+                    "name": func_name,
+                    "status": "running",
+                    "started_at": time.monotonic(),
+                }
                 self._active_tool_calls.append(tool_entry)
 
                 logger.info("executing_mcp_tool", name=func_name, args=args)
@@ -1953,20 +2002,22 @@ class OpenClawClient:
                 tool_entry["status"] = "done"
 
                 # Добавляем результат выполнения инструмента
-                messages_to_send.append({
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "name": func_name,
-                    "content": str(tool_result)
-                })
-            
+                messages_to_send.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "name": func_name,
+                        "content": str(tool_result),
+                    }
+                )
+
             # Рекурсивный вызов для получения финального ответа после инструментов
             return await self._openclaw_completion_once(
                 model_id=model_id,
                 messages_to_send=messages_to_send,
                 max_output_tokens=max_output_tokens,
                 has_photo=has_photo,
-                allow_auth_retry=allow_auth_retry
+                allow_auth_retry=allow_auth_retry,
             )
 
         if not usage_snapshot and full_response.strip():
@@ -2022,9 +2073,7 @@ class OpenClawClient:
             if has_photo and not bool(getattr(info, "supports_vision", False)):
                 continue
             local_candidates.append((model_id, info))
-        local_candidates.sort(
-            key=lambda item: float(getattr(item[1], "size_gb", 0.0) or 0.0)
-        )
+        local_candidates.sort(key=lambda item: float(getattr(item[1], "size_gb", 0.0) or 0.0))
         if local_candidates:
             return str(local_candidates[0][0])
         return None
@@ -2143,7 +2192,8 @@ class OpenClawClient:
                 timeout=120,
                 headers=build_lm_studio_auth_headers(
                     api_key=getattr(config, "LM_STUDIO_API_KEY", ""),
-                ) or None,
+                )
+                or None,
                 verify=False,
                 trust_env=False,
             ) as client:
@@ -2283,7 +2333,10 @@ class OpenClawClient:
         if force_cloud_probe:
             current_key_state = self._effective_runtime_google_key_state()
             current_key_tier = str(current_key_state.get("tier") or "").strip().lower()
-            if current_key_tier in {"free", "paid"} and current_key_tier != str(self.active_tier or "").strip().lower():
+            if (
+                current_key_tier in {"free", "paid"}
+                and current_key_tier != str(self.active_tier or "").strip().lower()
+            ):
                 self.active_tier = current_key_tier
                 self._cloud_tier_state["active_tier"] = current_key_tier
             self._sync_last_runtime_route_active_tier()
@@ -2327,7 +2380,11 @@ class OpenClawClient:
                     restored_messages = json.loads(cached)
                     sanitized_messages, changed = self._sanitize_session_history(restored_messages)
                     self._sessions[chat_id] = sanitized_messages
-                    logger.info("history_restored_from_cache", chat_id=chat_id, messages=len(self._sessions[chat_id]))
+                    logger.info(
+                        "history_restored_from_cache",
+                        chat_id=chat_id,
+                        messages=len(self._sessions[chat_id]),
+                    )
                     if changed:
                         try:
                             history_cache.set(
@@ -2341,7 +2398,11 @@ class OpenClawClient:
                                 messages=len(self._sessions[chat_id]),
                             )
                         except Exception as exc:  # noqa: BLE001
-                            logger.warning("history_cache_restore_rewrite_failed", chat_id=chat_id, error=str(exc))
+                            logger.warning(
+                                "history_cache_restore_rewrite_failed",
+                                chat_id=chat_id,
+                                error=str(exc),
+                            )
                 except (json.JSONDecodeError, TypeError):
                     self._sessions[chat_id] = []
             else:
@@ -2527,7 +2588,11 @@ class OpenClawClient:
                     self._finalize_chat_response(chat_id, lm_text)
                     yield lm_text
                     return
-                logger.warning("local_direct_path_failed_fallback_openclaw", chat_id=chat_id, model=selected_model)
+                logger.warning(
+                    "local_direct_path_failed_fallback_openclaw",
+                    chat_id=chat_id,
+                    model=selected_model,
+                )
 
             tried_paid = False
             tried_cloud_auth_recovery = False
@@ -2567,7 +2632,11 @@ class OpenClawClient:
                     semantic = self._semantic_from_provider_exception(exc)
                     final_response = ""
 
-                if semantic and semantic["code"] in {"lm_empty_stream", "lm_model_crash"} and not tried_semantic_retry:
+                if (
+                    semantic
+                    and semantic["code"] in {"lm_empty_stream", "lm_model_crash"}
+                    and not tried_semantic_retry
+                ):
                     tried_semantic_retry = True
                     retry_messages = self._build_retry_messages(messages_to_send)
                     logger.warning(
@@ -2612,7 +2681,10 @@ class OpenClawClient:
                         continue
 
                 # 2) auth/key type/quota -> cloud retry без слепого openai fallback
-                if semantic["code"] in (LEGACY_AUTH_CODES | {"quota_exceeded"}) and not tried_cloud_auth_recovery:
+                if (
+                    semantic["code"] in (LEGACY_AUTH_CODES | {"quota_exceeded"})
+                    and not tried_cloud_auth_recovery
+                ):
                     tried_cloud_auth_recovery = True
                     cloud_retry = await self._pick_cloud_retry_model(
                         model_manager=model_manager,
@@ -2628,7 +2700,13 @@ class OpenClawClient:
                 # если облачный ответ пустой/битый/таймаутный — пробуем другой cloud-кандидат,
                 # не переключаясь в local.
                 if (
-                    semantic["code"] in {"lm_empty_stream", "lm_malformed_response", "provider_timeout", "provider_error"}
+                    semantic["code"]
+                    in {
+                        "lm_empty_stream",
+                        "lm_malformed_response",
+                        "provider_timeout",
+                        "provider_error",
+                    }
                     and not tried_cloud_quality_recovery
                     and not model_manager.is_local_model(attempt_model)
                 ):
@@ -2640,7 +2718,9 @@ class OpenClawClient:
                     )
                     if cloud_retry:
                         attempt_model = cloud_retry
-                        self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_quality_retry"
+                        self._cloud_tier_state["last_recovery_action"] = (
+                            "switch_to_cloud_quality_retry"
+                        )
                         continue
 
                 # 2.5) Фото пришло в локальную модель без vision add-on:
@@ -2681,7 +2761,9 @@ class OpenClawClient:
                         )
                         if loaded:
                             attempt_model = alt_local
-                            self._cloud_tier_state["last_recovery_action"] = "switch_to_alt_local_vision"
+                            self._cloud_tier_state["last_recovery_action"] = (
+                                "switch_to_alt_local_vision"
+                            )
                             continue
                     elif not effective_force_cloud:
                         logger.info(
@@ -2699,7 +2781,9 @@ class OpenClawClient:
                     )
                     if cloud_candidate:
                         attempt_model = cloud_candidate
-                        self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_on_vision_addon_missing"
+                        self._cloud_tier_state["last_recovery_action"] = (
+                            "switch_to_cloud_on_vision_addon_missing"
+                        )
                         continue
 
                 # 3) критичные ошибки -> local autoload (если не force_cloud)
@@ -2716,7 +2800,9 @@ class OpenClawClient:
                 } | LEGACY_AUTH_CODES
                 if (
                     semantic["code"] in local_recovery_codes
-                    and self._local_recovery_enabled(force_cloud=effective_force_cloud, has_photo=has_photo)
+                    and self._local_recovery_enabled(
+                        force_cloud=effective_force_cloud, has_photo=has_photo
+                    )
                     and not tried_local
                 ):
                     tried_local = True
@@ -2749,7 +2835,9 @@ class OpenClawClient:
                         )
                         if cloud_candidate:
                             attempt_model = cloud_candidate
-                            self._cloud_tier_state["last_recovery_action"] = "switch_to_cloud_after_local_failure"
+                            self._cloud_tier_state["last_recovery_action"] = (
+                                "switch_to_cloud_after_local_failure"
+                            )
                             continue
 
                 # Больше стратегий нет
@@ -2766,7 +2854,9 @@ class OpenClawClient:
                 # Для auth-ошибок fallback не применяем, чтобы не маскировать
                 # реальную проблему "configured but unauthorized".
                 if (
-                    self._local_recovery_enabled(force_cloud=effective_force_cloud, has_photo=has_photo)
+                    self._local_recovery_enabled(
+                        force_cloud=effective_force_cloud, has_photo=has_photo
+                    )
                     and semantic_after["code"] not in LEGACY_AUTH_CODES
                 ):
                     lm_text = await self._direct_lm_fallback(
@@ -2815,7 +2905,9 @@ class OpenClawClient:
                 elif code == "gateway_unknown_error":
                     user_text = "⚠️ OpenClaw вернул неизвестную ошибку. Попробуй повторить запрос."
                 else:
-                    user_text = "❌ Облачный сервис временно недоступен. Попробуй позже или !model local."
+                    user_text = (
+                        "❌ Облачный сервис временно недоступен. Попробуй позже или !model local."
+                    )
                 yield user_text
                 return
 
@@ -2850,8 +2942,7 @@ class OpenClawClient:
                 route_detail = "Ответ получен через OpenClaw API"
                 if resolved_model and resolved_model != attempt_model:
                     route_detail = (
-                        "Ответ получен через OpenClaw API; "
-                        f"gateway fallback -> {resolved_model}"
+                        f"Ответ получен через OpenClaw API; gateway fallback -> {resolved_model}"
                     )
                 self._set_last_runtime_route(
                     channel=route_channel,
@@ -2984,11 +3075,15 @@ class OpenClawClient:
                     "is_aistudio_key": is_ai_studio_key(self.gemini_tiers.get("paid")),
                 },
             },
-            "current_google_key_masked": mask_secret(get_google_api_key_from_models(self._models_path)),
+            "current_google_key_masked": mask_secret(
+                get_google_api_key_from_models(self._models_path)
+            ),
             "last_error_code": self._cloud_tier_state.get("last_error_code"),
         }
 
-    async def get_cloud_provider_diagnostics(self, providers: list[str] | None = None) -> dict[str, Any]:
+    async def get_cloud_provider_diagnostics(
+        self, providers: list[str] | None = None
+    ) -> dict[str, Any]:
         """Диагностика cloud-провайдеров в безопасном формате."""
         providers_list = providers or ["google"]
         report: dict[str, Any] = {"ok": True, "providers": {}, "checked": providers_list}
@@ -3025,7 +3120,9 @@ class OpenClawClient:
                 report["ok"] = False
 
             self._cloud_tier_state["last_provider_status"] = probe.provider_status
-            self._cloud_tier_state["last_error_code"] = probe.semantic_error_code if probe.provider_status != "ok" else None
+            self._cloud_tier_state["last_error_code"] = (
+                probe.semantic_error_code if probe.provider_status != "ok" else None
+            )
             self._cloud_tier_state["last_recovery_action"] = probe.recovery_action
             self._cloud_tier_state["last_probe_at"] = int(time.time())
 
@@ -3036,7 +3133,10 @@ class OpenClawClient:
         current_key_state = self._effective_runtime_google_key_state()
         secrets_reload_runtime = get_openclaw_cli_runtime_status()
         current_key_tier = str(current_key_state.get("tier") or "").strip().lower()
-        if current_key_tier in {"free", "paid"} and current_key_tier != str(self.active_tier or "").strip().lower():
+        if (
+            current_key_tier in {"free", "paid"}
+            and current_key_tier != str(self.active_tier or "").strip().lower()
+        ):
             # Синхронизируем active_tier с фактическим ключом из models.json,
             # чтобы runtime-check не застревал в stale default `free`.
             self.active_tier = current_key_tier
@@ -3088,8 +3188,12 @@ class OpenClawClient:
             "current_google_key_raw_state": str(current_key_state.get("raw_state") or ""),
             "current_google_key_raw_masked": str(current_key_state.get("raw_masked") or ""),
             "current_google_key_reference": str(current_key_state.get("raw_reference") or ""),
-            "current_google_key_resolved_from_env": bool(current_key_state.get("resolved_from_env")),
-            "current_google_key_resolved_env_name": str(current_key_state.get("resolved_env_name") or ""),
+            "current_google_key_resolved_from_env": bool(
+                current_key_state.get("resolved_from_env")
+            ),
+            "current_google_key_resolved_env_name": str(
+                current_key_state.get("resolved_env_name") or ""
+            ),
             "secrets_reload_runtime": secrets_reload_runtime,
             "tier_state": self.get_tier_state_export(),
         }
@@ -3145,12 +3249,16 @@ class OpenClawClient:
             actions.append("Проверь и замени paid/free ключ на AI Studio API key формата AIza...")
             actions.append("Запусти sync_openclaw_models.command и затем check_cloud_chain.command")
         elif state.get("last_error_code") == "quota_exceeded":
-            actions.append("Переключи tier на paid и перезагрузи secrets (через web endpoint или CLI)")
+            actions.append(
+                "Переключи tier на paid и перезагрузи secrets (через web endpoint или CLI)"
+            )
             actions.append("Если paid недоступен — включи local fallback (!model local)")
         elif state.get("last_error_code") == "model_not_loaded":
             actions.append("Загрузи локальную модель в LM Studio и повтори запрос")
         elif state.get("last_error_code") == "lm_empty_stream":
-            actions.append("Повтори запрос с сокращённым контекстом или переключись на другую локальную модель")
+            actions.append(
+                "Повтори запрос с сокращённым контекстом или переключись на другую локальную модель"
+            )
             actions.append("Проверь, что у локальной модели нет аварий в логах LM Studio")
         elif state.get("last_error_code") == "lm_model_crash":
             actions.append("Перезапусти проблемную модель в LM Studio и повтори запрос")

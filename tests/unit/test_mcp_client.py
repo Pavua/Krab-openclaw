@@ -15,7 +15,9 @@ async def test_ensure_server_uses_managed_registry_launch() -> None:
     manager = MCPClientManager()
     manager.start_server = AsyncMock(return_value=True)
 
-    with patch("src.mcp_client.get_managed_mcp_servers", return_value={"context7": {"name": "context7"}}):
+    with patch(
+        "src.mcp_client.get_managed_mcp_servers", return_value={"context7": {"name": "context7"}}
+    ):
         with patch(
             "src.mcp_client.resolve_managed_server_launch",
             return_value={
@@ -41,7 +43,9 @@ async def test_ensure_server_returns_false_when_required_env_missing() -> None:
     manager = MCPClientManager()
     manager.start_server = AsyncMock(return_value=True)
 
-    with patch("src.mcp_client.get_managed_mcp_servers", return_value={"github": {"name": "github"}}):
+    with patch(
+        "src.mcp_client.get_managed_mcp_servers", return_value={"github": {"name": "github"}}
+    ):
         with patch(
             "src.mcp_client.resolve_managed_server_launch",
             return_value={
@@ -79,6 +83,7 @@ async def test_search_web_falls_back_to_firecrawl_when_brave_unavailable() -> No
 # ---------------------------------------------------------------------------
 # call_tool_unified
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_call_tool_unified_unknown_format_returns_error() -> None:
@@ -133,6 +138,7 @@ async def test_call_tool_unified_peekaboo_dispatches() -> None:
 # ---------------------------------------------------------------------------
 # get_tool_manifest
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_get_tool_manifest_no_sessions_has_native_tools() -> None:
@@ -216,6 +222,7 @@ async def test_get_tool_manifest_includes_session_tools() -> None:
 # health_check
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_health_check_not_started() -> None:
     """health_check возвращает ok=False, если is_running=False."""
@@ -259,6 +266,7 @@ async def test_health_check_running_with_sessions() -> None:
 # ---------------------------------------------------------------------------
 # call_tool (error paths)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_call_tool_no_session_returns_none() -> None:

@@ -206,9 +206,7 @@ def list_teams() -> str:
     }
     for team_key, roles in TEAM_REGISTRY.items():
         emoji = team_emojis.get(team_key, "🤖")
-        role_names = " → ".join(
-            f"{r['emoji']} {r['title']}" for r in roles
-        )
+        role_names = " → ".join(f"{r['emoji']} {r['title']}" for r in roles)
         lines.append(f"{emoji} **{team_key}** — {role_names}")
     lines.append(
         "\nИспользование: `!swarm <команда> <задача>`\n"
@@ -222,9 +220,11 @@ def list_teams() -> str:
 # SwarmBus — шина делегирования между командами
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SwarmBusTask:
     """Задача в шине SwarmBus."""
+
     task_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     source_team: str = ""
     target_team: str = ""
@@ -302,7 +302,14 @@ class SwarmBus:
             roles = TEAM_REGISTRY[resolved]
             room = AgentRoom(roles=roles)
             router = router_factory(resolved)
-            result = await room.run_round(topic, router, _bus=self, _depth=depth + 1, _team_name=resolved, _router_factory=router_factory)
+            result = await room.run_round(
+                topic,
+                router,
+                _bus=self,
+                _depth=depth + 1,
+                _team_name=resolved,
+                _router_factory=router_factory,
+            )
             task.result = result
             logger.info("swarm_bus_dispatch_done", task_id=task.task_id)
             return result

@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-import src.userbot_bridge as userbot_bridge_module
+import src.userbot.llm_flow as userbot_bridge_module
 
 
 def test_resolve_stream_timeouts_defaults_text() -> None:

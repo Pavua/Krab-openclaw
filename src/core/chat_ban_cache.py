@@ -92,9 +92,7 @@ class ChatBanCache:
         self._entries: dict[str, dict[str, Any]] = {}
         # Инжектируемый источник времени: нужен тестам, чтобы подменять
         # «сейчас» без monkeypatch модуля и без прямой мутации _entries.
-        self._now_fn: Callable[[], datetime] = now_fn or (
-            lambda: datetime.now(timezone.utc)
-        )
+        self._now_fn: Callable[[], datetime] = now_fn or (lambda: datetime.now(timezone.utc))
         if storage_path is not None:
             self._load_from_disk()
 

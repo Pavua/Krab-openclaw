@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -155,7 +154,7 @@ def build_translator_finish_gate_snapshot(
     readiness_payload = (
         dict(translator_readiness or {}) if isinstance(translator_readiness, dict) else {}
     )
-    runtime_state = dict(runtime_snapshot or {}) if isinstance(runtime_snapshot, dict) else {}
+    _ = dict(runtime_snapshot or {}) if isinstance(runtime_snapshot, dict) else {}
     previous_status = (
         dict(previous_device_status or {}) if isinstance(previous_device_status, dict) else {}
     )
@@ -193,7 +192,7 @@ def build_translator_finish_gate_snapshot(
 
     pytest_ok = bool(pytest_payload.get("ok"))
     build_ok = bool(build_payload.get("ok"))
-    install_ok = bool(install_payload.get("ok")) if install_payload else False
+    _ = bool(install_payload.get("ok")) if install_payload else False
     app_installed = bool(apps_payload.get("installed"))
     launch_status = str(launch_payload.get("status") or "skipped")
     automated_gate_ready = (

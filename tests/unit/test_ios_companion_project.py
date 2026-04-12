@@ -8,8 +8,8 @@ import pytest
 
 try:
     from scripts.ios_companion_project_lib import (
-        GenerationConfig,
         CompanionProjectError,
+        GenerationConfig,
         default_bundle_id,
         default_project_dir,
         ensure_skeleton_ready,
@@ -26,11 +26,17 @@ def test_sanitize_bundle_fragment_normalizes_noise() -> None:
 
 
 def test_default_bundle_id_uses_username_and_host() -> None:
-    assert default_bundle_id(username="USER3", host="Krab-Mac") == "com.antigravity.krabvoice.user3.krab.mac"
+    assert (
+        default_bundle_id(username="USER3", host="Krab-Mac")
+        == "com.antigravity.krabvoice.user3.krab.mac"
+    )
 
 
 def test_default_project_dir_is_per_account(tmp_path: Path) -> None:
-    assert default_project_dir(home_dir=tmp_path, username="USER3") == tmp_path / "Projects" / "KrabVoiceiOS-user3"
+    assert (
+        default_project_dir(home_dir=tmp_path, username="USER3")
+        == tmp_path / "Projects" / "KrabVoiceiOS-user3"
+    )
 
 
 def test_ensure_skeleton_ready_requires_all_swift_files(tmp_path: Path) -> None:
@@ -60,7 +66,7 @@ def test_make_project_spec_contains_bundle_id_and_permissions(tmp_path: Path) ->
     spec = make_project_spec(config)
 
     assert 'PRODUCT_BUNDLE_IDENTIFIER: "com.antigravity.krabvoice.user3.krab.mac"' in spec
-    assert 'INFOPLIST_KEY_NSMicrophoneUsageDescription' in spec
+    assert "INFOPLIST_KEY_NSMicrophoneUsageDescription" in spec
     assert str(skeleton_dir.resolve()) in spec
 
 

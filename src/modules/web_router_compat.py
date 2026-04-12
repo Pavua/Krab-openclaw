@@ -9,12 +9,13 @@
 - здесь мы восстанавливаем только полезный совместимый контракт, опираясь на
   текущие источники истины: ModelManager, OpenClawClient и runtime route meta.
 """
+
 from __future__ import annotations
 
+import json
+import math
 from collections import defaultdict
 from datetime import datetime, timezone
-import math
-import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -205,7 +206,9 @@ class WebRouterCompat:
         if not self.openclaw_client:
             return "OpenClaw client not configured"
         preferred_model = str(kwargs.get("preferred_model", "") or "").strip() or None
-        effective_force_mode = str(self.force_mode or ("force_cloud" if config.FORCE_CLOUD else "auto"))
+        effective_force_mode = str(
+            self.force_mode or ("force_cloud" if config.FORCE_CLOUD else "auto")
+        )
         effective_force_cloud = effective_force_mode == "force_cloud"
         if preferred_model:
             # Явный выбор модели в owner UI сильнее общего режима.
@@ -330,7 +333,9 @@ class WebRouterCompat:
         reasons: list[str] = []
         warnings: list[str] = []
 
-        effective_force_mode = str(self.force_mode or ("force_cloud" if config.FORCE_CLOUD else "auto"))
+        effective_force_mode = str(
+            self.force_mode or ("force_cloud" if config.FORCE_CLOUD else "auto")
+        )
         if preferred:
             model = preferred
             channel = "local" if self._is_local_model(preferred) else "cloud"
@@ -361,24 +366,38 @@ class WebRouterCompat:
             can_run_now = False
             warnings.append("Локальная модель сейчас не активна.")
             if local_target:
-                reasons.append("В качестве цели для local-first используется preferred local model.")
+                reasons.append(
+                    "В качестве цели для local-first используется preferred local model."
+                )
 
         prompt_len = len(str(prompt or ""))
         critical = normalized_profile in {"reasoning", "coding", "review"} or prompt_len >= 1800
-        estimated_cost = 0.0 if channel == "local" else (
-            0.006 if normalized_profile == "chat" else 0.015 if normalized_profile == "review" else 0.03
+        estimated_cost = (
+            0.0
+            if channel == "local"
+            else (
+                0.006
+                if normalized_profile == "chat"
+                else 0.015
+                if normalized_profile == "review"
+                else 0.03
+            )
         )
         requires_confirm_expensive = bool(
-            channel == "cloud"
-            and critical
-            and estimated_cost >= 0.015
-            and not confirm_expensive
+            channel == "cloud" and critical and estimated_cost >= 0.015 and not confirm_expensive
         )
         if requires_confirm_expensive:
             warnings.append("Запрос выглядит дорогим для cloud-маршрута и требует подтверждения.")
 
-        if preferred and self._is_local_model(preferred) and local_model and preferred != local_model:
-            reasons.append("Предпочтение задано локально, но фактически активна другая локальная модель.")
+        if (
+            preferred
+            and self._is_local_model(preferred)
+            and local_model
+            and preferred != local_model
+        ):
+            reasons.append(
+                "Предпочтение задано локально, но фактически активна другая локальная модель."
+            )
 
         if preferred and not self._is_local_model(preferred) and channel == "cloud":
             reasons.append("Предпочтение закреплено за облачной моделью.")
@@ -451,7 +470,9 @@ class WebRouterCompat:
                 "human": "Показан последний runtime-route и прогноз следующего запуска.",
             },
             "policy": {
-                "force_mode": str(self.force_mode or ("force_cloud" if config.FORCE_CLOUD else "auto")),
+                "force_mode": str(
+                    self.force_mode or ("force_cloud" if config.FORCE_CLOUD else "auto")
+                ),
                 "routing_policy": "local_first_web_compat",
                 "cloud_soft_cap_reached": bool(self.cloud_soft_cap_reached),
                 "local_available": bool(self._get_active_local_model()),
@@ -480,7 +501,11 @@ class WebRouterCompat:
         plan = self._build_execution_plan(task_type=normalized_profile)
         model = str(plan["execution"]["model"] or config.MODEL).strip()
         channel = str(plan["execution"]["channel"] or "auto").strip()
-        reasoning = "; ".join(plan["reasons"]) if plan["reasons"] else "Используется текущая routing policy."
+        reasoning = (
+            "; ".join(plan["reasons"])
+            if plan["reasons"]
+            else "Используется текущая routing policy."
+        )
         return {
             "profile": normalized_profile,
             "model": model,
@@ -541,7 +566,9 @@ class WebRouterCompat:
             }
             for (item_profile, item_model), scores in model_buckets.items()
         ]
-        top_models.sort(key=lambda item: (-float(item["avg_score"]), -int(item["count"]), str(item["model"])))
+        top_models.sort(
+            key=lambda item: (-float(item["avg_score"]), -int(item["count"]), str(item["model"]))
+        )
 
         top_channels = [
             {
@@ -551,7 +578,9 @@ class WebRouterCompat:
             }
             for channel, scores in channel_buckets.items()
         ]
-        top_channels.sort(key=lambda item: (-float(item["avg_score"]), -int(item["count"]), str(item["channel"])))
+        top_channels.sort(
+            key=lambda item: (-float(item["avg_score"]), -int(item["count"]), str(item["channel"]))
+        )
 
         recent_entries = [
             {
@@ -589,13 +618,19 @@ class WebRouterCompat:
         if not model_name:
             model_name = str(self._last_route.get("model") or "").strip()
         if not model_name:
-            model_name = self.get_profile_recommendation(profile).get("model", "") or str(config.MODEL or "")
+            model_name = self.get_profile_recommendation(profile).get("model", "") or str(
+                config.MODEL or ""
+            )
 
         channel = str(kwargs.get("channel") or "").strip().lower()
         if not channel:
             channel = str(self._last_route.get("channel") or "").strip().lower()
         if not channel:
-            channel = str(self.get_profile_recommendation(profile).get("channel") or "auto").strip().lower()
+            channel = (
+                str(self.get_profile_recommendation(profile).get("channel") or "auto")
+                .strip()
+                .lower()
+            )
 
         entry = {
             "score": score,
@@ -610,7 +645,8 @@ class WebRouterCompat:
             self._feedback = self._feedback[-100:]
 
         relevant = [
-            item for item in self._feedback
+            item
+            for item in self._feedback
             if self._normalize_profile(item.get("profile")) == profile
             and str(item.get("model") or "").strip() == model_name
         ]
@@ -689,7 +725,9 @@ class WebRouterCompat:
         monthly_calls_forecast = int(kwargs.get("monthly_calls_forecast", 5000) or 0)
         snapshot = self._build_cost_snapshot()
         known_calls = self._sum_report_calls(snapshot.get("by_model", {}))
-        has_usage = bool(snapshot.get("total_tokens", 0) or known_calls or snapshot.get("cost_session_usd", 0.0))
+        has_usage = bool(
+            snapshot.get("total_tokens", 0) or known_calls or snapshot.get("cost_session_usd", 0.0)
+        )
         status = "ok" if has_usage else "no_usage_yet"
         return {
             "status": status,
@@ -708,7 +746,8 @@ class WebRouterCompat:
                 "budget_ok": bool(snapshot.get("budget_ok", True)),
             },
             "forecast": {
-                "monthly_calls_forecast": snapshot.get("monthly_calls_forecast") or monthly_calls_forecast,
+                "monthly_calls_forecast": snapshot.get("monthly_calls_forecast")
+                or monthly_calls_forecast,
             },
             "by_model": snapshot.get("by_model", {}),
         }
@@ -730,7 +769,9 @@ class WebRouterCompat:
         runway_days = (spendable_budget / daily_burn_usd) if daily_burn_usd > 0 else None
 
         known_calls = self._sum_report_calls(snapshot.get("by_model", {}))
-        avg_cost_per_call = (cost_month_usd / known_calls) if cost_month_usd > 0 and known_calls > 0 else 0.0
+        avg_cost_per_call = (
+            (cost_month_usd / known_calls) if cost_month_usd > 0 and known_calls > 0 else 0.0
+        )
         safe_calls_per_day = (
             math.floor((spendable_budget / horizon_days) / avg_cost_per_call)
             if avg_cost_per_call > 0 and horizon_days > 0
@@ -776,12 +817,16 @@ class WebRouterCompat:
 
         if not recommend.get("local_available") and recommend.get("channel") == "local":
             risks.append("local_preferred_not_loaded")
-            recommendations.append("Загрузить preferred local model перед heavy local-first сценарием.")
+            recommendations.append(
+                "Загрузить preferred local model перед heavy local-first сценарием."
+            )
         if runway.get("status") == "warning":
             risks.append("budget_runway_low")
             recommendations.append("Снизить cloud-share или пополнить баланс.")
         if cost_report["status"] == "no_usage_yet":
-            recommendations.append("Пока нет cost usage; executive summary построен по runtime policy.")
+            recommendations.append(
+                "Пока нет cost usage; executive summary построен по runtime policy."
+            )
 
         return {
             "status": "ok" if not risks else "attention",
@@ -816,7 +861,9 @@ class WebRouterCompat:
             "usage": self.get_usage_summary(),
             "cost_report": self.get_cost_report(monthly_calls_forecast=monthly_calls_forecast),
             "runway": self.get_credit_runway_report(monthly_calls_forecast=monthly_calls_forecast),
-            "executive_summary": self.get_ops_executive_summary(monthly_calls_forecast=monthly_calls_forecast),
+            "executive_summary": self.get_ops_executive_summary(
+                monthly_calls_forecast=monthly_calls_forecast
+            ),
             "active_tier": getattr(self.openclaw_client, "active_tier", self.active_tier),
             "last_route": self.get_last_route(),
             "history": self.get_ops_history(limit=history_limit),
@@ -903,7 +950,9 @@ class WebRouterCompat:
                     "id": mid,
                     "loaded": mid == self._mm._current_model or mid in loaded_ids,
                     "type": info.type.value if hasattr(info.type, "value") else str(info.type),
-                    "size_human": f"{info.size_gb:.1f} GB" if float(info.size_gb or 0.0) > 0 else "n/a",
+                    "size_human": f"{info.size_gb:.1f} GB"
+                    if float(info.size_gb or 0.0) > 0
+                    else "n/a",
                     "vision": bool(getattr(info, "supports_vision", False)),
                 }
             )

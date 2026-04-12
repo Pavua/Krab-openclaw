@@ -12,10 +12,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pyrogram import enums
@@ -132,11 +131,15 @@ async def test_document_text_file_inlined_into_query(
 
     monkeypatch.setattr(bridge_module.openclaw_client, "send_message_stream", _fake_stream)
     monkeypatch.setattr(bridge_module.config, "DOCUMENT_DOWNLOAD_DIR", str(tmp_path), raising=False)
-    monkeypatch.setattr(bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
+    monkeypatch.setattr(
+        bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False
+    )
 
     from src.core.access_control import AccessLevel, AccessProfile
 
-    access_profile = AccessProfile(level=AccessLevel.FULL, source="unit-test", matched_subject="tester")
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL, source="unit-test", matched_subject="tester"
+    )
     await bot._process_message_serialized(
         message=msg,
         user=msg.from_user,
@@ -159,7 +162,9 @@ async def test_document_oversized_aborts_with_error(
 
     bot = _make_doc_bot()
     big_size = KraabUserbot._DOC_MAX_BYTES + 1
-    msg = _make_doc_message(file_name="huge.bin", mime_type="application/octet-stream", file_size=big_size)
+    msg = _make_doc_message(
+        file_name="huge.bin", mime_type="application/octet-stream", file_size=big_size
+    )
 
     download_called = False
 
@@ -184,11 +189,15 @@ async def test_document_oversized_aborts_with_error(
 
     monkeypatch.setattr(bridge_module.openclaw_client, "send_message_stream", _fake_stream)
     monkeypatch.setattr(bridge_module.config, "DOCUMENT_DOWNLOAD_DIR", str(tmp_path), raising=False)
-    monkeypatch.setattr(bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
+    monkeypatch.setattr(
+        bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False
+    )
 
     from src.core.access_control import AccessLevel, AccessProfile
 
-    access_profile = AccessProfile(level=AccessLevel.FULL, source="unit-test", matched_subject="tester")
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL, source="unit-test", matched_subject="tester"
+    )
     await bot._process_message_serialized(
         message=msg,
         user=msg.from_user,
@@ -233,11 +242,15 @@ async def test_document_download_timeout_aborts_with_error(
 
     monkeypatch.setattr(bridge_module.openclaw_client, "send_message_stream", _fake_stream)
     monkeypatch.setattr(bridge_module.config, "DOCUMENT_DOWNLOAD_DIR", str(tmp_path), raising=False)
-    monkeypatch.setattr(bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
+    monkeypatch.setattr(
+        bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False
+    )
 
     from src.core.access_control import AccessLevel, AccessProfile
 
-    access_profile = AccessProfile(level=AccessLevel.FULL, source="unit-test", matched_subject="tester")
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL, source="unit-test", matched_subject="tester"
+    )
     await bot._process_message_serialized(
         message=msg,
         user=msg.from_user,
@@ -283,11 +296,15 @@ async def test_document_binary_passes_path_in_query(
 
     monkeypatch.setattr(bridge_module.openclaw_client, "send_message_stream", _fake_stream)
     monkeypatch.setattr(bridge_module.config, "DOCUMENT_DOWNLOAD_DIR", str(tmp_path), raising=False)
-    monkeypatch.setattr(bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False)
+    monkeypatch.setattr(
+        bridge_module.config, "USERBOT_BACKGROUND_LLM_HANDOFF", False, raising=False
+    )
 
     from src.core.access_control import AccessLevel, AccessProfile
 
-    access_profile = AccessProfile(level=AccessLevel.FULL, source="unit-test", matched_subject="tester")
+    access_profile = AccessProfile(
+        level=AccessLevel.FULL, source="unit-test", matched_subject="tester"
+    )
     await bot._process_message_serialized(
         message=msg,
         user=msg.from_user,
@@ -299,6 +316,10 @@ async def test_document_binary_passes_path_in_query(
     assert len(sent_queries) == 1
     assert "report.pdf" in sent_queries[0]
     # Путь к файлу (не содержимое PDF) должен быть в запросе
-    assert "Файл сохранён" in sent_queries[0] or "krab_docs" in sent_queries[0] or tmp_path.name in sent_queries[0]
+    assert (
+        "Файл сохранён" in sent_queries[0]
+        or "krab_docs" in sent_queries[0]
+        or tmp_path.name in sent_queries[0]
+    )
     # Содержимое PDF (raw bytes) не должно быть вставлено
     assert "%PDF" not in sent_queries[0]

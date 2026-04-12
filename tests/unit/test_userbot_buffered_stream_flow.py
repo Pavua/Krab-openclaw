@@ -97,7 +97,9 @@ def test_should_send_voice_for_response_skips_error_surfaces() -> None:
 
 
 @pytest.mark.asyncio
-async def test_text_route_waits_past_first_chunk_soft_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_text_route_waits_past_first_chunk_soft_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Buffered-text запрос не должен падать после первого soft-timeout,
     если ответ приходит в пределах расширенного hard-timeout окна.
@@ -113,7 +115,9 @@ async def test_text_route_waits_past_first_chunk_soft_timeout(monkeypatch: pytes
         audio=None,
         chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")
+        ),
     )
     access_profile = AccessProfile(
         level=AccessLevel.FULL,
@@ -132,23 +136,25 @@ async def test_text_route_waits_past_first_chunk_soft_timeout(monkeypatch: pytes
         "get_last_runtime_route",
         lambda: {"model": "openai-codex/gpt-5.4", "channel": "planning", "status": "ok"},
     )
+    import src.userbot.llm_flow as llm_flow_module
+
     monkeypatch.setattr(
-        userbot_bridge_module,
+        llm_flow_module,
         "_resolve_openclaw_stream_timeouts",
         lambda **kwargs: (0.01, 0.05),
     )
     monkeypatch.setattr(
-        userbot_bridge_module,
+        llm_flow_module,
         "_resolve_openclaw_buffered_response_timeout",
         lambda **kwargs: 0.08,
     )
     monkeypatch.setattr(
-        userbot_bridge_module,
+        llm_flow_module,
         "_resolve_openclaw_progress_notice_schedule",
         lambda **kwargs: (0.01, 0.05),
     )
     monkeypatch.setattr(
-        userbot_bridge_module,
+        llm_flow_module,
         "_build_openclaw_slow_wait_notice",
         lambda **kwargs: "SLOW_NOTICE",
     )
@@ -189,7 +195,9 @@ async def test_text_route_emits_tool_progress_notice_before_regular_progress_sch
         audio=None,
         chat=SimpleNamespace(id=124, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=124), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=124), text="", caption="")
+        ),
     )
     access_profile = AccessProfile(
         level=AccessLevel.FULL,
@@ -213,18 +221,20 @@ async def test_text_route_emits_tool_progress_notice_before_regular_progress_sch
         "get_active_tool_calls_summary",
         lambda: "🔧 Выполняется: browser\nИнструментов: 0/1",
     )
+    import src.userbot.llm_flow as llm_flow_module
+
     monkeypatch.setattr(
-        userbot_bridge_module,
+        llm_flow_module,
         "_resolve_openclaw_stream_timeouts",
         lambda **kwargs: (0.05, 0.05),
     )
     monkeypatch.setattr(
-        userbot_bridge_module,
+        llm_flow_module,
         "_resolve_openclaw_buffered_response_timeout",
         lambda **kwargs: 0.20,
     )
     monkeypatch.setattr(
-        userbot_bridge_module,
+        llm_flow_module,
         "_resolve_openclaw_progress_notice_schedule",
         lambda **kwargs: (10.0, 30.0),
     )
@@ -271,7 +281,9 @@ async def test_voice_route_uses_typing_during_processing_and_upload_audio_on_del
         audio=None,
         chat=SimpleNamespace(id=125, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=125), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=125), text="", caption="")
+        ),
     )
     access_profile = AccessProfile(
         level=AccessLevel.FULL,
@@ -299,8 +311,10 @@ async def test_voice_route_uses_typing_during_processing_and_upload_audio_on_del
         False,
         raising=False,
     )
+    import src.voice_engine as voice_engine_module
+
     monkeypatch.setattr(
-        userbot_bridge_module,
+        voice_engine_module,
         "text_to_speech",
         AsyncMock(return_value=voice_path_raw),
     )
@@ -321,7 +335,9 @@ async def test_voice_route_uses_typing_during_processing_and_upload_audio_on_del
 
 
 @pytest.mark.asyncio
-async def test_mark_incoming_item_background_started_updates_inbox(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mark_incoming_item_background_started_updates_inbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Background handoff должен переводить persisted owner item в `acked`."""
     bot = _make_buffered_bot_stub()
     captured: dict[str, object] = {}
@@ -331,7 +347,9 @@ async def test_mark_incoming_item_background_started_updates_inbox(monkeypatch: 
         captured["kwargs"] = kwargs
         return {"ok": True}
 
-    monkeypatch.setattr(userbot_bridge_module.inbox_service, "set_status_by_dedupe", _fake_set_status_by_dedupe)
+    monkeypatch.setattr(
+        userbot_bridge_module.inbox_service, "set_status_by_dedupe", _fake_set_status_by_dedupe
+    )
 
     result = bot._mark_incoming_item_background_started(
         incoming_item_result={
@@ -390,7 +408,11 @@ async def test_process_message_serialized_defers_long_text_route_to_background(
         audio=None,
         chat=SimpleNamespace(id=125, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=125), id=901, text="", caption="", delete=AsyncMock())),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(
+                chat=SimpleNamespace(id=125), id=901, text="", caption="", delete=AsyncMock()
+            )
+        ),
     )
     access_profile = AccessProfile(
         level=AccessLevel.FULL,
@@ -412,7 +434,9 @@ async def test_process_message_serialized_defers_long_text_route_to_background(
         raising=False,
     )
     monkeypatch.setattr(bot, "_run_llm_request_flow", _fake_run_llm_request_flow)
-    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
+    monkeypatch.setattr(
+        bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True})
+    )
 
     await bot._process_message_serialized(
         message=incoming,
@@ -440,7 +464,9 @@ async def test_process_message_serialized_falls_back_to_send_message_when_initia
 ) -> None:
     """Стартовый ack не должен ломать background-path, если Telegram валит reply."""
     bot = _make_buffered_bot_stub()
-    placeholder = SimpleNamespace(chat=SimpleNamespace(id=126), id=902, text="", caption="", delete=AsyncMock())
+    placeholder = SimpleNamespace(
+        chat=SimpleNamespace(id=126), id=902, text="", caption="", delete=AsyncMock()
+    )
     bot.client.send_message = AsyncMock(return_value=placeholder)
     incoming = SimpleNamespace(
         id=13,
@@ -474,7 +500,9 @@ async def test_process_message_serialized_falls_back_to_send_message_when_initia
         raising=False,
     )
     monkeypatch.setattr(bot, "_run_llm_request_flow", _fake_run_llm_request_flow)
-    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
+    monkeypatch.setattr(
+        bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True})
+    )
 
     await bot._process_message_serialized(
         message=incoming,
@@ -509,7 +537,11 @@ async def test_process_message_serialized_queues_after_active_background_task(
         audio=None,
         chat=SimpleNamespace(id=126, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=126), id=902, text="", caption="", delete=AsyncMock())),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(
+                chat=SimpleNamespace(id=126), id=902, text="", caption="", delete=AsyncMock()
+            )
+        ),
     )
     access_profile = AccessProfile(
         level=AccessLevel.FULL,
@@ -536,8 +568,12 @@ async def test_process_message_serialized_queues_after_active_background_task(
         True,
         raising=False,
     )
-    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
-    monkeypatch.setattr(bot, "_finish_ai_request_background_after_previous", _fake_finish_after_previous)
+    monkeypatch.setattr(
+        bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True})
+    )
+    monkeypatch.setattr(
+        bot, "_finish_ai_request_background_after_previous", _fake_finish_after_previous
+    )
     bot._run_llm_request_flow = AsyncMock()
 
     await bot._process_message_serialized(
@@ -623,7 +659,9 @@ async def test_process_message_serialized_survives_initial_ack_failure(
         True,
         raising=False,
     )
-    monkeypatch.setattr(bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True}))
+    monkeypatch.setattr(
+        bot, "_mark_incoming_item_background_started", Mock(return_value={"ok": True})
+    )
     monkeypatch.setattr(bot, "_finish_ai_request_background", _fake_finish_background)
 
     await bot._process_message_serialized(

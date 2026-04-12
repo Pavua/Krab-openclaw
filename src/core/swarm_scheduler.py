@@ -28,7 +28,6 @@ from typing import Any, Awaitable, Callable
 
 from ..config import config
 from .logger import get_logger
-from .swarm_memory import swarm_memory
 
 logger = get_logger(__name__)
 
@@ -59,6 +58,7 @@ def parse_interval(spec: str) -> int:
     Возвращает секунды.
     """
     import re
+
     spec = spec.strip().lower()
     m = re.match(r"^(\d+)\s*([a-zа-яё]+)$", spec)
     if not m:
@@ -81,6 +81,7 @@ def _now_utc_iso() -> str:
 @dataclass
 class RecurringJob:
     """Запись рекуррентной задачи свёрма."""
+
     job_id: str
     team: str
     topic: str
@@ -215,8 +216,9 @@ class SwarmScheduler:
         if self._started:
             self._schedule_job(job.job_id)
 
-        logger.info("swarm_scheduler_job_added", job_id=job.job_id, team=team,
-                     interval=interval_sec)
+        logger.info(
+            "swarm_scheduler_job_added", job_id=job.job_id, team=team, interval=interval_sec
+        )
         return job
 
     def remove_job(self, job_id: str) -> bool:
@@ -244,7 +246,9 @@ class SwarmScheduler:
         for job in self._jobs.values():
             status = "✅" if job.enabled else "⏸️"
             interval_h = job.interval_sec / 3600
-            interval_str = f"{interval_h:.1f}ч" if interval_h >= 1 else f"{job.interval_sec // 60}мин"
+            interval_str = (
+                f"{interval_h:.1f}ч" if interval_h >= 1 else f"{job.interval_sec // 60}мин"
+            )
             lines.append(
                 f"{status} `{job.job_id}` — **{job.team}** каждые {interval_str}\n"
                 f"  Тема: _{job.topic[:80]}_\n"
@@ -374,11 +378,13 @@ class SwarmScheduler:
                 try:
                     await self._sender(self._owner_chat_id, msg)
                 except Exception as send_exc:  # noqa: BLE001
-                    logger.warning("swarm_scheduler_send_failed",
-                                   job_id=job.job_id, error=str(send_exc))
+                    logger.warning(
+                        "swarm_scheduler_send_failed", job_id=job.job_id, error=str(send_exc)
+                    )
 
-            logger.info("swarm_scheduler_job_completed", job_id=job.job_id,
-                         total_runs=job.total_runs)
+            logger.info(
+                "swarm_scheduler_job_completed", job_id=job.job_id, total_runs=job.total_runs
+            )
 
         except Exception as exc:  # noqa: BLE001
             job.last_error = str(exc)[:200]
@@ -389,6 +395,7 @@ class SwarmScheduler:
             # Создаём inbox item при ошибке
             try:
                 from .inbox_service import inbox_service
+
                 inbox_service.upsert_item(
                     dedupe_key=f"swarm_job_failed:{job.job_id}",
                     kind="swarm_job_failure",

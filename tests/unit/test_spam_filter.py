@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """Тесты фильтрации спама/рассылок — _is_notification_sender и _is_bulk_sender."""
-import pytest
+
 from types import SimpleNamespace
+
+import pytest
 
 
 def _make_user(**kwargs):
@@ -21,7 +23,7 @@ def _make_user(**kwargs):
 
 # Импортируем функции напрямую, если возможно
 try:
-    from src.core.spam_filter import is_notification_sender, is_bulk_sender
+    from src.core.spam_filter import is_bulk_sender, is_notification_sender
 except ImportError:
     pytest.skip("src.core.spam_filter not available", allow_module_level=True)
 
@@ -58,7 +60,9 @@ class TestIsBulkSender:
     """Фильтрация массовых рассылок, сервисных аккаунтов, OTP."""
 
     def test_verified_no_username(self):
-        assert is_bulk_sender(_make_user(is_verified=True, username=None, first_name="Banco Santander"))
+        assert is_bulk_sender(
+            _make_user(is_verified=True, username=None, first_name="Banco Santander")
+        )
 
     def test_verified_with_username(self):
         # Verified + username = скорее реальный пользователь

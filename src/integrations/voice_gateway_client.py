@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import cast
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -39,11 +38,11 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         )
         # Поддерживаем оба варианта имени ключа, чтобы не ломать старые .env.
         self.api_key = str(
-            api_key
-            or os.getenv("KRAB_VOICE_API_KEY", "")
-            or os.getenv("VOICE_GATEWAY_API_KEY", "")
+            api_key or os.getenv("KRAB_VOICE_API_KEY", "") or os.getenv("VOICE_GATEWAY_API_KEY", "")
         ).strip()
-        self.timeout_sec = max(0.5, float(timeout_sec or os.getenv("VOICE_GATEWAY_TIMEOUT_SEC", "2.5")))
+        self.timeout_sec = max(
+            0.5, float(timeout_sec or os.getenv("VOICE_GATEWAY_TIMEOUT_SEC", "2.5"))
+        )
 
     @staticmethod
     def _is_ok_payload(payload: dict[str, Any]) -> bool:
@@ -78,8 +77,12 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         """
         url = f"{self.base_url}{path}"
         try:
-            async with httpx.AsyncClient(timeout=timeout_sec or self.timeout_sec, headers=self._headers()) as client:
-                response = await client.request(method.upper(), url, params=params or None, json=json_payload or None)
+            async with httpx.AsyncClient(
+                timeout=timeout_sec or self.timeout_sec, headers=self._headers()
+            ) as client:
+                response = await client.request(
+                    method.upper(), url, params=params or None, json=json_payload or None
+                )
         except Exception as exc:  # noqa: BLE001 - клиент должен возвращать structured error
             return None, {}, str(exc)
 
@@ -95,7 +98,9 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         return response.status_code, payload, ""
 
     @staticmethod
-    def _error_payload(status_code: int | None, error: str, *, detail: Any = None) -> dict[str, Any]:
+    def _error_payload(
+        status_code: int | None, error: str, *, detail: Any = None
+    ) -> dict[str, Any]:
         """Нормализует network/HTTP ошибки под единый owner-facing формат."""
         if status_code is None:
             return {
@@ -193,7 +198,9 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
             "detail": payload if isinstance(payload, dict) else {},
         }
 
-    async def list_sessions(self, *, status: str | None = None, source: str | None = None, limit: int = 20) -> dict[str, Any]:
+    async def list_sessions(
+        self, *, status: str | None = None, source: str | None = None, limit: int = 20
+    ) -> dict[str, Any]:
         """Возвращает список translator-сессий."""
         params = {"limit": max(1, int(limit))}
         if status:
@@ -203,7 +210,11 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         status_code, payload, error = await self._request_json("GET", "/v1/sessions", params=params)
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
-        items = payload.get("items") if isinstance(payload.get("items"), list) else payload.get("sessions")
+        items = (
+            payload.get("items")
+            if isinstance(payload.get("items"), list)
+            else payload.get("sessions")
+        )
         if not isinstance(items, list):
             items = []
         return {
@@ -214,21 +225,27 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
 
     async def get_diagnostics(self, session_id: str) -> dict[str, Any]:
         """Читает diagnostics для конкретной translator-сессии."""
-        status_code, payload, error = await self._request_json("GET", f"/v1/sessions/{session_id}/diagnostics")
+        status_code, payload, error = await self._request_json(
+            "GET", f"/v1/sessions/{session_id}/diagnostics"
+        )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
         return {"ok": True, "result": dict(payload.get("result") or payload)}
 
     async def get_diagnostics_why(self, session_id: str) -> dict[str, Any]:
         """Читает why-report для translator-сессии."""
-        status_code, payload, error = await self._request_json("GET", f"/v1/sessions/{session_id}/diagnostics/why")
+        status_code, payload, error = await self._request_json(
+            "GET", f"/v1/sessions/{session_id}/diagnostics/why"
+        )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
         return {"ok": True, "result": dict(payload.get("result") or payload)}
 
     async def get_timeline_summary(self, session_id: str) -> dict[str, Any]:
         """Читает summary/timeline digest по сессии."""
-        status_code, payload, error = await self._request_json("GET", f"/v1/sessions/{session_id}/timeline/summary")
+        status_code, payload, error = await self._request_json(
+            "GET", f"/v1/sessions/{session_id}/timeline/summary"
+        )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
         return {"ok": True, "result": dict(payload.get("result") or payload)}
@@ -243,7 +260,10 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        return {"ok": True, "items": [cast(dict[str, Any], item) for item in items if isinstance(item, dict)]}
+        return {
+            "ok": True,
+            "items": [cast(dict[str, Any], item) for item in items if isinstance(item, dict)],
+        }
 
     async def get_timeline_stats(self, session_id: str, *, limit: int = 200) -> dict[str, Any]:
         """Возвращает статистику timeline."""
@@ -256,7 +276,9 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
             return self._error_payload(status_code, error, detail=payload)
         return {"ok": True, "result": dict(payload.get("result") or payload)}
 
-    async def export_timeline(self, session_id: str, *, format: str = "md", limit: int = 40) -> dict[str, Any]:
+    async def export_timeline(
+        self, session_id: str, *, format: str = "md", limit: int = 40
+    ) -> dict[str, Any]:
         """Экспортирует timeline в owner-facing формат."""
         status_code, payload, error = await self._request_json(
             "GET",
@@ -267,18 +289,25 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
             return self._error_payload(status_code, error, detail=payload)
         return {"ok": True, "result": dict(payload.get("result") or payload)}
 
-    async def list_quick_phrases(self, *, source_lang: str = "", target_lang: str = "") -> dict[str, Any]:
+    async def list_quick_phrases(
+        self, *, source_lang: str = "", target_lang: str = ""
+    ) -> dict[str, Any]:
         """Возвращает quick-phrase presets."""
         params: dict[str, Any] = {}
         if source_lang:
             params["source_lang"] = str(source_lang).strip()
         if target_lang:
             params["target_lang"] = str(target_lang).strip()
-        status_code, payload, error = await self._request_json("GET", "/v1/quick-phrases", params=params)
+        status_code, payload, error = await self._request_json(
+            "GET", "/v1/quick-phrases", params=params
+        )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        return {"ok": True, "items": [cast(dict[str, Any], item) for item in items if isinstance(item, dict)]}
+        return {
+            "ok": True,
+            "items": [cast(dict[str, Any], item) for item in items if isinstance(item, dict)],
+        }
 
     async def start_session(
         self,
@@ -301,7 +330,9 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
             "tgt_lang": str(tgt_lang).strip(),
             "meta": dict(meta or {}),
         }
-        status_code, response_payload, error = await self._request_json("POST", "/v1/sessions", json_payload=payload, timeout_sec=max(5.0, self.timeout_sec))
+        status_code, response_payload, error = await self._request_json(
+            "POST", "/v1/sessions", json_payload=payload, timeout_sec=max(5.0, self.timeout_sec)
+        )
         if error or status_code not in {200, 201} or not isinstance(response_payload, dict):
             return self._error_payload(status_code, error, detail=response_payload)
         result = dict(response_payload.get("result") or response_payload)
@@ -321,16 +352,28 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
-        return {"ok": True, "session_id": session_id, "result": dict(payload.get("result") or payload)}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": dict(payload.get("result") or payload),
+        }
 
     async def stop_session(self, session_id: str) -> dict[str, Any]:
         """Останавливает translator session."""
-        status_code, payload, error = await self._request_json("POST", f"/v1/sessions/{session_id}/stop", timeout_sec=max(5.0, self.timeout_sec))
+        status_code, payload, error = await self._request_json(
+            "POST", f"/v1/sessions/{session_id}/stop", timeout_sec=max(5.0, self.timeout_sec)
+        )
         if (error or status_code not in {200, 204}) and status_code == 404:
-            status_code, payload, error = await self._request_json("DELETE", f"/v1/sessions/{session_id}", timeout_sec=max(5.0, self.timeout_sec))
+            status_code, payload, error = await self._request_json(
+                "DELETE", f"/v1/sessions/{session_id}", timeout_sec=max(5.0, self.timeout_sec)
+            )
         if error or status_code not in {200, 204}:
             return self._error_payload(status_code, error, detail=payload)
-        return {"ok": True, "session_id": session_id, "result": dict(payload.get("result") or payload)}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": dict(payload.get("result") or payload),
+        }
 
     async def tune_runtime(self, session_id: str, **patch: Any) -> dict[str, Any]:
         """Обновляет runtime tuning конкретной сессии."""
@@ -342,7 +385,11 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
-        return {"ok": True, "session_id": session_id, "result": dict(payload.get("result") or payload)}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": dict(payload.get("result") or payload),
+        }
 
     async def send_quick_phrase(
         self,
@@ -366,7 +413,11 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         )
         if error or status_code != 200 or not isinstance(response_payload, dict):
             return self._error_payload(status_code, error, detail=response_payload)
-        return {"ok": True, "session_id": session_id, "result": dict(response_payload.get("result") or response_payload)}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": dict(response_payload.get("result") or response_payload),
+        }
 
     async def build_summary(self, session_id: str, *, max_items: int = 12) -> dict[str, Any]:
         """Строит summary для текущей сессии."""
@@ -378,19 +429,30 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
-        return {"ok": True, "session_id": session_id, "result": dict(payload.get("result") or payload)}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": dict(payload.get("result") or payload),
+        }
 
     async def list_mobile_devices(self, *, limit: int = 8) -> dict[str, Any]:
         """Возвращает companion registry."""
-        status_code, payload, error = await self._request_json("GET", "/v1/mobile/devices", params={"limit": max(1, int(limit))})
+        status_code, payload, error = await self._request_json(
+            "GET", "/v1/mobile/devices", params={"limit": max(1, int(limit))}
+        )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        return {"ok": True, "items": [cast(dict[str, Any], item) for item in items if isinstance(item, dict)]}
+        return {
+            "ok": True,
+            "items": [cast(dict[str, Any], item) for item in items if isinstance(item, dict)],
+        }
 
     async def get_mobile_session_snapshot(self, device_id: str) -> dict[str, Any]:
         """Возвращает snapshot выбранного companion-device."""
-        status_code, payload, error = await self._request_json("GET", f"/v1/mobile/devices/{device_id}/snapshot")
+        status_code, payload, error = await self._request_json(
+            "GET", f"/v1/mobile/devices/{device_id}/snapshot"
+        )
         if error or status_code != 200 or not isinstance(payload, dict):
             return self._error_payload(status_code, error, detail=payload)
         return {"ok": True, "result": dict(payload.get("result") or payload)}
@@ -466,7 +528,9 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
             "result": dict(payload.get("result") or payload),
         }
 
-    async def push_event(self, session_id: str, *, event_type: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def push_event(
+        self, session_id: str, *, event_type: str, data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Публикует произвольное событие в realtime-поток сессии.
 
         Используется для отправки reasoning.suggestion / reasoning.context
@@ -481,15 +545,25 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         )
         if error or status_code != 200 or not isinstance(response_payload, dict):
             return self._error_payload(status_code, error, detail=response_payload)
-        return {"ok": True, "session_id": session_id, "result": dict(response_payload.get("result") or response_payload)}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": dict(response_payload.get("result") or response_payload),
+        }
 
-    async def session_tts(self, session_id: str, *, text: str, voice: str = "default", style: str = "neutral") -> dict[str, Any]:
+    async def session_tts(
+        self, session_id: str, *, text: str, voice: str = "default", style: str = "neutral"
+    ) -> dict[str, Any]:
         """Генерирует речь и публикует tts.ready в поток сессии.
 
         Используется для озвучки LLM-подсказок (reasoning.suggestion)
         непосредственно в активную звонковую сессию.
         """
-        payload = {"text": str(text).strip(), "voice": str(voice).strip(), "style": str(style).strip()}
+        payload = {
+            "text": str(text).strip(),
+            "voice": str(voice).strip(),
+            "style": str(style).strip(),
+        }
         status_code, response_payload, error = await self._request_json(
             "POST",
             f"/v1/sessions/{session_id}/tts",
@@ -498,4 +572,8 @@ class VoiceGatewayClient(VoiceGatewayControlPlane):
         )
         if error or status_code != 200 or not isinstance(response_payload, dict):
             return self._error_payload(status_code, error, detail=response_payload)
-        return {"ok": True, "session_id": session_id, "result": dict(response_payload.get("result") or response_payload)}
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "result": dict(response_payload.get("result") or response_payload),
+        }

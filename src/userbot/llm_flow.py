@@ -191,11 +191,19 @@ def _build_openclaw_progress_wait_notice(
                 break
         # Извлекаем первую narration-строку (например "🌐 Открываю браузер...")
         first_line = tool_calls_summary.split("\n", 1)[0].strip()
-        if first_line and not first_line.startswith("✅") and not first_line.startswith("Инструментов"):
+        if (
+            first_line
+            and not first_line.startswith("✅")
+            and not first_line.startswith("Инструментов")
+        ):
             tool_name_display = first_line
 
     # Определяем есть ли running tools по счётчику "Инструментов: done/total"
-    _tc_m = re.search(r"Инструментов:\s*(\d+)/(\d+)", tool_calls_summary) if tool_calls_summary else None
+    _tc_m = (
+        re.search(r"Инструментов:\s*(\d+)/(\d+)", tool_calls_summary)
+        if tool_calls_summary
+        else None
+    )
     _has_running = _tc_m and int(_tc_m.group(1)) < int(_tc_m.group(2))
 
     if tool_calls_summary and _has_running:
@@ -218,10 +226,7 @@ def _build_openclaw_progress_wait_notice(
             "Если интересно что именно — загляни в дашборд :18789 (Chat → текущая сессия)."
         )
 
-    result = (
-        f"{lead}\n"
-        f"⏱ Прошло: {elapsed_label}" + route_line
-    )
+    result = f"{lead}\n⏱ Прошло: {elapsed_label}" + route_line
     if tool_calls_summary:
         result += f"\n\n{tool_calls_summary}"
     return result
@@ -358,15 +363,15 @@ class LLMFlowMixin:
         last_edit_time = 0.0
         timeout_error_was_sent = False
 
-        first_chunk_timeout_sec, chunk_timeout_sec = _ub._resolve_openclaw_stream_timeouts(
+        first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
             has_photo=bool(images)
         )
-        buffered_response_timeout_sec = _ub._resolve_openclaw_buffered_response_timeout(
+        buffered_response_timeout_sec = _resolve_openclaw_buffered_response_timeout(
             has_photo=bool(images),
             first_chunk_timeout_sec=first_chunk_timeout_sec,
         )
         progress_notice_initial_sec, progress_notice_repeat_sec = (
-            _ub._resolve_openclaw_progress_notice_schedule(
+            _resolve_openclaw_progress_notice_schedule(
                 has_photo=bool(images),
                 first_chunk_timeout_sec=first_chunk_timeout_sec,
             )
@@ -418,7 +423,7 @@ class LLMFlowMixin:
         )
         no_tool_activity_timeout_sec = max(60.0, no_tool_activity_timeout_sec)
         startup_route_model = str(
-            _ub._current_runtime_primary_model() or getattr(config, "MODEL", "") or ""
+            _current_runtime_primary_model() or getattr(config, "MODEL", "") or ""
         ).strip()
         next_chunk_task = asyncio.create_task(stream_iter.__anext__())
 
@@ -431,7 +436,9 @@ class LLMFlowMixin:
                 else:
                     wait_timeout = first_chunk_timeout_sec
                 elapsed_wait_sec = time.monotonic() - started_wait_at
-                remaining_total_timeout_sec = max(0.0, buffered_response_timeout_sec - elapsed_wait_sec)
+                remaining_total_timeout_sec = max(
+                    0.0, buffered_response_timeout_sec - elapsed_wait_sec
+                )
                 if not received_any_chunk:
                     if remaining_total_timeout_sec <= 0.0:
                         logger.error(
@@ -449,7 +456,7 @@ class LLMFlowMixin:
                                 route_meta = {}
                         route_model = str(
                             route_meta.get("model")
-                            or _ub._current_runtime_primary_model()
+                            or _current_runtime_primary_model()
                             or getattr(config, "MODEL", "")
                             or ""
                         ).strip()
@@ -519,7 +526,9 @@ class LLMFlowMixin:
                             first_chunk=False,
                             has_photo=bool(images),
                         )
-                        full_response = "❌ Модель слишком долго пишет ответ (оборвано на полуслове)."
+                        full_response = (
+                            "❌ Модель слишком долго пишет ответ (оборвано на полуслове)."
+                        )
                         timeout_error_was_sent = True  # → force_new_message, не тихий edit
                         if next_chunk_task and not next_chunk_task.done():
                             next_chunk_task.cancel()
@@ -600,17 +609,22 @@ class LLMFlowMixin:
                                 or ""
                             ).strip()
                             route_attempt = int(route_meta.get("attempt") or 0) or None
-                            progress_notice = _ub._build_openclaw_progress_wait_notice(
+                            progress_notice = _build_openclaw_progress_wait_notice(
                                 route_model=route_model,
                                 attempt=route_attempt,
                                 elapsed_sec=elapsed_wait_sec,
                                 notice_index=max(1, progress_notice_count),
                                 tool_calls_summary=tool_summary,
                             )
-                            if progress_notice != last_progress_notice_text or tool_summary != last_tool_summary:
+                            if (
+                                progress_notice != last_progress_notice_text
+                                or tool_summary != last_tool_summary
+                            ):
                                 try:
                                     if is_self:
-                                        message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
+                                        message = await self._safe_edit(
+                                            message, f"🦀 {query}\n\n{progress_notice}"
+                                        )
                                     else:
                                         temp_msg = await self._safe_edit(temp_msg, progress_notice)
                                     last_progress_notice_text = progress_notice
@@ -627,7 +641,10 @@ class LLMFlowMixin:
                         next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
 
                     # Handle Slow First Chunk
-                    if not slow_first_chunk_notice_sent and elapsed_wait_sec >= float(first_chunk_timeout_sec) - 1e-6:
+                    if (
+                        not slow_first_chunk_notice_sent
+                        and elapsed_wait_sec >= float(first_chunk_timeout_sec) - 1e-6
+                    ):
                         handled_interval = True
                         slow_first_chunk_notice_sent = True
                         route_meta = {}
@@ -653,13 +670,15 @@ class LLMFlowMixin:
                             route_attempt=route_attempt,
                             has_photo=bool(images),
                         )
-                        slow_notice = _ub._build_openclaw_slow_wait_notice(
+                        slow_notice = _build_openclaw_slow_wait_notice(
                             route_model=route_model,
                             attempt=route_attempt,
                         )
                         try:
                             if is_self:
-                                message = await self._safe_edit(message, f"🦀 {query}\n\n{slow_notice}")
+                                message = await self._safe_edit(
+                                    message, f"🦀 {query}\n\n{slow_notice}"
+                                )
                             else:
                                 temp_msg = await self._safe_edit(temp_msg, slow_notice)
                         except Exception as exc:
@@ -675,7 +694,10 @@ class LLMFlowMixin:
                         # We don't continue immediately, we might have progress notice to send
 
                     # Handle Progress Notice Keepalive
-                    if next_progress_notice_sec > 0.0 and elapsed_wait_sec >= next_progress_notice_sec - 1e-6:
+                    if (
+                        next_progress_notice_sec > 0.0
+                        and elapsed_wait_sec >= next_progress_notice_sec - 1e-6
+                    ):
                         handled_interval = True
                         route_meta = {}
                         if hasattr(openclaw_client, "get_last_runtime_route"):
@@ -700,7 +722,7 @@ class LLMFlowMixin:
                             route_attempt=route_attempt,
                             has_photo=bool(images),
                         )
-                        progress_notice = _ub._build_openclaw_progress_wait_notice(
+                        progress_notice = _build_openclaw_progress_wait_notice(
                             route_model=route_model,
                             attempt=route_attempt,
                             elapsed_sec=elapsed_wait_sec,
@@ -709,7 +731,9 @@ class LLMFlowMixin:
                         )
                         try:
                             if is_self:
-                                message = await self._safe_edit(message, f"🦀 {query}\n\n{progress_notice}")
+                                message = await self._safe_edit(
+                                    message, f"🦀 {query}\n\n{progress_notice}"
+                                )
                             else:
                                 temp_msg = await self._safe_edit(temp_msg, progress_notice)
                             last_progress_notice_text = progress_notice
@@ -743,9 +767,7 @@ class LLMFlowMixin:
                             first_chunk=True,
                             has_photo=bool(images),
                         )
-                        full_response = (
-                            "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
-                        )
+                        full_response = "❌ Модель отвечает слишком долго. Попробуй ещё раз или переключись на `!model cloud` / `!model local`."
                         timeout_error_was_sent = True
                         if next_chunk_task and not next_chunk_task.done():
                             next_chunk_task.cancel()
@@ -771,7 +793,9 @@ class LLMFlowMixin:
                 stream_display = (
                     self._extract_live_stream_text(
                         full_response_raw,
-                        allow_reasoning=bool(getattr(config, "TELEGRAM_STREAM_SHOW_REASONING", False)),
+                        allow_reasoning=bool(
+                            getattr(config, "TELEGRAM_STREAM_SHOW_REASONING", False)
+                        ),
                     )
                     if bool(getattr(config, "STRIP_REPLY_TO_TAGS", True))
                     else full_response_raw
@@ -779,7 +803,9 @@ class LLMFlowMixin:
                 if stream_display:
                     full_response = stream_display
 
-                update_interval = float(getattr(config, "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", 0.75) or 0.75)
+                update_interval = float(
+                    getattr(config, "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", 0.75) or 0.75
+                )
                 update_interval = max(0.25, update_interval)
                 if stream_display and (time.time() - last_edit_time > update_interval):
                     last_edit_time = time.time()
@@ -799,7 +825,9 @@ class LLMFlowMixin:
                 next_chunk_task = asyncio.create_task(stream_iter.__anext__())
 
             if not full_response:
-                full_response = self._extract_live_stream_text(full_response_raw, allow_reasoning=False)
+                full_response = self._extract_live_stream_text(
+                    full_response_raw, allow_reasoning=False
+                )
             if not full_response:
                 full_response = "❌ Модель не вернула ответ."
 
@@ -942,7 +970,9 @@ class LLMFlowMixin:
                 incoming_item_result=incoming_item_result,
                 response_text=full_response,
                 delivery_result=delivery_result,
-                note="llm_response_delivered_background" if prefer_send_message_for_background else "llm_response_delivered",
+                note="llm_response_delivered_background"
+                if prefer_send_message_for_background
+                else "llm_response_delivered",
             )
 
             # Post-response relay: если Краб пообещал передать в ответе, а входящее
@@ -953,7 +983,8 @@ class LLMFlowMixin:
                     asyncio.create_task(
                         self._escalate_relay_to_owner(
                             message=message,
-                            user=getattr(message, "from_user", None) or getattr(message, "sender_chat", None),
+                            user=getattr(message, "from_user", None)
+                            or getattr(message, "sender_chat", None),
                             query=query,
                             chat_type="private",
                         )
@@ -997,7 +1028,9 @@ class LLMFlowMixin:
                         await self._send_delivery_chat_action(
                             self.client,
                             message.chat.id,
-                            getattr(enums.ChatAction, "UPLOAD_AUDIO", enums.ChatAction.RECORD_AUDIO),
+                            getattr(
+                                enums.ChatAction, "UPLOAD_AUDIO", enums.ChatAction.RECORD_AUDIO
+                            ),
                         )
                         await self.client.send_voice(message.chat.id, _mpath)
                         _agent_sent_voice = True
@@ -1031,7 +1064,8 @@ class LLMFlowMixin:
                 except Exception as _me:  # noqa: BLE001
                     logger.error("media_send_failed", path=_mpath, error=str(_me))
                     await self.client.send_message(
-                        message.chat.id, f"⚠️ Не удалось отправить медиа `{os.path.basename(_mpath)}`: `{str(_me)[:200]}`"
+                        message.chat.id,
+                        f"⚠️ Не удалось отправить медиа `{os.path.basename(_mpath)}`: `{str(_me)[:200]}`",
                     )
 
             # Запускаем Python TTS (edge_tts) только если агент не прислал аудио сам.
@@ -1064,7 +1098,9 @@ class LLMFlowMixin:
                 # отклоняет голосовые < ~1 секунды, что роняет весь delivery pipeline.
                 _tts_text = (full_response or "").strip()
                 if len(_tts_text) >= 10:
-                    voice_path = await _ub.text_to_speech(
+                    from ..voice_engine import text_to_speech as _text_to_speech  # noqa: I001
+
+                    voice_path = await _text_to_speech(
                         _tts_text,
                         speed=self.voice_reply_speed,
                         voice=self.voice_reply_voice,
@@ -1075,7 +1111,9 @@ class LLMFlowMixin:
                             await self._send_delivery_chat_action(
                                 self.client,
                                 message.chat.id,
-                                getattr(enums.ChatAction, "UPLOAD_AUDIO", enums.ChatAction.RECORD_AUDIO),
+                                getattr(
+                                    enums.ChatAction, "UPLOAD_AUDIO", enums.ChatAction.RECORD_AUDIO
+                                ),
                             )
                             await self.client.send_voice(message.chat.id, voice_path)
                             logger.info("tts_voice_send_ok", chat_id=chat_id, path=voice_path)
@@ -1121,7 +1159,9 @@ class LLMFlowMixin:
                         chat_id=chat_id,
                         error=str(_cache_exc),
                     )
-            error_text = "❌ Фоновая обработка запроса завершилась ошибкой. Попробуй повторить сообщение."
+            error_text = (
+                "❌ Фоновая обработка запроса завершилась ошибкой. Попробуй повторить сообщение."
+            )
             try:
                 if temp_msg is not None:
                     await self.client.send_message(temp_msg.chat.id, error_text)
@@ -1141,6 +1181,10 @@ class LLMFlowMixin:
             self._record_incoming_reply_to_inbox(
                 incoming_item_result=incoming_item_result,
                 response_text=error_text,
-                delivery_result={"delivery_mode": "background_error", "text_message_ids": [], "parts_count": 1},
+                delivery_result={
+                    "delivery_mode": "background_error",
+                    "text_message_ids": [],
+                    "parts_count": 1,
+                },
                 note="llm_response_background_error",
             )

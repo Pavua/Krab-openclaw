@@ -16,6 +16,7 @@ from __future__ import annotations
 # Хелпер: создаёт MemoryManager с persist_directory = tmp_path
 # ---------------------------------------------------------------------------
 
+
 def _make_manager(tmp_path, monkeypatch):
     """Возвращает свежий MemoryManager, хранящий базу в tmp_path."""
     import src.memory_engine as me
@@ -28,6 +29,7 @@ def _make_manager(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Инициализация
 # ---------------------------------------------------------------------------
+
 
 class TestMemoryManagerInit:
     def test_normal_init_sets_collection(self, tmp_path, monkeypatch):
@@ -61,6 +63,7 @@ class TestMemoryManagerInit:
 # ---------------------------------------------------------------------------
 # save_fact
 # ---------------------------------------------------------------------------
+
 
 class TestSaveFact:
     def test_save_returns_true(self, tmp_path, monkeypatch):
@@ -105,6 +108,7 @@ class TestSaveFact:
 # recall
 # ---------------------------------------------------------------------------
 
+
 class TestRecall:
     def test_recall_empty_db_returns_empty_string(self, tmp_path, monkeypatch):
         """recall на пустой коллекции возвращает пустую строку."""
@@ -146,6 +150,7 @@ class TestRecall:
 # ---------------------------------------------------------------------------
 # count
 # ---------------------------------------------------------------------------
+
 
 class TestCount:
     def test_count_zero_on_empty(self, tmp_path, monkeypatch):

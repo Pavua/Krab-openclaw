@@ -2,6 +2,7 @@
 """
 Тесты для CostAnalytics — подсчёт токенов, бюджет, отчёты.
 """
+
 from __future__ import annotations
 
 import time
@@ -17,6 +18,7 @@ from src.core.cost_analytics import (
 
 # --- Хелперы ---
 
+
 def _cloud_usage(inp: int = 1000, out: int = 500) -> dict:
     """Типичный usage-словарь облачной модели."""
     return {"prompt_tokens": inp, "completion_tokens": out, "total_tokens": inp + out}
@@ -30,18 +32,30 @@ def _make_analytics(**kwargs) -> CostAnalytics:
 
 # --- _is_local_model ---
 
+
 class TestIsLocalModel:
     """Локальные модели не тарифицируются."""
 
-    @pytest.mark.parametrize("model_id", [
-        "local-qwen-7b", "mlx-gemma", "my-model-gguf", "LOCAL",
-    ])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "local-qwen-7b",
+            "mlx-gemma",
+            "my-model-gguf",
+            "LOCAL",
+        ],
+    )
     def test_local_variants_detected(self, model_id: str):
         assert _is_local_model(model_id) is True
 
-    @pytest.mark.parametrize("model_id", [
-        "google/gemini-3.1-pro", "openai/gpt-4o", "anthropic/claude-sonnet",
-    ])
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "google/gemini-3.1-pro",
+            "openai/gpt-4o",
+            "anthropic/claude-sonnet",
+        ],
+    )
     def test_cloud_models_not_local(self, model_id: str):
         assert _is_local_model(model_id) is False
 
@@ -50,6 +64,7 @@ class TestIsLocalModel:
 
 
 # --- _cost_usd ---
+
 
 class TestCostUsd:
     """Расчёт стоимости вызова."""
@@ -67,6 +82,7 @@ class TestCostUsd:
 
 
 # --- CostAnalytics.record_usage ---
+
 
 class TestRecordUsage:
     """Запись и аккумуляция использования."""
@@ -91,7 +107,9 @@ class TestRecordUsage:
     def test_alternative_key_names(self):
         """OpenClaw иногда отдаёт input_tokens/output_tokens вместо prompt/completion."""
         ca = _make_analytics()
-        ca.record_usage({"input_tokens": 77, "output_tokens": 33, "total_tokens": 110}, model_id="m1")
+        ca.record_usage(
+            {"input_tokens": 77, "output_tokens": 33, "total_tokens": 110}, model_id="m1"
+        )
         stats = ca.get_usage_stats()
         assert stats["input_tokens"] == 77
         assert stats["output_tokens"] == 33
@@ -105,6 +123,7 @@ class TestRecordUsage:
 
 
 # --- Бюджет ---
+
 
 class TestBudget:
     """Контроль месячного бюджета."""
@@ -145,6 +164,7 @@ class TestBudget:
 
 # --- Отчёты ---
 
+
 class TestReports:
     """build_usage_report / build_usage_report_dict."""
 
@@ -184,6 +204,7 @@ class TestReports:
 
 # --- Прогноз ---
 
+
 class TestForecast:
     """monthly_calls_forecast."""
 
@@ -201,6 +222,7 @@ class TestForecast:
 
 
 # --- CallRecord dataclass ---
+
 
 class TestCallRecord:
     """Базовые проверки датакласса."""

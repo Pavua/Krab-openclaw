@@ -45,15 +45,15 @@ def _make_bot_stub() -> KraabUserbot:
 def test_looks_like_capability_status_question_detects_runtime_prompt() -> None:
     """Fast-path отключён по просьбе пользователя — функция всегда возвращает False."""
     # NOTE: отключено ("все вопросы уходят в LLM")
-    assert KraabUserbot._looks_like_capability_status_question(
-        "Что ты уже умеешь, а что еще нет?"
-    ) is False
-    assert KraabUserbot._looks_like_capability_status_question(
-        "Какие у тебя возможности сейчас?"
-    ) is False
-    assert KraabUserbot._looks_like_capability_status_question(
-        "Просто расскажи анекдот"
-    ) is False
+    assert (
+        KraabUserbot._looks_like_capability_status_question("Что ты уже умеешь, а что еще нет?")
+        is False
+    )
+    assert (
+        KraabUserbot._looks_like_capability_status_question("Какие у тебя возможности сейчас?")
+        is False
+    )
+    assert KraabUserbot._looks_like_capability_status_question("Просто расскажи анекдот") is False
 
 
 def test_looks_like_commands_question_detects_help_intent() -> None:
@@ -77,24 +77,39 @@ def test_looks_like_runtime_truth_question_detects_self_check_intent() -> None:
     # NOTE: _looks_like_runtime_truth_question disabled ("все вопросы уходят в LLM")
     assert KraabUserbot._looks_like_runtime_truth_question("Проверка связи") is False
     assert KraabUserbot._looks_like_runtime_truth_question("Что работает, а что нет?") is False
-    assert KraabUserbot._looks_like_runtime_truth_question("Есть ли у тебя доступ к браузеру?") is False
+    assert (
+        KraabUserbot._looks_like_runtime_truth_question("Есть ли у тебя доступ к браузеру?")
+        is False
+    )
     assert KraabUserbot._looks_like_runtime_truth_question("Расскажи шутку") is False
 
 
 def test_looks_like_runtime_truth_question_detects_full_diagnostics_intent() -> None:
     """Fast-path отключён — диагностические вопросы тоже уходят в LLM."""
     # NOTE: _looks_like_runtime_truth_question disabled ("все вопросы уходят в LLM")
-    assert KraabUserbot._looks_like_runtime_truth_question("Cron у тебя уже работает? Проведи полную диагностику") is False
-    assert KraabUserbot._looks_like_runtime_truth_question(
-        "Проведи полную диагностику рантайма и скажи текущую модель"
-    ) is False
+    assert (
+        KraabUserbot._looks_like_runtime_truth_question(
+            "Cron у тебя уже работает? Проведи полную диагностику"
+        )
+        is False
+    )
+    assert (
+        KraabUserbot._looks_like_runtime_truth_question(
+            "Проведи полную диагностику рантайма и скажи текущую модель"
+        )
+        is False
+    )
 
 
-def test_build_runtime_capability_status_owner_includes_real_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_runtime_capability_status_owner_includes_real_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Для доверенного контура summary должен отражать реальные owner-инструменты."""
     bot = _make_bot_stub()
 
-    monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano")
+    monkeypatch.setattr(
+        userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano"
+    )
     monkeypatch.setattr(
         userbot_bridge_module.openclaw_client,
         "get_last_runtime_route",
@@ -112,7 +127,9 @@ def test_build_runtime_capability_status_owner_includes_real_tools(monkeypatch: 
     assert "Не запоминаю всю переписку навсегда автоматически" in text
 
 
-def test_build_runtime_capability_status_guest_hides_owner_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_runtime_capability_status_guest_hides_owner_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Для гостевого контура не должны светиться owner-only команды."""
     bot = _make_bot_stub()
 
@@ -161,8 +178,12 @@ async def test_build_runtime_integrations_status_owner_uses_runtime_truth(
     """Owner-summary должен отражать реальные интеграции и их configured-state."""
     bot = _make_bot_stub()
 
-    monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano")
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano"
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
 
     def _fake_launch(name: str):
@@ -170,7 +191,9 @@ async def test_build_runtime_integrations_status_owner_uses_runtime_truth(
             return {"missing_env": ["FIRECRAWL_API_KEY"]}
         return {"missing_env": []}
 
-    monkeypatch.setattr(userbot_bridge_module, "resolve_managed_server_launch", _fake_launch)
+    import src.core.mcp_registry as mcp_registry_module
+
+    monkeypatch.setattr(mcp_registry_module, "resolve_managed_server_launch", _fake_launch)
 
     text = await bot._build_runtime_integrations_status(is_allowed_sender=True)
 
@@ -189,7 +212,9 @@ async def test_build_runtime_integrations_status_guest_hides_owner_tools(
     bot = _make_bot_stub()
 
     monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "")
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True)
+    )
 
     text = await bot._build_runtime_integrations_status(is_allowed_sender=False)
 
@@ -199,7 +224,9 @@ async def test_build_runtime_integrations_status_guest_hides_owner_tools(
     assert "скрыты в этом чате" in text
 
 
-@pytest.mark.skip(reason="capability fast-path disabled per user request — все вопросы уходят в LLM")
+@pytest.mark.skip(
+    reason="capability fast-path disabled per user request — все вопросы уходят в LLM"
+)
 @pytest.mark.asyncio
 async def test_process_message_capability_question_uses_fast_path_without_llm(
     monkeypatch: pytest.MonkeyPatch,
@@ -219,12 +246,18 @@ async def test_process_message_capability_question_uses_fast_path_without_llm(
         voice=None,
         chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")
+        ),
     )
 
     send_stream_mock = Mock()
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
-    monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano")
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano"
+    )
     monkeypatch.setattr(
         userbot_bridge_module.openclaw_client,
         "get_last_runtime_route",
@@ -258,11 +291,15 @@ async def test_process_message_commands_question_uses_fast_path_without_llm(
         voice=None,
         chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")
+        ),
     )
 
     send_stream_mock = Mock()
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock
+    )
 
     await bot._process_message(incoming)
 
@@ -273,7 +310,9 @@ async def test_process_message_commands_question_uses_fast_path_without_llm(
     assert "`!search <запрос>`" in delivered_text
 
 
-@pytest.mark.skip(reason="integrations fast-path disabled per user request — все вопросы уходят в LLM")
+@pytest.mark.skip(
+    reason="integrations fast-path disabled per user request — все вопросы уходят в LLM"
+)
 @pytest.mark.asyncio
 async def test_process_message_integrations_question_uses_fast_path_without_llm(
     monkeypatch: pytest.MonkeyPatch,
@@ -290,13 +329,21 @@ async def test_process_message_integrations_question_uses_fast_path_without_llm(
         voice=None,
         chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")
+        ),
     )
 
     send_stream_mock = Mock()
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
-    monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano")
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano"
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(
         userbot_bridge_module,
         "resolve_managed_server_launch",
@@ -312,7 +359,9 @@ async def test_process_message_integrations_question_uses_fast_path_without_llm(
     assert "LM Studio local: ON (`nvidia/nemotron-3-nano`)" in delivered_text
 
 
-@pytest.mark.skip(reason="runtime truth fast-path disabled per user request — все вопросы уходят в LLM")
+@pytest.mark.skip(
+    reason="runtime truth fast-path disabled per user request — все вопросы уходят в LLM"
+)
 @pytest.mark.asyncio
 async def test_process_message_runtime_truth_question_uses_fast_path_without_llm(
     monkeypatch: pytest.MonkeyPatch,
@@ -329,18 +378,30 @@ async def test_process_message_runtime_truth_question_uses_fast_path_without_llm
         voice=None,
         chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")
+        ),
     )
 
     send_stream_mock = Mock()
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
-    monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano")
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.model_manager, "get_current_model", lambda: "nvidia/nemotron-3-nano"
+    )
     monkeypatch.setattr(
         userbot_bridge_module.openclaw_client,
         "get_last_runtime_route",
-        lambda: {"channel": "local_direct", "model": "nvidia/nemotron-3-nano", "provider": "lmstudio"},
+        lambda: {
+            "channel": "local_direct",
+            "model": "nvidia/nemotron-3-nano",
+            "provider": "lmstudio",
+        },
     )
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
     monkeypatch.setattr(userbot_bridge_module.krab_scheduler, "_started", True, raising=False)
     monkeypatch.setattr(
@@ -361,7 +422,9 @@ async def test_process_message_runtime_truth_question_uses_fast_path_without_llm
     assert "Cron / heartbeat: scheduler активен, transport живой." in delivered_text
 
 
-@pytest.mark.skip(reason="runtime truth fast-path disabled per user request — все вопросы уходят в LLM")
+@pytest.mark.skip(
+    reason="runtime truth fast-path disabled per user request — все вопросы уходят в LLM"
+)
 @pytest.mark.asyncio
 async def test_process_message_full_diagnostics_question_uses_runtime_truth_fast_path(
     monkeypatch: pytest.MonkeyPatch,
@@ -383,12 +446,18 @@ async def test_process_message_full_diagnostics_question_uses_runtime_truth_fast
         voice=None,
         chat=SimpleNamespace(id=123, type=enums.ChatType.PRIVATE),
         reply_to_message=None,
-        reply=AsyncMock(return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")),
+        reply=AsyncMock(
+            return_value=SimpleNamespace(chat=SimpleNamespace(id=123), text="", caption="")
+        ),
     )
 
     send_stream_mock = Mock()
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
-    monkeypatch.setattr(userbot_bridge_module.model_manager, "get_current_model", lambda: "openai-codex/gpt-5.4")
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock
+    )
+    monkeypatch.setattr(
+        userbot_bridge_module.model_manager, "get_current_model", lambda: "openai-codex/gpt-5.4"
+    )
     monkeypatch.setattr(
         userbot_bridge_module.openclaw_client,
         "get_last_runtime_route",
@@ -398,7 +467,9 @@ async def test_process_message_full_diagnostics_question_uses_runtime_truth_fast
             "provider": "openai-codex",
         },
     )
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "health_check", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(userbot_bridge_module.config, "SCHEDULER_ENABLED", True, raising=False)
     monkeypatch.setattr(userbot_bridge_module.krab_scheduler, "_started", True, raising=False)
     monkeypatch.setattr(

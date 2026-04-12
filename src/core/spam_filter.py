@@ -19,7 +19,9 @@ _OTP_PATTERNS = re.compile(
 def is_notification_sender(user: object) -> bool:
     """SMS/iMessage shortcode (≤5 цифр) — не принимают входящие."""
     username = str(getattr(user, "username", "") or "").strip().lstrip("@")
-    phone = str(getattr(user, "phone", "") or "").strip().lstrip("+").replace(" ", "").replace("-", "")
+    phone = (
+        str(getattr(user, "phone", "") or "").strip().lstrip("+").replace(" ", "").replace("-", "")
+    )
     for candidate in (username, phone):
         if candidate and candidate.isdigit() and len(candidate) <= 5:
             return True

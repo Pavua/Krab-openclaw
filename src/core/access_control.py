@@ -204,7 +204,9 @@ class AccessProfile:
         return False
 
 
-def build_command_access_matrix(known_commands: set[str] | frozenset[str] | None = None) -> dict[str, Any]:
+def build_command_access_matrix(
+    known_commands: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
     """
     Возвращает единый truth-срез командного доступа по ролям.
 
@@ -368,18 +370,16 @@ def save_acl_runtime_state(state: dict[str, list[str]], path: Path | None = None
     for level in (AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value):
         values = state.get(level) if isinstance(state, dict) else []
         normalized = sorted(
-            {
-                normalize_subject(item)
-                for item in (values or [])
-                if normalize_subject(item)
-            }
+            {normalize_subject(item) for item in (values or []) if normalize_subject(item)}
         )
         payload[level] = normalized
     _save_acl_file(acl_path, payload)
     return acl_path
 
 
-def update_acl_subject(level: str | AccessLevel, subject: object, *, add: bool, path: Path | None = None) -> dict[str, Any]:
+def update_acl_subject(
+    level: str | AccessLevel, subject: object, *, add: bool, path: Path | None = None
+) -> dict[str, Any]:
     """
     Добавляет или удаляет subject из runtime ACL-файла.
 
@@ -388,8 +388,14 @@ def update_acl_subject(level: str | AccessLevel, subject: object, *, add: bool, 
     - `state`: новое нормализованное состояние;
     - `path`: куда записан ACL.
     """
-    normalized_level = str(level.value if isinstance(level, AccessLevel) else level or "").strip().lower()
-    if normalized_level not in {AccessLevel.OWNER.value, AccessLevel.FULL.value, AccessLevel.PARTIAL.value}:
+    normalized_level = (
+        str(level.value if isinstance(level, AccessLevel) else level or "").strip().lower()
+    )
+    if normalized_level not in {
+        AccessLevel.OWNER.value,
+        AccessLevel.FULL.value,
+        AccessLevel.PARTIAL.value,
+    }:
         raise ValueError(f"unsupported_acl_level:{normalized_level or 'empty'}")
 
     normalized_subject = normalize_subject(subject)
@@ -415,7 +421,9 @@ def update_acl_subject(level: str | AccessLevel, subject: object, *, add: bool, 
     }
 
 
-def resolve_access_profile(*, user_id: object, username: object, self_user_id: object | None) -> AccessProfile:
+def resolve_access_profile(
+    *, user_id: object, username: object, self_user_id: object | None
+) -> AccessProfile:
     """
     Определяет ACL-профиль пользователя.
 
@@ -431,7 +439,9 @@ def resolve_access_profile(*, user_id: object, username: object, self_user_id: o
     normalized_username = normalize_subject(username)
     normalized_self_id = normalize_subject(self_user_id)
 
-    acl_path = Path(getattr(config, "USERBOT_ACL_FILE", Path.home() / ".openclaw" / "krab_userbot_acl.json"))
+    acl_path = Path(
+        getattr(config, "USERBOT_ACL_FILE", Path.home() / ".openclaw" / "krab_userbot_acl.json")
+    )
     acl_payload = _load_acl_file(acl_path)
 
     owner_file_ids, owner_file_names = _extract_acl_subjects(acl_payload.get("owner"))
@@ -440,7 +450,9 @@ def resolve_access_profile(*, user_id: object, username: object, self_user_id: o
 
     owner_env_ids, owner_env_names = _split_subjects(list(getattr(config, "OWNER_USER_IDS", [])))
     full_env_ids, full_env_names = _split_subjects(list(getattr(config, "FULL_ACCESS_USERS", [])))
-    partial_env_ids, partial_env_names = _split_subjects(list(getattr(config, "PARTIAL_ACCESS_USERS", [])))
+    partial_env_ids, partial_env_names = _split_subjects(
+        list(getattr(config, "PARTIAL_ACCESS_USERS", []))
+    )
     owner_username = normalize_subject(getattr(config, "OWNER_USERNAME", ""))
 
     def _matches(ids: set[str], usernames: set[str]) -> str:
@@ -451,21 +463,33 @@ def resolve_access_profile(*, user_id: object, username: object, self_user_id: o
         return ""
 
     if normalized_self_id and normalized_user_id and normalized_self_id == normalized_user_id:
-        return AccessProfile(level=AccessLevel.OWNER, source="self", matched_subject=normalized_user_id)
+        return AccessProfile(
+            level=AccessLevel.OWNER, source="self", matched_subject=normalized_user_id
+        )
 
     owner_match = _matches(owner_env_ids | owner_file_ids, owner_env_names | owner_file_names)
     if owner_match:
-        return AccessProfile(level=AccessLevel.OWNER, source="owner_acl", matched_subject=owner_match)
+        return AccessProfile(
+            level=AccessLevel.OWNER, source="owner_acl", matched_subject=owner_match
+        )
 
     if owner_username and normalized_username and owner_username == normalized_username:
-        return AccessProfile(level=AccessLevel.OWNER, source="config.owner_username", matched_subject=normalized_username)
+        return AccessProfile(
+            level=AccessLevel.OWNER,
+            source="config.owner_username",
+            matched_subject=normalized_username,
+        )
 
     full_match = _matches(full_env_ids | full_file_ids, full_env_names | full_file_names)
     if full_match:
         return AccessProfile(level=AccessLevel.FULL, source="full_acl", matched_subject=full_match)
 
-    partial_match = _matches(partial_env_ids | partial_file_ids, partial_env_names | partial_file_names)
+    partial_match = _matches(
+        partial_env_ids | partial_file_ids, partial_env_names | partial_file_names
+    )
     if partial_match:
-        return AccessProfile(level=AccessLevel.PARTIAL, source="partial_acl", matched_subject=partial_match)
+        return AccessProfile(
+            level=AccessLevel.PARTIAL, source="partial_acl", matched_subject=partial_match
+        )
 
     return AccessProfile(level=AccessLevel.GUEST, source="default_guest", matched_subject="")

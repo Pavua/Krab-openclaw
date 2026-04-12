@@ -30,6 +30,7 @@ from src.core.swarm_bus import (
 # TEAM_REGISTRY — структурная валидация
 # ---------------------------------------------------------------------------
 
+
 class TestTeamRegistry:
     """Валидация структуры реестра команд."""
 
@@ -59,6 +60,7 @@ class TestTeamRegistry:
 # ---------------------------------------------------------------------------
 # resolve_team_name / list_teams
 # ---------------------------------------------------------------------------
+
 
 class TestResolveTeamName:
     def test_canonical_name(self):
@@ -106,6 +108,7 @@ class TestListTeams:
 # SwarmBus
 # ---------------------------------------------------------------------------
 
+
 class TestSwarmBus:
     def test_initial_state(self):
         bus = SwarmBus()
@@ -145,8 +148,10 @@ class TestSwarmBus:
         router_factory = MagicMock(return_value=mock_router)
 
         # Мокаем swarm_channels и swarm_memory чтобы не трогать singleton-стейт
-        with patch("src.core.swarm.swarm_channels") as mock_ch, \
-             patch("src.core.swarm.swarm_memory") as mock_mem:
+        with (
+            patch("src.core.swarm.swarm_channels") as mock_ch,
+            patch("src.core.swarm.swarm_memory") as mock_mem,
+        ):
             mock_ch.get_pending_intervention.return_value = None
             mock_ch.broadcast_round_start = AsyncMock()
             mock_ch.broadcast_role_step = AsyncMock()
@@ -179,6 +184,7 @@ class TestSwarmBusTask:
 # AgentRoom
 # ---------------------------------------------------------------------------
 
+
 class TestAgentRoom:
     def test_default_roles(self):
         room = AgentRoom()
@@ -206,8 +212,10 @@ class TestAgentRoom:
         mock_router = AsyncMock()
         mock_router.route_query = AsyncMock(side_effect=["ответ альфа", "ответ бета"])
 
-        with patch("src.core.swarm.swarm_channels") as mock_ch, \
-             patch("src.core.swarm.swarm_memory"):
+        with (
+            patch("src.core.swarm.swarm_channels") as mock_ch,
+            patch("src.core.swarm.swarm_memory"),
+        ):
             mock_ch.get_pending_intervention.return_value = None
             mock_ch.broadcast_round_start = AsyncMock()
             mock_ch.broadcast_role_step = AsyncMock()
@@ -227,8 +235,10 @@ class TestAgentRoom:
         mock_router = AsyncMock()
         mock_router.route_query = AsyncMock(side_effect=RuntimeError("model timeout"))
 
-        with patch("src.core.swarm.swarm_channels") as mock_ch, \
-             patch("src.core.swarm.swarm_memory"):
+        with (
+            patch("src.core.swarm.swarm_channels") as mock_ch,
+            patch("src.core.swarm.swarm_memory"),
+        ):
             mock_ch.get_pending_intervention.return_value = None
             mock_ch.broadcast_round_start = AsyncMock()
             mock_ch.broadcast_role_step = AsyncMock()
@@ -247,8 +257,10 @@ class TestAgentRoom:
         mock_router = AsyncMock()
         mock_router.route_query = AsyncMock(return_value="x" * 500)
 
-        with patch("src.core.swarm.swarm_channels") as mock_ch, \
-             patch("src.core.swarm.swarm_memory"):
+        with (
+            patch("src.core.swarm.swarm_channels") as mock_ch,
+            patch("src.core.swarm.swarm_memory"),
+        ):
             mock_ch.get_pending_intervention.return_value = None
             mock_ch.broadcast_round_start = AsyncMock()
             mock_ch.broadcast_role_step = AsyncMock()
@@ -264,6 +276,7 @@ class TestAgentRoom:
 # ---------------------------------------------------------------------------
 # _DELEGATE_PATTERN
 # ---------------------------------------------------------------------------
+
 
 class TestDelegatePattern:
     def test_matches_english(self):
@@ -289,6 +302,7 @@ class TestDelegatePattern:
 # ---------------------------------------------------------------------------
 # SwarmOrchestrator (базовый)
 # ---------------------------------------------------------------------------
+
 
 class TestSwarmOrchestrator:
     @pytest.mark.asyncio

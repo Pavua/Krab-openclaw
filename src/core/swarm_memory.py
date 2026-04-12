@@ -94,8 +94,11 @@ class SwarmMemory:
         try:
             raw = self._path.read_text(encoding="utf-8")
             self._data = json.loads(raw) if raw.strip() else {}
-            logger.info("swarm_memory_loaded", teams=len(self._data),
-                        total=sum(len(v) for v in self._data.values()))
+            logger.info(
+                "swarm_memory_loaded",
+                teams=len(self._data),
+                total=sum(len(v) for v in self._data.values()),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("swarm_memory_load_failed", error=str(exc))
             self._data = {}
@@ -104,8 +107,7 @@ class SwarmMemory:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2),
-                           encoding="utf-8")
+            tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self._path)
         except Exception as exc:  # noqa: BLE001
             logger.error("swarm_memory_save_failed", error=str(exc))
@@ -144,8 +146,13 @@ class SwarmMemory:
             self._data[team_key] = self._data[team_key][-_MAX_ENTRIES_PER_TEAM:]
 
         self._save()
-        logger.info("swarm_memory_run_saved", team=team, run_id=record.run_id,
-                     topic_len=len(topic), result_len=len(record.result_summary))
+        logger.info(
+            "swarm_memory_run_saved",
+            team=team,
+            run_id=record.run_id,
+            topic_len=len(topic),
+            result_len=len(record.result_summary),
+        )
         return record
 
     def get_recent(self, team: str, count: int | None = None) -> list[SwarmRunRecord]:
@@ -167,10 +174,7 @@ class SwarmMemory:
 
         lines = [f"--- Память команды {team} (последние {len(records)} прогонов) ---"]
         for rec in records:
-            lines.append(
-                f"[{rec.created_at}] Тема: {rec.topic}\n"
-                f"Итог: {rec.result_summary}"
-            )
+            lines.append(f"[{rec.created_at}] Тема: {rec.topic}\nИтог: {rec.result_summary}")
             if rec.delegations:
                 lines.append(f"Делегирования: {', '.join(rec.delegations)}")
             lines.append("")
@@ -190,9 +194,7 @@ class SwarmMemory:
             "total_runs": len(records),
             "first_run": records[0].created_at,
             "last_run": records[-1].created_at,
-            "avg_duration_sec": round(
-                sum(r.duration_sec for r in records) / len(records), 1
-            ),
+            "avg_duration_sec": round(sum(r.duration_sec for r in records) / len(records), 1),
             "topics_sample": [r.topic[:80] for r in records[-3:]],
         }
 
@@ -203,12 +205,12 @@ class SwarmMemory:
             return f"Команда **{team}** ещё не запускалась."
 
         stats = self.get_team_stats(team)
-        lines = [
-            f"🧠 **Память команды {team}** (всего прогонов: {stats['total_runs']})\n"
-        ]
+        lines = [f"🧠 **Память команды {team}** (всего прогонов: {stats['total_runs']})\n"]
         for rec in reversed(records):
             topic_short = rec.topic[:100] + ("..." if len(rec.topic) > 100 else "")
-            result_short = rec.result_summary[:300] + ("..." if len(rec.result_summary) > 300 else "")
+            result_short = rec.result_summary[:300] + (
+                "..." if len(rec.result_summary) > 300 else ""
+            )
             deleg = f" | делегирования: {', '.join(rec.delegations)}" if rec.delegations else ""
             lines.append(
                 f"**{rec.created_at}** ({rec.duration_sec}с){deleg}\n"
@@ -247,7 +249,7 @@ class SwarmMemory:
                 # Пропускаем первую строку
                 nl = text.find("\n")
                 if nl > 0:
-                    text = text[nl + 1:].strip()
+                    text = text[nl + 1 :].strip()
                 break
 
         if len(text) > _RESULT_CLIP:

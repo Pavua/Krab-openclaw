@@ -2,9 +2,8 @@
 """
 Проверка окружения и конфигурации при старте (Фаза 4/6.2 декомпозиция main.py).
 """
-from __future__ import annotations
 
-import sys
+from __future__ import annotations
 
 import structlog
 

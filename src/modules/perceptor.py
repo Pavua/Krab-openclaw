@@ -31,12 +31,9 @@ class Perceptor:
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._config = config or {}
-        self._gateway_url = str(
-            os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090")
-        ).rstrip("/")
+        self._gateway_url = str(os.getenv("VOICE_GATEWAY_URL", "http://127.0.0.1:8090")).rstrip("/")
         self._api_key = str(
-            os.getenv("KRAB_VOICE_API_KEY", "")
-            or os.getenv("VOICE_GATEWAY_API_KEY", "")
+            os.getenv("KRAB_VOICE_API_KEY", "") or os.getenv("VOICE_GATEWAY_API_KEY", "")
         ).strip()
         logger.info("perceptor_init", gateway_url=self._gateway_url)
 
@@ -111,7 +108,10 @@ class Perceptor:
             async with httpx.AsyncClient(timeout=3.0) as client:
                 resp = await client.get(f"{self._gateway_url}/health")
                 payload = resp.json()
-                return bool(payload.get("ok")) or str(payload.get("status", "")).lower() in {"ok", "live"}
+                return bool(payload.get("ok")) or str(payload.get("status", "")).lower() in {
+                    "ok",
+                    "live",
+                }
         except Exception:
             return False
 

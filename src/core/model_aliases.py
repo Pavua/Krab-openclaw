@@ -3,6 +3,7 @@
 Model alias resolution and presets (extracted from old handlers/commands.py).
 Used by the web panel and command handlers for human-friendly model names.
 """
+
 from __future__ import annotations
 
 MODEL_FRIENDLY_ALIASES: dict[str, str] = {

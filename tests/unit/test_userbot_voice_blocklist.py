@@ -58,12 +58,14 @@ def _reset_blocklist(monkeypatch):
         target_cls,
         "update_setting",
         classmethod(
-            lambda cls, key, value: setattr(
-                cls,
-                "VOICE_REPLY_BLOCKED_CHATS",
-                [s.strip() for s in (value or "").split(",") if s.strip()],
+            lambda cls, key, value: (
+                setattr(
+                    cls,
+                    "VOICE_REPLY_BLOCKED_CHATS",
+                    [s.strip() for s in (value or "").split(",") if s.strip()],
+                )
+                or True
             )
-            or True
         ),
     )
     yield

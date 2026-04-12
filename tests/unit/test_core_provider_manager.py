@@ -6,6 +6,7 @@
 report_usage, to_api_dict, format_status, set_thinking_depth, set_fallback_chain,
 QuotaInfo.to_dict, is_provider_available, get_fallback_chain, edge-cases.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ from src.core.provider_manager import (
 # Фикстура: менеджер с изолированным файлом состояния
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def pm(tmp_path):
     """ProviderManager с временным state-файлом, без чтения ~/.openclaw."""
@@ -40,6 +42,7 @@ def pm(tmp_path):
 # ---------------------------------------------------------------------------
 # QuotaInfo.to_dict
 # ---------------------------------------------------------------------------
+
 
 class TestQuotaInfoToDict:
     """Сериализация квот."""
@@ -71,6 +74,7 @@ class TestQuotaInfoToDict:
 # ---------------------------------------------------------------------------
 # set_provider / set_model
 # ---------------------------------------------------------------------------
+
 
 class TestSetProvider:
     """Переключение провайдеров и моделей."""
@@ -118,6 +122,7 @@ class TestSetProvider:
 # set_thinking_depth
 # ---------------------------------------------------------------------------
 
+
 class TestSetThinkingDepth:
     """Установка глубины reasoning."""
 
@@ -143,6 +148,7 @@ class TestSetThinkingDepth:
 # set_fallback_chain
 # ---------------------------------------------------------------------------
 
+
 class TestSetFallbackChain:
     """Управление fallback-цепочками."""
 
@@ -166,8 +172,11 @@ class TestSetFallbackChain:
 
     def test_get_fallback_chain_all_available(self, pm):
         pm.set_fallback_chain([ProviderType.GEMINI_API, ProviderType.LM_STUDIO])
-        with patch.object(pm, "get_available_providers",
-                          return_value=[ProviderType.GEMINI_API, ProviderType.LM_STUDIO]):
+        with patch.object(
+            pm,
+            "get_available_providers",
+            return_value=[ProviderType.GEMINI_API, ProviderType.LM_STUDIO],
+        ):
             effective = pm.get_fallback_chain()
         assert effective == [ProviderType.GEMINI_API, ProviderType.LM_STUDIO]
 
@@ -175,6 +184,7 @@ class TestSetFallbackChain:
 # ---------------------------------------------------------------------------
 # report_usage
 # ---------------------------------------------------------------------------
+
 
 class TestReportUsage:
     """Учёт токенов."""
@@ -202,6 +212,7 @@ class TestReportUsage:
 # ---------------------------------------------------------------------------
 # resolve_config_for_provider
 # ---------------------------------------------------------------------------
+
 
 class TestResolveConfigForProvider:
     """Формирование конфига для openclaw_client."""
@@ -253,6 +264,7 @@ class TestResolveConfigForProvider:
 # to_api_dict
 # ---------------------------------------------------------------------------
 
+
 class TestToApiDict:
     """REST-сериализация состояния."""
 
@@ -298,6 +310,7 @@ class TestToApiDict:
 # format_status
 # ---------------------------------------------------------------------------
 
+
 class TestFormatStatus:
     """Telegram-форматирование статуса."""
 
@@ -320,6 +333,7 @@ class TestFormatStatus:
 # is_provider_available
 # ---------------------------------------------------------------------------
 
+
 class TestIsProviderAvailable:
     """Проверка доступности провайдеров."""
 
@@ -334,8 +348,7 @@ class TestIsProviderAvailable:
             assert pm.is_provider_available(ProviderType.GEMINI_API) is True
 
     def test_gemini_api_unavailable_without_key(self, pm):
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
+        env = {k: v for k, v in os.environ.items() if k not in ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
         with patch.dict(os.environ, env, clear=True):
             assert pm.is_provider_available(ProviderType.GEMINI_API) is False
 
@@ -352,6 +365,7 @@ class TestIsProviderAvailable:
 # ---------------------------------------------------------------------------
 # Персистентность (save / load round-trip)
 # ---------------------------------------------------------------------------
+
 
 class TestPersistence:
     """Сохранение и загрузка состояния из JSON."""
@@ -406,6 +420,7 @@ class TestPersistence:
 # get_default_model_for_provider
 # ---------------------------------------------------------------------------
 
+
 class TestGetDefaultModel:
     """Получение default-модели провайдера."""
 
@@ -433,6 +448,7 @@ class TestGetDefaultModel:
 # ---------------------------------------------------------------------------
 # set_temperature / set_max_output_tokens
 # ---------------------------------------------------------------------------
+
 
 class TestTemperatureAndTokens:
     """Граничные значения temperature и max_output_tokens."""

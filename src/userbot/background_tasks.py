@@ -86,7 +86,9 @@ class BackgroundTasksMixin:
         return lock
 
     @staticmethod
-    async def _keep_typing_alive(client: Any, chat_id: int, action: Any, stop_event: asyncio.Event) -> None:
+    async def _keep_typing_alive(
+        client: Any, chat_id: int, action: Any, stop_event: asyncio.Event
+    ) -> None:
         """Фоновая корутина: повторяет send_chat_action каждые 4 секунды, пока не установлен stop_event."""
         while not stop_event.is_set():
             try:
@@ -236,7 +238,9 @@ class BackgroundTasksMixin:
                     continue
                 stale_timeout_sec = max(
                     60.0,
-                    float(getattr(config, "USERBOT_BACKGROUND_TASK_STALE_TIMEOUT_SEC", 900.0) or 900.0),
+                    float(
+                        getattr(config, "USERBOT_BACKGROUND_TASK_STALE_TIMEOUT_SEC", 900.0) or 900.0
+                    ),
                 )
                 now = time.monotonic()
                 stale_keys = []

@@ -1,7 +1,9 @@
 """
 iMessage Integration - Отправка сообщений через AppleScript
 """
+
 import asyncio
+
 import structlog
 
 logger = structlog.get_logger(__name__)

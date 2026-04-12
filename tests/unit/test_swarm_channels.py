@@ -6,9 +6,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -155,8 +154,11 @@ class TestSwarmChannelsBroadcast:
     @pytest.mark.asyncio
     async def test_broadcast_role_step(self, channels: SwarmChannels):
         await channels.broadcast_role_step(
-            team="traders", role_name="analyst", role_emoji="📊",
-            role_title="Аналитик", text="BTC на поддержке 59k",
+            team="traders",
+            role_name="analyst",
+            role_emoji="📊",
+            role_title="Аналитик",
+            text="BTC на поддержке 59k",
         )
         channels._send_message.assert_called_once()
         args, kwargs = channels._send_message.call_args
@@ -172,8 +174,11 @@ class TestSwarmChannelsBroadcast:
         ch._client = None
         # Не должен падать
         await ch.broadcast_role_step(
-            team="traders", role_name="test", role_emoji="🤖",
-            role_title="Test", text="test",
+            team="traders",
+            role_name="test",
+            role_emoji="🤖",
+            role_title="Test",
+            text="test",
         )
 
     @pytest.mark.asyncio
@@ -186,8 +191,11 @@ class TestSwarmChannelsBroadcast:
         ch._send_message = AsyncMock()
         ch._client = MagicMock()
         await ch.broadcast_role_step(
-            team="unknown", role_name="test", role_emoji="🤖",
-            role_title="Test", text="test",
+            team="unknown",
+            role_name="test",
+            role_emoji="🤖",
+            role_title="Test",
+            text="test",
         )
         ch._send_message.assert_not_called()
 
@@ -212,7 +220,8 @@ class TestSwarmChannelsBroadcast:
     async def test_broadcast_delegation(self, channels: SwarmChannels):
         """Делегирование идёт в crossteam топик."""
         await channels.broadcast_delegation(
-            source_team="traders", target_team="coders",
+            source_team="traders",
+            target_team="coders",
             topic="Реализовать BTC Range Defender",
         )
         channels._send_message.assert_called_once()

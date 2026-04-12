@@ -20,7 +20,9 @@ from src.userbot_bridge import KraabUserbot
 
 
 @pytest.mark.asyncio
-async def test_photo_download_timeout_returns_explicit_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_photo_download_timeout_returns_explicit_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Если download_media по фото истекает по timeout, бот:
     1) не запускает AI stream;
@@ -65,7 +67,9 @@ async def test_photo_download_timeout_returns_explicit_error(monkeypatch: pytest
     )
 
     send_stream_mock = Mock()
-    monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock)
+    monkeypatch.setattr(
+        userbot_bridge_module.openclaw_client, "send_message_stream", send_stream_mock
+    )
 
     await bot._process_message(incoming)
 
@@ -76,7 +80,9 @@ async def test_photo_download_timeout_returns_explicit_error(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_photo_without_caption_uses_russian_effective_query(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_photo_without_caption_uses_russian_effective_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Фото без подписи должно идти в модель с русским текстом-запросом,
     а не с английским `(Image sent)`.
@@ -157,7 +163,9 @@ async def test_photo_auto_vision_forces_cloud_route(monkeypatch: pytest.MonkeyPa
     bot._looks_like_commands_question = Mock(return_value=False)
     bot._looks_like_integrations_question = Mock(return_value=False)
     bot._build_system_prompt_for_sender = Mock(return_value="SYSTEM")
-    bot._build_effective_user_query = Mock(return_value="Опиши присланное изображение на русском языке.")
+    bot._build_effective_user_query = Mock(
+        return_value="Опиши присланное изображение на русском языке."
+    )
     bot._deliver_response_parts = AsyncMock()
     bot._build_runtime_chat_scope_id = Mock(return_value="123")
 
@@ -190,7 +198,9 @@ async def test_photo_auto_vision_forces_cloud_route(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(userbot_bridge_module.openclaw_client, "send_message_stream", _fake_stream)
     monkeypatch.setattr(userbot_bridge_module.config, "FORCE_CLOUD", False, raising=False)
-    monkeypatch.setattr(userbot_bridge_module.config, "LOCAL_PREFERRED_VISION_MODEL", "qwen2-vl", raising=False)
+    monkeypatch.setattr(
+        userbot_bridge_module.config, "LOCAL_PREFERRED_VISION_MODEL", "qwen2-vl", raising=False
+    )
     monkeypatch.setattr(
         userbot_bridge_module.config,
         "USERBOT_FORCE_CLOUD_FOR_PHOTO",
