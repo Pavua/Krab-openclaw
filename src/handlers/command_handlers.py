@@ -9330,3 +9330,136 @@ async def handle_json(bot: "KraabUserbot", message: Message) -> None:
         ) from exc
     pretty = json.dumps(parsed, ensure_ascii=False, indent=2)
     await message.reply(f"```json\n{pretty}\n```")
+
+
+# ---------------------------------------------------------------------------
+# !snippet — хранилище кодовых сниппетов
+# ---------------------------------------------------------------------------
+
+_SNIPPETS_FILE = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "code_snippets.json"
+
+
+def _load_snippets() -> dict[str, dict]:
+    """Загружает словарь {name: {code, created_at}} из JSON-файла."""
+    try:
+        if _SNIPPETS_FILE.exists():
+            return json.loads(_SNIPPETS_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _save_snippets(data: dict[str, dict]) -> None:
+    """Сохраняет сниппеты в JSON-файл."""
+    _SNIPPETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SNIPPETS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def handle_snippet(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !snippet save <name> <code>  — сохранить сниппет (код после имени)
+    !snippet save <name>          — в reply на сообщение → сохраняет текст reply
+    !snippet <name>               — показать сниппет в code block
+    !snippet list                 — список всех сниппетов
+    !snippet del <name>           — удалить сниппет
+    !snippet search <query>       — поиск по содержимому
+    """
+    import datetime as _dt  # noqa: PLC0415
+
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split(None, 1)
+
+    # --- !snippet list ---
+    if not parts or parts[0].lower() == "list":
+        snippets = _load_snippets()
+        if not snippets:
+            await message.reply(
+                "📭 Нет сохранённых сниппетов.\n"
+                "Используй `!snippet save <name> <code>` или ответь на сообщение с `!snippet save <name>`"
+            )
+            return
+        lines = [f"• `{name}`" for name in sorted(snippets)]
+        await message.reply("📋 **Сниппеты:**\n" + "\n".join(lines))
+        return
+
+    subcommand = parts[0].lower()
+
+    # --- !snippet save <name> [code] ---
+    if subcommand == "save":
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        # Разбиваем на имя и код
+        name_and_code = rest.split(None, 1)
+        if not name_and_code:
+            raise UserInputError(
+                user_message="❌ Укажи имя: `!snippet save <name> <code>` или ответь на сообщение"
+            )
+        name = name_and_code[0].strip().lower()
+        if not name:
+            raise UserInputError(user_message="❌ Имя сниппета не может быть пустым.")
+
+        # Если код передан inline
+        if len(name_and_code) > 1 and name_and_code[1].strip():
+            code = name_and_code[1].strip()
+        else:
+            # Ищем текст в replied сообщении
+            replied = message.reply_to_message
+            if replied is None or not (replied.text or replied.caption):
+                raise UserInputError(
+                    user_message=(
+                        "❌ Укажи код после имени: `!snippet save <name> <code>`\n"
+                        "Или ответь на сообщение с кодом командой `!snippet save <name>`"
+                    )
+                )
+            code = (replied.text or replied.caption or "").strip()
+
+        snippets = _load_snippets()
+        snippets[name] = {
+            "code": code,
+            "created_at": _dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
+        }
+        _save_snippets(snippets)
+        await message.reply(f"✅ Сниппет `{name}` сохранён ({len(code)} символов).")
+        return
+
+    # --- !snippet del <name> ---
+    if subcommand == "del":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи имя: `!snippet del <name>`")
+        name = parts[1].strip().lower()
+        snippets = _load_snippets()
+        if name not in snippets:
+            raise UserInputError(user_message=f"❌ Сниппет `{name}` не найден.")
+        del snippets[name]
+        _save_snippets(snippets)
+        await message.reply(f"🗑 Сниппет `{name}` удалён.")
+        return
+
+    # --- !snippet search <query> ---
+    if subcommand == "search":
+        if len(parts) < 2 or not parts[1].strip():
+            raise UserInputError(user_message="❌ Укажи запрос: `!snippet search <query>`")
+        query = parts[1].strip().lower()
+        snippets = _load_snippets()
+        matches = [
+            name
+            for name, data in snippets.items()
+            if query in name or query in data.get("code", "").lower()
+        ]
+        if not matches:
+            await message.reply(f"🔍 Ничего не найдено по запросу `{query}`.")
+            return
+        lines = [f"• `{name}`" for name in sorted(matches)]
+        await message.reply(f"🔍 Найдено ({len(matches)}):\n" + "\n".join(lines))
+        return
+
+    # --- !snippet <name> — показать сниппет ---
+    name = parts[0].lower()
+    snippets = _load_snippets()
+    if name not in snippets:
+        raise UserInputError(
+            user_message=f"❌ Сниппет `{name}` не найден. Список: `!snippet list`"
+        )
+    code = snippets[name].get("code", "")
+    created = snippets[name].get("created_at", "")
+    header = f"📄 **{name}**" + (f" _(сохранён {created[:10]})_" if created else "")
+    await message.reply(f"{header}\n```\n{code}\n```")

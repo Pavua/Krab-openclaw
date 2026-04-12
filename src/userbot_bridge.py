@@ -58,84 +58,108 @@ from .core.translator_session_state import (
 )
 from .employee_templates import ROLES
 from .handlers import (
+    apply_spam_action,
     handle_acl,
+    handle_afk,
     handle_agent,
     handle_alias,
+    handle_ask,
+    handle_autodel,
+    handle_b64,
+    handle_bookmark,
     handle_browser,
     handle_budget,
-    handle_costs,
-    handle_digest,
-    handle_health,
+    handle_calc,
     handle_cap,
+    handle_catchup,
     handle_chatban,
     handle_claude_cli,
     handle_clear,
     handle_codex,
+    handle_collect,
     handle_config,
     handle_context,
+    handle_costs,
     handle_cronstatus,
+    handle_currency,
+    handle_define,
+    handle_del,
     handle_diagnose,
+    handle_digest,
+    handle_dns,
+    handle_export,
+    handle_fwd,
     handle_gemini_cli,
+    handle_grep,
+    handle_hash,
+    handle_health,
     handle_help,
     handle_hs,
-    handle_bookmark,
+    handle_img,
     handle_inbox,
+    handle_ip,
+    handle_json,
+    handle_len,
     handle_ls,
     handle_macos,
     handle_memo,
     handle_memory,
-    handle_note,
     handle_model,
     handle_monitor,
+    handle_new_chat_members,
+    handle_note,
     handle_notify,
     handle_opencode,
     handle_panel,
     handle_pin,
+    handle_ping,
+    handle_poll,
+    handle_purge,
+    handle_qr,
+    handle_quiz,
+    handle_rand,
+    handle_react,
     handle_read,
     handle_reasoning,
     handle_recall,
     handle_remember,
     handle_remind,
     handle_reminders,
+    handle_report,
     handle_restart,
-    handle_schedule,
     handle_rm_remind,
     handle_role,
+    handle_run,
+    handle_schedule,
     handle_screenshot,
     handle_search,
+    handle_sed,
     handle_set,
     handle_shop,
     handle_silence,
-    handle_todo,
+    handle_spam,
     handle_stats,
     handle_status,
+    handle_sticker,
+    handle_stopwatch,
+    handle_summary,
     handle_swarm,
     handle_sysinfo,
+    handle_timer,
+    handle_todo,
+    handle_translate,
     handle_translator,
+    handle_tts,
     handle_unpin,
+    handle_uptime,
+    handle_snippet,
     handle_voice,
     handle_watch,
+    handle_weather,
     handle_web,
-    handle_write,
-    handle_fwd,
-    handle_collect,
-    handle_del,
-    handle_purge,
-    handle_autodel,
+    handle_welcome,
     handle_who,
-    handle_summary,
-    handle_catchup,
-    handle_translate,
-    handle_export,
-    handle_react,
-    handle_ask,
-    handle_report,
-    handle_poll,
-    handle_quiz,
-    handle_grep,
-    handle_timer,
-    handle_stopwatch,
-    handle_qr,
+    handle_write,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -457,6 +481,12 @@ class KraabUserbot(
         self._startup_state = "initializing"
         self._startup_error_code = ""
         self._startup_error = ""
+        # AFK-режим: in-memory состояние (сбрасывается при рестарте)
+        self._afk_mode: bool = False
+        self._afk_reason: str = ""
+        self._afk_since: float = 0.0
+        # Отслеживаем чаты, которым уже отправили автоответ (чтобы не спамить)
+        self._afk_replied_chats: set[str] = set()
         self._recreate_client()
 
     # _get_session_dirs, _session_name, _primary_session_file, _inspect_session_file,
@@ -676,6 +706,13 @@ class KraabUserbot(
             await run_cmd(handle_sysinfo, m)
 
         @self.client.on_message(
+            filters.command("uptime", prefixes=prefixes) & _make_command_filter("uptime"),
+            group=-1,
+        )
+        async def wrap_uptime(c, m):
+            await run_cmd(handle_uptime, m)
+
+        @self.client.on_message(
             filters.command("panel", prefixes=prefixes) & _make_command_filter("panel"), group=-1
         )
         async def wrap_panel(c, m):
@@ -693,6 +730,13 @@ class KraabUserbot(
         )
         async def wrap_search(c, m):
             await run_cmd(handle_search, m)
+
+        @self.client.on_message(
+            filters.command("weather", prefixes=prefixes) & _make_command_filter("weather"),
+            group=-1,
+        )
+        async def wrap_weather(c, m):
+            await run_cmd(handle_weather, m)
 
         @self.client.on_message(
             filters.command("grep", prefixes=prefixes) & _make_command_filter("grep"), group=-1
@@ -1023,6 +1067,150 @@ class KraabUserbot(
         )
         async def wrap_qr(c, m):
             await run_cmd(handle_qr, m)
+
+        @self.client.on_message(
+            filters.command("hash", prefixes=prefixes) & _make_command_filter("hash"), group=-1
+        )
+        async def wrap_hash(c, m):
+            await run_cmd(handle_hash, m)
+
+        @self.client.on_message(
+            filters.command("calc", prefixes=prefixes) & _make_command_filter("calc"), group=-1
+        )
+        async def wrap_calc(c, m):
+            await run_cmd(handle_calc, m)
+
+        @self.client.on_message(
+            filters.command("b64", prefixes=prefixes) & _make_command_filter("b64"), group=-1
+        )
+        async def wrap_b64(c, m):
+            await run_cmd(handle_b64, m)
+
+        @self.client.on_message(
+            filters.command("define", prefixes=prefixes) & _make_command_filter("define"), group=-1
+        )
+        async def wrap_define(c, m):
+            await run_cmd(handle_define, m)
+
+        @self.client.on_message(
+            filters.command("rand", prefixes=prefixes) & _make_command_filter("rand"), group=-1
+        )
+        async def wrap_rand(c, m):
+            await run_cmd(handle_rand, m)
+
+        @self.client.on_message(
+            filters.command("ip", prefixes=prefixes) & _make_command_filter("ip"), group=-1
+        )
+        async def wrap_ip(c, m):
+            await run_cmd(handle_ip, m)
+
+        @self.client.on_message(
+            filters.command("dns", prefixes=prefixes) & _make_command_filter("dns"), group=-1
+        )
+        async def wrap_dns(c, m):
+            await run_cmd(handle_dns, m)
+
+        @self.client.on_message(
+            filters.command("ping", prefixes=prefixes) & _make_command_filter("ping"), group=-1
+        )
+        async def wrap_ping(c, m):
+            await run_cmd(handle_ping, m)
+
+        @self.client.on_message(
+            filters.command("currency", prefixes=prefixes) & _make_command_filter("currency"), group=-1
+        )
+        async def wrap_currency(c, m):
+            await run_cmd(handle_currency, m)
+
+        @self.client.on_message(
+            filters.command("len", prefixes=prefixes) & _make_command_filter("len"), group=-1
+        )
+        async def wrap_len(c, m):
+            await run_cmd(handle_len, m)
+
+        @self.client.on_message(
+            filters.command("count", prefixes=prefixes) & _make_command_filter("count"), group=-1
+        )
+        async def wrap_count(c, m):
+            await run_cmd(handle_len, m)
+
+        @self.client.on_message(
+            filters.command("sticker", prefixes=prefixes) & _make_command_filter("sticker"), group=-1
+        )
+        async def wrap_sticker(c, m):
+            await run_cmd(handle_sticker, m)
+
+        @self.client.on_message(
+            filters.command("sed", prefixes=prefixes) & _make_command_filter("sed"), group=-1
+        )
+        async def wrap_sed(c, m):
+            await run_cmd(handle_sed, m)
+
+        @self.client.on_message(
+            filters.command("tts", prefixes=prefixes) & _make_command_filter("tts"), group=-1
+        )
+        async def wrap_tts(c, m):
+            await run_cmd(handle_tts, m)
+
+        @self.client.on_message(
+            filters.command("img", prefixes=prefixes) & _make_command_filter("img"), group=-1
+        )
+        async def wrap_img(c, m):
+            await run_cmd(handle_img, m)
+
+
+        @self.client.on_message(
+            filters.command("welcome", prefixes=prefixes) & _make_command_filter("welcome"),
+            group=-1,
+        )
+        async def wrap_welcome(c, m):
+            await run_cmd(handle_welcome, m)
+
+        # Антиспам фильтр для групп
+        @self.client.on_message(
+            filters.command("spam", prefixes=prefixes) & _make_command_filter("spam"), group=-1
+        )
+        async def wrap_spam(c, m):
+            await run_cmd(handle_spam, m)
+
+        # Хранилище кодовых сниппетов
+        @self.client.on_message(
+            filters.command("snippet", prefixes=prefixes) & _make_command_filter("snippet"),
+            group=-1,
+        )
+        async def wrap_snippet(c, m):
+            await run_cmd(handle_snippet, m)
+
+        # Выполнение Python-кода (owner-only)
+        @self.client.on_message(
+            filters.command("run", prefixes=prefixes) & _make_command_filter("run"), group=-1
+        )
+        async def wrap_run(c, m):
+            await run_cmd(handle_run, m)
+
+        # Автоприветствие новых участников группы
+        @self.client.on_message(filters.new_chat_members, group=-1)
+        async def wrap_new_chat_members(c, m):
+            await handle_new_chat_members(self, m)
+
+        # AFK-режим: !afk и !back
+        @self.client.on_message(
+            filters.command("afk", prefixes=prefixes) & _make_command_filter("afk"), group=-1
+        )
+        async def wrap_afk(c, m):
+            await run_cmd(handle_afk, m)
+
+        @self.client.on_message(
+            filters.command("back", prefixes=prefixes) & _make_command_filter("back"), group=-1
+        )
+        async def wrap_back(c, m):
+            await run_cmd(handle_afk, m)
+
+        @self.client.on_message(
+            filters.command("json", prefixes=prefixes) & _make_command_filter("json"), group=-1
+        )
+        async def wrap_json(c, m):
+            await run_cmd(handle_json, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
@@ -2962,6 +3150,24 @@ class KraabUserbot(
             if not check_capability(access_level_str, "chat"):
                 logger.info("capability_denied_chat", chat_id=chat_id, level=access_level_str)
                 return
+        # Антиспам: проверяем только в группах для не-себя
+        if not is_self and message.chat.type not in (
+            enums.ChatType.PRIVATE,
+            enums.ChatType.BOT,
+        ):
+            from .core.spam_guard import classify_message as _classify_spam  # noqa: PLC0415
+            from .core.spam_guard import is_enabled as _spam_enabled  # noqa: PLC0415
+
+            if _spam_enabled(message.chat.id):
+                _spam_reason = _classify_spam(
+                    message.chat.id,
+                    int(user.id),
+                    message,
+                )
+                if _spam_reason:
+                    await apply_spam_action(self, message, _spam_reason)
+                    return
+
         has_trigger = self._is_trigger(text)
         has_group_audio_fallback = (
             has_audio_message
@@ -3535,6 +3741,39 @@ class KraabUserbot(
                 _auto_min = int(getattr(config, "OWNER_AUTO_SILENCE_MINUTES", 5))
                 if _auto_min > 0:
                     silence_manager.auto_silence_owner_typing(chat_id, _auto_min)
+
+            # AFK-режим: owner сам написал (не команду) → автовыключение AFK
+            if self._afk_mode and is_self and not is_command:
+                self._afk_mode = False
+                self._afk_reason = ""
+                self._afk_since = 0.0
+                self._afk_replied_chats.clear()
+                logger.info("afk_auto_disabled", reason="owner_sent_message")
+
+            # AFK-режим: входящий DM от другого пользователя → автоответ (один раз на чат)
+            if (
+                self._afk_mode
+                and not is_self
+                and message.chat
+                and getattr(message.chat, "type", None) is not None
+                and str(message.chat.type).upper().endswith("PRIVATE")
+                and chat_id not in self._afk_replied_chats
+            ):
+                _afk_elapsed = int(time.time() - self._afk_since)
+                _afk_mins = _afk_elapsed // 60
+                _afk_secs = _afk_elapsed % 60
+                _afk_time_str = (
+                    f"{_afk_mins} мин {_afk_secs} с" if _afk_mins else f"{_afk_secs} с"
+                )
+                _afk_reason_part = f"\n📝 Причина: {self._afk_reason}" if self._afk_reason else ""
+                try:
+                    await message.reply(
+                        f"🌙 Я сейчас AFK (отсутствую {_afk_time_str}).{_afk_reason_part}\n"
+                        f"Отвечу когда вернусь!"
+                    )
+                    self._afk_replied_chats.add(chat_id)
+                except Exception as _afk_err:  # noqa: BLE001
+                    logger.debug("afk_autoreply_failed", error=str(_afk_err))
 
             async with self._get_chat_processing_lock(chat_id):
                 if self._consume_batched_followup_message_id(
