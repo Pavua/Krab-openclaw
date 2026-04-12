@@ -2528,21 +2528,29 @@ class KraabUserbot(
                     return
 
         temp_msg = message
+        # Формируем информативный ack с моделью и маршрутом
+        _ack_model = ""
+        try:
+            from .userbot.llm_flow import _current_runtime_primary_model  # noqa: PLC0415
+            _ack_model = _current_runtime_primary_model() or ""
+        except Exception:
+            pass
+        _ack_model_hint = f"\nТекущий маршрут: `{_ack_model}`" if _ack_model else ""
+        _ack_text = (
+            f"🦀 Принял запрос.\n\n"
+            f"🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
+        )
         if not is_self:
             try:
                 temp_msg = await asyncio.wait_for(
-                    self._safe_reply_or_send_new(
-                        message,
-                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
-                    ),
+                    self._safe_reply_or_send_new(message, _ack_text),
                     timeout=10.0,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
                 try:
                     temp_msg = await self.client.send_message(
-                        message.chat.id,
-                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
+                        message.chat.id, _ack_text,
                     )
                 except Exception as send_exc:  # noqa: BLE001
                     logger.warning(
@@ -2554,7 +2562,7 @@ class KraabUserbot(
         else:
             message = await self._safe_edit(
                 message,
-                f"🦀 {query}\n\n🛠️ Собираю контекст и запускаю маршрут...",
+                f"🦀 {query}\n\n🛠️ Собираю контекст...{_ack_model_hint}",
             )
 
         if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(

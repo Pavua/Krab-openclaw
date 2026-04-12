@@ -364,6 +364,19 @@ class Config:
         "STRIP_REPLY_TO_TAGS",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+    # Streaming UI: интервал обновления сообщения при получении LLM chunks (секунды).
+    # Telegram rate limit ~20 edits/min на чат; 2s = безопасный default.
+    TELEGRAM_STREAM_UPDATE_INTERVAL_SEC: float = float(
+        os.getenv("TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", "2.0")
+    )
+    # Streaming UI: интервал проверки tool progress (секунды).
+    OPENCLAW_TOOL_PROGRESS_POLL_SEC: float = float(
+        os.getenv("OPENCLAW_TOOL_PROGRESS_POLL_SEC", "3.0")
+    )
+    # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
+    TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
+        "TELEGRAM_STREAM_SHOW_REASONING", "0"
+    ).strip().lower() in ("1", "true", "yes")
     # Фоновые deferred-задачи (cron/reminders) в текущем userbot контуре.
     # По умолчанию включено: reminders должны работать "из коробки" после старта runtime.
     SCHEDULER_ENABLED: bool = os.getenv(
