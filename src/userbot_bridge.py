@@ -85,6 +85,7 @@ from .handlers import (
     handle_config,
     handle_context,
     handle_costs,
+    handle_cron,
     handle_cronstatus,
     handle_currency,
     handle_define,
