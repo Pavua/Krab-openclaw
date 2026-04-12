@@ -112,6 +112,7 @@ from .handlers import (
     handle_macos,
     handle_mark,
     handle_media,
+    handle_members,
     handle_memo,
     handle_memory,
     handle_model,
@@ -1290,6 +1291,12 @@ class KraabUserbot(
             await run_cmd(handle_ocr, m)
 
         @self.client.on_message(
+            filters.command("media", prefixes=prefixes) & _make_command_filter("media"), group=-1
+        )
+        async def wrap_media(c, m):
+            await run_cmd(handle_media, m)
+
+        @self.client.on_message(
             filters.command("welcome", prefixes=prefixes) & _make_command_filter("welcome"),
             group=-1,
         )
@@ -1395,6 +1402,21 @@ class KraabUserbot(
         )
         async def wrap_history(c, m):
             await run_cmd(handle_history, m)
+
+        @self.client.on_message(
+            filters.command("profile", prefixes=prefixes) & _make_command_filter("profile"),
+            group=-1,
+        )
+        async def wrap_profile(c, m):
+            await run_cmd(handle_profile, m)
+
+        # Управление участниками группы (kick/ban/unban/list)
+        @self.client.on_message(
+            filters.command("members", prefixes=prefixes) & _make_command_filter("members"),
+            group=-1,
+        )
+        async def wrap_members(c, m):
+            await run_cmd(handle_members, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
