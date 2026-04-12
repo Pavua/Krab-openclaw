@@ -4,6 +4,7 @@
 Покрывают: граничные значения TTL, сериализацию, вытеснение,
 множественные ключи, нулевой/минимальный TTL, unicode, binary-like строки.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -21,10 +22,12 @@ from src.core.exceptions import CacheError
 # Фикстура: изолированный кэш в tmp_path
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
     """Изолированный экземпляр CacheManager с базой во временной директории."""
     import src.cache_manager as cm_mod
+
     # Переопределяем _CACHE_DIR, чтобы тест не писал в ~/.openclaw
     monkeypatch.setattr(cm_mod, "_CACHE_DIR", tmp_path)
     monkeypatch.setattr(cm_mod, "_CACHE_DIR_FALLBACK", tmp_path / "fallback")
@@ -35,8 +38,8 @@ def cache(tmp_path, monkeypatch):
 # 1. Граничный TTL: значение сразу истекает при ttl=0
 # ---------------------------------------------------------------------------
 
-class TestTTLEdgeCases:
 
+class TestTTLEdgeCases:
     def test_zero_ttl_expires_immediately(self, cache):
         """TTL=0 — запись считается просроченной при первом же обращении."""
         cache.set("zero", "v", ttl=0)
@@ -70,8 +73,8 @@ class TestTTLEdgeCases:
 # 2. Сериализация: unicode, спецсимволы, длинные строки
 # ---------------------------------------------------------------------------
 
-class TestSerialization:
 
+class TestSerialization:
     def test_unicode_value(self, cache):
         """Unicode (кириллица, эмодзи) должен сохраняться и читаться без искажений."""
         value = "Привет 🦀 мир — тест"
@@ -106,8 +109,8 @@ class TestSerialization:
 # 3. Вытеснение и очистка (eviction / clear_expired)
 # ---------------------------------------------------------------------------
 
-class TestEviction:
 
+class TestEviction:
     def test_clear_expired_removes_multiple_stale(self, cache):
         """clear_expired удаляет сразу несколько просроченных записей."""
         for i in range(5):
@@ -144,8 +147,8 @@ class TestEviction:
 # 4. Множественные ключи и изоляция
 # ---------------------------------------------------------------------------
 
-class TestMultipleKeys:
 
+class TestMultipleKeys:
     def test_independent_keys_isolated(self, cache):
         """Разные ключи независимы — изменение одного не влияет на другой."""
         cache.set("a", "1", ttl=60)
@@ -165,8 +168,8 @@ class TestMultipleKeys:
 # 5. Обработка ошибок и деградация
 # ---------------------------------------------------------------------------
 
-class TestErrorHandling:
 
+class TestErrorHandling:
     def test_get_returns_none_on_db_error(self, cache):
         """get() не бросает исключений при ошибке SQLite, возвращает None."""
         with mock.patch.object(cache, "_backend_get", side_effect=sqlite3.Error("boom")):
@@ -196,8 +199,8 @@ class TestErrorHandling:
 # 6. Конкурентный доступ с верификацией данных
 # ---------------------------------------------------------------------------
 
-class TestConcurrentAccess:
 
+class TestConcurrentAccess:
     def test_concurrent_writes_no_data_loss(self, cache):
         """Параллельные write-треды: все значения сохраняются, нет гонок."""
         errors: list[Exception] = []

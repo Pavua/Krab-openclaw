@@ -1804,7 +1804,7 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
         return
 
     if sub in {"lang", "language"}:
-        if len(args) < 3:
+        if not str(args[2] or "").strip():
             # Без аргументов — показать текущую пару
             profile = bot.get_translator_runtime_profile()
             current = profile.get("language_pair", "es-ru")
@@ -2076,7 +2076,7 @@ async def handle_translator(bot: "KraabUserbot", message: Message) -> None:
 
     if sub == "reset":
         profile = bot.update_translator_runtime_profile(
-            **default_translator_runtime_profile(),
+            **dict(default_translator_runtime_profile),
             persist=True,
         )
         await message.reply(_render_translator_profile(profile))

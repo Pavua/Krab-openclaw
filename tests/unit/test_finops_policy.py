@@ -25,11 +25,13 @@ from src.core.runtime_policy import (
 
 # ── Вспомогательная фабрика usage-словарей ──────────────────────────────────
 
+
 def make_usage(inp: int = 1000, out: int = 500) -> dict:
     return {"prompt_tokens": inp, "completion_tokens": out, "total_tokens": inp + out}
 
 
 # ── cost_analytics: базовые вычисления ──────────────────────────────────────
+
 
 class TestCostCalculations:
     """Юнит-тесты расчёта стоимости вызовов."""
@@ -61,6 +63,7 @@ class TestCostCalculations:
 
 
 # ── CostAnalytics: отслеживание бюджета ─────────────────────────────────────
+
 
 class TestBudgetTracking:
     """Тесты бюджетного контроля CostAnalytics."""
@@ -132,16 +135,25 @@ class TestBudgetTracking:
         ca.record_usage(make_usage(1000, 500), model_id="openai/gpt-4o")
         report = ca.build_usage_report_dict()
         required_keys = [
-            "input_tokens", "output_tokens", "total_tokens",
-            "cost_session_usd", "cost_month_usd", "monthly_budget_usd",
-            "remaining_budget_usd", "budget_ok", "by_model",
-            "total_tool_calls", "total_fallbacks", "by_channel",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cost_session_usd",
+            "cost_month_usd",
+            "monthly_budget_usd",
+            "remaining_budget_usd",
+            "budget_ok",
+            "by_model",
+            "total_tool_calls",
+            "total_fallbacks",
+            "by_channel",
         ]
         for key in required_keys:
             assert key in report, f"Отсутствует ключ: {key}"
 
 
 # ── PolicyMatrix: runtime_policy ────────────────────────────────────────────
+
 
 class TestPolicyMatrix:
     """Тесты построения policy-матрицы провайдеров."""
@@ -203,6 +215,7 @@ class TestPolicyMatrix:
 
 
 # ── Tier calculation: current_runtime_mode ──────────────────────────────────
+
 
 class TestTierCalculation:
     """Тесты определения текущего runtime-режима."""
