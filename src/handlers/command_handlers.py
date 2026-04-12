@@ -5931,3 +5931,59 @@ async def handle_export(bot: "KraabUserbot", message: Message) -> None:
         await status_msg.edit(
             f"✅ Файл сохранён: `{file_path}`\n⚠️ Не удалось отправить документ: {str(exc)[:200]}"
         )
+
+
+async def handle_react(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !react <emoji> — поставить реакцию на сообщение.
+
+    Должна быть ответом на сообщение (reply). Ставит указанный emoji
+    как реакцию на то сообщение, которому адресован reply.
+    Только для owner.
+
+    Примеры:
+        !react 👍          — лайк
+        !react ❤️          — сердечко
+        !react 🔥          — огонь
+    """
+    from ..config import config as _cfg  # noqa: PLC0415
+
+    if not bool(getattr(_cfg, "TELEGRAM_REACTIONS_ENABLED", True)):
+        await message.reply("⚠️ Реакции отключены (TELEGRAM_REACTIONS_ENABLED=0).")
+        return
+
+    raw_args = bot._get_command_args(message).strip()
+    if not raw_args:
+        raise UserInputError(
+            user_message="🎭 Формат: `!react <emoji>` (в reply на нужное сообщение)\n"
+                         "Пример: `!react 👍`"
+        )
+
+    emoji = raw_args.strip()
+
+    # Определяем целевое сообщение: reply → target, иначе само сообщение
+    target = message.reply_to_message if message.reply_to_message else message
+    chat_id_int = int(target.chat.id)
+    msg_id_int = int(target.id)
+
+    try:
+        await bot.client.send_reaction(
+            chat_id=chat_id_int,
+            message_id=msg_id_int,
+            emoji=emoji,
+        )
+        # Тихо удаляем команду (best-effort) — не захламляем чат
+        try:
+            await message.delete()
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001
+        err_text = str(exc)[:200]
+        logger.warning(
+            "handle_react_failed",
+            chat_id=chat_id_int,
+            message_id=msg_id_int,
+            emoji=emoji,
+            error=err_text,
+        )
+        await message.reply(f"❌ Не удалось поставить реакцию `{emoji}`: {err_text}")
