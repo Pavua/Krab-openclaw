@@ -220,6 +220,7 @@ __all__ = [
     "handle_currency",
     "handle_len",
     "handle_define",
+    "handle_quote",
     "handle_rand",
     "handle_sticker",
     "handle_sed",

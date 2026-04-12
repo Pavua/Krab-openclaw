@@ -119,6 +119,7 @@ from .handlers import (
     handle_purge,
     handle_qr,
     handle_quiz,
+    handle_quote,
     handle_rand,
     handle_react,
     handle_read,
@@ -1137,6 +1138,12 @@ class KraabUserbot(
         )
         async def wrap_rand(c, m):
             await run_cmd(handle_rand, m)
+
+        @self.client.on_message(
+            filters.command("quote", prefixes=prefixes) & _make_command_filter("quote"), group=-1
+        )
+        async def wrap_quote(c, m):
+            await run_cmd(handle_quote, m)
 
         @self.client.on_message(
             filters.command("ip", prefixes=prefixes) & _make_command_filter("ip"), group=-1
