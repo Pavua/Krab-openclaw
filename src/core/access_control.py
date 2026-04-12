@@ -105,6 +105,8 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         # AFK-режим
         "afk",
         "back",
+        # Paste — отправка длинных текстов как документов
+        "paste",
     }
 )
 
