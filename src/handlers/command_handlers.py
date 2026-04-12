@@ -2311,7 +2311,6 @@ async def handle_sysinfo(bot: "KraabUserbot", message: Message) -> None:
 async def handle_uptime(bot: "KraabUserbot", message: Message) -> None:
     """Uptime системы macOS + Краба + OpenClaw gateway."""
     import re
-    import subprocess
     import time as _t
 
     lines: list[str] = ["⏱️ **Uptime**", "─────────────"]
@@ -7336,11 +7335,6 @@ async def handle_hash(bot: "KraabUserbot", message: Message) -> None:
 # ---------------------------------------------------------------------------
 # !calc — безопасный калькулятор (compile + ограниченный namespace)
 # ---------------------------------------------------------------------------
-
-import ast as _ast
-import math as _math
-import operator as _operator
-
 
 # Разрешённые бинарные операции
 _CALC_BINOPS: dict[type, object] = {

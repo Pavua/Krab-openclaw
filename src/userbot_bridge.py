@@ -142,6 +142,10 @@ from .handlers import (
     handle_calc,
     handle_b64,
     handle_define,
+    handle_rand,
+    handle_ip,
+    handle_dns,
+    handle_ping,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -1061,6 +1065,36 @@ class KraabUserbot(
         )
         async def wrap_b64(c, m):
             await run_cmd(handle_b64, m)
+
+        @self.client.on_message(
+            filters.command("define", prefixes=prefixes) & _make_command_filter("define"), group=-1
+        )
+        async def wrap_define(c, m):
+            await run_cmd(handle_define, m)
+
+        @self.client.on_message(
+            filters.command("rand", prefixes=prefixes) & _make_command_filter("rand"), group=-1
+        )
+        async def wrap_rand(c, m):
+            await run_cmd(handle_rand, m)
+
+        @self.client.on_message(
+            filters.command("ip", prefixes=prefixes) & _make_command_filter("ip"), group=-1
+        )
+        async def wrap_ip(c, m):
+            await run_cmd(handle_ip, m)
+
+        @self.client.on_message(
+            filters.command("dns", prefixes=prefixes) & _make_command_filter("dns"), group=-1
+        )
+        async def wrap_dns(c, m):
+            await run_cmd(handle_dns, m)
+
+        @self.client.on_message(
+            filters.command("ping", prefixes=prefixes) & _make_command_filter("ping"), group=-1
+        )
+        async def wrap_ping(c, m):
+            await run_cmd(handle_ping, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
