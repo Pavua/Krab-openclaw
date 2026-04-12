@@ -9137,7 +9137,7 @@ async def handle_run(bot: "KraabUserbot", message: Message) -> None:
     # Определяем: если код парсится как expression — оборачиваем
     exec_code = code
     try:
-        tree = _ast.parse(code, mode="eval")
+        _ast.parse(code, mode="eval")
         # Это выражение — оборачиваем в print для вывода результата
         exec_code = f"__r = {code}\nif __r is not None: print(__r)"
     except SyntaxError:
