@@ -4578,3 +4578,245 @@ async def handle_memo(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(f"✅ {result.message}")
     else:
         await message.reply(f"❌ {result.message}")
+
+
+async def handle_monitor(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление мониторингом чатов на ключевые слова.
+
+    Формат:
+      !monitor add <chat_id|@username> [keyword1] [keyword2] ...
+      !monitor remove <chat_id>
+      !monitor list
+
+    Ключевые слова могут быть:
+      - обычный текст (поиск без учёта регистра)
+      - re:<pattern>  — Python regex (например: re:крипт|биткоин)
+    """
+    from ..core.chat_monitor import chat_monitor_service
+
+    args_raw = message.command[1:] if message.command else []
+    if not args_raw:
+        await message.reply(
+            "📡 **Chat Monitor**\n\n"
+            "`!monitor add <chat_id> [keywords...]` — начать мониторинг\n"
+            "`!monitor remove <chat_id>` — остановить мониторинг\n"
+            "`!monitor list` — активные мониторинги\n\n"
+            "Regex поддерживается: `re:pattern`"
+        )
+        return
+
+    subcmd = args_raw[0].lower()
+
+    # ── list ──────────────────────────────────────────────────
+    if subcmd == "list":
+        monitors = chat_monitor_service.list_monitors()
+        if not monitors:
+            await message.reply("📡 Активных мониторингов нет.")
+            return
+        lines = ["📡 **Активные мониторинги:**\n"]
+        for entry in monitors:
+            kw_str = (
+                ", ".join(f"`{k}`" for k in entry.keywords)
+                if entry.keywords
+                else "_(все сообщения)_"
+            )
+            lines.append(
+                f"• **{entry.chat_title}** (`{entry.chat_id}`)\n  Ключевые слова: {kw_str}"
+            )
+        await message.reply("\n".join(lines))
+        return
+
+    # ── remove ────────────────────────────────────────────────
+    if subcmd == "remove":
+        if len(args_raw) < 2:
+            raise UserInputError(user_message="❌ Формат: `!monitor remove <chat_id>`")
+        target_id = args_raw[1]
+        removed = chat_monitor_service.remove(target_id)
+        if removed:
+            await message.reply(f"🗑️ Мониторинг `{target_id}` удалён.")
+        else:
+            await message.reply(f"⚠️ Мониторинг для `{target_id}` не найден.")
+        return
+
+    # ── add ───────────────────────────────────────────────────
+    if subcmd == "add":
+        if len(args_raw) < 2:
+            raise UserInputError(
+                user_message="❌ Формат: `!monitor add <chat_id|@username> [keywords...]`"
+            )
+        target_raw = args_raw[1]
+        keywords = args_raw[2:]  # может быть пустым — мониторим все сообщения
+
+        # Резолвим chat_id и получаем title
+        chat_id_resolved: int | str = target_raw
+        chat_title = target_raw
+        try:
+            chat = await bot.client.get_chat(target_raw)
+            chat_id_resolved = chat.id
+            chat_title = (
+                getattr(chat, "title", None)
+                or getattr(chat, "first_name", None)
+                or target_raw
+            )
+        except Exception as e:
+            logger.warning("monitor_resolve_chat_error", target=target_raw, error=str(e))
+            # Если не смогли резолвить — используем как есть (числовой id)
+            if target_raw.lstrip("-").isdigit():
+                chat_id_resolved = int(target_raw)
+
+        entry = chat_monitor_service.add(
+            chat_id=chat_id_resolved,
+            chat_title=chat_title,
+            keywords=list(keywords),
+        )
+        kw_str = (
+            ", ".join(f"`{k}`" for k in entry.keywords)
+            if entry.keywords
+            else "_(все сообщения)_"
+        )
+        await message.reply(
+            f"✅ **Мониторинг запущен**\n"
+            f"Чат: **{entry.chat_title}** (`{entry.chat_id}`)\n"
+            f"Ключевые слова: {kw_str}"
+        )
+        return
+
+    raise UserInputError(
+        user_message="❌ Неизвестная подкоманда. Используй: `add`, `remove`, `list`"
+    )
+
+async def handle_schedule(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Отложенные сообщения через MTProto schedule_date.
+
+    Форматы:
+        !schedule HH:MM <текст>   — отправить в указанное время сегодня/завтра
+        !schedule +Nm <текст>     — через N минут
+        !schedule +Nh <текст>     — через N часов
+        !schedule list            — список запланированных
+        !schedule cancel <id>     — отменить по ID
+    """
+    from ..core.message_scheduler import (
+        MessageSchedulerStore,
+        _MIN_SCHEDULE_SECONDS,
+        _now_local,
+        format_scheduled_list,
+        msg_scheduler_store,
+        parse_schedule_spec,
+        split_schedule_input,
+    )
+
+    raw_args = bot._get_command_args(message).strip()
+    if not raw_args:
+        raise UserInputError(
+            user_message=(
+                "📅 **Отложенные сообщения**\n\n"
+                "Форматы:\n"
+                "`!schedule HH:MM <текст>` — в указанное время\n"
+                "`!schedule +Nm <текст>` — через N минут\n"
+                "`!schedule +Nh <текст>` — через N часов\n"
+                "`!schedule list` — список запланированных\n"
+                "`!schedule cancel <id>` — отменить\n\n"
+                "Пример: `!schedule +30m Позвонить Маше`"
+            )
+        )
+
+    spec, rest = split_schedule_input(raw_args)
+    chat_id = str(message.chat.id)
+
+    # --- list ---
+    if spec in {"list", "список"}:
+        records = msg_scheduler_store.list_pending(chat_id=chat_id)
+        await message.reply(format_scheduled_list(records))
+        return
+
+    # --- cancel ---
+    if spec in {"cancel", "отмена"}:
+        record_id = rest.strip()
+        if not record_id:
+            raise UserInputError(user_message="❌ Укажи ID: `!schedule cancel <id>`")
+
+        rec = msg_scheduler_store.get(record_id)
+        if rec is None or rec.chat_id != chat_id:
+            await message.reply(f"⚠️ Запись `{record_id}` не найдена в этом чате.")
+            return
+
+        # Удаляем scheduled message через Pyrogram
+        try:
+            await bot.client.delete_messages(
+                chat_id=int(chat_id),
+                message_ids=rec.tg_message_id,
+                revoke=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "schedule_cancel_delete_failed",
+                record_id=record_id,
+                tg_msg_id=rec.tg_message_id,
+                error=str(exc),
+            )
+
+        msg_scheduler_store.mark_cancelled(record_id)
+        await message.reply(f"🗑️ Запланированное сообщение `{record_id}` отменено.")
+        return
+
+    # --- schedule new message ---
+    if not rest:
+        raise UserInputError(
+            user_message=(
+                "❌ Укажи текст сообщения.\n"
+                "Пример: `!schedule +30m Позвонить Маше`"
+            )
+        )
+
+    try:
+        schedule_time = parse_schedule_spec(spec)
+    except ValueError as exc:
+        raise UserInputError(
+            user_message=(
+                f"❌ Не удалось распознать время: `{spec}`\n\n"
+                "Поддерживаемые форматы:\n"
+                "• `HH:MM` — конкретное время (напр. `14:30`)\n"
+                "• `+Nm` — через N минут (напр. `+30m`)\n"
+                "• `+Nh` — через N часов (напр. `+2h`)"
+            )
+        ) from exc
+
+    # Проверяем минимальный отступ
+    delay_sec = (schedule_time - _now_local()).total_seconds()
+    if delay_sec < _MIN_SCHEDULE_SECONDS:
+        raise UserInputError(
+            user_message=(
+                f"⚠️ Минимальное время отсрочки — {_MIN_SCHEDULE_SECONDS} секунд.\n"
+                "Telegram не принимает scheduled messages ближе к текущему моменту."
+            )
+        )
+
+    # Отправляем через Pyrogram с schedule_date
+    try:
+        sent = await bot.client.send_message(
+            chat_id=int(chat_id),
+            text=rest,
+            schedule_date=schedule_time,
+        )
+    except Exception as exc:
+        logger.error("schedule_send_failed", chat_id=chat_id, error=str(exc))
+        raise UserInputError(
+            user_message=f"❌ Ошибка при создании отложенного сообщения: {exc}"
+        ) from exc
+
+    # Сохраняем локальную запись
+    record_id = msg_scheduler_store.add(
+        chat_id=chat_id,
+        text=rest,
+        schedule_time=schedule_time,
+        tg_message_id=sent.id,
+    )
+
+    when_str = schedule_time.strftime("%d.%m.%Y в %H:%M")
+    await message.reply(
+        f"📅 Сообщение запланировано на **{when_str}**\n"
+        f"ID: `{record_id}` · Telegram msg: `{sent.id}`\n"
+        f"Отмена: `!schedule cancel {record_id}`"
+    )

@@ -83,6 +83,7 @@ from .handlers import (
     handle_memo,
     handle_memory,
     handle_model,
+    handle_monitor,
     handle_notify,
     handle_opencode,
     handle_panel,
@@ -94,6 +95,7 @@ from .handlers import (
     handle_remind,
     handle_reminders,
     handle_restart,
+    handle_schedule,
     handle_rm_remind,
     handle_role,
     handle_screenshot,
@@ -826,11 +828,25 @@ class KraabUserbot(
             await run_cmd(handle_cronstatus, m)
 
         @self.client.on_message(
+            filters.command("schedule", prefixes=prefixes) & _make_command_filter("schedule"),
+            group=-1,
+        )
+        async def wrap_schedule(c, m):
+            await run_cmd(handle_schedule, m)
+
+        @self.client.on_message(
             filters.command("browser", prefixes=prefixes) & _make_command_filter("browser"),
             group=-1,
         )
         async def wrap_browser(c, m):
             await run_cmd(handle_browser, m)
+
+        @self.client.on_message(
+            filters.command("monitor", prefixes=prefixes) & _make_command_filter("monitor"),
+            group=-1,
+        )
+        async def wrap_monitor(c, m):
+            await run_cmd(handle_monitor, m)
 
         # Обработка callback query от inline-кнопок
         @self.client.on_callback_query()
