@@ -4595,7 +4595,7 @@ async def handle_chatinfo(bot: "KraabUserbot", message: Message) -> None:
         try:
             target: int | str = int(raw)
         except ValueError:
-            target = args  # оставляем @username как строку
+            target = raw  # username без @
     else:
         target = message.chat.id
 
@@ -4634,7 +4634,7 @@ async def handle_chatinfo(bot: "KraabUserbot", message: Message) -> None:
         try:
             import datetime as _dt
             if isinstance(dc_date, (int, float)):
-                dt = _dt.datetime.utcfromtimestamp(dc_date)
+                dt = _dt.datetime.fromtimestamp(dc_date, tz=_dt.timezone.utc)
             else:
                 dt = dc_date
             created_str = dt.strftime("%Y-%m-%d")
