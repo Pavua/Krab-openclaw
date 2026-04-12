@@ -165,6 +165,13 @@ _COMMANDS: list[CommandInfo] = [
         usage="!ocr [подсказка]",
         owner_only=True,
     ),
+    CommandInfo(
+        name="media",
+        category="files",
+        description="Скачивание медиафайлов (фото/видео/документ/аудио). Reply на медиа.",
+        usage="!media [save|info]",
+        owner_only=True,
+    ),
 
     # ── models ───────────────────────────────────────────────────────────────
     CommandInfo(
