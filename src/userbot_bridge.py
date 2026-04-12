@@ -73,10 +73,13 @@ from .handlers import (
     handle_cap,
     handle_catchup,
     handle_chatban,
+    handle_chatinfo,
+    handle_chatmute,
     handle_claude_cli,
     handle_clear,
     handle_codex,
     handle_collect,
+    handle_archive,
     handle_config,
     handle_context,
     handle_costs,
@@ -85,6 +88,7 @@ from .handlers import (
     handle_define,
     handle_del,
     handle_diagnose,
+    handle_dice,
     handle_digest,
     handle_dns,
     handle_export,
@@ -102,6 +106,7 @@ from .handlers import (
     handle_len,
     handle_ls,
     handle_macos,
+    handle_mark,
     handle_memo,
     handle_memory,
     handle_model,
@@ -141,6 +146,7 @@ from .handlers import (
     handle_set,
     handle_shop,
     handle_silence,
+    handle_slowmode,
     handle_snippet,
     handle_spam,
     handle_stats,
@@ -156,6 +162,7 @@ from .handlers import (
     handle_translate,
     handle_translator,
     handle_tts,
+    handle_unarchive,
     handle_unpin,
     handle_uptime,
     handle_voice,
@@ -164,6 +171,7 @@ from .handlers import (
     handle_link,
     handle_template,
     handle_top,
+    handle_typing,
     handle_web,
     handle_welcome,
     handle_who,
@@ -615,6 +623,13 @@ class KraabUserbot(
             await run_cmd(handle_chatban, m)
 
         @self.client.on_message(
+            filters.command("chatmute", prefixes=prefixes) & _make_command_filter("chatmute"),
+            group=-1,
+        )
+        async def wrap_chatmute(c, m):
+            await run_cmd(handle_chatmute, m)
+
+        @self.client.on_message(
             filters.command("translator", prefixes=prefixes) & _make_command_filter("translator"),
             group=-1,
         )
@@ -652,6 +667,13 @@ class KraabUserbot(
         )
         async def wrap_silence(c, m):
             await run_cmd(handle_silence, m)
+
+        @self.client.on_message(
+            filters.command("slowmode", prefixes=prefixes) & _make_command_filter("slowmode"),
+            group=-1,
+        )
+        async def wrap_slowmode(c, m):
+            await run_cmd(handle_slowmode, m)
 
         @self.client.on_message(
             filters.command("stats", prefixes=prefixes) & _make_command_filter("stats"),
@@ -939,6 +961,27 @@ class KraabUserbot(
         async def wrap_unpin(c, m):
             await run_cmd(handle_unpin, m)
 
+        # Пометка чатов как прочитанных/непрочитанных
+        @self.client.on_message(
+            filters.command("mark", prefixes=prefixes) & _make_command_filter("mark"), group=-1
+        )
+        async def wrap_mark(c, m):
+            await run_cmd(handle_mark, m)
+
+        @self.client.on_message(
+            filters.command("archive", prefixes=prefixes) & _make_command_filter("archive"),
+            group=-1,
+        )
+        async def wrap_archive(c, m):
+            await run_cmd(handle_archive, m)
+
+        @self.client.on_message(
+            filters.command("unarchive", prefixes=prefixes) & _make_command_filter("unarchive"),
+            group=-1,
+        )
+        async def wrap_unarchive(c, m):
+            await run_cmd(handle_unarchive, m)
+
         @self.client.on_message(
             filters.command("fwd", prefixes=prefixes) & _make_command_filter("fwd"), group=-1
         )
@@ -1074,6 +1117,13 @@ class KraabUserbot(
         )
         async def wrap_quiz(c, m):
             await run_cmd(handle_quiz, m)
+
+        @self.client.on_message(
+            filters.command("dice", prefixes=prefixes) & _make_command_filter("dice"),
+            group=-1,
+        )
+        async def wrap_dice(c, m):
+            await run_cmd(handle_dice, m)
 
         @self.client.on_message(
             filters.command("alias", prefixes=prefixes) & _make_command_filter("alias"),
@@ -1264,6 +1314,14 @@ class KraabUserbot(
         async def wrap_run(c, m):
             await run_cmd(handle_run, m)
 
+        # Симуляция набора текста / записи голосового / загрузки
+        @self.client.on_message(
+            filters.command("typing", prefixes=prefixes) & _make_command_filter("typing"),
+            group=-1,
+        )
+        async def wrap_typing(c, m):
+            await run_cmd(handle_typing, m)
+
         # Автоприветствие новых участников группы
         @self.client.on_message(filters.new_chat_members, group=-1)
         async def wrap_new_chat_members(c, m):
@@ -1287,6 +1345,13 @@ class KraabUserbot(
         )
         async def wrap_json(c, m):
             await run_cmd(handle_json, m)
+
+        @self.client.on_message(
+            filters.command("chatinfo", prefixes=prefixes) & _make_command_filter("chatinfo"),
+            group=-1,
+        )
+        async def wrap_chatinfo(c, m):
+            await run_cmd(handle_chatinfo, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()

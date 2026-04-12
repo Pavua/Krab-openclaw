@@ -325,6 +325,20 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
     ),
     CommandInfo(
+        name="archive",
+        category="management",
+        description="Архивировать текущий чат (list — список архива)",
+        usage="!archive [list]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="unarchive",
+        category="management",
+        description="Разархивировать текущий чат",
+        usage="!unarchive",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="collect",
         category="management",
         description="Собрать N сообщений чата в один текст",
@@ -517,6 +531,13 @@ _COMMANDS: list[CommandInfo] = [
         description="CDP browser bridge",
         usage="!browser [cdp|status]",
         owner_only=True,
+    ),
+    CommandInfo(
+        name="chatinfo",
+        category="system",
+        description="Подробная информация о чате",
+        usage="!chatinfo [chat_id|@username]",
+        owner_only=False,
     ),
 
     # ── dev ──────────────────────────────────────────────────────────────────
