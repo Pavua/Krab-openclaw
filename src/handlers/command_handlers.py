@@ -3354,6 +3354,236 @@ async def handle_cronstatus(bot: "KraabUserbot", message: Message) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# !cron — управление OpenClaw cron jobs из Telegram
+# ---------------------------------------------------------------------------
+
+def _cron_read_jobs() -> list[dict]:
+    """Читает jobs.json напрямую (без gateway), возвращает список dict."""
+    jobs_path = pathlib.Path.home() / ".openclaw" / "cron" / "jobs.json"
+    try:
+        data = json.loads(jobs_path.read_text(encoding="utf-8", errors="replace"))
+        return data.get("jobs", []) if isinstance(data, dict) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _cron_write_jobs(jobs: list[dict]) -> None:
+    """Записывает обновлённый список jobs обратно в jobs.json."""
+    jobs_path = pathlib.Path.home() / ".openclaw" / "cron" / "jobs.json"
+    payload = {"version": 1, "jobs": jobs}
+    jobs_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _cron_format_schedule(job: dict) -> str:
+    """Возвращает читаемую строку расписания для job."""
+    schedule = job.get("schedule") or {}
+    kind = str(schedule.get("kind") or "unknown").lower()
+    if kind == "every":
+        every_ms = int(schedule.get("everyMs") or 0)
+        if every_ms <= 0:
+            return "каждые ?"
+        if every_ms % 3600000 == 0:
+            return f"каждые {every_ms // 3600000}ч"
+        if every_ms % 60000 == 0:
+            return f"каждые {every_ms // 60000}м"
+        return f"каждые {every_ms // 1000}с"
+    if kind == "cron":
+        expr = str(schedule.get("expr") or "?")
+        tz = str(schedule.get("tz") or "").strip()
+        return f"cron `{expr}`" + (f" ({tz})" if tz else "")
+    return kind
+
+
+def _cron_format_last_status(job: dict) -> str:
+    """Форматирует последний статус job."""
+    state = job.get("state") or {}
+    status = str(state.get("lastStatus") or state.get("lastRunStatus") or "—")
+    errors = int(state.get("consecutiveErrors") or 0)
+    if errors > 0:
+        return f"{status} ⚠️ ({errors} ош.)"
+    return status
+
+
+async def _cron_run_openclaw(
+    *args: str,
+    timeout: float = 30.0,
+) -> tuple[bool, str]:
+    """
+    Запускает `openclaw` с переданными аргументами.
+    Возвращает (success, raw_output).
+    """
+    from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "openclaw",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=clean_subprocess_env(),
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+            return False, "timeout"
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+    raw = stdout.decode("utf-8", errors="replace").strip()
+    return proc.returncode == 0, raw
+
+
+async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление OpenClaw cron jobs из Telegram.
+
+    Команды:
+      !cron list            — список всех jobs (enabled/disabled, расписание, статус)
+      !cron enable <name>   — включить job по имени или id
+      !cron disable <name>  — выключить job по имени или id
+      !cron run <name>      — запустить job немедленно
+      !cron status          — общая статистика (total, enabled, errors)
+    """
+    # Только владелец
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 Команда доступна только владельцу.")
+
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split(maxsplit=1)
+    sub = parts[0].lower() if parts else "list"
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    # ---------- !cron status ----------
+    if sub in {"status", "stat", "статус"}:
+        jobs = _cron_read_jobs()
+        total = len(jobs)
+        enabled = sum(1 for j in jobs if j.get("enabled"))
+        disabled = total - enabled
+        errors = sum(
+            1 for j in jobs
+            if int((j.get("state") or {}).get("consecutiveErrors") or 0) > 0
+        )
+        lines = [
+            "🗓 **OpenClaw Cron — статус**",
+            f"Всего jobs: **{total}**",
+            f"• включено: {enabled}",
+            f"• выключено: {disabled}",
+            f"• с ошибками: {errors}",
+        ]
+        await message.reply("\n".join(lines))
+        return
+
+    # ---------- !cron list ----------
+    if sub in {"list", "ls", "список", ""}:
+        jobs = _cron_read_jobs()
+        if not jobs:
+            await message.reply("🗓 Cron jobs не найдены.")
+            return
+        # Сортировка: сначала enabled
+        jobs_sorted = sorted(jobs, key=lambda j: (not j.get("enabled"), str(j.get("name") or "")))
+        lines = ["🗓 **OpenClaw Cron Jobs**\n"]
+        for job in jobs_sorted:
+            flag = "✅" if job.get("enabled") else "⏸"
+            name = str(job.get("name") or job.get("id") or "?")
+            schedule = _cron_format_schedule(job)
+            last_status = _cron_format_last_status(job)
+            lines.append(f"{flag} **{name}**")
+            lines.append(f"   расписание: {schedule} | статус: `{last_status}`")
+        await message.reply("\n".join(lines))
+        return
+
+    # ---------- !cron enable / !cron disable ----------
+    if sub in {"enable", "вкл", "включить", "disable", "выкл", "выключить"}:
+        if not arg:
+            action_word = "enable" if sub in {"enable", "вкл", "включить"} else "disable"
+            raise UserInputError(
+                user_message=f"❌ Укажи имя или id job: `!cron {action_word} <name>`"
+            )
+        enable = sub in {"enable", "вкл", "включить"}
+        action = "enable" if enable else "disable"
+
+        # Ищем job в jobs.json по имени или id
+        jobs = _cron_read_jobs()
+        matched = [
+            j for j in jobs
+            if str(j.get("name") or "").lower() == arg.lower()
+            or str(j.get("id") or "").lower() == arg.lower()
+        ]
+        if not matched:
+            raise UserInputError(user_message=f"❌ Job `{arg}` не найден.")
+
+        job_id = str(matched[0].get("id") or "")
+        job_name = str(matched[0].get("name") or job_id)
+
+        # Вызываем openclaw cron enable/disable <id>
+        ok, raw = await _cron_run_openclaw("cron", action, job_id)
+
+        if ok:
+            emoji = "✅" if enable else "⏸"
+            verb = "включён" if enable else "выключен"
+            await message.reply(f"{emoji} Job **{job_name}** {verb}.")
+        else:
+            # Fallback: патчим напрямую в jobs.json (gateway может быть offline)
+            logger.warning("cron_openclaw_cli_failed_patching_directly", action=action, raw=raw)
+            for j in jobs:
+                if str(j.get("id") or "") == job_id:
+                    j["enabled"] = enable
+            _cron_write_jobs(jobs)
+            emoji = "✅" if enable else "⏸"
+            verb = "включён" if enable else "выключен"
+            await message.reply(
+                f"{emoji} Job **{job_name}** {verb} (direct patch, gateway offline)."
+            )
+        return
+
+    # ---------- !cron run ----------
+    if sub in {"run", "запустить", "запуск"}:
+        if not arg:
+            raise UserInputError(user_message="❌ Укажи имя или id job: `!cron run <name>`")
+
+        # Ищем job в jobs.json по имени или id
+        jobs = _cron_read_jobs()
+        matched = [
+            j for j in jobs
+            if str(j.get("name") or "").lower() == arg.lower()
+            or str(j.get("id") or "").lower() == arg.lower()
+        ]
+        if not matched:
+            raise UserInputError(user_message=f"❌ Job `{arg}` не найден.")
+
+        job_id = str(matched[0].get("id") or "")
+        job_name = str(matched[0].get("name") or job_id)
+
+        msg = await message.reply(f"⏳ Запускаю job **{job_name}**…")
+        ok, raw = await _cron_run_openclaw("cron", "run", job_id, timeout=60.0)
+
+        short_raw = raw[:200] if raw else ""
+        if ok:
+            text = f"✅ Job **{job_name}** запущен.\n`{short_raw}`" if short_raw else f"✅ Job **{job_name}** запущен."
+            await msg.edit(text)
+        else:
+            text = f"❌ Ошибка запуска **{job_name}**:\n`{short_raw}`" if short_raw else f"❌ Ошибка запуска **{job_name}**."
+            await msg.edit(text)
+        return
+
+    # ---------- Неизвестная субкоманда ----------
+    await message.reply(
+        "🗓 **!cron** — управление OpenClaw cron jobs\n\n"
+        "`!cron list` — список всех jobs\n"
+        "`!cron enable <name>` — включить job\n"
+        "`!cron disable <name>` — выключить job\n"
+        "`!cron run <name>` — запустить job немедленно\n"
+        "`!cron status` — общая статистика"
+    )
+
+
 async def handle_watch(bot: "KraabUserbot", message: Message) -> None:
     """
     Управление proactive watch контуром.
