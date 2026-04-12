@@ -69,6 +69,51 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from ..userbot_bridge import KraabUserbot
 
+# ---------------------------------------------------------------------------
+# In-memory хранилище таймеров и секундомеров
+# ---------------------------------------------------------------------------
+
+# Структура: {timer_id: {"task": asyncio.Task, "label": str, "ends_at": float, "chat_id": int}}
+_active_timers: dict[int, dict] = {}
+_timer_counter: int = 0  # счётчик для ID
+
+# Структура: {chat_id: {"started_at": float, "laps": list[float]}}
+_stopwatches: dict[int, dict] = {}
+
+
+def _parse_duration(spec: str) -> int | None:
+    """Парсит строку вида 5m, 1h30m, 90s в секунды. Возвращает None при ошибке."""
+    import re
+    spec = spec.strip().lower()
+    # Попытка распарсить составной формат: 1h30m20s
+    pattern = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$")
+    m = pattern.fullmatch(spec)
+    if m and any(m.groups()):
+        h = int(m.group(1) or 0)
+        mins = int(m.group(2) or 0)
+        s = int(m.group(3) or 0)
+        total = h * 3600 + mins * 60 + s
+        return total if total > 0 else None
+    # Чистое число — трактуем как секунды
+    if spec.isdigit():
+        return int(spec) or None
+    return None
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Форматирует секунды в читаемую строку (1ч 5м 3с)."""
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    parts = []
+    if h:
+        parts.append(f"{h}ч")
+    if m:
+        parts.append(f"{m}м")
+    if s or not parts:
+        parts.append(f"{s}с")
+    return " ".join(parts)
+
 
 def _render_voice_profile(profile: dict[str, Any]) -> str:
     """Форматирует runtime voice-профиль для Telegram-ответа."""
@@ -6353,6 +6398,115 @@ def _render_daily_report(data: dict) -> str:
     return "\n".join(lines)
 
 
+async def handle_poll(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Быстрое создание опросов в чате.
+
+    Синтаксис:
+      !poll <вопрос> | <вариант1> | <вариант2> [| ...]
+      !poll anonymous <вопрос> | <вариант1> | <вариант2> [| ...]
+    Минимум 2, максимум 10 вариантов.
+    """
+    raw = bot._get_command_args(message).strip()
+
+    if not raw or raw.lower() in {"help", "помощь"}:
+        raise UserInputError(
+            user_message=(
+                "📊 **!poll — создание опроса**\n\n"
+                "`!poll Вопрос? | Вариант 1 | Вариант 2`\n"
+                "`!poll anonymous Вопрос? | Вариант 1 | Вариант 2`\n\n"
+                "Минимум 2, максимум 10 вариантов. Разделитель — `|`."
+            )
+        )
+
+    # Определяем режим анонимности
+    is_anonymous = False
+    if raw.lower().startswith("anonymous "):
+        is_anonymous = True
+        raw = raw[len("anonymous "):].strip()
+
+    # Разбираем вопрос и варианты
+    parts = [p.strip() for p in raw.split("|")]
+    if len(parts) < 3:
+        raise UserInputError(
+            user_message="❌ Нужно минимум 2 варианта. Синтаксис: `!poll Вопрос? | Вариант 1 | Вариант 2`"
+        )
+
+    question = parts[0]
+    options = parts[1:]
+
+    if len(options) > 10:
+        raise UserInputError(user_message="❌ Максимум 10 вариантов ответа.")
+
+    if not question:
+        raise UserInputError(user_message="❌ Вопрос не может быть пустым.")
+
+    # Удаляем исходное сообщение с командой
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+
+    await bot.client.send_poll(
+        chat_id=message.chat.id,
+        question=question,
+        options=options,
+        is_anonymous=is_anonymous,
+    )
+    logger.info("handle_poll_sent", question=question, options_count=len(options), anonymous=is_anonymous)
+
+
+async def handle_quiz(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Создание квиза (опрос с правильным ответом).
+
+    Синтаксис:
+      !quiz <вопрос> | <правильный ответ> | <неправильный1> [| ...]
+    Первый вариант всегда правильный. Минимум 2, максимум 10 вариантов.
+    """
+    raw = bot._get_command_args(message).strip()
+
+    if not raw or raw.lower() in {"help", "помощь"}:
+        raise UserInputError(
+            user_message=(
+                "🧠 **!quiz — создание квиза**\n\n"
+                "`!quiz Вопрос? | Правильный ответ | Неправильный 1 | Неправильный 2`\n\n"
+                "Первый вариант — правильный. Минимум 2, максимум 10 вариантов."
+            )
+        )
+
+    parts = [p.strip() for p in raw.split("|")]
+    if len(parts) < 3:
+        raise UserInputError(
+            user_message="❌ Нужно минимум 2 варианта. Синтаксис: `!quiz Вопрос? | Правильный | Неправильный`"
+        )
+
+    question = parts[0]
+    options = parts[1:]
+
+    if len(options) > 10:
+        raise UserInputError(user_message="❌ Максимум 10 вариантов ответа.")
+
+    if not question:
+        raise UserInputError(user_message="❌ Вопрос не может быть пустым.")
+
+    # Удаляем исходное сообщение с командой
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+
+    await bot.client.send_poll(
+        chat_id=message.chat.id,
+        question=question,
+        options=options,
+        type="quiz",
+        correct_option_id=0,  # первый вариант — правильный
+        is_anonymous=False,
+    )
+    logger.info("handle_quiz_sent", question=question, options_count=len(options))
+
+
 async def handle_report(bot: "KraabUserbot", message: Message) -> None:
     """
     Структурированный отчёт через LLM.
@@ -6500,3 +6654,354 @@ async def handle_report(bot: "KraabUserbot", message: Message) -> None:
         await status_msg.edit(header + final_text)
     except Exception:  # noqa: BLE001
         pass
+
+
+async def handle_grep(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !grep <query> [@chat] [N] — поиск по истории чата.
+
+    Форматы:
+      !grep биткоин              — ищет в текущем чате (последние 200 сообщений)
+      !grep биткоин 500          — ищет в последних 500 сообщениях
+      !grep биткоин @durov 100   — ищет в чате @durov (последние 100 сообщений)
+      !grep /pattern/            — regex-поиск (case-insensitive)
+    """
+    import re
+
+    raw = bot._get_command_args(message)
+    if not raw:
+        raise UserInputError(
+            user_message=(
+                "🔍 Использование:\n"
+                "`!grep <запрос> [@чат] [N]`\n\n"
+                "Примеры:\n"
+                "`!grep биткоин` — ищет в этом чате (200 последних сообщений)\n"
+                "`!grep биткоин 500` — ищет в 500 последних сообщениях\n"
+                "`!grep биткоин @durov 100` — ищет в другом чате\n"
+                "`!grep /паттерн/` — regex-поиск"
+            )
+        )
+
+    parts = raw.split()
+
+    # --- Парсим аргументы ---
+    query_parts: list[str] = []
+    target_chat: int | str = message.chat.id
+    limit: int = 200
+
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        # @chat — указание альтернативного чата
+        if part.startswith("@") and len(part) > 1:
+            target_chat = part  # pyrogram принимает username
+        # Числовой лимит (только если выглядит как standalone число)
+        elif part.isdigit():
+            limit = min(int(part), 2000)  # защита от очень больших лимитов
+        else:
+            query_parts.append(part)
+        i += 1
+
+    query_str = " ".join(query_parts).strip()
+    if not query_str:
+        raise UserInputError(user_message="🔍 Укажи поисковый запрос после `!grep`")
+
+    # --- Определяем тип поиска: regex или plain ---
+    use_regex = False
+    pattern: re.Pattern | None = None
+
+    if query_str.startswith("/") and query_str.endswith("/") and len(query_str) > 2:
+        # /pattern/ — regex-режим
+        regex_src = query_str[1:-1]
+        try:
+            pattern = re.compile(regex_src, re.IGNORECASE)
+            use_regex = True
+            display_query = f"/{regex_src}/"
+        except re.error as exc:
+            raise UserInputError(user_message=f"❌ Невалидный regex: `{exc}`") from exc
+    else:
+        display_query = query_str
+
+    status_msg = await message.reply(
+        f"🔍 Ищу `{display_query}` в последних **{limit}** сообщениях..."
+    )
+
+    matches: list[str] = []
+    scanned = 0
+
+    try:
+        async for msg in bot.client.get_chat_history(target_chat, limit=limit):
+            scanned += 1
+            text = msg.text or msg.caption or ""
+            if not text:
+                continue
+
+            # Фильтрация: regex или plain case-insensitive
+            if use_regex and pattern is not None:
+                found = bool(pattern.search(text))
+            else:
+                found = query_str.lower() in text.lower()
+
+            if not found:
+                continue
+
+            # Форматируем метаданные
+            dt = msg.date
+            time_str = dt.strftime("%d.%m %H:%M") if dt else "??:??"
+
+            sender = ""
+            if msg.from_user:
+                sender = (
+                    f"@{msg.from_user.username}"
+                    if msg.from_user.username
+                    else msg.from_user.first_name or "Unknown"
+                )
+            elif msg.sender_chat:
+                sender = msg.sender_chat.title or "Channel"
+
+            # Обрезаем длинный текст, показываем контекст вокруг совпадения
+            preview = text.replace("\n", " ")
+            if len(preview) > 200:
+                if use_regex and pattern is not None:
+                    m = pattern.search(preview)
+                    if m:
+                        start = max(0, m.start() - 60)
+                        end = min(len(preview), m.end() + 60)
+                        prefix = "..." if start > 0 else ""
+                        suffix = "..." if end < len(preview) else ""
+                        preview = prefix + preview[start:end] + suffix
+                    else:
+                        preview = preview[:200] + "..."
+                else:
+                    idx = preview.lower().find(query_str.lower())
+                    if idx >= 0:
+                        start = max(0, idx - 60)
+                        end = min(len(preview), idx + len(query_str) + 60)
+                        prefix = "..." if start > 0 else ""
+                        suffix = "..." if end < len(preview) else ""
+                        preview = prefix + preview[start:end] + suffix
+                    else:
+                        preview = preview[:200] + "..."
+
+            matches.append(f"[{time_str}] {sender}: {preview}")
+
+            # Не более 20 совпадений в ответе
+            if len(matches) >= 20:
+                break
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("handle_grep_error", error=str(exc))
+        await status_msg.edit(f"❌ Ошибка при поиске: {exc}")
+        return
+
+    if not matches:
+        await status_msg.edit(
+            f"🔍 Ничего не найдено для `{display_query}` "
+            f"в последних {scanned} сообщениях."
+        )
+        return
+
+    # --- Форматируем результат ---
+    header = f"🔍 Найдено **{len(matches)}** совпадений для `{display_query}`"
+    if len(matches) >= 20:
+        header += " (показаны первые 20)"
+    header += ":\n\n"
+
+    lines = [f"{i + 1}. {m}" for i, m in enumerate(matches)]
+    body = "\n".join(lines)
+
+    # Telegram limit 4096 символов
+    full = header + body
+    if len(full) > 4000:
+        full = full[:3950] + "\n...(обрезано)"
+
+    await status_msg.edit(full)
+
+
+# ---------------------------------------------------------------------------
+# !timer — таймер с обратным отсчётом
+# ---------------------------------------------------------------------------
+
+
+async def handle_timer(bot: "KraabUserbot", message: Message) -> None:
+    """Управление таймерами: !timer <время>, !timer list, !timer cancel [id]."""
+    global _timer_counter  # noqa: PLW0603
+
+    args = bot._get_command_args(message).strip()
+
+    # --- список активных таймеров ---
+    if args in ("list", "список", "ls"):
+        if not _active_timers:
+            await message.reply("⏱ Нет активных таймеров.")
+            return
+        lines = ["⏱ **Активные таймеры:**"]
+        now = time.monotonic()
+        for tid, info in sorted(_active_timers.items()):
+            remaining = max(0.0, info["ends_at"] - now)
+            label = info.get("label") or ""
+            label_part = f" — {label}" if label else ""
+            lines.append(f"• `#{tid}` {_fmt_duration(remaining)} осталось{label_part}")
+        await message.reply("\n".join(lines))
+        return
+
+    # --- отмена таймера ---
+    if args.startswith(("cancel", "отмена", "stop")):
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            # Отменить все
+            if not _active_timers:
+                await message.reply("⏱ Нет активных таймеров.")
+                return
+            for info in _active_timers.values():
+                info["task"].cancel()
+            count = len(_active_timers)
+            _active_timers.clear()
+            await message.reply(f"✅ Отменено таймеров: {count}.")
+            return
+        id_str = parts[1].lstrip("#")
+        if not id_str.isdigit():
+            await message.reply("❌ Укажи ID таймера: `!timer cancel 3`")
+            return
+        tid = int(id_str)
+        if tid not in _active_timers:
+            await message.reply(f"❌ Таймер `#{tid}` не найден.")
+            return
+        _active_timers[tid]["task"].cancel()
+        del _active_timers[tid]
+        await message.reply(f"✅ Таймер `#{tid}` отменён.")
+        return
+
+    # --- новый таймер: парсим первое слово как длительность, остальное — метка ---
+    parts = args.split(maxsplit=1)
+    if not parts or not args:
+        await message.reply(
+            "⏱ Использование:\n"
+            "`!timer 5m` — таймер на 5 минут\n"
+            "`!timer 1h30m Обед` — таймер с меткой\n"
+            "`!timer list` — список\n"
+            "`!timer cancel [id]` — отмена"
+        )
+        return
+
+    seconds = _parse_duration(parts[0])
+    if seconds is None:
+        await message.reply(
+            f"❌ Не могу распарсить время: `{parts[0]}`\n"
+            "Примеры: `5m`, `1h30m`, `90s`, `3600`"
+        )
+        return
+
+    label = parts[1] if len(parts) > 1 else ""
+    chat_id = message.chat.id
+
+    _timer_counter += 1
+    tid = _timer_counter
+
+    async def _timer_callback(t_id: int, secs: int, c_id: int, lbl: str) -> None:
+        """Ждёт нужное время, затем отправляет уведомление в чат."""
+        try:
+            await asyncio.sleep(secs)
+        except asyncio.CancelledError:
+            return
+        label_part = f" — {lbl}" if lbl else ""
+        text = f"⏰ **Таймер истёк!**{label_part} (#{t_id})"
+        try:
+            await bot.client.send_message(c_id, text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timer_notify_failed", timer_id=t_id, error=str(exc))
+        finally:
+            _active_timers.pop(t_id, None)
+
+    task = asyncio.create_task(_timer_callback(tid, seconds, chat_id, label))
+    _active_timers[tid] = {
+        "task": task,
+        "label": label,
+        "ends_at": time.monotonic() + seconds,
+        "chat_id": chat_id,
+    }
+
+    label_part = f" — {label}" if label else ""
+    await message.reply(
+        f"⏱ Таймер `#{tid}` запущен на **{_fmt_duration(seconds)}**{label_part}."
+    )
+
+
+# ---------------------------------------------------------------------------
+# !stopwatch — секундомер
+# ---------------------------------------------------------------------------
+
+
+async def handle_stopwatch(bot: "KraabUserbot", message: Message) -> None:
+    """Управление секундомером: !stopwatch start|stop|lap."""
+    args = bot._get_command_args(message).strip().lower()
+    chat_id = message.chat.id
+
+    if args in ("start", "старт", "go"):
+        if chat_id in _stopwatches:
+            elapsed = time.monotonic() - _stopwatches[chat_id]["started_at"]
+            await message.reply(
+                f"⚡ Секундомер уже запущен ({_fmt_duration(elapsed)} прошло). "
+                "Используй `!stopwatch stop` для остановки."
+            )
+            return
+        _stopwatches[chat_id] = {"started_at": time.monotonic(), "laps": []}
+        await message.reply("▶️ Секундомер запущен.")
+        return
+
+    if args in ("stop", "стоп", "end"):
+        if chat_id not in _stopwatches:
+            await message.reply("⏱ Секундомер не запущен. Используй `!stopwatch start`.")
+            return
+        sw = _stopwatches.pop(chat_id)
+        elapsed = time.monotonic() - sw["started_at"]
+        laps = sw["laps"]
+        lines = [f"⏹ Секундомер остановлен. **Итого: {_fmt_duration(elapsed)}**"]
+        if laps:
+            lines.append("")
+            for i, lap_ts in enumerate(laps, 1):
+                lap_elapsed = lap_ts - sw["started_at"]
+                lines.append(f"  Круг {i}: {_fmt_duration(lap_elapsed)}")
+        await message.reply("\n".join(lines))
+        return
+
+    if args in ("lap", "круг", "split"):
+        if chat_id not in _stopwatches:
+            await message.reply("⏱ Секундомер не запущен. Используй `!stopwatch start`.")
+            return
+        sw = _stopwatches[chat_id]
+        now = time.monotonic()
+        sw["laps"].append(now)
+        elapsed = now - sw["started_at"]
+        lap_num = len(sw["laps"])
+        if lap_num > 1:
+            prev = sw["laps"][-2]
+            split = now - prev
+            await message.reply(
+                f"🔵 Круг {lap_num}: **{_fmt_duration(elapsed)}** "
+                f"(+{_fmt_duration(split)} с прошлого)"
+            )
+        else:
+            await message.reply(f"🔵 Круг {lap_num}: **{_fmt_duration(elapsed)}**")
+        return
+
+    # status / без аргументов
+    if args in ("", "status", "статус", "time"):
+        if chat_id not in _stopwatches:
+            await message.reply("⏱ Секундомер не запущен. Используй `!stopwatch start`.")
+            return
+        sw = _stopwatches[chat_id]
+        elapsed = time.monotonic() - sw["started_at"]
+        laps = sw["laps"]
+        lines = [f"⏱ Текущее время: **{_fmt_duration(elapsed)}**"]
+        if laps:
+            lines.append(f"Кругов: {len(laps)}")
+        await message.reply("\n".join(lines))
+        return
+
+    await message.reply(
+        "⏱ Использование секундомера:\n"
+        "`!stopwatch start` — запустить\n"
+        "`!stopwatch stop` — остановить\n"
+        "`!stopwatch lap` — отметить круг\n"
+        "`!stopwatch` — текущее время"
+    )

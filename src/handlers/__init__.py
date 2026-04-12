@@ -79,6 +79,11 @@ from .command_handlers import (
     handle_react,
     handle_ask,
     handle_report,
+    handle_poll,
+    handle_quiz,
+    handle_grep,
+    handle_timer,
+    handle_stopwatch,
 )
 
 __all__ = [
@@ -154,4 +159,9 @@ __all__ = [
     "handle_alias",
     "handle_react",
     "handle_report",
+    "handle_poll",
+    "handle_quiz",
+    "handle_grep",
+    "handle_timer",
+    "handle_stopwatch",
 ]

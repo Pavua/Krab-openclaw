@@ -129,6 +129,11 @@ from .handlers import (
     handle_react,
     handle_ask,
     handle_report,
+    handle_poll,
+    handle_quiz,
+    handle_grep,
+    handle_timer,
+    handle_stopwatch,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -688,6 +693,12 @@ class KraabUserbot(
             await run_cmd(handle_search, m)
 
         @self.client.on_message(
+            filters.command("grep", prefixes=prefixes) & _make_command_filter("grep"), group=-1
+        )
+        async def wrap_grep(c, m):
+            await run_cmd(handle_grep, m)
+
+        @self.client.on_message(
             filters.command("ask", prefixes=prefixes) & _make_command_filter("ask"), group=-1
         )
         async def wrap_ask(c, m):
@@ -965,11 +976,39 @@ class KraabUserbot(
             await run_cmd(handle_react, m)
 
         @self.client.on_message(
+            filters.command("poll", prefixes=prefixes) & _make_command_filter("poll"),
+            group=-1,
+        )
+        async def wrap_poll(c, m):
+            await run_cmd(handle_poll, m)
+
+        @self.client.on_message(
+            filters.command("quiz", prefixes=prefixes) & _make_command_filter("quiz"),
+            group=-1,
+        )
+        async def wrap_quiz(c, m):
+            await run_cmd(handle_quiz, m)
+
+        @self.client.on_message(
             filters.command("alias", prefixes=prefixes) & _make_command_filter("alias"),
             group=-1,
         )
         async def wrap_alias(c, m):
             await run_cmd(handle_alias, m)
+
+        @self.client.on_message(
+            filters.command("timer", prefixes=prefixes) & _make_command_filter("timer"),
+            group=-1,
+        )
+        async def wrap_timer(c, m):
+            await run_cmd(handle_timer, m)
+
+        @self.client.on_message(
+            filters.command("stopwatch", prefixes=prefixes) & _make_command_filter("stopwatch"),
+            group=-1,
+        )
+        async def wrap_stopwatch(c, m):
+            await run_cmd(handle_stopwatch, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
