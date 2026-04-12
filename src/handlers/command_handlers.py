@@ -5065,6 +5065,78 @@ async def handle_unpin(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(reply)
 
 
+async def handle_archive(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Архивация и разархивация чатов. Owner-only.
+
+    Форматы:
+      !archive          — архивировать текущий чат
+      !unarchive        — разархивировать текущий чат
+      !archive list     — показать список архивированных чатов (до 20)
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!archive` доступен только владельцу.")
+
+    args = bot._get_command_args(message).strip().lower()
+
+    if args == "list":
+        # Получаем список архивированных диалогов
+        try:
+            archived = []
+            async for dialog in bot.client.get_dialogs(folder_id=1):
+                chat = dialog.chat
+                title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(chat.id)
+                archived.append(f"• `{chat.id}` — {title}")
+                if len(archived) >= 20:
+                    break
+        except Exception as exc:
+            reply = f"❌ Не удалось получить архив: `{exc}`"
+        else:
+            if archived:
+                lines = ["📦 **Архивированные чаты** (до 20):"] + archived
+                reply = "\n".join(lines)
+            else:
+                reply = "📦 Архив пуст."
+    else:
+        # Архивируем текущий чат
+        chat_id = message.chat.id
+        try:
+            await bot.client.archive_chats(chat_id)
+            reply = "📦 Чат добавлен в архив."
+        except Exception as exc:
+            reply = f"❌ Не удалось архивировать: `{exc}`"
+
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(reply)
+    else:
+        await message.reply(reply)
+
+
+async def handle_unarchive(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Разархивирует текущий чат. Owner-only.
+
+    Формат:
+      !unarchive        — разархивировать текущий чат
+    """
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!unarchive` доступен только владельцу.")
+
+    chat_id = message.chat.id
+    try:
+        await bot.client.unarchive_chats(chat_id)
+        reply = "📤 Чат извлечён из архива."
+    except Exception as exc:
+        reply = f"❌ Не удалось разархивировать: `{exc}`"
+
+    if message.from_user and message.from_user.id == bot.me.id:
+        await message.edit(reply)
+    else:
+        await message.reply(reply)
+
+
 async def handle_memo(bot: "KraabUserbot", message: Message) -> None:
     """
     Быстрые заметки из Telegram в Obsidian vault (00_Inbox).
