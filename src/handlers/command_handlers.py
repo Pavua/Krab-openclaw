@@ -12725,3 +12725,169 @@ async def handle_members(bot: "KraabUserbot", message: Message) -> None:
             "`!members unban @user`  — разбанить пользователя"
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# !log — просмотр логов Краба из Telegram
+# ---------------------------------------------------------------------------
+
+# Путь к лог-файлу Краба
+_KRAB_LOG_PATH = pathlib.Path.home() / ".openclaw" / "krab_runtime_state" / "krab_main.log"
+
+# Максимальный размер файла для чтения целиком (5 MB)
+_LOG_MAX_INLINE_SIZE = 5 * 1024 * 1024
+
+# Лимит строк для вывода в Telegram (без document)
+_LOG_TEXT_MAX_LINES = 200
+
+
+async def handle_log(bot: "KraabUserbot", message: Message) -> None:
+    """Просмотр логов Краба из Telegram.
+
+    Форматы:
+      !log [N]              — последние N строк лога (default 20)
+      !log errors           — только ошибки (строки с ERROR/error/CRITICAL/WARNING)
+      !log search <запрос>  — поиск по логам (grep-like)
+
+    Длинный вывод отправляется как документ (.txt файл).
+    """
+    args = bot._get_command_args(message).strip()
+
+    # Определяем переменную окружения или дефолтный путь к логу
+    raw_env = os.environ.get("KRAB_LOG_FILE")
+    if raw_env and raw_env.lower() != "none":
+        log_path = pathlib.Path(raw_env).expanduser()
+    else:
+        base_env = os.environ.get("KRAB_RUNTIME_STATE_DIR")
+        if base_env:
+            log_path = pathlib.Path(base_env).expanduser() / "krab_main.log"
+        else:
+            log_path = _KRAB_LOG_PATH
+
+    # Лог-файл должен существовать
+    if not log_path.exists():
+        await message.reply(
+            f"📋 Лог-файл не найден: `{log_path}`\n"
+            "Убедись, что Краб запущен и лог активен."
+        )
+        return
+
+    # --- Разбор подкоманды ---
+    mode = "tail"
+    n_lines = 20
+    query: str | None = None
+
+    if args:
+        lower = args.lower()
+        if lower == "errors":
+            mode = "errors"
+        elif lower.startswith("search "):
+            mode = "search"
+            query = args[7:].strip()
+            if not query:
+                raise UserInputError(
+                    user_message="🔍 Укажи запрос: `!log search <текст>`"
+                )
+        else:
+            # Пробуем распарсить как число
+            try:
+                n_lines = max(1, min(int(args), 1000))
+            except ValueError:
+                raise UserInputError(
+                    user_message=(
+                        "📋 **!log — просмотр логов Краба**\n\n"
+                        "`!log [N]`              — последние N строк (default 20)\n"
+                        "`!log errors`           — только ошибки\n"
+                        "`!log search <запрос>`  — поиск по логам"
+                    )
+                )
+
+    # --- Чтение лог-файла ---
+    try:
+        file_size = log_path.stat().st_size
+        if file_size > _LOG_MAX_INLINE_SIZE:
+            # Большой файл — читаем через tail subprocess
+            lines = _read_log_tail_subprocess(log_path, max(n_lines, 500))
+        else:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, IOError) as e:
+        await message.reply(f"❌ Ошибка чтения лога: {e}")
+        return
+
+    # --- Фильтрация ---
+    if mode == "errors":
+        result_lines = [
+            ln for ln in lines
+            if any(kw in ln for kw in ("ERROR", "error", "CRITICAL", "critical", "WARNING", "warning"))
+        ]
+        header = "⚠️ **Ошибки в логах Краба**"
+        if not result_lines:
+            await message.reply("✅ Ошибок в логах нет.")
+            return
+    elif mode == "search":
+        assert query is not None
+        result_lines = [ln for ln in lines if query.lower() in ln.lower()]
+        header = f"🔍 **Поиск в логах:** `{query}`"
+        if not result_lines:
+            await message.reply(f"🔍 По запросу `{query}` ничего не найдено.")
+            return
+    else:
+        # tail режим
+        result_lines = lines[-n_lines:]
+        header = f"📋 **Последние {n_lines} строк лога Краба**"
+
+    # --- Формируем текст ---
+    body = "\n".join(result_lines)
+    full_text = f"{header}\n\n```\n{body}\n```"
+
+    # --- Отправка: короткий текст → reply, длинный → document ---
+    if len(full_text) <= 3900 and len(result_lines) <= _LOG_TEXT_MAX_LINES:
+        parts = _split_text_for_telegram(full_text)
+        for part in parts:
+            await message.reply(part)
+    else:
+        # Отправляем как документ
+        now = datetime.datetime.now()
+        filename = now.strftime("krab_log_%Y-%m-%d_%H-%M.txt")
+        tmpdir = pathlib.Path(config.BASE_DIR) / ".runtime" / "log_exports"
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        filepath = tmpdir / filename
+
+        # Считаем строки — без markdown-обёртки
+        export_text = f"{header}\n\n{body}"
+        try:
+            filepath.write_text(export_text, encoding="utf-8")
+            await bot.client.send_document(
+                message.chat.id,
+                str(filepath),
+                caption=f"📋 {header} ({len(result_lines)} строк)",
+            )
+        except (OSError, IOError) as e:
+            await message.reply(f"❌ Ошибка создания файла: {e}")
+        finally:
+            try:
+                filepath.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _read_log_tail_subprocess(log_path: pathlib.Path, n: int) -> list[str]:
+    """Читает последние N строк большого лог-файла через subprocess tail."""
+    try:
+        from .core.subprocess_env import clean_subprocess_env  # type: ignore[import]
+        env = clean_subprocess_env()
+    except (ImportError, Exception):
+        env = None
+
+    try:
+        result = subprocess.run(
+            ["tail", "-n", str(n), str(log_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+        return result.stdout.splitlines()
+    except (subprocess.TimeoutExpired, OSError):
+        # Fallback: читаем весь файл и берём хвост
+        return log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
