@@ -696,6 +696,13 @@ class KraabUserbot(
             await run_cmd(handle_search, m)
 
         @self.client.on_message(
+            filters.command("weather", prefixes=prefixes) & _make_command_filter("weather"),
+            group=-1,
+        )
+        async def wrap_weather(c, m):
+            await run_cmd(handle_weather, m)
+
+        @self.client.on_message(
             filters.command("grep", prefixes=prefixes) & _make_command_filter("grep"), group=-1
         )
         async def wrap_grep(c, m):

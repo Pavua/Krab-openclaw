@@ -70,7 +70,6 @@ from .command_handlers import (
     handle_fwd,
     handle_collect,
     handle_purge,
-    handle_schedule,
     handle_summary,
     handle_catchup,
     handle_translate,
@@ -84,6 +83,9 @@ from .command_handlers import (
     handle_grep,
     handle_timer,
     handle_stopwatch,
+    handle_todo,
+    handle_qr,
+    handle_weather,
 )
 
 __all__ = [
@@ -164,4 +166,8 @@ __all__ = [
     "handle_grep",
     "handle_timer",
     "handle_stopwatch",
+    "handle_todo",
+    "handle_qr",
+    "handle_weather",
+    "handle_ask",
 ]
