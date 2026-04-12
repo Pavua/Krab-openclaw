@@ -60,6 +60,7 @@ from .employee_templates import ROLES
 from .handlers import (
     handle_acl,
     handle_agent,
+    handle_alias,
     handle_browser,
     handle_budget,
     handle_costs,
@@ -83,6 +84,7 @@ from .handlers import (
     handle_macos,
     handle_memo,
     handle_memory,
+    handle_note,
     handle_model,
     handle_monitor,
     handle_notify,
@@ -125,6 +127,7 @@ from .handlers import (
     handle_translate,
     handle_export,
     handle_react,
+    handle_ask,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -678,6 +681,12 @@ class KraabUserbot(
             await run_cmd(handle_search, m)
 
         @self.client.on_message(
+            filters.command("ask", prefixes=prefixes) & _make_command_filter("ask"), group=-1
+        )
+        async def wrap_ask(c, m):
+            await run_cmd(handle_ask, m)
+
+        @self.client.on_message(
             filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1
         )
         async def wrap_shop(c, m):
@@ -688,6 +697,12 @@ class KraabUserbot(
         )
         async def wrap_memo(c, m):
             await run_cmd(handle_memo, m)
+
+        @self.client.on_message(
+            filters.command("note", prefixes=prefixes) & _make_command_filter("note"), group=-1
+        )
+        async def wrap_note(c, m):
+            await run_cmd(handle_note, m)
 
         @self.client.on_message(
             filters.command(["bookmark", "bm"], prefixes=prefixes)
@@ -941,6 +956,13 @@ class KraabUserbot(
         )
         async def wrap_react(c, m):
             await run_cmd(handle_react, m)
+
+        @self.client.on_message(
+            filters.command("alias", prefixes=prefixes) & _make_command_filter("alias"),
+            group=-1,
+        )
+        async def wrap_alias(c, m):
+            await run_cmd(handle_alias, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
@@ -2832,8 +2854,18 @@ class KraabUserbot(
         chat_id: str,
     ) -> None:
         """Обрабатывает одно входящее сообщение под эксклюзивным lock чата."""
+        from .core.command_aliases import alias_service as _alias_svc  # noqa: PLC0415
+
         text = message.text or message.caption or ""
         has_audio_message = self._message_has_audio(message)
+
+        # Разрешаем алиасы ПЕРЕД routing: !t привет → !translate привет
+        if text and text.lstrip()[:1] in ("!", "/", "."):
+            resolved = _alias_svc.resolve(text)
+            if resolved != text:
+                # Подменяем текст сообщения — Pyrogram допускает это до обработки
+                message.text = resolved  # type: ignore[assignment]
+                text = resolved
 
         if text and text.lstrip()[:1] in ("!", "/", "."):
             cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()

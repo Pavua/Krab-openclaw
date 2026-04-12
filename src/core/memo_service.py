@@ -73,26 +73,47 @@ class MemoService:
         # Крайний случай — timestamp в микросекундах
         return f"{dt.strftime('%Y-%m-%d_%H-%M-%S-%f')}_memo.md"
 
-    def _build_content(self, text: str, chat_title: str, dt: datetime) -> str:
+    def _build_content(
+        self,
+        text: str,
+        chat_title: str,
+        dt: datetime,
+        tags: list[str] | None = None,
+        source_type: str = "krab-telegram",
+    ) -> str:
         """Строит содержимое файла с YAML frontmatter."""
         created = dt.strftime("%Y-%m-%dT%H:%M:%S")
+        # Теги в YAML-списке
+        tags_yaml = ""
+        if tags:
+            safe_tags = [t.replace('"', '') for t in tags]
+            tags_yaml = "tags:\n" + "".join(f'  - "{t}"\n' for t in safe_tags)
         return (
             "---\n"
             f"created: {created}\n"
-            "source: krab-telegram\n"
+            f"source: {source_type}\n"
             f"chat: {chat_title}\n"
+            f"{tags_yaml}"
             "---\n"
             "\n"
             f"{text}\n"
         )
 
-    def save(self, text: str, chat_title: str = "unknown") -> MemoResult:
+    def save(
+        self,
+        text: str,
+        chat_title: str = "unknown",
+        tags: list[str] | None = None,
+        source_type: str = "krab-telegram",
+    ) -> MemoResult:
         """
         Сохраняет заметку в inbox.
 
         Args:
             text: Текст заметки.
             chat_title: Название чата-источника.
+            tags: Список тегов для YAML frontmatter.
+            source_type: Тип источника (krab-telegram, krab-voice и т.д.).
 
         Returns:
             MemoResult с результатом операции.
@@ -109,7 +130,7 @@ class MemoService:
         dt = datetime.now()
         filename = self._build_filename(dt)
         file_path = self.inbox_dir / filename
-        content = self._build_content(text.strip(), chat_title, dt)
+        content = self._build_content(text.strip(), chat_title, dt, tags=tags, source_type=source_type)
 
         try:
             file_path.write_text(content, encoding="utf-8")
@@ -196,10 +217,21 @@ class MemoService:
 
         return results
 
-    async def save_async(self, text: str, chat_title: str = "unknown") -> MemoResult:
+    async def save_async(
+        self,
+        text: str,
+        chat_title: str = "unknown",
+        tags: list[str] | None = None,
+        source_type: str = "krab-telegram",
+    ) -> MemoResult:
         """Асинхронная обёртка над save() для использования в async-хендлерах."""
+        import functools
+
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.save, text, chat_title)
+        return await loop.run_in_executor(
+            None,
+            functools.partial(self.save, text, chat_title, tags=tags, source_type=source_type),
+        )
 
 
 # Синглтон

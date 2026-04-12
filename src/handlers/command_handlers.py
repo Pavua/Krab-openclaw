@@ -27,6 +27,7 @@ from ..core.access_control import (
     update_acl_subject,
 )
 from ..core.chat_ban_cache import chat_ban_cache
+from ..core.command_aliases import alias_service
 from ..core.cost_analytics import cost_analytics
 from ..core.exceptions import UserInputError
 from ..core.inbox_service import inbox_service
@@ -5946,9 +5947,7 @@ async def handle_react(bot: "KraabUserbot", message: Message) -> None:
         !react ❤️          — сердечко
         !react 🔥          — огонь
     """
-    from ..config import config as _cfg  # noqa: PLC0415
-
-    if not bool(getattr(_cfg, "TELEGRAM_REACTIONS_ENABLED", True)):
+    if not bool(getattr(config, "TELEGRAM_REACTIONS_ENABLED", True)):
         await message.reply("⚠️ Реакции отключены (TELEGRAM_REACTIONS_ENABLED=0).")
         return
 
@@ -5987,3 +5986,226 @@ async def handle_react(bot: "KraabUserbot", message: Message) -> None:
             error=err_text,
         )
         await message.reply(f"❌ Не удалось поставить реакцию `{emoji}`: {err_text}")
+
+
+async def handle_note(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Голосовая заметка в Obsidian через транскрибацию.
+
+    Использование:
+      !note              — в ответ на голосовое сообщение → транскрибирует и сохраняет
+      !note <тег>        — добавляет тег к заметке (например: !note идея)
+
+    Записывает с пометкой [voice] и source: krab-voice.
+    """
+    from ..core.memo_service import memo_service
+
+    # Проверяем: !note должна быть reply на голосовое сообщение
+    reply = message.reply_to_message
+    if reply is None:
+        raise UserInputError(
+            user_message=(
+                "🎤 **Note — голосовая заметка в Obsidian**\n\n"
+                "Ответь командой `!note` на голосовое сообщение.\n"
+                "Добавь тег: `!note идея`"
+            )
+        )
+
+    # Проверяем что reply содержит аудио
+    has_voice = bool(getattr(reply, "voice", None))
+    has_audio = bool(getattr(reply, "audio", None))
+    has_video_note = bool(getattr(reply, "video_note", None))
+
+    if not (has_voice or has_audio or has_video_note):
+        raise UserInputError(
+            user_message="❌ Команда `!note` работает только в ответ на голосовое сообщение."
+        )
+
+    # Извлекаем опциональный тег из аргументов команды
+    raw_args = bot._get_command_args(message).strip()
+    # Убираем само слово "note" если пользователь написал "!note note"
+    if raw_args.lower() == "note":
+        raw_args = ""
+    user_tag = raw_args if raw_args else None
+
+    # Определяем название чата
+    chat = message.chat
+    chat_title: str = (
+        getattr(chat, "title", None)
+        or getattr(chat, "first_name", None)
+        or str(chat.id)
+    )
+
+    # Транскрибируем через существующий _transcribe_audio_message
+    status_msg = await message.reply("⏳ Транскрибирую голосовое сообщение…")
+
+    transcript, voice_error = await bot._transcribe_audio_message(reply)
+
+    if not transcript:
+        err = voice_error or "❌ Не удалось распознать голосовое сообщение."
+        try:
+            await status_msg.edit(err)
+        except Exception:  # noqa: BLE001
+            await message.reply(err)
+        return
+
+    # Формируем тело заметки с пометкой [voice]
+    note_body = f"[voice] {transcript}"
+
+    # Теги: всегда "voice", плюс пользовательский тег если задан
+    tags: list[str] = ["voice"]
+    if user_tag:
+        tags.append(user_tag)
+
+    result = await memo_service.save_async(
+        text=note_body,
+        chat_title=chat_title,
+        tags=tags,
+        source_type="krab-voice",
+    )
+
+    if result.success:
+        tag_display = f" #{user_tag}" if user_tag else ""
+        reply_text = (
+            f"✅ Голосовая заметка сохранена{tag_display}\n"
+            f"📄 `{result.file_path.name if result.file_path else '?'}`\n"
+            f"\n_{transcript[:300]}{'…' if len(transcript) > 300 else ''}_"
+        )
+    else:
+        reply_text = f"❌ {result.message}"
+
+    try:
+        await status_msg.edit(reply_text)
+    except Exception:  # noqa: BLE001
+        await message.reply(reply_text)
+
+
+async def handle_alias(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление пользовательскими алиасами команд.
+
+    Использование:
+      !alias set <имя> <команда>   — создать алиас (напр. !alias set t !translate)
+      !alias list                  — показать все алиасы
+      !alias del <имя>             — удалить алиас
+    """
+    del bot
+    raw = str(message.text or "").split(maxsplit=2)
+    # raw[0] = "!alias", raw[1] = subcommand, raw[2] = остаток
+
+    if len(raw) < 2:
+        await message.reply(
+            "**Алиасы команд**\n\n"
+            "`!alias set <имя> <команда>` — создать алиас\n"
+            "`!alias list` — список алиасов\n"
+            "`!alias del <имя>` — удалить алиас\n\n"
+            "Пример: `!alias set t !translate` → затем `!t привет` = `!translate привет`"
+        )
+        return
+
+    sub = raw[1].lower()
+
+    if sub == "list":
+        await message.reply(alias_service.format_list())
+
+    elif sub == "set":
+        if len(raw) < 3:
+            raise UserInputError(user_message="Формат: `!alias set <имя> <команда>`")
+        # raw[2] = "<имя> <команда>"
+        parts = raw[2].split(None, 1)
+        if len(parts) < 2:
+            raise UserInputError(
+                user_message="Формат: `!alias set <имя> <команда>`\n"
+                             "Пример: `!alias set t !translate`"
+            )
+        alias_name, alias_cmd = parts[0], parts[1]
+        ok, msg = alias_service.add(alias_name, alias_cmd)
+        await message.reply(msg)
+
+    elif sub in ("del", "delete", "rm", "remove"):
+        if len(raw) < 3:
+            raise UserInputError(user_message="Формат: `!alias del <имя>`")
+        alias_name = raw[2].strip()
+        ok, msg = alias_service.remove(alias_name)
+        await message.reply(msg)
+
+    else:
+        raise UserInputError(
+            user_message=f"Неизвестная подкоманда `{sub}`.\n"
+                         "Доступно: `set`, `list`, `del`"
+        )
+
+
+async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !ask [вопрос] — задаёт вопрос AI о конкретном сообщении (reply).
+
+    Использование:
+      !ask кратко         — суммаризировать сообщение
+      !ask переведи       — перевести
+      !ask                — объяснить сообщение (вопрос по умолчанию)
+    """
+    question = bot._get_command_args(message).strip()
+
+    # Получаем исходное сообщение — только из reply
+    replied = message.reply_to_message
+    if replied is None:
+        raise UserInputError(
+            user_message=(
+                "💬 Ответь на сообщение командой `!ask [вопрос]`.\n"
+                "Пример: `!ask кратко` (в reply на длинный текст)"
+            )
+        )
+
+    # Извлекаем текст из reply-сообщения
+    source_text = (replied.text or replied.caption or "").strip()
+    if not source_text:
+        raise UserInputError(
+            user_message="❌ Исходное сообщение не содержит текста."
+        )
+
+    # Вопрос по умолчанию если не указан
+    if not question:
+        question = "Объясни это сообщение"
+
+    # Изолированная сессия, чтобы не загрязнять основной контекст чата
+    session_id = f"ask_{message.chat.id}"
+
+    # Системный промпт: роль аналитика без лишнего контекста
+    system_prompt = (
+        "Ты — Краб, персональный AI-ассистент. "
+        "Пользователь прислал фрагмент текста и задал вопрос о нём. "
+        "Отвечай кратко и по делу. "
+        "Используй язык вопроса (если вопрос на русском — отвечай по-русски)."
+    )
+
+    # Формируем промпт: текст + вопрос
+    prompt = f"Текст:\n\"\"\"\n{source_text}\n\"\"\"\n\nВопрос: {question}"
+
+    # Отправляем статус и запускаем стриминг
+    msg = await message.reply("🤔 Думаю...")
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            system_prompt=system_prompt,
+            disable_tools=True,  # !ask не нужны tool_calls — только ответ
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+        if not result:
+            await msg.edit("❌ AI вернул пустой ответ.")
+            return
+
+        # Разбиваем длинный ответ на куски для Telegram
+        parts = _split_text_for_telegram(result)
+        await msg.edit(parts[0])
+        for part in parts[1:]:
+            await message.reply(part)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_ask_error", error=str(exc))
+        await msg.edit(f"❌ Ошибка: {exc}")
