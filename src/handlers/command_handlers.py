@@ -1946,6 +1946,144 @@ async def handle_acl(bot: "KraabUserbot", message: Message) -> None:
     )
 
 
+async def handle_scope(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Управление ACL правами из Telegram через команду !scope.
+
+    Без аргументов — показывает ACL-уровень отправителя (доступно любому).
+    Подкоманды (owner-only): grant, revoke, list.
+
+    Синтаксис:
+    - !scope                         — мой текущий уровень доступа
+    - !scope grant <user_id> full    — выдать full доступ
+    - !scope grant <user_id> partial — выдать partial доступ
+    - !scope revoke <user_id>        — отозвать все уровни (full + partial)
+    - !scope list                    — список всех ACL-записей
+    """
+    raw_args = bot._get_command_args(message).strip()
+    parts = raw_args.split()
+    action = parts[0].strip().lower() if parts else ""
+
+    # Без аргументов — показываем уровень доступа отправителя (доступно всем)
+    if not action:
+        user = message.from_user
+        profile = bot._get_access_profile(user)
+        user_id = str(getattr(user, "id", "") or "")
+        username = str(getattr(user, "username", "") or "")
+        display = f"@{username}" if username else f"id:{user_id}"
+        level_emoji = {
+            AccessLevel.OWNER: "👑",
+            AccessLevel.FULL: "🔓",
+            AccessLevel.PARTIAL: "🔑",
+            AccessLevel.GUEST: "👤",
+        }.get(profile.level, "❓")
+        await message.reply(
+            f"🛂 **Уровень доступа**: {level_emoji} `{profile.level.value}`\n"
+            f"- Пользователь: {display}\n"
+            f"- Источник ACL: `{profile.source}`\n\n"
+            "Используй `!scope grant <user_id> full|partial` чтобы выдать права.\n"
+            "Используй `!scope revoke <user_id>` чтобы отозвать.\n"
+            "Используй `!scope list` для просмотра всех ACL-записей."
+        )
+        return
+
+    # list — только owner
+    if action == "list":
+        access_profile = bot._get_access_profile(message.from_user)
+        if access_profile.level != AccessLevel.OWNER:
+            raise UserInputError(user_message="🔒 `!scope list` доступен только владельцу.")
+        state = load_acl_runtime_state()
+        owner_items = state.get(AccessLevel.OWNER.value, [])
+        full_items = state.get(AccessLevel.FULL.value, [])
+        partial_items = state.get(AccessLevel.PARTIAL.value, [])
+        await message.reply(
+            "🛂 **Все ACL-записи userbot**\n"
+            "--------------------------\n"
+            f"👑 Owner: `{', '.join(owner_items) if owner_items else '-'}`\n"
+            f"🔓 Full:  `{', '.join(full_items) if full_items else '-'}`\n"
+            f"🔑 Partial: `{', '.join(partial_items) if partial_items else '-'}`\n\n"
+            f"Effective owner: `{get_effective_owner_label()}`"
+        )
+        return
+
+    # grant / revoke — только owner
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(
+            user_message=(
+                "🔒 Управление правами `!scope grant/revoke` доступно только владельцу."
+            )
+        )
+
+    if action == "grant":
+        # !scope grant <user_id> full|partial
+        if len(parts) < 3:
+            raise UserInputError(
+                user_message=(
+                    "❌ Формат: `!scope grant <user_id> full|partial`\n"
+                    "Пример: `!scope grant 123456789 full`"
+                )
+            )
+        subject = parts[1].strip()
+        level_raw = parts[2].strip().lower()
+        if level_raw not in {AccessLevel.FULL.value, AccessLevel.PARTIAL.value}:
+            raise UserInputError(
+                user_message="❌ Уровень должен быть `full` или `partial`."
+            )
+        result = update_acl_subject(level_raw, subject, add=True)
+        state = result["state"]
+        changed_note = "обновлено" if result["changed"] else "без изменений"
+        await message.reply(
+            f"✅ Доступ выдан.\n"
+            f"- Subject: `{result['subject']}`\n"
+            f"- Уровень: `{level_raw}`\n"
+            f"- Статус: {changed_note}\n"
+            f"- Full: `{', '.join(state.get('full', [])) if state.get('full') else '-'}`\n"
+            f"- Partial: `{', '.join(state.get('partial', [])) if state.get('partial') else '-'}`"
+        )
+        return
+
+    if action == "revoke":
+        # !scope revoke <user_id> — удаляет из ВСЕХ уровней (full + partial)
+        if len(parts) < 2:
+            raise UserInputError(
+                user_message=(
+                    "❌ Формат: `!scope revoke <user_id>`\n"
+                    "Пример: `!scope revoke 123456789`"
+                )
+            )
+        subject = parts[1].strip()
+        # Удаляем из full и partial (owner нельзя отозвать через !scope)
+        removed_from: list[str] = []
+        for level_val in (AccessLevel.FULL.value, AccessLevel.PARTIAL.value):
+            res = update_acl_subject(level_val, subject, add=False)
+            if res["changed"]:
+                removed_from.append(level_val)
+        if removed_from:
+            removed_str = ", ".join(f"`{lvl}`" for lvl in removed_from)
+            await message.reply(
+                f"✅ Доступ отозван.\n"
+                f"- Subject: `{normalize_subject(subject)}`\n"
+                f"- Удалён из уровней: {removed_str}"
+            )
+        else:
+            await message.reply(
+                f"ℹ️ Subject `{normalize_subject(subject)}` не найден ни в одном уровне ACL.\n"
+                "Ничего не изменено."
+            )
+        return
+
+    raise UserInputError(
+        user_message=(
+            "❌ Неизвестное действие. Доступные подкоманды:\n"
+            "- `!scope` — мой уровень доступа\n"
+            "- `!scope grant <user_id> full|partial`\n"
+            "- `!scope revoke <user_id>`\n"
+            "- `!scope list`"
+        )
+    )
+
+
 async def handle_reasoning(bot: "KraabUserbot", message: Message) -> None:
     """
     Показывает скрытую reasoning-trace отдельно от основного ответа.
@@ -3223,7 +3361,7 @@ async def handle_restart(bot: "KraabUserbot", message: Message) -> None:
     from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
 
     # Метка LaunchAgent для ai.krab.core
-    KRAB_LAUNCHD_LABEL = "ai.krab.core"
+    krab_launchd_label = "ai.krab.core"
 
     args = bot._get_command_args(message).strip().lower()
 
@@ -3242,7 +3380,7 @@ async def handle_restart(bot: "KraabUserbot", message: Message) -> None:
         try:
             uid = os.getuid()
             proc = subprocess.run(
-                ["launchctl", "print", f"gui/{uid}/{KRAB_LAUNCHD_LABEL}"],
+                ["launchctl", "print", f"gui/{uid}/{krab_launchd_label}"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -3266,7 +3404,7 @@ async def handle_restart(bot: "KraabUserbot", message: Message) -> None:
             "🦀 **Krab Status**",
             f"PID: `{pid}`",
             f"Uptime: `{uptime_str}`",
-            f"LaunchAgent: `{KRAB_LAUNCHD_LABEL}` — {launchd_status}",
+            f"LaunchAgent: `{krab_launchd_label}` — {launchd_status}",
             "",
             "Перезапуск: `!restart confirm`",
         ]
@@ -3279,7 +3417,7 @@ async def handle_restart(bot: "KraabUserbot", message: Message) -> None:
         try:
             uid = os.getuid()
             proc = subprocess.run(
-                ["launchctl", "kickstart", "-k", f"gui/{uid}/{KRAB_LAUNCHD_LABEL}"],
+                ["launchctl", "kickstart", "-k", f"gui/{uid}/{krab_launchd_label}"],
                 capture_output=True,
                 text=True,
                 timeout=10,

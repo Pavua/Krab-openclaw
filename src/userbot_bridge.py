@@ -59,6 +59,7 @@ from .core.translator_session_state import (
 from .employee_templates import ROLES
 from .handlers import (
     handle_acl,
+    handle_scope,
     handle_agent,
     handle_emoji,
     handle_alias,
@@ -75,6 +76,7 @@ from .handlers import (
     handle_config,
     handle_context,
     handle_cronstatus,
+    handle_debug,
     handle_diagnose,
     handle_gemini_cli,
     handle_help,
@@ -140,6 +142,8 @@ from .handlers import (
     handle_stopwatch,
     handle_qr,
     handle_whois,
+    handle_say,
+    handle_backup,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -845,6 +849,12 @@ class KraabUserbot(
             await run_cmd(handle_acl, m)
 
         @self.client.on_message(
+            filters.command("scope", prefixes=prefixes) & _make_command_filter("scope"), group=-1
+        )
+        async def wrap_scope(c, m):
+            await run_cmd(handle_scope, m)
+
+        @self.client.on_message(
             filters.command("access", prefixes=prefixes) & _make_command_filter("access"), group=-1
         )
         async def wrap_access(c, m):
@@ -857,6 +867,13 @@ class KraabUserbot(
         )
         async def wrap_reasoning(c, m):
             await run_cmd(handle_reasoning, m)
+
+        @self.client.on_message(
+            filters.command("debug", prefixes=prefixes) & _make_command_filter("debug"),
+            group=-1,
+        )
+        async def wrap_debug(c, m):
+            await run_cmd(handle_debug, m)
 
         @self.client.on_message(
             filters.command("diagnose", prefixes=prefixes) & _make_command_filter("diagnose"),
@@ -1053,6 +1070,20 @@ class KraabUserbot(
         )
         async def wrap_qr(c, m):
             await run_cmd(handle_qr, m)
+
+        # Тихая отправка сообщения от имени юзербота
+        @self.client.on_message(
+            filters.command("say", prefixes=prefixes) & _make_command_filter("say"), group=-1
+        )
+        async def wrap_say(c, m):
+            await run_cmd(handle_say, m)
+
+        @self.client.on_message(
+            filters.command("backup", prefixes=prefixes) & _make_command_filter("backup"),
+            group=-1,
+        )
+        async def wrap_backup(c, m):
+            await run_cmd(handle_backup, m)
 
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()

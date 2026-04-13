@@ -664,6 +664,16 @@ _COMMANDS: list[CommandInfo] = [
         ),
         owner_only=True,
     ),
+    CommandInfo(
+        name="say",
+        category="management",
+        description="Тихая отправка сообщения от имени юзербота (команда удаляется)",
+        usage=(
+            "!say <текст>              — отправить в текущий чат\n"
+            "!say <chat_id> <текст>   — отправить в другой чат"
+        ),
+        owner_only=True,
+    ),
 ]
 
 
