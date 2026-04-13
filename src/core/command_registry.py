@@ -468,6 +468,13 @@ _COMMANDS: list[CommandInfo] = [
         owner_only=True,
     ),
     CommandInfo(
+        name="cron",
+        category="scheduler",
+        description="Управление OpenClaw cron jobs (list/enable/disable/run/status)",
+        usage="!cron [list|enable|disable|run|status] [<name>]",
+        owner_only=True,
+    ),
+    CommandInfo(
         name="monitor",
         category="scheduler",
         description="Мониторинг чатов",
@@ -625,6 +632,12 @@ _COMMANDS: list[CommandInfo] = [
         description="Генерация QR-кода из текста или URL",
         usage="!qr <текст|URL>  или ответь на сообщение",
         owner_only=True,
+    ),
+    CommandInfo(
+        name="convert",
+        category="basic",
+        description="Конвертер единиц: длина, масса, объём, скорость, температура",
+        usage="!convert <число> <из> <в>  (напр. !convert 100 km mi)",
     ),
     CommandInfo(
         name="template",
