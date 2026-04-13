@@ -357,6 +357,7 @@ class KraabUserbot(
     LLMTextProcessingMixin,
     RuntimeStatusMixin,
     VoiceProfileMixin,
+    AutoTranslateMixin,
     AccessControlMixin,
     LLMFlowMixin,
     BackgroundTasksMixin,
@@ -3530,6 +3531,24 @@ class KraabUserbot(
                     asyncio.create_task(
                         self._send_monitor_alert(message=message, matched_keyword=_matched_kw)
                     )
+
+            # AUTO-TRANSLATE: если для чата включён автоперевод (!translate auto),
+            # переводим входящее текстовое сообщение (не от self, не команду).
+            # Fire-and-forget — не блокируем основной обработчик.
+            if (
+                not _is_self_for_guard
+                and not _is_command_for_guard
+                and message.text
+                and chat_id
+                and self.is_auto_translate_enabled(chat_id)
+            ):
+                asyncio.create_task(
+                    self._handle_auto_translate_message(
+                        message=message,
+                        text=str(message.text),
+                        chat_id=chat_id,
+                    )
+                )
 
             # B.6 chat capability cache: fire-and-forget refresh если в кеше
             # нет свежей записи. `_refresh_chat_capabilities_background` сам
