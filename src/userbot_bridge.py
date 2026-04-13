@@ -144,6 +144,7 @@ from .handlers import (
     handle_who,
     handle_whois,
     handle_write,
+    handle_eval,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client

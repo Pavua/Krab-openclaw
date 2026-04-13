@@ -69,6 +69,7 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "cronstatus",
         "acl",
         "access",
+        "scope",
         "reasoning",
         # CLI runner команды (Приоритет 3)
         "codex",
