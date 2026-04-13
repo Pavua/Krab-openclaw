@@ -408,9 +408,14 @@
 
       es.addEventListener('message', (e) => {
         hideTypingIndicator();
-        
-        // Обработка переносов строк из SSE
-        const chunk = e.data.replace(/\\n/g, '\n'); 
+
+        // SSE data = JSON {"reply": "текст"}
+        let chunk = e.data;
+        try {
+          const parsed = JSON.parse(e.data);
+          chunk = parsed.reply || parsed.text || e.data;
+        } catch(_) {}
+        chunk = chunk.replace(/\\n/g, '\n');
         currentAssistantText += chunk;
 
         if (!currentAssistantBubble) {
