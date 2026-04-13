@@ -3,23 +3,29 @@
 Тесты системных команд: !macos, !chatban, !stats, !restart.
 
 Покрываем:
-1. handle_macos — справка при вызове без аргументов
-2. handle_macos — недоступность автоматизации
-3. handle_macos — подкоманда status
-4. handle_chatban — status (пустой cache)
-5. handle_chatban — status с записями
-6. handle_chatban — clear с валидным chat_id
-7. handle_chatban — clear без chat_id → UserInputError
-8. handle_chatban — неизвестная подкоманда → UserInputError
-9. handle_chatban — вызов без аргументов (= status)
+1.  handle_macos — справка при вызове без аргументов
+2.  handle_macos — недоступность автоматизации
+3.  handle_macos — подкоманда status
+4.  handle_chatban — status (пустой cache)
+5.  handle_chatban — status с записями
+6.  handle_chatban — clear с валидным chat_id
+7.  handle_chatban — clear без chat_id → UserInputError
+8.  handle_chatban — неизвестная подкоманда → UserInputError
+9.  handle_chatban — вызов без аргументов (= status)
 10. handle_stats — рендер панели без падений
-11. handle_restart — sys.exit(42)
+11. handle_restart — без аргументов → запрос подтверждения (NO sys.exit)
 12. handle_stats — контент панели содержит ключевые заголовки
+13. handle_restart confirm — launchctl успех → сообщение "Перезапускаю"
+14. handle_restart confirm — launchctl ошибка → sys.exit(42)
+15. handle_restart confirm — launchctl недоступен → sys.exit(42)
+16. handle_restart status — показывает PID и uptime
+17. handle_restart status — launchctl недоступен → N/A
 """
 
 from __future__ import annotations
 
 import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -33,7 +39,7 @@ from src.handlers.command_handlers import handle_chatban, handle_macos, handle_r
 # ─────────────────────────── helpers ────────────────────────────────────────
 
 
-def _msg(text: str) -> SimpleNamespace:
+def _msg(text: str, args: str = "") -> SimpleNamespace:
     """Минимальный stub Message с reply-mock."""
     return SimpleNamespace(
         text=text,
@@ -42,9 +48,13 @@ def _msg(text: str) -> SimpleNamespace:
     )
 
 
-def _bot() -> SimpleNamespace:
+def _bot(cmd_args: str = "", session_start: float | None = None) -> SimpleNamespace:
     """Минимальный stub KraabUserbot."""
-    return SimpleNamespace()
+    start = session_start if session_start is not None else time.time() - 3661  # 1ч 1м
+    return SimpleNamespace(
+        _get_command_args=lambda msg: cmd_args,
+        _session_start_time=start,
+    )
 
 
 # ─────────────────────────── handle_macos ───────────────────────────────────
@@ -238,10 +248,147 @@ async def test_stats_panel_contains_key_sections(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_restart_exits_with_42() -> None:
-    """handle_restart отправляет сообщение и делает sys.exit(42)."""
+async def test_restart_no_args_asks_for_confirmation() -> None:
+    """!restart без аргументов — отправляет запрос подтверждения, НЕ выходит."""
     message = _msg("!restart")
-    with pytest.raises(SystemExit) as exc_info:
-        await handle_restart(_bot(), message)
+    bot = _bot(cmd_args="")
+    await handle_restart(bot, message)
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert "confirm" in text.lower()
+    assert "restart" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_restart_confirm_launchctl_success() -> None:
+    """!restart confirm — launchctl возвращает 0, сообщение "Перезапускаю", нет sys.exit."""
+    message = _msg("!restart confirm")
+    bot = _bot(cmd_args="confirm")
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = ""
+    mock_proc.stderr = ""
+
+    with (
+        patch("src.core.subprocess_env.clean_subprocess_env", return_value={}),
+        patch("src.handlers.command_handlers.subprocess.run", return_value=mock_proc) as mock_run,
+    ):
+        await handle_restart(bot, message)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert "Перезапускаю" in text
+
+    # Проверяем, что вызывался launchctl kickstart -k
+    call_args = mock_run.call_args_list[-1]
+    cmd = call_args.args[0]
+    assert "kickstart" in cmd
+    assert "-k" in cmd
+    assert "ai.krab.core" in " ".join(cmd)
+
+
+@pytest.mark.asyncio
+async def test_restart_confirm_launchctl_nonzero_falls_back_to_exit() -> None:
+    """!restart confirm — launchctl вернул ненулевой код → sys.exit(42)."""
+    message = _msg("!restart confirm")
+    bot = _bot(cmd_args="confirm")
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.stdout = ""
+    mock_proc.stderr = "error"
+
+    with (
+        patch("src.core.subprocess_env.clean_subprocess_env", return_value={}),
+        patch("src.handlers.command_handlers.subprocess.run", return_value=mock_proc),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        await handle_restart(bot, message)
+
     assert exc_info.value.code == 42
     message.reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_restart_confirm_launchctl_not_found_falls_back_to_exit() -> None:
+    """!restart confirm — launchctl не найден (FileNotFoundError) → sys.exit(42)."""
+    message = _msg("!restart confirm")
+    bot = _bot(cmd_args="confirm")
+
+    with (
+        patch("src.core.subprocess_env.clean_subprocess_env", return_value={}),
+        patch(
+            "src.handlers.command_handlers.subprocess.run",
+            side_effect=FileNotFoundError("launchctl not found"),
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        await handle_restart(bot, message)
+
+    assert exc_info.value.code == 42
+    message.reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_restart_status_shows_pid_and_uptime() -> None:
+    """!restart status — сообщение содержит PID и uptime."""
+    message = _msg("!restart status")
+    bot = _bot(cmd_args="status", session_start=time.time() - 3661)
+
+    # Симулируем launchctl print с PID в выводе
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = "pid = 12345\nstate = running"
+
+    with (
+        patch("src.core.subprocess_env.clean_subprocess_env", return_value={}),
+        patch("src.handlers.command_handlers.subprocess.run", return_value=mock_proc),
+    ):
+        await handle_restart(bot, message)
+
+    message.reply.assert_awaited_once()
+    text = message.reply.await_args.args[0]
+    assert "PID" in text
+    assert "Uptime" in text
+    assert "ai.krab.core" in text
+    assert "confirm" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_restart_status_launchctl_unavailable() -> None:
+    """!restart status — launchctl недоступен → launchd_status = N/A."""
+    message = _msg("!restart status")
+    bot = _bot(cmd_args="status")
+
+    with (
+        patch("src.core.subprocess_env.clean_subprocess_env", return_value={}),
+        patch(
+            "src.handlers.command_handlers.subprocess.run",
+            side_effect=Exception("unavailable"),
+        ),
+    ):
+        await handle_restart(bot, message)
+
+    text = message.reply.await_args.args[0]
+    assert "N/A" in text
+
+
+@pytest.mark.asyncio
+async def test_restart_status_launchctl_stopped() -> None:
+    """!restart status — launchctl print без 'pid' → Stopped."""
+    message = _msg("!restart status")
+    bot = _bot(cmd_args="status")
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = "state = waiting"
+
+    with (
+        patch("src.core.subprocess_env.clean_subprocess_env", return_value={}),
+        patch("src.handlers.command_handlers.subprocess.run", return_value=mock_proc),
+    ):
+        await handle_restart(bot, message)
+
+    text = message.reply.await_args.args[0]
+    assert "Stopped" in text
