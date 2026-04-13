@@ -1083,6 +1083,12 @@ class KraabUserbot(
         async def wrap_backup(c, m):
             await run_cmd(handle_backup, m)
 
+        @self.client.on_message(
+            filters.command("eval", prefixes=prefixes) & _make_command_filter("eval"), group=-1
+        )
+        async def wrap_eval(c, m):
+            await run_cmd(handle_eval, m)
+
         # Хендлер для реакций других пользователей на сообщения Краба
         @self.client.on_message_reaction_updated()
         async def wrap_reaction_updated(c, reaction_update):
