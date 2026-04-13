@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Costs Dashboard - Krab AI</title>
+    <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <style>
+        :root {
+            --bg-primary: #0a0a1a;
+            --accent-cyan: #7dd3fc;
+            --accent-purple: #a78bfa;
+            --accent-green: #34d399;
+            --accent-red: #f87171;
+            --accent-yellow: #fbbf24;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-bg-hover: rgba(255, 255, 255, 0.1);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --radius-card: 20px;
+            --radius-button: 12px;
+        }
+
+        body {
+            margin: 0;
+            background-color: var(--bg-primary);
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+            padding-bottom: 80px; /* For mobile tab bar */
+        }
+
+        /* Layout Utilities */
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .justify-center { justify-content: center; }
+        .gap-1 { gap: 0.25rem; } .gap-2 { gap: 0.5rem; } .gap-3 { gap: 1rem; } .gap-4 { gap: 1.5rem; }
+        .mt-1 { margin-top: 0.25rem; } .mt-2 { margin-top: 0.5rem; } .mt-4 { margin-top: 1rem; }
+        .mb-2 { margin-bottom: 0.5rem; } .mb-4 { margin-bottom: 1rem; }
+        .p-2 { padding: 0.5rem; } .p-4 { padding: 1rem; }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        
+        /* Typography */
+        .text-sm { font-size: 0.875rem; }
+        .text-lg { font-size: 1.125rem; }
+        .text-xl { font-size: 1.25rem; font-weight: 600; }
+        .text-2xl { font-size: 1.5rem; font-weight: 700; }
+        .text-3xl { font-size: 1.875rem; font-weight: 700; }
+        .text-muted { color: rgba(255, 255, 255, 0.6); }
+        .text-accent { color: var(--accent-cyan); }
+        .text-success { color: var(--accent-green); }
+        .text-error { color: var(--accent-red); }
+        .text-warning { color: var(--accent-yellow); }
+        .text-purple { color: var(--accent-purple); }
+
+        /* Grids */
+        .grid { display: grid; }
+        .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+        .grid-3 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+        .grid-2x2 { grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+        /* Glass Components Fallbacks (if not fully in liquid-glass.css) */
+        .glass-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-card);
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+        .glass-button {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-button);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .glass-button:hover { background: var(--glass-bg-hover); }
+        .glass-button-primary { background: var(--accent-cyan); color: #000; font-weight: 600; border: none; }
+        .glass-button-primary:hover { opacity: 0.9; }
+        .glass-input {
+            background: rgba(0,0,0,0.2);
+            border: 1px solid var(--glass-border);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-button);
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            display: inline-block;
+        }
+
+        /* Progress Bar */
+        .progress-track {
+            background: rgba(0,0,0,0.3);
+            border-radius: 999px;
+            height: 12px;
+            width: 100%;
+            overflow: hidden;
+            border: 1px solid var(--glass-border);
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            transition: width 0.5s ease, background-color 0.5s ease;
+            border-radius: 999px;
+        }
+
+        /* Table */
+        .table-responsive { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--glass-border); }
+        th { color: var(--accent-cyan); font-weight: 600; }
+        tbody tr:hover { background: var(--glass-bg-hover); }
+
+        /* Navigation */
+        .glass-nav {
+            position: sticky; top: 0; z-index: 50;
+            background: rgba(10, 10, 26, 0.8);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--glass-border);
+            padding: 1rem 2rem;
+        }
+        .nav-link { color: #fff; text-decoration: none; opacity: 0.7; transition: 0.2s; }
+        .nav-link:hover { opacity: 1; }
+        .nav-link.active { opacity: 1; color: var(--accent-cyan); border-bottom: 2px solid var(--accent-cyan); padding-bottom: 2px; }
+        
+        .glass-tab-bar {
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+            background: rgba(10, 10, 26, 0.9);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-top: 1px solid var(--glass-border);
+            display: flex; justify-content: space-around; padding: 0.75rem 0;
+        }
+        .tab-item {
+            display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+            color: #fff; text-decoration: none; opacity: 0.6; font-size: 0.75rem;
+        }
+        .tab-item.active { opacity: 1; color: var(--accent-cyan); }
+        .tab-icon { font-size: 1.25rem; }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(5px);
+            z-index: 100; display: none; align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content { max-width: 400px; width: 90%; }
+
+        /* Skeleton */
+        @keyframes shimmer {
+            0% { opacity: 0.3; } 50% { opacity: 0.7; } 100% { opacity: 0.3; }
+        }
+        .skeleton {
+            animation: shimmer 1.5s infinite;
+            background: var(--glass-bg-hover);
+            border-radius: 4px;
+            color: transparent !important;
+            min-height: 1.2em;
+            display: inline-block;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .glass-nav { display: none; }
+        }
+        @media (min-width: 769px) {
+            .glass-tab-bar { display: none; }
+            body { padding-bottom: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Desktop Nav -->
+    <nav class="glass-nav flex items-center justify-between">
+        <div class="nav-logo flex items-center gap-2">
+            <a href="/" class="text-accent text-xl" style="text-decoration:none; font-weight:bold;">Krab AI</a>
+        </div>
+        <div class="nav-links flex gap-4 items-center">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/costs" class="nav-link active">Costs</a>
+            <a href="/inbox" class="nav-link">Inbox</a>
+            <a href="/swarm" class="nav-link">Swarm</a>
+            <a href="/stats" class="nav-link">Stats</a>
+        </div>
+        <div class="badge text-muted" id="nav-timer">↻ 10s</div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="container">
+        <div class="flex justify-between items-center mb-4">
+            <h1 class="text-3xl">Costs Dashboard</h1>
+            <span class="status-dot ok" id="api-status" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--accent-green);"></span>
+        </div>
+
+        <!-- Budget Section -->
+        <div class="glass-card mb-4">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-lg">Monthly Budget</h3>
+                <button class="glass-button" onclick="openModal()">Set Budget</button>
+            </div>
+            <div class="progress-track mt-4">
+                <div class="progress-fill" id="budget-fill" style="width: 0%;"></div>
+            </div>
+            <div class="flex justify-between mt-2 text-sm">
+                <div class="flex-col">
+                    <span class="text-muted">Spent</span>
+                    <span class="text-xl skeleton" id="budget-spent">$0.00</span>
+                </div>
+                <div class="flex-col text-right">
+                    <span class="text-muted">Remaining (<span id="budget-limit" class="skeleton">$0</span>)</span>
+                    <span class="text-xl skeleton" id="budget-remaining">$0.00</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid-3 mb-4">
+            <div class="glass-card flex-col justify-center items-center text-center">
+                <div class="text-muted mb-1">Total Cost</div>
+                <div class="text-3xl text-success skeleton" id="total-cost" data-val="0">$0.00</div>
+            </div>
+            <div class="glass-card flex-col justify-center items-center text-center">
+                <div class="text-muted mb-1">Total Calls</div>
+                <div class="text-3xl text-accent skeleton" id="total-calls" data-val="0">0</div>
+            </div>
+            <div class="glass-card flex-col justify-center items-center text-center">
+                <div class="text-muted mb-1">Total Tokens</div>
+                <div class="text-3xl text-purple skeleton" id="total-tokens" data-val="0">0</div>
+            </div>
+        </div>
+
+        <!-- FinOps & Efficiency Grid -->
+        <div class="grid-2 mb-4">
+            <div class="glass-card">
+                <h3 class="text-lg mb-4 text-accent">FinOps Breakdown</h3>
+                <div class="grid grid-2x2 gap-3">
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Tool Calls</div>
+                        <div class="text-xl skeleton" id="tool-calls">0</div>
+                    </div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Fallbacks</div>
+                        <div class="text-xl text-warning skeleton" id="fallbacks">0</div>
+                    </div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Context Tokens</div>
+                        <div class="text-xl skeleton" id="context-tokens">0</div>
+                    </div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Avg Context</div>
+                        <div class="text-xl skeleton" id="avg-context">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-col gap-4">
+                <div class="glass-card flex-1">
+                    <h3 class="text-lg mb-2 text-accent">Cost Efficiency</h3>
+                    <div class="flex justify-between items-center mt-4 border-b pb-2" style="border-color: var(--glass-border);">
+                        <span class="text-muted">Cost per Request</span>
+                        <span class="text-xl skeleton" id="cost-per-req">$0.0000</span>
+                    </div>
+                    <div class="flex justify-between items-center mt-4">
+                        <span class="text-muted">Tokens per $1</span>
+                        <span class="text-xl skeleton" id="tokens-per-dollar">0</span>
+                    </div>
+                </div>
+                
+                <div class="glass-card flex-1">
+                    <h3 class="text-lg mb-2 text-accent">By Channel</h3>
+                    <div class="flex flex-wrap gap-2 mt-2" id="channels-container">
+                        <span class="skeleton badge" style="width: 60px;"></span>
+                        <span class="skeleton badge" style="width: 80px;"></span>
+                        <span class="skeleton badge" style="width: 50px;"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- By Model Table -->
+        <div class="glass-card mb-4">
+            <h3 class="text-lg mb-4 text-accent">Usage by Model</h3>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th class="text-right">Cost (USD)</th>
+                            <th class="text-right">Calls</th>
+                            <th class="text-right">Tokens</th>
+                            <th class="text-right">Avg Cost/Call</th>
+                        </tr>
+                    </thead>
+                    <tbody id="model-tbody">
+                        <tr>
+                            <td class="skeleton">gpt-4-turbo</td>
+                            <td class="skeleton text-right">$0.00</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">$0.00</td>
+                        </tr>
+                        <tr>
+                            <td class="skeleton">claude-3-opus</td>
+                            <td class="skeleton text-right">$0.00</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">$0.00</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex justify-between items-center text-muted text-sm mt-4">
+            <div id="last-updated">Last updated: --:--:--</div>
+            <div id="footer-timer">Next refresh in 10s</div>
+        </div>
+    </main>
+
+    <!-- Mobile Tab Bar -->
+    <div class="glass-tab-bar">
+        <a href="/" class="tab-item">
+            <span class="tab-icon">🏠</span>
+            <span>Home</span>
+        </a>
+        <a href="/costs" class="tab-item active">
+            <span class="tab-icon">💰</span>
+            <span>Costs</span>
+        </a>
+        <a href="/inbox" class="tab-item">
+            <span class="tab-icon">📥</span>
+            <span>Inbox</span>
+        </a>
+        <a href="/swarm" class="tab-item">
+            <span class="tab-icon">🐝</span>
+            <span>Swarm</span>
+        </a>
+        <a href="/stats" class="tab-item">
+            <span class="tab-icon">📊</span>
+            <span>Stats</span>
+        </a>
+    </div>
+
+    <!-- Set Budget Modal -->
+    <div class="modal-overlay" id="budget-modal">
+        <div class="glass-card modal-content">
+            <h3 class="text-xl mb-4 text-accent">Set Monthly Budget</h3>
+            <form id="budget-form" onsubmit="submitBudget(event)">
+                <div class="mb-4">
+                    <label class="text-muted text-sm block mb-2">Monthly Limit (USD)</label>
+                    <input type="number" step="0.01" min="0" id="budget-input" class="glass-input" required placeholder="e.g. 50.00">
+                </div>
+                <div class="flex justify-between gap-2 mt-4">
+                    <button type="button" class="glass-button flex-1" onclick="closeModal()">Cancel</button>
+                    <button type="submit" class="glass-button glass-button-primary flex-1">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let timer = 10;
+        let isFirstLoad = true;
+        let refreshInterval;
+
+        // Mock Data Fallbacks
+        const mockReport = {
+            total_cost_usd: 42.15,
+            total_calls: 1254,
+            input_tokens: 850000,
+            output_tokens: 210000,
+            total_tool_calls: 342,
+            total_fallbacks: 12,
+            total_context_tokens: 1060000,
+            avg_context_tokens: 845,
+            by_model: {
+                "gpt-4o": { cost_usd: 28.50, calls: 800, tokens: 600000 },
+                "claude-3-5-sonnet": { cost_usd: 12.20, calls: 350, tokens: 400000 },
+                "llama-3-70b": { cost_usd: 1.45, calls: 104, tokens: 60000 }
+            },
+            by_channel: {
+                "telegram": 850,
+                "translator": 200,
+                "swarm": 154,
+                "api": 50
+            }
+        };
+
+        const mockBudget = {
+            monthly_limit_usd: 50.00,
+            spent_usd: 42.15,
+            remaining_usd: 7.85,
+            budget_ok: true,
+            used_pct: 84.3
+        };
+
+        // Formatters
+        const fmtUSD = (num) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num || 0);
+        const fmtNum = (num) => new Intl.NumberFormat('en-US').format(num || 0);
+        const fmtUSD4 = (num) => '$' + (num || 0).toFixed(4);
+
+        // Animation for numbers
+        function animateValue(obj, start, end, duration, formatter) {
+            let startTimestamp = null;
+            const step = (timestamp) => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                // easeOutQuart
+                const easeProgress = 1 - Math.pow(1 - progress, 4);
+                const currentVal = start + easeProgress * (end - start);
+                obj.innerHTML = formatter(currentVal);
+                if (progress < 1) {
+                    window.requestAnimationFrame(step);
+                } else {
+                    obj.innerHTML = formatter(end);
+                    obj.dataset.val = end;
+                }
+            };
+            window.requestAnimationFrame(step);
+        }
+
+        function updateElement(id, value, formatter = fmtNum, animate = false) {
+            const el = document.getElementById(id);
+            el.classList.remove('skeleton');
+            if (animate && isFirstLoad) {
+                const start = parseFloat(el.dataset.val || 0);
+                animateValue(el, start, value, 1500, formatter);
+            } else {
+                el.innerHTML = formatter(value);
+                el.dataset.val = value;
+            }
+        }
+
+        // Render Functions
+        function renderBudget(budget) {
+            updateElement('budget-spent', budget.spent_usd, fmtUSD);
+            updateElement('budget-remaining', budget.remaining_usd, fmtUSD);
+            
+            const limitEl = document.getElementById('budget-limit');
+            limitEl.classList.remove('skeleton');
+            limitEl.innerText = fmtUSD(budget.monthly_limit_usd);
+
+            const fill = document.getElementById('budget-fill');
+            const pct = Math.min(Math.max(budget.used_pct, 0), 100);
+            fill.style.width = pct + '%';
+
+            if (pct < 50) {
+                fill.style.backgroundColor = 'var(--accent-green)';
+            } else if (pct < 80) {
+                fill.style.backgroundColor = 'var(--accent-yellow)';
+            } else {
+                fill.style.backgroundColor = 'var(--accent-red)';
+            }
+        }
+
+        function renderReport(report) {
+            // Summary
+            updateElement('total-cost', report.total_cost_usd, fmtUSD, true);
+            updateElement('total-calls', report.total_calls, fmtNum, true);
+            const totalTokens = (report.input_tokens || 0) + (report.output_tokens || 0);
+            updateElement('total-tokens', totalTokens, fmtNum, true);
+
+            // FinOps
+            updateElement('tool-calls', report.total_tool_calls);
+            updateElement('fallbacks', report.total_fallbacks);
+            updateElement('context-tokens', report.total_context_tokens);
+            updateElement('avg-context', report.avg_context_tokens);
+
+            // Efficiency
+            const costPerReq = report.total_calls > 0 ? report.total_cost_usd / report.total_calls : 0;
+            const tokensPerDollar = report.total_cost_usd > 0 ? totalTokens / report.total_cost_usd : 0;
+            updateElement('cost-per-req', costPerReq, fmtUSD4);
+            updateElement('tokens-per-dollar', Math.round(tokensPerDollar));
+
+            // Channels
+            const channelsContainer = document.getElementById('channels-container');
+            channelsContainer.innerHTML = '';
+            for (const [channel, calls] of Object.entries(report.by_channel || {})) {
+                const badge = document.createElement('span');
+                badge.className = 'badge';
+                badge.innerText = `${channel}: ${fmtNum(calls)}`;
+                
+                if (channel.toLowerCase() === 'telegram') badge.style.color = 'var(--accent-cyan)';
+                else if (channel.toLowerCase() === 'translator') badge.style.color = 'var(--accent-purple)';
+                else if (channel.toLowerCase() === 'swarm') badge.style.color = 'var(--accent-yellow)';
+                else badge.style.color = '#fff';
+
+                badge.style.borderColor = badge.style.color;
+                channelsContainer.appendChild(badge);
+            }
+
+            // Table
+            const tbody = document.getElementById('model-tbody');
+            tbody.innerHTML = '';
+            const models = Object.entries(report.by_model || {}).map(([name, data]) => ({ name, ...data }));
+            models.sort((a, b) => b.cost_usd - a.cost_usd);
+
+            models.forEach(m => {
+                const tr = document.createElement('tr');
+                const avgCost = m.calls > 0 ? m.cost_usd / m.calls : 0;
+                tr.innerHTML = `
+                    <td style="color: #fff;">${m.name}</td>
+                    <td class="text-right text-success">${fmtUSD(m.cost_usd)}</td>
+                    <td class="text-right">${fmtNum(m.calls)}</td>
+                    <td class="text-right text-muted">${fmtNum(m.tokens)}</td>
+                    <td class="text-right text-muted">${fmtUSD4(avgCost)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // API Calls
+        async function fetchData() {
+            let reportData = mockReport;
+            let budgetData = mockBudget;
+            const statusDot = document.getElementById('api-status');
+
+            try {
+                const [resReport, resBudget] = await Promise.all([
+                    fetch('/api/costs/report').catch(() => null),
+                    fetch('/api/costs/budget').catch(() => null)
+                ]);
+
+                if (resReport && resReport.ok) {
+                    const json = await resReport.json();
+                    if (json.report) reportData = json.report;
+                }
+                if (resBudget && resBudget.ok) {
+                    const json = await resBudget.json();
+                    if (json.budget) budgetData = json.budget;
+                }
+                statusDot.style.background = 'var(--accent-green)';
+            } catch (err) {
+                console.warn("API unavailable, using mock data", err);
+                statusDot.style.background = 'var(--accent-red)';
+            }
+
+            renderReport(reportData);
+            renderBudget(budgetData);
+            
+            isFirstLoad = false;
+            
+            const now = new Date();
+            document.getElementById('last-updated').innerText = `Last updated: ${now.toLocaleTimeString()}`;
+        }
+
+        async function submitBudget(e) {
+            e.preventDefault();
+            const input = document.getElementById('budget-input').value;
+            const val = parseFloat(input);
+            if (isNaN(val)) return;
+
+            try {
+                await fetch('/api/costs/budget', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ monthly_limit_usd: val })
+                });
+                // In a real scenario, we'd wait for success. For demo, we just update mock and refetch
+                mockBudget.monthly_limit_usd = val;
+                mockBudget.remaining_usd = val - mockBudget.spent_usd;
+                mockBudget.used_pct = (mockBudget.spent_usd / val) * 100;
+            } catch (err) {
+                console.error(err);
+            }
+            
+            closeModal();
+            fetchData();
+        }
+
+        // Modal Controls
+        function openModal() {
+            document.getElementById('budget-modal').classList.add('active');
+            document.getElementById('budget-input').focus();
+        }
+        function closeModal() {
+            document.getElementById('budget-modal').classList.remove('active');
+        }
+
+        // Timer Logic
+        function tickTimer() {
+            timer--;
+            if (timer <= 0) {
+                timer = 10;
+                fetchData();
+            }
+            document.getElementById('nav-timer').innerText = `↻ ${timer}s`;
+            document.getElementById('footer-timer').innerText = `Next refresh in ${timer}s`;
+        }
+
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchData();
+            refreshInterval = setInterval(tickTimer, 1000);
+            
+            // Close modal on outside click
+            document.getElementById('budget-modal').addEventListener('click', function(e) {
+                if (e.target === this) closeModal();
+            });
+        });
+    </script>
+</body>
+</html>

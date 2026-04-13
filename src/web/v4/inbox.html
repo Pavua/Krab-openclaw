@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inbox | Krab</title>
+    <link href="/v4/liquid-glass.css" rel="stylesheet">
+    <style>
+        /* Minimal page-specific CSS */
+        :root {
+            --text-muted: rgba(255, 255, 255, 0.6);
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            background-color: #0f0f13;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Desktop Nav Additions */
+        .glass-nav-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            padding: 0 1rem;
+        }
+        
+        .nav-left, .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .nav-left .logo {
+            font-weight: bold;
+            font-size: 1.25rem;
+            margin-right: 1rem;
+        }
+
+        .nav-left a, .glass-tab-bar a {
+            text-decoration: none;
+            color: var(--text-muted);
+            transition: color 0.2s;
+        }
+
+        .nav-left a:hover, .nav-left a.active, .glass-tab-bar a.active {
+            color: #ffffff;
+        }
+
+        .nav-right .countdown {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .nav-right .icon-bell {
+            cursor: pointer;
+        }
+
+        /* Header */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .page-header h1 {
+            margin: 0;
+            font-size: 2rem;
+            font-weight: 600;
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        /* Filter Tabs */
+        .filter-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            overflow-x: auto;
+        }
+
+        .filter-tab {
+            padding: 0.5rem 1.25rem;
+            cursor: pointer;
+            border-radius: 6px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .filter-tab:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .filter-tab.active {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.1);
+            font-weight: 500;
+        }
+
+        /* Items List */
+        .items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .inbox-item {
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .inbox-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .inbox-item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .inbox-item-main {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .severity-icon {
+            font-size: 1.25rem;
+        }
+
+        .item-title {
+            font-weight: 500;
+            font-size: 1.05rem;
+        }
+
+        .badges {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .badge {
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            color: #ddd;
+        }
+
+        .badge.critical { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
+        .badge.warning { background: rgba(255, 165, 2, 0.2); color: #ffa502; }
+        .badge.info { background: rgba(30, 144, 255, 0.2); color: #1e90ff; }
+
+        .inbox-item-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .time-ago {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .inbox-item-body {
+            display: none;
+            padding-top: 1rem;
+            margin-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            color: #ccc;
+            line-height: 1.5;
+        }
+
+        .inbox-item.expanded .inbox-item-body {
+            display: block;
+        }
+
+        /* Skeletons */
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.03) 75%);
+            background-size: 200% 100%;
+            animation: skeleton-loading 1.5s infinite;
+            border-radius: 8px;
+        }
+
+        @keyframes skeleton-loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            z-index: 9999;
+        }
+
+        .toast {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            background: rgba(30, 30, 35, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s ease-out forwards;
+            min-width: 250px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(120%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Mobile Adjustments */
+        @media (max-width: 768px) {
+            .container {
+                padding: 1.5rem;
+                padding-bottom: 90px;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .inbox-item-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .inbox-item-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Desktop Nav -->
+    <nav class="glass-nav">
+        <div class="glass-nav-content">
+            <div class="nav-left">
+                <div class="logo">Krab</div>
+                <a href="/">Hub</a>
+                <a href="/costs">Costs</a>
+                <a href="/inbox" class="active">Inbox</a>
+                <a href="/swarm">Swarm</a>
+                <a href="/v4/chat">Chat</a>
+            </div>
+            <div class="nav-right">
+                <span class="countdown">Refresh in <span id="refresh-timer">10</span>s</span>
+                <span class="icon-bell" title="Notifications">🔔</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Mobile Tab Bar -->
+    <nav class="glass-tab-bar">
+        <a href="/" class="tab-item">Hub</a>
+        <a href="/costs" class="tab-item">Costs</a>
+        <a href="/inbox" class="tab-item active">Inbox</a>
+        <a href="/swarm" class="tab-item">Swarm</a>
+        <a href="/v4/chat" class="tab-item">Chat</a>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="container">
+        <header class="page-header">
+            <h1>Inbox</h1>
+            <div class="actions">
+                <button class="glass-button" id="btn-remediate-stale">Remediate Stale</button>
+                <button class="glass-button glass-button-primary" id="btn-ack-all">Ack All Open</button>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <section class="stats-grid" id="stats-container">
+            <!-- Skeletons rendered by JS initially -->
+        </section>
+
+        <!-- Filter Tabs -->
+        <section class="filter-tabs" id="filter-tabs">
+            <div class="filter-tab active" data-filter="All">All</div>
+            <div class="filter-tab" data-filter="Open">Open</div>
+            <div class="filter-tab" data-filter="Acked">Acked</div>
+            <div class="filter-tab" data-filter="Processing">Processing</div>
+        </section>
+
+        <!-- Items List -->
+        <section class="items-list" id="inbox-items">
+            <!-- Skeletons rendered by JS initially -->
+        </section>
+    </main>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Vanilla JS Logic -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // State
+            let currentFilter = 'All';
+            let countdown = 10;
+            let timerId = null;
+
+            // DOM Elements
+            const statsContainer = document.getElementById('stats-container');
+            const itemsContainer = document.getElementById('inbox-items');
+            const filterTabs = document.getElementById('filter-tabs');
+            const refreshTimerEl = document.getElementById('refresh-timer');
+            const toastContainer = document.getElementById('toast-container');
+
+            // Initialize
+            renderSkeletons();
+            startTimer();
+            refreshData();
+
+            // --- Event Listeners ---
+            
+            // Filter Tabs
+            filterTabs.addEventListener('click', (e) => {
+                const tab = e.target.closest('.filter-tab');
+                if (!tab) return;
+                
+                document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentFilter = tab.dataset.filter;
+                
+                renderItemsSkeletons();
+                loadItems();
+                resetTimer();
+            });
+
+            // Expand/Collapse and Ack Button Delegation
+            itemsContainer.addEventListener('click', async (e) => {
+                const ackBtn = e.target.closest('.ack-btn');
+                const item = e.target.closest('.inbox-item');
+
+                if (ackBtn) {
+                    e.stopPropagation();
+                    const id = ackBtn.dataset.id;
+                    await handleAction('ack', { id });
+                    return;
+                }
+
+                if (item) {
+                    item.classList.toggle('expanded');
+                }
+            });
+
+            // Header Actions
+            document.getElementById('btn-remediate-stale').addEventListener('click', () => {
+                handleAction('remediate_stale');
+            });
+
+            document.getElementById('btn-ack-all').addEventListener('click', () => {
+                handleAction('ack_all_open');
+            });
+
+            // --- API & Data Handling ---
+
+            async function apiCall(endpoint, method = 'GET', body = null) {
+                const key = localStorage.getItem('krab_web_key') || '';
+                const options = {
+                    method,
+                    headers: {
+                        'X-Krab-Web-Key': key,
+                        'Content-Type': 'application/json'
+                    }
+                };
+                if (body) options.body = JSON.stringify(body);
+
+                try {
+                    const res = await fetch(endpoint, options);
+                    if (!res.ok) throw new Error(`API Error: ${res.status}`);
+                    return await res.json();
+                } catch (error) {
+                    console.warn(`Fetch to ${endpoint} failed. Using mock data for UI demonstration.`, error);
+                    return getMockData(endpoint, method, body);
+                }
+            }
+
+            async function refreshData() {
+                await Promise.all([loadStats(), loadItems()]);
+            }
+
+            async function loadStats() {
+                const data = await apiCall('/api/inbox/status');
+                statsContainer.innerHTML = `
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Open</span>
+                        <span class="stat-value">${data.open || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Attention</span>
+                        <span class="stat-value" style="color: #ffa502;">${data.attention || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Escalations</span>
+                        <span class="stat-value" style="color: #ff4757;">${data.escalations || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Stale</span>
+                        <span class="stat-value" style="color: #1e90ff;">${data.stale || 0}</span>
+                    </div>
+                `;
+            }
+
+            async function loadItems() {
+                const data = await apiCall(`/api/inbox/items?status=${currentFilter}&limit=20`);
+                
+                if (!data || data.length === 0) {
+                    itemsContainer.innerHTML = `
+                        <div class="glass-card" style="text-align:center; padding: 3rem; color: var(--text-muted);">
+                            No items found for "${currentFilter}".
+                        </div>
+                    `;
+                    return;
+                }
+
+                itemsContainer.innerHTML = data.map(item => `
+                    <div class="glass-card inbox-item" data-id="${item.id}">
+                        <div class="inbox-item-header">
+                            <div class="inbox-item-main">
+                                <span class="severity-icon">
+                                    ${item.severity === 'critical' ? '🔴' : item.severity === 'warning' ? '🟠' : '🔵'}
+                                </span>
+                                <span class="item-title">${item.title}</span>
+                                <div class="badges">
+                                    ${(item.badges || []).map(b => `<span class="badge ${item.severity}">${b}</span>`).join('')}
+                                </div>
+                            </div>
+                            <div class="inbox-item-actions">
+                                <span class="time-ago">${item.timeAgo}</span>
+                                ${item.status !== 'acked' 
+                                    ? `<button class="glass-button ack-btn" data-id="${item.id}">Ack</button>` 
+                                    : `<span class="badge">Acked</span>`}
+                            </div>
+                        </div>
+                        <div class="inbox-item-body">
+                            ${item.body || 'No further details available for this event.'}
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            async function handleAction(action, payload = {}) {
+                try {
+                    await apiCall('/api/inbox/update', 'POST', { action, ...payload });
+                    showToast(`Successfully executed: ${action.replace(/_/g, ' ')}`);
+                    resetTimer();
+                    refreshData();
+                } catch (error) {
+                    showToast(`Error executing ${action}`, 'error');
+                }
+            }
+
+            // --- UI Helpers ---
+
+            function renderSkeletons() {
+                statsContainer.innerHTML = Array(4).fill('<div class="glass-card skeleton" style="height: 104px;"></div>').join('');
+                renderItemsSkeletons();
+            }
+
+            function renderItemsSkeletons() {
+                itemsContainer.innerHTML = Array(5).fill('<div class="glass-card skeleton" style="height: 72px;"></div>').join('');
+            }
+
+            function showToast(message, type = 'success') {
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                toast.innerHTML = `
+                    <span>${message}</span>
+                    <span style="cursor:pointer;" onclick="this.parentElement.remove()">✕</span>
+                `;
+                toastContainer.appendChild(toast);
+                setTimeout(() => {
+                    if (toast.parentElement) {
+                        toast.style.opacity = '0';
+                        toast.style.transform = 'translateX(100%)';
+                        toast.style.transition = 'all 0.3s';
+                        setTimeout(() => toast.remove(), 300);
+                    }
+                }, 4000);
+            }
+
+            // --- Timer Logic ---
+
+            function startTimer() {
+                clearInterval(timerId);
+                timerId = setInterval(() => {
+                    countdown--;
+                    if (countdown <= 0) {
+                        refreshData();
+                        countdown = 10;
+                    }
+                    refreshTimerEl.innerText = countdown;
+                }, 1000);
+            }
+
+            function resetTimer() {
+                countdown = 10;
+                refreshTimerEl.innerText = countdown;
+                startTimer();
+            }
+
+            // --- Mock Data Fallback (For UI Testing without Backend) ---
+            function getMockData(endpoint, method, body) {
+                if (endpoint.includes('/status')) {
+                    return { open: 24, attention: 5, escalations: 2, stale: 8 };
+                }
+                if (endpoint.includes('/items')) {
+                    const allItems = [
+                        { id: 'evt-1', severity: 'critical', title: 'DB Connection Pool Exhausted', timeAgo: '2m ago', badges: ['database', 'prod'], body: 'Primary database cluster is rejecting connections. Active connections have exceeded 5000.', status: 'open' },
+                        { id: 'evt-2', severity: 'warning', title: 'High Memory Usage on Worker Node', timeAgo: '15m ago', badges: ['k8s', 'worker-4'], body: 'Node memory utilization has been above 90% for the last 10 minutes.', status: 'open' },
+                        { id: 'evt-3', severity: 'info', title: 'SSL Certificate Auto-Renewed', timeAgo: '1h ago', badges: ['security', 'automated'], body: 'Wildcard certificate for *.krab.internal successfully renewed and deployed.', status: 'acked' },
+                        { id: 'evt-4', severity: 'critical', title: 'Payment Gateway API Latency', timeAgo: '1h 12m ago', badges: ['api', 'payments'], body: 'P99 latency spiked to 4.5s. Upstream provider might be experiencing issues.', status: 'open' },
+                        { id: 'evt-5', severity: 'warning', title: 'Stale Cache Entries Detected', timeAgo: '3h ago', badges: ['redis', 'cache'], body: 'Eviction policy is failing to clear outdated keys in region us-east-1.', status: 'processing' }
+                    ];
+                    
+                    if (currentFilter === 'All') return allItems;
+                    return allItems.filter(item => 
+                        currentFilter.toLowerCase() === item.status || 
+                        (currentFilter === 'Open' && item.status !== 'acked')
+                    );
+                }
+                if (endpoint.includes('/update')) {
+                    return { success: true };
+                }
+                return {};
+            }
+        });
+    </script>
+</body>
+</html>

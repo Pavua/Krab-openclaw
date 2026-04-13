@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Krab AI Dashboard</title>
+  
+  <!-- Подключение Liquid Glass CSS -->
+  <link rel="stylesheet" href="/v4/liquid-glass.css">
+  
+  <style>
+    /* Дополнительные стили для специфичных элементов чата, не покрытых базовым CSS */
+    .attachment-preview {
+      position: absolute;
+      bottom: 100%;
+      left: 1.5rem;
+      background: var(--glass-bg);
+      backdrop-filter: blur(var(--glass-blur));
+      border: 1px solid var(--accent-cyan);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      display: none;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      box-shadow: var(--glass-shadow);
+    }
+    .attachment-preview.active { display: flex; }
+    .remove-attach { cursor: pointer; color: var(--accent-red); font-weight: bold; }
+    
+    .typing-indicator {
+      display: flex;
+      gap: 4px;
+      padding: 0.5rem 1rem;
+      align-items: center;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+    .typing-indicator span {
+      width: 6px; height: 6px;
+      background: var(--accent-cyan);
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+    /* Иконки SVG */
+    .icon { width: 1.25rem; height: 1.25rem; fill: currentColor; }
+  </style>
+</head>
+<body>
+
+  <!-- Desktop Nav -->
+  <nav class="glass-nav">
+    <div class="nav-logo">Krab</div>
+    
+    <div class="nav-links">
+      <div class="mode-toggle">
+        <input type="radio" id="mode-debug" name="tool-mode" value="debug">
+        <label for="mode-debug">Debug</label>
+        
+        <input type="radio" id="mode-normal" name="tool-mode" value="normal" checked>
+        <label for="mode-normal">Normal</label>
+        
+        <input type="radio" id="mode-clean" name="tool-mode" value="clean">
+        <label for="mode-clean">Clean</label>
+      </div>
+    </div>
+
+    <div class="nav-bell">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+      <div class="badge">3</div>
+    </div>
+  </nav>
+
+  <!-- Main Chat Area -->
+  <main class="chat-container">
+    <div class="chat-messages" id="chat-messages">
+      <!-- Сообщения будут появляться здесь -->
+    </div>
+
+    <div class="chat-input-bar">
+      <!-- Превью прикрепленного файла -->
+      <div class="attachment-preview" id="attach-preview">
+        <span>📎 Файл прикреплен</span>
+        <span class="remove-attach" id="remove-attach">✕</span>
+      </div>
+
+      <input type="file" id="file-input" style="display: none;">
+      <button class="glass-button" id="btn-attach" title="Прикрепить файл">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 0 1 5 0v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5a2.5 2.5 0 0 0 5 0V5c0-3.31-2.69-6-6-6S3 1.69 3 5v11.5c0 3.87 3.13 7 7 7s7-3.13 7-7V6h-1.5z"/></svg>
+      </button>
+      
+      <input type="text" class="glass-input" id="chat-input" placeholder="Введите сообщение для Krab..." autocomplete="off">
+      
+      <button class="glass-button-primary" id="btn-send">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </div>
+  </main>
+
+  <!-- Mobile Tab Bar -->
+  <nav class="glass-tab-bar">
+    <a href="#" class="tab-item active">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+      Chat
+    </a>
+    <a href="#" class="tab-item">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M4 13h6c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v8c0 .55.45 1 1 1zm0 8h6c.55 0 1-.45 1-1v-4c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v4c0 .55.45 1 1 1zm10 0h6c.55 0 1-.45 1-1v-8c0-.55-.45-1-1-1h-6c-.55 0-1 .45-1 1v8c0 .55.45 1 1 1zM13 4v4c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1h-6c-.55 0-1 .45-1 1z"/></svg>
+      Hub
+    </a>
+    <a href="#" class="tab-item">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+      Settings
+    </a>
+  </nav>
+
+  <script>
+    // ==========================================
+    // 1. STATE & INITIALIZATION
+    // ==========================================
+    const state = {
+      token: localStorage.getItem('krab_web_key') || null,
+      mode: localStorage.getItem('krab_tool_mode') || 'normal',
+      history: JSON.parse(localStorage.getItem('krab_chat_history') || '[]'),
+      attachmentSnippet: null,
+      currentEventSource: null
+    };
+
+    const DOM = {
+      messages: document.getElementById('chat-messages'),
+      input: document.getElementById('chat-input'),
+      btnSend: document.getElementById('btn-send'),
+      btnAttach: document.getElementById('btn-attach'),
+      fileInput: document.getElementById('file-input'),
+      attachPreview: document.getElementById('attach-preview'),
+      btnRemoveAttach: document.getElementById('remove-attach'),
+      modeRadios: document.querySelectorAll('input[name="tool-mode"]')
+    };
+
+    function init() {
+      // Проверка токена
+      if (!state.token) {
+        state.token = prompt('Введите ваш токен для Krab API:');
+        if (state.token) localStorage.setItem('krab_web_key', state.token);
+      }
+
+      // Установка режима
+      const activeRadio = document.querySelector(`input[name="tool-mode"][value="${state.mode}"]`);
+      if (activeRadio) activeRadio.checked = true;
+
+      // Рендер истории
+      state.history.forEach(msg => {
+        if (msg.type === 'message') renderMessage(msg.role, msg.content, false);
+        if (msg.type === 'tool') renderToolPill(msg.name, msg.args, msg.result, msg.status, false);
+      });
+      scrollToBottom();
+
+      setupListeners();
+    }
+
+    // ==========================================
+    // 2. UTILS & MARKDOWN
+    // ==========================================
+    function parseMarkdown(text) {
+      if (!text) return '';
+      let html = text
+        .replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.3);padding:10px;border-radius:8px;overflow-x:auto;margin:8px 0;"><code style="font-family:monospace;">$1</code></pre>')
+        .replace(/`([^`]+)`/g, '<code style="background:rgba(0,0,0,0.3);padding:2px 4px;border-radius:4px;font-family:monospace;">$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/\n/g, '<br>');
+      return html;
+    }
+
+    function scrollToBottom() {
+      DOM.messages.scrollTop = DOM.messages.scrollHeight;
+    }
+
+    function saveHistory() {
+      // Храним только последние 50 записей
+      if (state.history.length > 50) state.history = state.history.slice(-50);
+      localStorage.setItem('krab_chat_history', JSON.stringify(state.history));
+    }
+
+    // ==========================================
+    // 3. UI RENDERERS
+    // ==========================================
+    function renderMessage(role, text, save = true) {
+      const div = document.createElement('div');
+      div.className = role === 'user' ? 'chat-bubble-user' : 'chat-bubble-assistant';
+      div.innerHTML = parseMarkdown(text);
+      DOM.messages.appendChild(div);
+      
+      if (save) {
+        state.history.push({ type: 'message', role, content: text });
+        saveHistory();
+      }
+      scrollToBottom();
+      return div;
+    }
+
+    function renderToolPill(name, args, result, status, save = true) {
+      const pill = document.createElement('div');
+      pill.className = 'tool-pill';
+      pill.setAttribute('data-mode', state.mode);
+      pill.id = 'tool-' + Date.now();
+
+      const dotClass = status === 'running' ? 'warning' : (status === 'error' ? 'error' : 'ok');
+      
+      pill.innerHTML = `
+        <div class="tool-pill-header">
+          <div class="flex items-center gap-2">
+            <span class="status-dot ${dotClass}"></span>
+            <strong>${name}</strong>
+          </div>
+          <svg class="icon text-muted" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+        </div>
+        <div class="tool-pill-detail">
+          <div class="text-xs text-muted mb-1">Arguments:</div>
+          <div>${args || '{}'}</div>
+          <div class="text-xs text-muted mt-2 mb-1">Result:</div>
+          <div class="tool-result">${result || 'Running...'}</div>
+        </div>
+      `;
+
+      // Логика раскрытия (в режиме Normal скрыто по умолчанию, клик раскрывает)
+      pill.addEventListener('click', () => {
+        if (state.mode === 'debug') return; // В дебаге всегда открыто
+        const detail = pill.querySelector('.tool-pill-detail');
+        detail.style.display = detail.style.display === 'block' ? 'none' : 'block';
+      });
+
+      DOM.messages.appendChild(pill);
+
+      if (save) {
+        state.history.push({ type: 'tool', name, args, result, status });
+        saveHistory();
+      }
+      scrollToBottom();
+      return pill;
+    }
+
+    function updateToolPill(pill, result, status) {
+      const dot = pill.querySelector('.status-dot');
+      dot.className = `status-dot ${status === 'error' ? 'error' : 'ok'}`;
+      
+      const resultDiv = pill.querySelector('.tool-result');
+      resultDiv.textContent = result;
+      
+      // Обновляем в истории (ищем последний тул с таким именем)
+      const name = pill.querySelector('strong').textContent;
+      for (let i = state.history.length - 1; i >= 0; i--) {
+        if (state.history[i].type === 'tool' && state.history[i].name === name && state.history[i].status === 'running') {
+          state.history[i].result = result;
+          state.history[i].status = status;
+          saveHistory();
+          break;
+        }
+      }
+    }
+
+    function showTypingIndicator() {
+      const div = document.createElement('div');
+      div.className = 'typing-indicator';
+      div.id = 'typing-indicator';
+      div.innerHTML = `<span></span><span></span><span></span>`;
+      DOM.messages.appendChild(div);
+      scrollToBottom();
+    }
+
+    function hideTypingIndicator() {
+      const el = document.getElementById('typing-indicator');
+      if (el) el.remove();
+    }
+
+    // ==========================================
+    // 4. EVENT LISTENERS
+    // ==========================================
+    function setupListeners() {
+      // Смена режима отображения Tool Calls
+      DOM.modeRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          state.mode = e.target.value;
+          localStorage.setItem('krab_tool_mode', state.mode);
+          // Обновляем data-mode у всех существующих pills
+          document.querySelectorAll('.tool-pill').forEach(pill => {
+            pill.setAttribute('data-mode', state.mode);
+            // Сбрасываем инлайн стили при переключении
+            pill.querySelector('.tool-pill-detail').style.display = '';
+          });
+        });
+      });
+
+      // Отправка сообщения
+      DOM.btnSend.addEventListener('click', handleSend);
+      DOM.input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleSend();
+      });
+
+      // Прикрепление файла
+      DOM.btnAttach.addEventListener('click', () => DOM.fileInput.click());
+      DOM.fileInput.addEventListener('change', handleFileUpload);
+      DOM.btnRemoveAttach.addEventListener('click', () => {
+        state.attachmentSnippet = null;
+        DOM.fileInput.value = '';
+        DOM.attachPreview.classList.remove('active');
+      });
+    }
+
+    // ==========================================
+    // 5. FILE UPLOAD LOGIC
+    // ==========================================
+    async function handleFileUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      DOM.attachPreview.querySelector('span').textContent = 'Загрузка...';
+      DOM.attachPreview.classList.add('active');
+
+      try {
+        const res = await fetch('/api/assistant/attachment', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${state.token}` },
+          body: formData
+        });
+        
+        if (!res.ok) throw new Error('Upload failed');
+        
+        const data = await res.json();
+        // Ожидается, что сервер вернет сниппет, который нужно добавить к промпту
+        state.attachmentSnippet = data.snippet || `[Attached File: ${file.name}]`;
+        DOM.attachPreview.querySelector('span').textContent = `📎 ${file.name}`;
+      } catch (err) {
+        console.error(err);
+        DOM.attachPreview.querySelector('span').textContent = '❌ Ошибка загрузки';
+        setTimeout(() => DOM.attachPreview.classList.remove('active'), 3000);
+      }
+    }
+
+    // ==========================================
+    // 6. SSE STREAMING LOGIC
+    // ==========================================
+    function handleSend() {
+      let text = DOM.input.value.trim();
+      if (!text && !state.attachmentSnippet) return;
+
+      // Если есть прикрепленный файл, добавляем его сниппет к тексту
+      if (state.attachmentSnippet) {
+        text = state.attachmentSnippet + '\n\n' + text;
+        state.attachmentSnippet = null;
+        DOM.attachPreview.classList.remove('active');
+        DOM.fileInput.value = '';
+      }
+
+      renderMessage('user', text);
+      DOM.input.value = '';
+      
+      startStream(text);
+    }
+
+    function startStream(promptText) {
+      if (state.currentEventSource) {
+        state.currentEventSource.close();
+      }
+
+      showTypingIndicator();
+
+      const url = new URL(window.location.origin + '/api/assistant/stream');
+      url.searchParams.append('prompt', promptText);
+      url.searchParams.append('token', state.token);
+
+      const es = new EventSource(url.toString());
+      state.currentEventSource = es;
+
+      let currentAssistantBubble = null;
+      let currentAssistantText = '';
+      let activeToolPill = null;
+
+      es.addEventListener('status', (e) => {
+        // Можно выводить статусы в UI, пока просто логируем
+        console.log('Status:', e.data);
+      });
+
+      es.addEventListener('tool_start', (e) => {
+        hideTypingIndicator();
+        try {
+          const data = JSON.parse(e.data);
+          activeToolPill = renderToolPill(data.name, data.args, null, 'running');
+        } catch(err) { console.error(err); }
+      });
+
+      es.addEventListener('tool_done', (e) => {
+        if (activeToolPill) {
+          try {
+            const data = JSON.parse(e.data);
+            updateToolPill(activeToolPill, data.result, 'ok');
+            activeToolPill = null;
+          } catch(err) { console.error(err); }
+        }
+        showTypingIndicator();
+      });
+
+      es.addEventListener('message', (e) => {
+        hideTypingIndicator();
+        
+        // Обработка переносов строк из SSE
+        const chunk = e.data.replace(/\\n/g, '\n'); 
+        currentAssistantText += chunk;
+
+        if (!currentAssistantBubble) {
+          currentAssistantBubble = renderMessage('assistant', currentAssistantText, false);
+        } else {
+          currentAssistantBubble.innerHTML = parseMarkdown(currentAssistantText);
+          scrollToBottom();
+        }
+      });
+
+      es.addEventListener('route', (e) => {
+        console.log('Route changed to:', e.data);
+      });
+
+      es.addEventListener('error', (e) => {
+        hideTypingIndicator();
+        console.error('SSE Error:', e);
+        renderToolPill('System', null, 'Connection error or stream interrupted.', 'error');
+        es.close();
+      });
+
+      es.addEventListener('done', (e) => {
+        hideTypingIndicator();
+        if (currentAssistantText) {
+          state.history.push({ type: 'message', role: 'assistant', content: currentAssistantText });
+          saveHistory();
+        }
+        es.close();
+        state.currentEventSource = null;
+      });
+    }
+
+    // Запуск приложения
+    window.addEventListener('DOMContentLoaded', init);
+
+  </script>
+</body>
+</html>

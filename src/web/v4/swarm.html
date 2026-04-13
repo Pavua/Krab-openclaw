@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swarm Control Dashboard | Krab AI</title>
+    <link href="/v4/liquid-glass.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a1a;
+            --glass-bg: rgba(255,255,255,0.06);
+            --glass-bg-hover: rgba(255,255,255,0.10);
+            --glass-border: rgba(255,255,255,0.10);
+            --glass-blur: 40px;
+            --glass-specular: inset 0 0.5px 0 rgba(255,255,255,0.12);
+            --glass-shadow: 0 8px 40px rgba(0,0,0,0.25);
+            --accent-cyan: #7dd3fc;
+            --accent-purple: #a78bfa;
+            --accent-green: #34d399;
+            --accent-red: #f87171;
+            --accent-yellow: #fbbf24;
+            --radius-card: 20px;
+            --radius-button: 12px;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            font-family: system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Essential Layout & Overrides */
+        .desktop-nav { display: flex; padding: 1rem 2rem; border-bottom: 1px solid var(--glass-border); background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--glass-shadow); }
+        .mobile-nav { display: none; position: fixed; bottom: 0; width: 100%; padding: 1rem; background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); border-top: 1px solid var(--glass-border); z-index: 50; }
+        .main-content { padding: 2rem; flex: 1; max-width: 1400px; margin: 0 auto; width: 100%; box-sizing: border-box; padding-bottom: 6rem; }
+        
+        .logo { font-weight: bold; font-size: 1.25rem; background: linear-gradient(to right, var(--accent-cyan), var(--accent-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .nav-links a { color: var(--text-muted); text-decoration: none; font-weight: 500; transition: color 0.2s; }
+        .nav-links a:hover, .nav-links a.active { color: var(--accent-cyan); }
+        
+        /* Tabs System */
+        .tab-nav { display: flex; gap: 1rem; margin-bottom: 2rem; border-bottom: 1px solid var(--glass-border); padding-bottom: 1rem; overflow-x: auto;}
+        .tab-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; padding: 0.5rem 1rem; border-radius: var(--radius-button); transition: all 0.2s; white-space: nowrap; }
+        .tab-btn:hover { background: var(--glass-bg-hover); color: var(--text-main); }
+        .tab-btn.active { background: var(--glass-bg); color: var(--accent-purple); box-shadow: var(--glass-specular); border: 1px solid var(--glass-border); }
+        .tab-pane { display: none; animation: fadeIn 0.3s ease; }
+        .tab-pane.active { display: block; }
+        
+        /* Kanban Board */
+        .kanban-board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; }
+        .kanban-col { background: rgba(0,0,0,0.2); border-radius: var(--radius-card); padding: 1rem; border: 1px solid var(--glass-border); min-height: 500px; display: flex; flex-direction: column; gap: 1rem; }
+        .kanban-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--glass-border); }
+        .task-card { padding: 1rem; cursor: grab; transition: transform 0.2s, box-shadow 0.2s; }
+        .task-card:hover { transform: translateY(-2px); box-shadow: var(--glass-shadow); }
+        
+        /* Utils */
+        .badge { padding: 0.25rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; background: var(--glass-bg); border: 1px solid var(--glass-border); }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .status-dot.ok { background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+        .status-dot.warning { background-color: var(--accent-yellow); box-shadow: 0 0 8px var(--accent-yellow); }
+        .status-dot.error { background-color: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+        
+        /* Skeleton */
+        .skeleton { background: linear-gradient(90deg, var(--glass-bg) 25%, var(--glass-bg-hover) 50%, var(--glass-bg) 75%); background-size: 200% 100%; animation: loading 1.5s infinite; border-radius: 8px; min-height: 1rem; }
+        @keyframes loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Form Elements */
+        .glass-input, select.glass-input { width: 100%; padding: 0.75rem 1rem; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-button); color: var(--text-main); outline: none; margin-top: 0.5rem; box-sizing: border-box; }
+        .glass-input:focus { border-color: var(--accent-cyan); background: var(--glass-bg-hover); }
+        .glass-input option { background: var(--bg-primary); color: var(--text-main); }
+        
+        /* Toggle Switch */
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--glass-bg); transition: .4s; border-radius: 34px; border: 1px solid var(--glass-border); }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: var(--text-muted); transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: rgba(52, 211, 153, 0.2); border-color: var(--accent-green); }
+        input:checked + .slider:before { transform: translateX(24px); background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .kanban-board { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 768px) {
+            .desktop-nav { display: none; }
+            .mobile-nav { display: flex; }
+            .kanban-board { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
+        /* Helper Classes */
+        .flex { display: flex; } .flex-col { display: flex; flex-direction: column; }
+        .items-center { align-items: center; } .justify-between { justify-content: space-between; }
+        .gap-1 { gap: 0.25rem; } .gap-2 { gap: 0.5rem; } .gap-3 { gap: 0.75rem; } .gap-4 { gap: 1rem; }
+        .mt-1 { margin-top: 0.25rem; } .mt-2 { margin-top: 0.5rem; } .mt-4 { margin-top: 1rem; }
+        .mb-2 { margin-bottom: 0.5rem; } .mb-4 { margin-bottom: 1rem; }
+        .text-sm { font-size: 0.875rem; } .text-xs { font-size: 0.75rem; }
+        .text-muted { color: var(--text-muted); } .text-accent { color: var(--accent-cyan); }
+        .text-success { color: var(--accent-green); } .text-error { color: var(--accent-red); }
+        .glass-button-primary { background: linear-gradient(135deg, rgba(125,211,252,0.2), rgba(167,139,250,0.2)); border: 1px solid var(--accent-purple); color: var(--text-main); padding: 0.75rem 1.5rem; border-radius: var(--radius-button); cursor: pointer; font-weight: 600; transition: all 0.2s; }
+        .glass-button-primary:hover { background: linear-gradient(135deg, rgba(125,211,252,0.3), rgba(167,139,250,0.3)); box-shadow: 0 0 15px rgba(167,139,250,0.4); }
+        .glass-card { background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); border: 1px solid var(--glass-border); border-radius: var(--radius-card); box-shadow: var(--glass-shadow); }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
+    </style>
+</head>
+<body>
+
+    <!-- Desktop Nav -->
+    <nav class="glass-nav desktop-nav items-center justify-between">
+        <div class="logo">Krab AI</div>
+        <div class="nav-links flex gap-4">
+            <a href="/">Home</a>
+            <a href="/costs">Costs</a>
+            <a href="/inbox">Inbox</a>
+            <a href="/swarm" class="active text-accent">Swarm</a>
+            <a href="/translator">Translator</a>
+        </div>
+        <div class="flex items-center gap-2 text-sm">
+            <span class="text-muted">System Health</span>
+            <div id="system-health-dot" class="status-dot ok"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="flex justify-between items-center mb-4">
+            <h1 class="text-accent" style="margin: 0; font-size: 1.75rem;">Swarm Control</h1>
+            <div class="text-sm text-muted" id="last-updated">Updating...</div>
+        </div>
+
+        <!-- Stats Summary -->
+        <div class="stats-grid" id="stats-container">
+            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
+                <span class="text-muted text-sm mb-2">Pending</span>
+                <span class="text-accent-cyan" style="font-size: 2rem; font-weight: bold;" id="stat-pending"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
+            </div>
+            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
+                <span class="text-muted text-sm mb-2">In Progress</span>
+                <span class="text-accent-purple" style="font-size: 2rem; font-weight: bold;" id="stat-in_progress"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
+            </div>
+            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
+                <span class="text-muted text-sm mb-2">Done</span>
+                <span class="text-success" style="font-size: 2rem; font-weight: bold;" id="stat-done"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
+            </div>
+            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
+                <span class="text-muted text-sm mb-2">Failed</span>
+                <span class="text-error" style="font-size: 2rem; font-weight: bold;" id="stat-failed"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tab-nav">
+            <button class="tab-btn active" onclick="switchTab('board')">Task Board</button>
+            <button class="tab-btn" onclick="switchTab('create')">Create Task</button>
+            <button class="tab-btn" onclick="switchTab('artifacts')">Artifacts</button>
+            <button class="tab-btn" onclick="switchTab('listeners')">Listeners</button>
+        </div>
+
+        <!-- Tab: Task Board -->
+        <div id="tab-board" class="tab-pane active">
+            <div id="board-error" class="text-error mb-4" style="display: none;"></div>
+            <div class="kanban-board">
+                <div class="kanban-col">
+                    <div class="kanban-header">
+                        <h3 class="text-muted" style="margin:0; font-size: 1rem;">Pending</h3>
+                        <span class="badge" id="count-pending">0</span>
+                    </div>
+                    <div id="col-pending" class="flex flex-col gap-2">
+                        <div class="skeleton" style="height: 100px;"></div>
+                        <div class="skeleton" style="height: 100px;"></div>
+                    </div>
+                </div>
+                <div class="kanban-col">
+                    <div class="kanban-header">
+                        <h3 class="text-accent-purple" style="margin:0; font-size: 1rem;">In Progress</h3>
+                        <span class="badge" id="count-in_progress">0</span>
+                    </div>
+                    <div id="col-in_progress" class="flex flex-col gap-2">
+                        <div class="skeleton" style="height: 100px;"></div>
+                    </div>
+                </div>
+                <div class="kanban-col">
+                    <div class="kanban-header">
+                        <h3 class="text-success" style="margin:0; font-size: 1rem;">Done</h3>
+                        <span class="badge" id="count-done">0</span>
+                    </div>
+                    <div id="col-done" class="flex flex-col gap-2">
+                        <div class="skeleton" style="height: 100px;"></div>
+                    </div>
+                </div>
+                <div class="kanban-col">
+                    <div class="kanban-header">
+                        <h3 class="text-error" style="margin:0; font-size: 1rem;">Failed</h3>
+                        <span class="badge" id="count-failed">0</span>
+                    </div>
+                    <div id="col-failed" class="flex flex-col gap-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Create Task -->
+        <div id="tab-create" class="tab-pane">
+            <div class="glass-card" style="max-width: 600px; margin: 0 auto; padding: 2rem;">
+                <h2 class="mb-4" style="margin-top:0;">Deploy New Task</h2>
+                <div id="create-msg" class="mb-4 text-sm"></div>
+                <form id="form-create-task" class="flex flex-col gap-4">
+                    <div>
+                        <label class="text-sm text-muted">Target Team</label>
+                        <select id="task-team" class="glass-input" required>
+                            <option value="traders">📈 Traders</option>
+                            <option value="coders">💻 Coders</option>
+                            <option value="analysts">📊 Analysts</option>
+                            <option value="creative">🎨 Creative</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-sm text-muted">Task Title</label>
+                        <input type="text" id="task-title" class="glass-input" placeholder="e.g. Analyze Q3 market trends..." required>
+                    </div>
+                    <div>
+                        <label class="text-sm text-muted">Priority</label>
+                        <select id="task-priority" class="glass-input" required>
+                            <option value="low">Low</option>
+                            <option value="normal" selected>Normal</option>
+                            <option value="high">High</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="glass-button-primary mt-4" id="btn-submit-task">Deploy Task</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Tab: Artifacts -->
+        <div id="tab-artifacts" class="tab-pane">
+            <div id="artifacts-error" class="text-error mb-4" style="display: none;"></div>
+            <div id="artifacts-list" class="flex flex-col gap-3">
+                <div class="glass-card p-4 skeleton" style="height: 80px; padding: 1rem;"></div>
+                <div class="glass-card p-4 skeleton" style="height: 80px; padding: 1rem;"></div>
+            </div>
+        </div>
+
+        <!-- Tab: Listeners -->
+        <div id="tab-listeners" class="tab-pane">
+            <div id="listeners-error" class="text-error mb-4" style="display: none;"></div>
+            <div class="glass-card" style="max-width: 600px; margin: 0 auto; padding: 2rem;">
+                <div class="flex justify-between items-center mb-4 pb-4" style="border-bottom: 1px solid var(--glass-border);">
+                    <div>
+                        <h3 style="margin:0;">Global Swarm Network</h3>
+                        <span class="text-xs text-muted">Master override for all agent listeners</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="toggle-global" onchange="toggleListener('global', this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                
+                <div class="flex flex-col gap-4" id="listeners-list">
+                    <!-- Populated by JS -->
+                    <div class="flex justify-between items-center skeleton" style="height: 40px;"></div>
+                    <div class="flex justify-between items-center skeleton" style="height: 40px;"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Mobile Tab Bar -->
+    <div class="glass-tab-bar mobile-nav justify-between items-center">
+        <a href="/" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
+            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+            <span class="text-xs">Home</span>
+        </a>
+        <a href="/costs" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
+            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+            <span class="text-xs">Costs</span>
+        </a>
+        <a href="/inbox" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
+            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+            <span class="text-xs">Inbox</span>
+        </a>
+        <a href="/swarm" class="tab-item text-accent flex flex-col items-center gap-1" style="text-decoration: none;">
+            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <span class="text-xs">Swarm</span>
+        </a>
+        <a href="/translator" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
+            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"></path></svg>
+            <span class="text-xs">Translator</span>
+        </a>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080/api/swarm';
+        const EMOJI_MAP = { traders: '📈', coders: '💻', analysts: '📊', creative: '🎨' };
+        const PRIORITY_COLORS = { low: 'var(--accent-cyan)', normal: 'var(--accent-green)', high: 'var(--accent-yellow)', critical: 'var(--accent-red)' };
+        
+        // Tab switching logic
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(`tab-${tabId}`).classList.add('active');
+        }
+
+        // Set System Health
+        function setHealth(status) {
+            const dot = document.getElementById('system-health-dot');
+            dot.className = `status-dot ${status}`;
+        }
+
+        // Format Date
+        function formatTime(isoString) {
+            if (!isoString) return '';
+            const d = new Date(isoString);
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        // Fetch Dashboard Data
+        async function fetchDashboard() {
+            try {
+                const [boardRes, artifactsRes, listenersRes] = await Promise.all([
+                    fetch(`${API_BASE}/task-board`).catch(() => null),
+                    fetch(`${API_BASE}/artifacts`).catch(() => null),
+                    fetch(`${API_BASE}/listeners`).catch(() => null)
+                ]);
+
+                if (!boardRes || !boardRes.ok) throw new Error('Task board API unavailable');
+                
+                const boardData = await boardRes.json();
+                renderBoard(boardData);
+                
+                if (artifactsRes && artifactsRes.ok) {
+                    const artifacts = await artifactsRes.json();
+                    renderArtifacts(artifacts);
+                }
+
+                if (listenersRes && listenersRes.ok) {
+                    const listeners = await listenersRes.json();
+                    renderListeners(listeners);
+                }
+
+                setHealth('ok');
+                document.getElementById('last-updated').innerText = `Updated: ${new Date().toLocaleTimeString()}`;
+                
+                // Clear errors
+                document.getElementById('board-error').style.display = 'none';
+                document.getElementById('artifacts-error').style.display = 'none';
+                document.getElementById('listeners-error').style.display = 'none';
+
+            } catch (err) {
+                console.error(err);
+                setHealth('error');
+                showError('board-error', 'Failed to connect to Swarm API. Retrying...');
+                showError('artifacts-error', 'Failed to load artifacts.');
+                showError('listeners-error', 'Failed to load listeners.');
+            }
+        }
+
+        function showError(elementId, msg) {
+            const el = document.getElementById(elementId);
+            el.innerText = msg;
+            el.style.display = 'block';
+        }
+
+        // Render Task Board & Stats
+        function renderBoard(data) {
+            const statuses = ['pending', 'in_progress', 'done', 'failed'];
+            const stats = { pending: 0, in_progress: 0, done: 0, failed: 0 };
+
+            statuses.forEach(status => {
+                const col = document.getElementById(`col-${status}`);
+                col.innerHTML = ''; // Clear skeletons
+                
+                const tasks = data[status] || [];
+                stats[status] = tasks.length;
+                document.getElementById(`count-${status}`).innerText = tasks.length;
+
+                tasks.forEach(task => {
+                    const card = document.createElement('div');
+                    card.className = 'glass-card task-card flex flex-col gap-2';
+                    const emoji = EMOJI_MAP[task.team] || '🤖';
+                    const pColor = PRIORITY_COLORS[task.priority] || 'var(--text-muted)';
+                    
+                    card.innerHTML = `
+                        <div class="flex justify-between items-center">
+                            <span class="badge" style="background: rgba(255,255,255,0.1); font-size:1rem;">${emoji}</span>
+                            <span class="text-xs text-muted">${formatTime(task.created_at)}</span>
+                        </div>
+                        <div style="font-weight: 500; font-size: 0.95rem; line-height: 1.4;">${task.title}</div>
+                        <div class="flex mt-1">
+                            <span class="badge" style="color: ${pColor}; border-color: ${pColor};">${task.priority.toUpperCase()}</span>
+                        </div>
+                    `;
+                    col.appendChild(card);
+                });
+
+                if (tasks.length === 0) {
+                    col.innerHTML = `<div class="text-muted text-sm text-center mt-4">No tasks</div>`;
+                }
+            });
+
+            // Update Stats
+            statuses.forEach(status => {
+                document.getElementById(`stat-${status}`).innerText = stats[status];
+            });
+        }
+
+        // Render Artifacts
+        function renderArtifacts(artifacts) {
+            const list = document.getElementById('artifacts-list');
+            list.innerHTML = '';
+            
+            if (!artifacts || artifacts.length === 0) {
+                list.innerHTML = `<div class="text-muted text-sm p-4 text-center">No artifacts generated yet.</div>`;
+                return;
+            }
+
+            artifacts.forEach(art => {
+                const item = document.createElement('div');
+                item.className = 'glass-card p-4 flex flex-col gap-2';
+                item.style.padding = '1rem';
+                const emoji = EMOJI_MAP[art.team] || '🤖';
+
+                item.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <span style="font-size: 1.2rem;">${emoji}</span>
+                            <strong class="text-sm" style="text-transform: capitalize;">${art.team} Team</strong>
+                        </div>
+                        <span class="text-xs text-muted">${formatTime(art.created_at)}</span>
+                    </div>
+                    <div class="text-sm text-muted" style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; margin-top: 0.5rem; white-space: pre-wrap;">${art.content}</div>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        // Render Listeners
+        function renderListeners(data) {
+            document.getElementById('toggle-global').checked = data.global;
+            
+            const list = document.getElementById('listeners-list');
+            list.innerHTML = '';
+
+            const teams = Object.keys(EMOJI_MAP);
+            teams.forEach(team => {
+                const isActive = data.teams ? data.teams[team] : false;
+                const emoji = EMOJI_MAP[team];
+                
+                const row = document.createElement('div');
+                row.className = 'flex justify-between items-center p-2';
+                row.style.borderBottom = '1px solid var(--glass-border)';
+                
+                row.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span style="font-size: 1.5rem;">${emoji}</span>
+                        <span style="text-transform: capitalize; font-weight: 500;">${team} Node</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" onchange="toggleListener('${team}', this.checked)" ${isActive ? 'checked' : ''} ${!data.global ? 'disabled' : ''}>
+                        <span class="slider" style="${!data.global ? 'opacity: 0.5; cursor: not-allowed;' : ''}"></span>
+                    </label>
+                `;
+                list.appendChild(row);
+            });
+        }
+
+        // Toggle Listener API
+        async function toggleListener(target, state) {
+            try {
+                const res = await fetch(`${API_BASE}/listeners/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target, state })
+                });
+                if (!res.ok) throw new Error('Toggle failed');
+                fetchDashboard(); // Refresh state immediately
+            } catch (err) {
+                console.error(err);
+                alert('Failed to toggle listener. Check API connection.');
+                fetchDashboard(); // Revert UI
+            }
+        }
+
+        // Handle Task Creation
+        document.getElementById('form-create-task').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('btn-submit-task');
+            const msg = document.getElementById('create-msg');
+            
+            const payload = {
+                team: document.getElementById('task-team').value,
+                title: document.getElementById('task-title').value,
+                priority: document.getElementById('task-priority').value
+            };
+
+            btn.innerText = 'Deploying...';
+            btn.disabled = true;
+            msg.innerText = '';
+            msg.className = 'mb-4 text-sm';
+
+            try {
+                const res = await fetch(`${API_BASE}/tasks/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!res.ok) throw new Error('Failed to create task');
+                
+                msg.innerText = 'Task deployed successfully!';
+                msg.classList.add('text-success');
+                document.getElementById('form-create-task').reset();
+                fetchDashboard(); // Update board
+                
+                setTimeout(() => { switchTab('board'); msg.innerText = ''; }, 1500);
+            } catch (err) {
+                console.error(err);
+                msg.innerText = 'Error: Could not deploy task. API unreachable.';
+                msg.classList.add('text-error');
+            } finally {
+                btn.innerText = 'Deploy Task';
+                btn.disabled = false;
+            }
+        });
+
+        // Init and Auto-Refresh
+        fetchDashboard();
+        setInterval(fetchDashboard, 15000);
+
+    </script>
+</body>
+</html>

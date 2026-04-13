@@ -7597,6 +7597,65 @@ class WebApp:
                 return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>Translator page not found</h1>", headers=_no_store_headers())
 
+        # ── V4 Dashboard (Liquid Glass) ────────────────────────────────
+
+        @self.app.get("/v4", response_class=HTMLResponse)
+        @self.app.get("/v4/", response_class=HTMLResponse)
+        async def v4_index():
+            """V4 Liquid Glass dashboard — главная страница."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "index.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/chat", response_class=HTMLResponse)
+        async def v4_chat():
+            """V4 Liquid Glass dashboard — AI Chat."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "chat.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Chat not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/costs", response_class=HTMLResponse)
+        async def v4_costs():
+            """V4 Liquid Glass dashboard — Costs."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "costs.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Costs not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/inbox", response_class=HTMLResponse)
+        async def v4_inbox():
+            """V4 Liquid Glass dashboard — Inbox."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "inbox.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Inbox not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/swarm", response_class=HTMLResponse)
+        async def v4_swarm():
+            """V4 Liquid Glass dashboard — Swarm."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "swarm.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Swarm not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/translator", response_class=HTMLResponse)
+        async def v4_translator():
+            """V4 Liquid Glass dashboard — Translator."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "translator.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Translator not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/liquid-glass.css")
+        async def v4_css():
+            """V4 Liquid Glass — общий CSS."""
+            css = config.BASE_DIR / "src" / "web" / "v4" / "liquid-glass.css"
+            if css.exists():
+                return FileResponse(css, media_type="text/css", headers=_no_store_headers())
+            return HTMLResponse("/* not found */", media_type="text/css")
+
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
 
         @self.app.get("/api/costs/report")
@@ -8312,6 +8371,18 @@ class WebApp:
                 "ok": True,
                 "result": result,
             }
+
+        @self.app.get("/api/notifications/count")
+        async def notification_count():
+            """Количество уведомлений для badge в UI."""
+            try:
+                items = inbox_service.list_items(status="open", limit=100)
+                attention = [
+                    i for i in items if i.get("severity") in ("error", "warning")
+                ]
+                return {"ok": True, "total": len(items), "attention": len(attention)}
+            except Exception:
+                return {"ok": True, "total": 0, "attention": 0}
 
         @self.app.post("/api/openclaw/cron/jobs/create")
         async def openclaw_cron_job_create(
@@ -12778,6 +12849,69 @@ class WebApp:
                 response_payload["reply"] = _build_model_status_from_route(last_route)
             self._idempotency_set("assistant_query", idem_key, response_payload)
             return response_payload
+
+        @self.app.get("/api/assistant/stream")
+        async def assistant_stream(
+            prompt: str = Query(default=""),
+            token: str = Query(default=""),
+            task_type: str = Query(default="chat"),
+        ):
+            """SSE streaming для AI Chat dashboard."""
+            from fastapi.responses import StreamingResponse as _StreamingResponse
+
+            # Проверка auth
+            if self._web_api_key and token != self._web_api_key:
+                return {"ok": False, "error": "unauthorized"}
+            if not prompt.strip():
+                return {"ok": False, "error": "empty prompt"}
+
+            async def event_generator():
+                import json as _json
+
+                # Фаза routing
+                yield f"event: status\ndata: {_json.dumps({'phase': 'routing'})}\n\n"
+
+                try:
+                    from ..openclaw_client import openclaw_client
+
+                    # Фаза обработки
+                    yield f"event: status\ndata: {_json.dumps({'phase': 'processing'})}\n\n"
+
+                    # Собираем ответ
+                    chunks = []
+                    async for chunk in openclaw_client.send_message_stream(
+                        message=prompt,
+                        chat_id=f"web_chat_{id(prompt) % 10000}",
+                        system_prompt="Ты — AI ассистент Krab. Отвечай полезно и по делу.",
+                        force_cloud=True,
+                    ):
+                        chunks.append(chunk)
+
+                    reply = "".join(chunks).strip()
+
+                    # Tool calls info
+                    if hasattr(openclaw_client, "_active_tool_calls"):
+                        for i, tc in enumerate(openclaw_client._active_tool_calls):
+                            yield f"event: tool_done\ndata: {_json.dumps({'name': tc.get('name', '?'), 'index': i})}\n\n"
+
+                    # Route info
+                    route = {}
+                    if hasattr(openclaw_client, "get_last_runtime_route"):
+                        route = openclaw_client.get_last_runtime_route() or {}
+
+                    yield f"event: route\ndata: {_json.dumps({'model': route.get('model', '?'), 'provider': route.get('provider', '?')})}\n\n"
+                    yield f"event: message\ndata: {_json.dumps({'reply': reply})}\n\n"
+
+                except Exception as exc:
+                    yield f"event: error\ndata: {_json.dumps({'error': str(exc)})}\n\n"
+
+                yield "event: done\ndata: {}\n\n"
+
+            return _StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         @self.app.get("/api/openclaw/report")
         async def openclaw_report():

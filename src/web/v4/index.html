@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🦀 Krab ✅</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <style>
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-primary);
+            color: #ffffff;
+            margin: 0;
+            padding: 80px 0 100px 0;
+        }
+
+        .main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Allowed specific inline styles */
+        .progress-track {
+            background: var(--glass-border);
+            height: 4px;
+            border-radius: 2px;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .progress-fill {
+            background: var(--accent-green);
+            height: 100%;
+            width: 0%;
+            transition: width 0.5s ease, background-color 0.3s ease;
+        }
+
+        #toast-container {
+            position: fixed;
+            bottom: 90px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            padding: 12px 20px;
+            border-radius: var(--radius-card);
+            backdrop-filter: blur(var(--glass-blur));
+            box-shadow: var(--glass-shadow);
+            color: #fff;
+            animation: fadeUp 0.3s ease-out forwards;
+        }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .hub-card {
+            cursor: pointer;
+            animation: fadeIn 0.4s ease-out both;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .hub-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--glass-border);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .chat-card {
+            background: linear-gradient(135deg, rgba(167, 139, 250, 0.15) 0%, var(--glass-bg) 100%);
+            border-color: rgba(167, 139, 250, 0.3);
+            justify-content: center;
+        }
+
+        .chat-card:hover {
+            background: linear-gradient(135deg, rgba(167, 139, 250, 0.25) 0%, var(--glass-bg-hover) 100%);
+            border-color: var(--accent-purple);
+        }
+
+        /* Mobile specific bottom nav positioning */
+        .glass-tab-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 10px 20px;
+            z-index: 1000;
+        }
+
+        .glass-nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 15px 20px;
+            z-index: 1000;
+        }
+
+        .badge-wrapper {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Navigation -->
+    <nav class="glass-nav flex items-center justify-between">
+        <div class="nav-logo flex items-center gap-2">
+            <span class="text-lg">🦀 Krab</span>
+        </div>
+        <div class="nav-links flex items-center gap-4">
+            <a href="/v4/hub" class="nav-link active">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/v4/costs" class="nav-link">Costs</a>
+            <a href="/v4/inbox" class="nav-link">Inbox</a>
+            <a href="/v4/swarm" class="nav-link">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
+        </div>
+        <div class="nav-bell flex items-center" style="position: relative; cursor: pointer;" onclick="window.location.href='/v4/ops'">
+            <span class="text-lg">🔔</span>
+            <div class="badge-wrapper" id="badge-wrapper" style="display: none;">
+                <span class="badge" id="bell-badge" style="background: var(--accent-red); color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold;">0</span>
+            </div>
+            <div id="nav-status" class="status-dot ok ml-2"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-container flex flex-col gap-4">
+        
+        <div class="flex items-center justify-between mb-2">
+            <h1 class="h1">Dashboard Hub</h1>
+        </div>
+
+        <!-- Hub Grid -->
+        <div class="hub-grid">
+            
+            <!-- Card 1: System Status -->
+            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.05s" onclick="window.location.href='/v4/health'">
+                <h3 class="h3 flex items-center gap-1">System Status <div id="card-status-dot" class="status-dot ok"></div></h3>
+                <div>
+                    <div class="mt-2 text-lg skeleton" id="sys-uptime" style="min-height: 24px;"></div>
+                    <div class="text-sm text-muted mt-1" id="sys-status">Initializing...</div>
+                </div>
+            </div>
+
+            <!-- Card 2: Costs -->
+            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.1s" onclick="window.location.href='/v4/costs'">
+                <h3 class="h3">Costs 💰</h3>
+                <div>
+                    <div class="mt-2 text-lg skeleton" id="costs-text" style="min-height: 24px;"></div>
+                    <div class="progress-track mt-2">
+                        <div class="progress-fill" id="costs-bar"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card 3: Inbox -->
+            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.15s" onclick="window.location.href='/v4/inbox'">
+                <h3 class="h3">Inbox 📬</h3>
+                <div>
+                    <div class="mt-2 text-lg skeleton" id="inbox-count" style="min-height: 24px;"></div>
+                    <div class="text-sm text-muted mt-1">Unread messages</div>
+                </div>
+            </div>
+
+            <!-- Card 4: Swarm -->
+            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.2s" onclick="window.location.href='/v4/swarm'">
+                <h3 class="h3">Swarm 🐝</h3>
+                <div>
+                    <div class="mt-2 text-lg skeleton" id="swarm-active" style="min-height: 24px;"></div>
+                    <div class="text-sm text-muted mt-1 skeleton" id="swarm-pending" style="min-height: 20px;"></div>
+                </div>
+            </div>
+
+            <!-- Card 5: Chat -->
+            <div class="hub-card glass-card chat-card flex flex-col items-center" style="animation-delay: 0.25s" onclick="window.location.href='/v4/chat'">
+                <h2 class="h2 text-accent" style="color: var(--accent-purple)">Chat 💬</h2>
+                <div class="text-sm text-muted mt-2">Open AI Assistant</div>
+            </div>
+
+            <!-- Card 6: Ops -->
+            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.3s" onclick="window.location.href='/v4/ops'">
+                <h3 class="h3">Ops 🔧</h3>
+                <div>
+                    <div class="mt-2 text-lg skeleton" id="ops-alerts" style="min-height: 24px;"></div>
+                    <div class="text-sm text-muted mt-1">Active alerts</div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="mt-4">
+            <h2 class="h2 mb-2">Quick Actions</h2>
+            <div class="flex gap-2">
+                <button class="glass-button" onclick="quickAction('Health Check', 'GET', '/api/ops/diagnostics')">🔍 Health Check</button>
+                <button class="glass-button glass-button-primary" onclick="quickAction('Restart', 'POST', '/api/runtime/recover')">🔄 Restart</button>
+                <button class="glass-button" onclick="quickAction('Clear Context', 'POST', '/api/runtime/chat-session/clear')">🗑 Clear Context</button>
+            </div>
+        </div>
+
+        <!-- Last Updated -->
+        <div class="text-xs text-muted mt-4 flex justify-between items-center">
+            <span>Last updated: <span id="last-updated-time">--:--:--</span></span>
+        </div>
+
+    </main>
+
+    <!-- Mobile Bottom Tab Bar -->
+    <nav class="glass-tab-bar flex justify-between items-center">
+        <a href="/v4/hub" class="tab-item active flex flex-col items-center gap-1">
+            <span class="text-lg">🏠</span>
+            <span class="text-xs">Hub</span>
+        </a>
+        <a href="/v4/chat" class="tab-item flex flex-col items-center gap-1 text-muted">
+            <span class="text-lg">💬</span>
+            <span class="text-xs">Chat</span>
+        </a>
+        <a href="/v4/costs" class="tab-item flex flex-col items-center gap-1 text-muted">
+            <span class="text-lg">💰</span>
+            <span class="text-xs">Costs</span>
+        </a>
+        <a href="/v4/inbox" class="tab-item flex flex-col items-center gap-1 text-muted">
+            <span class="text-lg">📬</span>
+            <span class="text-xs">Inbox</span>
+        </a>
+        <a href="/v4/swarm" class="tab-item flex flex-col items-center gap-1 text-muted">
+            <span class="text-lg">🐝</span>
+            <span class="text-xs">Swarm</span>
+        </a>
+    </nav>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080';
+
+        async function safeFetch(endpoint) {
+            try {
+                const res = await fetch(API_BASE + endpoint);
+                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                return await res.json();
+            } catch (error) {
+                return null;
+            }
+        }
+
+        async function loadDashboardData() {
+            const elementsToSkeleton = [
+                'sys-uptime', 'costs-text', 'inbox-count', 
+                'swarm-active', 'swarm-pending', 'ops-alerts'
+            ];
+            
+            elementsToSkeleton.forEach(id => {
+                const el = document.getElementById(id);
+                if(el.textContent === '' || el.textContent === '—') {
+                    el.classList.add('skeleton');
+                    el.textContent = '';
+                }
+            });
+
+            const [healthRes, costsRes, inboxRes, swarmRes, opsRes] = await Promise.allSettled([
+                safeFetch('/api/health/lite'),
+                safeFetch('/api/costs/budget'),
+                safeFetch('/api/notifications/count'),
+                safeFetch('/api/swarm/task-board'),
+                safeFetch('/api/ops/alerts')
+            ]);
+
+            let hasSystemError = false;
+
+            // 1. System Status
+            const sysUptime = document.getElementById('sys-uptime');
+            const sysStatus = document.getElementById('sys-status');
+            const navStatus = document.getElementById('nav-status');
+            const cardStatus = document.getElementById('card-status-dot');
+
+            sysUptime.classList.remove('skeleton');
+            if (healthRes.value) {
+                sysUptime.textContent = healthRes.value.uptime || '99.9% Uptime';
+                sysStatus.textContent = healthRes.value.status || 'All systems operational';
+                sysStatus.className = 'text-sm mt-1 text-success';
+                navStatus.className = 'status-dot ok ml-2';
+                cardStatus.className = 'status-dot ok';
+            } else {
+                hasSystemError = true;
+                sysUptime.textContent = '—';
+                sysStatus.textContent = 'Service Unreachable';
+                sysStatus.className = 'text-sm mt-1 text-error';
+                navStatus.className = 'status-dot error ml-2';
+                cardStatus.className = 'status-dot error';
+            }
+
+            // 2. Costs
+            const costsText = document.getElementById('costs-text');
+            const costsBar = document.getElementById('costs-bar');
+            costsText.classList.remove('skeleton');
+            if (costsRes.value) {
+                const spent = costsRes.value.spent || 0;
+                const budget = costsRes.value.budget || 100;
+                costsText.textContent = `$${spent.toFixed(2)} / $${budget.toFixed(2)}`;
+                
+                const percentage = Math.min((spent / budget) * 100, 100);
+                costsBar.style.width = `${percentage}%`;
+                
+                if (percentage >= 90) {
+                    costsBar.style.backgroundColor = 'var(--accent-red)';
+                } else if (percentage >= 75) {
+                    costsBar.style.backgroundColor = 'var(--accent-yellow)';
+                } else {
+                    costsBar.style.backgroundColor = 'var(--accent-green)';
+                }
+            } else {
+                hasSystemError = true;
+                costsText.textContent = '—';
+                costsBar.style.width = '0%';
+            }
+
+            // 3. Inbox
+            const inboxCount = document.getElementById('inbox-count');
+            inboxCount.classList.remove('skeleton');
+            if (inboxRes.value) {
+                inboxCount.textContent = `${inboxRes.value.count || 0} New`;
+            } else {
+                hasSystemError = true;
+                inboxCount.textContent = '—';
+            }
+
+            // 4. Swarm
+            const swarmActive = document.getElementById('swarm-active');
+            const swarmPending = document.getElementById('swarm-pending');
+            swarmActive.classList.remove('skeleton');
+            swarmPending.classList.remove('skeleton');
+            if (swarmRes.value) {
+                swarmActive.textContent = `${swarmRes.value.active || 0} Active Tasks`;
+                swarmPending.textContent = `${swarmRes.value.pending || 0} Pending`;
+            } else {
+                hasSystemError = true;
+                swarmActive.textContent = '—';
+                swarmPending.textContent = '—';
+            }
+
+            // 5. Ops
+            const opsAlerts = document.getElementById('ops-alerts');
+            const badgeWrapper = document.getElementById('badge-wrapper');
+            const bellBadge = document.getElementById('bell-badge');
+            opsAlerts.classList.remove('skeleton');
+            if (opsRes.value) {
+                const alertsCount = opsRes.value.count || 0;
+                opsAlerts.textContent = `${alertsCount} Issues`;
+                
+                if (alertsCount > 0) {
+                    badgeWrapper.style.display = 'block';
+                    bellBadge.textContent = alertsCount > 99 ? '99+' : alertsCount;
+                } else {
+                    badgeWrapper.style.display = 'none';
+                }
+            } else {
+                hasSystemError = true;
+                opsAlerts.textContent = '—';
+                badgeWrapper.style.display = 'none';
+            }
+
+            // Document Title & Timestamp
+            document.title = hasSystemError ? '🦀 Krab ⚠️' : '🦀 Krab ✅';
+            
+            const now = new Date();
+            document.getElementById('last-updated-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        async function quickAction(name, method, url) {
+            try {
+                const res = await fetch(API_BASE + url, { method });
+                if (res.ok) {
+                    showToast(`${name} executed successfully`, 'success');
+                    loadDashboardData(); // Refresh data immediately
+                } else {
+                    showToast(`Failed to execute ${name}`, 'error');
+                }
+            } catch (e) {
+                showToast(`Network error during ${name}`, 'error');
+            }
+        }
+
+        function showToast(message, type) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            
+            const borderColor = type === 'success' ? 'var(--accent-green)' : 'var(--accent-red)';
+            toast.style.borderLeft = `4px solid ${borderColor}`;
+            
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(10px)';
+                toast.style.transition = 'all 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDashboardData();
+            // Auto-refresh every 30 seconds
+            setInterval(loadDashboardData, 30000);
+        });
+    </script>
+</body>
+</html>

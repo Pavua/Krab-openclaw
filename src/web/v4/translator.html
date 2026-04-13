@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Krab AI - Translator</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="/v4/liquid-glass.css" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Desktop Navigation -->
+  <nav class="glass-nav">
+    <div class="nav-logo">KRAB</div>
+    <div class="nav-links">
+      <a href="/" class="nav-link">Home</a>
+      <a href="/costs" class="nav-link">Costs</a>
+      <a href="/inbox" class="nav-link">Inbox</a>
+      <a href="/swarm" class="nav-link">Swarm</a>
+      <a href="/v4/translator" class="nav-link active">Translator</a>
+    </div>
+    <div class="nav-bell">
+      <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+    </div>
+  </nav>
+
+  <!-- Mobile Tab Bar -->
+  <nav class="glass-tab-bar">
+    <a href="/" class="tab-item">
+      <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+      Home
+    </a>
+    <a href="/costs" class="tab-item">
+      <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+      Costs
+    </a>
+    <a href="/inbox" class="tab-item">
+      <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
+      Inbox
+    </a>
+    <a href="/swarm" class="tab-item">
+      <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+      Swarm
+    </a>
+    <a href="/v4/translator" class="tab-item active">
+      <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"></path></svg>
+      Translator
+    </a>
+  </nav>
+
+  <!-- Main Content -->
+  <main style="max-width: 1100px; margin: 0 auto; padding: 2rem; display: flex; flex-direction: column; gap: 1.5rem; padding-bottom: 100px;">
+
+    <!-- Header -->
+    <header class="flex items-center justify-between" style="animation: fadeUp 0.4s ease-out backwards;">
+      <div class="flex items-center gap-3">
+        <div id="statusDot" class="status-dot warning"></div>
+        <h1 class="flex items-center gap-2">
+          Translator
+          <span id="langBadge" class="skeleton" style="display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; min-width: 80px; letter-spacing: 0.03em;">Loading</span>
+        </h1>
+      </div>
+      <div id="statusText" class="text-sm text-muted" style="font-weight: 600; letter-spacing: 0.08em;">INITIALIZING</div>
+    </header>
+
+    <!-- Session Controls -->
+    <div class="flex items-center gap-3" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.1s;">
+      <button id="btnStart" class="glass-button glass-button-primary" onclick="handleAction('start')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Start
+      </button>
+      <button id="btnPause" class="glass-button" onclick="handleAction('pause')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Pause
+      </button>
+      <button id="btnResume" class="glass-button glass-button-primary" onclick="handleAction('resume')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Resume
+      </button>
+      <button id="btnStop" class="glass-button" onclick="handleAction('stop')" style="display: none; color: var(--accent-red); border-color: rgba(248,113,113,0.3);">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M9 10h6v4H9z"></path></svg>
+        Stop
+      </button>
+    </div>
+
+    <!-- Cards Grid: Profile + Session -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+
+      <!-- Profile Card -->
+      <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.2s;">
+        <h2 class="mb-3">Profile Settings</h2>
+        <div class="flex flex-col gap-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Language Pair</span>
+            <span id="profLang" class="skeleton" style="min-width: 70px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Mode</span>
+            <span id="profMode" class="skeleton" style="min-width: 90px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Voice Strategy</span>
+            <span id="profVoice" class="skeleton" style="min-width: 110px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
+            <span class="text-muted">Ordinary Calls</span>
+            <div id="profOrd" class="status-dot" style="animation: none;"></div>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Internet Calls</span>
+            <div id="profInt" class="status-dot" style="animation: none;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session Card -->
+      <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.3s;">
+        <h2 class="mb-3">Live Session</h2>
+        <div class="flex flex-col gap-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Active Chats</span>
+            <span id="sessChats" class="text-accent skeleton" style="font-weight: 700; min-width: 30px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Total Translations</span>
+            <span id="sessTotal" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Avg Latency</span>
+            <span id="sessLatency" class="skeleton" style="min-width: 60px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
+            <span class="text-muted">Muted</span>
+            <span id="sessMuted" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Last Translation -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.4s;">
+      <h2 class="mb-3">Last Translation</h2>
+      <div style="display: flex; gap: 1rem; align-items: stretch;">
+        <div id="lastOrig" class="skeleton text-muted" style="flex: 1; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word;">&nbsp;</div>
+        <div class="flex items-center justify-center text-muted" style="padding: 0 0.5rem; flex-shrink: 0;">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+        </div>
+        <div id="lastTrans" class="skeleton text-accent" style="flex: 1; padding: 1rem; background: rgba(125,211,252,0.05); border: 1px solid rgba(125,211,252,0.15); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word;">&nbsp;</div>
+      </div>
+    </div>
+
+    <!-- History Card -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.5s;">
+      <div class="flex justify-between items-center mb-3">
+        <h2>Recent History</h2>
+        <span class="text-xs text-muted">Last 10</span>
+      </div>
+      <div id="historyContainer" class="flex flex-col gap-2">
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    const API = 'http://localhost:8080/api/translator';
+
+    // XSS-safe helpers using DOM methods
+    function createTextNode(text) {
+      return document.createTextNode(text == null ? '' : String(text));
+    }
+
+    function setTextContent(id, text) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = text == null ? '' : String(text);
+      el.classList.remove('skeleton');
+    }
+
+    function setTextEl(el, text) {
+      if (!el) return;
+      el.textContent = text == null ? '' : String(text);
+      el.classList.remove('skeleton');
+    }
+
+    function makeSpan(text, cls) {
+      const span = document.createElement('span');
+      span.className = cls || '';
+      span.textContent = String(text);
+      return span;
+    }
+
+    let currentStatus = 'idle';
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch(API + '/status');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderStatus(data);
+      } catch (err) {
+        console.error('Status fetch failed:', err);
+        renderOffline();
+      }
+    }
+
+    async function fetchHistory() {
+      try {
+        const res = await fetch(API + '/history?n=10');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderHistory(Array.isArray(data) ? data : (data.items || []));
+      } catch (err) {
+        console.error('History fetch failed:', err);
+      }
+    }
+
+    function renderStatus(data) {
+      if (!data) return;
+      const profile = data.profile || {};
+      const session = data.session || {};
+      currentStatus = (session.session_status || 'idle').toLowerCase();
+
+      // Status dot
+      const dot = document.getElementById('statusDot');
+      dot.className = 'status-dot ' + (currentStatus === 'active' ? 'ok' : currentStatus === 'paused' ? 'warning' : 'error');
+
+      // Status text
+      setTextContent('statusText', currentStatus.toUpperCase());
+
+      // Language badge
+      const badge = document.getElementById('langBadge');
+      badge.textContent = profile.language_pair || '-- -- --';
+      badge.classList.remove('skeleton');
+      badge.style.background = 'rgba(167,139,250,0.15)';
+      badge.style.color = 'var(--accent-purple)';
+      badge.style.border = '1px solid rgba(167,139,250,0.25)';
+
+      // Buttons visibility
+      const isIdle = currentStatus === 'idle' || currentStatus === 'stopped';
+      document.getElementById('btnStart').style.display = isIdle ? 'inline-flex' : 'none';
+      document.getElementById('btnPause').style.display = currentStatus === 'active' ? 'inline-flex' : 'none';
+      document.getElementById('btnResume').style.display = currentStatus === 'paused' ? 'inline-flex' : 'none';
+      document.getElementById('btnStop').style.display = (currentStatus === 'active' || currentStatus === 'paused') ? 'inline-flex' : 'none';
+
+      // Profile card
+      setTextContent('profLang', profile.language_pair || '--');
+      setTextContent('profMode', profile.translation_mode || '--');
+      setTextContent('profVoice', profile.voice_strategy || '--');
+      document.getElementById('profOrd').className = 'status-dot ' + (profile.ordinary_calls_enabled ? 'ok' : 'error');
+      document.getElementById('profInt').className = 'status-dot ' + (profile.internet_calls_enabled ? 'ok' : 'error');
+
+      // Session stats
+      const stats = session.stats || {};
+      const total = stats.total_translations || 0;
+      const avgMs = total > 0 ? Math.round((stats.total_latency_ms || 0) / total) : 0;
+      setTextContent('sessChats', session.active_chats != null ? session.active_chats : 0);
+      setTextContent('sessTotal', total);
+      setTextContent('sessLatency', avgMs + ' ms');
+
+      const mutedEl = document.getElementById('sessMuted');
+      mutedEl.textContent = '';
+      mutedEl.classList.remove('skeleton');
+      mutedEl.appendChild(makeSpan(session.translation_muted ? 'Yes' : 'No', session.translation_muted ? 'text-error' : 'text-success'));
+
+      // Last translation
+      const origEl = document.getElementById('lastOrig');
+      origEl.textContent = session.last_translated_original || 'No recent translation.';
+      origEl.classList.remove('skeleton');
+      origEl.style.opacity = session.last_translated_original ? '1' : '0.5';
+
+      const transEl = document.getElementById('lastTrans');
+      transEl.textContent = session.last_translated_translation || 'Waiting for input...';
+      transEl.classList.remove('skeleton');
+    }
+
+    function renderOffline() {
+      document.getElementById('statusDot').className = 'status-dot error';
+      setTextContent('statusText', 'OFFLINE');
+      document.getElementById('btnStart').style.display = 'inline-flex';
+      ['btnPause','btnResume','btnStop'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+      });
+    }
+
+    function renderHistory(items) {
+      const container = document.getElementById('historyContainer');
+      container.textContent = '';
+
+      if (!items || items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-muted text-sm';
+        empty.style.cssText = 'text-align:center; padding: 1.5rem;';
+        empty.textContent = 'No translation history yet.';
+        container.appendChild(empty);
+        return;
+      }
+
+      items.forEach(item => {
+        const pill = document.createElement('div');
+        pill.className = 'tool-pill';
+        pill.style.cssText = 'margin:0; border-radius: 12px;';
+
+        const header = document.createElement('div');
+        header.className = 'tool-pill-header';
+
+        const col = document.createElement('div');
+        col.style.cssText = 'display:flex; flex-direction:column; gap:0.35rem; width:100%;';
+
+        const meta = document.createElement('div');
+        meta.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+
+        const langSpan = document.createElement('span');
+        langSpan.className = 'text-xs';
+        langSpan.style.color = 'var(--accent-purple)';
+        langSpan.textContent = item.language_pair || '';
+
+        const tsSpan = document.createElement('span');
+        tsSpan.className = 'text-xs text-muted';
+        if (item.timestamp) {
+          const d = new Date(typeof item.timestamp === 'number' && item.timestamp < 1e12 ? item.timestamp * 1000 : item.timestamp);
+          tsSpan.textContent = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        }
+
+        meta.appendChild(langSpan);
+        meta.appendChild(tsSpan);
+
+        const origDiv = document.createElement('div');
+        origDiv.className = 'text-muted text-sm';
+        origDiv.textContent = item.original || '';
+
+        const transDiv = document.createElement('div');
+        transDiv.className = 'text-accent text-sm';
+        transDiv.textContent = item.translation || '';
+
+        col.appendChild(meta);
+        col.appendChild(origDiv);
+        col.appendChild(transDiv);
+        header.appendChild(col);
+        pill.appendChild(header);
+        container.appendChild(pill);
+      });
+    }
+
+    async function handleAction(action) {
+      try {
+        const res = await fetch(API + '/session/' + action, { method: 'POST' });
+        if (res.ok) fetchStatus();
+        else console.error('Action failed: HTTP ' + res.status);
+      } catch (err) {
+        console.error('Action error:', err);
+      }
+    }
+
+    // Init + auto-refresh every 10s
+    fetchStatus();
+    fetchHistory();
+    setInterval(function() { fetchStatus(); fetchHistory(); }, 10000);
+  </script>
+</body>
+</html>
