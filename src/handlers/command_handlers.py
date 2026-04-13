@@ -1688,17 +1688,176 @@ async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
         await message.reply(res)
 
 
+##############################################################################
+# Группы ключей для !config — технические/системные настройки
+##############################################################################
+
+# (config_key, описание)
+_CONFIG_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("Модель и routing", [
+        ("MODEL",                        "Основная модель"),
+        ("FORCE_CLOUD",                  "Принудительный cloud-маршрут"),
+        ("LOCAL_FALLBACK_ENABLED",       "Fallback cloud→local при ошибках"),
+        ("LOCAL_PREFERRED_MODEL",        "Локальная модель (LM Studio)"),
+        ("LOCAL_PREFERRED_VISION_MODEL", "Локальная vision-модель"),
+        ("SINGLE_LOCAL_MODEL_MODE",      "Держать одну локальную модель"),
+        ("GUARDED_IDLE_UNLOAD",          "Guarded idle-unload локальной модели"),
+        ("GUARDED_IDLE_UNLOAD_GRACE_SEC","Пауза перед idle-unload (сек)"),
+        ("RESTORE_PREFERRED_ON_IDLE_UNLOAD", "Восстановить preferred после unload"),
+    ]),
+    ("Таймауты и retry", [
+        ("OPENCLAW_CHUNK_TIMEOUT_SEC",              "Таймаут chunk стриминга (сек)"),
+        ("OPENCLAW_FIRST_CHUNK_TIMEOUT_SEC",         "Таймаут первого chunk (сек)"),
+        ("OPENCLAW_PHOTO_FIRST_CHUNK_TIMEOUT_SEC",   "Таймаут первого chunk фото (сек)"),
+        ("OPENCLAW_AUTO_RETRY_COUNT",                "Кол-во auto-retry при ошибках"),
+        ("OPENCLAW_AUTO_RETRY_DELAY_SEC",            "Задержка auto-retry (сек)"),
+        ("OPENCLAW_PROGRESS_NOTICE_INITIAL_SEC",     "Первый progress-notice (сек)"),
+        ("OPENCLAW_PROGRESS_NOTICE_REPEAT_SEC",      "Повтор progress-notice (сек)"),
+    ]),
+    ("Userbot и Telegram", [
+        ("USERBOT_MAX_OUTPUT_TOKENS",      "Макс. токенов ответа (текст)"),
+        ("USERBOT_PHOTO_MAX_OUTPUT_TOKENS","Макс. токенов ответа (фото)"),
+        ("USERBOT_FORCE_CLOUD_FOR_PHOTO",  "Cloud-маршрут для фото"),
+        ("TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", "Интервал stream UI (сек)"),
+        ("TELEGRAM_STREAM_SHOW_REASONING",      "Показывать reasoning в stream"),
+        ("TELEGRAM_REACTIONS_ENABLED",          "Реакции 👀✅❌"),
+        ("TELEGRAM_MESSAGE_BATCH_WINDOW_SEC",   "Окно склейки сообщений (сек)"),
+        ("TELEGRAM_SESSION_HEARTBEAT_SEC",      "Heartbeat MTProto (сек)"),
+        ("TOOL_NARRATION_ENABLED",              "Tool narration в Telegram"),
+    ]),
+    ("Фоновые задачи", [
+        ("SCHEDULER_ENABLED",              "Планировщик reminders/cron"),
+        ("DEFERRED_ACTION_GUARD_ENABLED",  "Guard deferred-actions"),
+        ("SWARM_AUTONOMOUS_ENABLED",       "Автономные задачи свёрма"),
+        ("SILENCE_DEFAULT_MINUTES",        "Tишина по умолчанию (мин)"),
+        ("OWNER_AUTO_SILENCE_MINUTES",     "Авто-тишина при owner-write (мин)"),
+    ]),
+    ("Доступ и безопасность", [
+        ("OWNER_USERNAME",              "Username владельца (fallback)"),
+        ("NON_OWNER_SAFE_MODE_ENABLED", "Safe-mode для гостей"),
+        ("GUEST_TOOLS_DISABLED",        "Запрет tools для GUEST"),
+        ("FORWARD_UNKNOWN_INCOMING",    "Пересылать неизвестные входящие"),
+        ("AI_DISCLOSURE_ENABLED",       "Дисклеймер ИИ в начале диалога"),
+        ("MANUAL_BLOCKLIST",            "Чёрный список (usernames/IDs)"),
+    ]),
+    ("Голос", [
+        ("VOICE_MODE_DEFAULT",   "Voice-режим по умолчанию"),
+        ("VOICE_REPLY_SPEED",    "Скорость TTS"),
+        ("VOICE_REPLY_VOICE",    "TTS-голос"),
+        ("VOICE_REPLY_DELIVERY", "Режим доставки (text+voice/voice/text)"),
+    ]),
+    ("История диалога", [
+        ("HISTORY_WINDOW_MESSAGES",       "Окно cloud-истории (сообщений)"),
+        ("LOCAL_HISTORY_WINDOW_MESSAGES", "Окно local-истории (сообщений)"),
+        ("RETRY_HISTORY_WINDOW_MESSAGES", "Окно retry-истории (сообщений)"),
+    ]),
+    ("Сеть и прокси", [
+        ("TOR_ENABLED",       "Tor SOCKS5 прокси"),
+        ("TOR_SOCKS_PORT",    "Порт Tor SOCKS5"),
+        ("BROWSER_FOCUS_TAB", "Фокус вкладки браузера"),
+        ("LM_STUDIO_URL",     "URL LM Studio"),
+        ("OPENCLAW_URL",      "URL OpenClaw Gateway"),
+    ]),
+    ("Прочее", [
+        ("DEFAULT_WEATHER_CITY",    "Город погоды по умолчанию"),
+        ("MAX_RAM_GB",              "Лимит RAM (GB)"),
+        ("LOG_LEVEL",               "Уровень логирования"),
+        ("GEMINI_PAID_KEY_ENABLED", "Платный Gemini API ключ"),
+    ]),
+]
+
+# Плоский индекс key→описание для быстрого поиска
+_CONFIG_KEY_DESC: dict[str, str] = {
+    k: desc
+    for _, group in _CONFIG_GROUPS
+    for k, desc in group
+}
+
+
+def _render_config_value(key: str) -> str:
+    """Возвращает строковое представление значения ключа конфига."""
+    val = getattr(config, key, None)
+    if val is None:
+        return "—"
+    if isinstance(val, (list, frozenset)):
+        items = list(val)
+        if not items:
+            return "(пусто)"
+        return ", ".join(str(i) for i in items)
+    return str(val)
+
+
+def _render_config_all() -> str:
+    """Форматирует полный вывод !config."""
+    lines: list[str] = ["**Конфигурация Краба** — все настройки", ""]
+    for group_name, keys in _CONFIG_GROUPS:
+        lines.append(f"**{group_name}**")
+        for key, desc in keys:
+            val = _render_config_value(key)
+            lines.append(f"  `{key}` = `{val}` — {desc}")
+        lines.append("")
+    lines.append("Использование:")
+    lines.append("`!config` — показать все")
+    lines.append("`!config <KEY>` — одна настройка")
+    lines.append("`!config <KEY> <value>` — установить")
+    return "\n".join(lines)
+
+
 async def handle_config(bot: "KraabUserbot", message: Message) -> None:
-    """Просмотр текущих настроек."""
-    text = f"""
-⚙️ **Конфигурация Краба**
-----------------------
-👤 **Владелец (effective):** `{get_effective_owner_label()}`
-🧷 **Fallback owner_username:** `{config.OWNER_USERNAME}`
-🎯 **Триггеры:** `{", ".join(config.TRIGGER_PREFIXES)}`
-🧠 **Память (RAM):** `{config.MAX_RAM_GB}GB`
-"""
-    await message.reply(text)
+    """
+    Просмотр и редактирование технических настроек Краба.
+
+    !config                 — все ключевые настройки (сгруппировано)
+    !config <KEY>           — показать значение одной настройки
+    !config <KEY> <value>   — установить значение
+
+    Принимает прямые CONFIG-ключи в любом регистре.
+    Отличие от !set: !config охватывает ВСЕ системные настройки,
+    !set — user-friendly алиасы.
+    """
+    raw_args = bot._get_command_args(message).strip() if hasattr(bot, "_get_command_args") else ""
+
+    # Режим 1: показать все настройки
+    if not raw_args:
+        await message.reply(_render_config_all())
+        return
+
+    parts = raw_args.split(maxsplit=1)
+    key_input = parts[0].upper()
+    has_value = len(parts) > 1
+    value_str = parts[1] if has_value else ""
+
+    # Режим 2: показать одну настройку
+    if not has_value:
+        if hasattr(config, key_input):
+            val = _render_config_value(key_input)
+            desc = _CONFIG_KEY_DESC.get(key_input, "")
+            suffix = f" — {desc}" if desc else ""
+            await message.reply(f"`{key_input}` = `{val}`{suffix}")
+        else:
+            raise UserInputError(
+                user_message=(
+                    f"❓ Настройка `{key_input}` не найдена.\n"
+                    "`!config` — показать все доступные настройки."
+                )
+            )
+        return
+
+    # Режим 3: установить значение
+    if not hasattr(config, key_input):
+        raise UserInputError(
+            user_message=(
+                f"❓ Настройка `{key_input}` не найдена.\n"
+                "`!config` — показать все доступные настройки."
+            )
+        )
+
+    ok = config.update_setting(key_input, value_str)
+    if ok:
+        new_val = _render_config_value(key_input)
+        await message.reply(f"✅ `{key_input}` = `{new_val}`")
+    else:
+        await message.reply(f"❌ Не удалось обновить `{key_input}`. Проверь значение.")
 
 
 ##############################################################################
@@ -7877,6 +8036,138 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
 
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_ask_error", error=str(exc))
+        await msg.edit(f"❌ Ошибка: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# !rewrite — переписывание / улучшение текста через LLM
+# ---------------------------------------------------------------------------
+
+# Поддерживаемые режимы и их промпты
+_REWRITE_MODES: dict[str, tuple[str, str]] = {
+    "formal": (
+        "formal",
+        "Перепиши текст в официальном / формальном стиле. "
+        "Сохраняй смысл, избегай сленга и разговорных выражений.",
+    ),
+    "casual": (
+        "casual",
+        "Перепиши текст в разговорном / неформальном стиле. "
+        "Можно использовать живой язык, сокращения, избегать бюрократических оборотов.",
+    ),
+    "short": (
+        "short",
+        "Сократи текст: убери воду, оставь только суть. "
+        "Итог должен быть заметно короче оригинала.",
+    ),
+    # режим по умолчанию — ключ пустая строка
+    "": (
+        "default",
+        "Улучши текст: сделай его чётче, читабельнее и грамотнее. "
+        "Исправь стиль и формулировки, сохрани смысл и язык оригинала.",
+    ),
+}
+
+
+async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !rewrite [режим] [текст] — переписывает текст через LLM.
+
+    Режимы:
+      !rewrite <текст>          — улучшить / переписать
+      !rewrite formal <текст>   — формальный стиль
+      !rewrite casual <текст>   — разговорный стиль
+      !rewrite short <текст>    — сократить
+
+    Также работает в reply — если текст не указан, берётся из ответного сообщения.
+    """
+    args = bot._get_command_args(message).strip()
+
+    # Определяем режим — первое слово, если оно совпадает с известным
+    mode_key = ""
+    text_to_rewrite = ""
+
+    if args:
+        first_word = args.split()[0].lower()
+        if first_word in _REWRITE_MODES:
+            mode_key = first_word
+            text_to_rewrite = args[len(first_word):].strip()
+        else:
+            text_to_rewrite = args
+
+    # Если текст не передан аргументом — пробуем reply
+    if not text_to_rewrite:
+        replied = message.reply_to_message
+        if replied is None:
+            raise UserInputError(
+                user_message=(
+                    "✏️ Использование:
+"
+                    "- `!rewrite <текст>` — улучшить текст
+"
+                    "- `!rewrite formal <текст>` — формальный стиль
+"
+                    "- `!rewrite casual <текст>` — разговорный стиль
+"
+                    "- `!rewrite short <текст>` — сократить
+
+"
+                    "Или ответь на сообщение командой `!rewrite [режим]`."
+                )
+            )
+        text_to_rewrite = (replied.text or replied.caption or "").strip()
+        if not text_to_rewrite:
+            raise UserInputError(
+                user_message="❌ Исходное сообщение не содержит текста."
+            )
+
+    _mode_label, mode_instruction = _REWRITE_MODES[mode_key]
+
+    # Системный промпт
+    system_prompt = (
+        "Ты — Краб, персональный AI-ассистент. "
+        "Твоя задача — редактировать тексты по инструкции пользователя. "
+        "Возвращай ТОЛЬКО переписанный текст без пояснений, заголовков и лишних слов. "
+        "Сохраняй язык оригинала (если текст на русском — отвечай по-русски, "
+        "если на английском — по-английски)."
+    )
+
+    # Промпт = инструкция + текст
+    prompt = f"{mode_instruction}
+
+Текст:
+"""
+{text_to_rewrite}
+""""
+
+    # Изолированная сессия, чтобы не загрязнять основной контекст чата
+    session_id = f"rewrite_{message.chat.id}"
+
+    msg = await message.reply("✏️ Переписываю...")
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            system_prompt=system_prompt,
+            disable_tools=True,  # только текстовый ответ, tool_calls не нужны
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+        if not result:
+            await msg.edit("❌ AI вернул пустой ответ.")
+            return
+
+        # Разбиваем длинный ответ на куски для Telegram
+        parts = _split_text_for_telegram(result)
+        await msg.edit(parts[0])
+        for part in parts[1:]:
+            await message.reply(part)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_rewrite_error", error=str(exc))
         await msg.edit(f"❌ Ошибка: {exc}")
 
 
@@ -15456,3 +15747,117 @@ async def handle_backup(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_backup_error", error=str(exc))
         await status_msg.edit(f"❌ Ошибка создания резервной копии: {str(exc)[:300]}")
+
+
+# ---------------------------------------------------------------------------
+# !explain — объяснение кода через AI
+# ---------------------------------------------------------------------------
+
+_EXPLAIN_PROMPT = (
+    "Объясни этот код простым языком. Что он делает, зачем, как работает."
+)
+
+
+async def handle_explain(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Объяснение фрагмента кода через AI.
+
+    Форматы:
+      !explain <код>   — объясняет переданный код
+      !explain         — reply на сообщение с кодом → объясняет код из reply
+    """
+    raw_args = bot._get_command_args(message).strip()
+
+    # Получаем код: из аргументов или из reply-сообщения
+    code = raw_args
+    if not code:
+        replied = getattr(message, "reply_to_message", None)
+        if replied:
+            code = (replied.text or replied.caption or "").strip()
+
+    if not code:
+        raise UserInputError(
+            user_message=(
+                "💡 Пришли код для объяснения:\n"
+                "`!explain <код>` — вставь код напрямую\n"
+                "Или ответь на сообщение с кодом командой `!explain`"
+            )
+        )
+
+    # Изолированная сессия — не смешиваем с основным диалогом чата
+    session_id = f"explain_{message.chat.id}"
+
+    msg = await message.reply("💡 **Анализирую код...**")
+
+    prompt = f"{_EXPLAIN_PROMPT}\n\n```\n{code}\n```"
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=True,
+            max_output_tokens=1024,
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+
+        if not result:
+            await msg.edit("❌ AI не смог объяснить этот код.")
+            return
+
+        # Пагинация при длинном ответе
+        header = "💡 **Объяснение кода**\n\n"
+        parts = _split_text_for_telegram(header + result)
+        total = len(parts)
+
+        first = parts[0]
+        if total > 1:
+            first += f"\n\n_(часть 1/{total})_"
+        await msg.edit(first)
+
+        for i, part in enumerate(parts[1:], start=2):
+            suffix = f"\n\n_(часть {i}/{total})_" if total > 2 else ""
+            await message.reply(part + suffix)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_explain_error", error=str(exc))
+        await msg.edit(f"❌ Ошибка объяснения: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# handle_id — показать ID текущего чата, себя, сообщения (если reply)
+# ---------------------------------------------------------------------------
+
+
+async def handle_id(bot: "KraabUserbot", message: Message) -> None:
+    """Показать ID текущего чата, своего аккаунта и (если reply) сообщения и автора.
+
+    Синтаксис:
+      !id         — chat_id + свой user_id
+      !id в reply — chat_id + свой user_id + message_id + user_id автора
+    """
+    # ID текущего чата
+    chat_id = message.chat.id
+
+    # Свой user_id
+    me = await bot.client.get_me()
+    my_user_id = me.id
+
+    lines: list[str] = [
+        "🆔 IDs",
+        f"Chat: `{chat_id}`",
+        f"User: `{my_user_id}`",
+    ]
+
+    # Если команда отправлена в reply — добавляем message_id и user_id автора
+    reply = message.reply_to_message
+    if reply is not None:
+        lines.append(f"Message: `{reply.id}`")
+        # Автор может быть user или анонимный канал/бот
+        reply_from = reply.from_user
+        if reply_from is not None:
+            lines.append(f"Author: `{reply_from.id}`")
+
+    await message.reply("\n".join(lines))
