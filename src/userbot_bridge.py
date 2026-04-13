@@ -68,6 +68,8 @@ from .handlers import (
     handle_blocked,
     handle_b64,
     handle_bookmark,
+    handle_decrypt,
+    handle_encrypt,
     handle_browser,
     handle_budget,
     handle_calc,
@@ -174,6 +176,7 @@ from .handlers import (
     handle_unpin,
     handle_uptime,
     handle_urban,
+    handle_version,
     handle_profile,
     handle_voice,
     handle_watch,
@@ -185,6 +188,7 @@ from .handlers import (
     handle_web,
     handle_welcome,
     handle_who,
+    handle_whois,
     handle_write,
     handle_time,
     handle_yt,
@@ -706,6 +710,12 @@ class KraabUserbot(
             await run_cmd(handle_who, m)
 
         @self.client.on_message(
+            filters.command("whois", prefixes=prefixes) & _make_command_filter("whois"), group=-1
+        )
+        async def wrap_whois(c, m):
+            await run_cmd(handle_whois, m)
+
+        @self.client.on_message(
             filters.command("costs", prefixes=prefixes) & _make_command_filter("costs"), group=-1
         )
         async def wrap_costs(c, m):
@@ -760,6 +770,13 @@ class KraabUserbot(
         )
         async def wrap_uptime(c, m):
             await run_cmd(handle_uptime, m)
+
+        @self.client.on_message(
+            filters.command("version", prefixes=prefixes) & _make_command_filter("version"),
+            group=-1,
+        )
+        async def wrap_version(c, m):
+            await run_cmd(handle_version, m)
 
         @self.client.on_message(
             filters.command("panel", prefixes=prefixes) & _make_command_filter("panel"), group=-1
@@ -1214,6 +1231,18 @@ class KraabUserbot(
         )
         async def wrap_b64(c, m):
             await run_cmd(handle_b64, m)
+
+        @self.client.on_message(
+            filters.command("encrypt", prefixes=prefixes) & _make_command_filter("encrypt"), group=-1
+        )
+        async def wrap_encrypt(c, m):
+            await run_cmd(handle_encrypt, m)
+
+        @self.client.on_message(
+            filters.command("decrypt", prefixes=prefixes) & _make_command_filter("decrypt"), group=-1
+        )
+        async def wrap_decrypt(c, m):
+            await run_cmd(handle_decrypt, m)
 
         @self.client.on_message(
             filters.command("define", prefixes=prefixes) & _make_command_filter("define"), group=-1

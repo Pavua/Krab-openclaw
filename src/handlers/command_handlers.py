@@ -2642,6 +2642,85 @@ async def handle_panel(bot: "KraabUserbot", message: Message) -> None:
     await handle_status(bot, message)
 
 
+async def handle_version(bot: "KraabUserbot", message: Message) -> None:
+    """Информация о версии Краба: git commit, branch, Python, Pyrogram, OpenClaw."""
+    import platform
+
+    del bot
+
+    lines: list[str] = ["🦀 **Krab Version**", "─────"]
+
+    # Git commit hash (короткий 7 символов)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(pathlib.Path(__file__).parent.parent.parent),
+        )
+        commit = result.stdout.strip() or "unknown"
+    except Exception:
+        commit = "unknown"
+    lines.append(f"Commit: `{commit}`")
+
+    # Текущая ветка
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(pathlib.Path(__file__).parent.parent.parent),
+        )
+        branch = result.stdout.strip() or "unknown"
+    except Exception:
+        branch = "unknown"
+    lines.append(f"Branch: `{branch}`")
+
+    # Дата последнего коммита (только дата YYYY-MM-DD)
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%ci"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(pathlib.Path(__file__).parent.parent.parent),
+        )
+        commit_date = result.stdout.strip()[:10] if result.stdout.strip() else "unknown"
+    except Exception:
+        commit_date = "unknown"
+    lines.append(f"Date: `{commit_date}`")
+
+    # Python версия
+    py_ver = platform.python_version()
+    lines.append(f"Python: `{py_ver}`")
+
+    # Pyrogram версия
+    try:
+        import pyrogram
+        pyro_ver = pyrogram.__version__
+    except Exception:
+        pyro_ver = "unknown"
+    lines.append(f"Pyrogram: `{pyro_ver}`")
+
+    # OpenClaw версия через CLI
+    try:
+        result = subprocess.run(
+            ["openclaw", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        oc_raw = (result.stdout.strip() or result.stderr.strip()).splitlines()
+        oc_ver = oc_raw[0] if oc_raw else "unknown"
+    except Exception:
+        oc_ver = "unknown"
+    lines.append(f"OpenClaw: `{oc_ver}`")
+
+    await message.reply("\n".join(lines))
+
+
 async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
     """
     Базовое управление macOS из owner/full-контура.
@@ -8491,6 +8570,92 @@ async def handle_b64(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# !encrypt / !decrypt — симметричное шифрование (XOR + SHA-256 + Base64)
+# ---------------------------------------------------------------------------
+
+import hashlib as _hashlib  # noqa: E402
+
+
+def _derive_key(password: str) -> bytes:
+    """Выводит 32-байтный ключ из пароля через SHA-256."""
+    return _hashlib.sha256(password.encode("utf-8")).digest()
+
+
+def _xor_crypt(data: bytes, key: bytes) -> bytes:
+    """XOR-шифрование/дешифрование с циклическим ключом."""
+    key_len = len(key)
+    return bytes(b ^ key[i % key_len] for i, b in enumerate(data))
+
+
+def encrypt_text(password: str, text: str) -> str:
+    """Шифрует текст паролем, возвращает Base64-строку."""
+    key = _derive_key(password)
+    ciphertext = _xor_crypt(text.encode("utf-8"), key)
+    return _base64.b64encode(ciphertext).decode("ascii")
+
+
+def decrypt_text(password: str, b64_cipher: str) -> str:
+    """Дешифрует Base64-шифртекст паролем, возвращает исходный текст."""
+    key = _derive_key(password)
+    # мягкий паддинг
+    stripped = b64_cipher.strip().replace("\n", "").replace(" ", "")
+    padded = stripped + "=" * ((4 - len(stripped) % 4) % 4)
+    ciphertext = _base64.b64decode(padded)
+    return _xor_crypt(ciphertext, key).decode("utf-8")
+
+
+async def handle_encrypt(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда !encrypt — шифрование текста паролем.
+
+    Формат: !encrypt <password> <текст>
+    Возвращает зашифрованный Base64-блоб.
+    """
+    args = bot._get_command_args(message).strip()
+    parts = args.split(" ", 1)
+    if len(parts) < 2 or not parts[0] or not parts[1].strip():
+        raise UserInputError(
+            user_message=(
+                "🔒 **Encrypt — справка**\n\n"
+                "`!encrypt <пароль> <текст>` — зашифровать текст\n"
+                "`!decrypt <пароль> <base64>` — расшифровать\n\n"
+                "Алгоритм: XOR + SHA-256(пароль) + Base64"
+            )
+        )
+    password, plaintext = parts[0], parts[1].strip()
+    result = encrypt_text(password, plaintext)
+    await message.reply(f"🔒 **Encrypted:**\n`{result}`")
+
+
+async def handle_decrypt(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Команда !decrypt — расшифровка текста паролем.
+
+    Формат: !decrypt <password> <base64>
+    Возвращает расшифрованный текст.
+    """
+    args = bot._get_command_args(message).strip()
+    parts = args.split(" ", 1)
+    if len(parts) < 2 or not parts[0] or not parts[1].strip():
+        raise UserInputError(
+            user_message=(
+                "🔓 **Decrypt — справка**\n\n"
+                "`!decrypt <пароль> <base64>` — расшифровать\n"
+                "`!encrypt <пароль> <текст>` — зашифровать\n\n"
+                "Алгоритм: XOR + SHA-256(пароль) + Base64"
+            )
+        )
+    password, b64_cipher = parts[0], parts[1].strip()
+    try:
+        result = decrypt_text(password, b64_cipher)
+    except Exception as exc:  # noqa: BLE001
+        raise UserInputError(
+            user_message=f"❌ Не удалось расшифровать: {exc}\n\nПроверь пароль и корректность Base64."
+        ) from exc
+    await message.reply(f"🔓 **Decrypted:**\n`{result}`")
+
+
+# ---------------------------------------------------------------------------
 # Вспомогательные функции для сетевых утилит
 # ---------------------------------------------------------------------------
 
@@ -13122,3 +13287,158 @@ def _read_log_tail_subprocess(log_path: pathlib.Path, n: int) -> list[str]:
     except (subprocess.TimeoutExpired, OSError):
         # Fallback: читаем весь файл и берём хвост
         return log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+
+
+# ---------------------------------------------------------------------------
+# WHOIS lookup
+# ---------------------------------------------------------------------------
+
+# Поля, которые извлекаем из whois-вывода: (ключ_результата, [варианты_regex])
+_WHOIS_FIELD_PATTERNS: list[tuple[str, list[str]]] = [
+    ("registrar", [r"Registrar:\s*(.+)", r"registrar:\s*(.+)"]),
+    ("created", [
+        r"Creation Date:\s*(.+)",
+        r"Created Date:\s*(.+)",
+        r"created:\s*(.+)",
+        r"Domain Registration Date:\s*(.+)",
+    ]),
+    ("expires", [
+        r"Registry Expiry Date:\s*(.+)",
+        r"Expir(?:y|ation) Date:\s*(.+)",
+        r"expires:\s*(.+)",
+        r"paid-till:\s*(.+)",
+    ]),
+    ("nameservers", [
+        r"Name Server:\s*(.+)",
+        r"nserver:\s*(.+)",
+        r"Nameservers:\s*(.+)",
+    ]),
+]
+
+
+def _parse_whois_output(raw: str) -> dict[str, str | list[str]]:
+    """
+    Извлекает ключевые WHOIS-поля из сырого вывода.
+
+    Возвращает словарь с полями: registrar, created, expires, nameservers.
+    Nameservers — список строк.
+    """
+    result: dict[str, str | list[str]] = {}
+    nameservers: list[str] = []
+
+    for field_key, patterns in _WHOIS_FIELD_PATTERNS:
+        if field_key == "nameservers":
+            # Собираем все уникальные NS-записи
+            for pattern in patterns:
+                for m in re.finditer(pattern, raw, re.IGNORECASE | re.MULTILINE):
+                    ns = m.group(1).strip().lower().rstrip(".")
+                    if ns and ns not in nameservers:
+                        nameservers.append(ns)
+        else:
+            # Берём первое совпадение
+            if field_key in result:
+                continue
+            for pattern in patterns:
+                m = re.search(pattern, raw, re.IGNORECASE | re.MULTILINE)
+                if m:
+                    value = m.group(1).strip()
+                    # Обрезаем до даты: берём только первые 10 символов ISO-даты
+                    if field_key in ("created", "expires") and "T" in value:
+                        value = value.split("T")[0]
+                    elif field_key in ("created", "expires"):
+                        # Некоторые реестры пишут дату с пробелом
+                        value = value.split(" ")[0]
+                    result[field_key] = value
+                    break
+
+    result["nameservers"] = nameservers  # type: ignore[assignment]
+    return result
+
+
+async def handle_whois(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !whois <домен> — WHOIS lookup: регистратор, дата создания, истечения, NS.
+
+    Использует системную утилиту whois (macOS built-in).
+    Парсит вывод для ключевых полей.
+    """
+    from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+    domain = bot._get_command_args(message).strip().lower()
+
+    # Убираем протокол и путь если пользователь вставил URL
+    domain = re.sub(r"^https?://", "", domain)
+    domain = domain.split("/")[0].strip()
+
+    if not domain:
+        raise UserInputError(
+            user_message=(
+                "🔍 **!whois — WHOIS lookup**\n\n"
+                "`!whois <домен>` — информация о домене\n\n"
+                "_Пример: `!whois example.com`_"
+            )
+        )
+
+    status_msg = await message.reply(f"🔍 WHOIS: `{domain}`...")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "whois",
+            domain,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=clean_subprocess_env(),
+        )
+        try:
+            stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=20.0)
+        except asyncio.TimeoutError:
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+            await status_msg.edit(f"❌ WHOIS timeout для `{domain}` (>20 сек).")
+            return
+    except FileNotFoundError:
+        await status_msg.edit("❌ Утилита `whois` не найдена на этом хосте.")
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_whois_exec_error", domain=domain, error=str(exc))
+        await status_msg.edit(f"❌ Ошибка запуска whois: {exc}")
+        return
+
+    raw = stdout.decode("utf-8", errors="replace")
+
+    # Некоторые домены возвращают «No match» или аналогичное
+    _not_found_signals = (
+        "no match",
+        "not found",
+        "no entries found",
+        "object does not exist",
+        "no data found",
+        "this query returned 0 objects",
+        "domain not found",
+    )
+    raw_lower = raw.lower()
+    if any(sig in raw_lower for sig in _not_found_signals) and len(raw) < 500:
+        await status_msg.edit(f"❌ Домен `{domain}` не найден в WHOIS.")
+        return
+
+    fields = _parse_whois_output(raw)
+
+    registrar = fields.get("registrar") or "—"
+    created = fields.get("created") or "—"
+    expires = fields.get("expires") or "—"
+    ns_list: list[str] = fields.get("nameservers", [])  # type: ignore[assignment]
+    nameservers_str = ", ".join(ns_list) if ns_list else "—"
+
+    reply = (
+        f"🔍 WHOIS: `{domain}`\n"
+        f"─────\n"
+        f"Registrar: {registrar}\n"
+        f"Created: {created}\n"
+        f"Expires: {expires}\n"
+        f"Nameservers: {nameservers_str}"
+    )
+
+    await status_msg.edit(reply)
