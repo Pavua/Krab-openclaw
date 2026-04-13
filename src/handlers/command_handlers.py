@@ -32,7 +32,6 @@ from ..core.access_control import (
     get_effective_owner_label,
     load_acl_runtime_state,
     normalize_subject,
-    resolve_access_profile,
     update_acl_subject,
 )
 from ..core.chat_ban_cache import chat_ban_cache
