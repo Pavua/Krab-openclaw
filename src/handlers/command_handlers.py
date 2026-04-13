@@ -10675,6 +10675,264 @@ async def handle_spam(bot: "KraabUserbot", message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
+# !eval — безопасный eval Python-выражений через AST (без statements)
+# ---------------------------------------------------------------------------
+
+# Типы AST-узлов, разрешённые в !eval
+_EVAL_ALLOWED_NODES = (
+    _ast.Expression,
+    _ast.Constant,
+    _ast.BinOp,
+    _ast.UnaryOp,
+    _ast.BoolOp,
+    _ast.Compare,
+    _ast.IfExp,
+    _ast.Call,
+    _ast.Name,
+    _ast.Attribute,
+    _ast.Subscript,
+    _ast.Slice,
+    _ast.List,
+    _ast.Tuple,
+    _ast.Dict,
+    _ast.Set,
+    _ast.ListComp,
+    _ast.SetComp,
+    _ast.DictComp,
+    _ast.GeneratorExp,
+    _ast.comprehension,
+    _ast.Add,
+    _ast.Sub,
+    _ast.Mult,
+    _ast.Div,
+    _ast.FloorDiv,
+    _ast.Mod,
+    _ast.Pow,
+    _ast.BitAnd,
+    _ast.BitOr,
+    _ast.BitXor,
+    _ast.LShift,
+    _ast.RShift,
+    _ast.Invert,
+    _ast.Not,
+    _ast.UAdd,
+    _ast.USub,
+    _ast.And,
+    _ast.Or,
+    _ast.Eq,
+    _ast.NotEq,
+    _ast.Lt,
+    _ast.LtE,
+    _ast.Gt,
+    _ast.GtE,
+    _ast.Is,
+    _ast.IsNot,
+    _ast.In,
+    _ast.NotIn,
+    _ast.Load,
+    _ast.Store,
+    _ast.Del,
+)
+
+# Запрещённые имена в !eval
+_EVAL_FORBIDDEN_NAMES = frozenset({
+    "import",
+    "exec",
+    "eval",
+    "open",
+    "__builtins__",
+    "__import__",
+    "__loader__",
+    "__spec__",
+    "__build_class__",
+    "compile",
+    "globals",
+    "locals",
+    "vars",
+    "dir",
+    "delattr",
+    "setattr",
+    "getattr",
+    "breakpoint",
+    "input",
+    "print",
+})
+
+# Безопасное пространство имён для !eval
+_EVAL_NAMESPACE: dict[str, object] = {
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "len": len,
+    "sorted": sorted,
+    "reversed": reversed,
+    "enumerate": enumerate,
+    "zip": zip,
+    "map": map,
+    "filter": filter,
+    "list": list,
+    "tuple": tuple,
+    "set": set,
+    "dict": dict,
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "complex": complex,
+    "bytes": bytes,
+    "bytearray": bytearray,
+    "range": range,
+    "type": type,
+    "isinstance": isinstance,
+    "issubclass": issubclass,
+    "repr": repr,
+    "hash": hash,
+    "hex": hex,
+    "oct": oct,
+    "bin": bin,
+    "ord": ord,
+    "chr": chr,
+    "divmod": divmod,
+    "pow": pow,
+    "all": all,
+    "any": any,
+    # math-функции
+    "sqrt": _math.sqrt,
+    "sin": _math.sin,
+    "cos": _math.cos,
+    "tan": _math.tan,
+    "log": _math.log,
+    "log2": _math.log2,
+    "log10": _math.log10,
+    "ceil": _math.ceil,
+    "floor": _math.floor,
+    "trunc": _math.trunc,
+    # константы
+    "pi": _math.pi,
+    "e": _math.e,
+    "inf": _math.inf,
+    "nan": _math.nan,
+    "tau": _math.tau,
+    "True": True,
+    "False": False,
+    "None": None,
+}
+
+
+def _eval_check_node(node: _ast.AST) -> None:
+    """Рекурсивно проверяет AST-узел на допустимость для !eval."""
+    if not isinstance(node, _EVAL_ALLOWED_NODES):
+        raise UserInputError(
+            user_message=f"\u274c Недопустимая конструкция: `{type(node).__name__}`"
+        )
+    # Запрещаем __dunder__ атрибуты
+    if isinstance(node, _ast.Attribute):
+        if node.attr.startswith("__"):
+            raise UserInputError(user_message=f"\u274c Доступ к `{node.attr}` запрещён.")
+    # Запрещённые имена и dunder-переменные
+    if isinstance(node, _ast.Name):
+        if node.id in _EVAL_FORBIDDEN_NAMES or node.id.startswith("__"):
+            raise UserInputError(user_message=f"\u274c Имя `{node.id}` запрещено.")
+    for child in _ast.iter_child_nodes(node):
+        _eval_check_node(child)
+
+
+def safe_eval(expression: str) -> object:
+    """
+    Безопасно вычисляет Python-выражение через AST + ограниченный namespace.
+
+    Поддерживает: literals, арифметику, списки, строки, bool, comprehensions.
+    Не поддерживает: statements (import/def/class/print/exec/eval/open).
+    Timeout — на уровне handle_eval (asyncio, 2 сек).
+    """
+    expression = expression.strip()
+    if not expression:
+        raise UserInputError(user_message="\u274c Пустое выражение.")
+    if len(expression) > 500:
+        raise UserInputError(user_message="\u274c Выражение слишком длинное (макс. 500 символов).")
+
+    # Парсим как expression (не statement)
+    try:
+        tree = compile(expression, "<eval>", "eval", _ast.PyCF_ONLY_AST)
+    except SyntaxError as exc:
+        raise UserInputError(user_message=f"\u274c Синтаксическая ошибка: {exc.msg}")
+
+    # Проверяем безопасность всех AST-узлов
+    _eval_check_node(tree)
+
+    # Вычисляем через eval с пустыми builtins + whitelisted namespace
+    try:
+        result = eval(  # noqa: S307
+            compile(tree, "<eval>", "eval"),
+            {"__builtins__": {}},
+            _EVAL_NAMESPACE,
+        )
+    except ZeroDivisionError:
+        raise UserInputError(user_message="\u274c Деление на ноль.")
+    except (ValueError, TypeError, ArithmeticError) as exc:
+        raise UserInputError(user_message=f"\u274c Ошибка вычисления: {exc}")
+    except MemoryError:
+        raise UserInputError(user_message="\u274c Результат слишком большой (MemoryError).")
+    except Exception as exc:  # noqa: BLE001
+        raise UserInputError(user_message=f"\u274c Ошибка: {exc}")
+
+    return result
+
+
+async def handle_eval(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !eval <выражение> — безопасный eval Python-выражений.
+
+    Отличие от !calc: поддерживает любые Python-expressions (строки, списки, bool).
+    Отличие от !run: только expressions, без statements (import/def/class запрещены).
+
+    Примеры:
+      !eval 2**100                     → большое число
+      !eval len("hello")               → 5
+      !eval sorted([3,1,2])            → [1, 2, 3]
+      !eval [x**2 for x in range(5)]  → [0, 1, 4, 9, 16]
+
+    Timeout: 2 секунды.
+    """
+    expr = bot._get_command_args(message).strip()
+    if not expr:
+        raise UserInputError(
+            user_message=(
+                "\U0001f40d **!eval — Python expressions**\n\n"
+                "Использование: `!eval <выражение>`\n\n"
+                "Примеры:\n"
+                "`!eval 2**100` → большое число\n"
+                '`!eval len("hello")` → `5`\n'
+                "`!eval sorted([3,1,2])` → `[1, 2, 3]`\n"
+                "`!eval [x**2 for x in range(5)]` → `[0, 1, 4, 9, 16]`\n\n"
+                "Только expressions. Statements (import, def, class) запрещены.\n"
+                "Timeout: 2 секунды."
+            )
+        )
+
+    # Выполняем с таймаутом 2 секунды через executor (блокирующая операция)
+    loop = asyncio.get_event_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, safe_eval, expr),
+            timeout=2.0,
+        )
+    except asyncio.TimeoutError:
+        await message.reply("\u23f1 Timeout: вычисление прервано (>2 сек).")
+        return
+
+    # Форматируем результат
+    result_repr = repr(result)
+    # Обрезаем слишком длинные результаты
+    if len(result_repr) > 3000:
+        result_repr = result_repr[:3000] + "\u2026"
+
+    await message.reply(f"= {result_repr}")
+
+
+# ---------------------------------------------------------------------------
 # !run — выполнение Python-выражений (owner-only, subprocess-изолированно)
 # ---------------------------------------------------------------------------
 

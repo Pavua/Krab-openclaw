@@ -70,6 +70,7 @@ from .handlers import (
     handle_bookmark,
     handle_decrypt,
     handle_encrypt,
+    handle_eval,
     handle_browser,
     handle_budget,
     handle_calc,
@@ -1227,6 +1228,12 @@ class KraabUserbot(
             await run_cmd(handle_calc, m)
 
         @self.client.on_message(
+            filters.command("eval", prefixes=prefixes) & _make_command_filter("eval"), group=-1
+        )
+        async def wrap_eval(c, m):
+            await run_cmd(handle_eval, m)
+
+                @self.client.on_message(
             filters.command("b64", prefixes=prefixes) & _make_command_filter("b64"), group=-1
         )
         async def wrap_b64(c, m):
