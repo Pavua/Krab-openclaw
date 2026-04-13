@@ -18,8 +18,9 @@
   modes       — голос, тишина, фильтры
   users       — пользователи и доступ
   scheduler   — планировщик и напоминания
-  system      — macOS, браузер, файлы
-  dev         — Dev / AI CLI
+  system      — macOS, браузер, файлы, шифрование
+  files       — медиафайлы (фото/видео/документ)
+  dev         — Dev / AI CLI, отладка, eval
 """
 
 from __future__ import annotations
@@ -138,6 +139,12 @@ _COMMANDS: list[CommandInfo] = [
         description="Веб-поиск Brave",
         usage="!search <запрос>",
         aliases=["s"],
+    ),
+    CommandInfo(
+        name="explain",
+        category="ai",
+        description="Объяснение кода простым языком через AI",
+        usage="!explain <код>  или reply на сообщение с кодом",
     ),
     CommandInfo(
         name="news",
@@ -674,6 +681,383 @@ _COMMANDS: list[CommandInfo] = [
         ),
         owner_only=True,
     ),
+
+    # ── users (дополнительные) ───────────────────────────────────────────────
+    CommandInfo(
+        name="scope",
+        category="users",
+        description="Управление ACL-правами: просмотр уровня доступа, grant/revoke",
+        usage="!scope | !scope grant <user_id> full|partial | !scope revoke <user_id> | !scope list",
+    ),
+    CommandInfo(
+        name="profile",
+        category="users",
+        description="Профиль пользователя Telegram: аватар, статистика, биография",
+        usage="!profile [@user|reply]",
+    ),
+    CommandInfo(
+        name="contacts",
+        category="users",
+        description="Список контактов Telegram (поиск, статистика)",
+        usage="!contacts [поиск]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="invite",
+        category="users",
+        description="Пригласить пользователя в группу/канал",
+        usage="!invite <@user|id> [chat_id]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="members",
+        category="users",
+        description="Список участников чата с фильтрацией",
+        usage="!members [N] [admins|bots|recent]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="whois",
+        category="users",
+        description="WHOIS-поиск домена или IP-адреса через AI",
+        usage="!whois <domain|IP>",
+    ),
+
+    # ── management (дополнительные) ──────────────────────────────────────────
+    CommandInfo(
+        name="mark",
+        category="management",
+        description="Пометить сообщение тегом для быстрого поиска",
+        usage="!mark [tag]  (reply на сообщение)",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="chatmute",
+        category="management",
+        description="Замутить уведомления чата на N минут (0 = снять мут)",
+        usage="!chatmute [мин]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="slowmode",
+        category="management",
+        description="Включить slow mode в группе (задержка в секундах)",
+        usage="!slowmode <сек>  (0 = выключить)",
+        owner_only=True,
+    ),
+
+    # ── modes (дополнительные) ───────────────────────────────────────────────
+    CommandInfo(
+        name="afk",
+        category="modes",
+        description="Режим Away From Keyboard: авто-ответ при упоминании",
+        usage="!afk [сообщение] | !afk off",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="typing",
+        category="modes",
+        description="Имитировать typing action в чате",
+        usage="!typing [сек]",
+        owner_only=True,
+    ),
+
+    # ── notes (дополнительные) ───────────────────────────────────────────────
+    CommandInfo(
+        name="todo",
+        category="notes",
+        description="Список задач: добавить, показать, отметить выполненными",
+        usage="!todo [add <текст>|list|done <N>|clear]",
+    ),
+    CommandInfo(
+        name="quote",
+        category="notes",
+        description="Сохранить/показать цитату (reply на сообщение)",
+        usage="!quote [save|list|random|del <id>]",
+    ),
+    CommandInfo(
+        name="snippet",
+        category="notes",
+        description="Сниппеты кода: сохранить и отправить с подсветкой синтаксиса",
+        usage="!snippet save <name> <lang> <code> | !snippet <name> | !snippet list",
+        owner_only=True,
+    ),
+
+    # ── ai (дополнительные) ──────────────────────────────────────────────────
+    CommandInfo(
+        name="urban",
+        category="ai",
+        description="Определение слова из Urban Dictionary через AI + web_search",
+        usage="!urban <слово>",
+    ),
+    CommandInfo(
+        name="define",
+        category="ai",
+        description="Определение слова из словаря (через AI)",
+        usage="!define <слово>",
+    ),
+    CommandInfo(
+        name="poll",
+        category="ai",
+        description="Создать опрос в чате",
+        usage="!poll <вопрос> | <вариант1> | <вариант2> ...",
+    ),
+    CommandInfo(
+        name="quiz",
+        category="ai",
+        description="AI-генерированная викторина по теме",
+        usage="!quiz <тема>",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="tts",
+        category="ai",
+        description="Text-to-speech: преобразовать текст в голосовое сообщение",
+        usage="!tts <текст>  или reply на сообщение",
+        owner_only=True,
+    ),
+
+    # ── system (дополнительные) ──────────────────────────────────────────────
+    CommandInfo(
+        name="version",
+        category="system",
+        description="Версия Краба: git commit, branch, Python, Pyrogram, OpenClaw",
+        usage="!version",
+    ),
+    CommandInfo(
+        name="uptime",
+        category="system",
+        description="Аптайм Краба и системный uptime macOS",
+        usage="!uptime",
+    ),
+    CommandInfo(
+        name="log",
+        category="system",
+        description="Последние N строк лог-файла Краба",
+        usage="!log [N] [error|warn|info]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="sticker",
+        category="system",
+        description="Информация о стикере (reply): pack, emoji, file_id",
+        usage="!sticker  (reply на стикер)",
+    ),
+
+    # ── dev (дополнительные) ─────────────────────────────────────────────────
+    CommandInfo(
+        name="debug",
+        category="dev",
+        description="Отладочная сводка: tasks, sessions, GC, last error (owner-only)",
+        usage="!debug [sessions|tasks|gc]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="backup",
+        category="dev",
+        description="Экспорт всех persistent данных Краба в ZIP-архив",
+        usage="!backup [list]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="eval",
+        category="dev",
+        description="Выполнить произвольный Python-код (owner-only)",
+        usage="!eval <python код>",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="run",
+        category="dev",
+        description="Запустить shell-скрипт или команду (owner-only)",
+        usage="!run <команда>",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="grep",
+        category="dev",
+        description="Поиск паттерна по тексту или reply (regex поддерживается)",
+        usage="!grep <паттерн> [текст]  или reply на сообщение",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="json",
+        category="dev",
+        description="Форматировать/валидировать JSON",
+        usage="!json <json-строка>  или reply на сообщение",
+    ),
+    CommandInfo(
+        name="yt",
+        category="dev",
+        description="Информация о YouTube-видео или плейлисте",
+        usage="!yt <url|id>",
+    ),
+
+    # ── basic (дополнительные) ───────────────────────────────────────────────
+    CommandInfo(
+        name="calc",
+        category="basic",
+        description="Калькулятор: математические выражения (поддерживает функции)",
+        usage="!calc <выражение>",
+    ),
+    CommandInfo(
+        name="rand",
+        category="basic",
+        description="Случайное число, выбор из списка или перемешивание",
+        usage="!rand [N] | !rand <a> <b> | !rand pick item1 item2 ...",
+    ),
+    CommandInfo(
+        name="dice",
+        category="basic",
+        description="Бросок кубика(ов): стандартные нотации (2d6, d20)",
+        usage="!dice [NdM]",
+    ),
+    CommandInfo(
+        name="time",
+        category="basic",
+        description="Текущее время в разных часовых поясах",
+        usage="!time [город|timezone]",
+    ),
+    CommandInfo(
+        name="len",
+        category="basic",
+        description="Длина текста в символах, словах и байтах",
+        usage="!len <текст>  или reply на сообщение",
+    ),
+    CommandInfo(
+        name="hash",
+        category="basic",
+        description="Хэш текста или файла (MD5, SHA1, SHA256, SHA512)",
+        usage="!hash [алгоритм] <текст>  или reply на файл",
+    ),
+    CommandInfo(
+        name="b64",
+        category="basic",
+        description="Base64 кодирование/декодирование",
+        usage="!b64 encode|decode <текст>",
+    ),
+    CommandInfo(
+        name="ip",
+        category="basic",
+        description="Геолокация IP-адреса и ASN-информация",
+        usage="!ip <IP-адрес>",
+    ),
+    CommandInfo(
+        name="dns",
+        category="basic",
+        description="DNS-запрос: A, AAAA, MX, TXT, CNAME записи",
+        usage="!dns <домен> [тип]",
+    ),
+    CommandInfo(
+        name="ping",
+        category="basic",
+        description="Ping хоста (ICMP или TCP)",
+        usage="!ping <host> [порт]",
+    ),
+    CommandInfo(
+        name="currency",
+        category="basic",
+        description="Конвертация валют через AI",
+        usage="!currency <сумма> <из> <в>  (напр. !currency 100 USD EUR)",
+    ),
+
+    # ── management (утилиты текста) ──────────────────────────────────────────
+    CommandInfo(
+        name="sed",
+        category="management",
+        description="Замена текста по паттерну s/старое/новое/ (reply на сообщение)",
+        usage="!sed s/старое/новое/  (reply на сообщение)",
+    ),
+    CommandInfo(
+        name="diff",
+        category="management",
+        description="Diff двух текстов: unified-формат",
+        usage="!diff <текст1> --- <текст2>  или reply + аргумент",
+    ),
+    CommandInfo(
+        name="regex",
+        category="management",
+        description="Проверить регулярное выражение против текста",
+        usage="!regex <паттерн> <текст>  или reply на сообщение",
+    ),
+    CommandInfo(
+        name="tag",
+        category="management",
+        description="Тегировать участников группы (упомянуть @всех или список)",
+        usage="!tag [all|admins|<user1> <user2>]",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="link",
+        category="management",
+        description="Создать invite-link чата или получить ссылку на сообщение",
+        usage="!link [сообщение]  (reply на сообщение для permalink)",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="top",
+        category="management",
+        description="Лидерборд активности чата по количеству сообщений",
+        usage="!top [N] | !top week | !top all",
+    ),
+    CommandInfo(
+        name="welcome",
+        category="management",
+        description="Настройка приветственного сообщения для новых участников",
+        usage="!welcome <текст> | !welcome off | !welcome status",
+        owner_only=True,
+    ),
+
+    # ── system (утилиты шифрования) ──────────────────────────────────────────
+    CommandInfo(
+        name="encrypt",
+        category="system",
+        description="Зашифровать текст паролем (AES-256)",
+        usage="!encrypt <пароль> <текст>",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="decrypt",
+        category="system",
+        description="Расшифровать текст паролем (AES-256)",
+        usage="!decrypt <пароль> <зашифрованный текст>",
+        owner_only=True,
+    ),
+    CommandInfo(
+        name="color",
+        category="system",
+        description="Конвертация и просмотр цвета: HEX, RGB, HSL",
+        usage="!color <#HEX|rgb(r,g,b)|название>",
+    ),
+    CommandInfo(
+        name="emoji",
+        category="system",
+        description="Информация об эмодзи: код, название, категория",
+        usage="!emoji <эмодзи>  или !emoji search <название>",
+    ),
+
+    # ── scheduler (дополнительные) ───────────────────────────────────────────
+    CommandInfo(
+        name="timer",
+        category="scheduler",
+        description="Таймер с уведомлением по истечении: list, cancel",
+        usage="!timer <время> [метка] | !timer list | !timer cancel [id]",
+    ),
+    CommandInfo(
+        name="stopwatch",
+        category="scheduler",
+        description="Секундомер: start, stop, lap, reset",
+        usage="!stopwatch start|stop|lap|reset",
+    ),
+
+    # ── ai (media/vision) ────────────────────────────────────────────────────
+    CommandInfo(
+        name="spam",
+        category="modes",
+        description="Антиспам: блокировать/разблокировать пользователя за спам",
+        usage="!spam block <@user|id> | !spam unblock <id> | !spam list",
+        owner_only=True,
+    ),
 ]
 
 
@@ -698,6 +1082,7 @@ class CommandRegistry:
         "users",
         "scheduler",
         "system",
+        "files",
         "dev",
     ]
 
