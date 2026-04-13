@@ -79,6 +79,8 @@ from .handlers import (
     handle_gemini_cli,
     handle_help,
     handle_hs,
+    handle_news,
+    handle_rate,
     handle_bookmark,
     handle_inbox,
     handle_ls,
@@ -707,6 +709,18 @@ class KraabUserbot(
         )
         async def wrap_search(c, m):
             await run_cmd(handle_search, m)
+
+        @self.client.on_message(
+            filters.command("news", prefixes=prefixes) & _make_command_filter("news"), group=-1
+        )
+        async def wrap_news(c, m):
+            await run_cmd(handle_news, m)
+
+        @self.client.on_message(
+            filters.command("rate", prefixes=prefixes) & _make_command_filter("rate"), group=-1
+        )
+        async def wrap_rate(c, m):
+            await run_cmd(handle_rate, m)
 
         @self.client.on_message(
             filters.command("grep", prefixes=prefixes) & _make_command_filter("grep"), group=-1

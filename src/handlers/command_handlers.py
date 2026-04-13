@@ -14583,3 +14583,249 @@ async def handle_emoji(bot: "KraabUserbot", message: Message) -> None:
         else:
             suffix = ""
         await message.reply(f"{preview}{suffix}")
+
+
+# ---------------------------------------------------------------------------
+# handle_news — быстрые новости через AI
+# ---------------------------------------------------------------------------
+
+# Синонимы языков для !news ru / !news en
+_NEWS_LANG_MAP: dict[str, str] = {
+    "ru": "на русском языке",
+    "рус": "на русском языке",
+    "rus": "на русском языке",
+    "en": "на английском языке",
+    "eng": "на английском языке",
+}
+
+# Топик-тематики, которые пользователь может запросить
+_NEWS_KNOWN_TOPICS: frozenset[str] = frozenset({
+    "crypto", "крипто", "криптовалюта",
+    "ai", "ии", "ml",
+    "tech", "технологии", "технология",
+    "finance", "финансы", "финансовые",
+    "science", "наука",
+    "politics", "политика",
+    "business", "бизнес",
+    "sports", "спорт",
+    "gaming", "игры",
+    "space", "космос",
+    "health", "здоровье",
+    "world", "мир",
+    "russia", "россия",
+    "usa", "сша",
+})
+
+
+async def handle_news(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Быстрые новости через AI (web_search).
+
+    Форматы:
+      !news               — топ-5 главных новостей за сегодня
+      !news <тема>        — новости по теме (crypto, AI, tech, финансы…)
+      !news ru            — новости на русском
+    """
+    raw = bot._get_command_args(message).strip()
+
+    # Разбираем аргументы: язык и тема
+    lang_suffix = ""
+    topic = "мировые события"  # дефолтная тема
+
+    if raw:
+        # Проверяем, является ли аргумент языком
+        first_word = raw.split()[0].lower()
+        if first_word in _NEWS_LANG_MAP:
+            lang_suffix = f" {_NEWS_LANG_MAP[first_word]}"
+            # Если после языка есть тема — берём её
+            rest = raw[len(first_word):].strip()
+            if rest:
+                topic = rest
+            # Иначе тема — мировые события на указанном языке
+        else:
+            # Аргумент — тема
+            topic = raw
+
+    # Формируем промпт
+    prompt = (
+        f"Дай топ-5 главных новостей за сегодня по теме: {topic}. "
+        f"Кратко, с источниками{lang_suffix}. "
+        "Формат каждой новости: порядковый номер, заголовок, одно-два предложения сути, источник/URL."
+    )
+
+    # Изолированная сессия, чтобы не загрязнять основной контекст чата
+    session_id = f"news_{message.chat.id}"
+
+    # Индикатор загрузки
+    display_topic = topic if topic != "мировые события" else "топ новостей"
+    msg = await message.reply(f"📰 **Краб читает новости:** `{display_topic}`...")
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=False,  # нужен web_search
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+
+        if not result:
+            await msg.edit("❌ Не удалось получить новости. Попробуй позже.")
+            return
+
+        # Заголовок + тело
+        header = f"📰 **{display_topic.capitalize()}**\n\n"
+        full_text = header + result
+
+        # Пагинация (Telegram лимит ~4096)
+        parts = _split_text_for_telegram(full_text)
+        total = len(parts)
+
+        first = parts[0]
+        if total > 1:
+            first += f"\n\n_(часть 1/{total})_"
+        await msg.edit(first)
+
+        for i, part in enumerate(parts[1:], start=2):
+            suffix = f"\n\n_(часть {i}/{total})_" if total > 2 else ""
+            await message.reply(part + suffix)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_news_error", topic=topic, error=str(exc))
+        await msg.edit(f"❌ Ошибка получения новостей: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# !rate — курсы криптовалют и акций через AI + web_search
+# ---------------------------------------------------------------------------
+
+# Известные крипто-тикеры для более точного AI-запроса
+_RATE_CRYPTO_ALIASES: dict[str, str] = {
+    "btc": "Bitcoin (BTC)",
+    "eth": "Ethereum (ETH)",
+    "sol": "Solana (SOL)",
+    "bnb": "BNB (Binance Coin)",
+    "xrp": "XRP (Ripple)",
+    "ada": "Cardano (ADA)",
+    "doge": "Dogecoin (DOGE)",
+    "ton": "Toncoin (TON)",
+    "usdt": "Tether (USDT)",
+    "usdc": "USD Coin (USDC)",
+    "avax": "Avalanche (AVAX)",
+    "link": "Chainlink (LINK)",
+    "dot": "Polkadot (DOT)",
+    "ltc": "Litecoin (LTC)",
+    "shib": "Shiba Inu (SHIB)",
+}
+
+# Максимальное количество тикеров за один запрос
+_RATE_MAX_ASSETS = 5
+
+
+def _rate_asset_label(ticker: str) -> str:
+    """Возвращает читаемое название актива по тикеру (крипто) или тикер в верхнем регистре (акции)."""
+    return _RATE_CRYPTO_ALIASES.get(ticker.lower(), ticker.upper())
+
+
+def _build_rate_prompt(assets: list[str]) -> str:
+    """Формирует промпт для AI-запроса текущего курса активов."""
+    labels = [_rate_asset_label(a) for a in assets]
+    if len(labels) == 1:
+        asset_str = labels[0]
+        return (
+            f"Найди текущую цену {asset_str}. "
+            "Покажи: цену в USD, изменение за 24ч, капитализацию. "
+            "Используй актуальные данные из веб-поиска. "
+            "Ответ дай кратко, без лишних вступлений."
+        )
+    else:
+        asset_str = ", ".join(labels)
+        return (
+            f"Найди текущие цены следующих активов: {asset_str}. "
+            "Для каждого актива покажи: цену в USD, изменение за 24ч, капитализацию. "
+            "В конце добавь краткое сравнение. "
+            "Используй актуальные данные из веб-поиска. "
+            "Ответ дай кратко, без лишних вступлений."
+        )
+
+
+async def handle_rate(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Курсы криптовалют и акций через AI + web_search.
+
+    Форматы:
+      !rate btc          — текущая цена Bitcoin (цена, 24h%, капитализация)
+      !rate eth          — Ethereum
+      !rate AAPL         — акция Apple
+      !rate btc eth      — сравнение двух активов
+      !rate btc eth sol  — сравнение нескольких активов (до 5)
+    """
+    raw_args = bot._get_command_args(message).strip()
+
+    # Проверяем пустой запрос
+    if not raw_args:
+        raise UserInputError(
+            user_message=(
+                "📈 Укажи тикер:\n"
+                "`!rate btc` — Bitcoin\n"
+                "`!rate eth` — Ethereum\n"
+                "`!rate AAPL` — акция Apple\n"
+                "`!rate btc eth` — сравнение активов"
+            )
+        )
+
+    # Парсим список тикеров (разделители: пробел или запятая)
+    assets = [a.strip() for a in re.split(r"[\s,]+", raw_args) if a.strip()]
+
+    if not assets:
+        raise UserInputError(user_message="📈 Укажи хотя бы один тикер.")
+
+    # Ограничиваем количество активов
+    if len(assets) > _RATE_MAX_ASSETS:
+        assets = assets[:_RATE_MAX_ASSETS]
+
+    # Изолированная сессия (не загрязняем основной контекст чата)
+    session_id = f"rate_{message.chat.id}"
+
+    # Индикатор загрузки
+    labels_preview = ", ".join(_rate_asset_label(a) for a in assets)
+    msg = await message.reply(f"📈 Смотрю курс: **{labels_preview}**...")
+
+    prompt = _build_rate_prompt(assets)
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=False,  # AI использует web_search для актуальных данных
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+        if not result:
+            await msg.edit("❌ Не удалось получить данные о курсе.")
+            return
+
+        # Заголовок + ответ AI
+        header = f"📈 **{labels_preview}**\n\n"
+        full_text = header + result
+
+        # Пагинация для длинных ответов (Telegram лимит ~4096)
+        parts = _split_text_for_telegram(full_text)
+        total = len(parts)
+
+        first = parts[0]
+        if total > 1:
+            first += f"\n\n_(часть 1/{total})_"
+        await msg.edit(first)
+
+        for i, part in enumerate(parts[1:], start=2):
+            suffix = f"\n\n_(часть {i}/{total})_" if total > 2 else ""
+            await message.reply(part + suffix)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_rate_error", assets=assets, error=str(exc))
+        await msg.edit(f"❌ Ошибка получения курса: {exc}")

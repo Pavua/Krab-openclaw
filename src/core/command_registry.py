@@ -140,10 +140,23 @@ _COMMANDS: list[CommandInfo] = [
         aliases=["s"],
     ),
     CommandInfo(
+        name="news",
+        category="ai",
+        description="Топ-5 новостей через AI — тема или язык (ru/en)",
+        usage="!news [тема|ru|en]",
+    ),
+    CommandInfo(
         name="weather",
         category="ai",
         description="Текущая погода через web_search",
         usage="!weather [город]",
+    ),
+    CommandInfo(
+        name="rate",
+        category="ai",
+        description="Курс криптовалюты или акции через AI (цена, 24h%, капитализация)",
+        usage="!rate <тикер> [тикер2 ...]",
+        aliases=["курс"],
     ),
     CommandInfo(
         name="report",
