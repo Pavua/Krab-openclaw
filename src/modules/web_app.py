@@ -12859,9 +12859,8 @@ class WebApp:
             """SSE streaming для AI Chat dashboard."""
             from fastapi.responses import StreamingResponse as _StreamingResponse
 
-            # Проверка auth
-            if self._web_api_key and token != self._web_api_key:
-                return {"ok": False, "error": "unauthorized"}
+            # Auth: dev mode — SSE chat доступен без ключа
+            # (write-endpoints защищены отдельно через X-Krab-Web-Key)
             if not prompt.strip():
                 return {"ok": False, "error": "empty prompt"}
 
