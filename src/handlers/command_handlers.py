@@ -1332,41 +1332,141 @@ async def handle_paste(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_status(bot: "KraabUserbot", message: Message) -> None:
-    """Статус системы и ресурсов."""
-    ram = model_manager.get_ram_usage()
-    is_ok = await openclaw_client.health_check()
-    route_meta = {}
+    """Компактный overview всех подсистем Краба одним сообщением (!status)."""
+    import os as _os
+
+    import psutil as _psutil
+
+    from ..core.silence_mode import silence_manager
+    from ..core.swarm_bus import TEAM_REGISTRY
+    from ..core.swarm_scheduler import swarm_scheduler
+
+    # ── 1. Telegram ─────────────────────────────────────────────────────
+    tg_ok = bot.me is not None
+    tg_icon = "✅" if tg_ok else "❌"
+
+    # ── 2. OpenClaw / активная модель ───────────────────────────────────
+    try:
+        oc_ok = await openclaw_client.health_check()
+    except Exception:
+        oc_ok = False
+    route_meta: dict = {}
     if hasattr(openclaw_client, "get_last_runtime_route"):
         try:
             route_meta = openclaw_client.get_last_runtime_route() or {}
         except Exception:
             route_meta = {}
     actual_model = str(route_meta.get("model") or "").strip()
-    actual_channel = str(route_meta.get("channel") or "").strip()
-    route_status = str(route_meta.get("status") or "").strip()
-    route_error = str(route_meta.get("error_code") or "").strip()
     declared_primary = str(
         get_runtime_primary_model() or getattr(config, "MODEL", "") or ""
     ).strip()
     effective_model = actual_model or declared_primary or "unknown"
-    bar = "▓" * int(ram["percent"] / 10) + "░" * (10 - int(ram["percent"] / 10))
-    text = f"""
-🦀 **Системный статус Краба**
----------------------------
-📡 **Gateway (OpenClaw):** {"✅ Online" if is_ok else "❌ Offline"}
-🧠 **Фактическая модель:** `{effective_model}`
-🎭 **Роль:** `{bot.current_role}`
-🎙️ **Голос:** `{"ВКЛ" if bot.voice_mode else "ВЫКЛ"}`
-💻 **RAM:** [{bar}] {ram["percent"]}%
-"""
+    # Сокращённое имя модели (после последнего "/")
+    model_short = effective_model.split("/")[-1] if "/" in effective_model else effective_model
+    oc_icon = "✅" if oc_ok else "❌"
+
+    # ── 3. Scheduler ────────────────────────────────────────────────────
+    try:
+        sched_jobs = swarm_scheduler.list_jobs()
+        job_count = len(sched_jobs)
+        sched_icon = "✅"
+    except Exception:
+        job_count = 0
+        sched_icon = "⚠️"
+
+    # ── 4. Inbox ────────────────────────────────────────────────────────
+    try:
+        inbox_summary = inbox_service.get_summary()
+        inbox_open = int(inbox_summary.get("open_items", 0))
+    except Exception:
+        inbox_open = 0
+
+    # ── 5. Cost ─────────────────────────────────────────────────────────
+    try:
+        cost_report = cost_analytics.build_usage_report_dict()
+        cost_month = cost_report.get("cost_month_usd", 0.0)
+        budget = cost_report.get("monthly_budget_usd") or 0.0
+        cost_str = f"${cost_month:.2f}/{budget:.2f}" if budget else f"${cost_month:.2f}"
+    except Exception:
+        cost_str = "?"
+
+    # ── 6. Swarm teams ──────────────────────────────────────────────────
+    try:
+        team_count = len(TEAM_REGISTRY)
+    except Exception:
+        team_count = 0
+
+    # ── 7. Translator ───────────────────────────────────────────────────
+    try:
+        t_state = bot.get_translator_session_state()
+        t_status = t_state.get("session_status", "idle")
+        t_pair = t_state.get("last_pair") or ""
+        if t_status == "idle":
+            translator_str = "idle"
+        else:
+            translator_str = f"active ({t_pair})" if t_pair else t_status
+    except Exception:
+        translator_str = "idle"
+
+    # ── 8. Silence ──────────────────────────────────────────────────────
+    try:
+        sil = silence_manager.status()
+        silence_str = "on" if sil.get("global_muted") else "off"
+    except Exception:
+        silence_str = "off"
+
+    # ── 9. Uptime ───────────────────────────────────────────────────────
+    try:
+        elapsed = int(time.time() - bot._session_start_time)
+        hours, rem = divmod(elapsed, 3600)
+        mins = rem // 60
+        uptime_str = f"{hours}h{mins}m" if hours else f"{mins}m"
+    except Exception:
+        uptime_str = "?"
+
+    # ── 10. RAM (RSS процесса) ──────────────────────────────────────────
+    try:
+        rss_mb = int(_psutil.Process(_os.getpid()).memory_info().rss / 1024 / 1024)
+        ram_str = f"{rss_mb}MB"
+    except Exception:
+        ram_str = "?"
+
+    # ── 11. Сообщений за сессию ────────────────────────────────────────
+    try:
+        msg_count = bot._session_messages_processed
+    except Exception:
+        msg_count = 0
+
+    # ── Сборка компактного статуса ──────────────────────────────────────
+    line1 = (
+        f"{tg_icon} Telegram | "
+        f"{oc_icon} OpenClaw ({model_short}) | "
+        f"{sched_icon} Scheduler ({job_count} jobs)"
+    )
+    line2 = (
+        f"📬 Inbox: {inbox_open} open | "
+        f"💰 Cost: {cost_str} | "
+        f"🐝 Swarm: {team_count} teams"
+    )
+    line3 = f"🔄 Translator: {translator_str} | 🔇 Silence: {silence_str}"
+    line4 = f"⏱ Uptime: {uptime_str} | 🧠 RAM: {ram_str} | 📊 Messages: {msg_count}"
+
+    text = (
+        "🦀 **Krab Status**\n"
+        "━━━━━━━━━━━━\n"
+        f"{line1}\n"
+        f"{line2}\n"
+        f"{line3}\n"
+        f"{line4}"
+    )
+
+    # Доп. строка: Primary runtime если не совпадает с фактической моделью
     if declared_primary and declared_primary != effective_model:
-        text += f"🧭 **Primary runtime:** `{declared_primary}`\n"
-    if actual_channel:
-        text += f"🛣️ **Маршрут:** `{actual_channel}`\n"
-    if route_status and (route_status != "ok" or route_error):
-        suffix = f" / `{route_error}`" if route_error else ""
-        text += f"⚠️ **Route status:** `{route_status}`{suffix}\n"
-    if message.from_user and message.from_user.id == bot.me.id:
+        text += f"\n🧭 Primary runtime: `{declared_primary}`"
+
+    # Если сообщение отправлено самим ботом — редактируем, иначе отвечаем
+    me_id = getattr(bot.me, "id", None) if bot.me is not None else None
+    if message.from_user and me_id and message.from_user.id == me_id:
         await message.edit(text)
     else:
         await message.reply(text)
@@ -13700,3 +13800,786 @@ async def handle_whois(bot: "KraabUserbot", message: Message) -> None:
     )
 
     await status_msg.edit(reply)
+
+
+# ---------------------------------------------------------------------------
+# !convert — конвертер единиц измерения (чистая математика, без API)
+# ---------------------------------------------------------------------------
+
+# Словарь коэффициентов: все значения приведены к базовой единице.
+# Формат: "единица" → (множитель_к_базе, "базовая_группа")
+_CONVERT_UNITS: dict[str, tuple[float, str]] = {
+    # Длина → метры
+    "km":  (1000.0,   "m"),
+    "m":   (1.0,      "m"),
+    "cm":  (0.01,     "m"),
+    "mm":  (0.001,    "m"),
+    "mi":  (1609.344, "m"),
+    "ft":  (0.3048,   "m"),
+    "in":  (0.0254,   "m"),
+    "yd":  (0.9144,   "m"),
+    # Масса → килограммы
+    "kg":  (1.0,      "kg"),
+    "g":   (0.001,    "kg"),
+    "lb":  (0.453592, "kg"),
+    "oz":  (0.028350, "kg"),
+    # Объём → литры
+    "l":   (1.0,      "l"),
+    "ml":  (0.001,    "l"),
+    "gal": (3.78541,  "l"),
+    "pt":  (0.473176, "l"),
+    # Скорость — база м/с (для согласованности)
+    "kmh": (1.0 / 3.6,     "speed"),
+    "mph": (0.44704,        "speed"),
+    "ms":  (1.0,            "speed"),
+    "kn":  (0.514444,       "speed"),
+}
+
+# Алиасы: разные варианты написания → канонический ключ
+_CONVERT_ALIASES: dict[str, str] = {
+    "kilometer": "km", "kilometers": "km", "kilometre": "km", "kilometres": "km",
+    "meter": "m", "meters": "m", "metre": "m", "metres": "m",
+    "centimeter": "cm", "centimeters": "cm",
+    "millimeter": "mm", "millimeters": "mm",
+    "mile": "mi", "miles": "mi",
+    "foot": "ft", "feet": "ft",
+    "inch": "in", "inches": "in",
+    "yard": "yd", "yards": "yd",
+    "kilogram": "kg", "kilograms": "kg",
+    "gram": "g", "grams": "g",
+    "pound": "lb", "pounds": "lb", "lbs": "lb",
+    "ounce": "oz", "ounces": "oz",
+    "liter": "l", "liters": "l", "litre": "l", "litres": "l",
+    "milliliter": "ml", "milliliters": "ml",
+    "gallon": "gal", "gallons": "gal",
+    "pint": "pt", "pints": "pt",
+    "km/h": "kmh",
+    "m/s": "ms",
+    "knot": "kn", "knots": "kn",
+    # Температура
+    "c": "c", "celsius": "c",
+    "f": "f", "fahrenheit": "f",
+    "k": "k", "kelvin": "k",
+    "°c": "c", "°f": "f",
+}
+
+# Группа температурных единиц — нелинейное преобразование
+_TEMP_UNITS = {"c", "f", "k"}
+
+
+def _normalize_unit(raw: str) -> str:
+    """Нормализует строку единицы: lower + алиасы → канонический ключ."""
+    key = raw.lower().strip()
+    return _CONVERT_ALIASES.get(key, key)
+
+
+def _convert_temperature(value: float, src: str, dst: str) -> float:
+    """Конвертация температуры между C / F / K."""
+    # Шаг 1: приводим к Celsius
+    if src == "c":
+        celsius = value
+    elif src == "f":
+        celsius = (value - 32) * 5.0 / 9.0
+    elif src == "k":
+        celsius = value - 273.15
+    else:
+        raise ValueError(f"Неизвестная единица температуры: {src}")
+    # Шаг 2: из Celsius в dst
+    if dst == "c":
+        return celsius
+    if dst == "f":
+        return celsius * 9.0 / 5.0 + 32
+    if dst == "k":
+        return celsius + 273.15
+    raise ValueError(f"Неизвестная единица температуры: {dst}")
+
+
+def _do_convert(value: float, src: str, dst: str) -> float:
+    """
+    Конвертирует value из src в dst.
+    Кидает ValueError при несовместимых или неизвестных единицах.
+    """
+    src_n = _normalize_unit(src)
+    dst_n = _normalize_unit(dst)
+
+    # Температура — отдельная ветка (нелинейно)
+    if src_n in _TEMP_UNITS or dst_n in _TEMP_UNITS:
+        if src_n not in _TEMP_UNITS or dst_n not in _TEMP_UNITS:
+            raise ValueError("Нельзя конвертировать температуру и другие единицы вместе.")
+        return _convert_temperature(value, src_n, dst_n)
+
+    # Обычные единицы через базовый коэффициент
+    if src_n not in _CONVERT_UNITS:
+        raise ValueError(f"Неизвестная единица: `{src}`")
+    if dst_n not in _CONVERT_UNITS:
+        raise ValueError(f"Неизвестная единица: `{dst}`")
+
+    src_factor, src_base = _CONVERT_UNITS[src_n]
+    dst_factor, dst_base = _CONVERT_UNITS[dst_n]
+
+    if src_base != dst_base:
+        raise ValueError(
+            f"Несовместимые единицы: `{src}` ({src_base}) и `{dst}` ({dst_base})"
+        )
+
+    # value * src_factor → базовая единица → / dst_factor → dst
+    return value * src_factor / dst_factor
+
+
+def _format_convert_result(result: float) -> str:
+    """Форматирует число: до 6 значащих цифр, без лишних нулей."""
+    if result == int(result) and abs(result) < 1e12:
+        return str(int(result))
+    return f"{result:.6g}"
+
+
+_CONVERT_HELP = (
+    "**Использование:** `!convert <число> <из> <в>`\n\n"
+    "**Примеры:**\n"
+    "`!convert 100 km mi` → 62.14 mi\n"
+    "`!convert 72 F C` → 22.22 °C\n"
+    "`!convert 5 kg lb` → 11.02 lb\n"
+    "`!convert 3.5 L gal` → 0.924 gal\n\n"
+    "**Поддерживаемые единицы:**\n"
+    "Длина: `km m cm mm mi ft in yd`\n"
+    "Масса: `kg g lb oz`\n"
+    "Объём: `L mL gal pt`\n"
+    "Скорость: `kmh mph m/s kn`\n"
+    "Температура: `C F K`"
+)
+
+
+async def handle_convert(bot: "KraabUserbot", message: Message) -> None:
+    """Конвертер единиц измерения без внешних API (!convert)."""
+    raw_args = bot._get_command_args(message).strip()
+
+    if not raw_args:
+        await message.reply(_CONVERT_HELP)
+        return
+
+    parts = raw_args.split()
+    if len(parts) != 3:
+        raise UserInputError(
+            user_message=(
+                "❌ Формат: `!convert <число> <из> <в>`\n"
+                "Например: `!convert 100 km mi`"
+            )
+        )
+
+    value_str, src_raw, dst_raw = parts
+
+    # Парсим число; разрешаем запятую как десятичный разделитель
+    try:
+        value = float(value_str.replace(",", "."))
+    except ValueError:
+        raise UserInputError(user_message=f"❌ Не могу разобрать число: `{value_str}`")
+
+    try:
+        result = _do_convert(value, src_raw, dst_raw)
+    except ValueError as exc:
+        raise UserInputError(user_message=f"❌ {exc}")
+
+    # Красивый символ для температурных единиц
+    dst_n = _normalize_unit(dst_raw)
+    if dst_n == "c":
+        unit_symbol = "°C"
+    elif dst_n == "f":
+        unit_symbol = "°F"
+    elif dst_n == "k":
+        unit_symbol = "K"
+    else:
+        unit_symbol = dst_raw
+
+    result_str = _format_convert_result(result)
+    src_display = src_raw.upper() if _normalize_unit(src_raw) in _TEMP_UNITS else src_raw
+    value_display = _format_convert_result(value)
+
+    await message.reply(
+        f"🔢 **{value_display} {src_display}** = **{result_str} {unit_symbol}**"
+    )
+
+
+# ---------------------------------------------------------------------------
+# !color — конвертер цветов: HEX ↔ RGB ↔ HSL + CSS named colors
+# ---------------------------------------------------------------------------
+
+# CSS named colors — стандартные 140 именованных цветов из CSS3
+_CSS_NAMED_COLORS: dict[str, tuple[int, int, int]] = {
+    "aliceblue": (240, 248, 255),
+    "antiquewhite": (250, 235, 215),
+    "aqua": (0, 255, 255),
+    "aquamarine": (127, 255, 212),
+    "azure": (240, 255, 255),
+    "beige": (245, 245, 220),
+    "bisque": (255, 228, 196),
+    "black": (0, 0, 0),
+    "blanchedalmond": (255, 235, 205),
+    "blue": (0, 0, 255),
+    "blueviolet": (138, 43, 226),
+    "brown": (165, 42, 42),
+    "burlywood": (222, 184, 135),
+    "cadetblue": (95, 158, 160),
+    "chartreuse": (127, 255, 0),
+    "chocolate": (210, 105, 30),
+    "coral": (255, 127, 80),
+    "cornflowerblue": (100, 149, 237),
+    "cornsilk": (255, 248, 220),
+    "crimson": (220, 20, 60),
+    "cyan": (0, 255, 255),
+    "darkblue": (0, 0, 139),
+    "darkcyan": (0, 139, 139),
+    "darkgoldenrod": (184, 134, 11),
+    "darkgray": (169, 169, 169),
+    "darkgreen": (0, 100, 0),
+    "darkgrey": (169, 169, 169),
+    "darkkhaki": (189, 183, 107),
+    "darkmagenta": (139, 0, 139),
+    "darkolivegreen": (85, 107, 47),
+    "darkorange": (255, 140, 0),
+    "darkorchid": (153, 50, 204),
+    "darkred": (139, 0, 0),
+    "darksalmon": (233, 150, 122),
+    "darkseagreen": (143, 188, 143),
+    "darkslateblue": (72, 61, 139),
+    "darkslategray": (47, 79, 79),
+    "darkslategrey": (47, 79, 79),
+    "darkturquoise": (0, 206, 209),
+    "darkviolet": (148, 0, 211),
+    "deeppink": (255, 20, 147),
+    "deepskyblue": (0, 191, 255),
+    "dimgray": (105, 105, 105),
+    "dimgrey": (105, 105, 105),
+    "dodgerblue": (30, 144, 255),
+    "firebrick": (178, 34, 34),
+    "floralwhite": (255, 250, 240),
+    "forestgreen": (34, 139, 34),
+    "fuchsia": (255, 0, 255),
+    "gainsboro": (220, 220, 220),
+    "ghostwhite": (248, 248, 255),
+    "gold": (255, 215, 0),
+    "goldenrod": (218, 165, 32),
+    "gray": (128, 128, 128),
+    "green": (0, 128, 0),
+    "greenyellow": (173, 255, 47),
+    "grey": (128, 128, 128),
+    "honeydew": (240, 255, 240),
+    "hotpink": (255, 105, 180),
+    "indianred": (205, 92, 92),
+    "indigo": (75, 0, 130),
+    "ivory": (255, 255, 240),
+    "khaki": (240, 230, 140),
+    "lavender": (230, 230, 250),
+    "lavenderblush": (255, 240, 245),
+    "lawngreen": (124, 252, 0),
+    "lemonchiffon": (255, 250, 205),
+    "lightblue": (173, 216, 230),
+    "lightcoral": (240, 128, 128),
+    "lightcyan": (224, 255, 255),
+    "lightgoldenrodyellow": (250, 250, 210),
+    "lightgray": (211, 211, 211),
+    "lightgreen": (144, 238, 144),
+    "lightgrey": (211, 211, 211),
+    "lightpink": (255, 182, 193),
+    "lightsalmon": (255, 160, 122),
+    "lightseagreen": (32, 178, 170),
+    "lightskyblue": (135, 206, 250),
+    "lightslategray": (119, 136, 153),
+    "lightslategrey": (119, 136, 153),
+    "lightsteelblue": (176, 196, 222),
+    "lightyellow": (255, 255, 224),
+    "lime": (0, 255, 0),
+    "limegreen": (50, 205, 50),
+    "linen": (250, 240, 230),
+    "magenta": (255, 0, 255),
+    "maroon": (128, 0, 0),
+    "mediumaquamarine": (102, 205, 170),
+    "mediumblue": (0, 0, 205),
+    "mediumorchid": (186, 85, 211),
+    "mediumpurple": (147, 112, 219),
+    "mediumseagreen": (60, 179, 113),
+    "mediumslateblue": (123, 104, 238),
+    "mediumspringgreen": (0, 250, 154),
+    "mediumturquoise": (72, 209, 204),
+    "mediumvioletred": (199, 21, 133),
+    "midnightblue": (25, 25, 112),
+    "mintcream": (245, 255, 250),
+    "mistyrose": (255, 228, 225),
+    "moccasin": (255, 228, 181),
+    "navajowhite": (255, 222, 173),
+    "navy": (0, 0, 128),
+    "oldlace": (253, 245, 230),
+    "olive": (128, 128, 0),
+    "olivedrab": (107, 142, 35),
+    "orange": (255, 165, 0),
+    "orangered": (255, 69, 0),
+    "orchid": (218, 112, 214),
+    "palegoldenrod": (238, 232, 170),
+    "palegreen": (152, 251, 152),
+    "paleturquoise": (175, 238, 238),
+    "palevioletred": (219, 112, 147),
+    "papayawhip": (255, 239, 213),
+    "peachpuff": (255, 218, 185),
+    "peru": (205, 133, 63),
+    "pink": (255, 192, 203),
+    "plum": (221, 160, 221),
+    "powderblue": (176, 224, 230),
+    "purple": (128, 0, 128),
+    "rebeccapurple": (102, 51, 153),
+    "red": (255, 0, 0),
+    "rosybrown": (188, 143, 143),
+    "royalblue": (65, 105, 225),
+    "saddlebrown": (139, 69, 19),
+    "salmon": (250, 128, 114),
+    "sandybrown": (244, 164, 96),
+    "seagreen": (46, 139, 87),
+    "seashell": (255, 245, 238),
+    "sienna": (160, 82, 45),
+    "silver": (192, 192, 192),
+    "skyblue": (135, 206, 235),
+    "slateblue": (106, 90, 205),
+    "slategray": (112, 128, 144),
+    "slategrey": (112, 128, 144),
+    "snow": (255, 250, 250),
+    "springgreen": (0, 255, 127),
+    "steelblue": (70, 130, 180),
+    "tan": (210, 180, 140),
+    "teal": (0, 128, 128),
+    "thistle": (216, 191, 216),
+    "tomato": (255, 99, 71),
+    "turquoise": (64, 224, 208),
+    "violet": (238, 130, 238),
+    "wheat": (245, 222, 179),
+    "white": (255, 255, 255),
+    "whitesmoke": (245, 245, 245),
+    "yellow": (255, 255, 0),
+    "yellowgreen": (154, 205, 50),
+}
+
+
+def _rgb_to_hsl(r: int, g: int, b: int) -> tuple[int, int, int]:
+    """Конвертирует RGB (0–255) в HSL (H: 0–360°, S: 0–100%, L: 0–100%)."""
+    rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
+    cmax = max(rf, gf, bf)
+    cmin = min(rf, gf, bf)
+    delta = cmax - cmin
+
+    # Светлота
+    l_val = (cmax + cmin) / 2.0
+
+    # Насыщенность
+    if delta == 0.0:
+        s_val = 0.0
+    else:
+        s_val = delta / (1.0 - abs(2.0 * l_val - 1.0))
+
+    # Тон
+    if delta == 0.0:
+        h_val = 0.0
+    elif cmax == rf:
+        h_val = 60.0 * (((gf - bf) / delta) % 6)
+    elif cmax == gf:
+        h_val = 60.0 * (((bf - rf) / delta) + 2.0)
+    else:
+        h_val = 60.0 * (((rf - gf) / delta) + 4.0)
+
+    return round(h_val), round(s_val * 100), round(l_val * 100)
+
+
+def _parse_color_input(raw: str) -> tuple[int, int, int] | None:
+    """
+    Разбирает строку с цветом и возвращает (R, G, B) или None.
+
+    Поддерживаемые форматы:
+      - #RRGGBB или #RGB (hex)
+      - rgb(R, G, B) или rgb(R,G,B)
+      - CSS named color (red, blue, tomato, ...)
+    """
+    s = raw.strip()
+
+    # HEX: #RRGGBB или #RGB
+    hex_match = re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", s)
+    if hex_match:
+        h = hex_match.group(1)
+        if len(h) == 3:
+            # Расширяем: #ABC → #AABBCC
+            h = h[0] * 2 + h[1] * 2 + h[2] * 2
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+    # RGB: rgb(255, 87, 51) или rgb(255,87,51)
+    rgb_match = re.fullmatch(
+        r"rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)", s, re.IGNORECASE
+    )
+    if rgb_match:
+        r_val = int(rgb_match.group(1))
+        g_val = int(rgb_match.group(2))
+        b_val = int(rgb_match.group(3))
+        if 0 <= r_val <= 255 and 0 <= g_val <= 255 and 0 <= b_val <= 255:
+            return r_val, g_val, b_val
+        return None  # значения вне допустимого диапазона
+
+    # CSS named color
+    name = s.lower().replace("-", "").replace(" ", "")
+    if name in _CSS_NAMED_COLORS:
+        return _CSS_NAMED_COLORS[name]
+
+    return None
+
+
+def _rgb_to_hex(r: int, g: int, b: int) -> str:
+    """Конвертирует RGB в HEX строку вида #RRGGBB (верхний регистр)."""
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+async def handle_color(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !color <цвет> — конвертер цветов между форматами HEX, RGB и HSL.
+
+    Поддерживаемые форматы ввода:
+      !color #FF5733        → RGB(255, 87, 51), HSL(11°, 100%, 60%)
+      !color #F53           → раскрывает до #FF5533
+      !color rgb(255,87,51) → #FF5733, HSL(11°, 100%, 60%)
+      !color red            → #FF0000, RGB(255, 0, 0), HSL(0°, 100%, 50%)
+
+    Поддерживается 140 стандартных CSS named colors.
+    """
+    raw = bot._get_command_args(message).strip()
+
+    if not raw:
+        raise UserInputError(
+            user_message=(
+                "🎨 **!color — конвертер цветов**\n\n"
+                "Форматы ввода:\n"
+                "`!color #FF5733`        → RGB + HSL\n"
+                "`!color rgb(255,87,51)` → HEX + HSL\n"
+                "`!color red`            → HEX + RGB + HSL\n\n"
+                "Поддерживаются: HEX (#RRGGBB, #RGB), rgb(...), CSS named colors"
+            )
+        )
+
+    parsed = _parse_color_input(raw)
+    if parsed is None:
+        raise UserInputError(
+            user_message=(
+                f"❌ Не удалось распознать цвет: `{raw}`\n\n"
+                "Допустимые форматы: `#FF5733`, `#F57`, `rgb(255,87,51)`, `red`"
+            )
+        )
+
+    r, g, b = parsed
+    hex_val = _rgb_to_hex(r, g, b)
+    h_deg, s_pct, l_pct = _rgb_to_hsl(r, g, b)
+
+    # Определяем тип ввода, чтобы не дублировать исходный формат в выводе
+    s_lower = raw.strip().lower()
+    is_hex = s_lower.startswith("#")
+    is_rgb_fmt = s_lower.startswith("rgb(")
+    is_named = not is_hex and not is_rgb_fmt
+
+    lines: list[str] = [f"🎨 Цвет: `{raw}`\n"]
+
+    if is_hex or is_named:
+        lines.append(f"RGB: `rgb({r}, {g}, {b})`")
+    if is_rgb_fmt or is_named:
+        lines.append(f"HEX: `{hex_val}`")
+    lines.append(f"HSL: `hsl({h_deg}°, {s_pct}%, {l_pct}%)`")
+
+    await message.reply("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Словарь эмодзи (~200 записей) — keyword → [emoji, ...]
+# ---------------------------------------------------------------------------
+
+_EMOJI_DB: dict[str, list[str]] = {
+    # Огонь / энергия
+    "fire": ["🔥"],
+    "flame": ["🔥"],
+    "hot": ["🔥", "🌡️"],
+    # Сердце / любовь
+    "heart": ["❤️", "💜", "💙", "💚", "🖤", "🤍", "🧡", "💛", "💗", "💓", "💞", "💕", "💔", "❣️"],
+    "love": ["❤️", "💕", "😍", "😘", "🥰"],
+    "kiss": ["😘", "💋", "😗"],
+    "hug": ["🤗"],
+    # Кошки
+    "cat": ["🐱", "🐈", "😺", "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾"],
+    "kitten": ["🐱", "😺"],
+    "meow": ["🐱", "😺"],
+    # Собаки
+    "dog": ["🐶", "🐕", "🦮", "🐩"],
+    "puppy": ["🐶"],
+    "woof": ["🐶"],
+    # Смех / радость
+    "laugh": ["😂", "🤣", "😄", "😁"],
+    "happy": ["😊", "😄", "😁", "🙂", "😀"],
+    "joy": ["😂", "🥳"],
+    "smile": ["😊", "🙂", "😀", "😁"],
+    "lol": ["😂", "🤣"],
+    "haha": ["😂", "🤣"],
+    # Грусть / слёзы
+    "sad": ["😢", "😭", "😔", "😞"],
+    "cry": ["😢", "😭"],
+    "tear": ["😢", "😭"],
+    # Злость
+    "angry": ["😠", "😡", "🤬"],
+    "rage": ["😡", "🤬"],
+    "mad": ["😠", "😡"],
+    # Удивление
+    "surprise": ["😮", "😲", "🤯"],
+    "shock": ["😱", "😨", "🤯"],
+    "wow": ["😮", "🤩", "😲"],
+    "mind": ["🤯"],
+    # Испуг
+    "fear": ["😨", "😰", "😱"],
+    "scared": ["😨", "😱"],
+    # Сон
+    "sleep": ["😴", "💤"],
+    "tired": ["😴", "🥱"],
+    "yawn": ["🥱"],
+    # Еда
+    "pizza": ["🍕"],
+    "burger": ["🍔"],
+    "taco": ["🌮"],
+    "sushi": ["🍣"],
+    "ramen": ["🍜"],
+    "cake": ["🎂", "🍰"],
+    "coffee": ["☕", "🍵"],
+    "tea": ["🍵", "🫖"],
+    "beer": ["🍺", "🍻"],
+    "wine": ["🍷"],
+    "cocktail": ["🍹", "🍸"],
+    "cookie": ["🍪"],
+    "bread": ["🍞"],
+    "apple": ["🍎"],
+    "banana": ["🍌"],
+    "strawberry": ["🍓"],
+    "watermelon": ["🍉"],
+    "grapes": ["🍇"],
+    "mango": ["🥭"],
+    "avocado": ["🥑"],
+    "salad": ["🥗"],
+    "chicken": ["🍗"],
+    "steak": ["🥩"],
+    "egg": ["🥚"],
+    "icecream": ["🍦", "🍧", "🍨"],
+    "chocolate": ["🍫"],
+    "candy": ["🍬", "🍭"],
+    "donut": ["🍩"],
+    # Природа / животные
+    "sun": ["☀️", "🌞"],
+    "moon": ["🌙", "🌕", "🌝"],
+    "star": ["⭐", "🌟", "✨", "💫"],
+    "cloud": ["☁️", "⛅"],
+    "rain": ["🌧️", "🌂"],
+    "snow": ["❄️", "☃️", "🌨️"],
+    "thunder": ["⛈️", "🌩️"],
+    "rainbow": ["🌈"],
+    "flower": ["🌸", "🌺", "🌼", "🌻", "🌹", "💐"],
+    "rose": ["🌹"],
+    "leaf": ["🍀", "🍃", "🌿"],
+    "tree": ["🌳", "🌲", "🎄"],
+    "mountain": ["⛰️", "🏔️"],
+    "ocean": ["🌊", "🏖️"],
+    "water": ["💧", "🌊"],
+    "earth": ["🌍", "🌎", "🌏"],
+    "fish": ["🐟", "🐠", "🐡"],
+    "bird": ["🐦", "🦜", "🦅", "🦆"],
+    "butterfly": ["🦋"],
+    "bee": ["🐝"],
+    "snake": ["🐍"],
+    "frog": ["🐸"],
+    "rabbit": ["🐰", "🐇"],
+    "bear": ["🐻"],
+    "panda": ["🐼"],
+    "fox": ["🦊"],
+    "wolf": ["🐺"],
+    "lion": ["🦁"],
+    "tiger": ["🐯"],
+    "horse": ["🐴", "🦄"],
+    "unicorn": ["🦄"],
+    "monkey": ["🐵", "🙈", "🙉", "🙊"],
+    "pig": ["🐷", "🐖"],
+    "cow": ["🐮", "🐄"],
+    "elephant": ["🐘"],
+    "dolphin": ["🐬"],
+    "shark": ["🦈"],
+    "turtle": ["🐢"],
+    "crab": ["🦀"],
+    "lobster": ["🦞"],
+    "octopus": ["🐙"],
+    # Жесты / реакции
+    "ok": ["👌", "✅"],
+    "yes": ["✅", "👍"],
+    "no": ["❌", "👎"],
+    "thumbsup": ["👍"],
+    "thumbsdown": ["👎"],
+    "clap": ["👏"],
+    "wave": ["👋"],
+    "point": ["👉", "👆", "👇", "👈"],
+    "muscle": ["💪"],
+    "fist": ["✊", "👊"],
+    "peace": ["✌️", "☮️"],
+    "pray": ["🙏"],
+    "eyes": ["👀"],
+    "think": ["🤔"],
+    "shrug": ["🤷"],
+    "facepalm": ["🤦"],
+    "celebrate": ["🎉", "🥳", "🎊"],
+    "party": ["🎉", "🎊", "🥳"],
+    # Техника
+    "phone": ["📱", "☎️"],
+    "computer": ["💻", "🖥️"],
+    "camera": ["📷", "📸"],
+    "music": ["🎵", "🎶"],
+    "headphones": ["🎧"],
+    "rocket": ["🚀"],
+    "robot": ["🤖"],
+    "alien": ["👽"],
+    "ghost": ["👻"],
+    "skull": ["💀"],
+    "bomb": ["💣"],
+    "lightning": ["⚡"],
+    "magnet": ["🧲"],
+    "lock": ["🔒"],
+    "key": ["🔑", "🗝️"],
+    "money": ["💰", "💵", "💸"],
+    "gem": ["💎"],
+    "crown": ["👑"],
+    "trophy": ["🏆"],
+    "medal": ["🥇", "🥈", "🥉"],
+    "sword": ["⚔️"],
+    "shield": ["🛡️"],
+    "magic": ["✨", "🪄"],
+    "book": ["📚", "📖"],
+    "pencil": ["✏️", "📝"],
+    "clock": ["🕐", "⏰", "⏱️"],
+    "calendar": ["📅", "📆"],
+    "mail": ["📧", "✉️"],
+    "bell": ["🔔"],
+    "flag": ["🚩", "🏁"],
+    "search": ["🔍", "🔎"],
+    "bulb": ["💡"],
+    "warning": ["⚠️"],
+    "forbidden": ["🚫"],
+    "check": ["✅", "☑️"],
+    "cross": ["❌"],
+    "plus": ["➕"],
+    "minus": ["➖"],
+    "infinity": ["♾️"],
+    # Транспорт
+    "car": ["🚗", "🚙"],
+    "bus": ["🚌"],
+    "plane": ["✈️"],
+    "ship": ["🚢"],
+    "bike": ["🚲", "🛵"],
+    "train": ["🚂", "🚆"],
+    # Разное
+    "poop": ["💩"],
+    "nerd": ["🤓"],
+    "cool": ["😎"],
+    "sick": ["🤒", "🤧"],
+    "mask": ["😷"],
+    "zombie": ["🧟"],
+    "vampire": ["🧛"],
+    "mermaid": ["🧜"],
+    "fairy": ["🧚"],
+    "angel": ["😇"],
+    "devil": ["😈"],
+    "clown": ["🤡"],
+    "santa": ["🎅"],
+    "snowman": ["☃️"],
+    "christmas": ["🎄", "🎅", "🎁"],
+    "gift": ["🎁"],
+    "balloon": ["🎈"],
+    "confetti": ["🎊", "🎉"],
+    "sparkles": ["✨"],
+    "diamond": ["💎"],
+}
+
+
+def _emoji_search(query: str) -> list[str]:
+    """
+    Ищет эмодзи по ключевому слову.
+    Возвращает дедуплицированный список, сохраняя порядок первого появления.
+    Сначала точное совпадение, затем частичные.
+    """
+    q = query.strip().lower()
+    seen: set[str] = set()
+    results: list[str] = []
+
+    # 1. Точное совпадение ключа
+    if q in _EMOJI_DB:
+        for em in _EMOJI_DB[q]:
+            if em not in seen:
+                seen.add(em)
+                results.append(em)
+
+    # 2. Частичное совпадение (ключ содержит запрос или запрос содержит ключ)
+    for key, emojis in _EMOJI_DB.items():
+        if key == q:
+            continue  # уже обработан выше
+        if q in key or key in q:
+            for em in emojis:
+                if em not in seen:
+                    seen.add(em)
+                    results.append(em)
+
+    return results
+
+
+async def handle_emoji(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Поиск эмодзи по текстовому описанию.
+
+    Синтаксис:
+      !emoji <keyword>         — первые совпадения (до 5)
+      !emoji search <keyword>  — все варианты
+
+    Примеры:
+      !emoji fire        → 🔥
+      !emoji heart       → ❤️ 💜 💙 ...
+      !emoji search cat  → 🐱 🐈 😺 😸 ...
+    """
+    raw = bot._get_command_args(message).strip()
+
+    if not raw:
+        await message.reply(
+            "😊 **!emoji** — поиск эмодзи по описанию\n\n"
+            "`!emoji <слово>` — первое совпадение\n"
+            "`!emoji search <слово>` — все варианты\n\n"
+            "_Примеры: `!emoji fire`, `!emoji heart`, `!emoji search cat`_"
+        )
+        return
+
+    # Разбираем подкоманду search
+    parts = raw.split(maxsplit=1)
+    show_all = parts[0].lower() == "search"
+    if show_all:
+        query = parts[1].strip() if len(parts) > 1 else ""
+    else:
+        query = raw
+
+    if not query:
+        await message.reply("🔍 Укажи слово для поиска: `!emoji search <слово>`")
+        return
+
+    matches = _emoji_search(query)
+
+    if not matches:
+        await message.reply(
+            f"🤷 Эмодзи для «{query}» не найдены.\n"
+            "_Попробуй синоним на английском: fire, heart, cat, smile..._"
+        )
+        return
+
+    if show_all:
+        # Все варианты в одну строку
+        line = " ".join(matches)
+        await message.reply(f"🔍 `{query}` → {line}")
+    else:
+        # Первые 5 для краткого ответа
+        preview = " ".join(matches[:5])
+        if len(matches) > 5:
+            suffix = f" _( +{len(matches) - 5} ещё — `!emoji search {query}`)_"
+        else:
+            suffix = ""
+        await message.reply(f"{preview}{suffix}")
