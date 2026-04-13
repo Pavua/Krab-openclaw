@@ -6758,9 +6758,11 @@ async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
     !translate [lang] <текст> — быстрый перевод без voice.
 
     Формы вызова:
-      !translate <текст>         — перевод по текущей language pair из translator profile
+      !translate <текст>         — автоопределение направления (ru→en, en→ru, es→ru)
+                                   или по language_pair профиля если задана
       !translate en <текст>      — перевод на указанный язык
       !translate (reply)         — перевод текста ответного сообщения
+      !translate auto            — включить/выключить автоперевод входящих в чате
     """
     from ..core.translator_engine import translate_text
     from ..openclaw_client import openclaw_client as _oc
@@ -6770,6 +6772,11 @@ async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
     # Убираем команду: !translate или Краб translate
     parts = raw_text.split(maxsplit=1)
     after_cmd = parts[1].strip() if len(parts) > 1 else ""
+
+    # Специальный subcommand: !translate auto → toggle автоперевода
+    if after_cmd.lower() in ("auto", "авто"):
+        await handle_translate_auto(bot, message)
+        return
 
     # Определяем target lang и текст для перевода
     tgt_lang_override: str | None = None
@@ -6795,13 +6802,14 @@ async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
                     "❌ Укажи текст для перевода:\n"
                     "`!translate <текст>`\n"
                     "`!translate en <текст>`\n"
+                    "`!translate auto` — автоперевод входящих в чате\n"
                     "Или ответь командой на сообщение."
                 )
             )
 
     # --- Определяем языковую пару ---
     profile = bot.get_translator_runtime_profile()
-    pair = profile.get("language_pair", "es-ru")
+    pair = profile.get("language_pair", "")
 
     if tgt_lang_override:
         # Пользователь явно указал целевой язык — автоопределяем source через language_detect
@@ -6812,15 +6820,15 @@ async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
             src_lang = detected if detected and detected != tgt_lang_override else "auto"
             if src_lang == "auto" or not src_lang:
                 # Берём src из профиля если авто не сработал
-                src_lang = pair.split("-")[0] if "-" in pair else "es"
+                src_lang = pair.split("-")[0] if "-" in pair else "auto"
         except Exception:
-            src_lang = pair.split("-")[0] if "-" in pair else "es"
+            src_lang = pair.split("-")[0] if "-" in pair else "auto"
         tgt_lang = tgt_lang_override
         if src_lang == tgt_lang:
             # Если совпадает — переводим на другой (из профиля tgt)
-            tgt_lang = pair.split("-")[1] if "-" in pair else "ru"
-    else:
-        # Используем пару из профиля; language_detect определяет src
+            tgt_lang = pair.split("-")[1] if len(pair.split("-")) >= 2 else "ru"
+    elif pair and pair not in ("", "auto-detect"):
+        # Профиль задан — используем пару из профиля; language_detect определяет src
         try:
             from ..core.language_detect import detect_language, resolve_translation_pair
 
@@ -6831,13 +6839,24 @@ async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
                 src_lang, tgt_lang = (pair.split("-") + ["ru"])[:2]
         except Exception:
             src_lang, tgt_lang = (pair.split("-") + ["ru"])[:2]
+    else:
+        # Нет профиля или auto-detect — автоопределяем направление по языку текста
+        # Правила: ru→en, en→ru, es→ru, остальное→ru
+        try:
+            from ..core.language_detect import auto_detect_direction, detect_language
 
-    # Если src == tgt — принудительно меняем tgt на второй язык пары
+            detected = detect_language(text_to_translate)
+            if detected:
+                src_lang, tgt_lang = auto_detect_direction(detected)
+            else:
+                # Детекция не удалась — fallback: переводим на русский
+                src_lang, tgt_lang = "auto", "ru"
+        except Exception:
+            src_lang, tgt_lang = "auto", "ru"
+
+    # Если src == tgt — принудительно меняем tgt на ru или на en
     if src_lang == tgt_lang:
-        parts_pair = pair.split("-")
-        tgt_lang = parts_pair[1] if len(parts_pair) >= 2 else "ru"
-        if src_lang == tgt_lang:
-            tgt_lang = "ru"
+        tgt_lang = "en" if src_lang == "ru" else "ru"
 
     # --- Перевод ---
     try:
@@ -6862,6 +6881,31 @@ async def handle_translate(bot: "KraabUserbot", message: Message) -> None:
         f"**{result.original}**\n"
         f"_{result.translated}_"
     )
+
+
+async def handle_translate_auto(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !translate auto — toggle автоперевода входящих сообщений в текущем чате.
+
+    Когда включён: все входящие текстовые сообщения переводятся автоматически
+    (направление определяется через auto_detect_direction: ru→en, en→ru, es→ru).
+    Повторный вызов выключает автоперевод.
+    """
+    chat_id = str(message.chat.id)
+    is_enabled = bot.is_auto_translate_enabled(chat_id)
+
+    if is_enabled:
+        bot.remove_auto_translate_chat(chat_id)
+        await message.reply(f"🔄 Автоперевод в этом чате выключен.")
+        logger.info("auto_translate_disabled", chat_id=chat_id)
+    else:
+        bot.add_auto_translate_chat(chat_id)
+        await message.reply(
+            "🔄 Автоперевод входящих включён в этом чате.\n"
+            "Направление: ru→en, en→ru, es→ru.\n"
+            "Для выключения: `!translate auto`"
+        )
+        logger.info("auto_translate_enabled", chat_id=chat_id)
 
 
 async def handle_bookmark(bot: "KraabUserbot", message: Message) -> None:

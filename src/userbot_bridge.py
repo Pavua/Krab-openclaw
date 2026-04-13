@@ -146,6 +146,7 @@ from .openclaw_client import openclaw_client
 from .reserve_bot import reserve_bot
 from .search_engine import close_search
 from .userbot.access_control import AccessControlMixin
+from .userbot.auto_translate import AutoTranslateMixin
 from .userbot.background_tasks import BackgroundTasksMixin
 from .userbot.llm_flow import (
     LLMFlowMixin,
