@@ -6896,7 +6896,7 @@ async def handle_translate_auto(bot: "KraabUserbot", message: Message) -> None:
 
     if is_enabled:
         bot.remove_auto_translate_chat(chat_id)
-        await message.reply(f"🔄 Автоперевод в этом чате выключен.")
+        await message.reply("🔄 Автоперевод в этом чате выключен.")
         logger.info("auto_translate_disabled", chat_id=chat_id)
     else:
         bot.add_auto_translate_chat(chat_id)
