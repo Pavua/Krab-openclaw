@@ -84,12 +84,14 @@ from .handlers import (
     handle_digest,
     handle_emoji,
     handle_export,
+    handle_fix,
     handle_fwd,
     handle_gemini_cli,
     handle_grep,
     handle_health,
     handle_help,
     handle_hs,
+    handle_id,
     handle_inbox,
     handle_ls,
     handle_macos,
@@ -117,6 +119,7 @@ from .handlers import (
     handle_reminders,
     handle_report,
     handle_restart,
+    handle_rewrite,
     handle_rm_remind,
     handle_role,
     handle_say,
@@ -145,6 +148,7 @@ from .handlers import (
     handle_whois,
     handle_write,
     handle_eval,
+    handle_explain,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -690,6 +694,12 @@ class KraabUserbot(
             await run_cmd(handle_inbox, m)
 
         @self.client.on_message(
+            filters.command("id", prefixes=prefixes) & _make_command_filter("id"), group=-1
+        )
+        async def wrap_id(c, m):
+            await run_cmd(handle_id, m)
+
+        @self.client.on_message(
             filters.command("sysinfo", prefixes=prefixes) & _make_command_filter("sysinfo"),
             group=-1,
         )
@@ -716,6 +726,13 @@ class KraabUserbot(
             await run_cmd(handle_search, m)
 
         @self.client.on_message(
+            filters.command("explain", prefixes=prefixes) & _make_command_filter("explain"),
+            group=-1,
+        )
+        async def wrap_explain(c, m):
+            await run_cmd(handle_explain, m)
+
+        @self.client.on_message(
             filters.command("news", prefixes=prefixes) & _make_command_filter("news"), group=-1
         )
         async def wrap_news(c, m):
@@ -738,6 +755,18 @@ class KraabUserbot(
         )
         async def wrap_ask(c, m):
             await run_cmd(handle_ask, m)
+
+        @self.client.on_message(
+            filters.command("fix", prefixes=prefixes) & _make_command_filter("fix"), group=-1
+        )
+        async def wrap_fix(c, m):
+            await run_cmd(handle_fix, m)
+
+        @self.client.on_message(
+            filters.command("rewrite", prefixes=prefixes) & _make_command_filter("rewrite"), group=-1
+        )
+        async def wrap_rewrite(c, m):
+            await run_cmd(handle_rewrite, m)
 
         @self.client.on_message(
             filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1

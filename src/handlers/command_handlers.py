@@ -8039,6 +8039,80 @@ async def handle_ask(bot: "KraabUserbot", message: Message) -> None:
         await msg.edit(f"❌ Ошибка: {exc}")
 
 
+
+# ---------------------------------------------------------------------------
+# !fix — исправление грамматики, орфографии и пунктуации через AI
+# ---------------------------------------------------------------------------
+
+
+async def handle_fix(bot: "KraabUserbot", message: Message) -> None:
+    """
+    !fix [текст] — исправляет грамматику, орфографию и пунктуацию через AI.
+
+    Использование:
+      !fix Привет как дела   — исправить текст из аргументов команды
+      !fix                   — исправить текст из reply-сообщения
+    """
+    args_text = bot._get_command_args(message).strip()
+
+    # Если нет аргументов — берём текст из reply
+    if not args_text:
+        replied = message.reply_to_message
+        if replied is None:
+            raise UserInputError(
+                user_message=(
+                    "✏️ Укажи текст после команды или ответь на сообщение:\n"
+                    "`!fix Привет как дела` — исправит текст\n"
+                    "`!fix` (в reply) — исправит текст ответного сообщения"
+                )
+            )
+        source_text = (replied.text or replied.caption or "").strip()
+        if not source_text:
+            raise UserInputError(
+                user_message="❌ Исходное сообщение не содержит текста."
+            )
+    else:
+        source_text = args_text
+
+    # Изолированная сессия — не загрязняем основной контекст чата
+    session_id = f"fix_{message.chat.id}"
+
+    # Промпт: только исправленный текст без объяснений
+    prompt = (
+        "Исправь грамматику, орфографию и пунктуацию. "
+        "Верни ТОЛЬКО исправленный текст.\n\n"
+        f"{source_text}"
+    )
+
+    # Статусное сообщение пока AI обрабатывает
+    msg = await message.reply("✏️ Исправляю...")
+
+    try:
+        chunks: list[str] = []
+        async for chunk in openclaw_client.send_message_stream(
+            message=prompt,
+            chat_id=session_id,
+            disable_tools=True,       # только текстовый ответ, без tool_calls
+            max_output_tokens=512,    # короткий вывод — только исправленный текст
+        ):
+            chunks.append(str(chunk))
+
+        result = "".join(chunks).strip()
+        if not result:
+            await msg.edit("❌ AI вернул пустой ответ.")
+            return
+
+        # Разбиваем длинный ответ на куски для Telegram (редко нужно, но на всякий случай)
+        parts = _split_text_for_telegram(result)
+        await msg.edit(parts[0])
+        for part in parts[1:]:
+            await message.reply(part)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_fix_error", error=str(exc))
+        await msg.edit(f"❌ Ошибка: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # !rewrite — переписывание / улучшение текста через LLM
 # ---------------------------------------------------------------------------
@@ -8101,17 +8175,11 @@ async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
         if replied is None:
             raise UserInputError(
                 user_message=(
-                    "✏️ Использование:
-"
-                    "- `!rewrite <текст>` — улучшить текст
-"
-                    "- `!rewrite formal <текст>` — формальный стиль
-"
-                    "- `!rewrite casual <текст>` — разговорный стиль
-"
-                    "- `!rewrite short <текст>` — сократить
-
-"
+                    "✏️ Использование:\n"
+                    "- `!rewrite <текст>` — улучшить текст\n"
+                    "- `!rewrite formal <текст>` — формальный стиль\n"
+                    "- `!rewrite casual <текст>` — разговорный стиль\n"
+                    "- `!rewrite short <текст>` — сократить\n\n"
                     "Или ответь на сообщение командой `!rewrite [режим]`."
                 )
             )
@@ -8133,12 +8201,7 @@ async def handle_rewrite(bot: "KraabUserbot", message: Message) -> None:
     )
 
     # Промпт = инструкция + текст
-    prompt = f"{mode_instruction}
-
-Текст:
-"""
-{text_to_rewrite}
-""""
+    prompt = f"{mode_instruction}\n\nТекст:\n\"\"\"\n{text_to_rewrite}\n\"\"\""
 
     # Изолированная сессия, чтобы не загрязнять основной контекст чата
     session_id = f"rewrite_{message.chat.id}"
