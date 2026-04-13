@@ -1060,6 +1060,13 @@ class KraabUserbot(
             await run_cmd(handle_cronstatus, m)
 
         @self.client.on_message(
+            filters.command("cron", prefixes=prefixes) & _make_command_filter("cron"),
+            group=-1,
+        )
+        async def wrap_cron(c, m):
+            await run_cmd(handle_cron, m)
+
+        @self.client.on_message(
             filters.command("schedule", prefixes=prefixes) & _make_command_filter("schedule"),
             group=-1,
         )

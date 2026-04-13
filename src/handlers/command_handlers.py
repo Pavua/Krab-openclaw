@@ -13046,9 +13046,10 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
 
     # --- Фильтрация ---
     if mode == "errors":
+        _error_keywords = {"error", "critical", "warning"}
         result_lines = [
             ln for ln in lines
-            if any(kw in ln for kw in ("ERROR", "error", "CRITICAL", "critical", "WARNING", "warning"))
+            if any(kw in ln.lower() for kw in _error_keywords)
         ]
         header = "⚠️ **Ошибки в логах Краба**"
         if not result_lines:
