@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from pyrogram.types import Message
 
+from ..cache_manager import history_cache, search_cache
 from ..config import config
 from ..core.access_control import (
     PARTIAL_ACCESS_COMMANDS,
@@ -1647,9 +1648,41 @@ async def handle_model(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_clear(bot: "KraabUserbot", message: Message) -> None:
-    """Очистка истории диалога."""
-    openclaw_client.clear_session(str(message.chat.id))
-    res = "🧹 **Память очищена. Клешни как новые!**"
+    """Очистка контекста / кэшей.
+
+    Синтаксис:
+      !clear            — очистить сессию текущего чата (алиас !context clear)
+      !clear all        — очистить все сессии (сбросить _sessions целиком)
+      !clear cache      — очистить все кэши (history_cache + search_cache)
+    """
+    chat_id = str(message.chat.id)
+    raw = (message.text or "").strip()
+    # Извлекаем аргумент после команды (учитываем префикс ! и слово clear)
+    parts = raw.split(maxsplit=1)
+    sub = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    if sub == "all":
+        # Очищаем все сессии
+        count = len(openclaw_client._sessions)
+        openclaw_client._sessions.clear()
+        # Также сбрасываем LM Studio native chat state, если есть
+        if hasattr(openclaw_client, "_lm_native_chat_state"):
+            openclaw_client._lm_native_chat_state.clear()
+        res = f"🧹 **Все сессии очищены** (`{count}` чат(ов)). Краб начинает с чистого листа!"
+    elif sub == "cache":
+        # Очищаем все кэши
+        h_count = history_cache.clear_all()
+        s_count = search_cache.clear_all()
+        res = (
+            f"🗑️ **Кэши очищены**\n"
+            f"• history_cache: `{h_count}` записей\n"
+            f"• search_cache: `{s_count}` записей"
+        )
+    else:
+        # Очистить сессию текущего чата (поведение по умолчанию)
+        openclaw_client.clear_session(chat_id)
+        res = "🧹 **Память очищена. Клешни как новые!**"
+
     if message.from_user and message.from_user.id == bot.me.id:
         await message.edit(res)
     else:
@@ -3181,9 +3214,100 @@ async def handle_macos(bot: "KraabUserbot", message: Message) -> None:
 
 
 async def handle_restart(bot: "KraabUserbot", message: Message) -> None:
-    """Мягкая перезагрузка процесса."""
-    await message.reply("🔄 Перезапускаюсь...")
-    sys.exit(42)
+    """Перезапуск Краба через launchctl с подтверждением.
+
+    !restart          — запросить подтверждение
+    !restart confirm  — выполнить перезапуск через launchctl kickstart -k
+    !restart status   — показать uptime и PID текущего процесса
+    """
+    from ..core.subprocess_env import clean_subprocess_env  # noqa: PLC0415
+
+    # Метка LaunchAgent для ai.krab.core
+    KRAB_LAUNCHD_LABEL = "ai.krab.core"
+
+    args = bot._get_command_args(message).strip().lower()
+
+    # ── !restart status ──────────────────────────────────────────────────────
+    if args == "status":
+        pid = os.getpid()
+        uptime_str = "?"
+        try:
+            elapsed = time.time() - bot._session_start_time
+            uptime_str = _format_uptime_str(elapsed)
+        except Exception:
+            pass
+
+        # Статус launchd-сервиса (Running / Stopped)
+        launchd_status = "?"
+        try:
+            uid = os.getuid()
+            proc = subprocess.run(
+                ["launchctl", "print", f"gui/{uid}/{KRAB_LAUNCHD_LABEL}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=clean_subprocess_env(),
+            )
+            if "pid" in proc.stdout.lower():
+                import re as _re2
+
+                pid_match = _re2.search(r"pid\s*=\s*(\d+)", proc.stdout, _re2.IGNORECASE)
+                if pid_match:
+                    launchd_pid = pid_match.group(1)
+                    launchd_status = f"Running (PID {launchd_pid})"
+                else:
+                    launchd_status = "Running"
+            else:
+                launchd_status = "Stopped"
+        except Exception:
+            launchd_status = "N/A"
+
+        lines = [
+            "🦀 **Krab Status**",
+            f"PID: `{pid}`",
+            f"Uptime: `{uptime_str}`",
+            f"LaunchAgent: `{KRAB_LAUNCHD_LABEL}` — {launchd_status}",
+            "",
+            "Перезапуск: `!restart confirm`",
+        ]
+        await message.reply("\n".join(lines))
+        return
+
+    # ── !restart confirm — выполнить перезапуск ──────────────────────────────
+    if args == "confirm":
+        await message.reply("🔄 Перезапускаю Краба...")
+        try:
+            uid = os.getuid()
+            proc = subprocess.run(
+                ["launchctl", "kickstart", "-k", f"gui/{uid}/{KRAB_LAUNCHD_LABEL}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=clean_subprocess_env(),
+            )
+            if proc.returncode != 0:
+                # launchctl не сработал — запасной вариант через sys.exit
+                logger.warning(
+                    "launchctl kickstart вернул %d: %s",
+                    proc.returncode,
+                    (proc.stderr or proc.stdout).strip(),
+                )
+                sys.exit(42)
+        except FileNotFoundError:
+            # launchctl недоступен (например, в тестах) — запасной sys.exit
+            sys.exit(42)
+        except Exception as exc:
+            logger.error("Ошибка при запуске launchctl: %s", exc)
+            sys.exit(42)
+        return
+
+    # ── !restart (без аргументов) — запросить подтверждение ─────────────────
+    await message.reply(
+        "⚠️ **Перезапуск Краба**\n\n"
+        "Это остановит и заново запустит процесс через launchd.\n\n"
+        "Подтверди командой:\n`!restart confirm`\n\n"
+        "Текущий статус: `!restart status`"
+    )
 
 
 async def handle_agent(bot: "KraabUserbot", message: Message) -> None:
@@ -3360,6 +3484,150 @@ async def handle_diagnose(bot: "KraabUserbot", message: Message) -> None:
         report.append(f"- OpenClaw: ❌ Unreachable ({str(e)})")
         report.append("  _Совет: Проверьте, запущен ли Gateway и совпадает ли порт (обычно 18792)_")
     await msg.edit("\n".join(report))
+
+
+async def handle_debug(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Отладочная информация для разработчика (!debug [sessions|tasks|gc]).
+
+    Субкоманды:
+    - `!debug`          — сводка: tasks, timers, sessions, rate limiter, last error
+    - `!debug sessions` — список активных OpenClaw сессий с размером
+    - `!debug tasks`    — список asyncio задач
+    - `!debug gc`       — принудительный GC + статистика
+
+    Owner-only.
+    """
+    import gc
+
+    # Проверка прав: только владелец
+    access_profile = bot._get_access_profile(message.from_user)
+    if access_profile.level != AccessLevel.OWNER:
+        raise UserInputError(user_message="🔒 `!debug` доступен только владельцу.")
+
+    raw_args = bot._get_command_args(message).strip().lower()
+    sub = raw_args.split()[0] if raw_args else ""
+
+    if sub == "tasks":
+        # Список asyncio задач
+        tasks = list(asyncio.all_tasks())
+        lines = [f"⚙️ **asyncio tasks** (`{len(tasks)}` total)", "───────────────"]
+        for t in sorted(tasks, key=lambda x: x.get_name()):
+            name = t.get_name()
+            done_str = "done" if t.done() else "running"
+            coro = t.get_coro()
+            coro_name = getattr(coro, "__qualname__", None) or getattr(coro, "__name__", str(coro))
+            lines.append(f"- `{name}` [{done_str}] — `{coro_name}`")
+        if len(lines) > 32:
+            lines = lines[:32]
+            lines.append(f"…и ещё `{len(tasks) - 30}` задач")
+        await message.reply("\n".join(lines))
+        return
+
+    if sub == "sessions":
+        # Список OpenClaw сессий с размером
+        sessions_raw: dict = {}
+        try:
+            sessions_raw = dict(openclaw_client._sessions)  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+        lines = [
+            f"💬 **OpenClaw sessions** (`{len(sessions_raw)}` active)",
+            "───────────────────────",
+        ]
+        if not sessions_raw:
+            lines.append("- сессий нет")
+        else:
+            for sid, msgs in sorted(sessions_raw.items(), key=lambda x: -len(x[1])):
+                msg_list = list(msgs) if msgs is not None else []
+                size = len(msg_list)
+                # Грубая оценка токенов: 4 символа ~ 1 токен
+                raw_text = " ".join(
+                    str(m.get("content", "")) for m in msg_list if isinstance(m, dict)
+                )
+                approx_tokens = max(1, len(raw_text) // 4)
+                lines.append(
+                    f"- `{sid}` — `{size}` сообщений (~{approx_tokens:,} tok)".replace(",", "_")
+                )
+        await message.reply("\n".join(lines))
+        return
+
+    if sub == "gc":
+        # Принудительный garbage collection
+        before = gc.get_count()
+        collected = gc.collect()
+        after = gc.get_count()
+        unreachable = gc.garbage
+        lines = [
+            "🗑 **Garbage Collection**",
+            "─────────────────────",
+            f"До:    gen0={before[0]}, gen1={before[1]}, gen2={before[2]}",
+            f"После: gen0={after[0]}, gen1={after[1]}, gen2={after[2]}",
+            f"Собрано объектов: `{collected}`",
+            f"gc.garbage (unreachable): `{len(unreachable)}`",
+        ]
+        await message.reply("\n".join(lines))
+        return
+
+    # Сводка по умолчанию
+    from ..core.telegram_rate_limiter import telegram_rate_limiter
+
+    # asyncio tasks
+    all_tasks = list(asyncio.all_tasks())
+    task_count = len(all_tasks)
+    done_count = sum(1 for t in all_tasks if t.done())
+
+    # Pending timers из _active_timers (модуль-уровень)
+    timer_count = len(_active_timers)
+
+    # Активные OpenClaw сессии
+    try:
+        sessions_map: dict = dict(openclaw_client._sessions)  # type: ignore[attr-defined]
+    except AttributeError:
+        sessions_map = {}
+    session_count = len(sessions_map)
+    total_msgs = sum(len(list(v)) for v in sessions_map.values() if v is not None)
+
+    # Rate limiter stats
+    rl = telegram_rate_limiter.stats()
+    rl_str = (
+        f"cap {int(rl.get('max_per_sec', 0))} req/s · "
+        f"в окне {int(rl.get('current_in_window', 0))} · "
+        f"total {int(rl.get('total_acquired', 0))} · "
+        f"waited {int(rl.get('total_waited', 0))}"
+    )
+
+    # Последняя ошибка из proactive_watch (если доступна)
+    last_error_str = "—"
+    try:
+        err_digest = proactive_watch.get_error_digest()  # type: ignore[attr-defined]
+        if err_digest:
+            last_err = err_digest[-1] if isinstance(err_digest, list) else None
+            if last_err and isinstance(last_err, dict):
+                last_error_str = (
+                    f"{last_err.get('type', '?')}: {str(last_err.get('msg', '?'))[:80]}"
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
+    lines = [
+        "🐛 **Debug Info**",
+        "─────────────────",
+        (
+            f"asyncio tasks: `{task_count}` total "
+            f"(`{done_count}` done, `{task_count - done_count}` running)"
+        ),
+        f"Pending timers: `{timer_count}`",
+        f"OpenClaw sessions: `{session_count}` (total `{total_msgs}` messages)",
+        f"Rate limiter: `{rl_str}`",
+        f"Last error: `{last_error_str}`",
+        "",
+        "Субкоманды:",
+        "`!debug sessions` — список сессий",
+        "`!debug tasks`    — список задач",
+        "`!debug gc`       — garbage collection",
+    ]
+    await message.reply("\n".join(lines))
 
 
 _REMIND_HELP = (
@@ -14875,3 +15143,179 @@ async def handle_rate(bot: "KraabUserbot", message: Message) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.error("handle_rate_error", assets=assets, error=str(exc))
         await msg.edit(f"❌ Ошибка получения курса: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# !say — тихая отправка сообщения от имени юзербота
+# ---------------------------------------------------------------------------
+
+
+async def handle_say(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Отправляет сообщение от имени юзербота, удаляя команду из истории.
+
+    Форматы:
+      !say <текст>               — отправить в текущий чат
+      !say <chat_id> <текст>     — отправить в другой чат (chat_id — число или @username)
+
+    Полезно для «тихой» отправки без видимого !-command в истории чата.
+    """
+    raw = bot._get_command_args(message).strip()
+
+    if not raw:
+        raise UserInputError(
+            user_message="❌ Использование: `!say <текст>` или `!say <chat_id> <текст>`"
+        )
+
+    # Определяем chat_id и текст
+    # Если первый токен — число или @username — отправляем в другой чат
+    parts = raw.split(maxsplit=1)
+    target_chat: int | str = message.chat.id
+    text = raw
+
+    if len(parts) == 2:
+        first = parts[0]
+        # Числовой chat_id (может быть отрицательным)
+        try:
+            target_chat = int(first)
+            text = parts[1]
+        except ValueError:
+            # @username или просто текст начинается с нечислового токена
+            if first.startswith("@"):
+                target_chat = first
+                text = parts[1]
+            # иначе — всё является текстом, отправляем в текущий чат
+
+    if not text:
+        raise UserInputError(user_message="❌ Текст сообщения не может быть пустым.")
+
+    # Удаляем команду из истории чата (до отправки, чтобы не было паузы)
+    try:
+        await message.delete()
+    except Exception:
+        pass  # Нет прав на удаление — не критично
+
+    # Отправляем сообщение
+    try:
+        await bot.client.send_message(chat_id=target_chat, text=text)
+        logger.info("handle_say_sent", target_chat=target_chat, length=len(text))
+    except Exception as exc:
+        logger.error("handle_say_error", target_chat=target_chat, error=str(exc))
+        # Если отправка в другой чат не удалась — уведомляем в текущем
+        try:
+            await bot.client.send_message(
+                chat_id=message.chat.id,
+                text=f"❌ Ошибка отправки в `{target_chat}`: {exc}",
+            )
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# handle_backup — экспорт всех persistent данных Краба в ZIP
+# ---------------------------------------------------------------------------
+
+# Файлы для резервной копии (относительно krab_runtime_state/)
+_BACKUP_FILES = [
+    "bookmarks.json",
+    "chat_monitors.json",
+    "command_aliases.json",
+    "saved_stickers.json",
+    "personal_todos.json",
+    "code_snippets.json",
+    "message_templates.json",
+    "saved_quotes.json",
+    "welcome_messages.json",
+    "silence_schedule.json",
+    "spam_filter_config.json",
+    "swarm_memory.json",
+    "swarm_channels.json",
+]
+
+
+async def handle_backup(bot: "KraabUserbot", message: Message) -> None:
+    """
+    Экспортирует все persistent данные Краба в ZIP-архив и отправляет в чат.
+
+    !backup        — создать и отправить архив
+    !backup list   — показать список файлов, которые войдут в архив
+    """
+    import tempfile
+    import zipfile as _zipfile
+
+    args = bot._get_command_args(message).strip().lower()
+
+    # Базовая директория runtime state
+    runtime_dir = pathlib.Path.home() / ".openclaw" / "krab_runtime_state"
+
+    if args == "list":
+        # Показываем какие файлы войдут в архив
+        lines = ["📋 **Файлы в резервной копии:**\n"]
+        found_count = 0
+        missing_count = 0
+        for fname in _BACKUP_FILES:
+            fpath = runtime_dir / fname
+            if fpath.exists():
+                size_kb = fpath.stat().st_size / 1024
+                lines.append(f"✅ `{fname}` ({size_kb:.1f} KB)")
+                found_count += 1
+            else:
+                lines.append(f"⬜ `{fname}` _(отсутствует)_")
+                missing_count += 1
+        lines.append(
+            f"\n**Итого:** {found_count} файлов найдено, {missing_count} отсутствуют."
+        )
+        await message.reply("\n".join(lines))
+        return
+
+    # Создаём ZIP-архив во временной директории
+    status_msg = await message.reply("⏳ Создаю резервную копию данных Краба…")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            archive_name = f"krab_backup_{timestamp}.zip"
+            archive_path = pathlib.Path(tmpdir) / archive_name
+
+            included: list[str] = []
+            skipped: list[str] = []
+
+            with _zipfile.ZipFile(archive_path, "w", compression=_zipfile.ZIP_DEFLATED) as zf:
+                for fname in _BACKUP_FILES:
+                    fpath = runtime_dir / fname
+                    if fpath.exists():
+                        zf.write(fpath, arcname=fname)
+                        included.append(fname)
+                    else:
+                        skipped.append(fname)
+
+            if not included:
+                await status_msg.edit(
+                    "⚠️ Нет данных для резервной копии — ни один файл не найден.\n"
+                    "Используй `!backup list` для проверки."
+                )
+                return
+
+            # Размер архива
+            archive_size_kb = archive_path.stat().st_size / 1024
+
+            # Формируем подпись к документу
+            caption_lines = [
+                f"💾 **Krab Backup** `{timestamp}`",
+                f"Файлов: {len(included)} | Размер: {archive_size_kb:.1f} KB",
+            ]
+            if skipped:
+                caption_lines.append(f"Пропущено (нет): {', '.join(skipped)}")
+
+            # Отправляем ZIP как документ
+            await bot.client.send_document(
+                chat_id=message.chat.id,
+                document=str(archive_path),
+                caption="\n".join(caption_lines),
+                reply_to_message_id=message.id,
+            )
+            await status_msg.delete()
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("handle_backup_error", error=str(exc))
+        await status_msg.edit(f"❌ Ошибка создания резервной копии: {str(exc)[:300]}")
