@@ -7554,33 +7554,27 @@ class WebApp:
 
         @self.app.get("/inbox", response_class=HTMLResponse)
         async def inbox_dashboard():
-            """Inbox items dashboard с фильтрами и карточками (Gemini 3.1 Pro)."""
-            from .web_app_inbox_dashboard import INBOX_DASHBOARD_HTML
-
-            return HTMLResponse(
-                INBOX_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
+            """Inbox items dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "inbox_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>Inbox page not found</h1>", headers=_no_store_headers())
 
         @self.app.get("/costs", response_class=HTMLResponse)
         async def costs_dashboard():
-            """Cost analytics dashboard с бюджетом и breakdown (Gemini 3.1 Pro)."""
-            from .web_app_costs_dashboard import COSTS_DASHBOARD_HTML
-
-            return HTMLResponse(
-                COSTS_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
+            """Cost analytics dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "costs_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>Costs page not found</h1>", headers=_no_store_headers())
 
         @self.app.get("/swarm", response_class=HTMLResponse)
         async def swarm_dashboard():
-            """Swarm multi-agent teams visualizer (Gemini 3.1 Pro)."""
-            from .web_app_swarm_dashboard import SWARM_DASHBOARD_HTML
-
-            return HTMLResponse(
-                SWARM_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
+            """Swarm multi-agent dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "swarm_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>Swarm page not found</h1>", headers=_no_store_headers())
 
         @self.app.get("/prototypes/{page}", response_class=HTMLResponse)
         async def prototype_page(page: str):
@@ -7597,10 +7591,10 @@ class WebApp:
 
         @self.app.get("/translator", response_class=HTMLResponse)
         async def translator_dashboard():
-            """Translator status page (Gemini-generated prototype)."""
-            proto = config.BASE_DIR / "src" / "web" / "prototypes" / "translator_v1.html"
-            if proto.exists():
-                return FileResponse(proto, headers=_no_store_headers())
+            """Translator dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "translator_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>Translator page not found</h1>", headers=_no_store_headers())
 
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────

@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inbox Dashboard | Krab AI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a1a;
+            --surface: rgba(255, 255, 255, 0.02);
+            --surface-hover: rgba(255, 255, 255, 0.05);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(255, 255, 255, 0.15);
+            --cyan: #00f0ff;
+            --purple: #8a2be2;
+            --text-main: #f2f2f2;
+            --text-muted: #888899;
+            --danger: #ff4444;
+            --warning: #ffbb33;
+            --success: #00C851;
+            --font: 'Outfit', sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: var(--font);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        .glass {
+            background: var(--surface);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+        }
+
+        /* Navbar */
+        nav {
+            display: flex;
+            align-items: center;
+            padding: 0 32px;
+            height: 64px;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(10, 10, 26, 0.8);
+            backdrop-filter: blur(12px);
+        }
+
+        .brand {
+            font-weight: 700;
+            font-size: 1.2rem;
+            margin-right: 48px;
+            background: linear-gradient(90deg, var(--cyan), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 1px;
+        }
+
+        .nav-links { display: flex; gap: 24px; }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            position: relative;
+            height: 64px;
+            display: flex;
+            align-items: center;
+        }
+
+        .nav-links a:hover { color: var(--text-main); }
+        .nav-links a.active { color: var(--text-main); }
+
+        .nav-links a.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px; left: 0;
+            width: 100%; height: 2px;
+            background: var(--cyan);
+            box-shadow: 0 -2px 10px rgba(0, 240, 255, 0.5);
+        }
+
+        main {
+            padding: 32px;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            flex: 1;
+        }
+
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        h1 { font-size: 2rem; font-weight: 600; }
+
+        .btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-family: var(--font);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: var(--surface-hover);
+            border-color: var(--border-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn:active { transform: translateY(0); }
+
+        .btn-primary {
+            background: linear-gradient(90deg, rgba(0, 240, 255, 0.1), rgba(138, 43, 226, 0.1));
+            border-color: rgba(138, 43, 226, 0.3);
+        }
+
+        .btn-primary:hover {
+            border-color: var(--cyan);
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.15);
+        }
+
+        .actions { display: flex; gap: 12px; }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(0,240,255,0.4), transparent);
+        }
+
+        .stat-card[data-type="attention"]::before { background: linear-gradient(90deg, transparent, var(--warning), transparent); }
+        .stat-card[data-type="escalation"]::before { background: linear-gradient(90deg, transparent, var(--danger), transparent); }
+        .stat-card[data-type="stale"]::before { background: linear-gradient(90deg, transparent, var(--purple), transparent); }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 500;
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 300;
+            line-height: 1;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 1px;
+        }
+
+        .tab {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 10px 20px;
+            font-family: var(--font);
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            position: relative;
+            transition: color 0.2s;
+        }
+
+        .tab:hover { color: var(--text-main); }
+        .tab.active { color: var(--cyan); }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px; left: 0;
+            width: 100%; height: 2px;
+            background: var(--cyan);
+            border-radius: 2px 2px 0 0;
+        }
+
+        /* Item List */
+        .list-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .item {
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            overflow: hidden;
+        }
+
+        .item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: var(--border-hover);
+        }
+
+        .item-header {
+            display: flex;
+            align-items: center;
+            padding: 16px 20px;
+            gap: 16px;
+        }
+
+        .item-severity {
+            font-size: 1.2rem;
+            width: 24px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .item-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .item-title {
+            font-weight: 500;
+            font-size: 1rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .item-meta {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 2px 8px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            font-family: monospace;
+            font-size: 0.75rem;
+        }
+
+        .item-time {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .item-actions {
+            opacity: 0;
+            transition: opacity 0.2s;
+            flex-shrink: 0;
+        }
+
+        .item:hover .item-actions { opacity: 1; }
+
+        .item-body {
+            padding: 0 20px 20px 60px;
+            font-size: 0.9rem;
+            color: #b0b0c0;
+            line-height: 1.5;
+            display: none;
+            border-top: 1px solid transparent;
+        }
+
+        .item.expanded {
+            background: rgba(255, 255, 255, 0.03);
+            border-color: rgba(0, 240, 255, 0.2);
+        }
+
+        .item.expanded .item-body {
+            display: block;
+            border-top-color: rgba(255, 255, 255, 0.05);
+            margin-top: 8px;
+            padding-top: 16px;
+        }
+
+        /* Skeleton Loading */
+        @keyframes shimmer {
+            0% { background-position: -1000px 0; }
+            100% { background-position: 1000px 0; }
+        }
+
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.02) 25%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.02) 75%);
+            background-size: 1000px 100%;
+            animation: shimmer 2s infinite linear;
+        }
+
+        .sk-badge { height: 80px; border-radius: 12px; }
+        .sk-item  { height: 72px; border-radius: 8px; }
+
+        /* Toasts */
+        .toast-container {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 1000;
+        }
+
+        .toast {
+            background: rgba(20, 20, 35, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--cyan);
+            padding: 14px 22px;
+            border-radius: 6px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            transform: translateX(120%);
+            animation: slideIn 0.3s forwards cubic-bezier(0.2, 0.8, 0.2, 1);
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            max-width: 360px;
+        }
+
+        .toast.error   { border-left-color: var(--danger); }
+        .toast.success { border-left-color: var(--success); }
+        .toast.fade-out { animation: slideOut 0.3s forwards; }
+
+        @keyframes slideIn  { to { transform: translateX(0); } }
+        @keyframes slideOut { to { transform: translateX(120%); opacity: 0; } }
+
+        .empty-state {
+            text-align: center;
+            padding: 64px 20px;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            main { padding: 16px; }
+            .item-header { flex-wrap: wrap; }
+            .item-actions { opacity: 1; width: 100%; display: flex; justify-content: flex-end; }
+            .item-body { padding-left: 20px; }
+            .nav-links { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="brand">Krab AI</div>
+        <div class="nav-links">
+            <a href="/">/</a>
+            <a href="/costs">/costs</a>
+            <a href="/inbox" class="active">/inbox</a>
+            <a href="/swarm">/swarm</a>
+            <a href="/translator">/translator</a>
+        </div>
+    </nav>
+
+    <main>
+        <div class="header-row">
+            <h1>Inbox</h1>
+            <div class="actions">
+                <button class="btn" id="btnRemediate">&#10024; Remediate Stale</button>
+                <button class="btn btn-primary" id="btnAckAll">&#10003; Ack All Open</button>
+            </div>
+        </div>
+
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card glass skeleton sk-badge"></div>
+            <div class="stat-card glass skeleton sk-badge"></div>
+            <div class="stat-card glass skeleton sk-badge"></div>
+            <div class="stat-card glass skeleton sk-badge"></div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" data-status="open">Open</button>
+            <button class="tab" data-status="acked">Acked</button>
+            <button class="tab" data-status="all">All</button>
+        </div>
+
+        <div class="list-container" id="listContainer">
+            <div class="item glass skeleton sk-item"></div>
+            <div class="item glass skeleton sk-item"></div>
+            <div class="item glass skeleton sk-item"></div>
+            <div class="item glass skeleton sk-item"></div>
+        </div>
+    </main>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        'use strict';
+
+        const API_BASE = 'http://localhost:8080/api/inbox';
+        const KRAB_KEY = localStorage.getItem('krab_web_key') || '';
+
+        /* ---- helpers ---- */
+        function esc(str) {
+            return String(str ?? '');
+        }
+
+        function timeAgo(dateStr) {
+            if (!dateStr) return '';
+            const diff = Math.floor((Date.now() - new Date(dateStr)) / 1000);
+            if (diff < 60)    return diff + 's ago';
+            if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            return Math.floor(diff / 86400) + 'd ago';
+        }
+
+        const SEV_EMOJI = { info: 'ℹ️', warning: '⚠️', error: '🔴', critical: '🚨' };
+        function severityEmoji(s) { return SEV_EMOJI[s] || 'ℹ️'; }
+
+        function authHeaders() {
+            const h = { 'Content-Type': 'application/json' };
+            if (KRAB_KEY) h['X-Krab-Web-Key'] = KRAB_KEY;
+            return h;
+        }
+
+        /* ---- toast ---- */
+        function showToast(message, type) {
+            type = type || 'info';
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+
+            const icon = document.createElement('span');
+            icon.textContent = type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ';
+
+            const text = document.createElement('span');
+            text.textContent = message;
+
+            toast.appendChild(icon);
+            toast.appendChild(text);
+            container.appendChild(toast);
+
+            setTimeout(function () {
+                toast.classList.add('fade-out');
+                toast.addEventListener('animationend', function () { toast.remove(); });
+            }, 3500);
+        }
+
+        /* ---- stat cards ---- */
+        function createStatCard(type, label, value) {
+            const card = document.createElement('div');
+            card.className = 'stat-card glass';
+            card.dataset.type = type;
+
+            const lbl = document.createElement('div');
+            lbl.className = 'stat-label';
+            lbl.textContent = label;
+
+            const val = document.createElement('div');
+            val.className = 'stat-value';
+            val.textContent = value !== undefined && value !== null ? String(value) : '—';
+
+            card.appendChild(lbl);
+            card.appendChild(val);
+            return card;
+        }
+
+        function renderStats(data) {
+            const grid = document.getElementById('statsGrid');
+            grid.innerHTML = '';
+            const stale = (data.stale_processing || 0) + (data.stale_open || 0);
+            grid.appendChild(createStatCard('open',       'Open',        data.open_items));
+            grid.appendChild(createStatCard('attention',  'Attention',   data.attention_items));
+            grid.appendChild(createStatCard('escalation', 'Escalations', data.escalations));
+            grid.appendChild(createStatCard('stale',      'Stale',       stale));
+        }
+
+        function renderStatsEmpty() {
+            const grid = document.getElementById('statsGrid');
+            grid.innerHTML = '';
+            ['open', 'attention', 'escalation', 'stale'].forEach(function (type) {
+                const labels = { open: 'Open', attention: 'Attention', escalation: 'Escalations', stale: 'Stale' };
+                grid.appendChild(createStatCard(type, labels[type], null));
+            });
+        }
+
+        /* ---- item list ---- */
+        function createItemEl(item) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'item glass';
+            wrapper.dataset.id = esc(item.id);
+
+            const header = document.createElement('div');
+            header.className = 'item-header';
+
+            const sev = document.createElement('div');
+            sev.className = 'item-severity';
+            sev.textContent = severityEmoji(item.severity);
+
+            const main = document.createElement('div');
+            main.className = 'item-main';
+
+            const title = document.createElement('div');
+            title.className = 'item-title';
+            title.textContent = esc(item.title || item.id);
+
+            const meta = document.createElement('div');
+            meta.className = 'item-meta';
+
+            if (item.kind) {
+                const b1 = document.createElement('span');
+                b1.className = 'badge';
+                b1.textContent = esc(item.kind);
+                meta.appendChild(b1);
+            }
+
+            if (item.source) {
+                const b2 = document.createElement('span');
+                b2.className = 'badge';
+                b2.textContent = esc(item.source);
+                meta.appendChild(b2);
+            }
+
+            if (item.status) {
+                const st = document.createElement('span');
+                st.textContent = esc(item.status);
+                meta.appendChild(st);
+            }
+
+            main.appendChild(title);
+            main.appendChild(meta);
+
+            const time = document.createElement('div');
+            time.className = 'item-time';
+            time.textContent = timeAgo(item.created_at);
+
+            const actions = document.createElement('div');
+            actions.className = 'item-actions';
+
+            const ackBtn = document.createElement('button');
+            ackBtn.className = 'btn';
+            ackBtn.textContent = 'Ack';
+            ackBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                updateItemStatus(esc(item.id), 'acked');
+            });
+            actions.appendChild(ackBtn);
+
+            header.appendChild(sev);
+            header.appendChild(main);
+            header.appendChild(time);
+            header.appendChild(actions);
+            wrapper.appendChild(header);
+
+            if (item.body) {
+                const body = document.createElement('div');
+                body.className = 'item-body';
+                body.textContent = esc(item.body);
+                wrapper.appendChild(body);
+            }
+
+            header.addEventListener('click', function () {
+                wrapper.classList.toggle('expanded');
+            });
+
+            return wrapper;
+        }
+
+        function renderItems(items) {
+            const container = document.getElementById('listContainer');
+            container.innerHTML = '';
+            if (!items || !items.length) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-state';
+                empty.textContent = 'No items found';
+                container.appendChild(empty);
+                return;
+            }
+            items.forEach(function (item) {
+                container.appendChild(createItemEl(item));
+            });
+        }
+
+        function renderSkeletons() {
+            const container = document.getElementById('listContainer');
+            container.innerHTML = '';
+            for (let i = 0; i < 3; i++) {
+                const sk = document.createElement('div');
+                sk.className = 'item glass skeleton sk-item';
+                container.appendChild(sk);
+            }
+        }
+
+        /* ---- API calls ---- */
+        var currentTab = 'open';
+        var refreshTimer = null;
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch(API_BASE + '/status', { headers: authHeaders() });
+                if (!res.ok) throw new Error('status ' + res.status);
+                const data = await res.json();
+                renderStats(data);
+            } catch (err) {
+                console.warn('fetchStatus:', err);
+                renderStatsEmpty();
+            }
+        }
+
+        async function fetchItems() {
+            renderSkeletons();
+            try {
+                const res = await fetch(API_BASE + '/items?status=' + encodeURIComponent(currentTab) + '&limit=20', {
+                    headers: authHeaders()
+                });
+                if (!res.ok) throw new Error('items ' + res.status);
+                const data = await res.json();
+                renderItems(data.items || []);
+            } catch (err) {
+                console.warn('fetchItems:', err);
+                renderItems([]);
+            }
+        }
+
+        async function updateItemStatus(id, status) {
+            try {
+                const res = await fetch(API_BASE + '/update', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ id: id, status: status })
+                });
+                if (!res.ok) throw new Error('Update failed: ' + res.status);
+                showToast('Item marked as ' + status, 'success');
+                await refreshData();
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function ackAllOpen() {
+            try {
+                const res = await fetch(API_BASE + '/update', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify({ action: 'ack_all_open' })
+                });
+                if (!res.ok) throw new Error('Ack all failed: ' + res.status);
+                showToast('All open items acknowledged', 'success');
+                await refreshData();
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function remediateStale() {
+            try {
+                const res = await fetch('http://localhost:8080/api/inbox/stale-processing/remediate', {
+                    method: 'POST',
+                    headers: authHeaders()
+                });
+                if (!res.ok) throw new Error('Remediation failed: ' + res.status);
+                showToast('Stale items remediated', 'success');
+                await refreshData();
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function refreshData() {
+            await Promise.all([fetchStatus(), fetchItems()]);
+        }
+
+        function setTab(status) {
+            currentTab = status;
+            document.querySelectorAll('.tab').forEach(function (t) {
+                t.classList.toggle('active', t.dataset.status === status);
+            });
+            fetchItems();
+        }
+
+        /* ---- init ---- */
+        document.addEventListener('DOMContentLoaded', function () {
+            document.querySelectorAll('.tab').forEach(function (t) {
+                t.addEventListener('click', function () { setTab(t.dataset.status); });
+            });
+
+            document.getElementById('btnAckAll').addEventListener('click', ackAllOpen);
+            document.getElementById('btnRemediate').addEventListener('click', remediateStale);
+
+            refreshData();
+            refreshTimer = setInterval(refreshData, 10000);
+        });
+    </script>
+</body>
+</html>
