@@ -18,12 +18,15 @@
           <a href="/v4/inbox" class="nav-link">Inbox</a>
           <a href="/v4/swarm" class="nav-link">Swarm</a>
           <a href="/v4/translator" class="nav-link active">Translator</a>
-          <a href="/v4/inbox" class="nav-bell" title="Notifications">
-            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-            </svg>
-            <span class="bell-count hidden" id="nav-bell-count">0</span>
-          </a>
+          <div class="nav-bell-wrapper">
+              <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                  </svg>
+                  <span class="bell-count hidden" id="nav-bell-count">0</span>
+              </a>
+              <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+          </div>
       </div>
   </nav>
 
@@ -365,21 +368,131 @@
 
     async function updateBellCount() {
       try {
-        const r = await fetch('/api/notifications/count');
-        const d = await r.json();
-        const total = (d.total || 0) + (d.attention || 0);
-        const el = document.getElementById('nav-bell-count');
-        if (!el) return;
-        if (total > 0) {
-          el.textContent = total > 99 ? '99+' : String(total);
-          el.classList.remove('hidden');
+        const [inboxRes, opsRes] = await Promise.all([
+          fetch('/api/inbox/status').catch(() => null),
+          fetch('/api/ops/alerts').catch(() => null)
+        ]);
+
+        const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+        const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+        const summary = inboxData.summary || {};
+        const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+        const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+        let total = 0;
+        if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+          total = (summary.open_items || 0) + (summary.attention_items || 0);
         } else {
-          el.classList.add('hidden');
+          total = latestItems.length + alerts.length;
         }
-      } catch {}
+
+        const countEl = document.getElementById('nav-bell-count');
+        if (countEl) {
+          if (total > 0) {
+            countEl.textContent = total > 99 ? '99+' : String(total);
+            countEl.classList.remove('hidden');
+          } else {
+            countEl.classList.add('hidden');
+          }
+        }
+
+        const dropdown = document.getElementById('bell-dropdown');
+        if (!dropdown) return;
+
+        dropdown.innerHTML = '';
+
+        if (alerts.length === 0 && latestItems.length === 0) {
+          const emptyDiv = document.createElement('div');
+          emptyDiv.className = 'bell-dropdown-empty';
+          emptyDiv.textContent = 'Нет уведомлений';
+          dropdown.appendChild(emptyDiv);
+        } else {
+          if (alerts.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'bell-dropdown-header';
+            header.textContent = 'ALERTS';
+            dropdown.appendChild(header);
+
+            alerts.forEach(alert => {
+              const a = document.createElement('a');
+              a.className = 'bell-dropdown-item';
+              a.href = '/v4/ops';
+          
+              const dot = document.createElement('span');
+              dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+              const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+              a.appendChild(dot);
+              a.appendChild(text);
+              dropdown.appendChild(a);
+            });
+          }
+
+          if (latestItems.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'bell-dropdown-header';
+            header.textContent = 'INBOX';
+            dropdown.appendChild(header);
+
+            latestItems.forEach(item => {
+              const a = document.createElement('a');
+              a.className = 'bell-dropdown-item';
+              a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+              const dot = document.createElement('span');
+              dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+              const text = document.createTextNode(item.title || 'Notification');
+          
+              a.appendChild(dot);
+              a.appendChild(text);
+              dropdown.appendChild(a);
+            });
+          }
+        }
+
+        const footer = document.createElement('a');
+        footer.className = 'bell-dropdown-footer';
+        footer.href = '/v4/inbox';
+        footer.textContent = 'Открыть все →';
+        footer.style.display = 'block';
+        footer.style.textDecoration = 'none';
+        dropdown.appendChild(footer);
+
+      } catch (err) {
+        console.error(err);
+      }
     }
+
     setInterval(updateBellCount, 30000);
     updateBellCount();
+
+    const navBell = document.querySelector('.nav-bell');
+    if (navBell) {
+      const bellWrapper = navBell.closest('.nav-bell-wrapper');
+      const bellDropdown = document.getElementById('bell-dropdown');
+  
+      if (bellWrapper && bellDropdown) {
+        navBell.addEventListener('click', (e) => {
+          e.preventDefault();
+          bellDropdown.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', (e) => {
+          if (!bellWrapper.contains(e.target)) {
+            bellDropdown.classList.add('hidden');
+          }
+        });
+
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            bellDropdown.classList.add('hidden');
+          }
+        });
+      }
+    }
   </script>
 </body>
 </html>

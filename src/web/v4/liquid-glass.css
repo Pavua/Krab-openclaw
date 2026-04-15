@@ -582,3 +582,69 @@ h3 { font-size: 1rem; font-weight: 500; }
 @media (min-width: 1024px) {
   .hub-grid { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* =========================================
+   Notification Bell Dropdown
+   ========================================= */
+.bell-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 360px;
+  max-height: 480px;
+  overflow-y: auto;
+  background: rgba(20, 20, 41, 0.95);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  padding: 0.5rem;
+}
+.bell-dropdown.hidden { display: none; }
+.bell-dropdown-header {
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.5);
+}
+.bell-dropdown-item {
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.15s;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.bell-dropdown-item:hover { background: rgba(255,255,255,0.05); }
+.bell-dropdown-empty {
+  padding: 2rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.85rem;
+}
+.bell-dropdown-severity {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+.bell-dropdown-severity.critical { background: var(--accent-red); }
+.bell-dropdown-severity.warning { background: var(--accent-yellow); }
+.bell-dropdown-severity.info { background: var(--accent-cyan); }
+.bell-dropdown-severity.error { background: var(--accent-red); }
+.bell-dropdown-footer {
+  padding: 0.75rem 1rem;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--accent-cyan);
+  border-top: 1px solid var(--glass-border);
+  margin-top: 0.25rem;
+}
+.nav-bell-wrapper { position: relative; display: inline-flex; align-items: center; height: 100%; }
