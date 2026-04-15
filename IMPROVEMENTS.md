@@ -6,19 +6,22 @@
 
 ---
 
-## 📋 Session 8 (2026-04-15)
+## 📋 Session 8 (2026-04-15 → 2026-04-16) — MEGA PARALLEL CONVEYOR
 
-> **12+ коммитов Track B** (Dashboard V4 polish) | **+20 тестов** (test_log + test_memory_adapter) | **~8 Gemini 3.1 Pro агентов** | **Track E Memory Layer** запущен параллельно
+> **139+ коммитов Track B** | **+30+ тестов** (test_log + test_memory_adapter + test fixes) | **10 Gemini 3.1 Pro агентов параллельно** | **Track E Memory Layer** параллельно с 232 тестами
 
-### Статистика Session 8 (Track B)
+### Статистика Session 8 (Track B + Track E)
 
 | Метрика | Session 7 | Session 8 |
 |---------|-----------|-----------|
-| Коммиты Track B | 91 | 12+ |
-| Всего тестов | 7067 | ~7077 |
-| Dashboard V4 pages | 6 | **7** (+Ops) |
-| API endpoints | 201 | **205** (+SSE swarm/inbox events, ops ack, runtime) |
-| Phase 7 готовность | 88% | **100%** (test_log closed gap) |
+| Коммиты Track B | 91 | **139+** |
+| Коммиты Track E | — | **7** |
+| Всего тестов Track B | 7067 | ~7080+ |
+| Тестов Track E | — | **232** |
+| Dashboard V4 pages | 6 | **10** (+Ops, +Research, +Settings, +Commands) |
+| API endpoints | 201 | **207+** (SSE events, ops ack, theme-toggle, research route) |
+| Phase 7 готовность | 88% | **100%** |
+| Параллельных Gemini agents | ~50 session 7 | **10 одновременно session 8** |
 
 ### Dashboard V4 — Session 8 полировка
 
@@ -53,20 +56,82 @@
 - **Main baseline unblock** (`62c86b2` в main) — 158 файлов, pytest
   разблокирован для Track E worktree
 
-### Коммиты Track B (`claude/youthful-pascal`)
+### Коммиты Track B (`claude/youthful-pascal`) — последние 15
 
 ```
+471052a fix(v4): восстановить Ops + Research nav-links в 8 страницах
+bdc3011 feat(v4): Session 8 wave 3b — index a11y + swarm FAB + ops route
+958b91f feat(v4): Session 8 wave 3a — costs charts + translator polish
+ddc1143 feat(v4): Session 8 wave 2 — 4 parallel Gemini agents
+4f329da feat(v4): notification bell dropdown с alerts+inbox
+2df60b3 docs: IMPROVEMENTS.md — Session 8 rollup
 8511e44 feat(memory): Track E integration stub — memory_adapter facade
-a0f2b6a feat(v4): SSE auto-refresh для Swarm + Inbox
-d9e8d32 test: !log command — 10 unit tests, Phase 7 closed
+a0f2b6a feat(v4): SSE auto-refresh Swarm + Inbox
+d9e8d32 test: !log command (Phase 7 closed)
 484400a feat(v4): notification bell в ops.html
-27330f6 feat: Session 8 Dashboard polish — Ops + bell + LM Studio
+27330f6 feat: Session 8 Dashboard polish (Ops + bell + LM Studio)
 70c8bd1 feat: Hub UX — Primary dropdown + Apply Changes
 26bc066 feat: Hub fallback chain editor
 eaf7a56 fix: V4 contrast issues
 df095d4 feat: V4 dashboard unification (6 pages)
-8b162fa fix: chat.html 6 bugfixes
 ```
+
+### 10 Gemini 3.1 Pro agents Session 8
+
+| # | Target | Lines added | Status |
+|---|--------|-------------|--------|
+| 1 | inbox actions extend + handleAction fix | +2347 | ✅ |
+| 2 | /v4/research новая страница (1024 lines) | new file | ✅ |
+| 3 | chat Cmd+K palette + Cmd+/ help | +11837 | ✅ |
+| 4 | theme dark/light toggle + CSS 49+ overrides | +6131 CSS + 1925 JS | ✅ |
+| 5 | costs SVG charts + sparklines + trends | +9067 | ✅ |
+| 6 | translator language switcher + live indicator | +11675 | ✅ |
+| 7 | index Hub a11y (19 aria-labels) + hero fade | +8512 | ✅ |
+| 8 | swarm FAB + quick actions + filter bar | +15939 | ✅ |
+| 9 | /v4/settings новая страница | ~20KB | 🔄 |
+| 10 | /v4/commands catalog (175+ commands) | ~20KB | 🔄 |
+
+### Track E (Memory Layer) параллельно — claude/memory-layer
+
+**7 коммитов, 232 тестов, ~2900 LOC, 1.58s full pytest run**
+
+| Phase | Commit | Что |
+|-------|--------|-----|
+| 0 | 4a8ef11 | PII redactor + Track E plan |
+| 0 | 6c68212 | deps (sqlite-vec, model2vec, pymorphy3) |
+| 1 | 9fbedc7 | whitelist + chunking + archive DDL (52 tests) |
+| 2 | c4a0a36 | HybridRetriever + RRF + decay (43 tests) |
+| 1 | 1b4cc18 | JSON parser + ingestion pipeline (32 tests) |
+| 3 | 9acd2a0 | !archive + !memory stats commands (35 tests) |
+| 2 | 71063c9 | embedder + e2e integration (26 tests) |
+
+**E2E verified** через synthetic fixture: 36 msgs → whitelist filter → PII
+redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec embedding
+→ HybridRetriever search (FTS5 + vector RRF) → результаты.
+
+**Ready to merge** после Track B PR.
+
+### Dashboard V4 — финальные 10 страниц
+
+| Page | URL | Ключевая фича |
+|------|-----|---------------|
+| Hub | `/v4/` | Primary dropdown + Fallback editor + a11y + Recently switched badge |
+| Chat | `/v4/chat` | SSE streaming + Cmd+K palette + Cmd+/ help + Cmd+Enter |
+| Costs | `/v4/costs` | SVG bar charts + sparklines + trend ↑↓ indicators |
+| Inbox | `/v4/inbox` | Ack/Done/Dismiss actions + SSE + formatTimeAgo |
+| Swarm | `/v4/swarm` | FAB + quick actions + filter bar + sparklines + tooltips |
+| Translator | `/v4/translator` | Language switcher + live indicator + test box + latency |
+| Ops | `/v4/ops` | Operations Center (alerts, metrics, timeline) |
+| Research | `/v4/research` | Swarm Research Pipeline dashboard |
+| Settings | `/v4/settings` | Config editor (в работе Agent 9) |
+| Commands | `/v4/commands` | 175+ команд catalog (в работе Agent 10) |
+
+Все страницы:
+- **8 nav-links** (Hub/Chat/Costs/Inbox/Swarm/Translator/Ops/Research)
+- **Notification bell dropdown** с alerts + inbox items
+- **Theme toggle** dark/light с localStorage
+- **Liquid Glass** эстетика
+- **WCAG AA** контраст
 
 ### Bugfixes Session 8
 
