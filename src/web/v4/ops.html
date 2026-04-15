@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ops - Krab AI</title>
+<link rel="stylesheet" href="/v4/liquid-glass.css">
+<style>
+    .stats-grid { display:grid; grid-template-columns: repeat(4,1fr); gap:1rem; margin-bottom:1.5rem; }
+    .stat-card { text-align:center; padding:1.25rem 1rem; }
+    .stat-value { font-size:2rem; font-weight:700; line-height:1; margin-bottom:.25rem; }
+    .stat-label { font-size:.75rem; color:rgba(255,255,255,.5); text-transform:uppercase; letter-spacing:.05em; }
+    .page-content { max-width:1200px; margin:0 auto; padding:2rem; padding-bottom:6rem; }
+    .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.75rem; gap:1rem; }
+    .last-updated { font-size:.75rem; color:rgba(255,255,255,.35); }
+    .section { margin-bottom:2rem; }
+    .section h2 { margin-bottom:1rem; font-size:1.2rem; font-weight:600; }
+    .alert-item { display:flex; align-items:center; gap:1rem; padding:1rem; margin-bottom:.75rem; }
+    .alert-info { flex:1; min-width:0; }
+    .alert-title { font-weight:600; margin-bottom:.2rem; }
+    .alert-code { font-family:monospace; font-size:.75rem; color:rgba(255,255,255,.45); }
+    .alert-ts { font-size:.75rem; color:rgba(255,255,255,.4); margin-top:.2rem; }
+    .alert-actions { display:flex; gap:.5rem; flex-shrink:0; }
+    .pill { display:inline-block; padding:.2rem .6rem; border-radius:999px; font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-right:.5rem; }
+    .pill-critical { background:rgba(248,113,113,.15); color:#fecaca; border:1px solid rgba(248,113,113,.35); }
+    .pill-warning  { background:rgba(251,191,36,.15);  color:#fef3c7; border:1px solid rgba(251,191,36,.35); }
+    .pill-info     { background:rgba(125,211,252,.15); color:#e0f2fe; border:1px solid rgba(125,211,252,.35); }
+    .pill-done     { background:rgba(52,211,153,.15);  color:#a7f3d0; border:1px solid rgba(52,211,153,.35); }
+    .pill-failed   { background:rgba(248,113,113,.15); color:#fecaca; border:1px solid rgba(248,113,113,.35); }
+    .status-ok { text-align:center; padding:2.5rem; font-size:1.2rem; color:var(--accent-green, #a7f3d0); border:1px solid rgba(52,211,153,.3); }
+    .metric-tile { text-align:center; padding:1rem; }
+    .metric-value { font-size:1.4rem; font-weight:700; color:var(--accent-cyan, #7dd3fc); margin-bottom:.2rem; }
+    .metric-label { font-size:.7rem; color:rgba(255,255,255,.5); text-transform:uppercase; letter-spacing:.05em; }
+    .metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:.75rem; }
+    .timeline { padding-left:1.2rem; border-left:2px solid rgba(255,255,255,.08); }
+    .timeline-event { position:relative; margin-bottom:1rem; padding-left:1rem; }
+    .timeline-event::before { content:''; position:absolute; left:-1.5rem; top:.4rem; width:8px; height:8px; border-radius:50%; background:var(--accent-cyan, #7dd3fc); }
+    .timeline-head { display:flex; align-items:center; gap:.6rem; font-size:.8rem; color:rgba(255,255,255,.65); margin-bottom:.15rem; }
+    .timeline-time { font-family:monospace; color:rgba(255,255,255,.45); }
+    .timeline-actor { font-weight:600; color:#fff; }
+    .timeline-action { font-size:.85rem; color:rgba(255,255,255,.75); }
+    .snapshot-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+    .snapshot-card h3 { font-size:.9rem; margin-bottom:.75rem; color:rgba(255,255,255,.6); text-transform:uppercase; letter-spacing:.05em; }
+    .snapshot-row { display:flex; justify-content:space-between; align-items:center; padding:.4rem 0; border-bottom:1px solid rgba(255,255,255,.04); }
+    .snapshot-row:last-child { border-bottom:none; }
+    .snapshot-name { font-size:.85rem; color:rgba(255,255,255,.85); }
+    .empty-state { text-align:center; padding:2rem; color:rgba(255,255,255,.35); font-size:.9rem; }
+    .actions-footer { display:flex; gap:1rem; margin-top:2rem; flex-wrap:wrap; }
+    .glass-button { background:var(--glass-bg, rgba(255,255,255,.06)); border:1px solid var(--glass-border, rgba(255,255,255,.1)); color:#fff; padding:.65rem 1.2rem; border-radius:12px; cursor:pointer; font-family:inherit; font-size:.85rem; backdrop-filter:blur(20px); transition:all .15s; }
+    .glass-button:hover { background:rgba(255,255,255,.1); }
+    .glass-button:disabled { opacity:.5; cursor:not-allowed; }
+    
+    @media (max-width:768px) { 
+        .page-content {padding:1rem; padding-bottom:90px;} 
+        .stats-grid, .metrics-grid {grid-template-columns:repeat(2,1fr);} 
+        .snapshot-grid {grid-template-columns:1fr;} 
+    }
+</style>
+</head>
+<body>
+
+<nav class="glass-nav">
+    <div class="nav-logo">Krab AI</div>
+    <div class="nav-links">
+        <a href="/v4/" class="nav-link">Hub</a>
+        <a href="/v4/chat" class="nav-link">Chat</a>
+        <a href="/v4/costs" class="nav-link">Costs</a>
+        <a href="/v4/inbox" class="nav-link">Inbox</a>
+        <a href="/v4/swarm" class="nav-link">Swarm</a>
+        <a href="/v4/translator" class="nav-link">Translator</a>
+        <a href="/v4/ops" class="nav-link active">Ops</a>
+    </div>
+</nav>
+
+<div class="page-content">
+    <div class="page-header">
+        <h1 style="font-size:1.5rem; font-weight:600; margin:0;">Operations Center</h1>
+        <div class="last-updated" id="last-updated">Updated —</div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-alerts">—</div>
+            <div class="stat-label">Active Alerts</div>
+        </div>
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-incidents">—</div>
+            <div class="stat-label">Open Incidents</div>
+        </div>
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-sla">—</div>
+            <div class="stat-label">SLA Uptime 24h</div>
+        </div>
+        <div class="glass-card stat-card">
+            <div class="stat-value" id="stat-digest" style="font-size:1.2rem; line-height:1.6;">—</div>
+            <div class="stat-label">Last Digest</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Active Alerts</h2>
+        <div id="alerts-container">
+            <div class="glass-card empty-state">Loading alerts...</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Metrics</h2>
+        <div class="metrics-grid" id="metrics-container">
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p50">—</div><div class="metric-label">Latency p50</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p95">—</div><div class="metric-label">Latency p95</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-p99">—</div><div class="metric-label">Latency p99</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-error">—</div><div class="metric-label">Error Rate</div></div>
+            <div class="glass-card metric-tile"><div class="metric-value" id="metric-tps">—</div><div class="metric-label">Throughput</div></div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Runtime Snapshot</h2>
+        <div class="snapshot-grid">
+            <div class="glass-card snapshot-card">
+                <h3>Providers</h3>
+                <div id="providers-list">
+                    <div class="empty-state" style="padding:1rem;">Loading...</div>
+                </div>
+            </div>
+            <div class="glass-card snapshot-card">
+                <h3>Services</h3>
+                <div id="services-list">
+                    <div class="empty-state" style="padding:1rem;">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Event Timeline</h2>
+        <div class="glass-card" style="padding:1.5rem;">
+            <div class="timeline" id="timeline-container">
+                <div class="empty-state" style="padding:1rem;">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="actions-footer">
+        <button class="glass-button" id="btn-report" onclick="generateReport()">Generate Report</button>
+        <button class="glass-button" id="btn-clear-ack" onclick="clearAckedAlerts()">Clear Acked Alerts</button>
+    </div>
+</div>
+
+<div class="glass-tab-bar">
+    <a href="/v4/" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        <span>Hub</span>
+    </a>
+    <a href="/v4/chat" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <span>Chat</span>
+    </a>
+    <a href="/v4/costs" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+        <span>Costs</span>
+    </a>
+    <a href="/v4/swarm" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+        <span>Swarm</span>
+    </a>
+    <a href="/v4/ops" class="tab-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Ops</span>
+    </a>
+</div>
+
+<script>
+const API_BASE = '';
+
+async function fetchJSON(path) {
+    try {
+        const r = await window.fetch(API_BASE + path);
+        if (!r.ok) throw new Error(r.status);
+        return await r.json();
+    } catch(e) {
+        console.warn('fetch fail', path, e);
+        return null;
+    }
+}
+
+function safeText(val, fallback = '—') {
+    if (val === null || val === undefined || val === '') return fallback;
+    return String(val);
+}
+
+function formatDate(ts) {
+    if (!ts) return 'N/A';
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? ts : d.toLocaleString();
+}
+
+function formatTime(ts) {
+    if (!ts) return 'N/A';
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? ts : d.toLocaleTimeString();
+}
+
+async function loadSummary() {
+    const alerts = await fetchJSON('/api/ops/alerts');
+    document.getElementById('stat-alerts').textContent = alerts ? alerts.length : '—';
+
+    const history = await fetchJSON('/api/ops/history');
+    if (history && Array.isArray(history)) {
+        const open = history.filter(h => h.status === 'open');
+        document.getElementById('stat-incidents').textContent = open.length;
+        
+        if (history.length > 0) {
+            const last = history[history.length - 1];
+            document.getElementById('stat-digest').textContent = formatDate(last.timestamp || last.ts);
+        } else {
+            document.getElementById('stat-digest').textContent = 'N/A';
+        }
+    } else {
+        document.getElementById('stat-incidents').textContent = '—';
+        document.getElementById('stat-digest').textContent = '—';
+    }
+
+    const sla = await fetchJSON('/api/sla');
+    if (sla) {
+        const val = sla.uptime_24h !== undefined ? sla.uptime_24h : (sla.uptime ? sla.uptime + '%' : '—');
+        document.getElementById('stat-sla').textContent = val;
+    } else {
+        document.getElementById('stat-sla').textContent = '—';
+    }
+}
+
+async function loadAlerts() {
+    const container = document.getElementById('alerts-container');
+    const alerts = await fetchJSON('/api/ops/alerts');
+    
+    container.innerHTML = '';
+
+    if (!alerts) {
+        const err = document.createElement('div');
+        err.className = 'glass-card empty-state';
+        err.textContent = 'Failed to load alerts';
+        container.appendChild(err);
+        return;
+    }
+
+    if (alerts.length === 0) {
+        const ok = document.createElement('div');
+        ok.className = 'glass-card status-ok';
+        ok.textContent = '✓ All systems operational';
+        container.appendChild(ok);
+        return;
+    }
+
+    alerts.forEach(a => {
+        const card = document.createElement('div');
+        card.className = 'glass-card alert-item';
+        
+        const info = document.createElement('div');
+        info.className = 'alert-info';
+        
+        const titleRow = document.createElement('div');
+        
+        const pill = document.createElement('span');
+        const sev = (a.severity || 'info').toLowerCase();
+        pill.className = 'pill pill-' + (sev === 'critical' ? 'critical' : (sev === 'warning' ? 'warning' : 'info'));
+        pill.textContent = sev;
+        titleRow.appendChild(pill);
+        
+        const title = document.createElement('span');
+        title.className = 'alert-title';
+        title.textContent = safeText(a.title);
+        titleRow.appendChild(title);
+        
+        info.appendChild(titleRow);
+
+        const codeRow = document.createElement('div');
+        codeRow.className = 'alert-code';
+        codeRow.textContent = safeText(a.code);
+        info.appendChild(codeRow);
+
+        const tsRow = document.createElement('div');
+        tsRow.className = 'alert-ts';
+        tsRow.textContent = formatDate(a.timestamp || a.ts);
+        info.appendChild(tsRow);
+
+        card.appendChild(info);
+
+        const actions = document.createElement('div');
+        actions.className = 'alert-actions';
+        
+        const btn = document.createElement('button');
+        btn.className = 'glass-button';
+        if (a.ack) {
+            btn.textContent = 'Cancel Ack';
+            btn.onclick = () => cancelAck(a.code);
+        } else {
+            btn.textContent = 'Ack';
+            btn.onclick = () => ackAlert(a.code);
+        }
+        actions.appendChild(btn);
+        
+        card.appendChild(actions);
+        container.appendChild(card);
+    });
+}
+
+async function loadMetrics() {
+    const metrics = await fetchJSON('/api/ops/metrics');
+    if (!metrics) {
+        ['p50', 'p95', 'p99', 'error', 'tps'].forEach(id => {
+            document.getElementById('metric-' + id).textContent = '—';
+        });
+        return;
+    }
+
+    document.getElementById('metric-p50').textContent = metrics.latency_p50 !== undefined ? metrics.latency_p50 + 'ms' : '—';
+    document.getElementById('metric-p95').textContent = metrics.latency_p95 !== undefined ? metrics.latency_p95 + 'ms' : '—';
+    document.getElementById('metric-p99').textContent = metrics.latency_p99 !== undefined ? metrics.latency_p99 + 'ms' : '—';
+    document.getElementById('metric-error').textContent = metrics.error_rate !== undefined ? metrics.error_rate + '%' : '—';
+    document.getElementById('metric-tps').textContent = metrics.throughput !== undefined ? metrics.throughput + 'rps' : '—';
+}
+
+async function loadSnapshot() {
+    const snap = await fetchJSON('/api/ops/runtime_snapshot');
+    const pList = document.getElementById('providers-list');
+    const sList = document.getElementById('services-list');
+    
+    pList.innerHTML = '';
+    sList.innerHTML = '';
+
+    if (!snap) {
+        pList.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load</div>';
+        sList.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load</div>';
+        return;
+    }
+
+    if (snap.providers) {
+        const keys = Object.keys(snap.providers);
+        if (keys.length === 0) pList.innerHTML = '<div class="empty-state" style="padding:1rem;">No providers</div>';
+        keys.forEach(k => {
+            const row = document.createElement('div');
+            row.className = 'snapshot-row';
+            const name = document.createElement('span');
+            name.className = 'snapshot-name';
+            name.textContent = k;
+            const pill = document.createElement('span');
+            const ready = snap.providers[k].ready;
+            pill.className = 'pill ' + (ready ? 'pill-done' : 'pill-failed');
+            pill.textContent = ready ? 'READY' : 'NOT READY';
+            row.appendChild(name);
+            row.appendChild(pill);
+            pList.appendChild(row);
+        });
+    }
+
+    if (snap.services) {
+        const keys = Object.keys(snap.services);
+        if (keys.length === 0) sList.innerHTML = '<div class="empty-state" style="padding:1rem;">No services</div>';
+        keys.forEach(k => {
+            const row = document.createElement('div');
+            row.className = 'snapshot-row';
+            const name = document.createElement('span');
+            name.className = 'snapshot-name';
+            name.textContent = k;
+            const pill = document.createElement('span');
+            const status = (snap.services[k].status || '').toLowerCase();
+            pill.className = 'pill ' + (status === 'ok' ? 'pill-done' : (status === 'warning' ? 'pill-warning' : 'pill-failed'));
+            pill.textContent = status || 'UNKNOWN';
+            row.appendChild(name);
+            row.appendChild(pill);
+            sList.appendChild(row);
+        });
+    }
+}
+
+async function loadTimeline() {
+    const container = document.getElementById('timeline-container');
+    const events = await fetchJSON('/api/ops/timeline');
+    
+    container.innerHTML = '';
+
+    if (!events) {
+        container.innerHTML = '<div class="empty-state" style="padding:1rem;">Failed to load events</div>';
+        return;
+    }
+
+    if (events.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="padding:1rem;">No recent events</div>';
+        return;
+    }
+
+    const recent = events.slice(-20).reverse();
+    recent.forEach(e => {
+        const ev = document.createElement('div');
+        ev.className = 'timeline-event';
+        
+        const head = document.createElement('div');
+        head.className = 'timeline-head';
+        
+        const time = document.createElement('span');
+        time.className = 'timeline-time';
+        time.textContent = formatTime(e.ts);
+        head.appendChild(time);
+        
+        const actor = document.createElement('span');
+        actor.className = 'timeline-actor';
+        actor.textContent = safeText(e.actor);
+        head.appendChild(actor);
+
+        if (e.severity) {
+            const pill = document.createElement('span');
+            const sev = e.severity.toLowerCase();
+            pill.className = 'pill pill-' + (sev === 'critical' ? 'critical' : (sev === 'warning' ? 'warning' : 'info'));
+            pill.style.marginRight = '0';
+            pill.style.fontSize = '0.6rem';
+            pill.textContent = sev;
+            head.appendChild(pill);
+        }
+
+        ev.appendChild(head);
+
+        const action = document.createElement('div');
+        action.className = 'timeline-action';
+        action.textContent = safeText(e.action);
+        ev.appendChild(action);
+
+        container.appendChild(ev);
+    });
+}
+
+function refreshAll() {
+    Promise.allSettled([
+        loadSummary(),
+        loadAlerts(),
+        loadMetrics(),
+        loadSnapshot(),
+        loadTimeline()
+    ]).then(() => {
+        document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    });
+}
+
+async function ackAlert(code) {
+    if (!code) return;
+    try {
+        await window.fetch(API_BASE + '/api/ops/ack/' + encodeURIComponent(code), { method: 'POST' });
+        refreshAll();
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function cancelAck(code) {
+    if (!code) return;
+    try {
+        await window.fetch(API_BASE + '/api/ops/ack/' + encodeURIComponent(code), { method: 'DELETE' });
+        refreshAll();
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function generateReport() {
+    const btn = document.getElementById('btn-report');
+    try {
+        btn.disabled = true;
+        btn.textContent = 'Generating...';
+        const r = await window.fetch(API_BASE + '/api/ops/report/export', { method: 'POST' });
+        if (!r.ok) throw new Error('Export failed');
+        
+        const contentType = r.headers.get('content-type');
+        let blob;
+        if (contentType && contentType.includes('application/json')) {
+            const data = await r.json();
+            blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        } else {
+            blob = await r.blob();
+        }
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'ops-report.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Failed to generate report: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate Report';
+    }
+}
+
+async function clearAckedAlerts() {
+    const btn = document.getElementById('btn-clear-ack');
+    try {
+        btn.disabled = true;
+        btn.textContent = 'Clearing...';
+        const alerts = await fetchJSON('/api/ops/alerts');
+        if (alerts && Array.isArray(alerts)) {
+            const acked = alerts.filter(a => a.ack);
+            for (const a of acked) {
+                if (a.code) {
+                    await window.fetch(API_BASE + '/api/ops/ack/' + encodeURIComponent(a.code), { method: 'DELETE' });
+                }
+            }
+        }
+        await refreshAll();
+    } catch (e) {
+        alert('Failed to clear alerts: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Clear Acked Alerts';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    refreshAll();
+    setInterval(refreshAll, 15000);
+});
+</script>
+</body>
+</html>

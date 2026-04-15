@@ -267,6 +267,13 @@
             <a href="/v4/inbox" class="nav-link">Inbox</a>
             <a href="/v4/swarm" class="nav-link">Swarm</a>
             <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/ops" class="nav-link">Ops</a>
+            <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                </svg>
+                <span class="bell-count hidden" id="nav-bell-count">0</span>
+            </a>
         </div>
     </nav>
 
@@ -573,9 +580,13 @@
                 setVal('stat-ops', count > 0 ? `<span class="text-error">${count} alerts</span>` : `0 alerts`, true);
             } else setVal('stat-ops', '— alerts');
 
-            // Load catalog if empty
+            // Lazy two-phase catalog loading:
+            // Phase A: быстро (~1s) cloud catalog из cache
+            // Phase B: в фоне force_refresh LM Studio (~100s)
             if (catalogData.length === 0) {
-                loadCatalog();
+                loadCatalog(false).then(() => {
+                    setTimeout(() => loadCatalog(true).catch(() => {}), 500);
+                });
             }
         }
 
@@ -631,8 +642,9 @@
 
         // Catalog & Fallbacks
         async function loadCatalog(force = false) {
+            // endpoint только GET; force_refresh передаётся через query param
             const endpoint = force ? '/api/model/catalog?force_refresh=true' : '/api/model/catalog';
-            const data = await fetchAPI(endpoint, force ? {method: 'POST'} : {});
+            const data = await fetchAPI(endpoint, {});
 
             if (data._error) return;
             const cat = data.catalog || {};
@@ -902,6 +914,24 @@
         // Init
         refreshDashboard();
         setInterval(refreshDashboard, 15000);
+
+        async function updateBellCount() {
+            try {
+                const r = await fetch('/api/notifications/count');
+                const d = await r.json();
+                const total = (d.total || 0) + (d.attention || 0);
+                const el = document.getElementById('nav-bell-count');
+                if (!el) return;
+                if (total > 0) {
+                    el.textContent = total > 99 ? '99+' : String(total);
+                    el.classList.remove('hidden');
+                } else {
+                    el.classList.add('hidden');
+                }
+            } catch {}
+        }
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
 
     </script>
 </body>

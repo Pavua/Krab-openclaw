@@ -138,18 +138,37 @@ h3 { font-size: 1rem; font-weight: 500; }
 
 .nav-bell {
   position: relative;
-  cursor: pointer;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  transition: background 0.2s;
+  padding: 0.5rem;
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  transition: color 0.15s;
 }
 
 .nav-bell:hover {
-  background: var(--glass-bg-hover);
+  color: #ffffff;
+}
+
+.bell-count {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--accent-red);
+  color: #0a0a1a;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bell-count.hidden {
+  display: none;
 }
 
 .glass-tab-bar {
