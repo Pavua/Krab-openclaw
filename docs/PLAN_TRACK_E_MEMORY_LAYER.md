@@ -43,6 +43,23 @@ Mandatory для любой индексации:
 4. **Access control** — `!archive` owner-only scope, никаких broadcast/tool invocations.
 5. **Raw text не хранится** — только `text_redacted` после PII scrubber.
 
+## Dependencies verified (smoke-test, Session 8)
+
+Прогнан полный smoke-test на M4 Max / Python 3.13 / venv — всё зелёное:
+
+| Пакет | Версия | Замечания |
+|-------|--------|-----------|
+| `sqlite-vec` | 0.1.9 | wheel `macosx_11_0_arm64`, `sqlite_vec.load(conn)` работает |
+| `model2vec` | 0.8.1 | `M2V_multilingual_output` скачивается 1 раз (~124s cold), далее instant |
+| `pymorphy3` | 2.0.6 | + `pymorphy3-dicts-ru` 2.4.x, ru-лемматизация OK |
+
+Ключевые цифры:
+- Batch encode 1024 строк: **21.7 ms** на M4 Max.
+- Cross-lingual `ru-en similarity "показать архив" / "show archive" = 0.9336` — модель годится для многоязычных запросов.
+- Vector dim = 256, type = `float32`.
+- **Важный нюанс**: Model2Vec возвращает **НЕ нормализованные** векторы (norm ≈ 164). Для `sqlite-vec` `distance_metric=cosine` это не проблема (cosine внутри нормализует), но для ручного dot product / L2 — надо явно `v / np.linalg.norm(v)`.
+- Первая загрузка модели в проде — warm-up в фоне при старте Krab (после 124s HF download cached).
+
 ## Стек (принят)
 
 | Компонент | Версия/модель | Назначение |
