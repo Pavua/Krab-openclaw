@@ -140,8 +140,8 @@ def test_commands_returns_list() -> None:
 def test_commands_contains_required_entries() -> None:
     """Список команд должен включать базовые userbot-команды."""
     resp = _client().get("/api/commands")
-    cmds = {c["cmd"] for c in resp.json()["commands"]}
-    for expected in ("!status", "!model", "!voice", "!translator", "!swarm", "!help"):
+    cmds = {c["name"] for c in resp.json()["commands"]}
+    for expected in ("status", "model", "voice", "translator", "swarm", "help"):
         assert expected in cmds, f"ожидаемая команда отсутствует: {expected}"
 
 
@@ -149,7 +149,7 @@ def test_commands_entries_have_desc() -> None:
     """Каждая запись должна содержать поле desc."""
     resp = _client().get("/api/commands")
     for entry in resp.json()["commands"]:
-        assert "desc" in entry, f"entry без desc: {entry}"
+        assert "description" in entry, f"entry без desc: {entry}"
 
 
 # ---------------------------------------------------------------------------

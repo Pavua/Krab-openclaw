@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Inbox | Krab</title>
     <link href="/v4/liquid-glass.css" rel="stylesheet">
+    <script src="/v4/theme-toggle.js" defer></script>
     <style>
         /* Minimal page-specific CSS */
         :root {
@@ -175,6 +176,12 @@
             gap: 1.5rem;
         }
 
+        .inbox-actions { display: flex; gap: 0.4rem; }
+        .inbox-actions .glass-button { padding: 0.25rem 0.7rem; font-size: 0.75rem; }
+        .inbox-actions .btn-ack { color: var(--accent-yellow, #fde68a); border-color: rgba(251,191,36,0.3); }
+        .inbox-actions .btn-done { color: var(--accent-green, #6ee7b7); border-color: rgba(52,211,153,0.3); }
+        .inbox-actions .btn-dismiss { color: var(--accent-red, #fca5a5); border-color: rgba(248,113,113,0.3); }
+
         .time-ago {
             font-size: 0.875rem;
             color: var(--text-muted);
@@ -269,6 +276,7 @@
             <a href="/v4/inbox" class="nav-link active">Inbox</a>
             <a href="/v4/swarm" class="nav-link">Swarm</a>
             <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/research" class="nav-link">Research</a>
             <div class="nav-bell-wrapper">
                 <a href="/v4/inbox" class="nav-bell" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -389,15 +397,18 @@
                 renderCurrentItems();
             });
 
-            // Expand/Collapse and Ack Button Delegation
+            // Expand/Collapse and Action Button Delegation
             itemsContainer.addEventListener('click', async (e) => {
-                const ackBtn = e.target.closest('.ack-btn');
+                const actionBtn = e.target.closest('[data-action]');
                 const item = e.target.closest('.inbox-item');
 
-                if (ackBtn) {
+                if (actionBtn) {
                     e.stopPropagation();
-                    const id = ackBtn.dataset.id;
-                    await handleAction('ack', { id });
+                    const action = actionBtn.dataset.action;
+                    const id = actionBtn.dataset.id;
+                    actionBtn.disabled = true;
+                    await handleAction(action, { id });
+                    setTimeout(() => initialLoad(), 300);
                     return;
                 }
 
@@ -557,7 +568,11 @@
                             <div class="inbox-item-actions">
                                 <span class="time-ago">${formatTimeAgo(item.created_at_utc || item.created_at)}</span>
                                 ${item.status !== 'acked' 
-                                    ? `<button class="glass-button ack-btn" data-id="${item.item_id || item.id}">Ack</button>` 
+                                    ? `<div class="inbox-actions">
+                                           <button class="glass-button btn-ack" data-id="${item.item_id || item.id}" data-action="ack">Ack</button>
+                                           <button class="glass-button btn-done" data-id="${item.item_id || item.id}" data-action="done">Done</button>
+                                           <button class="glass-button btn-dismiss" data-id="${item.item_id || item.id}" data-action="dismiss">Dismiss</button>
+                                       </div>` 
                                     : `<span class="badge">Acked</span>`}
                             </div>
                         </div>
@@ -569,11 +584,42 @@
             }
 
             async function handleAction(action, payload = {}) {
+                const actionToStatus = {
+                    'ack': 'acked',
+                    'done': 'done',
+                    'dismiss': 'cancelled',
+                    'approve': 'approved',
+                    'reject': 'rejected',
+                };
+                const status = actionToStatus[action] || action;
+                const itemId = payload.id || payload.item_id;
+
+                // special header-level actions без itemId — остаются как есть (proxy API)
+                if (action === 'remediate_stale' || action === 'ack_all_open') {
+                    try {
+                        await apiCall('/api/inbox/update', 'POST', { action, ...payload });
+                        showToast(`Successfully executed: ${action.replace(/_/g, ' ')}`);
+                    } catch (error) {
+                        showToast(`Error executing ${action}`, 'error');
+                    }
+                    return;
+                }
+
+                if (!itemId) {
+                    showToast(`No item ID for action: ${action}`, 'error');
+                    return;
+                }
+
                 try {
-                    await apiCall('/api/inbox/update', 'POST', { action, ...payload });
-                    showToast(`Successfully executed: ${action.replace(/_/g, ' ')}`);
+                    await apiCall('/api/inbox/update', 'POST', {
+                        item_id: itemId,
+                        status: status,
+                        actor: 'owner-ui',
+                        note: '',
+                    });
+                    showToast(`✓ ${action}: success`);
                 } catch (error) {
-                    showToast(`Error executing ${action}`, 'error');
+                    showToast(`Error: ${action}`, 'error');
                 }
             }
 

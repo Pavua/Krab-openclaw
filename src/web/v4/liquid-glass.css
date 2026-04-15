@@ -648,3 +648,202 @@ h3 { font-size: 1rem; font-weight: 500; }
   margin-top: 0.25rem;
 }
 .nav-bell-wrapper { position: relative; display: inline-flex; align-items: center; height: 100%; }
+
+/* =========================================
+   Theme Toggle & Transitions
+   ========================================= */
+.theme-toggle {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.5rem;
+  color: inherit;
+  font-size: 1rem;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  margin-right: 0.3rem;
+}
+
+.theme-toggle:hover {
+  opacity: 1;
+}
+
+body {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* =========================================
+   Light Theme Overrides
+   ========================================= */
+html[data-theme="light"] {
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-bg-hover: rgba(255, 255, 255, 0.8);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-shadow: 0 8px 40px rgba(0, 0, 0, 0.08);
+  --glass-specular: inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
+  
+  --bg-primary: #f5f7fb;
+  --bg-surface: #ffffff;
+  
+  --accent-cyan: #0284c7;
+  --accent-purple: #7c3aed;
+  --accent-green: #059669;
+  --accent-red: #dc2626;
+  --accent-yellow: #d97706;
+}
+
+html[data-theme="light"] body {
+  background-color: var(--bg-primary);
+  background-image: 
+    radial-gradient(circle at 15% 50%, rgba(2, 132, 199, 0.08), transparent 35%),
+    radial-gradient(circle at 85% 30%, rgba(124, 58, 237, 0.08), transparent 35%),
+    radial-gradient(circle at 50% 80%, rgba(5, 150, 105, 0.05), transparent 40%);
+  color: #0a0a1a;
+}
+
+html[data-theme="light"] .glass-nav,
+html[data-theme="light"] .glass-card,
+html[data-theme="light"] .glass-tab-bar,
+html[data-theme="light"] .glass-button,
+html[data-theme="light"] .glass-input {
+  color: #0a0a1a;
+}
+
+html[data-theme="light"] .nav-link {
+  color: rgba(10, 10, 26, 0.6);
+}
+
+html[data-theme="light"] .nav-link:hover,
+html[data-theme="light"] .nav-link.active {
+  color: #0a0a1a;
+}
+
+html[data-theme="light"] .nav-link.active::after {
+  background: var(--accent-cyan);
+  box-shadow: 0 -2px 8px rgba(2, 132, 199, 0.5);
+}
+
+html[data-theme="light"] .nav-bell {
+  color: rgba(10, 10, 26, 0.7);
+}
+
+html[data-theme="light"] .nav-bell:hover {
+  color: #0a0a1a;
+}
+
+html[data-theme="light"] .bell-dropdown {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+html[data-theme="light"] .bell-dropdown-header {
+  color: rgba(10, 10, 26, 0.6);
+}
+
+html[data-theme="light"] .bell-dropdown-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+html[data-theme="light"] .bell-dropdown-empty {
+  color: rgba(10, 10, 26, 0.5);
+}
+
+html[data-theme="light"] .chat-bubble-user {
+  background: rgba(2, 132, 199, 0.1);
+  border-color: rgba(2, 132, 199, 0.2);
+  color: #0a0a1a;
+  text-shadow: none;
+}
+
+html[data-theme="light"] .chat-bubble-assistant {
+  background: var(--glass-bg);
+  color: #0a0a1a;
+}
+
+html[data-theme="light"] .chat-input-bar {
+  background: linear-gradient(to top, var(--bg-primary) 60%, transparent);
+}
+
+html[data-theme="light"] .tool-pill-detail {
+  background: rgba(0, 0, 0, 0.05);
+  color: #0a0a1a;
+}
+
+html[data-theme="light"] .mode-toggle {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+html[data-theme="light"] .mode-toggle label {
+  color: rgba(10, 10, 26, 0.6);
+}
+
+html[data-theme="light"] .mode-toggle input[type="radio"]:checked + label {
+  background: var(--glass-bg-hover);
+  color: #0a0a1a;
+  box-shadow: var(--glass-specular), 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+html[data-theme="light"] .tab-item {
+  color: rgba(10, 10, 26, 0.5);
+}
+
+html[data-theme="light"] .tab-item.active {
+  color: #0284c7;
+}
+
+html[data-theme="light"] .glass-button-primary {
+  background: #0284c7;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.3);
+}
+
+html[data-theme="light"] .glass-button-primary:hover {
+  background: #0369a1;
+  box-shadow: 0 6px 20px rgba(2, 132, 199, 0.4);
+}
+
+html[data-theme="light"] .glass-input::placeholder {
+  color: rgba(10, 10, 26, 0.4);
+}
+
+html[data-theme="light"] .glass-input:focus {
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05), 0 0 0 3px rgba(2, 132, 199, 0.25);
+}
+
+html[data-theme="light"] .badge {
+  border-color: var(--bg-surface);
+}
+
+html[data-theme="light"] .pill-pending { color: #92400e; text-shadow: none; background: rgba(217, 119, 6, 0.15); border-color: rgba(217, 119, 6, 0.3); }
+html[data-theme="light"] .pill-in_progress { color: #5b21b6; text-shadow: none; background: rgba(124, 58, 237, 0.15); border-color: rgba(124, 58, 237, 0.3); }
+html[data-theme="light"] .pill-done { color: #065f46; text-shadow: none; background: rgba(5, 150, 105, 0.15); border-color: rgba(5, 150, 105, 0.3); }
+html[data-theme="light"] .pill-failed { color: #991b1b; text-shadow: none; background: rgba(220, 38, 38, 0.15); border-color: rgba(220, 38, 38, 0.3); }
+html[data-theme="light"] .pill-low { color: #075985; text-shadow: none; background: rgba(2, 132, 199, 0.1); border-color: rgba(2, 132, 199, 0.2); }
+html[data-theme="light"] .pill-medium { color: #065f46; text-shadow: none; background: rgba(5, 150, 105, 0.1); border-color: rgba(5, 150, 105, 0.2); }
+html[data-theme="light"] .pill-high { color: #92400e; text-shadow: none; background: rgba(217, 119, 6, 0.1); border-color: rgba(217, 119, 6, 0.2); }
+html[data-theme="light"] .pill-critical { color: #991b1b; text-shadow: none; background: rgba(220, 38, 38, 0.1); border-color: rgba(220, 38, 38, 0.2); }
+
+html[data-theme="light"] .text-accent { color: #0284c7; }
+html[data-theme="light"] .text-muted { color: rgba(10, 10, 26, 0.6); }
+html[data-theme="light"] .text-success { color: #059669; }
+html[data-theme="light"] .text-error { color: #dc2626; }
+html[data-theme="light"] .text-accent-purple { color: #7c3aed; }
+html[data-theme="light"] .text-accent-yellow { color: #b45309; }
+
+html[data-theme="light"] .skeleton {
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.06) 25%, rgba(0, 0, 0, 0.10) 50%, rgba(0, 0, 0, 0.06) 75%);
+  background-size: 200% 100%;
+}
+
+html[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+html[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme="light"] .hub-card:hover {
+  box-shadow: var(--glass-specular), 0 20px 40px rgba(0, 0, 0, 0.1), 0 0 24px rgba(2, 132, 199, 0.15);
+  border-color: rgba(0, 0, 0, 0.15);
+}

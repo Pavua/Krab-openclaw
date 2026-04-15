@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Krab Dashboard - AI Chat</title>
     <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <script src="/v4/theme-toggle.js" defer></script>
     <style>
         /* Structural layout using variables assumed from liquid-glass.css */
         body {
@@ -239,6 +240,58 @@
             .chat-input-bar { padding: 0.75rem 1rem; }
             .mode-toggles .glass-pill { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
         }
+
+        /* Keyboard shortcuts overlays */
+        .kbd-overlay {
+            position: fixed; inset: 0;
+            background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            display: flex; align-items: flex-start; justify-content: center;
+            padding-top: 15vh; z-index: 1000;
+        }
+        .kbd-overlay.hidden { display: none; }
+        .kbd-palette, .kbd-help {
+            background: rgba(20,20,41,0.95); backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid var(--glass-border, rgba(255,255,255,0.15));
+            border-radius: 16px; padding: 1rem; min-width: 480px;
+            max-width: 90vw;
+            box-shadow: 0 16px 64px rgba(0,0,0,0.6);
+            color: var(--text-main, #fff);
+        }
+        .kbd-search {
+            width: 100%; padding: 0.75rem 1rem; background: transparent;
+            border: 1px solid var(--glass-border, rgba(255,255,255,0.15));
+            border-radius: 10px;
+            color: #fff; font-size: 1rem; outline: none;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+        .kbd-search:focus { border-color: var(--accent-cyan, #7dd3fc); }
+        .kbd-results { max-height: 50vh; overflow-y: auto; margin-top: 0.75rem; }
+        .kbd-result {
+            padding: 0.7rem 1rem; border-radius: 10px; cursor: pointer;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .kbd-result.selected { background: rgba(125,211,252,0.15); }
+        .kbd-result:hover { background: rgba(255,255,255,0.05); }
+        .kbd-key {
+            font-family: monospace; font-size: 0.75rem;
+            background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem;
+            border-radius: 6px; color: var(--text-muted, #aaa);
+        }
+        .kbd-help h3 { margin-top: 0; margin-bottom: 1rem; }
+        .kbd-help-table { width: 100%; border-collapse: collapse; }
+        .kbd-help-table td {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid var(--glass-border, rgba(255,255,255,0.1));
+        }
+        .kbd-help-table tr:last-child td { border-bottom: none; }
+        .kbd-help-table td:first-child { width: 40%; }
+        .kbd-help-table td:last-child { text-align: right; }
+        .kbd-help .text-xs { font-size: 0.75rem; margin-top: 1rem; margin-bottom: 0; }
+        .kbd-help .text-muted { color: var(--text-muted, #888); }
+        .kbd-empty { padding: 0.7rem 1rem; color: var(--text-muted, #888); font-size: 0.9rem; }
     </style>
 </head>
 <body class="mode-normal">
@@ -253,6 +306,7 @@
             <a href="/v4/inbox" class="nav-link">Inbox</a>
             <a href="/v4/swarm" class="nav-link">Swarm</a>
             <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/research" class="nav-link">Research</a>
             <div class="nav-bell-wrapper">
                 <a href="/v4/inbox" class="nav-bell" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -292,6 +346,26 @@
                 <textarea class="glass-input" id="chat-input" rows="1" placeholder="Message Assistant..."></textarea>
                 <button class="glass-button-primary" id="btn-send">Send</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Keyboard shortcut overlays -->
+    <div id="kbd-palette-overlay" class="kbd-overlay hidden" role="dialog" aria-label="Quick navigation">
+        <div class="kbd-palette">
+            <input id="kbd-search" class="kbd-search" placeholder="Go to page... (Cmd+K)" autocomplete="off">
+            <div id="kbd-results" class="kbd-results"></div>
+        </div>
+    </div>
+    <div id="kbd-help-overlay" class="kbd-overlay hidden" role="dialog" aria-label="Keyboard shortcuts">
+        <div class="kbd-help">
+            <h3>Keyboard Shortcuts</h3>
+            <table class="kbd-help-table">
+                <tr><td>Quick Navigation</td><td><span class="kbd-key">Cmd + K</span></td></tr>
+                <tr><td>Help</td><td><span class="kbd-key">Cmd + /</span></td></tr>
+                <tr><td>Send Message</td><td><span class="kbd-key">Cmd + Enter</span></td></tr>
+                <tr><td>Close Modal</td><td><span class="kbd-key">Esc</span></td></tr>
+            </table>
+            <p class="text-xs text-muted">Press Esc to close</p>
         </div>
     </div>
 
@@ -719,6 +793,207 @@
             });
           }
         }
+
+        // ============================================================
+        // Keyboard Shortcuts: Cmd+K quick nav / Cmd+/ help / Cmd+Enter / Esc
+        // ============================================================
+        (function initKeyboardShortcuts() {
+            const PAGES = [
+                { name: 'Hub', url: '/v4/' },
+                { name: 'Chat', url: '/v4/chat' },
+                { name: 'Costs', url: '/v4/costs' },
+                { name: 'Inbox', url: '/v4/inbox' },
+                { name: 'Swarm', url: '/v4/swarm' },
+                { name: 'Translator', url: '/v4/translator' },
+                { name: 'Ops', url: '/v4/ops' },
+                { name: 'Research', url: '/v4/research' }
+            ];
+
+            const isMac = navigator.platform.toUpperCase().includes('MAC');
+            const modKey = isMac ? 'metaKey' : 'ctrlKey';
+
+            const paletteOverlay = document.getElementById('kbd-palette-overlay');
+            const helpOverlay = document.getElementById('kbd-help-overlay');
+            const kbdSearch = document.getElementById('kbd-search');
+            const kbdResults = document.getElementById('kbd-results');
+
+            let selectedIndex = 0;
+            let currentMatches = [];
+
+            function fuzzyMatch(query, items) {
+                const q = (query || '').trim().toLowerCase();
+                if (!q) return items.slice();
+                const subs = [];
+                const acros = [];
+                for (const item of items) {
+                    const n = item.name.toLowerCase();
+                    if (n.includes(q)) {
+                        subs.push(item);
+                        continue;
+                    }
+                    let qi = 0;
+                    for (let i = 0; i < n.length && qi < q.length; i++) {
+                        if (n[i] === q[qi]) qi++;
+                    }
+                    if (qi === q.length) acros.push(item);
+                }
+                return subs.concat(acros);
+            }
+
+            function clearNode(node) {
+                while (node.firstChild) node.removeChild(node.firstChild);
+            }
+
+            function renderResults() {
+                clearNode(kbdResults);
+                if (currentMatches.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'kbd-empty';
+                    empty.textContent = 'No matches';
+                    kbdResults.appendChild(empty);
+                    return;
+                }
+                currentMatches.forEach((item, idx) => {
+                    const row = document.createElement('div');
+                    row.className = 'kbd-result' + (idx === selectedIndex ? ' selected' : '');
+                    row.dataset.index = String(idx);
+                    const label = document.createElement('span');
+                    label.textContent = item.name;
+                    const hint = document.createElement('span');
+                    hint.className = 'kbd-key';
+                    hint.textContent = item.url;
+                    row.appendChild(label);
+                    row.appendChild(hint);
+                    row.addEventListener('click', () => {
+                        selectedIndex = idx;
+                        navigateSelected();
+                    });
+                    row.addEventListener('mouseenter', () => {
+                        selectedIndex = idx;
+                        updateSelectionHighlight();
+                    });
+                    kbdResults.appendChild(row);
+                });
+            }
+
+            function updateSelectionHighlight() {
+                const rows = kbdResults.querySelectorAll('.kbd-result');
+                rows.forEach((r, idx) => r.classList.toggle('selected', idx === selectedIndex));
+                const sel = rows[selectedIndex];
+                if (sel && typeof sel.scrollIntoView === 'function') {
+                    sel.scrollIntoView({ block: 'nearest' });
+                }
+            }
+
+            function navigateSelected() {
+                if (!currentMatches.length) return;
+                const target = currentMatches[selectedIndex];
+                if (target && target.url) {
+                    window.location.href = target.url;
+                }
+            }
+
+            function openPalette() {
+                closeHelp();
+                paletteOverlay.classList.remove('hidden');
+                kbdSearch.value = '';
+                selectedIndex = 0;
+                currentMatches = PAGES.slice();
+                renderResults();
+                setTimeout(() => kbdSearch.focus(), 0);
+            }
+
+            function closePalette() {
+                paletteOverlay.classList.add('hidden');
+            }
+
+            function openHelp() {
+                closePalette();
+                helpOverlay.classList.remove('hidden');
+            }
+
+            function closeHelp() {
+                helpOverlay.classList.add('hidden');
+            }
+
+            function closeAllModals() {
+                closePalette();
+                closeHelp();
+            }
+
+            kbdSearch.addEventListener('input', () => {
+                currentMatches = fuzzyMatch(kbdSearch.value, PAGES);
+                selectedIndex = 0;
+                renderResults();
+            });
+
+            kbdSearch.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    if (currentMatches.length) {
+                        selectedIndex = (selectedIndex + 1) % currentMatches.length;
+                        updateSelectionHighlight();
+                    }
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    if (currentMatches.length) {
+                        selectedIndex = (selectedIndex - 1 + currentMatches.length) % currentMatches.length;
+                        updateSelectionHighlight();
+                    }
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    navigateSelected();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closePalette();
+                }
+            });
+
+            paletteOverlay.addEventListener('click', (e) => {
+                if (e.target === paletteOverlay) closePalette();
+            });
+            helpOverlay.addEventListener('click', (e) => {
+                if (e.target === helpOverlay) closeHelp();
+            });
+
+            document.addEventListener('keydown', (e) => {
+                const mod = e[modKey];
+
+                // Cmd+K / Ctrl+K → quick nav palette
+                if (mod && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+                    e.preventDefault();
+                    if (paletteOverlay.classList.contains('hidden')) openPalette();
+                    else closePalette();
+                    return;
+                }
+
+                // Cmd+/ / Ctrl+/ → help overlay
+                if (mod && !e.shiftKey && !e.altKey && e.key === '/') {
+                    e.preventDefault();
+                    if (helpOverlay.classList.contains('hidden')) openHelp();
+                    else closeHelp();
+                    return;
+                }
+
+                // Cmd+Enter / Ctrl+Enter → send message
+                if (mod && e.key === 'Enter') {
+                    if (!paletteOverlay.classList.contains('hidden')) return; // palette owns Enter
+                    e.preventDefault();
+                    sendMessage();
+                    return;
+                }
+
+                // Esc → close any open modal
+                if (e.key === 'Escape') {
+                    const paletteOpen = !paletteOverlay.classList.contains('hidden');
+                    const helpOpen = !helpOverlay.classList.contains('hidden');
+                    if (paletteOpen || helpOpen) {
+                        e.preventDefault();
+                        closeAllModals();
+                    }
+                }
+            });
+        })();
     </script>
 </body>
 </html>

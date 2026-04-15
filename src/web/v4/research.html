@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Krab AI - Swarm Research Pipeline</title>
+    <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <script src="/v4/theme-toggle.js" defer></script>
+    <style>
+        /* Base & Layout */
+        :root {
+            --accent-cyan: #7dd3fc;
+            --accent-cyan-glow: rgba(125, 211, 252, 0.4);
+            --success-green: #34d399;
+            --danger-red: #f87171;
+            --warning-yellow: #fbbf24;
+            --glass-bg: rgba(20, 20, 25, 0.6);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-muted: rgba(255, 255, 255, 0.5);
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0f0f13;
+            color: #ffffff;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .page-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            padding-bottom: 6rem;
+        }
+
+        /* Header */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.75rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .header-titles h1 {
+            margin: 0;
+            font-size: 1.75rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        .last-updated {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.35);
+            margin-top: 0.25rem;
+        }
+
+        /* Buttons */
+        .btn-launch-new {
+            background: rgba(125, 211, 252, 0.1);
+            border: 1px solid var(--accent-cyan-glow);
+            color: var(--accent-cyan);
+            padding: 0.6rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .btn-launch-new:hover {
+            background: rgba(125, 211, 252, 0.2);
+            box-shadow: 0 0 15px var(--accent-cyan-glow);
+        }
+
+        .btn-cancel {
+            background: transparent;
+            border: 1px solid var(--glass-border);
+            color: #fff;
+            padding: 0.6rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-cancel:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 1.25rem 1rem;
+            text-align: center;
+            backdrop-filter: blur(12px);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+        }
+
+        /* Runs List */
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .runs-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .run-row {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+            backdrop-filter: blur(12px);
+        }
+
+        .run-row:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .run-row-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+
+        .run-col {
+            flex: 1;
+            font-size: 0.9rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .run-col-time {
+            flex: 0 0 140px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .run-col-topic {
+            flex: 2;
+            font-weight: 500;
+        }
+
+        .run-col-status {
+            flex: 0 0 100px;
+            text-align: center;
+        }
+
+        .run-col-duration {
+            flex: 0 0 80px;
+            text-align: right;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .run-col-action {
+            flex: 0 0 30px;
+            text-align: right;
+            color: var(--text-muted);
+        }
+
+        .run-row svg.expand-icon {
+            width: 18px;
+            height: 18px;
+            transition: transform 0.3s ease;
+        }
+
+        .run-row.expanded svg.expand-icon {
+            transform: rotate(180deg);
+        }
+
+        .run-preview-full {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease, margin 0.3s ease, padding 0.3s ease, opacity 0.3s ease;
+            opacity: 0;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: rgba(255, 255, 255, 0.8);
+            white-space: pre-wrap;
+        }
+
+        .run-row.expanded .run-preview-full {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--glass-border);
+            opacity: 1;
+        }
+
+        /* Scrollbar for preview */
+        .run-preview-full::-webkit-scrollbar {
+            width: 6px;
+        }
+        .run-preview-full::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 3px;
+        }
+        .run-preview-full::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem 2rem;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            background: var(--glass-bg);
+            border: 1px dashed var(--glass-border);
+            border-radius: 12px;
+        }
+
+        /* Pills */
+        .pill {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .pill-info { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+        .pill-done { background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3); }
+        .pill-warning { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.3); }
+        .pill-failed { background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
+        .pill-critical { background: rgba(220, 38, 38, 0.2); color: #ef4444; border: 1px solid rgba(220, 38, 38, 0.5); animation: pulse-red 2s infinite; }
+
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: rgba(25, 25, 30, 0.85);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-title {
+            margin: 0 0 1.5rem 0;
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .modal-textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 0.75rem;
+            border: 1px solid var(--glass-border);
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+
+        .modal-textarea:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.2);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+        }
+
+        /* Toasts */
+        .toast-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            pointer-events: none;
+        }
+
+        .toast {
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            backdrop-filter: blur(20px);
+            font-size: 0.9rem;
+            font-weight: 500;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            pointer-events: auto;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast-success {
+            border: 1px solid rgba(52, 211, 153, 0.4);
+            background: rgba(52, 211, 153, 0.15);
+            color: #a7f3d0;
+        }
+
+        .toast-error {
+            border: 1px solid rgba(248, 113, 113, 0.4);
+            background: rgba(248, 113, 113, 0.15);
+            color: #fca5a5;
+        }
+
+        /* Navbar & Bell (Identical to ops.html logic) */
+        .glass-nav {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1.5rem;
+            background: rgba(15, 15, 19, 0.8);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--glass-border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            gap: 1.5rem;
+        }
+
+        .nav-brand {
+            font-weight: 700;
+            font-size: 1.1rem;
+            letter-spacing: 0.05em;
+            color: #fff;
+            text-decoration: none;
+            margin-right: auto;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-link.active {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-bell-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .bell-icon-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0.4rem;
+            border-radius: 50%;
+            transition: color 0.2s, background 0.2s;
+            position: relative;
+            display: flex;
+        }
+
+        .bell-icon-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .bell-badge {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: var(--danger-red);
+            color: #fff;
+            font-size: 0.65rem;
+            font-weight: bold;
+            padding: 0.1rem 0.3rem;
+            border-radius: 10px;
+            min-width: 14px;
+            text-align: center;
+            display: none;
+        }
+
+        .bell-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 0.5rem;
+            width: 320px;
+            background: rgba(25, 25, 30, 0.95);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(20px);
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .bell-dropdown.show {
+            display: flex;
+        }
+
+        .bell-dropdown-header {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--glass-border);
+            font-weight: 600;
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .bell-dropdown-body {
+            max-height: 300px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .bell-item {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.85rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            text-decoration: none;
+            color: #fff;
+        }
+
+        .bell-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .bell-item:last-child {
+            border-bottom: none;
+        }
+
+        .bell-item-time {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+
+        .bell-empty {
+            padding: 1.5rem 1rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        /* Mobile Tab Bar */
+        .glass-tab-bar {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(15, 15, 19, 0.85);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid var(--glass-border);
+            padding: 0.5rem 1rem;
+            padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+            z-index: 100;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .tab-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.25rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.65rem;
+            flex: 1;
+        }
+
+        .tab-item svg {
+            width: 24px;
+            height: 24px;
+            stroke-width: 1.5;
+        }
+
+        .tab-item.active {
+            color: var(--accent-cyan);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .nav-links { display: none; }
+            .glass-tab-bar { display: flex; }
+            .page-content { padding: 1rem; padding-bottom: 90px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            
+            .run-row-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.5rem;
+            }
+            
+            .run-col { width: 100%; text-align: left !important; }
+            .run-col-time { font-size: 0.75rem; order: 1; }
+            .run-col-topic { font-size: 1rem; order: 2; white-space: normal; }
+            .run-col-status { order: 3; }
+            .run-col-duration { order: 4; }
+            .run-col-action { position: absolute; top: 1rem; right: 1rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navbar -->
+    <nav class="glass-nav">
+        <a href="#" class="nav-brand">KRAB AI</a>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/v4/costs" class="nav-link">Costs</a>
+            <a href="/v4/inbox" class="nav-link">Inbox</a>
+            <a href="/v4/swarm" class="nav-link">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/ops" class="nav-link">Ops</a>
+            <a href="/v4/research" class="nav-link active">Research</a>
+        </div>
+        <div class="nav-bell-wrapper">
+            <button class="bell-icon-btn" id="bellBtn" aria-label="Notifications">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                </svg>
+                <span class="bell-badge" id="bellBadge">0</span>
+            </button>
+            <div class="bell-dropdown" id="bellDropdown">
+                <div class="bell-dropdown-header">
+                    <span>Alerts</span>
+                </div>
+                <div class="bell-dropdown-body" id="bellDropdownBody">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="page-content">
+        <div class="page-header">
+            <div class="header-titles">
+                <h1>Swarm Research Pipeline</h1>
+                <div class="last-updated" id="lastUpdated">Last updated: --</div>
+            </div>
+            <button class="btn-launch-new" onclick="openResearchModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                Start New Research
+            </button>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="statTotalRuns">0</div>
+                <div class="stat-label">Total Research Runs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statRunningNow">0</div>
+                <div class="stat-label">Running Now</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statAvgDuration">0s</div>
+                <div class="stat-label">Avg Duration</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statLastTopic" style="font-size: 1.25rem; line-height: 2rem;">--</div>
+                <div class="stat-label">Last Topic</div>
+            </div>
+        </div>
+
+        <div class="section-title">Research Runs</div>
+        <div class="runs-list" id="runsList">
+            <!-- Populated by JS -->
+            <div class="empty-state">Loading research runs...</div>
+        </div>
+    </main>
+
+    <!-- Mobile Tab Bar -->
+    <nav class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+            </svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="1" x2="12" y2="23"></line>
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+            </svg>
+            Costs
+        </a>
+        <a href="/v4/swarm" class="tab-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                <rect x="9" y="9" width="6" height="6"></rect>
+                <line x1="9" y1="1" x2="9" y2="4"></line>
+                <line x1="15" y1="1" x2="15" y2="4"></line>
+                <line x1="9" y1="20" x2="9" y2="23"></line>
+                <line x1="15" y1="20" x2="15" y2="23"></line>
+                <line x1="20" y1="9" x2="23" y2="9"></line>
+                <line x1="20" y1="14" x2="23" y2="14"></line>
+                <line x1="1" y1="9" x2="4" y2="9"></line>
+                <line x1="1" y1="14" x2="4" y2="14"></line>
+            </svg>
+            Swarm
+        </a>
+        <a href="/v4/research" class="tab-item active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            Research
+        </a>
+    </nav>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="researchModal" onclick="closeResearchModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <h2 class="modal-title">Start New Research</h2>
+            <textarea id="researchTopic" class="modal-textarea" rows="4" placeholder="Enter research topic or specific query..."></textarea>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeResearchModal()">Cancel</button>
+                <button class="btn-launch-new" onclick="launchResearch()">Launch</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script>
+        const API_BASE = '';
+
+        // Helpers
+        async function fetchJSON(url, options = {}) {
+            try {
+                const res = await fetch(API_BASE + url, options);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return await res.json();
+            } catch (err) {
+                console.error(`Fetch error for ${url}:`, err);
+                return null;
+            }
+        }
+
+        function safeText(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function formatDate(isoString) {
+            if (!isoString) return '--';
+            const d = new Date(isoString);
+            if (isNaN(d.getTime())) return isoString;
+            return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        function formatTime(isoString) {
+            if (!isoString) return '--';
+            const d = new Date(isoString);
+            if (isNaN(d.getTime())) return isoString;
+            return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function formatDuration(sec) {
+            if (sec === undefined || sec === null) return '--';
+            const s = parseInt(sec, 10);
+            if (isNaN(s)) return '--';
+            if (s < 60) return `${s}s`;
+            const m = Math.floor(s / 60);
+            const rs = s % 60;
+            return `${m}m ${rs}s`;
+        }
+
+        function createToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            // Trigger reflow
+            void toast.offsetWidth;
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // Modal Logic
+        function openResearchModal() {
+            document.getElementById('researchTopic').value = '';
+            document.getElementById('researchModal').classList.add('active');
+            document.getElementById('researchTopic').focus();
+        }
+
+        function closeResearchModal(e) {
+            // If invoked from overlay click, only close when clicking the overlay itself (not children)
+            // If invoked from Cancel button or Escape, force close.
+            if (e && e.type === 'click' && e.currentTarget && e.currentTarget.id === 'researchModal') {
+                if (e.target !== document.getElementById('researchModal')) return;
+            }
+            document.getElementById('researchModal').classList.remove('active');
+        }
+
+        async function launchResearch() {
+            const topic = document.getElementById('researchTopic').value.trim();
+            if (!topic) {
+                createToast('Please enter a topic', 'error');
+                return;
+            }
+
+            const payload = { team: 'analysts', title: topic };
+            
+            try {
+                const res = await fetch(API_BASE + '/api/swarm/tasks/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    createToast('Research launched successfully');
+                    closeResearchModal();
+                    refreshAll();
+                } else {
+                    createToast('Failed to launch research', 'error');
+                }
+            } catch (err) {
+                createToast('Network error launching research', 'error');
+            }
+        }
+
+        // Data Loading
+        async function loadStats() {
+            const tbData = await fetchJSON('/api/swarm/task-board');
+            let runningCount = 0;
+
+            if (tbData) {
+                let tasks = [];
+                if (Array.isArray(tbData)) {
+                    tasks = tbData;
+                } else if (tbData.tasks && Array.isArray(tbData.tasks)) {
+                    tasks = tbData.tasks;
+                } else if (tbData.teams && Array.isArray(tbData.teams)) {
+                    tbData.teams.forEach(t => {
+                        if (t.tasks && Array.isArray(t.tasks)) {
+                            tasks.push(...t.tasks.map(x => ({ ...x, team: t.name })));
+                        }
+                    });
+                }
+
+                const activeStatuses = ['in_progress', 'running', 'pending'];
+                runningCount = tasks.filter(t => 
+                    t.team === 'analysts' && 
+                    t.status && 
+                    activeStatuses.includes(t.status.toLowerCase())
+                ).length;
+            }
+
+            document.getElementById('statRunningNow').textContent = runningCount;
+        }
+
+        async function loadRuns() {
+            const data = await fetchJSON('/api/swarm/artifacts');
+            let artifacts = [];
+            
+            if (Array.isArray(data)) {
+                artifacts = data;
+            } else if (data && data.artifacts && Array.isArray(data.artifacts)) {
+                artifacts = data.artifacts;
+            }
+
+            // Filter for analysts and sort newest first
+            const runs = artifacts
+                .filter(a => a.team === 'analysts')
+                .sort((a, b) => new Date(b.timestamp_iso || 0) - new Date(a.timestamp_iso || 0));
+
+            // Update Stats
+            document.getElementById('statTotalRuns').textContent = runs.length;
+            
+            if (runs.length > 0) {
+                document.getElementById('statLastTopic').textContent = runs[0].topic || 'Unknown';
+                document.getElementById('statLastTopic').title = runs[0].topic || '';
+                
+                const validDurations = runs.filter(r => r.duration_sec != null).map(r => parseInt(r.duration_sec, 10));
+                if (validDurations.length > 0) {
+                    const avg = validDurations.reduce((a, b) => a + b, 0) / validDurations.length;
+                    document.getElementById('statAvgDuration').textContent = formatDuration(avg);
+                } else {
+                    document.getElementById('statAvgDuration').textContent = '--';
+                }
+            } else {
+                document.getElementById('statLastTopic').textContent = '--';
+                document.getElementById('statAvgDuration').textContent = '--';
+            }
+
+            // Render List
+            const listEl = document.getElementById('runsList');
+            listEl.innerHTML = '';
+
+            if (runs.length === 0) {
+                listEl.innerHTML = `<div class="empty-state">No research runs yet. Click Start to launch your first deep research.</div>`;
+                return;
+            }
+
+            runs.forEach(run => {
+                const row = document.createElement('div');
+                row.className = 'run-row';
+                row.onclick = function() { this.classList.toggle('expanded'); };
+
+                const dateStr = formatDate(run.timestamp_iso);
+                const timeStr = formatTime(run.timestamp_iso);
+                const topic = safeText(run.topic || 'Untitled Research');
+                const duration = formatDuration(run.duration_sec);
+                const preview = safeText(run.result_preview || 'No preview available.');
+
+                // Status pill logic (assuming done if it's in artifacts, but could be failed)
+                let statusHtml = `<span class="pill pill-done">Done</span>`;
+                if (run.status && run.status.toLowerCase() === 'failed') {
+                    statusHtml = `<span class="pill pill-failed">Failed</span>`;
+                }
+
+                row.innerHTML = `
+                    <div class="run-row-header">
+                        <div class="run-col run-col-time">${dateStr} ${timeStr}</div>
+                        <div class="run-col run-col-topic" title="${topic}">${topic}</div>
+                        <div class="run-col run-col-status">${statusHtml}</div>
+                        <div class="run-col run-col-duration">${duration}</div>
+                        <div class="run-col run-col-action">
+                            <svg class="expand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="run-preview-full" onclick="event.stopPropagation()">${preview}</div>
+                `;
+                listEl.appendChild(row);
+            });
+        }
+
+        async function refreshAll() {
+            await Promise.all([loadStats(), loadRuns()]);
+            document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+        }
+
+        // Bell Dropdown Logic (Identical to ops.html)
+        const bellBtn = document.getElementById('bellBtn');
+        const bellDropdown = document.getElementById('bellDropdown');
+        const bellBadge = document.getElementById('bellBadge');
+        const bellDropdownBody = document.getElementById('bellDropdownBody');
+
+        async function updateBellCount() {
+            try {
+                const [inboxRes, opsRes] = await Promise.all([
+                    fetch('/api/inbox/status').catch(() => null),
+                    fetch('/api/ops/alerts').catch(() => null)
+                ]);
+                const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+                const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+                const summary = inboxData.summary || {};
+                const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+                const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : (Array.isArray(opsData) ? opsData.slice(0, 3) : []);
+                let total = 0;
+                if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+                    total = (summary.open_items || 0) + (summary.attention_items || 0);
+                } else {
+                    total = latestItems.length + alerts.length;
+                }
+                if (bellBadge) {
+                    if (total > 0) {
+                        bellBadge.textContent = total > 99 ? '99+' : String(total);
+                        bellBadge.style.display = 'block';
+                    } else {
+                        bellBadge.style.display = 'none';
+                    }
+                }
+            } catch (err) {
+                console.error('updateBellCount', err);
+            }
+        }
+
+        async function loadAlerts() {
+            bellDropdownBody.innerHTML = '<div class="bell-empty">Loading...</div>';
+            const alerts = await fetchJSON('/api/ops/alerts');
+            bellDropdownBody.innerHTML = '';
+
+            if (!alerts || alerts.length === 0) {
+                bellDropdownBody.innerHTML = '<div class="bell-empty">No new alerts</div>';
+                return;
+            }
+
+            alerts.slice(0, 5).forEach(alert => {
+                const a = document.createElement('a');
+                a.href = '#';
+                a.className = 'bell-item';
+                
+                const msg = document.createElement('div');
+                msg.textContent = alert.message || 'Unknown alert';
+                
+                const time = document.createElement('div');
+                time.className = 'bell-item-time';
+                time.textContent = formatTime(alert.timestamp_iso) + ' ' + formatDate(alert.timestamp_iso);
+                
+                a.appendChild(msg);
+                a.appendChild(time);
+                bellDropdownBody.appendChild(a);
+            });
+        }
+
+        bellBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isShowing = bellDropdown.classList.contains('show');
+            if (!isShowing) {
+                loadAlerts();
+                bellDropdown.classList.add('show');
+            } else {
+                bellDropdown.classList.remove('show');
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!bellDropdown.contains(e.target) && !bellBtn.contains(e.target)) {
+                bellDropdown.classList.remove('show');
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                bellDropdown.classList.remove('show');
+                closeResearchModal();
+            }
+        });
+
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshAll();
+            updateBellCount();
+            
+            setInterval(refreshAll, 30000);
+            setInterval(updateBellCount, 30000);
+        });
+    </script>
+</body>
+</html>

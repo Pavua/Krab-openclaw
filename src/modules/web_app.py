@@ -7648,6 +7648,14 @@ class WebApp:
                 return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>V4 Translator not ready</h1>", headers=_no_store_headers())
 
+        @self.app.get("/v4/research", response_class=HTMLResponse)
+        async def v4_research():
+            """V4 Liquid Glass dashboard — Swarm Research Pipeline."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "research.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Research not ready</h1>", headers=_no_store_headers())
+
         @self.app.get("/v4/liquid-glass.css")
         async def v4_css():
             """V4 Liquid Glass — общий CSS."""
@@ -7655,6 +7663,14 @@ class WebApp:
             if css.exists():
                 return FileResponse(css, media_type="text/css", headers=_no_store_headers())
             return HTMLResponse("/* not found */", media_type="text/css")
+
+        @self.app.get("/v4/theme-toggle.js")
+        async def v4_theme_toggle():
+            """V4 — скрипт dark/light theme toggle с localStorage."""
+            js = config.BASE_DIR / "src" / "web" / "v4" / "theme-toggle.js"
+            if js.exists():
+                return FileResponse(js, media_type="application/javascript", headers=_no_store_headers())
+            return HTMLResponse("// not found", media_type="application/javascript")
 
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
 

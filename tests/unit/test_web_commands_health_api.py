@@ -120,17 +120,17 @@ def test_commands_nonempty_list() -> None:
 
 
 def test_commands_entries_schema() -> None:
-    """Каждая запись содержит поля cmd и desc."""
+    """Каждая запись содержит поля name и description."""
     commands = _client().get("/api/commands").json()["commands"]
     for entry in commands:
-        assert "cmd" in entry, f"нет поля cmd: {entry}"
-        assert "desc" in entry, f"нет поля desc: {entry}"
+        assert "name" in entry, f"нет поля name: {entry}"
+        assert "description" in entry, f"нет поля description: {entry}"
 
 
 def test_commands_known_cmds_present() -> None:
     """Ключевые команды присутствуют в списке."""
-    cmds = {e["cmd"] for e in _client().get("/api/commands").json()["commands"]}
-    required = {"!status", "!model", "!voice", "!translator", "!swarm", "!help", "!search"}
+    cmds = {e["name"] for e in _client().get("/api/commands").json()["commands"]}
+    required = {"status", "model", "voice", "translator", "swarm", "help", "search"}
     missing = required - cmds
     assert not missing, f"отсутствуют команды: {missing}"
 

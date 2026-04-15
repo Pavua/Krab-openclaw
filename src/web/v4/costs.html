@@ -27,6 +27,8 @@
         .p-2 { padding: 0.5rem; } .p-4 { padding: 1rem; }
         .text-center { text-align: center; }
         .text-right { text-align: right; }
+        .w-full { width: 100%; }
+        .relative { position: relative; }
         
         /* Typography */
         .text-sm { font-size: 0.875rem; }
@@ -110,6 +112,66 @@
             min-height: 1.2em;
             display: inline-block;
         }
+
+        /* Stat Cards & Trends */
+        .stat-card {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 140px;
+        }
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        .trend-indicator {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            display: none; /* shown via JS */
+            align-items: center;
+            gap: 4px;
+        }
+        .sparkline-wrapper {
+            height: 36px;
+            width: 100%;
+            max-width: 120px;
+            opacity: 0.8;
+            margin-top: 0.5rem;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+        }
+
+        /* Bar Charts */
+        .bar-row {
+            display: grid;
+            grid-template-columns: 100px 1fr 70px;
+            gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .bar-label {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .bar-container {
+            background: rgba(0,0,0,0.3);
+            border-radius: 999px;
+            height: 8px;
+            width: 100%;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            transition: width 0.5s ease;
+        }
     </style>
 </head>
 <body>
@@ -167,17 +229,29 @@
 
         <!-- Summary Cards -->
         <div class="grid-3 mb-4">
-            <div class="glass-card flex-col justify-center items-center text-center">
-                <div class="text-muted mb-1">Total Cost</div>
-                <div class="text-3xl text-success skeleton" id="total-cost" data-val="0">$0.00</div>
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Cost</span>
+                    <span id="trend-cost" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-success skeleton my-2" id="total-cost" data-val="0">$0.00</div>
+                <div id="sparkline-cost" class="sparkline-wrapper"></div>
             </div>
-            <div class="glass-card flex-col justify-center items-center text-center">
-                <div class="text-muted mb-1">Total Calls</div>
-                <div class="text-3xl text-accent skeleton" id="total-calls" data-val="0">0</div>
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Calls</span>
+                    <span id="trend-calls" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-accent skeleton my-2" id="total-calls" data-val="0">0</div>
+                <div id="sparkline-calls" class="sparkline-wrapper"></div>
             </div>
-            <div class="glass-card flex-col justify-center items-center text-center">
-                <div class="text-muted mb-1">Total Tokens</div>
-                <div class="text-3xl text-purple skeleton" id="total-tokens" data-val="0">0</div>
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Tokens</span>
+                    <span id="trend-tokens" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-purple skeleton my-2" id="total-tokens" data-val="0">0</div>
+                <div id="sparkline-tokens" class="sparkline-wrapper"></div>
             </div>
         </div>
 
@@ -219,11 +293,11 @@
                 </div>
                 
                 <div class="glass-card flex-1">
-                    <h3 class="text-lg mb-2 text-accent">By Channel</h3>
-                    <div class="flex flex-wrap gap-2 mt-2" id="channels-container">
-                        <span class="skeleton badge" style="width: 60px;"></span>
-                        <span class="skeleton badge" style="width: 80px;"></span>
-                        <span class="skeleton badge" style="width: 50px;"></span>
+                    <h3 class="text-lg mb-4 text-accent">By Channel</h3>
+                    <div id="channels-container">
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
                     </div>
                 </div>
             </div>
@@ -341,7 +415,16 @@
                 "translator": 200,
                 "swarm": 154,
                 "api": 50
-            }
+            },
+            history: [
+                { date: '2023-10-01', cost_usd: 5.5, calls: 150, tokens: 75000 },
+                { date: '2023-10-02', cost_usd: 6.2, calls: 180, tokens: 82000 },
+                { date: '2023-10-03', cost_usd: 4.8, calls: 140, tokens: 65000 },
+                { date: '2023-10-04', cost_usd: 7.1, calls: 210, tokens: 95000 },
+                { date: '2023-10-05', cost_usd: 6.5, calls: 190, tokens: 88000 },
+                { date: '2023-10-06', cost_usd: 8.4, calls: 240, tokens: 110000 },
+                { date: '2023-10-07', cost_usd: 7.9, calls: 220, tokens: 105000 }
+            ]
         };
 
         const mockBudget = {
@@ -363,14 +446,13 @@
             const step = (timestamp) => {
                 if (!startTimestamp) startTimestamp = timestamp;
                 const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-                // easeOutQuart
                 const easeProgress = 1 - Math.pow(1 - progress, 4);
                 const currentVal = start + easeProgress * (end - start);
-                obj.innerHTML = formatter(currentVal);
+                obj.textContent = formatter(currentVal);
                 if (progress < 1) {
                     window.requestAnimationFrame(step);
                 } else {
-                    obj.innerHTML = formatter(end);
+                    obj.textContent = formatter(end);
                     obj.dataset.val = end;
                 }
             };
@@ -379,14 +461,134 @@
 
         function updateElement(id, value, formatter = fmtNum, animate = false) {
             const el = document.getElementById(id);
+            if (!el) return;
             el.classList.remove('skeleton');
             if (animate && isFirstLoad) {
                 const start = parseFloat(el.dataset.val || 0);
                 animateValue(el, start, value, 1500, formatter);
             } else {
-                el.innerHTML = formatter(value);
+                el.textContent = formatter(value);
                 el.dataset.val = value;
             }
+        }
+
+        // Sparkline & Trend Generators
+        function createSparkline(data, color) {
+            if (!data || data.length < 2) return null;
+            const max = Math.max(...data);
+            const min = Math.min(...data);
+            const range = max - min || 1;
+            const width = 120;
+            const height = 36;
+            
+            const points = data.map((val, i) => {
+                const x = (i / (data.length - 1)) * width;
+                const y = height - ((val - min) / range) * height;
+                return `${x},${y}`;
+            }).join(' ');
+
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('viewBox', `0 -2 ${width} ${height + 4}`);
+            svg.setAttribute('preserveAspectRatio', 'none');
+            svg.style.overflow = 'visible';
+
+            const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+            polyline.setAttribute('fill', 'none');
+            polyline.setAttribute('stroke', color);
+            polyline.setAttribute('stroke-width', '2');
+            polyline.setAttribute('stroke-linecap', 'round');
+            polyline.setAttribute('stroke-linejoin', 'round');
+            polyline.setAttribute('points', points);
+
+            svg.appendChild(polyline);
+            return svg;
+        }
+
+        function renderSparkline(containerId, data, color) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = ''; 
+            const svg = createSparkline(data, color);
+            if (svg) container.appendChild(svg);
+        }
+
+        function updateTrend(elementId, data, isCost = false) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (!data || data.length < 2) {
+                el.style.display = 'none';
+                return;
+            }
+            const current = data[data.length - 1];
+            const prev = data[data.length - 2];
+            if (prev === 0) {
+                el.style.display = 'none';
+                return;
+            }
+            const pct = ((current - prev) / prev) * 100;
+            const absPct = Math.abs(pct).toFixed(1);
+            
+            el.style.display = 'inline-flex';
+            
+            if (pct > 0) {
+                el.textContent = `↑ ${absPct}%`;
+                el.style.color = isCost ? '#fca5a5' : '#6ee7b7'; 
+            } else {
+                el.textContent = `↓ ${absPct}%`;
+                el.style.color = isCost ? '#6ee7b7' : '#fca5a5'; 
+            }
+        }
+
+        function renderBarChart(containerId, dataObj) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = ''; 
+            
+            if (!dataObj) return;
+            
+            const entries = Object.entries(dataObj)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 8);
+                
+            if (entries.length === 0) return;
+            
+            const maxVal = entries[0][1] || 1;
+            const palette = ['#bae6fd', '#c4b5fd', '#6ee7b7', '#fde68a', '#fca5a5'];
+            
+            entries.forEach(([key, val], index) => {
+                const color = palette[index % palette.length];
+                const pct = (val / maxVal) * 100;
+                
+                const row = document.createElement('div');
+                row.className = 'bar-row';
+                
+                const label = document.createElement('span');
+                label.className = 'bar-label text-sm text-muted';
+                label.textContent = key;
+                label.title = key;
+                
+                const barContainer = document.createElement('div');
+                barContainer.className = 'bar-container';
+                
+                const barFill = document.createElement('div');
+                barFill.className = 'bar-fill';
+                barFill.style.width = `${pct}%`;
+                barFill.style.backgroundColor = color;
+                
+                barContainer.appendChild(barFill);
+                
+                const value = document.createElement('span');
+                value.className = 'bar-value text-sm text-right';
+                value.textContent = Number.isInteger(val) ? fmtNum(val) : fmtUSD(val);
+                
+                row.appendChild(label);
+                row.appendChild(barContainer);
+                row.appendChild(value);
+                
+                container.appendChild(row);
+            });
         }
 
         // Render Functions
@@ -395,19 +597,23 @@
             updateElement('budget-remaining', budget.remaining_usd, fmtUSD);
             
             const limitEl = document.getElementById('budget-limit');
-            limitEl.classList.remove('skeleton');
-            limitEl.innerText = fmtUSD(budget.monthly_limit_usd);
+            if (limitEl) {
+                limitEl.classList.remove('skeleton');
+                limitEl.textContent = fmtUSD(budget.monthly_limit_usd);
+            }
 
             const fill = document.getElementById('budget-fill');
-            const pct = Math.min(Math.max(budget.used_pct, 0), 100);
-            fill.style.width = pct + '%';
+            if (fill) {
+                const pct = Math.min(Math.max(budget.used_pct, 0), 100);
+                fill.style.width = pct + '%';
 
-            if (pct < 50) {
-                fill.style.backgroundColor = 'var(--accent-green)';
-            } else if (pct < 80) {
-                fill.style.backgroundColor = 'var(--accent-yellow)';
-            } else {
-                fill.style.backgroundColor = 'var(--accent-red)';
+                if (pct < 50) {
+                    fill.style.backgroundColor = 'var(--accent-green)';
+                } else if (pct < 80) {
+                    fill.style.backgroundColor = 'var(--accent-yellow)';
+                } else {
+                    fill.style.backgroundColor = 'var(--accent-red)';
+                }
             }
         }
 
@@ -417,6 +623,21 @@
             updateElement('total-calls', report.total_calls, fmtNum, true);
             const totalTokens = (report.input_tokens || 0) + (report.output_tokens || 0);
             updateElement('total-tokens', totalTokens, fmtNum, true);
+
+            // Trends & Sparklines
+            if (report.history && report.history.length > 0) {
+                const costs = report.history.map(h => h.cost_usd || 0);
+                const calls = report.history.map(h => h.calls || 0);
+                const tokens = report.history.map(h => h.tokens || 0);
+
+                updateTrend('trend-cost', costs, true);
+                updateTrend('trend-calls', calls, false);
+                updateTrend('trend-tokens', tokens, false);
+
+                renderSparkline('sparkline-cost', costs, '#6ee7b7');
+                renderSparkline('sparkline-calls', calls, '#bae6fd');
+                renderSparkline('sparkline-tokens', tokens, '#c4b5fd');
+            }
 
             // FinOps
             updateElement('tool-calls', report.total_tool_calls);
@@ -430,41 +651,49 @@
             updateElement('cost-per-req', costPerReq, fmtUSD4);
             updateElement('tokens-per-dollar', Math.round(tokensPerDollar));
 
-            // Channels
-            const channelsContainer = document.getElementById('channels-container');
-            channelsContainer.innerHTML = '';
-            for (const [channel, calls] of Object.entries(report.by_channel || {})) {
-                const badge = document.createElement('span');
-                badge.className = 'badge';
-                badge.innerText = `${channel}: ${fmtNum(calls)}`;
-                
-                if (channel.toLowerCase() === 'telegram') badge.style.color = 'var(--accent-cyan)';
-                else if (channel.toLowerCase() === 'translator') badge.style.color = 'var(--accent-purple)';
-                else if (channel.toLowerCase() === 'swarm') badge.style.color = 'var(--accent-yellow)';
-                else badge.style.color = '#fff';
-
-                badge.style.borderColor = badge.style.color;
-                channelsContainer.appendChild(badge);
-            }
+            // Channels Bar Chart
+            renderBarChart('channels-container', report.by_channel);
 
             // Table
             const tbody = document.getElementById('model-tbody');
-            tbody.innerHTML = '';
-            const models = Object.entries(report.by_model || {}).map(([name, data]) => ({ name, ...data }));
-            models.sort((a, b) => b.cost_usd - a.cost_usd);
+            if (tbody) {
+                tbody.innerHTML = ''; 
+                const models = Object.entries(report.by_model || {}).map(([name, data]) => ({ name, ...data }));
+                models.sort((a, b) => b.cost_usd - a.cost_usd);
 
-            models.forEach(m => {
-                const tr = document.createElement('tr');
-                const avgCost = m.calls > 0 ? m.cost_usd / m.calls : 0;
-                tr.innerHTML = `
-                    <td style="color: #fff;">${m.name}</td>
-                    <td class="text-right text-success">${fmtUSD(m.cost_usd)}</td>
-                    <td class="text-right">${fmtNum(m.calls)}</td>
-                    <td class="text-right text-muted">${fmtNum(m.tokens)}</td>
-                    <td class="text-right text-muted">${fmtUSD4(avgCost)}</td>
-                `;
-                tbody.appendChild(tr);
-            });
+                models.forEach(m => {
+                    const tr = document.createElement('tr');
+                    const avgCost = m.calls > 0 ? m.cost_usd / m.calls : 0;
+                    
+                    const tdName = document.createElement('td');
+                    tdName.style.color = '#fff';
+                    tdName.textContent = m.name;
+                    
+                    const tdCost = document.createElement('td');
+                    tdCost.className = 'text-right text-success';
+                    tdCost.textContent = fmtUSD(m.cost_usd);
+                    
+                    const tdCalls = document.createElement('td');
+                    tdCalls.className = 'text-right';
+                    tdCalls.textContent = fmtNum(m.calls);
+                    
+                    const tdTokens = document.createElement('td');
+                    tdTokens.className = 'text-right text-muted';
+                    tdTokens.textContent = fmtNum(m.tokens);
+                    
+                    const tdAvg = document.createElement('td');
+                    tdAvg.className = 'text-right text-muted';
+                    tdAvg.textContent = fmtUSD4(avgCost);
+                    
+                    tr.appendChild(tdName);
+                    tr.appendChild(tdCost);
+                    tr.appendChild(tdCalls);
+                    tr.appendChild(tdTokens);
+                    tr.appendChild(tdAvg);
+                    
+                    tbody.appendChild(tr);
+                });
+            }
         }
 
         // API Calls
@@ -487,10 +716,10 @@
                     const json = await resBudget.json();
                     if (json.budget) budgetData = json.budget;
                 }
-                statusDot.style.background = 'var(--accent-green)';
+                if (statusDot) statusDot.style.background = 'var(--accent-green)';
             } catch (err) {
                 console.warn("API unavailable, using mock data", err);
-                statusDot.style.background = 'var(--accent-red)';
+                if (statusDot) statusDot.style.background = 'var(--accent-red)';
             }
 
             renderReport(reportData);
@@ -499,7 +728,8 @@
             isFirstLoad = false;
             
             const now = new Date();
-            document.getElementById('last-updated').innerText = `Last updated: ${now.toLocaleTimeString()}`;
+            const lastUpdated = document.getElementById('last-updated');
+            if (lastUpdated) lastUpdated.textContent = `Last updated: ${now.toLocaleTimeString()}`;
         }
 
         async function submitBudget(e) {
@@ -514,7 +744,6 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ monthly_limit_usd: val })
                 });
-                // In a real scenario, we'd wait for success. For demo, we just update mock and refetch
                 mockBudget.monthly_limit_usd = val;
                 mockBudget.remaining_usd = val - mockBudget.spent_usd;
                 mockBudget.used_pct = (mockBudget.spent_usd / val) * 100;
@@ -528,11 +757,15 @@
 
         // Modal Controls
         function openModal() {
-            document.getElementById('budget-modal').classList.add('active');
-            document.getElementById('budget-input').focus();
+            const modal = document.getElementById('budget-modal');
+            if (modal) {
+                modal.classList.add('active');
+                document.getElementById('budget-input').focus();
+            }
         }
         function closeModal() {
-            document.getElementById('budget-modal').classList.remove('active');
+            const modal = document.getElementById('budget-modal');
+            if (modal) modal.classList.remove('active');
         }
 
         // Timer Logic
@@ -542,8 +775,10 @@
                 timer = 10;
                 fetchData();
             }
-            document.getElementById('nav-timer').innerText = `↻ ${timer}s`;
-            document.getElementById('footer-timer').innerText = `Next refresh in ${timer}s`;
+            const navTimer = document.getElementById('nav-timer');
+            const footerTimer = document.getElementById('footer-timer');
+            if (navTimer) navTimer.textContent = `↻ ${timer}s`;
+            if (footerTimer) footerTimer.textContent = `Next refresh in ${timer}s`;
         }
 
         // Init
@@ -551,10 +786,12 @@
             fetchData();
             refreshInterval = setInterval(tickTimer, 1000);
             
-            // Close modal on outside click
-            document.getElementById('budget-modal').addEventListener('click', function(e) {
-                if (e.target === this) closeModal();
-            });
+            const modal = document.getElementById('budget-modal');
+            if (modal) {
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) closeModal();
+                });
+            }
         });
 
         async function updateBellCount() {
