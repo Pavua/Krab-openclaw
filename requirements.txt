@@ -18,3 +18,8 @@ sentence-transformers>=2.2.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.31.0
 langdetect>=1.0.9
+
+# Track E — Memory Layer (hybrid archive retrieval)
+sqlite-vec>=0.1.6
+model2vec>=0.3.0
+pymorphy3>=2.0
