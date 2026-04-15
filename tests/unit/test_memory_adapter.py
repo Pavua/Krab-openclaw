@@ -64,16 +64,21 @@ def test_empty_query_returns_empty():
     assert search_archive("   ") == []
 
 
-def test_is_memory_layer_available_false_before_merge():
-    """Без Track E retriever = stub, availability = False."""
-    assert is_memory_layer_available() is False
+def test_is_memory_layer_available_post_merge():
+    """После Track E merge retriever = HybridRetriever, availability = True.
+
+    До merge этот тест проверял False + _StubRetriever. Track E merged
+    (commit 8cac10c), так что теперь мы проверяем live integration.
+    """
+    # Track E present → auto-pickup HybridRetriever
+    assert is_memory_layer_available() is True
 
 
-def test_get_memory_layer_status_returns_stub_info():
-    """Status content: available=False, класс _StubRetriever."""
+def test_get_memory_layer_status_returns_real_retriever_info():
+    """Status content: available=True, класс HybridRetriever (post-merge)."""
     status = get_memory_layer_status()
-    assert status["available"] is False
-    assert status["retriever_class"] == "_StubRetriever"
+    assert status["available"] is True
+    assert status["retriever_class"] == "HybridRetriever"
     assert "checked_at" in status
 
 
@@ -147,10 +152,11 @@ def test_search_survives_retriever_exception():
         assert result == []
 
 
-def test_search_survives_import_error():
-    """Если импорт реального retriever падает — fallback на stub без exception."""
-    # Это тест baseline (Track E не merged), _StubRetriever должен быть в singleton
+def test_search_uses_real_retriever_post_merge():
+    """После Track E merge singleton — это HybridRetriever, не stub."""
     search_archive("test")
     from src.core.memory_adapter import _retriever_singleton
 
-    assert isinstance(_retriever_singleton, _StubRetriever)
+    # Track E merged: НЕ должен быть _StubRetriever
+    assert not isinstance(_retriever_singleton, _StubRetriever)
+    assert _retriever_singleton.__class__.__name__ == "HybridRetriever"
