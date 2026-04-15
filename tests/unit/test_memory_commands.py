@@ -259,6 +259,105 @@ class TestCollectStats:
         assert stats.vectors == -1  # без vec extension таблицы нет
 
 
+class TestStatsWithRealVec:
+    """
+    Регрессия на production-баг, пойманный e2e smoke (Session 8 post-merge):
+
+      Embedder вписал 7 векторов → `!memory stats` продолжал показывать
+      "Vectors: (sqlite-vec не подключён)". Причина: collect_stats
+      открывал read-only conn, не грузил sqlite-vec extension, и
+      SELECT на vec0 virtual table падал OperationalError.
+
+    Этот тест требует реально установленный sqlite-vec — pytest.importorskip
+    корректно skip'нет его если extension недоступен.
+    """
+
+    def test_stats_with_vec_chunks_populated(self, tmp_path: Path) -> None:
+        import struct
+
+        sqlite_vec = pytest.importorskip("sqlite_vec")
+
+        paths = ArchivePaths.under(tmp_path / "mem")
+        conn = open_archive(paths)
+        create_schema(conn)
+
+        # Вставляем chunk.
+        conn.execute(
+            "INSERT INTO chats(chat_id, title) VALUES (?, ?);", ("-100", "dev")
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO chunks(chunk_id, chat_id, start_ts, end_ts,
+                               message_count, char_len, text_redacted)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("c1", "-100", "t0", "t1", 1, 5, "hello"),
+        )
+        chunk_rowid = cur.lastrowid
+
+        # Создаём vec-таблицу и вставляем один вектор с тем же rowid.
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.execute(
+            "CREATE VIRTUAL TABLE vec_chunks USING vec0("
+            "vector float[4] distance_metric=cosine);"
+        )
+        conn.execute(
+            "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?);",
+            (chunk_rowid, struct.pack("4f", 0.1, 0.2, 0.3, 0.4)),
+        )
+        conn.commit()
+        conn.close()
+
+        handler = MemoryCommandHandler(
+            archive_paths=paths, retriever=_FakeRetriever()
+        )
+        stats = handler.collect_stats()
+
+        # КЛЮЧЕВАЯ проверка: vectors должно быть 1, не -1.
+        assert stats.vectors == 1, (
+            f"expected vectors=1, got {stats.vectors} — регрессия: "
+            "collect_stats не загружает sqlite-vec перед COUNT(*) на vec_chunks"
+        )
+        assert stats.chats == 1
+        assert stats.chunks == 1
+
+    def test_stats_format_shows_vectors_when_present(
+        self, tmp_path: Path
+    ) -> None:
+        """handle_stats() рендерит число, а не '(sqlite-vec не подключён)'."""
+        import struct
+
+        sqlite_vec = pytest.importorskip("sqlite_vec")
+
+        paths = ArchivePaths.under(tmp_path / "mem")
+        conn = open_archive(paths)
+        create_schema(conn)
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.execute(
+            "CREATE VIRTUAL TABLE vec_chunks USING vec0("
+            "vector float[4] distance_metric=cosine);"
+        )
+        conn.execute(
+            "INSERT INTO vec_chunks(rowid, vector) VALUES (?, ?);",
+            (1, struct.pack("4f", 0.0, 0.0, 0.0, 1.0)),
+        )
+        conn.commit()
+        conn.close()
+
+        handler = MemoryCommandHandler(
+            archive_paths=paths, retriever=_FakeRetriever()
+        )
+        out = handler.handle_stats()
+        # "Vectors:       1" должно присутствовать (экранированное MarkdownV2
+        # может добавить слэши, но сама цифра не скрыта).
+        assert "Vectors" in out
+        assert "не подключ" not in out.lower(), (
+            "Регрессия: stats показывает 'не подключён' при реальных векторах"
+        )
+
+
 class TestHandleStats:
     def test_stats_rendered(self, tmp_path: Path) -> None:
         paths = ArchivePaths.under(tmp_path / "mem")

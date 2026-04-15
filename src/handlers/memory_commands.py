@@ -123,8 +123,13 @@ class MemoryCommandHandler:
 
     def collect_stats(self) -> MemoryStats:
         """
-        Считает counts без загрузки sqlite-vec (vec_chunks проверяется через
-        sqlite_master — если таблицы нет, возвращаем vectors=-1).
+        Считает counts. Для vec_chunks требуется подгруженный sqlite-vec
+        extension (virtual table vec0 без extension падает на OperationalError
+        при любом SELECT), поэтому пробуем активировать его здесь.
+
+        Контракт значений vectors:
+          >=0  — реальный COUNT(*) векторов;
+          -1   — vec_chunks таблицы нет ИЛИ sqlite-vec не установлен.
         """
         if not self._paths.db.exists():
             return MemoryStats(
@@ -150,10 +155,15 @@ class MemoryCommandHandler:
 
             vectors = -1
             if "vec_chunks" in set(list_tables(conn)):
+                # Без load extension SELECT на vec0 virtual table падает
+                # OperationalError даже если таблица физически есть.
+                # Это тот самый баг, который unit-тесты не ловили
+                # (без реальных векторов проблема не проявляется).
+                _try_load_sqlite_vec(conn)
                 try:
                     vectors = _scalar_int(conn, "SELECT COUNT(*) FROM vec_chunks;")
                 except sqlite3.OperationalError:
-                    # sqlite-vec extension не подгружена в этом conn'е.
+                    # sqlite-vec не удалось подгрузить — показываем -1.
                     vectors = -1
         finally:
             conn.close()
@@ -307,3 +317,23 @@ def _scalar_int(conn: sqlite3.Connection, sql: str) -> int:
     if row is None or row[0] is None:
         return 0
     return int(row[0])
+
+
+def _try_load_sqlite_vec(conn: sqlite3.Connection) -> bool:
+    """
+    Best-effort попытка подгрузить sqlite-vec extension в коннект.
+    Возвращает True при успехе, False если extension недоступен или
+    возникла любая ошибка. Не поднимает исключения — коллер сам
+    проверит доступность vec-таблиц через последующие SELECT'ы.
+    """
+    try:
+        import sqlite_vec  # type: ignore[import-not-found]
+
+        conn.enable_load_extension(True)
+        try:
+            sqlite_vec.load(conn)
+        finally:
+            conn.enable_load_extension(False)
+        return True
+    except Exception:  # noqa: BLE001 — extension optional
+        return False
