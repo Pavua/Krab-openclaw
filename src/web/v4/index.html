@@ -12,9 +12,9 @@
             margin: 0;
             padding: 0;
             font-family: 'Outfit', system-ui, -apple-system, sans-serif;
-            background-color: #0b0f19; /* Fallback dark bg */
+            background-color: #0b0f19;
             color: #e2e8f0;
-            padding-bottom: 80px; /* Space for mobile tab bar */
+            padding-bottom: 80px;
         }
         
         .container {
@@ -23,15 +23,20 @@
             padding: var(--spacing-md);
         }
 
-        /* Layout Utilities */
         .w-full { width: 100%; }
         .h-full { height: 100%; }
         .hidden { display: none !important; }
         .m-0 { margin: 0; }
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mb-3 { margin-bottom: 0.75rem; }
+        .mb-4 { margin-bottom: 1rem; }
+        .mt-2 { margin-top: 0.5rem; }
+        .mt-4 { margin-top: 1rem; }
         .p-2 { padding: var(--spacing-sm); }
         .p-3 { padding: 0.75rem; }
         .p-4 { padding: var(--spacing-md); }
         .text-center { text-align: center; }
+        .text-sm { font-size: 0.875rem; }
         .text-lg { font-size: 1.125rem; }
         .text-xl { font-size: 1.25rem; }
         .text-2xl { font-size: 1.5rem; }
@@ -39,7 +44,6 @@
         .opacity-50 { opacity: 0.5; }
         .cursor-pointer { cursor: pointer; }
 
-        /* Helper utilities not in liquid-glass.css */
         .max-w-md { max-width: 28rem; }
         .tracking-wider { letter-spacing: 0.05em; }
         .sticky { position: sticky; }
@@ -52,7 +56,37 @@
         .justify-around { justify-content: space-around; }
         .block { display: block; }
 
-        /* Model badge inline style */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border-width: 0;
+        }
+
+        button:focus-visible, a:focus-visible, select:focus-visible, .fallback-item:focus-visible {
+            outline: 2px solid #7dd3fc;
+            outline-offset: 2px;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .hero-section { animation: fadeInUp 0.6s ease-out both; }
+        .hub-grid { animation: fadeInUp 0.6s 0.15s ease-out both; }
+        .routing-card { animation: fadeInUp 0.6s 0.3s ease-out both; }
+        .quick-actions { animation: fadeInUp 0.6s 0.45s ease-out both; }
+
+        @media (prefers-reduced-motion: reduce) {
+            * { animation: none !important; transition: none !important; }
+        }
+
         .model-badge {
             display: inline-block;
             padding: 0.5rem 1.25rem;
@@ -68,7 +102,6 @@
             text-align: center;
         }
 
-        /* Component Specifics */
         .hero-section {
             min-height: 35vh;
             display: flex;
@@ -105,14 +138,12 @@
             padding-right: 8px;
         }
 
-        /* Desktop specific */
         @media (min-width: 768px) {
             .hub-grid { grid-template-columns: repeat(3, 1fr); }
             .mobile-only { display: none !important; }
             body { padding-bottom: 0; }
         }
 
-        /* Mobile specific */
         @media (max-width: 767px) {
             .desktop-only { display: none !important; }
             .health-row { flex-direction: column; width: 100%; }
@@ -120,7 +151,6 @@
             .quick-actions { flex-direction: column; }
         }
 
-        /* Skeletons & Status */
         .skeleton {
             background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
             background-size: 200% 100%;
@@ -143,7 +173,13 @@
         .status-dot.ok { background-color: #10b981; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
         .status-dot.error { background-color: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); }
 
-        /* Unsaved Changes UI */
+        @keyframes pulse-status {
+            0% { transform: scale(1); box-shadow: 0 0 0 rgba(0,0,0,0); }
+            50% { transform: scale(1.4); box-shadow: 0 0 12px currentColor; }
+            100% { transform: scale(1); box-shadow: 0 0 8px currentColor; }
+        }
+        .status-changed { animation: pulse-status 1.2s ease-out; }
+
         .unsaved-badge {
             background: rgba(245, 158, 11, 0.15);
             color: #fbbf24;
@@ -163,7 +199,18 @@
             box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
         }
 
-        /* Fallback Chain UI */
+        .recently-switched {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            animation: fadeInUp 0.3s ease-out;
+            margin-left: 8px;
+        }
+
         .fallback-item {
             background: rgba(255, 255, 255, 0.02);
             border: 1px solid rgba(255, 255, 255, 0.05);
@@ -218,7 +265,6 @@
             background: rgba(255, 255, 255, 0.05);
         }
         
-        /* Toast Notifications */
         #toast-container {
             position: fixed;
             bottom: 90px;
@@ -255,6 +301,51 @@
             from { transform: translateY(100%); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .glass-modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+        }
+        .glass-modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .glass-modal {
+            background: #0f172a;
+            border: 1px solid rgba(125, 211, 252, 0.2);
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+            transform: translateY(20px);
+            transition: transform 0.2s;
+        }
+        .glass-modal-overlay.active .glass-modal {
+            transform: translateY(0);
+        }
     </style>
 </head>
 <body>
@@ -271,7 +362,7 @@
             <a href="/v4/ops" class="nav-link">Ops</a>
             <a href="/v4/research" class="nav-link">Research</a>
             <div class="nav-bell-wrapper">
-                <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                <a href="/v4/inbox" class="nav-bell" aria-label="Notifications (0 new)" title="Notifications">
                     <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                     </svg>
@@ -306,30 +397,29 @@
     </div>
 
     <main class="container">
-        <!-- 2. HERO SECTION -->
         <section class="hero-section mb-4">
             <h1 class="hero-title">🦀 Krab</h1>
             <p class="text-muted text-sm mt-2 mb-4">Autonomous AI Orchestration Hub</p>
             
-            <div class="health-row gap-2 w-full max-w-md">
+            <div class="health-row gap-2 w-full max-w-md" role="status" aria-live="polite" aria-atomic="true">
                 <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
-                    <span class="status-dot" id="dot-tg"></span> <span class="text-sm">Telegram</span>
+                    <span class="status-dot" id="dot-tg" role="img" aria-label="Telegram: checking"></span> <span class="text-sm">Telegram</span>
                 </div>
                 <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
-                    <span class="status-dot" id="dot-claw"></span> <span class="text-sm">OpenClaw</span>
+                    <span class="status-dot" id="dot-claw" role="img" aria-label="OpenClaw: checking"></span> <span class="text-sm">OpenClaw</span>
                 </div>
                 <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
-                    <span class="status-dot" id="dot-sched"></span> <span class="text-sm">Scheduler</span>
+                    <span class="status-dot" id="dot-sched" role="img" aria-label="Scheduler: checking"></span> <span class="text-sm">Scheduler</span>
                 </div>
             </div>
 
             <div class="glass-card mt-4 p-4 flex flex-col items-center gap-2 max-w-md w-full">
                 <span class="text-xs text-muted uppercase tracking-wider">Current Active Model</span>
-                <div class="model-badge skeleton" id="hero-model-badge">Loading...</div>
+                <div class="model-badge skeleton" id="hero-model-badge" aria-live="polite">Loading...</div>
+                <div class="text-xs text-muted mt-2" id="hero-last-route" style="opacity:0.7;">Last route: — • — • —</div>
             </div>
         </section>
 
-        <!-- 3. HUB NAVIGATION GRID -->
         <section class="hub-grid mb-4">
             <a href="/v4/costs" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
                 <div class="flex justify-between items-center mb-2">
@@ -374,13 +464,12 @@
             </a>
         </section>
 
-        <!-- 4. MODEL ROUTING CARD -->
-        <section class="glass-card p-4 mb-4">
+        <section class="glass-card p-4 mb-4 routing-card">
             <div class="flex justify-between items-center mb-3">
                 <h2 class="m-0 text-lg">Model Routing & Fallbacks</h2>
                 <div class="flex gap-2">
-                    <button class="glass-button text-xs" onclick="refreshCatalog()" id="btn-refresh-cat">Refresh</button>
-                    <button class="glass-button text-xs" onclick="toggleAdvanced()">Advanced</button>
+                    <button class="glass-button text-xs" onclick="refreshCatalog()" id="btn-refresh-cat" aria-label="Refresh catalog">Refresh</button>
+                    <button class="glass-button text-xs" onclick="toggleAdvanced()" aria-label="Toggle advanced routing settings">Advanced</button>
                 </div>
             </div>
             
@@ -390,9 +479,11 @@
                         <div class="flex items-center gap-2">
                             <span class="text-xs text-success">PRIMARY ROUTE</span>
                             <span id="primary-dirty-dot" class="dirty-dot hidden"></span>
+                            <span id="recently-switched-badge" class="recently-switched hidden">Recently switched</span>
                         </div>
                         <span class="badge text-xs skeleton" id="route-primary-provider">—</span>
                     </div>
+                    <label for="primary-model-select" class="sr-only">Primary Model</label>
                     <select id="primary-model-select" class="glass-input w-full text-sm font-bold text-accent" style="background: rgba(0,0,0,0.2);">
                         <option value="">Loading catalog...</option>
                     </select>
@@ -404,28 +495,28 @@
                     <div class="skeleton p-2" style="height: 30px;"></div>
                 </div>
 
-                <!-- Apply Changes Section -->
                 <div class="mt-4 flex flex-col gap-2">
                     <div class="flex justify-center hidden" id="unsaved-changes-container">
                         <span class="unsaved-badge">Есть несохранённые изменения</span>
                     </div>
-                    <button id="btn-apply-changes" class="glass-button glass-button-primary w-full opacity-50" style="padding: 12px; font-size: 1rem; font-weight: 700;" disabled title="Сохранить и применить" onclick="applyModelSwitch()">
+                    <button id="btn-apply-changes" class="glass-button glass-button-primary w-full opacity-50" style="padding: 12px; font-size: 1rem; font-weight: 700;" disabled title="Сохранить и применить" aria-label="Apply routing changes" onclick="applyModelSwitch()">
                         Apply Changes
                     </button>
                     <div class="text-muted text-xs text-center">Изменения применяются сразу без рестарта</div>
                 </div>
             </div>
 
-            <!-- Advanced Expandable -->
             <div id="advanced-routing" class="hidden mt-4 pt-4" style="border-top: 1px solid rgba(255,255,255,0.1);">
                 <div class="flex flex-col gap-3">
                     <div class="flex justify-between items-center">
                         <span class="text-sm">Force Local Only</span>
-                        <button class="glass-button text-xs" id="toggle-local" onclick="this.classList.toggle('glass-button-primary')">Off</button>
+                        <label for="toggle-local" class="sr-only">Force Local Only</label>
+                        <button class="glass-button text-xs" id="toggle-local" aria-label="Toggle Force Local Only" onclick="this.classList.toggle('glass-button-primary')">Off</button>
                     </div>
                     <div class="flex justify-between items-center">
                         <span class="text-sm">Thinking Depth</span>
-                        <select class="glass-input text-xs" style="width: auto;">
+                        <label for="thinking-depth" class="sr-only">Thinking Depth</label>
+                        <select id="thinking-depth" class="glass-input text-xs" aria-label="Thinking Depth" style="width: auto;">
                             <option>Auto</option>
                             <option>Low</option>
                             <option>High</option>
@@ -435,21 +526,31 @@
             </div>
         </section>
 
-        <!-- 5. QUICK ACTIONS -->
         <section class="quick-actions flex gap-2 justify-between mt-4">
-            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" onclick="runAction('/api/ops/diagnostics', 'GET', this)">
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Run health check" onclick="runAction('/api/ops/diagnostics', 'GET', this)">
                 <span class="text-lg">🩺</span> <span class="text-xs">Health Check</span>
             </button>
-            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" onclick="runAction('/api/runtime/recover', 'POST', this)">
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Restart runtime" onclick="confirmAction('Restart runtime? This will disconnect current chat sessions temporarily.', '/api/runtime/recover', 'POST', this)">
                 <span class="text-lg">⚡</span> <span class="text-xs">Restart</span>
             </button>
-            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1 text-error" onclick="runAction('/api/runtime/chat-session/clear', 'POST', this)">
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1 text-error" aria-label="Clear chat context" onclick="confirmAction('Clear current chat context? Unsaved messages will be lost.', '/api/runtime/chat-session/clear', 'POST', this)">
                 <span class="text-lg">🗑️</span> <span class="text-xs">Clear Context</span>
             </button>
         </section>
     </main>
 
-    <div id="toast-container"></div>
+    <div id="toast-container" role="alert" aria-live="assertive"></div>
+
+    <div id="custom-modal" class="glass-modal-overlay">
+        <div class="glass-modal">
+            <h3 class="m-0 mb-3 text-lg">Confirm Action</h3>
+            <p id="custom-modal-text" class="text-sm text-muted mb-4"></p>
+            <div class="flex justify-end gap-2">
+                <button class="glass-button" onclick="closeModal()">Cancel</button>
+                <button class="glass-button glass-button-primary" id="custom-modal-confirm">Confirm</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         const API_BASE = '';
@@ -459,7 +560,6 @@
         let pendingPrimary = '';
         let originalFallbacks = [];
 
-        // Utility: Safe Fetch
         async function fetchAPI(endpoint, options = {}) {
             try {
                 const res = await fetch(API_BASE + endpoint, options);
@@ -472,7 +572,6 @@
             }
         }
 
-        // Utility: Remove skeleton and set text
         function setVal(id, val, isHtml = false) {
             const el = document.getElementById(id);
             if (!el) return;
@@ -481,10 +580,16 @@
             else el.textContent = val;
         }
 
-        function setStatus(id, isOk) {
+        function setStatus(id, isOk, labelName) {
             const el = document.getElementById(id);
             if (!el) return;
-            el.className = `status-dot ${isOk ? 'ok' : 'error'}`;
+            const newClass = `status-dot ${isOk ? 'ok' : 'error'}`;
+            if (el.className !== newClass && el.className !== 'status-dot') {
+                el.classList.add('status-changed');
+                setTimeout(() => el.classList.remove('status-changed'), 1200);
+            }
+            el.className = newClass;
+            el.setAttribute('aria-label', `${labelName}: ${isOk ? 'connected' : 'error'}`);
         }
 
         function showToast(msg, type) {
@@ -506,6 +611,16 @@
                 if (a[i] !== b[i]) return false;
             }
             return true;
+        }
+
+        function checkRecentlySwitched() {
+            const lastTs = localStorage.getItem('lastPrimaryChangeTs');
+            const badge = document.getElementById('recently-switched-badge');
+            if (lastTs && (Date.now() - parseInt(lastTs)) < 5 * 60 * 1000) {
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
         }
 
         function updateDirtyUI() {
@@ -536,9 +651,9 @@
                 if (parts.length > 1) provider = parts[0];
             }
             setVal('route-primary-provider', provider);
+            checkRecentlySwitched();
         }
 
-        // Main Data Fetch Loop
         async function refreshDashboard() {
             const [health, summary, budget, notifs, swarm, alerts] = await Promise.all([
                 fetchAPI('/api/health/lite'),
@@ -549,20 +664,22 @@
                 fetchAPI('/api/ops/alerts')
             ]);
 
-            // Global Health & Title
             const systemOk = !health._error && health.ok !== false && summary.health?.status !== 'error';
             document.title = systemOk ? "🦀 Krab ✅" : "🦀 Krab ⚠️";
 
-            // Hero Health Row
-            setStatus('dot-tg', health.telegram_session_state === 'connected' || health.ok);
-            setStatus('dot-claw', systemOk);
-            setStatus('dot-sched', systemOk);
+            setStatus('dot-tg', health.telegram_session_state === 'connected' || health.ok, 'Telegram');
+            setStatus('dot-claw', systemOk, 'OpenClaw');
+            setStatus('dot-sched', systemOk, 'Scheduler');
 
-            // Current Model Logic
             const currentModel = summary.route?.model || health.last_runtime_route?.model || '—';
             setVal('hero-model-badge', currentModel);
 
-            // Hub Stats
+            const lastRoute = health.last_runtime_route || {};
+            const lrModel = lastRoute.model || '—';
+            const lrProvider = lastRoute.provider || '—';
+            const lrTs = lastRoute.ts ? new Date(lastRoute.ts * 1000).toLocaleTimeString() : '—';
+            setVal('hero-last-route', `Last route: ${lrModel} • ${lrProvider} • ${lrTs}`);
+
             if (!budget._error && budget.budget) {
                 setVal('stat-costs', `$${parseFloat(budget.budget.spent_usd || 0).toFixed(2)} today`);
             } else setVal('stat-costs', '— today');
@@ -585,9 +702,6 @@
                 setVal('stat-ops', count > 0 ? `<span class="text-error">${count} alerts</span>` : `0 alerts`, true);
             } else setVal('stat-ops', '— alerts');
 
-            // Lazy two-phase catalog loading:
-            // Phase A: быстро (~1s) cloud catalog из cache
-            // Phase B: в фоне force_refresh LM Studio (~100s)
             if (catalogData.length === 0) {
                 loadCatalog(false).then(() => {
                     setTimeout(() => loadCatalog(true).catch(() => {}), 500);
@@ -645,9 +759,7 @@
             };
         }
 
-        // Catalog & Fallbacks
         async function loadCatalog(force = false) {
-            // endpoint только GET; force_refresh передаётся через query param
             const endpoint = force ? '/api/model/catalog?force_refresh=true' : '/api/model/catalog';
             const data = await fetchAPI(endpoint, {});
 
@@ -670,7 +782,6 @@
             updateDirtyUI();
         }
 
-        // Fallback Chain UI Logic
         function renderFallbackChain() {
             const container = document.getElementById('fallback-chain');
             while (container.firstChild) container.removeChild(container.firstChild);
@@ -693,6 +804,7 @@
 
                     const item = document.createElement('div');
                     item.className = 'fallback-item p-2 flex justify-between items-center text-sm mb-2';
+                    item.tabIndex = 0;
 
                     const left = document.createElement('div');
                     left.className = 'flex items-center gap-2 overflow-hidden';
@@ -723,18 +835,21 @@
                     const btnUp = document.createElement('button');
                     btnUp.className = 'fallback-btn';
                     btnUp.textContent = '▲';
+                    btnUp.setAttribute('aria-label', `Move up ${modelId}`);
                     if (idx === 0) btnUp.disabled = true;
                     btnUp.onclick = () => moveFallback(idx, -1);
 
                     const btnDown = document.createElement('button');
                     btnDown.className = 'fallback-btn';
                     btnDown.textContent = '▼';
+                    btnDown.setAttribute('aria-label', `Move down ${modelId}`);
                     if (idx === fallbackChain.length - 1) btnDown.disabled = true;
                     btnDown.onclick = () => moveFallback(idx, 1);
 
                     const btnRm = document.createElement('button');
                     btnRm.className = 'fallback-btn fallback-btn-remove';
                     btnRm.textContent = '✕';
+                    btnRm.setAttribute('aria-label', `Remove fallback ${modelId}`);
                     btnRm.onclick = () => removeFallback(idx);
 
                     right.appendChild(prov);
@@ -745,14 +860,23 @@
                     item.appendChild(left);
                     item.appendChild(right);
                     container.appendChild(item);
+
+                    item.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            if (document.activeElement === btnUp) btnUp.click();
+                            else if (document.activeElement === btnDown) btnDown.click();
+                            else if (document.activeElement === btnRm) btnRm.click();
+                        }
+                    });
                 });
             }
 
-            // Add Fallback Button
             const addContainer = document.createElement('div');
             const addBtn = document.createElement('button');
             addBtn.className = 'fallback-add-button text-sm';
             addBtn.textContent = '+ Add Fallback';
+            addBtn.setAttribute('aria-label', 'Add new fallback model');
             
             addBtn.onclick = () => {
                 while (addContainer.firstChild) addContainer.removeChild(addContainer.firstChild);
@@ -762,6 +886,7 @@
                 
                 const select = document.createElement('select');
                 select.className = 'glass-input w-full text-sm';
+                select.setAttribute('aria-label', 'Select fallback model');
                 
                 const defaultOpt = document.createElement('option');
                 defaultOpt.value = '';
@@ -838,7 +963,6 @@
             updateDirtyUI();
         }
 
-        // Actions
         function toggleAdvanced() {
             document.getElementById('advanced-routing').classList.toggle('hidden');
         }
@@ -878,6 +1002,7 @@
                 
                 currentPrimaryModel = pendingPrimary;
                 originalFallbacks = [...fallbackChain];
+                localStorage.setItem('lastPrimaryChangeTs', Date.now().toString());
                 updateDirtyUI();
 
                 setTimeout(() => {
@@ -898,14 +1023,46 @@
             }, 3000);
         }
 
+        let pendingAction = null;
+        function confirmAction(message, endpoint, method, btnElement) {
+            document.getElementById('custom-modal-text').textContent = message;
+            const modal = document.getElementById('custom-modal');
+            modal.classList.add('active');
+            pendingAction = () => {
+                closeModal();
+                runAction(endpoint, method, btnElement);
+            };
+        }
+
+        function closeModal() {
+            document.getElementById('custom-modal').classList.remove('active');
+            pendingAction = null;
+        }
+
+        document.getElementById('custom-modal-confirm').addEventListener('click', () => {
+            if (pendingAction) pendingAction();
+        });
+
+        // Закрытие modal: по клику на backdrop и Escape
+        document.getElementById('custom-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'custom-modal') closeModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('custom-modal');
+                if (modal && modal.classList.contains('active')) closeModal();
+            }
+        });
+
         async function runAction(endpoint, method, btnElement) {
             const originalHtml = btnElement.innerHTML;
-            btnElement.innerHTML = '<span class="text-xs skeleton">Wait...</span>';
+            btnElement.innerHTML = '<span class="spinner"></span> <span class="text-xs">Wait...</span>';
             
             const res = await fetchAPI(endpoint, { method });
             
             if(!res._error) {
                 btnElement.innerHTML = '<span class="text-success text-xs">Done ✅</span>';
+                if (endpoint.includes('clear')) showToast('Context cleared', 'success');
             } else {
                 btnElement.innerHTML = '<span class="text-error text-xs">Error ❌</span>';
             }
@@ -916,7 +1073,6 @@
             }, 2000);
         }
 
-        // Init
         refreshDashboard();
         setInterval(refreshDashboard, 15000);
 
@@ -942,6 +1098,11 @@
             }
 
             const countEl = document.getElementById('nav-bell-count');
+            const navBell = document.querySelector('.nav-bell');
+            if (navBell) {
+                navBell.setAttribute('aria-label', `Notifications (${total} new)`);
+            }
+
             if (countEl) {
               if (total > 0) {
                 countEl.textContent = total > 99 ? '99+' : String(total);
@@ -1032,6 +1193,10 @@
             navBell.addEventListener('click', (e) => {
               e.preventDefault();
               bellDropdown.classList.toggle('hidden');
+              if (!bellDropdown.classList.contains('hidden')) {
+                  const firstItem = bellDropdown.querySelector('a');
+                  if (firstItem) setTimeout(() => firstItem.focus(), 50);
+              }
             });
 
             document.addEventListener('click', (e) => {
@@ -1043,7 +1208,22 @@
             document.addEventListener('keydown', (e) => {
               if (e.key === 'Escape') {
                 bellDropdown.classList.add('hidden');
+                navBell.focus();
               }
+            });
+
+            bellDropdown.addEventListener('keydown', (e) => {
+                const items = Array.from(bellDropdown.querySelectorAll('a'));
+                const index = items.indexOf(document.activeElement);
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    const next = items[index + 1] || items[0];
+                    if (next) next.focus();
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const prev = items[index - 1] || items[items.length - 1];
+                    if (prev) prev.focus();
+                }
             });
           }
         }

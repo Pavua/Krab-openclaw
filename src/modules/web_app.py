@@ -7648,6 +7648,14 @@ class WebApp:
                 return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>V4 Translator not ready</h1>", headers=_no_store_headers())
 
+        @self.app.get("/v4/ops", response_class=HTMLResponse)
+        async def v4_ops():
+            """V4 Liquid Glass dashboard — Operations Center."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "ops.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Ops not ready</h1>", headers=_no_store_headers())
+
         @self.app.get("/v4/research", response_class=HTMLResponse)
         async def v4_research():
             """V4 Liquid Glass dashboard — Swarm Research Pipeline."""
