@@ -1,0 +1,479 @@
+{
+  "name": "🐝 Krab Swarm",
+  "type": "private_supergroup",
+  "id": -1003703978531,
+  "messages": [
+    {
+      "id": 1,
+      "type": "message",
+      "date": "2026-04-01T10:00:00",
+      "date_unixtime": "1743501600",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "Доброе утро всем, стартуем Session 8",
+      "text_entities": [
+        {"type": "plain", "text": "Доброе утро всем, стартуем Session 8"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "message",
+      "date": "2026-04-01T10:01:30",
+      "date_unixtime": "1743501690",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "text": "привет, я уже тут",
+      "text_entities": [
+        {"type": "plain", "text": "привет, я уже тут"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "message",
+      "date": "2026-04-01T10:03:15",
+      "date_unixtime": "1743501795",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": "го завтракать сначала :)",
+      "text_entities": [
+        {"type": "plain", "text": "го завтракать сначала :)"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "message",
+      "date": "2026-04-01T10:05:00",
+      "date_unixtime": "1743501900",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "план на сегодня: починить memory layer и написать unit-тесты",
+      "text_entities": [
+        {"type": "plain", "text": "план на сегодня: починить memory layer и написать unit-тесты"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "message",
+      "date": "2026-04-01T10:07:20",
+      "date_unixtime": "1743502040",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "text": "окей, я возьму парсер экспорта",
+      "text_entities": [
+        {"type": "plain", "text": "окей, я возьму парсер экспорта"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "message",
+      "date": "2026-04-01T10:10:05",
+      "date_unixtime": "1743502205",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "отлично, тогда я за chunker",
+      "text_entities": [
+        {"type": "plain", "text": "отлично, тогда я за chunker"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "message",
+      "date": "2026-04-01T10:12:45",
+      "date_unixtime": "1743502365",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": "я пилю fixtures и PII redactor tests",
+      "text_entities": [
+        {"type": "plain", "text": "я пилю fixtures и PII redactor tests"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "message",
+      "date": "2026-04-01T10:15:00",
+      "date_unixtime": "1743502500",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "какой threshold для chunk gap решили?",
+      "text_entities": [
+        {"type": "plain", "text": "какой threshold для chunk gap решили?"}
+      ]
+    },
+    {
+      "id": 9,
+      "type": "message",
+      "date": "2026-04-01T10:17:30",
+      "date_unixtime": "1743502650",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "text": "10 минут — разумный дефолт",
+      "text_entities": [
+        {"type": "plain", "text": "10 минут — разумный дефолт"}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "message",
+      "date": "2026-04-01T10:19:50",
+      "date_unixtime": "1743502790",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": "поддерживаю, 10 мин",
+      "text_entities": [
+        {"type": "plain", "text": "поддерживаю, 10 мин"}
+      ]
+    },
+    {
+      "id": 11,
+      "type": "message",
+      "date": "2026-04-01T10:22:10",
+      "date_unixtime": "1743502930",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "ок, фиксируем в docs",
+      "text_entities": [
+        {"type": "plain", "text": "ок, фиксируем в docs"}
+      ]
+    },
+    {
+      "id": 12,
+      "type": "message",
+      "date": "2026-04-01T10:24:55",
+      "date_unixtime": "1743503095",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "reply_to_message_id": 8,
+      "text": "про gap — я уточню в коде chunker",
+      "text_entities": [
+        {"type": "plain", "text": "про gap — я уточню в коде chunker"}
+      ]
+    },
+    {
+      "id": 13,
+      "type": "message",
+      "date": "2026-04-01T10:27:40",
+      "date_unixtime": "1743503260",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": [
+        "смотрите функцию ",
+        {"type": "code", "text": "split_into_chunks()"},
+        " в ",
+        {"type": "bold", "text": "memory/chunker.py"},
+        " — там же документация: ",
+        {"type": "link", "text": "https://example.com/docs/chunker"}
+      ],
+      "text_entities": [
+        {"type": "plain", "text": "смотрите функцию "},
+        {"type": "code", "text": "split_into_chunks()"},
+        {"type": "plain", "text": " в "},
+        {"type": "bold", "text": "memory/chunker.py"},
+        {"type": "plain", "text": " — там же документация: "},
+        {"type": "link", "text": "https://example.com/docs/chunker"}
+      ]
+    },
+    {
+      "id": 14,
+      "type": "message",
+      "date": "2026-04-01T10:30:15",
+      "date_unixtime": "1743503415",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": "спасибо, посмотрю",
+      "text_entities": [
+        {"type": "plain", "text": "спасибо, посмотрю"}
+      ]
+    },
+    {
+      "id": 15,
+      "type": "message",
+      "date": "2026-04-01T10:45:00",
+      "date_unixtime": "1743504300",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "text": "запушил первый draft парсера",
+      "text_entities": [
+        {"type": "plain", "text": "запушил первый draft парсера"}
+      ]
+    },
+    {
+      "id": 16,
+      "type": "service",
+      "date": "2026-04-01T10:48:00",
+      "date_unixtime": "1743504480",
+      "actor": "dave_reviewer",
+      "actor_id": "user111000004",
+      "action": "join_group_by_link",
+      "text": "",
+      "text_entities": []
+    },
+    {
+      "id": 17,
+      "type": "message",
+      "date": "2026-04-01T10:50:10",
+      "date_unixtime": "1743504610",
+      "from": "dave_reviewer",
+      "from_id": "user111000004",
+      "text": "всем привет, присоединился ревьюить",
+      "text_entities": [
+        {"type": "plain", "text": "всем привет, присоединился ревьюить"}
+      ]
+    },
+    {
+      "id": 18,
+      "type": "message",
+      "date": "2026-04-01T10:52:30",
+      "date_unixtime": "1743504750",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "reply_to_message_id": 15,
+      "text": "посмотрел, выглядит неплохо, оставлю комменты в PR",
+      "text_entities": [
+        {"type": "plain", "text": "посмотрел, выглядит неплохо, оставлю комменты в PR"}
+      ]
+    },
+    {
+      "id": 19,
+      "type": "message",
+      "date": "2026-04-01T10:55:00",
+      "date_unixtime": "1743504900",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "text": "жду",
+      "text_entities": [
+        {"type": "plain", "text": "жду"}
+      ]
+    },
+    {
+      "id": 20,
+      "type": "message",
+      "date": "2026-04-01T10:58:20",
+      "date_unixtime": "1743505100",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": "пойду на кофе, вернусь через полтора часа",
+      "text_entities": [
+        {"type": "plain", "text": "пойду на кофе, вернусь через полтора часа"}
+      ]
+    },
+    {
+      "id": 21,
+      "type": "message",
+      "date": "2026-04-01T12:30:00",
+      "date_unixtime": "1743510600",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "возвращаемся к работе",
+      "text_entities": [
+        {"type": "plain", "text": "возвращаемся к работе"}
+      ]
+    },
+    {
+      "id": 22,
+      "type": "message",
+      "date": "2026-04-01T12:32:15",
+      "date_unixtime": "1743510735",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "text": [
+        "обновил ",
+        {"type": "code", "text": "requirements.txt"},
+        " — добавил ",
+        {"type": "bold", "text": "tiktoken"},
+        " для подсчёта токенов"
+      ],
+      "text_entities": [
+        {"type": "plain", "text": "обновил "},
+        {"type": "code", "text": "requirements.txt"},
+        {"type": "plain", "text": " — добавил "},
+        {"type": "bold", "text": "tiktoken"},
+        {"type": "plain", "text": " для подсчёта токенов"}
+      ]
+    },
+    {
+      "id": 23,
+      "type": "message",
+      "date": "2026-04-01T12:34:40",
+      "date_unixtime": "1743510880",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": "кстати, для тестов PII redactor оставлю фейковую карту 4242 4242 4242 4242 — пусть сработает regex",
+      "text_entities": [
+        {"type": "plain", "text": "кстати, для тестов PII redactor оставлю фейковую карту 4242 4242 4242 4242 — пусть сработает regex"}
+      ]
+    },
+    {
+      "id": 24,
+      "type": "message",
+      "date": "2026-04-01T12:37:05",
+      "date_unixtime": "1743511025",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "ага, главное чтобы redactor заменил на [REDACTED_CARD]",
+      "text_entities": [
+        {"type": "plain", "text": "ага, главное чтобы redactor заменил на [REDACTED_CARD]"}
+      ]
+    },
+    {
+      "id": 25,
+      "type": "message",
+      "date": "2026-04-01T12:40:30",
+      "date_unixtime": "1743511230",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": [
+        "ещё проверим контакты: ",
+        {"type": "email", "text": "someone@example.com"},
+        " и телефон +7 999 123 45 67 — это placeholder'ы для CI"
+      ],
+      "text_entities": [
+        {"type": "plain", "text": "ещё проверим контакты: "},
+        {"type": "email", "text": "someone@example.com"},
+        {"type": "plain", "text": " и телефон +7 999 123 45 67 — это placeholder'ы для CI"}
+      ]
+    },
+    {
+      "id": 26,
+      "type": "message",
+      "date": "2026-04-01T12:43:00",
+      "date_unixtime": "1743511380",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "text": "и BTC-like: bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq — это адрес из туториала биткойна, не используется",
+      "text_entities": [
+        {"type": "plain", "text": "и BTC-like: bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq — это адрес из туториала биткойна, не используется"}
+      ]
+    },
+    {
+      "id": 27,
+      "type": "message",
+      "date": "2026-04-01T12:46:20",
+      "date_unixtime": "1743511580",
+      "from": "dave_reviewer",
+      "from_id": "user111000004",
+      "photo": "(File not included. Change data exporting settings to download.)",
+      "media_type": "photo",
+      "width": 1280,
+      "height": 720,
+      "text": "",
+      "text_entities": []
+    },
+    {
+      "id": 28,
+      "type": "message",
+      "date": "2026-04-01T12:50:00",
+      "date_unixtime": "1743511800",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "скрин с графиком понятен, спасибо",
+      "text_entities": [
+        {"type": "plain", "text": "скрин с графиком понятен, спасибо"}
+      ]
+    },
+    {
+      "id": 29,
+      "type": "message",
+      "date": "2026-04-01T12:53:40",
+      "date_unixtime": "1743512020",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "file": "(File not included. Change data exporting settings to download.)",
+      "media_type": "voice_message",
+      "mime_type": "audio/ogg",
+      "duration_seconds": 17,
+      "text": "",
+      "text_entities": []
+    },
+    {
+      "id": 30,
+      "type": "message",
+      "date": "2026-04-01T12:57:10",
+      "date_unixtime": "1743512230",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "file": "(File not included. Change data exporting settings to download.)",
+      "media_type": "video_file",
+      "mime_type": "video/mp4",
+      "duration_seconds": 42,
+      "width": 1920,
+      "height": 1080,
+      "text": "",
+      "text_entities": []
+    },
+    {
+      "id": 31,
+      "type": "message",
+      "date": "2026-04-01T13:10:30",
+      "date_unixtime": "1743513030",
+      "from": "dave_reviewer",
+      "from_id": "user111000004",
+      "reply_to_message_id": 27,
+      "text": "отвечаю на свой же скрин после паузы — всё ок, мержим",
+      "text_entities": [
+        {"type": "plain", "text": "отвечаю на свой же скрин после паузы — всё ок, мержим"}
+      ]
+    },
+    {
+      "id": 32,
+      "type": "message",
+      "date": "2026-04-02T09:15:00",
+      "date_unixtime": "1743585300",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "text": "утро вторника, разбираем вчерашние PR-ы",
+      "text_entities": [
+        {"type": "plain", "text": "утро вторника, разбираем вчерашние PR-ы"}
+      ]
+    },
+    {
+      "id": 33,
+      "type": "message",
+      "date": "2026-04-02T09:17:30",
+      "date_unixtime": "1743585450",
+      "from": "bob_coder",
+      "from_id": "user111000002",
+      "reply_to_message_id": 32,
+      "text": "мой draft готов к ревью",
+      "text_entities": [
+        {"type": "plain", "text": "мой draft готов к ревью"}
+      ]
+    },
+    {
+      "id": 34,
+      "type": "message",
+      "date": "2026-04-02T09:20:00",
+      "date_unixtime": "1743585600",
+      "from": "charlie_qa",
+      "from_id": "user111000003",
+      "text": "тесты fixtures накатил, сейчас прогоню pytest",
+      "text_entities": [
+        {"type": "plain", "text": "тесты fixtures накатил, сейчас прогоню pytest"}
+      ]
+    },
+    {
+      "id": 35,
+      "type": "message",
+      "date": "2026-04-02T09:22:45",
+      "date_unixtime": "1743585765",
+      "from": "alice_dev",
+      "from_id": "user111000001",
+      "reply_to_message_id": 34,
+      "text": "супер, жду результат",
+      "text_entities": [
+        {"type": "plain", "text": "супер, жду результат"}
+      ]
+    },
+    {
+      "id": 36,
+      "type": "service",
+      "date": "2026-04-02T09:25:00",
+      "date_unixtime": "1743585900",
+      "actor": "dave_reviewer",
+      "actor_id": "user111000004",
+      "action": "remove_members",
+      "members": ["dave_reviewer"],
+      "text": "",
+      "text_entities": []
+    }
+  ]
+}
