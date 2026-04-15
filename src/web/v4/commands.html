@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Commands - Krab AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/v4/liquid-glass.css">
+<script src="/v4/theme-toggle.js" defer></script>
+<style>
+    body {
+        margin: 0;
+        padding: 0;
+        font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+        background-color: #0b0f19;
+        color: #e2e8f0;
+        padding-bottom: 80px;
+    }
+
+    .page-content {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 2rem;
+        padding-bottom: 6rem;
+    }
+
+    .page-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.5rem;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .page-header h1 {
+        margin: 0;
+        font-size: 1.75rem;
+        font-weight: 600;
+        background: linear-gradient(135deg, #fff, #a5b4fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .header-meta {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        font-size: 0.85rem;
+        color: rgba(255, 255, 255, 0.55);
+    }
+
+    .meta-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.35rem 0.75rem;
+        border-radius: 999px;
+        background: rgba(125, 211, 252, 0.12);
+        border: 1px solid rgba(125, 211, 252, 0.3);
+        color: #e0f2fe;
+        font-size: 0.8rem;
+        font-weight: 500;
+    }
+
+    .last-updated {
+        font-size: 0.75rem;
+        color: rgba(255, 255, 255, 0.35);
+    }
+
+    /* Search ---------------------------------------------------------------- */
+    .search-wrap {
+        position: relative;
+        margin-bottom: 1.25rem;
+    }
+
+    .search-input {
+        width: 100%;
+        padding: 0.9rem 1.1rem 0.9rem 2.8rem;
+        font-family: inherit;
+        font-size: 0.95rem;
+        background: var(--glass-bg, rgba(255, 255, 255, 0.04));
+        border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.1));
+        color: #fff;
+        border-radius: 14px;
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        outline: none;
+        transition: border-color 0.15s, background 0.15s;
+        box-sizing: border-box;
+    }
+
+    .search-input:focus {
+        border-color: rgba(125, 211, 252, 0.5);
+        background: rgba(255, 255, 255, 0.06);
+    }
+
+    .search-icon {
+        position: absolute;
+        left: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        color: rgba(255, 255, 255, 0.45);
+        pointer-events: none;
+    }
+
+    .search-kbd {
+        position: absolute;
+        right: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 0.7rem;
+        color: rgba(255, 255, 255, 0.35);
+        padding: 0.2rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        font-family: monospace;
+    }
+
+    /* Category tabs --------------------------------------------------------- */
+    .tabs-wrap {
+        display: flex;
+        gap: 0.5rem;
+        overflow-x: auto;
+        padding: 0.25rem 0 0.5rem;
+        margin-bottom: 0.75rem;
+        scrollbar-width: thin;
+    }
+
+    .tabs-wrap::-webkit-scrollbar { height: 4px; }
+    .tabs-wrap::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.03); border-radius: 4px; }
+    .tabs-wrap::-webkit-scrollbar-thumb { background: rgba(125, 211, 252, 0.2); border-radius: 4px; }
+
+    .cat-tab {
+        flex-shrink: 0;
+        padding: 0.5rem 1rem;
+        border-radius: 10px;
+        background: var(--glass-bg, rgba(255, 255, 255, 0.04));
+        border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
+        color: rgba(255, 255, 255, 0.7);
+        font-family: inherit;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+    }
+
+    .cat-tab:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+    }
+
+    .cat-tab.active {
+        background: rgba(125, 211, 252, 0.18);
+        border-color: rgba(125, 211, 252, 0.5);
+        color: #fff;
+    }
+
+    .cat-tab-count {
+        font-size: 0.7rem;
+        color: rgba(255, 255, 255, 0.5);
+        background: rgba(255, 255, 255, 0.06);
+        padding: 0.1rem 0.45rem;
+        border-radius: 999px;
+    }
+
+    .cat-tab.active .cat-tab-count {
+        color: #e0f2fe;
+        background: rgba(125, 211, 252, 0.25);
+    }
+
+    /* Filter chips ---------------------------------------------------------- */
+    .chip-row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-bottom: 1.25rem;
+    }
+
+    .chip {
+        padding: 0.35rem 0.8rem;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.65);
+        font-family: inherit;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: all 0.15s;
+        user-select: none;
+    }
+
+    .chip:hover {
+        background: rgba(255, 255, 255, 0.07);
+        color: #fff;
+    }
+
+    .chip.active {
+        background: rgba(167, 243, 208, 0.15);
+        border-color: rgba(52, 211, 153, 0.45);
+        color: #a7f3d0;
+    }
+
+    /* Summary bar ----------------------------------------------------------- */
+    .summary-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.65rem 1rem;
+        margin-bottom: 0.75rem;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        font-size: 0.8rem;
+        color: rgba(255, 255, 255, 0.6);
+    }
+
+    .summary-reset {
+        background: none;
+        border: none;
+        color: rgba(125, 211, 252, 0.9);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 0.8rem;
+        padding: 0;
+    }
+
+    .summary-reset:hover { color: #fff; text-decoration: underline; }
+
+    /* Table ----------------------------------------------------------------- */
+    .cmd-table-wrap {
+        overflow: hidden;
+        border-radius: 16px;
+        border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
+        background: var(--glass-bg, rgba(255, 255, 255, 0.03));
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+    }
+
+    .cmd-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+
+    .cmd-table thead th {
+        text-align: left;
+        padding: 0.85rem 1rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: rgba(255, 255, 255, 0.5);
+        background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .cmd-table thead th:hover { color: rgba(255, 255, 255, 0.85); }
+
+    .cmd-table thead th .sort-arrow {
+        display: inline-block;
+        margin-left: 0.25rem;
+        font-size: 0.65rem;
+        opacity: 0.5;
+    }
+
+    .cmd-table thead th.sorted .sort-arrow { opacity: 1; color: #7dd3fc; }
+
+    /* Column widths */
+    .col-name { width: 18%; }
+    .col-cat { width: 14%; }
+    .col-desc { width: auto; }
+    .col-owner { width: 8%; text-align: center; }
+    .col-aliases { width: 16%; }
+
+    .cmd-row {
+        cursor: pointer;
+        transition: background 0.1s;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .cmd-row:hover { background: rgba(125, 211, 252, 0.05); }
+    .cmd-row.expanded { background: rgba(125, 211, 252, 0.07); }
+
+    .cmd-row td {
+        padding: 0.8rem 1rem;
+        vertical-align: top;
+        font-size: 0.88rem;
+    }
+
+    .cmd-name {
+        font-family: 'SF Mono', Menlo, monospace;
+        font-weight: 600;
+        color: #7dd3fc;
+        font-size: 0.88rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .cmd-name mark {
+        background: rgba(251, 191, 36, 0.35);
+        color: inherit;
+        padding: 0 0.1rem;
+        border-radius: 3px;
+    }
+
+    .cmd-cat-badge {
+        display: inline-block;
+        padding: 0.15rem 0.55rem;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        background: rgba(167, 139, 250, 0.15);
+        border: 1px solid rgba(167, 139, 250, 0.3);
+        color: #c4b5fd;
+        text-transform: capitalize;
+    }
+
+    .cmd-desc {
+        color: rgba(255, 255, 255, 0.78);
+        line-height: 1.4;
+    }
+
+    .cmd-desc mark {
+        background: rgba(251, 191, 36, 0.3);
+        color: inherit;
+        padding: 0 0.1rem;
+        border-radius: 3px;
+    }
+
+    .owner-ico {
+        font-size: 1rem;
+        text-align: center;
+    }
+
+    .owner-ico.yes { color: #fbbf24; }
+    .owner-ico.no { color: rgba(255, 255, 255, 0.2); }
+
+    .aliases-list {
+        display: flex;
+        gap: 0.3rem;
+        flex-wrap: wrap;
+    }
+
+    .alias-pill {
+        font-family: 'SF Mono', Menlo, monospace;
+        font-size: 0.7rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .alias-empty { color: rgba(255, 255, 255, 0.25); font-size: 0.75rem; }
+
+    /* Expanded row */
+    .expand-row td {
+        padding: 0;
+        background: rgba(0, 0, 0, 0.15);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .expand-inner {
+        padding: 1rem 1.25rem 1.25rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+    }
+
+    .expand-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: rgba(255, 255, 255, 0.45);
+        margin-bottom: 0.25rem;
+    }
+
+    .expand-usage {
+        font-family: 'SF Mono', Menlo, monospace;
+        font-size: 0.82rem;
+        padding: 0.7rem 0.9rem;
+        background: rgba(0, 0, 0, 0.3);
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        color: #e0f2fe;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .expand-copy-btn {
+        align-self: flex-start;
+        padding: 0.4rem 0.8rem;
+        font-family: inherit;
+        font-size: 0.75rem;
+        background: rgba(125, 211, 252, 0.15);
+        border: 1px solid rgba(125, 211, 252, 0.3);
+        color: #e0f2fe;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+
+    .expand-copy-btn:hover { background: rgba(125, 211, 252, 0.25); }
+    .expand-copy-btn.copied { background: rgba(52, 211, 153, 0.2); border-color: rgba(52, 211, 153, 0.5); color: #a7f3d0; }
+
+    /* Empty / loading */
+    .empty-state {
+        padding: 3rem 1rem;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.35);
+        font-size: 0.95rem;
+    }
+
+    .empty-state-hint {
+        display: block;
+        margin-top: 0.5rem;
+        font-size: 0.8rem;
+        color: rgba(255, 255, 255, 0.25);
+    }
+
+    .loading {
+        padding: 2rem 1rem;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.45);
+        font-size: 0.9rem;
+    }
+
+    /* Pagination ------------------------------------------------------------ */
+    .pager {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1.25rem;
+        padding: 0.75rem;
+    }
+
+    .pager-btn {
+        padding: 0.45rem 0.85rem;
+        background: var(--glass-bg, rgba(255, 255, 255, 0.04));
+        border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
+        color: #fff;
+        border-radius: 8px;
+        font-family: inherit;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .pager-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+    .pager-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .pager-btn.active { background: rgba(125, 211, 252, 0.2); border-color: rgba(125, 211, 252, 0.5); }
+
+    .pager-info { font-size: 0.85rem; color: rgba(255, 255, 255, 0.5); padding: 0 0.75rem; }
+
+    /* Responsive ------------------------------------------------------------ */
+    @media (max-width: 900px) {
+        .col-aliases, .col-owner { display: none; }
+    }
+
+    @media (max-width: 640px) {
+        .page-content { padding: 1rem; padding-bottom: 90px; }
+        .page-header h1 { font-size: 1.4rem; }
+        .col-cat { display: none; }
+        .cmd-table thead th,
+        .cmd-row td { padding: 0.6rem 0.7rem; font-size: 0.82rem; }
+        .search-input { font-size: 16px; /* prevent iOS zoom */ }
+        .search-kbd { display: none; }
+    }
+
+    /* Reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+        * { transition: none !important; animation: none !important; }
+    }
+</style>
+</head>
+<body>
+
+<nav class="glass-nav">
+    <div class="nav-logo">Krab AI</div>
+    <div class="nav-links">
+        <a href="/v4/" class="nav-link">Hub</a>
+        <a href="/v4/chat" class="nav-link">Chat</a>
+        <a href="/v4/costs" class="nav-link">Costs</a>
+        <a href="/v4/inbox" class="nav-link">Inbox</a>
+        <a href="/v4/swarm" class="nav-link">Swarm</a>
+        <a href="/v4/translator" class="nav-link">Translator</a>
+        <a href="/v4/ops" class="nav-link">Ops</a>
+        <a href="/v4/research" class="nav-link">Research</a>
+        <a href="/v4/commands" class="nav-link active">Commands</a>
+        <div class="nav-bell-wrapper">
+            <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                </svg>
+                <span class="bell-count hidden" id="nav-bell-count">0</span>
+            </a>
+            <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+        </div>
+    </div>
+</nav>
+
+<main class="page-content">
+    <div class="page-header">
+        <div>
+            <h1>Commands Reference</h1>
+            <div class="header-meta">
+                <span class="meta-badge" id="totalBadge">— commands</span>
+                <span class="last-updated" id="lastUpdated">Loading…</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="search-wrap">
+        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="search" id="searchInput" class="search-input" placeholder="Search by name, description, or alias…" autocomplete="off" spellcheck="false" aria-label="Search commands">
+        <span class="search-kbd">⌘F</span>
+    </div>
+
+    <div class="tabs-wrap" id="tabsWrap" role="tablist" aria-label="Categories"></div>
+
+    <div class="chip-row" role="group" aria-label="Quick filters">
+        <button class="chip" data-chip="owner">Owner only</button>
+        <button class="chip" data-chip="aliases">Has aliases</button>
+        <button class="chip" data-chip="ai">AI commands</button>
+        <button class="chip" data-chip="admin">Admin</button>
+    </div>
+
+    <div class="summary-bar" id="summaryBar">
+        <span id="summaryText">Loading…</span>
+        <button class="summary-reset" id="resetBtn" type="button">Reset filters</button>
+    </div>
+
+    <div class="cmd-table-wrap">
+        <table class="cmd-table" aria-label="Commands list">
+            <thead>
+                <tr>
+                    <th class="col-name sortable" data-sort="name">Command <span class="sort-arrow">▲</span></th>
+                    <th class="col-cat sortable" data-sort="category">Category <span class="sort-arrow"></span></th>
+                    <th class="col-desc">Description</th>
+                    <th class="col-owner" title="Owner-only commands">Owner</th>
+                    <th class="col-aliases">Aliases</th>
+                </tr>
+            </thead>
+            <tbody id="cmdBody"></tbody>
+        </table>
+    </div>
+
+    <div class="pager" id="pager" aria-label="Pagination"></div>
+</main>
+
+<script>
+(function () {
+    'use strict';
+
+    const API_BASE = '';
+    const PAGE_SIZE = 50;
+    const STORAGE_KEY = 'krab_commands_state_v1';
+
+    // ─── State ─────────────────────────────────────────────────────────────
+    const state = {
+        all: [],
+        categories: [],
+        category: 'all',
+        search: '',
+        chips: new Set(),
+        sortKey: 'name',
+        sortDir: 'asc',
+        expanded: new Set(),
+        page: 1,
+    };
+
+    // Restore persisted state
+    try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        if (typeof saved.search === 'string') state.search = saved.search;
+        if (typeof saved.category === 'string') state.category = saved.category;
+        if (Array.isArray(saved.chips)) state.chips = new Set(saved.chips);
+        if (saved.sortKey) state.sortKey = saved.sortKey;
+        if (saved.sortDir) state.sortDir = saved.sortDir;
+    } catch (_) { /* ignore */ }
+
+    function persist() {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                search: state.search,
+                category: state.category,
+                chips: Array.from(state.chips),
+                sortKey: state.sortKey,
+                sortDir: state.sortDir,
+            }));
+        } catch (_) { /* quota — ignore */ }
+    }
+
+    // ─── Elements ─────────────────────────────────────────────────────────
+    const $ = (id) => document.getElementById(id);
+    const searchInput = $('searchInput');
+    const tabsWrap = $('tabsWrap');
+    const cmdBody = $('cmdBody');
+    const summaryText = $('summaryText');
+    const pager = $('pager');
+    const totalBadge = $('totalBadge');
+    const lastUpdated = $('lastUpdated');
+    const resetBtn = $('resetBtn');
+
+    // Initial loading row (safe DOM)
+    (function paintInitialLoading() {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.className = 'loading';
+        td.textContent = 'Loading commands…';
+        tr.appendChild(td);
+        cmdBody.appendChild(tr);
+    })();
+
+    // ─── Safe DOM helpers ─────────────────────────────────────────────────
+    function clearNode(n) {
+        while (n.firstChild) n.removeChild(n.firstChild);
+    }
+
+    // ─── Fuzzy / substring matcher ────────────────────────────────────────
+    function matches(cmd, q) {
+        if (!q) return true;
+        const low = q.toLowerCase();
+        const hay = [
+            cmd.name || '',
+            cmd.description || '',
+            cmd.usage || '',
+            (cmd.aliases || []).join(' '),
+            cmd.category || ''
+        ].join(' ').toLowerCase();
+
+        if (hay.includes(low)) return true;
+
+        // acronym: each char of query appears in order inside name
+        const name = (cmd.name || '').toLowerCase();
+        let i = 0;
+        let j = 0;
+        while (i < name.length && j < low.length) {
+            if (name[i] === low[j]) j++;
+            i++;
+        }
+        return j === low.length;
+    }
+
+    // Highlight: wrap occurrences of q in text with <mark> — but safely via DOM
+    function highlight(text, q) {
+        const frag = document.createDocumentFragment();
+        if (!text) return frag;
+        if (!q) {
+            frag.appendChild(document.createTextNode(text));
+            return frag;
+        }
+        const low = text.toLowerCase();
+        const ql = q.toLowerCase();
+        let idx = 0;
+        let pos;
+        while ((pos = low.indexOf(ql, idx)) !== -1) {
+            if (pos > idx) {
+                frag.appendChild(document.createTextNode(text.slice(idx, pos)));
+            }
+            const mark = document.createElement('mark');
+            mark.textContent = text.slice(pos, pos + ql.length);
+            frag.appendChild(mark);
+            idx = pos + ql.length;
+        }
+        if (idx < text.length) {
+            frag.appendChild(document.createTextNode(text.slice(idx)));
+        }
+        return frag;
+    }
+
+    // ─── Chip predicates ──────────────────────────────────────────────────
+    const AI_CATS = new Set(['ai', 'search', 'translator', 'swarm', 'voice']);
+    const ADMIN_CATS = new Set(['admin', 'system', 'ops', 'config']);
+
+    function passesChips(cmd) {
+        if (state.chips.has('owner') && !cmd.owner_only) return false;
+        if (state.chips.has('aliases') && !(Array.isArray(cmd.aliases) && cmd.aliases.length > 0)) return false;
+        if (state.chips.has('ai') && !AI_CATS.has((cmd.category || '').toLowerCase())) return false;
+        if (state.chips.has('admin') && !(cmd.owner_only || ADMIN_CATS.has((cmd.category || '').toLowerCase()))) return false;
+        return true;
+    }
+
+    function getFiltered() {
+        return state.all.filter((cmd) => {
+            if (state.category !== 'all' && (cmd.category || '') !== state.category) return false;
+            if (!passesChips(cmd)) return false;
+            if (!matches(cmd, state.search)) return false;
+            return true;
+        });
+    }
+
+    function getSorted(list) {
+        const key = state.sortKey;
+        const dir = state.sortDir === 'desc' ? -1 : 1;
+        return list.slice().sort((a, b) => {
+            const av = String(a[key] || '').toLowerCase();
+            const bv = String(b[key] || '').toLowerCase();
+            if (av < bv) return -1 * dir;
+            if (av > bv) return 1 * dir;
+            return 0;
+        });
+    }
+
+    // ─── Render tabs ──────────────────────────────────────────────────────
+    function renderTabs() {
+        clearNode(tabsWrap);
+        const cats = ['all', ...state.categories];
+        const baseSet = state.all.filter(passesChips).filter((c) => matches(c, state.search));
+        cats.forEach((cat) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'cat-tab' + (state.category === cat ? ' active' : '');
+            btn.dataset.cat = cat;
+            btn.setAttribute('role', 'tab');
+            btn.setAttribute('aria-selected', state.category === cat ? 'true' : 'false');
+
+            const label = document.createElement('span');
+            label.textContent = cat === 'all' ? 'All' : cat.charAt(0).toUpperCase() + cat.slice(1);
+            btn.appendChild(label);
+
+            const count = document.createElement('span');
+            count.className = 'cat-tab-count';
+            const n = cat === 'all'
+                ? baseSet.length
+                : baseSet.filter((c) => (c.category || '') === cat).length;
+            count.textContent = String(n);
+            btn.appendChild(count);
+
+            btn.addEventListener('click', () => {
+                state.category = cat;
+                state.page = 1;
+                persist();
+                renderTabs();
+                renderBody();
+            });
+            tabsWrap.appendChild(btn);
+        });
+    }
+
+    // ─── Render chips state ───────────────────────────────────────────────
+    function renderChips() {
+        document.querySelectorAll('.chip').forEach((el) => {
+            el.classList.toggle('active', state.chips.has(el.dataset.chip));
+            el.setAttribute('aria-pressed', state.chips.has(el.dataset.chip) ? 'true' : 'false');
+        });
+    }
+
+    // ─── Render table body ────────────────────────────────────────────────
+    function renderBody() {
+        const filtered = getFiltered();
+        const sorted = getSorted(filtered);
+        const totalFiltered = sorted.length;
+        const pages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
+        if (state.page > pages) state.page = pages;
+        const start = (state.page - 1) * PAGE_SIZE;
+        const pageItems = sorted.slice(start, start + PAGE_SIZE);
+
+        summaryText.textContent = totalFiltered === state.all.length
+            ? `All ${state.all.length} commands`
+            : `${totalFiltered} of ${state.all.length} commands`;
+
+        clearNode(cmdBody);
+
+        if (pageItems.length === 0) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 5;
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = 'No commands match your filters.';
+            const hint = document.createElement('span');
+            hint.className = 'empty-state-hint';
+            hint.textContent = 'Try clearing search or filters.';
+            empty.appendChild(hint);
+            td.appendChild(empty);
+            tr.appendChild(td);
+            cmdBody.appendChild(tr);
+            renderPager(pages, totalFiltered);
+            updateSortHeaders();
+            return;
+        }
+
+        const q = state.search;
+
+        pageItems.forEach((cmd) => {
+            const tr = document.createElement('tr');
+            tr.className = 'cmd-row';
+            tr.tabIndex = 0;
+            tr.setAttribute('role', 'button');
+            tr.setAttribute('aria-expanded', state.expanded.has(cmd.name) ? 'true' : 'false');
+            tr.dataset.cmd = cmd.name;
+
+            // Name
+            const tdName = document.createElement('td');
+            tdName.className = 'col-name';
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'cmd-name';
+            nameSpan.appendChild(document.createTextNode('!'));
+            nameSpan.appendChild(highlight(cmd.name || '', q));
+            tdName.appendChild(nameSpan);
+            tr.appendChild(tdName);
+
+            // Category
+            const tdCat = document.createElement('td');
+            tdCat.className = 'col-cat';
+            const catBadge = document.createElement('span');
+            catBadge.className = 'cmd-cat-badge';
+            catBadge.textContent = cmd.category || 'other';
+            tdCat.appendChild(catBadge);
+            tr.appendChild(tdCat);
+
+            // Description
+            const tdDesc = document.createElement('td');
+            tdDesc.className = 'cmd-desc';
+            tdDesc.appendChild(highlight(cmd.description || '', q));
+            tr.appendChild(tdDesc);
+
+            // Owner
+            const tdOwner = document.createElement('td');
+            tdOwner.className = 'col-owner';
+            const ownerSpan = document.createElement('span');
+            if (cmd.owner_only) {
+                ownerSpan.className = 'owner-ico yes';
+                ownerSpan.textContent = '●';
+                ownerSpan.title = 'Owner only';
+                ownerSpan.setAttribute('aria-label', 'Owner only');
+            } else {
+                ownerSpan.className = 'owner-ico no';
+                ownerSpan.textContent = '○';
+                ownerSpan.title = 'Public';
+                ownerSpan.setAttribute('aria-label', 'Public');
+            }
+            tdOwner.appendChild(ownerSpan);
+            tr.appendChild(tdOwner);
+
+            // Aliases
+            const tdAliases = document.createElement('td');
+            tdAliases.className = 'col-aliases';
+            const aliases = Array.isArray(cmd.aliases) ? cmd.aliases : [];
+            if (aliases.length === 0) {
+                const none = document.createElement('span');
+                none.className = 'alias-empty';
+                none.textContent = '—';
+                tdAliases.appendChild(none);
+            } else {
+                const list = document.createElement('div');
+                list.className = 'aliases-list';
+                aliases.forEach((a) => {
+                    const pill = document.createElement('span');
+                    pill.className = 'alias-pill';
+                    pill.textContent = '!' + a;
+                    list.appendChild(pill);
+                });
+                tdAliases.appendChild(list);
+            }
+            tr.appendChild(tdAliases);
+
+            tr.addEventListener('click', (ev) => {
+                if (ev.target.closest('.expand-copy-btn')) return;
+                toggleExpand(cmd.name, tr);
+            });
+            tr.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter' || ev.key === ' ') {
+                    ev.preventDefault();
+                    toggleExpand(cmd.name, tr);
+                }
+            });
+
+            cmdBody.appendChild(tr);
+
+            if (state.expanded.has(cmd.name)) {
+                cmdBody.appendChild(buildExpandRow(cmd));
+                tr.classList.add('expanded');
+            }
+        });
+
+        renderPager(pages, totalFiltered);
+        updateSortHeaders();
+    }
+
+    function buildExpandRow(cmd) {
+        const tr = document.createElement('tr');
+        tr.className = 'expand-row';
+        const td = document.createElement('td');
+        td.colSpan = 5;
+
+        const inner = document.createElement('div');
+        inner.className = 'expand-inner';
+
+        const label = document.createElement('div');
+        label.className = 'expand-label';
+        label.textContent = 'Usage';
+        inner.appendChild(label);
+
+        const usage = document.createElement('div');
+        usage.className = 'expand-usage';
+        usage.textContent = cmd.usage || ('!' + cmd.name);
+        inner.appendChild(usage);
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'expand-copy-btn';
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            try {
+                await navigator.clipboard.writeText(cmd.usage || ('!' + cmd.name));
+                copyBtn.textContent = 'Copied';
+                copyBtn.classList.add('copied');
+                setTimeout(() => {
+                    copyBtn.textContent = 'Copy';
+                    copyBtn.classList.remove('copied');
+                }, 1500);
+            } catch (_) {
+                copyBtn.textContent = 'Failed';
+                setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+            }
+        });
+        inner.appendChild(copyBtn);
+
+        td.appendChild(inner);
+        tr.appendChild(td);
+        return tr;
+    }
+
+    function toggleExpand(name, tr) {
+        if (state.expanded.has(name)) {
+            state.expanded.delete(name);
+            tr.classList.remove('expanded');
+            tr.setAttribute('aria-expanded', 'false');
+            const next = tr.nextElementSibling;
+            if (next && next.classList.contains('expand-row')) next.remove();
+        } else {
+            state.expanded.add(name);
+            tr.classList.add('expanded');
+            tr.setAttribute('aria-expanded', 'true');
+            const cmd = state.all.find((c) => c.name === name);
+            if (cmd) {
+                const er = buildExpandRow(cmd);
+                if (tr.nextSibling) {
+                    tr.parentNode.insertBefore(er, tr.nextSibling);
+                } else {
+                    tr.parentNode.appendChild(er);
+                }
+            }
+        }
+    }
+
+    function updateSortHeaders() {
+        document.querySelectorAll('.sortable').forEach((th) => {
+            const isSorted = th.dataset.sort === state.sortKey;
+            th.classList.toggle('sorted', isSorted);
+            const arrow = th.querySelector('.sort-arrow');
+            if (arrow) {
+                if (isSorted) arrow.textContent = state.sortDir === 'asc' ? '▲' : '▼';
+                else arrow.textContent = '';
+            }
+        });
+    }
+
+    function renderPager(pages, total) {
+        clearNode(pager);
+        if (total <= PAGE_SIZE) return;
+
+        const mk = (label, page, disabled, active) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'pager-btn' + (active ? ' active' : '');
+            b.textContent = label;
+            b.disabled = !!disabled;
+            if (!disabled) {
+                b.addEventListener('click', () => {
+                    state.page = page;
+                    renderBody();
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                });
+            }
+            return b;
+        };
+
+        pager.appendChild(mk('‹ Prev', state.page - 1, state.page <= 1));
+
+        // Smart window of pages
+        const win = 2;
+        const pagesList = [];
+        for (let p = 1; p <= pages; p++) {
+            if (p === 1 || p === pages || Math.abs(p - state.page) <= win) pagesList.push(p);
+            else if (pagesList[pagesList.length - 1] !== '…') pagesList.push('…');
+        }
+        pagesList.forEach((p) => {
+            if (p === '…') {
+                const span = document.createElement('span');
+                span.className = 'pager-info';
+                span.textContent = '…';
+                pager.appendChild(span);
+            } else {
+                pager.appendChild(mk(String(p), p, false, p === state.page));
+            }
+        });
+
+        pager.appendChild(mk('Next ›', state.page + 1, state.page >= pages));
+
+        const info = document.createElement('span');
+        info.className = 'pager-info';
+        info.textContent = `${(state.page - 1) * PAGE_SIZE + 1}–${Math.min(state.page * PAGE_SIZE, total)} of ${total}`;
+        pager.appendChild(info);
+    }
+
+    // ─── Sorting ──────────────────────────────────────────────────────────
+    document.querySelectorAll('.sortable').forEach((th) => {
+        th.addEventListener('click', () => {
+            const key = th.dataset.sort;
+            if (state.sortKey === key) {
+                state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                state.sortKey = key;
+                state.sortDir = 'asc';
+            }
+            persist();
+            renderBody();
+        });
+    });
+
+    // ─── Search input ─────────────────────────────────────────────────────
+    let searchTimer = null;
+    searchInput.value = state.search;
+    searchInput.addEventListener('input', (ev) => {
+        const val = ev.target.value;
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+            state.search = val.trim();
+            state.page = 1;
+            persist();
+            renderTabs();
+            renderBody();
+        }, 120);
+    });
+
+    // Focus via Cmd/Ctrl+F and '/'
+    document.addEventListener('keydown', (ev) => {
+        const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+        if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') {
+            ev.preventDefault();
+            searchInput.focus();
+            searchInput.select();
+        } else if (ev.key === '/' && tag !== 'input' && tag !== 'textarea') {
+            ev.preventDefault();
+            searchInput.focus();
+        } else if (ev.key === 'Escape' && document.activeElement === searchInput) {
+            searchInput.value = '';
+            state.search = '';
+            state.page = 1;
+            persist();
+            renderTabs();
+            renderBody();
+        }
+    });
+
+    // ─── Chips ───────────────────────────────────────────────────────────
+    document.querySelectorAll('.chip').forEach((el) => {
+        el.addEventListener('click', () => {
+            const key = el.dataset.chip;
+            if (state.chips.has(key)) state.chips.delete(key);
+            else state.chips.add(key);
+            state.page = 1;
+            persist();
+            renderChips();
+            renderTabs();
+            renderBody();
+        });
+    });
+
+    // ─── Reset ────────────────────────────────────────────────────────────
+    resetBtn.addEventListener('click', () => {
+        state.search = '';
+        state.category = 'all';
+        state.chips.clear();
+        state.sortKey = 'name';
+        state.sortDir = 'asc';
+        state.page = 1;
+        state.expanded.clear();
+        searchInput.value = '';
+        persist();
+        renderChips();
+        renderTabs();
+        renderBody();
+    });
+
+    // ─── Load commands ────────────────────────────────────────────────────
+    async function loadCommands() {
+        try {
+            const res = await fetch(API_BASE + '/api/commands');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            if (!data || data.ok === false) throw new Error('API returned not-ok');
+
+            state.all = Array.isArray(data.commands) ? data.commands : [];
+            state.categories = Array.isArray(data.categories) ? data.categories : [];
+
+            totalBadge.textContent = `${data.total ?? state.all.length} commands`;
+            lastUpdated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+
+            renderChips();
+            renderTabs();
+            renderBody();
+
+            if (!state.search) searchInput.focus();
+        } catch (err) {
+            console.error('Commands load failed:', err);
+            clearNode(cmdBody);
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 5;
+            const div = document.createElement('div');
+            div.className = 'empty-state';
+            div.textContent = 'Failed to load commands.';
+            const hint = document.createElement('span');
+            hint.className = 'empty-state-hint';
+            hint.textContent = String(err && err.message || err);
+            div.appendChild(hint);
+            td.appendChild(div);
+            tr.appendChild(td);
+            cmdBody.appendChild(tr);
+            totalBadge.textContent = '— commands';
+            lastUpdated.textContent = 'Load failed';
+        }
+    }
+
+    loadCommands();
+
+    // ─── Bell dropdown (shared pattern) ──────────────────────────────────
+    async function updateBellCount() {
+        try {
+            const [inboxRes, opsRes] = await Promise.all([
+                fetch('/api/inbox/status').catch(() => null),
+                fetch('/api/ops/alerts').catch(() => null)
+            ]);
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+                total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+                total = latestItems.length + alerts.length;
+            }
+
+            const countEl = document.getElementById('nav-bell-count');
+            if (countEl) {
+                if (total > 0) {
+                    countEl.textContent = total > 99 ? '99+' : String(total);
+                    countEl.classList.remove('hidden');
+                } else {
+                    countEl.classList.add('hidden');
+                }
+            }
+
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
+            clearNode(dropdown);
+
+            if (alerts.length === 0 && latestItems.length === 0) {
+                const emptyDiv = document.createElement('div');
+                emptyDiv.className = 'bell-dropdown-empty';
+                emptyDiv.textContent = 'Нет уведомлений';
+                dropdown.appendChild(emptyDiv);
+            } else {
+                if (alerts.length > 0) {
+                    const header = document.createElement('div');
+                    header.className = 'bell-dropdown-header';
+                    header.textContent = 'ALERTS';
+                    dropdown.appendChild(header);
+                    alerts.forEach((alert) => {
+                        const a = document.createElement('a');
+                        a.className = 'bell-dropdown-item';
+                        a.href = '/v4/ops';
+                        const dot = document.createElement('span');
+                        dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+                        const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+                        a.appendChild(dot);
+                        a.appendChild(text);
+                        dropdown.appendChild(a);
+                    });
+                }
+                if (latestItems.length > 0) {
+                    const header = document.createElement('div');
+                    header.className = 'bell-dropdown-header';
+                    header.textContent = 'INBOX';
+                    dropdown.appendChild(header);
+                    latestItems.forEach((item) => {
+                        const a = document.createElement('a');
+                        a.className = 'bell-dropdown-item';
+                        a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+                        const dot = document.createElement('span');
+                        dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+                        const text = document.createTextNode(item.title || 'Notification');
+                        a.appendChild(dot);
+                        a.appendChild(text);
+                        dropdown.appendChild(a);
+                    });
+                }
+            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    setInterval(updateBellCount, 30000);
+    updateBellCount();
+
+    const navBell = document.querySelector('.nav-bell');
+    if (navBell) {
+        const bellWrapper = navBell.closest('.nav-bell-wrapper');
+        const bellDropdown = document.getElementById('bell-dropdown');
+        if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+                e.preventDefault();
+                bellDropdown.classList.toggle('hidden');
+            });
+            document.addEventListener('click', (e) => {
+                if (!bellWrapper.contains(e.target)) {
+                    bellDropdown.classList.add('hidden');
+                }
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    bellDropdown.classList.add('hidden');
+                }
+            });
+        }
+    }
+})();
+</script>
+</body>
+</html>

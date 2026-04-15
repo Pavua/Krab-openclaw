@@ -7664,6 +7664,22 @@ class WebApp:
                 return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>V4 Research not ready</h1>", headers=_no_store_headers())
 
+        @self.app.get("/v4/settings", response_class=HTMLResponse)
+        async def v4_settings():
+            """V4 Liquid Glass dashboard — Settings editor."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "settings.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Settings not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/commands", response_class=HTMLResponse)
+        async def v4_commands():
+            """V4 Liquid Glass dashboard — Commands catalog."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "commands.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Commands not ready</h1>", headers=_no_store_headers())
+
         @self.app.get("/v4/liquid-glass.css")
         async def v4_css():
             """V4 Liquid Glass — общий CSS."""
