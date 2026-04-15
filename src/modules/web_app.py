@@ -12912,6 +12912,144 @@ class WebApp:
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
+        @self.app.get("/api/swarm/events")
+        async def swarm_events(token: str = Query(default="")):
+            """SSE stream для обновлений Swarm task board.
+
+            Стримит snapshot task_board + artifacts_count + listeners_enabled.
+            Эмитит event 'update' только при реальном изменении состояния (hash-based).
+            Heartbeat каждые 5 секунд.
+            """
+            from fastapi.responses import StreamingResponse as _StreamingResponse
+
+            async def event_stream():
+                last_hash: Optional[str] = None
+                while True:
+                    try:
+                        from ..core.swarm_artifact_store import swarm_artifact_store
+                        from ..core.swarm_task_board import swarm_task_board
+                        from ..core.swarm_team_listener import is_listeners_enabled
+
+                        board = swarm_task_board.get_board_summary()
+                        tasks = swarm_task_board.list_tasks(limit=30)
+                        tasks_payload = [
+                            {
+                                "task_id": t.task_id,
+                                "team": t.team,
+                                "title": t.title,
+                                "status": t.status,
+                                "priority": t.priority,
+                                "created_at": t.created_at,
+                            }
+                            for t in tasks
+                        ]
+                        arts = swarm_artifact_store.list_artifacts(limit=10)
+                        arts_payload = [
+                            {
+                                "team": a.get("team"),
+                                "topic": a.get("topic"),
+                                "timestamp_iso": a.get("timestamp_iso"),
+                                "duration_sec": a.get("duration_sec"),
+                                "result_preview": (a.get("result") or "")[:200],
+                            }
+                            for a in arts
+                        ]
+                        listeners_enabled = is_listeners_enabled()
+
+                        payload = {
+                            "summary": board,
+                            "tasks": tasks_payload,
+                            "artifacts": arts_payload,
+                            "listeners_enabled": listeners_enabled,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
+
+                        current_hash = hashlib.sha256(
+                            json.dumps(
+                                {
+                                    "summary": board,
+                                    "tasks": tasks_payload,
+                                    "artifacts": arts_payload,
+                                    "listeners_enabled": listeners_enabled,
+                                },
+                                sort_keys=True,
+                                default=str,
+                            ).encode()
+                        ).hexdigest()
+
+                        if current_hash != last_hash:
+                            last_hash = current_hash
+                            yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
+                        else:
+                            yield ": heartbeat\n\n"
+
+                        await asyncio.sleep(5)
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as exc:
+                        logger.error("swarm_events_error", error=str(exc))
+                        yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                        await asyncio.sleep(10)
+
+            return _StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        @self.app.get("/api/inbox/events")
+        async def inbox_events(token: str = Query(default="")):
+            """SSE stream для inbox updates.
+
+            Стримит summary (open/attention/escalations/stale) + items list.
+            Эмитит event 'update' только при реальном изменении состояния.
+            Heartbeat каждые 5 секунд.
+            """
+            from fastapi.responses import StreamingResponse as _StreamingResponse
+
+            async def event_stream():
+                last_hash: Optional[str] = None
+                while True:
+                    try:
+                        workflow = inbox_service.get_workflow_snapshot()
+                        summary = workflow.get("summary") or {}
+                        items = inbox_service.list_items(status="all", kind="", limit=20)
+
+                        payload = {
+                            "summary": summary,
+                            "workflow": workflow,
+                            "items": items,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
+
+                        current_hash = hashlib.sha256(
+                            json.dumps(
+                                {"summary": summary, "items": items},
+                                sort_keys=True,
+                                default=str,
+                            ).encode()
+                        ).hexdigest()
+
+                        if current_hash != last_hash:
+                            last_hash = current_hash
+                            yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
+                        else:
+                            yield ": heartbeat\n\n"
+
+                        await asyncio.sleep(5)
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as exc:
+                        logger.error("inbox_events_error", error=str(exc))
+                        yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                        await asyncio.sleep(10)
+
+            return _StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
         @self.app.get("/api/openclaw/report")
         async def openclaw_report():
             """Агрегированный health-report OpenClaw."""

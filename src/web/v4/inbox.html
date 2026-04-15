@@ -311,7 +311,7 @@
         <header class="page-header">
             <div style="display: flex; align-items: center; gap: 1rem;">
                 <h1>Inbox</h1>
-                <span class="last-updated">Refresh in <span id="refresh-timer">10</span>s</span>
+                <span class="last-updated" id="live-status">Connecting...</span>
             </div>
             <div class="actions">
                 <button class="glass-button" id="btn-remediate-stale">Remediate Stale</button>
@@ -343,7 +343,6 @@
 
     <!-- Vanilla JS Logic -->
     <script>
-
         function formatTimeAgo(iso) {
             if (!iso) return '';
             const then = new Date(iso);
@@ -354,23 +353,24 @@
             if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
             return Math.floor(diff/86400) + 'd ago';
         }
+
         document.addEventListener('DOMContentLoaded', () => {
             // State
             let currentFilter = 'All';
-            let countdown = 10;
-            let timerId = null;
+            let lastItems = [];
+            let evtSource = null;
 
             // DOM Elements
             const statsContainer = document.getElementById('stats-container');
             const itemsContainer = document.getElementById('inbox-items');
             const filterTabs = document.getElementById('filter-tabs');
-            const refreshTimerEl = document.getElementById('refresh-timer');
+            const liveStatusEl = document.getElementById('live-status');
             const toastContainer = document.getElementById('toast-container');
 
             // Initialize
             renderSkeletons();
-            startTimer();
-            refreshData();
+            initialLoad();
+            connectSSE();
 
             // --- Event Listeners ---
             
@@ -383,9 +383,7 @@
                 tab.classList.add('active');
                 currentFilter = tab.dataset.filter;
                 
-                renderItemsSkeletons();
-                loadItems();
-                resetTimer();
+                renderCurrentItems();
             });
 
             // Expand/Collapse and Ack Button Delegation
@@ -414,6 +412,10 @@
                 handleAction('ack_all_open');
             });
 
+            window.addEventListener('beforeunload', () => {
+                if (evtSource) evtSource.close();
+            });
+
             // --- API & Data Handling ---
 
             async function apiCall(endpoint, method = 'GET', body = null) {
@@ -437,12 +439,59 @@
                 }
             }
 
-            async function refreshData() {
-                await Promise.all([loadStats(), loadItems()]);
+            async function initialLoad() {
+                try {
+                    const [statsData, itemsData] = await Promise.all([
+                        apiCall('/api/inbox/status'),
+                        apiCall('/api/inbox/items?status=all&limit=50')
+                    ]);
+                    loadStatsFromData(statsData);
+                    const items = itemsData?.items || itemsData || [];
+                    loadItemsFromData(items);
+                } catch (e) {
+                    console.warn("Initial load failed", e);
+                }
             }
 
-            async function loadStats() {
-                const data = await apiCall('/api/inbox/status');
+            function connectSSE() {
+                if (evtSource) {
+                    evtSource.close();
+                }
+                evtSource = new EventSource('/api/inbox/events');
+
+                evtSource.addEventListener('update', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        const summary = data.summary || (data.workflow && data.workflow.summary) || {};
+                        loadStatsFromData(summary);
+                        if (data.items) {
+                            loadItemsFromData(data.items);
+                        }
+                    } catch (err) {
+                        console.error('Error parsing SSE update:', err);
+                    }
+                });
+
+                evtSource.addEventListener('error', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        console.warn('SSE error event:', data.error);
+                        showToast(data.error || 'SSE Error', 'error');
+                    } catch(err) {
+                        console.warn('SSE disconnected');
+                        showToast('SSE disconnected', 'error');
+                    }
+                });
+
+                evtSource.onerror = (err) => {
+                    console.warn('EventSource onerror triggered. Reconnecting in 5s...');
+                    evtSource.close();
+                    setTimeout(connectSSE, 5000);
+                };
+            }
+
+            function loadStatsFromData(data) {
+                if (!data) return;
                 statsContainer.innerHTML = `
                     <div class="glass-card stat-card">
                         <span class="stat-label">Open</span>
@@ -461,16 +510,27 @@
                         <span class="stat-value" style="color: #1e90ff;">${data.stale || 0}</span>
                     </div>
                 `;
+                const now = new Date();
+                liveStatusEl.innerText = `Updated ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
             }
 
-            async function loadItems() {
-                // API ожидает lowercase status; backend: open/acked/processing/all
-                const filterParam = (currentFilter || 'all').toLowerCase();
-                const response = await apiCall(`/api/inbox/items?status=${filterParam}&limit=20`);
-                // Backend возвращает {"ok": true, "items": [...]}
-                const data = response?.items || response || [];
-                
-                if (!data || data.length === 0) {
+            function loadItemsFromData(items) {
+                if (!items) return;
+                lastItems = items;
+                renderCurrentItems();
+            }
+
+            function renderCurrentItems() {
+                let filtered = lastItems;
+                if (currentFilter !== 'All') {
+                    filtered = lastItems.filter(item => {
+                        const status = (item.status || '').toLowerCase();
+                        if (currentFilter === 'Open') return status !== 'acked';
+                        return status === currentFilter.toLowerCase();
+                    });
+                }
+
+                if (!filtered || filtered.length === 0) {
                     itemsContainer.innerHTML = `
                         <div class="glass-card" style="text-align:center; padding: 3rem; color: var(--text-muted);">
                             No items found for "${currentFilter}".
@@ -479,7 +539,7 @@
                     return;
                 }
 
-                itemsContainer.innerHTML = data.map(item => `
+                itemsContainer.innerHTML = filtered.map(item => `
                     <div class="glass-card inbox-item" data-id="${item.item_id || item.id}">
                         <div class="inbox-item-header">
                             <div class="inbox-item-main">
@@ -509,8 +569,6 @@
                 try {
                     await apiCall('/api/inbox/update', 'POST', { action, ...payload });
                     showToast(`Successfully executed: ${action.replace(/_/g, ' ')}`);
-                    resetTimer();
-                    refreshData();
                 } catch (error) {
                     showToast(`Error executing ${action}`, 'error');
                 }
@@ -545,45 +603,19 @@
                 }, 4000);
             }
 
-            // --- Timer Logic ---
-
-            function startTimer() {
-                clearInterval(timerId);
-                timerId = setInterval(() => {
-                    countdown--;
-                    if (countdown <= 0) {
-                        refreshData();
-                        countdown = 10;
-                    }
-                    refreshTimerEl.innerText = countdown;
-                }, 1000);
-            }
-
-            function resetTimer() {
-                countdown = 10;
-                refreshTimerEl.innerText = countdown;
-                startTimer();
-            }
-
             // --- Mock Data Fallback (For UI Testing without Backend) ---
             function getMockData(endpoint, method, body) {
                 if (endpoint.includes('/status')) {
                     return { open: 24, attention: 5, escalations: 2, stale: 8 };
                 }
                 if (endpoint.includes('/items')) {
-                    const allItems = [
+                    return [
                         { id: 'evt-1', severity: 'critical', title: 'DB Connection Pool Exhausted', timeAgo: '2m ago', badges: ['database', 'prod'], body: 'Primary database cluster is rejecting connections. Active connections have exceeded 5000.', status: 'open' },
                         { id: 'evt-2', severity: 'warning', title: 'High Memory Usage on Worker Node', timeAgo: '15m ago', badges: ['k8s', 'worker-4'], body: 'Node memory utilization has been above 90% for the last 10 minutes.', status: 'open' },
                         { id: 'evt-3', severity: 'info', title: 'SSL Certificate Auto-Renewed', timeAgo: '1h ago', badges: ['security', 'automated'], body: 'Wildcard certificate for *.krab.internal successfully renewed and deployed.', status: 'acked' },
                         { id: 'evt-4', severity: 'critical', title: 'Payment Gateway API Latency', timeAgo: '1h 12m ago', badges: ['api', 'payments'], body: 'P99 latency spiked to 4.5s. Upstream provider might be experiencing issues.', status: 'open' },
                         { id: 'evt-5', severity: 'warning', title: 'Stale Cache Entries Detected', timeAgo: '3h ago', badges: ['redis', 'cache'], body: 'Eviction policy is failing to clear outdated keys in region us-east-1.', status: 'processing' }
                     ];
-                    
-                    if (currentFilter === 'All') return allItems;
-                    return allItems.filter(item => 
-                        currentFilter.toLowerCase() === item.status || 
-                        (currentFilter === 'Open' && item.status !== 'acked')
-                    );
                 }
                 if (endpoint.includes('/update')) {
                     return { success: true };

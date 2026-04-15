@@ -283,6 +283,7 @@
     <script>
         var allTasks = [];
         var listenersEnabled = false;
+        var evtSource = null;
 
         function switchTab(name, btn) {
             document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
@@ -567,7 +568,7 @@
             }
         }
 
-        /* ---- Init ---- */
+        /* ---- Init & SSE ---- */
         async function fetchAll() {
             await Promise.allSettled([
                 fetchBoard(),
@@ -579,8 +580,75 @@
                 'Updated ' + new Date().toLocaleTimeString();
         }
 
+        function connectSSE() {
+            if (evtSource) {
+                evtSource.close();
+            }
+            evtSource = new EventSource('/api/swarm/events');
+
+            evtSource.addEventListener('update', function(e) {
+                try {
+                    var data = JSON.parse(e.data);
+
+                    if (data.summary && data.summary.by_status) {
+                        var bs = data.summary.by_status;
+                        document.getElementById('stat-pending').textContent     = bs.pending     !== undefined ? bs.pending     : 0;
+                        document.getElementById('stat-in_progress').textContent = bs.in_progress !== undefined ? bs.in_progress : 0;
+                        document.getElementById('stat-done').textContent        = bs.done        !== undefined ? bs.done        : 0;
+                        document.getElementById('stat-failed').textContent      = bs.failed      !== undefined ? bs.failed      : 0;
+                    }
+
+                    if (data.summary && data.summary.by_team) {
+                        var bt = data.summary.by_team;
+                        document.getElementById('team-traders').textContent  = bt.traders  !== undefined ? bt.traders  : 0;
+                        document.getElementById('team-coders').textContent   = bt.coders   !== undefined ? bt.coders   : 0;
+                        document.getElementById('team-analysts').textContent = bt.analysts !== undefined ? bt.analysts : 0;
+                        document.getElementById('team-creative').textContent = bt.creative !== undefined ? bt.creative : 0;
+                    }
+
+                    if (data.tasks) {
+                        allTasks = data.tasks;
+                        filterTasks();
+                    }
+
+                    if (data.artifacts) {
+                        renderArtifacts(data.artifacts);
+                    }
+
+                    if (data.listeners_enabled !== undefined) {
+                        listenersEnabled = data.listeners_enabled;
+                        renderListeners(listenersEnabled);
+                    }
+
+                    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+                    setStatus('ok');
+                } catch(err) {
+                    console.error('Failed to parse SSE update', err);
+                }
+            });
+
+            evtSource.addEventListener('error', function(e) {
+                console.warn('SSE disconnected', e.data || '');
+                setStatus('error');
+            });
+
+            evtSource.onerror = function() {
+                console.warn('SSE connection error, reconnecting in 5s...');
+                setStatus('error');
+                evtSource.close();
+                setTimeout(connectSSE, 5000);
+            };
+        }
+
+        // Initial fetch and connect
         fetchAll();
-        setInterval(fetchAll, 15000);
+        connectSSE();
+
+        window.addEventListener('beforeunload', function() {
+            if (evtSource) {
+                evtSource.close();
+            }
+        });
 
         async function updateBellCount() {
             try {
