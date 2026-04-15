@@ -93,14 +93,12 @@ docs/
 
 @dataclass(frozen=True)
 class SearchResult:
-    message_id: int
-    chat_id: int
-    chat_title: str | None
-    sender_id: int | None
+    message_id: str                 # str, не int: композитные ключи (chat_id:msg_id)
+    chat_id: str                    # str, чтобы коробочно сериализовалось
+    text_redacted: str              # raw НЕ отдаём, только после PII prepass
     timestamp: datetime
-    text_redacted: str              # raw НЕ отдаём
-    score: float                    # fused RRF score × decay
-    context_before: list[str]       # до N соседних chunks
+    score: float                    # 0..1 после RRF + decay
+    context_before: list[str]
     context_after: list[str]
 
 
@@ -108,15 +106,17 @@ class HybridRetriever:
     def search(
         self,
         query: str,
-        chat_id: int | None = None,
+        chat_id: Optional[str] = None,
         top_k: int = 10,
-        context: int = 2,
-        decay_mode: Literal["none", "gentle", "aggressive", "auto"] = "auto",
+        with_context: int = 2,      # переименован из `context` для читаемости
+        decay_mode: str = "auto",   # "none" | "gentle" | "aggressive" | "auto"
         owner_only: bool = True,
     ) -> list[SearchResult]: ...
 ```
 
 `owner_only=True` по умолчанию — доступ только из owner-scope userbot команд. Track B при LLM context injection будет вызывать с теми же дефолтами.
+
+**Типы `message_id`/`chat_id` — обязательно строки** (не int). Причина: Telegram даёт negative int для групп/супергрупп (например `-1003703978531`), в JSON-экспорте они приходят в виде строки, и для композитных ключей формата `f"{chat_id}:{msg_id}"` проще иметь единый тип. Контракт зафиксирован с Track B.
 
 ## Фазы
 
