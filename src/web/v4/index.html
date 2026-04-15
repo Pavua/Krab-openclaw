@@ -142,6 +142,26 @@
         .status-dot.ok { background-color: #10b981; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
         .status-dot.error { background-color: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); }
 
+        /* Unsaved Changes UI */
+        .unsaved-badge {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+        .dirty-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #fbbf24;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+        }
+
         /* Fallback Chain UI */
         .fallback-item {
             background: rgba(255, 255, 255, 0.02);
@@ -353,12 +373,17 @@
             </div>
             
             <div class="flex flex-col gap-3">
-                <div class="glass-card p-3 flex justify-between items-center" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(16, 185, 129, 0.3);">
-                    <div class="flex flex-col">
-                        <span class="text-xs text-success mb-1">PRIMARY ROUTE</span>
-                        <strong class="text-accent skeleton" id="route-primary-name">—</strong>
+                <div class="glass-card p-3 flex flex-col gap-2" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(16, 185, 129, 0.3);">
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-success">PRIMARY ROUTE</span>
+                            <span id="primary-dirty-dot" class="dirty-dot hidden"></span>
+                        </div>
+                        <span class="badge text-xs skeleton" id="route-primary-provider">—</span>
                     </div>
-                    <span class="badge text-xs skeleton" id="route-primary-provider">—</span>
+                    <select id="primary-model-select" class="glass-input w-full text-sm font-bold text-accent" style="background: rgba(0,0,0,0.2);">
+                        <option value="">Loading catalog...</option>
+                    </select>
                 </div>
 
                 <div class="text-xs text-muted mt-2">Fallback Chain:</div>
@@ -366,17 +391,22 @@
                     <div class="skeleton p-2" style="height: 30px;"></div>
                     <div class="skeleton p-2" style="height: 30px;"></div>
                 </div>
+
+                <!-- Apply Changes Section -->
+                <div class="mt-4 flex flex-col gap-2">
+                    <div class="flex justify-center hidden" id="unsaved-changes-container">
+                        <span class="unsaved-badge">Есть несохранённые изменения</span>
+                    </div>
+                    <button id="btn-apply-changes" class="glass-button glass-button-primary w-full opacity-50" style="padding: 12px; font-size: 1rem; font-weight: 700;" disabled title="Сохранить и применить" onclick="applyModelSwitch()">
+                        Apply Changes
+                    </button>
+                    <div class="text-muted text-xs text-center">Изменения применяются сразу без рестарта</div>
+                </div>
             </div>
 
             <!-- Advanced Expandable -->
             <div id="advanced-routing" class="hidden mt-4 pt-4" style="border-top: 1px solid rgba(255,255,255,0.1);">
                 <div class="flex flex-col gap-3">
-                    <div>
-                        <label class="text-xs text-muted block mb-1">Manual Override Model</label>
-                        <select id="model-select" class="glass-input w-full">
-                            <option value="">Loading catalog...</option>
-                        </select>
-                    </div>
                     <div class="flex justify-between items-center">
                         <span class="text-sm">Force Local Only</span>
                         <button class="glass-button text-xs" id="toggle-local" onclick="this.classList.toggle('glass-button-primary')">Off</button>
@@ -389,7 +419,6 @@
                             <option>High</option>
                         </select>
                     </div>
-                    <button class="glass-button glass-button-primary w-full mt-2" onclick="applyModelSwitch()" id="btn-switch-model">Apply Switch</button>
                 </div>
             </div>
         </section>
@@ -415,6 +444,8 @@
         let catalogData = [];
         let fallbackChain = [];
         let currentPrimaryModel = '';
+        let pendingPrimary = '';
+        let originalFallbacks = [];
 
         // Utility: Safe Fetch
         async function fetchAPI(endpoint, options = {}) {
@@ -457,6 +488,44 @@
             }, 3000);
         }
 
+        function arraysEqual(a, b) {
+            if (a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) {
+                if (a[i] !== b[i]) return false;
+            }
+            return true;
+        }
+
+        function updateDirtyUI() {
+            const isDirty = pendingPrimary !== currentPrimaryModel || !arraysEqual(fallbackChain, originalFallbacks);
+            
+            const badgeContainer = document.getElementById('unsaved-changes-container');
+            const dot = document.getElementById('primary-dirty-dot');
+            const applyBtn = document.getElementById('btn-apply-changes');
+            
+            if (isDirty) {
+                badgeContainer.classList.remove('hidden');
+                dot.classList.remove('hidden');
+                applyBtn.disabled = false;
+                applyBtn.classList.remove('opacity-50');
+            } else {
+                badgeContainer.classList.add('hidden');
+                dot.classList.add('hidden');
+                applyBtn.disabled = true;
+                applyBtn.classList.add('opacity-50');
+            }
+
+            let provider = '—';
+            const modelObj = catalogData.find(m => m.id === pendingPrimary);
+            if (modelObj) {
+                provider = modelObj.provider_label || modelObj.provider || 'unknown';
+            } else if (pendingPrimary) {
+                const parts = String(pendingPrimary).split('/');
+                if (parts.length > 1) provider = parts[0];
+            }
+            setVal('route-primary-provider', provider);
+        }
+
         // Main Data Fetch Loop
         async function refreshDashboard() {
             const [health, summary, budget, notifs, swarm, alerts] = await Promise.all([
@@ -479,11 +548,7 @@
 
             // Current Model Logic
             const currentModel = summary.route?.model || health.last_runtime_route?.model || '—';
-            const currentProvider = summary.route?.provider || health.last_runtime_route?.provider || '—';
-            
             setVal('hero-model-badge', currentModel);
-            setVal('route-primary-name', currentModel);
-            setVal('route-primary-provider', currentProvider);
 
             // Hub Stats
             if (!budget._error && budget.budget) {
@@ -514,25 +579,12 @@
             }
         }
 
-        // Catalog & Fallbacks
-        async function loadCatalog(force = false) {
-            const endpoint = force ? '/api/model/catalog?force_refresh=true' : '/api/model/catalog';
-            const data = await fetchAPI(endpoint, force ? {method: 'POST'} : {});
-
-            if (data._error) return;
-            const cat = data.catalog || {};
-            const cloudInv = cat.cloud_inventory || [];
-            const localModels = cat.local_models || [];
-            const routingStatus = cat.routing_status || {};
-            const currentPrimary = routingStatus.current_primary || (cat.cloud_slots && cat.cloud_slots.chat) || '';
-            
-            currentPrimaryModel = currentPrimary;
-            catalogData = [...cloudInv, ...localModels.map(m => ({...m, provider: 'lm_studio', provider_label: 'Local'}))];
-            fallbackChain = [...(routingStatus.current_fallbacks || [])];
-
-            // Group by provider for select
-            const select = document.getElementById('model-select');
+        function renderPrimarySelect() {
+            const select = document.getElementById('primary-model-select');
             while (select.firstChild) select.removeChild(select.firstChild);
+            
+            const cloudInv = catalogData.filter(m => m.provider !== 'lm_studio');
+            const localModels = catalogData.filter(m => m.provider === 'lm_studio');
             
             const groupsByProvider = new Map();
             cloudInv.forEach(m => {
@@ -548,9 +600,9 @@
                 group.label = g.label;
                 g.models.forEach(m => {
                     const opt = document.createElement('option');
-                    opt.value = JSON.stringify({model: m.id, provider: providerId});
-                    opt.textContent = m.id + (m.id === currentPrimary ? '  (active)' : '');
-                    if (m.id === currentPrimary) opt.selected = true;
+                    opt.value = m.id;
+                    opt.textContent = m.id;
+                    if (m.id === pendingPrimary) opt.selected = true;
                     group.appendChild(opt);
                 });
                 select.appendChild(group);
@@ -561,16 +613,44 @@
                 group.label = 'Local (LM Studio)';
                 localModels.forEach(m => {
                     const opt = document.createElement('option');
-                    opt.value = JSON.stringify({model: m.id, provider: 'lm_studio'});
+                    opt.value = m.id;
                     const size = m.size_human ? ' \u2014 ' + m.size_human : '';
                     const loaded = m.loaded ? ' [loaded]' : '';
                     opt.textContent = m.id + size + loaded;
+                    if (m.id === pendingPrimary) opt.selected = true;
                     group.appendChild(opt);
                 });
                 select.appendChild(group);
             }
 
+            select.onchange = (e) => {
+                pendingPrimary = e.target.value;
+                updateDirtyUI();
+            };
+        }
+
+        // Catalog & Fallbacks
+        async function loadCatalog(force = false) {
+            const endpoint = force ? '/api/model/catalog?force_refresh=true' : '/api/model/catalog';
+            const data = await fetchAPI(endpoint, force ? {method: 'POST'} : {});
+
+            if (data._error) return;
+            const cat = data.catalog || {};
+            const cloudInv = cat.cloud_inventory || [];
+            const localModels = cat.local_models || [];
+            const routingStatus = cat.routing_status || {};
+            const currentPrimary = routingStatus.current_primary || (cat.cloud_slots && cat.cloud_slots.chat) || '';
+            
+            currentPrimaryModel = currentPrimary;
+            catalogData = [...cloudInv, ...localModels.map(m => ({...m, provider: 'lm_studio', provider_label: 'Local'}))];
+            fallbackChain = [...(routingStatus.current_fallbacks || [])];
+            
+            originalFallbacks = [...fallbackChain];
+            pendingPrimary = currentPrimaryModel;
+
+            renderPrimarySelect();
             renderFallbackChain();
+            updateDirtyUI();
         }
 
         // Fallback Chain UI Logic
@@ -722,12 +802,14 @@
             if (!fallbackChain.includes(modelId)) {
                 fallbackChain.push(modelId);
                 renderFallbackChain();
+                updateDirtyUI();
             }
         }
 
         function removeFallback(idx) {
             fallbackChain.splice(idx, 1);
             renderFallbackChain();
+            updateDirtyUI();
         }
 
         function moveFallback(idx, dir) {
@@ -736,6 +818,7 @@
             fallbackChain[idx] = fallbackChain[idx + dir];
             fallbackChain[idx + dir] = temp;
             renderFallbackChain();
+            updateDirtyUI();
         }
 
         // Actions
@@ -751,28 +834,19 @@
         }
 
         async function applyModelSwitch() {
-            const select = document.getElementById('model-select');
-            let primary = currentPrimaryModel;
-            
-            if (select.value) {
-                try {
-                    const parsed = JSON.parse(select.value);
-                    if (parsed.model) primary = parsed.model;
-                } catch(e) {}
-            }
-
             const payload = {
                 action: "set_runtime_chain",
-                primary: primary,
+                primary: pendingPrimary,
                 fallbacks: fallbackChain,
                 thinking_default: "off"
             };
 
-            const btn = document.getElementById('btn-switch-model');
+            const btn = document.getElementById('btn-apply-changes');
             const originalText = btn.textContent;
             
             btn.textContent = 'Applying...';
             btn.classList.add('opacity-50');
+            btn.disabled = true;
             
             const res = await fetchAPI('/api/model/apply', {
                 method: 'POST',
@@ -784,6 +858,11 @@
                 btn.textContent = 'Success!';
                 btn.classList.add('text-success');
                 showToast('Routing chain updated successfully', 'success');
+                
+                currentPrimaryModel = pendingPrimary;
+                originalFallbacks = [...fallbackChain];
+                updateDirtyUI();
+
                 setTimeout(() => {
                     loadCatalog(true);
                     refreshDashboard();
@@ -792,11 +871,13 @@
                 btn.textContent = 'Failed';
                 btn.classList.add('text-error');
                 showToast('Failed to update routing chain', 'error');
+                updateDirtyUI();
             }
 
             setTimeout(() => {
                 btn.textContent = originalText;
-                btn.classList.remove('opacity-50', 'text-success', 'text-error');
+                btn.classList.remove('text-success', 'text-error');
+                updateDirtyUI();
             }, 3000);
         }
 
