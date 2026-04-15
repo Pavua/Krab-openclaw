@@ -1,8 +1,95 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-13 (session 7)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-15 (session 8)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 8 (2026-04-15)
+
+> **12+ коммитов Track B** (Dashboard V4 polish) | **+20 тестов** (test_log + test_memory_adapter) | **~8 Gemini 3.1 Pro агентов** | **Track E Memory Layer** запущен параллельно
+
+### Статистика Session 8 (Track B)
+
+| Метрика | Session 7 | Session 8 |
+|---------|-----------|-----------|
+| Коммиты Track B | 91 | 12+ |
+| Всего тестов | 7067 | ~7077 |
+| Dashboard V4 pages | 6 | **7** (+Ops) |
+| API endpoints | 201 | **205** (+SSE swarm/inbox events, ops ack, runtime) |
+| Phase 7 готовность | 88% | **100%** (test_log closed gap) |
+
+### Dashboard V4 — Session 8 полировка
+
+- **/v4/ops** (новая страница) — Operations Center: Active Alerts,
+  Metrics (p50/p95/p99, error_rate, throughput), Runtime Snapshot
+  (Providers + Services), Event Timeline, Actions footer
+- **Hub Fallback Chain editor** — add/remove/reorder (▲▼✕),
+  "+ Add Fallback" с фильтром уже добавленных, Apply Changes с dirty tracking
+  (badge "Есть несохранённые изменения" + dot)
+- **Hub UX overhaul** — Primary Model dropdown всегда виден, Apply Changes
+  большая кнопка ВНИЗУ, info "Изменения применяются сразу без рестарта"
+- **LM Studio two-phase loader** — Phase A ~1s cloud cache, Phase B ~100s
+  force_refresh в фоне (KrabEar забивает GPU). Fix: endpoint GET (было POST
+  → 405 Method Not Allowed)
+- **Contrast audit WCAG AA** — `.text-accent` #7dd3fc→#bae6fd,
+  `.text-muted` 0.5→0.72, 8 pill-классов, hero-badge dark on cyan
+- **Unified navbar 7 nav-links** + notification bell везде (counter "32")
+- **SSE auto-refresh** — Swarm/Inbox заменили polling на EventSource
+  (`/api/swarm/events`, `/api/inbox/events`). Hash-based change detection.
+
+### Phase 7 финализация (100%)
+
+- **`!log` tests** (`test_log_command.py`, 10/10 passed) — последний gap
+  закрыт, `!members` / `!cron` тесты уже были в Session 7
+
+### Track E (Memory Layer) — подготовка параллельно
+
+- **`src/core/memory_adapter.py`** — facade stub для HybridRetriever
+- **API контракт зафиксирован:** `HybridRetriever.search(query, chat_id,
+  top_k, with_context, decay_mode, owner_only) → list[SearchResult]`
+- **`test_memory_adapter.py`** (10/10 passed)
+- **Main baseline unblock** (`62c86b2` в main) — 158 файлов, pytest
+  разблокирован для Track E worktree
+
+### Коммиты Track B (`claude/youthful-pascal`)
+
+```
+8511e44 feat(memory): Track E integration stub — memory_adapter facade
+a0f2b6a feat(v4): SSE auto-refresh для Swarm + Inbox
+d9e8d32 test: !log command — 10 unit tests, Phase 7 closed
+484400a feat(v4): notification bell в ops.html
+27330f6 feat: Session 8 Dashboard polish — Ops + bell + LM Studio
+70c8bd1 feat: Hub UX — Primary dropdown + Apply Changes
+26bc066 feat: Hub fallback chain editor
+eaf7a56 fix: V4 contrast issues
+df095d4 feat: V4 dashboard unification (6 pages)
+8b162fa fix: chat.html 6 bugfixes
+```
+
+### Bugfixes Session 8
+
+- **loadCatalog schema mismatch** — `data.providers` → `data.catalog.cloud_inventory`
+- **loadCatalog method bug** — POST на GET-only endpoint → 405 → catalog пустой
+- **hero-model-badge cyan-on-cyan** — invisible text, fix color #fff + shadow
+- **chat.html btn-send white-on-cyan** — invisible, fix dark text + shadow
+
+### Session 9 backlog
+
+- Mobile PWA тестирование на iPhone (Add to Home Screen)
+- Bell onclick dropdown с последними alerts/inbox
+- Inbox actions: pin/archive/done (сейчас только Ack + handleAction schema bug)
+- Ops metrics real data collection (сейчас empty — new runtime)
+- Track E merge когда параллельный чат закончит MVP
+
+### Session 10+ паркованные идеи
+
+- **Remote access** через `152.89.100.100` (external IP есть) — Caddy SSL +
+  port-forward, без Cloudflare Tunnel
+- **Guest Mode** с ролями OWNER / VIEWER / DEMO (redaction + disable interactive)
+- Keyboard shortcuts Cmd+K, Cmd+/
+- Dark/Light theme toggle
 
 ---
 
