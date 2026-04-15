@@ -141,6 +141,99 @@
         }
         .status-dot.ok { background-color: #10b981; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
         .status-dot.error { background-color: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); }
+
+        /* Fallback Chain UI */
+        .fallback-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+        .fallback-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .fallback-btn {
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.6;
+            cursor: pointer;
+            transition: opacity 0.2s, color 0.2s;
+            border: none;
+            background: transparent;
+            color: inherit;
+            font-size: 14px;
+            padding: 0;
+        }
+        .fallback-btn:hover {
+            opacity: 1;
+        }
+        .fallback-btn:disabled {
+            opacity: 0.2;
+            pointer-events: none;
+        }
+        .fallback-btn-remove:hover {
+            color: #ef4444;
+        }
+        .fallback-add-button {
+            border: 1px dashed rgba(255, 255, 255, 0.3);
+            background: transparent;
+            color: #e2e8f0;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: all 0.2s;
+            width: 100%;
+            display: block;
+            margin-top: 8px;
+        }
+        .fallback-add-button:hover {
+            opacity: 1;
+            border-color: rgba(255, 255, 255, 0.6);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        /* Toast Notifications */
+        #toast-container {
+            position: fixed;
+            bottom: 90px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        .toast {
+            padding: 12px 24px;
+            border-radius: 8px;
+            margin-top: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            animation: slideUp 0.3s ease-out;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            pointer-events: auto;
+            transition: all 0.3s ease-in;
+        }
+        .toast-success {
+            background: rgba(16, 185, 129, 0.95);
+            color: #fff;
+            border: 1px solid #10b981;
+        }
+        .toast-error {
+            background: rgba(239, 68, 68, 0.95);
+            color: #fff;
+            border: 1px solid #ef4444;
+        }
+        @keyframes slideUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -315,9 +408,13 @@
         </section>
     </main>
 
+    <div id="toast-container"></div>
+
     <script>
         const API_BASE = '';
         let catalogData = [];
+        let fallbackChain = [];
+        let currentPrimaryModel = '';
 
         // Utility: Safe Fetch
         async function fetchAPI(endpoint, options = {}) {
@@ -345,6 +442,19 @@
             const el = document.getElementById(id);
             if (!el) return;
             el.className = `status-dot ${isOk ? 'ok' : 'error'}`;
+        }
+
+        function showToast(msg, type) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(100%)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
         }
 
         // Main Data Fetch Loop
@@ -404,7 +514,7 @@
             }
         }
 
-        // Catalog & Fallbacks — парсит реальный API /api/model/catalog
+        // Catalog & Fallbacks
         async function loadCatalog(force = false) {
             const endpoint = force ? '/api/model/catalog?force_refresh=true' : '/api/model/catalog';
             const data = await fetchAPI(endpoint, force ? {method: 'POST'} : {});
@@ -415,13 +525,15 @@
             const localModels = cat.local_models || [];
             const routingStatus = cat.routing_status || {};
             const currentPrimary = routingStatus.current_primary || (cat.cloud_slots && cat.cloud_slots.chat) || '';
-            const currentFallbacks = routingStatus.current_fallbacks || [];
+            
+            currentPrimaryModel = currentPrimary;
+            catalogData = [...cloudInv, ...localModels.map(m => ({...m, provider: 'lm_studio', provider_label: 'Local'}))];
+            fallbackChain = [...(routingStatus.current_fallbacks || [])];
 
-            catalogData = cloudInv;
-
-            // Группируем cloud_inventory по provider
+            // Group by provider for select
             const select = document.getElementById('model-select');
             while (select.firstChild) select.removeChild(select.firstChild);
+            
             const groupsByProvider = new Map();
             cloudInv.forEach(m => {
                 const provider = m.provider || 'other';
@@ -444,7 +556,6 @@
                 select.appendChild(group);
             });
 
-            // Local models — отдельная optgroup
             if (localModels.length > 0) {
                 const group = document.createElement('optgroup');
                 group.label = 'Local (LM Studio)';
@@ -459,45 +570,173 @@
                 select.appendChild(group);
             }
 
-            // Реальная Fallback Chain из routing_status.current_fallbacks
-            const chainContainer = document.getElementById('fallback-chain');
-            while (chainContainer.firstChild) chainContainer.removeChild(chainContainer.firstChild);
+            renderFallbackChain();
+        }
 
-            if (currentFallbacks.length > 0) {
-                currentFallbacks.forEach((modelId, idx) => {
-                    const parts = String(modelId).split('/');
-                    const provider = parts.length > 1 ? parts[0] : 'unknown';
-                    const card = document.createElement('div');
-                    card.className = 'glass-card p-2 flex justify-between items-center text-sm';
-                    card.style.background = 'rgba(255,255,255,0.02)';
+        // Fallback Chain UI Logic
+        function renderFallbackChain() {
+            const container = document.getElementById('fallback-chain');
+            while (container.firstChild) container.removeChild(container.firstChild);
+
+            if (fallbackChain.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'text-xs text-muted p-2 text-center';
+                empty.textContent = 'No fallbacks configured.';
+                container.appendChild(empty);
+            } else {
+                fallbackChain.forEach((modelId, idx) => {
+                    let provider = 'unknown';
+                    const modelObj = catalogData.find(m => m.id === modelId);
+                    if (modelObj && modelObj.provider) {
+                        provider = modelObj.provider;
+                    } else {
+                        const parts = String(modelId).split('/');
+                        if (parts.length > 1) provider = parts[0];
+                    }
+
+                    const item = document.createElement('div');
+                    item.className = 'fallback-item p-2 flex justify-between items-center text-sm mb-2';
+
                     const left = document.createElement('div');
+                    left.className = 'flex items-center gap-2 overflow-hidden';
+                    
                     const handle = document.createElement('span');
                     handle.className = 'drag-handle';
-                    handle.textContent = '\u2261';
-                    const numSpan = document.createElement('span');
-                    numSpan.className = 'opacity-50 mr-2';
-                    numSpan.textContent = (idx + 1) + '.';
-                    const nameSpan = document.createElement('span');
-                    nameSpan.textContent = modelId;
+                    handle.textContent = '≡';
+                    
+                    const num = document.createElement('span');
+                    num.className = 'opacity-50 text-xs';
+                    num.textContent = (idx + 1) + '.';
+                    
+                    const name = document.createElement('span');
+                    name.className = 'truncate';
+                    name.textContent = modelId;
+
                     left.appendChild(handle);
-                    left.appendChild(document.createTextNode(' '));
-                    left.appendChild(numSpan);
-                    left.appendChild(nameSpan);
-                    const right = document.createElement('span');
-                    right.className = 'text-xs text-muted';
-                    right.textContent = provider;
-                    card.appendChild(left);
-                    card.appendChild(right);
-                    chainContainer.appendChild(card);
+                    left.appendChild(num);
+                    left.appendChild(name);
+
+                    const right = document.createElement('div');
+                    right.className = 'flex items-center gap-1 shrink-0';
+
+                    const prov = document.createElement('span');
+                    prov.className = 'text-xs text-muted mr-2 hidden md:inline';
+                    prov.textContent = provider;
+
+                    const btnUp = document.createElement('button');
+                    btnUp.className = 'fallback-btn';
+                    btnUp.textContent = '▲';
+                    if (idx === 0) btnUp.disabled = true;
+                    btnUp.onclick = () => moveFallback(idx, -1);
+
+                    const btnDown = document.createElement('button');
+                    btnDown.className = 'fallback-btn';
+                    btnDown.textContent = '▼';
+                    if (idx === fallbackChain.length - 1) btnDown.disabled = true;
+                    btnDown.onclick = () => moveFallback(idx, 1);
+
+                    const btnRm = document.createElement('button');
+                    btnRm.className = 'fallback-btn fallback-btn-remove';
+                    btnRm.textContent = '✕';
+                    btnRm.onclick = () => removeFallback(idx);
+
+                    right.appendChild(prov);
+                    right.appendChild(btnUp);
+                    right.appendChild(btnDown);
+                    right.appendChild(btnRm);
+
+                    item.appendChild(left);
+                    item.appendChild(right);
+                    container.appendChild(item);
                 });
-            } else {
-                const empty = document.createElement('div');
-                empty.className = 'text-xs text-muted p-2';
-                empty.textContent = 'No fallbacks configured.';
-                chainContainer.appendChild(empty);
+            }
+
+            // Add Fallback Button
+            const addContainer = document.createElement('div');
+            const addBtn = document.createElement('button');
+            addBtn.className = 'fallback-add-button text-sm';
+            addBtn.textContent = '+ Add Fallback';
+            
+            addBtn.onclick = () => {
+                while (addContainer.firstChild) addContainer.removeChild(addContainer.firstChild);
+                
+                const selectorDiv = document.createElement('div');
+                selectorDiv.className = 'glass-card p-2 flex flex-col gap-2 mt-2';
+                
+                const select = document.createElement('select');
+                select.className = 'glass-input w-full text-sm';
+                
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = '';
+                defaultOpt.textContent = 'Select model...';
+                select.appendChild(defaultOpt);
+
+                const groups = new Map();
+                catalogData.forEach(m => {
+                    if (fallbackChain.includes(m.id)) return;
+                    const p = m.provider || 'other';
+                    if (!groups.has(p)) groups.set(p, { label: m.provider_label || p, models: [] });
+                    groups.get(p).models.push(m);
+                });
+
+                groups.forEach((g, pId) => {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = g.label;
+                    g.models.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        opt.textContent = m.id;
+                        optgroup.appendChild(opt);
+                    });
+                    select.appendChild(optgroup);
+                });
+
+                const btnRow = document.createElement('div');
+                btnRow.className = 'flex gap-2 justify-end';
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'glass-button text-xs';
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.onclick = () => renderFallbackChain();
+
+                const confirmBtn = document.createElement('button');
+                confirmBtn.className = 'glass-button glass-button-primary text-xs';
+                confirmBtn.textContent = 'Add';
+                confirmBtn.onclick = () => {
+                    if (select.value) addFallback(select.value);
+                };
+
+                btnRow.appendChild(cancelBtn);
+                btnRow.appendChild(confirmBtn);
+
+                selectorDiv.appendChild(select);
+                selectorDiv.appendChild(btnRow);
+                addContainer.appendChild(selectorDiv);
+            };
+
+            addContainer.appendChild(addBtn);
+            container.appendChild(addContainer);
+        }
+
+        function addFallback(modelId) {
+            if (!fallbackChain.includes(modelId)) {
+                fallbackChain.push(modelId);
+                renderFallbackChain();
             }
         }
 
+        function removeFallback(idx) {
+            fallbackChain.splice(idx, 1);
+            renderFallbackChain();
+        }
+
+        function moveFallback(idx, dir) {
+            if (idx + dir < 0 || idx + dir >= fallbackChain.length) return;
+            const temp = fallbackChain[idx];
+            fallbackChain[idx] = fallbackChain[idx + dir];
+            fallbackChain[idx + dir] = temp;
+            renderFallbackChain();
+        }
 
         // Actions
         function toggleAdvanced() {
@@ -513,12 +752,26 @@
 
         async function applyModelSwitch() {
             const select = document.getElementById('model-select');
-            if(!select.value) return;
-            const payload = JSON.parse(select.value);
+            let primary = currentPrimaryModel;
+            
+            if (select.value) {
+                try {
+                    const parsed = JSON.parse(select.value);
+                    if (parsed.model) primary = parsed.model;
+                } catch(e) {}
+            }
+
+            const payload = {
+                action: "set_runtime_chain",
+                primary: primary,
+                fallbacks: fallbackChain,
+                thinking_default: "off"
+            };
+
             const btn = document.getElementById('btn-switch-model');
             const originalText = btn.textContent;
             
-            btn.textContent = 'Switching...';
+            btn.textContent = 'Applying...';
             btn.classList.add('opacity-50');
             
             const res = await fetchAPI('/api/model/apply', {
@@ -530,10 +783,15 @@
             if(!res._error) {
                 btn.textContent = 'Success!';
                 btn.classList.add('text-success');
-                setTimeout(() => refreshDashboard(), 1000);
+                showToast('Routing chain updated successfully', 'success');
+                setTimeout(() => {
+                    loadCatalog(true);
+                    refreshDashboard();
+                }, 500);
             } else {
                 btn.textContent = 'Failed';
                 btn.classList.add('text-error');
+                showToast('Failed to update routing chain', 'error');
             }
 
             setTimeout(() => {
