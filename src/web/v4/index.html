@@ -2,428 +2,566 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🦀 Krab ✅</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🦀 Krab ⏳</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/v4/liquid-glass.css">
     <style>
         body {
-            font-family: 'Outfit', sans-serif;
-            background-color: var(--bg-primary);
-            color: #ffffff;
             margin: 0;
-            padding: 80px 0 100px 0;
+            padding: 0;
+            font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+            background-color: #0b0f19; /* Fallback dark bg */
+            color: #e2e8f0;
+            padding-bottom: 80px; /* Space for mobile tab bar */
         }
-
-        .main-container {
+        
+        .container {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 0 20px;
+            padding: var(--spacing-md);
         }
 
-        /* Allowed specific inline styles */
-        .progress-track {
-            background: var(--glass-border);
-            height: 4px;
-            border-radius: 2px;
-            overflow: hidden;
-            width: 100%;
+        /* Layout Utilities */
+        .w-full { width: 100%; }
+        .h-full { height: 100%; }
+        .hidden { display: none !important; }
+        .m-0 { margin: 0; }
+        .p-2 { padding: var(--spacing-sm); }
+        .p-3 { padding: 0.75rem; }
+        .p-4 { padding: var(--spacing-md); }
+        .text-center { text-align: center; }
+        .text-lg { font-size: 1.125rem; }
+        .text-xl { font-size: 1.25rem; }
+        .text-2xl { font-size: 1.5rem; }
+        .font-bold { font-weight: bold; }
+        .opacity-50 { opacity: 0.5; }
+        .cursor-pointer { cursor: pointer; }
+
+        /* Helper utilities not in liquid-glass.css */
+        .max-w-md { max-width: 28rem; }
+        .tracking-wider { letter-spacing: 0.05em; }
+        .sticky { position: sticky; }
+        .top-0 { top: 0; }
+        .z-50 { z-index: 50; }
+        .fixed { position: fixed; }
+        .bottom-0 { bottom: 0; }
+        .flex-1 { flex: 1 1 0%; }
+        .justify-center { justify-content: center; }
+        .justify-around { justify-content: space-around; }
+        .block { display: block; }
+
+        /* Model badge inline style */
+        .model-badge {
+            display: inline-block;
+            padding: 0.5rem 1.25rem;
+            border-radius: 100px;
+            background: rgba(125, 211, 252, 0.12);
+            border: 1px solid rgba(125, 211, 252, 0.3);
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            min-width: 200px;
+            text-align: center;
         }
 
-        .progress-fill {
-            background: var(--accent-green);
-            height: 100%;
-            width: 0%;
-            transition: width 0.5s ease, background-color 0.3s ease;
-        }
-
-        #toast-container {
-            position: fixed;
-            bottom: 90px;
-            right: 20px;
-            z-index: 9999;
+        /* Component Specifics */
+        .hero-section {
+            min-height: 35vh;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
         }
 
-        .toast {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            padding: 12px 20px;
-            border-radius: var(--radius-card);
-            backdrop-filter: blur(var(--glass-blur));
-            box-shadow: var(--glass-shadow);
-            color: #fff;
-            animation: fadeUp 0.3s ease-out forwards;
+        .hero-title {
+            font-size: clamp(2.5rem, 5vw, 4rem);
+            margin: 0;
+            line-height: 1.1;
+            background: linear-gradient(135deg, #fff, #a5b4fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
 
-        @keyframes fadeUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+        .hub-grid {
+            display: grid;
+            grid-template-columns: repeat(1, 1fr);
+            gap: var(--spacing-md);
         }
 
-        .hub-card {
-            cursor: pointer;
-            animation: fadeIn 0.4s ease-out both;
-            transition: transform 0.2s ease, border-color 0.2s ease;
-        }
-
-        .hub-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--glass-border);
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .chat-card {
-            background: linear-gradient(135deg, rgba(167, 139, 250, 0.15) 0%, var(--glass-bg) 100%);
-            border-color: rgba(167, 139, 250, 0.3);
+        .health-row {
+            display: flex;
+            flex-wrap: wrap;
             justify-content: center;
         }
 
-        .chat-card:hover {
-            background: linear-gradient(135deg, rgba(167, 139, 250, 0.25) 0%, var(--glass-bg-hover) 100%);
-            border-color: var(--accent-purple);
+        .drag-handle {
+            color: rgba(255,255,255,0.3);
+            cursor: grab;
+            padding-right: 8px;
         }
 
-        /* Mobile specific bottom nav positioning */
-        .glass-tab-bar {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            padding: 10px 20px;
-            z-index: 1000;
+        /* Desktop specific */
+        @media (min-width: 768px) {
+            .hub-grid { grid-template-columns: repeat(3, 1fr); }
+            .mobile-only { display: none !important; }
+            body { padding-bottom: 0; }
         }
 
-        .glass-nav {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            padding: 15px 20px;
-            z-index: 1000;
+        /* Mobile specific */
+        @media (max-width: 767px) {
+            .desktop-only { display: none !important; }
+            .health-row { flex-direction: column; width: 100%; }
+            .health-row .glass-card { justify-content: center; }
+            .quick-actions { flex-direction: column; }
         }
 
-        .badge-wrapper {
-            position: absolute;
-            top: -8px;
-            right: -8px;
+        /* Skeletons & Status */
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+            color: transparent !important;
+            border-radius: 4px;
         }
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            background-color: #64748b;
+        }
+        .status-dot.ok { background-color: #10b981; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
+        .status-dot.error { background-color: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); }
     </style>
 </head>
 <body>
 
-    <!-- Top Navigation -->
-    <nav class="glass-nav flex items-center justify-between">
-        <div class="nav-logo flex items-center gap-2">
-            <span class="text-lg">🦀 Krab</span>
-        </div>
-        <div class="nav-links flex items-center gap-4">
-            <a href="/v4/hub" class="nav-link active">Hub</a>
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link active">Hub</a>
             <a href="/v4/chat" class="nav-link">Chat</a>
             <a href="/v4/costs" class="nav-link">Costs</a>
             <a href="/v4/inbox" class="nav-link">Inbox</a>
             <a href="/v4/swarm" class="nav-link">Swarm</a>
             <a href="/v4/translator" class="nav-link">Translator</a>
         </div>
-        <div class="nav-bell flex items-center" style="position: relative; cursor: pointer;" onclick="window.location.href='/v4/ops'">
-            <span class="text-lg">🔔</span>
-            <div class="badge-wrapper" id="badge-wrapper" style="display: none;">
-                <span class="badge" id="bell-badge" style="background: var(--accent-red); color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold;">0</span>
-            </div>
-            <div id="nav-status" class="status-dot ok ml-2"></div>
-        </div>
     </nav>
 
-    <!-- Main Content -->
-    <main class="main-container flex flex-col gap-4">
-        
-        <div class="flex items-center justify-between mb-2">
-            <h1 class="h1">Dashboard Hub</h1>
-        </div>
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Costs
+        </a>
+        <a href="/v4/swarm" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Swarm
+        </a>
+        <a href="/v4/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+            Trans
+        </a>
+    </div>
 
-        <!-- Hub Grid -->
-        <div class="hub-grid">
+    <main class="container">
+        <!-- 2. HERO SECTION -->
+        <section class="hero-section mb-4">
+            <h1 class="hero-title">🦀 Krab</h1>
+            <p class="text-muted text-sm mt-2 mb-4">Autonomous AI Orchestration Hub</p>
             
-            <!-- Card 1: System Status -->
-            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.05s" onclick="window.location.href='/v4/health'">
-                <h3 class="h3 flex items-center gap-1">System Status <div id="card-status-dot" class="status-dot ok"></div></h3>
-                <div>
-                    <div class="mt-2 text-lg skeleton" id="sys-uptime" style="min-height: 24px;"></div>
-                    <div class="text-sm text-muted mt-1" id="sys-status">Initializing...</div>
+            <div class="health-row gap-2 w-full max-w-md">
+                <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
+                    <span class="status-dot" id="dot-tg"></span> <span class="text-sm">Telegram</span>
+                </div>
+                <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
+                    <span class="status-dot" id="dot-claw"></span> <span class="text-sm">OpenClaw</span>
+                </div>
+                <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
+                    <span class="status-dot" id="dot-sched"></span> <span class="text-sm">Scheduler</span>
                 </div>
             </div>
 
-            <!-- Card 2: Costs -->
-            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.1s" onclick="window.location.href='/v4/costs'">
-                <h3 class="h3">Costs 💰</h3>
-                <div>
-                    <div class="mt-2 text-lg skeleton" id="costs-text" style="min-height: 24px;"></div>
-                    <div class="progress-track mt-2">
-                        <div class="progress-fill" id="costs-bar"></div>
+            <div class="glass-card mt-4 p-4 flex flex-col items-center gap-2 max-w-md w-full">
+                <span class="text-xs text-muted uppercase tracking-wider">Current Active Model</span>
+                <div class="model-badge text-accent skeleton" id="hero-model-badge">Loading...</div>
+            </div>
+        </section>
+
+        <!-- 3. HUB NAVIGATION GRID -->
+        <section class="hub-grid mb-4">
+            <a href="/v4/costs" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">💰 Costs</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-costs">— today</span>
+            </a>
+            
+            <a href="/v4/inbox" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">📬 Inbox</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-inbox">— unread</span>
+            </a>
+
+            <a href="/v4/swarm" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">🐝 Swarm</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-swarm">— teams active</span>
+            </a>
+
+            <a href="/v4/translator" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">🔄 Translator</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-translator">— translations</span>
+            </a>
+
+            <a href="/v4/chat" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">💬 Chat</h3>
+                </div>
+                <span class="text-sm text-muted">Open AI Assistant</span>
+            </a>
+
+            <a href="#ops" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">🔧 Ops</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-ops">— alerts</span>
+            </a>
+        </section>
+
+        <!-- 4. MODEL ROUTING CARD -->
+        <section class="glass-card p-4 mb-4">
+            <div class="flex justify-between items-center mb-3">
+                <h2 class="m-0 text-lg">Model Routing & Fallbacks</h2>
+                <div class="flex gap-2">
+                    <button class="glass-button text-xs" onclick="refreshCatalog()" id="btn-refresh-cat">Refresh</button>
+                    <button class="glass-button text-xs" onclick="toggleAdvanced()">Advanced</button>
+                </div>
+            </div>
+            
+            <div class="flex flex-col gap-3">
+                <div class="glass-card p-3 flex justify-between items-center" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(16, 185, 129, 0.3);">
+                    <div class="flex flex-col">
+                        <span class="text-xs text-success mb-1">PRIMARY ROUTE</span>
+                        <strong class="text-accent skeleton" id="route-primary-name">—</strong>
                     </div>
+                    <span class="badge text-xs skeleton" id="route-primary-provider">—</span>
+                </div>
+
+                <div class="text-xs text-muted mt-2">Fallback Chain:</div>
+                <div id="fallback-chain" class="flex flex-col gap-2">
+                    <div class="skeleton p-2" style="height: 30px;"></div>
+                    <div class="skeleton p-2" style="height: 30px;"></div>
                 </div>
             </div>
 
-            <!-- Card 3: Inbox -->
-            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.15s" onclick="window.location.href='/v4/inbox'">
-                <h3 class="h3">Inbox 📬</h3>
-                <div>
-                    <div class="mt-2 text-lg skeleton" id="inbox-count" style="min-height: 24px;"></div>
-                    <div class="text-sm text-muted mt-1">Unread messages</div>
+            <!-- Advanced Expandable -->
+            <div id="advanced-routing" class="hidden mt-4 pt-4" style="border-top: 1px solid rgba(255,255,255,0.1);">
+                <div class="flex flex-col gap-3">
+                    <div>
+                        <label class="text-xs text-muted block mb-1">Manual Override Model</label>
+                        <select id="model-select" class="glass-input w-full">
+                            <option value="">Loading catalog...</option>
+                        </select>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm">Force Local Only</span>
+                        <button class="glass-button text-xs" id="toggle-local" onclick="this.classList.toggle('glass-button-primary')">Off</button>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm">Thinking Depth</span>
+                        <select class="glass-input text-xs" style="width: auto;">
+                            <option>Auto</option>
+                            <option>Low</option>
+                            <option>High</option>
+                        </select>
+                    </div>
+                    <button class="glass-button glass-button-primary w-full mt-2" onclick="applyModelSwitch()" id="btn-switch-model">Apply Switch</button>
                 </div>
             </div>
+        </section>
 
-            <!-- Card 4: Swarm -->
-            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.2s" onclick="window.location.href='/v4/swarm'">
-                <h3 class="h3">Swarm 🐝</h3>
-                <div>
-                    <div class="mt-2 text-lg skeleton" id="swarm-active" style="min-height: 24px;"></div>
-                    <div class="text-sm text-muted mt-1 skeleton" id="swarm-pending" style="min-height: 20px;"></div>
-                </div>
-            </div>
-
-            <!-- Card 5: Chat -->
-            <div class="hub-card glass-card chat-card flex flex-col items-center" style="animation-delay: 0.25s" onclick="window.location.href='/v4/chat'">
-                <h2 class="h2 text-accent" style="color: var(--accent-purple)">Chat 💬</h2>
-                <div class="text-sm text-muted mt-2">Open AI Assistant</div>
-            </div>
-
-            <!-- Card 6: Ops -->
-            <div class="hub-card glass-card flex flex-col justify-between" style="animation-delay: 0.3s" onclick="window.location.href='/v4/ops'">
-                <h3 class="h3">Ops 🔧</h3>
-                <div>
-                    <div class="mt-2 text-lg skeleton" id="ops-alerts" style="min-height: 24px;"></div>
-                    <div class="text-sm text-muted mt-1">Active alerts</div>
-                </div>
-            </div>
-
-        </div>
-
-        <!-- Quick Actions -->
-        <div class="mt-4">
-            <h2 class="h2 mb-2">Quick Actions</h2>
-            <div class="flex gap-2">
-                <button class="glass-button" onclick="quickAction('Health Check', 'GET', '/api/ops/diagnostics')">🔍 Health Check</button>
-                <button class="glass-button glass-button-primary" onclick="quickAction('Restart', 'POST', '/api/runtime/recover')">🔄 Restart</button>
-                <button class="glass-button" onclick="quickAction('Clear Context', 'POST', '/api/runtime/chat-session/clear')">🗑 Clear Context</button>
-            </div>
-        </div>
-
-        <!-- Last Updated -->
-        <div class="text-xs text-muted mt-4 flex justify-between items-center">
-            <span>Last updated: <span id="last-updated-time">--:--:--</span></span>
-        </div>
-
+        <!-- 5. QUICK ACTIONS -->
+        <section class="quick-actions flex gap-2 justify-between mt-4">
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" onclick="runAction('/api/ops/diagnostics', 'GET', this)">
+                <span class="text-lg">🩺</span> <span class="text-xs">Health Check</span>
+            </button>
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" onclick="runAction('/api/runtime/recover', 'POST', this)">
+                <span class="text-lg">⚡</span> <span class="text-xs">Restart</span>
+            </button>
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1 text-error" onclick="runAction('/api/runtime/chat-session/clear', 'POST', this)">
+                <span class="text-lg">🗑️</span> <span class="text-xs">Clear Context</span>
+            </button>
+        </section>
     </main>
-
-    <!-- Mobile Bottom Tab Bar -->
-    <nav class="glass-tab-bar flex justify-between items-center">
-        <a href="/v4/hub" class="tab-item active flex flex-col items-center gap-1">
-            <span class="text-lg">🏠</span>
-            <span class="text-xs">Hub</span>
-        </a>
-        <a href="/v4/chat" class="tab-item flex flex-col items-center gap-1 text-muted">
-            <span class="text-lg">💬</span>
-            <span class="text-xs">Chat</span>
-        </a>
-        <a href="/v4/costs" class="tab-item flex flex-col items-center gap-1 text-muted">
-            <span class="text-lg">💰</span>
-            <span class="text-xs">Costs</span>
-        </a>
-        <a href="/v4/inbox" class="tab-item flex flex-col items-center gap-1 text-muted">
-            <span class="text-lg">📬</span>
-            <span class="text-xs">Inbox</span>
-        </a>
-        <a href="/v4/swarm" class="tab-item flex flex-col items-center gap-1 text-muted">
-            <span class="text-lg">🐝</span>
-            <span class="text-xs">Swarm</span>
-        </a>
-    </nav>
-
-    <!-- Toast Notifications Container -->
-    <div id="toast-container"></div>
 
     <script>
         const API_BASE = '';
+        let catalogData = [];
 
-        async function safeFetch(endpoint) {
+        // Utility: Safe Fetch
+        async function fetchAPI(endpoint, options = {}) {
             try {
-                const res = await fetch(API_BASE + endpoint);
-                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-                return await res.json();
-            } catch (error) {
-                return null;
+                const res = await fetch(API_BASE + endpoint, options);
+                if (!res.ok) return { _error: true, status: res.status };
+                const text = await res.text();
+                return text ? JSON.parse(text) : {};
+            } catch (e) {
+                console.error(`Error fetching ${endpoint}:`, e);
+                return { _error: true, message: e.message };
             }
         }
 
-        async function loadDashboardData() {
-            const elementsToSkeleton = [
-                'sys-uptime', 'costs-text', 'inbox-count', 
-                'swarm-active', 'swarm-pending', 'ops-alerts'
-            ];
-            
-            elementsToSkeleton.forEach(id => {
-                const el = document.getElementById(id);
-                if(el.textContent === '' || el.textContent === '—') {
-                    el.classList.add('skeleton');
-                    el.textContent = '';
-                }
-            });
+        // Utility: Remove skeleton and set text
+        function setVal(id, val, isHtml = false) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('skeleton');
+            if (isHtml) el.innerHTML = val;
+            else el.textContent = val;
+        }
 
-            const [healthRes, costsRes, inboxRes, swarmRes, opsRes] = await Promise.allSettled([
-                safeFetch('/api/health/lite'),
-                safeFetch('/api/costs/budget'),
-                safeFetch('/api/notifications/count'),
-                safeFetch('/api/swarm/task-board'),
-                safeFetch('/api/ops/alerts')
+        function setStatus(id, isOk) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.className = `status-dot ${isOk ? 'ok' : 'error'}`;
+        }
+
+        // Main Data Fetch Loop
+        async function refreshDashboard() {
+            const [health, summary, budget, notifs, swarm, alerts] = await Promise.all([
+                fetchAPI('/api/health/lite'),
+                fetchAPI('/api/runtime/summary'),
+                fetchAPI('/api/costs/budget'),
+                fetchAPI('/api/notifications/count'),
+                fetchAPI('/api/swarm/task-board'),
+                fetchAPI('/api/ops/alerts')
             ]);
 
-            let hasSystemError = false;
+            // Global Health & Title
+            const systemOk = !health._error && health.ok !== false && summary.health?.status !== 'error';
+            document.title = systemOk ? "🦀 Krab ✅" : "🦀 Krab ⚠️";
 
-            // 1. System Status
-            const sysUptime = document.getElementById('sys-uptime');
-            const sysStatus = document.getElementById('sys-status');
-            const navStatus = document.getElementById('nav-status');
-            const cardStatus = document.getElementById('card-status-dot');
+            // Hero Health Row
+            setStatus('dot-tg', health.telegram_session_state === 'connected' || health.ok);
+            setStatus('dot-claw', systemOk);
+            setStatus('dot-sched', systemOk);
 
-            sysUptime.classList.remove('skeleton');
-            if (healthRes.value) {
-                sysUptime.textContent = healthRes.value.uptime || '99.9% Uptime';
-                sysStatus.textContent = healthRes.value.status || 'All systems operational';
-                sysStatus.className = 'text-sm mt-1 text-success';
-                navStatus.className = 'status-dot ok ml-2';
-                cardStatus.className = 'status-dot ok';
-            } else {
-                hasSystemError = true;
-                sysUptime.textContent = '—';
-                sysStatus.textContent = 'Service Unreachable';
-                sysStatus.className = 'text-sm mt-1 text-error';
-                navStatus.className = 'status-dot error ml-2';
-                cardStatus.className = 'status-dot error';
-            }
-
-            // 2. Costs
-            const costsText = document.getElementById('costs-text');
-            const costsBar = document.getElementById('costs-bar');
-            costsText.classList.remove('skeleton');
-            if (costsRes.value) {
-                const spent = costsRes.value.spent || 0;
-                const budget = costsRes.value.budget || 100;
-                costsText.textContent = `$${spent.toFixed(2)} / $${budget.toFixed(2)}`;
-                
-                const percentage = Math.min((spent / budget) * 100, 100);
-                costsBar.style.width = `${percentage}%`;
-                
-                if (percentage >= 90) {
-                    costsBar.style.backgroundColor = 'var(--accent-red)';
-                } else if (percentage >= 75) {
-                    costsBar.style.backgroundColor = 'var(--accent-yellow)';
-                } else {
-                    costsBar.style.backgroundColor = 'var(--accent-green)';
-                }
-            } else {
-                hasSystemError = true;
-                costsText.textContent = '—';
-                costsBar.style.width = '0%';
-            }
-
-            // 3. Inbox
-            const inboxCount = document.getElementById('inbox-count');
-            inboxCount.classList.remove('skeleton');
-            if (inboxRes.value) {
-                inboxCount.textContent = `${inboxRes.value.count || 0} New`;
-            } else {
-                hasSystemError = true;
-                inboxCount.textContent = '—';
-            }
-
-            // 4. Swarm
-            const swarmActive = document.getElementById('swarm-active');
-            const swarmPending = document.getElementById('swarm-pending');
-            swarmActive.classList.remove('skeleton');
-            swarmPending.classList.remove('skeleton');
-            if (swarmRes.value) {
-                swarmActive.textContent = `${swarmRes.value.active || 0} Active Tasks`;
-                swarmPending.textContent = `${swarmRes.value.pending || 0} Pending`;
-            } else {
-                hasSystemError = true;
-                swarmActive.textContent = '—';
-                swarmPending.textContent = '—';
-            }
-
-            // 5. Ops
-            const opsAlerts = document.getElementById('ops-alerts');
-            const badgeWrapper = document.getElementById('badge-wrapper');
-            const bellBadge = document.getElementById('bell-badge');
-            opsAlerts.classList.remove('skeleton');
-            if (opsRes.value) {
-                const alertsCount = opsRes.value.count || 0;
-                opsAlerts.textContent = `${alertsCount} Issues`;
-                
-                if (alertsCount > 0) {
-                    badgeWrapper.style.display = 'block';
-                    bellBadge.textContent = alertsCount > 99 ? '99+' : alertsCount;
-                } else {
-                    badgeWrapper.style.display = 'none';
-                }
-            } else {
-                hasSystemError = true;
-                opsAlerts.textContent = '—';
-                badgeWrapper.style.display = 'none';
-            }
-
-            // Document Title & Timestamp
-            document.title = hasSystemError ? '🦀 Krab ⚠️' : '🦀 Krab ✅';
+            // Current Model Logic
+            const currentModel = summary.route?.model || health.last_runtime_route?.model || '—';
+            const currentProvider = summary.route?.provider || health.last_runtime_route?.provider || '—';
             
-            const now = new Date();
-            document.getElementById('last-updated-time').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        }
+            setVal('hero-model-badge', currentModel);
+            setVal('route-primary-name', currentModel);
+            setVal('route-primary-provider', currentProvider);
 
-        async function quickAction(name, method, url) {
-            try {
-                const res = await fetch(API_BASE + url, { method });
-                if (res.ok) {
-                    showToast(`${name} executed successfully`, 'success');
-                    loadDashboardData(); // Refresh data immediately
-                } else {
-                    showToast(`Failed to execute ${name}`, 'error');
-                }
-            } catch (e) {
-                showToast(`Network error during ${name}`, 'error');
+            // Hub Stats
+            if (!budget._error && budget.budget) {
+                setVal('stat-costs', `$${parseFloat(budget.budget.spent_usd || 0).toFixed(2)} today`);
+            } else setVal('stat-costs', '— today');
+
+            if (!notifs._error) {
+                setVal('stat-inbox', `${notifs.total || 0} unread`);
+            } else setVal('stat-inbox', '— unread');
+
+            if (!swarm._error && swarm.summary) {
+                const teams = swarm.summary.by_team ? Object.keys(swarm.summary.by_team).length : 0;
+                setVal('stat-swarm', `${teams} teams active`);
+            } else setVal('stat-swarm', '— teams active');
+
+            if (!summary._error && summary.translator) {
+                setVal('stat-translator', `${summary.translator.count || 0} translations`);
+            } else setVal('stat-translator', '— translations');
+
+            if (!alerts._error && alerts.alerts) {
+                const count = alerts.alerts.length;
+                setVal('stat-ops', count > 0 ? `<span class="text-error">${count} alerts</span>` : `0 alerts`, true);
+            } else setVal('stat-ops', '— alerts');
+
+            // Load catalog if empty
+            if (catalogData.length === 0) {
+                loadCatalog();
             }
         }
 
-        function showToast(message, type) {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            toast.className = 'toast';
+        // Catalog & Fallbacks — парсит реальный API /api/model/catalog
+        async function loadCatalog(force = false) {
+            const endpoint = force ? '/api/model/catalog?force_refresh=true' : '/api/model/catalog';
+            const data = await fetchAPI(endpoint, force ? {method: 'POST'} : {});
+
+            if (data._error) return;
+            const cat = data.catalog || {};
+            const cloudInv = cat.cloud_inventory || [];
+            const localModels = cat.local_models || [];
+            const routingStatus = cat.routing_status || {};
+            const currentPrimary = routingStatus.current_primary || (cat.cloud_slots && cat.cloud_slots.chat) || '';
+            const currentFallbacks = routingStatus.current_fallbacks || [];
+
+            catalogData = cloudInv;
+
+            // Группируем cloud_inventory по provider
+            const select = document.getElementById('model-select');
+            while (select.firstChild) select.removeChild(select.firstChild);
+            const groupsByProvider = new Map();
+            cloudInv.forEach(m => {
+                const provider = m.provider || 'other';
+                if (!groupsByProvider.has(provider)) {
+                    groupsByProvider.set(provider, {label: m.provider_label || provider, models: []});
+                }
+                groupsByProvider.get(provider).models.push(m);
+            });
+
+            groupsByProvider.forEach((g, providerId) => {
+                const group = document.createElement('optgroup');
+                group.label = g.label;
+                g.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = JSON.stringify({model: m.id, provider: providerId});
+                    opt.textContent = m.id + (m.id === currentPrimary ? '  (active)' : '');
+                    if (m.id === currentPrimary) opt.selected = true;
+                    group.appendChild(opt);
+                });
+                select.appendChild(group);
+            });
+
+            // Local models — отдельная optgroup
+            if (localModels.length > 0) {
+                const group = document.createElement('optgroup');
+                group.label = 'Local (LM Studio)';
+                localModels.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = JSON.stringify({model: m.id, provider: 'lm_studio'});
+                    const size = m.size_human ? ' \u2014 ' + m.size_human : '';
+                    const loaded = m.loaded ? ' [loaded]' : '';
+                    opt.textContent = m.id + size + loaded;
+                    group.appendChild(opt);
+                });
+                select.appendChild(group);
+            }
+
+            // Реальная Fallback Chain из routing_status.current_fallbacks
+            const chainContainer = document.getElementById('fallback-chain');
+            while (chainContainer.firstChild) chainContainer.removeChild(chainContainer.firstChild);
+
+            if (currentFallbacks.length > 0) {
+                currentFallbacks.forEach((modelId, idx) => {
+                    const parts = String(modelId).split('/');
+                    const provider = parts.length > 1 ? parts[0] : 'unknown';
+                    const card = document.createElement('div');
+                    card.className = 'glass-card p-2 flex justify-between items-center text-sm';
+                    card.style.background = 'rgba(255,255,255,0.02)';
+                    const left = document.createElement('div');
+                    const handle = document.createElement('span');
+                    handle.className = 'drag-handle';
+                    handle.textContent = '\u2261';
+                    const numSpan = document.createElement('span');
+                    numSpan.className = 'opacity-50 mr-2';
+                    numSpan.textContent = (idx + 1) + '.';
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = modelId;
+                    left.appendChild(handle);
+                    left.appendChild(document.createTextNode(' '));
+                    left.appendChild(numSpan);
+                    left.appendChild(nameSpan);
+                    const right = document.createElement('span');
+                    right.className = 'text-xs text-muted';
+                    right.textContent = provider;
+                    card.appendChild(left);
+                    card.appendChild(right);
+                    chainContainer.appendChild(card);
+                });
+            } else {
+                const empty = document.createElement('div');
+                empty.className = 'text-xs text-muted p-2';
+                empty.textContent = 'No fallbacks configured.';
+                chainContainer.appendChild(empty);
+            }
+        }
+
+
+        // Actions
+        function toggleAdvanced() {
+            document.getElementById('advanced-routing').classList.toggle('hidden');
+        }
+
+        async function refreshCatalog() {
+            const btn = document.getElementById('btn-refresh-cat');
+            btn.textContent = '...';
+            await loadCatalog(true);
+            btn.textContent = 'Refresh';
+        }
+
+        async function applyModelSwitch() {
+            const select = document.getElementById('model-select');
+            if(!select.value) return;
+            const payload = JSON.parse(select.value);
+            const btn = document.getElementById('btn-switch-model');
+            const originalText = btn.textContent;
             
-            const borderColor = type === 'success' ? 'var(--accent-green)' : 'var(--accent-red)';
-            toast.style.borderLeft = `4px solid ${borderColor}`;
+            btn.textContent = 'Switching...';
+            btn.classList.add('opacity-50');
             
-            toast.textContent = message;
-            container.appendChild(toast);
+            const res = await fetchAPI('/api/model/apply', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+
+            if(!res._error) {
+                btn.textContent = 'Success!';
+                btn.classList.add('text-success');
+                setTimeout(() => refreshDashboard(), 1000);
+            } else {
+                btn.textContent = 'Failed';
+                btn.classList.add('text-error');
+            }
 
             setTimeout(() => {
-                toast.style.opacity = '0';
-                toast.style.transform = 'translateY(10px)';
-                toast.style.transition = 'all 0.3s ease';
-                setTimeout(() => toast.remove(), 300);
+                btn.textContent = originalText;
+                btn.classList.remove('opacity-50', 'text-success', 'text-error');
             }, 3000);
         }
 
-        // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            loadDashboardData();
-            // Auto-refresh every 30 seconds
-            setInterval(loadDashboardData, 30000);
-        });
+        async function runAction(endpoint, method, btnElement) {
+            const originalHtml = btnElement.innerHTML;
+            btnElement.innerHTML = '<span class="text-xs skeleton">Wait...</span>';
+            
+            const res = await fetchAPI(endpoint, { method });
+            
+            if(!res._error) {
+                btnElement.innerHTML = '<span class="text-success text-xs">Done ✅</span>';
+            } else {
+                btnElement.innerHTML = '<span class="text-error text-xs">Error ❌</span>';
+            }
+            
+            setTimeout(() => {
+                btnElement.innerHTML = originalHtml;
+                refreshDashboard();
+            }, 2000);
+        }
+
+        // Init
+        refreshDashboard();
+        setInterval(refreshDashboard, 15000);
+
     </script>
 </body>
 </html>

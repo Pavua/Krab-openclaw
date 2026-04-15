@@ -26,46 +26,6 @@
             padding: 2rem;
         }
 
-        /* Desktop Nav Additions */
-        .glass-nav-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            width: 100%;
-            padding: 0 1rem;
-        }
-        
-        .nav-left, .nav-right {
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-        }
-
-        .nav-left .logo {
-            font-weight: bold;
-            font-size: 1.25rem;
-            margin-right: 1rem;
-        }
-
-        .nav-left a, .glass-tab-bar a {
-            text-decoration: none;
-            color: var(--text-muted);
-            transition: color 0.2s;
-        }
-
-        .nav-left a:hover, .nav-left a.active, .glass-tab-bar a.active {
-            color: #ffffff;
-        }
-
-        .nav-right .countdown {
-            font-size: 0.875rem;
-            color: var(--text-muted);
-        }
-
-        .nav-right .icon-bell {
-            cursor: pointer;
-        }
-
         /* Header */
         .page-header {
             display: flex;
@@ -80,6 +40,12 @@
             margin: 0;
             font-size: 2rem;
             font-weight: 600;
+        }
+
+        .last-updated {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.35);
+            white-space: nowrap;
         }
 
         .actions {
@@ -295,35 +261,52 @@
 
     <!-- Desktop Nav -->
     <nav class="glass-nav">
-        <div class="glass-nav-content">
-            <div class="nav-left">
-                <div class="logo">Krab</div>
-                <a href="/">Hub</a>
-                <a href="/costs">Costs</a>
-                <a href="/inbox" class="active">Inbox</a>
-                <a href="/swarm">Swarm</a>
-                <a href="/v4/chat">Chat</a>
-            </div>
-            <div class="nav-right">
-                <span class="countdown">Refresh in <span id="refresh-timer">10</span>s</span>
-                <span class="icon-bell" title="Notifications">🔔</span>
-            </div>
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/v4/costs" class="nav-link">Costs</a>
+            <a href="/v4/inbox" class="nav-link active">Inbox</a>
+            <a href="/v4/swarm" class="nav-link">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
         </div>
     </nav>
 
     <!-- Mobile Tab Bar -->
-    <nav class="glass-tab-bar">
-        <a href="/" class="tab-item">Hub</a>
-        <a href="/costs" class="tab-item">Costs</a>
-        <a href="/inbox" class="tab-item active">Inbox</a>
-        <a href="/swarm" class="tab-item">Swarm</a>
-        <a href="/v4/chat" class="tab-item">Chat</a>
-    </nav>
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+            Costs
+        </a>
+        <a href="/v4/inbox" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            Inbox
+        </a>
+        <a href="/v4/swarm" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            Swarm
+        </a>
+        <a href="/v4/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6"></path><path d="M4 14l6-6 2-3"></path><path d="M2 5h12"></path><path d="M7 2h1"></path><path d="M22 22l-5-10-5 10"></path><path d="M14 18h6"></path></svg>
+            Trans
+        </a>
+    </div>
 
     <!-- Main Content -->
     <main class="container">
         <header class="page-header">
-            <h1>Inbox</h1>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <h1>Inbox</h1>
+                <span class="last-updated">Refresh in <span id="refresh-timer">10</span>s</span>
+            </div>
             <div class="actions">
                 <button class="glass-button" id="btn-remediate-stale">Remediate Stale</button>
                 <button class="glass-button glass-button-primary" id="btn-ack-all">Ack All Open</button>
@@ -354,6 +337,17 @@
 
     <!-- Vanilla JS Logic -->
     <script>
+
+        function formatTimeAgo(iso) {
+            if (!iso) return '';
+            const then = new Date(iso);
+            if (isNaN(then)) return '';
+            const diff = (Date.now() - then) / 1000;
+            if (diff < 60) return Math.floor(diff) + 's ago';
+            if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+            return Math.floor(diff/86400) + 'd ago';
+        }
         document.addEventListener('DOMContentLoaded', () => {
             // State
             let currentFilter = 'All';
@@ -464,7 +458,11 @@
             }
 
             async function loadItems() {
-                const data = await apiCall(`/api/inbox/items?status=${currentFilter}&limit=20`);
+                // API ожидает lowercase status; backend: open/acked/processing/all
+                const filterParam = (currentFilter || 'all').toLowerCase();
+                const response = await apiCall(`/api/inbox/items?status=${filterParam}&limit=20`);
+                // Backend возвращает {"ok": true, "items": [...]}
+                const data = response?.items || response || [];
                 
                 if (!data || data.length === 0) {
                     itemsContainer.innerHTML = `
@@ -476,7 +474,7 @@
                 }
 
                 itemsContainer.innerHTML = data.map(item => `
-                    <div class="glass-card inbox-item" data-id="${item.id}">
+                    <div class="glass-card inbox-item" data-id="${item.item_id || item.id}">
                         <div class="inbox-item-header">
                             <div class="inbox-item-main">
                                 <span class="severity-icon">
@@ -484,13 +482,13 @@
                                 </span>
                                 <span class="item-title">${item.title}</span>
                                 <div class="badges">
-                                    ${(item.badges || []).map(b => `<span class="badge ${item.severity}">${b}</span>`).join('')}
+                                    ${[item.kind, item.source].filter(Boolean).map(b => `<span class="badge ${item.severity}">${b}</span>`).join('')}
                                 </div>
                             </div>
                             <div class="inbox-item-actions">
-                                <span class="time-ago">${item.timeAgo}</span>
+                                <span class="time-ago">${formatTimeAgo(item.created_at_utc || item.created_at)}</span>
                                 ${item.status !== 'acked' 
-                                    ? `<button class="glass-button ack-btn" data-id="${item.id}">Ack</button>` 
+                                    ? `<button class="glass-button ack-btn" data-id="${item.item_id || item.id}">Ack</button>` 
                                     : `<span class="badge">Acked</span>`}
                             </div>
                         </div>

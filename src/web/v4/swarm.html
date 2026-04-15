@@ -3,541 +3,578 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Swarm Control Dashboard | Krab AI</title>
-    <link href="/v4/liquid-glass.css" rel="stylesheet">
+    <title>Swarm Control | Krab AI</title>
+    <link rel="stylesheet" href="/v4/liquid-glass.css">
     <style>
-        :root {
-            --bg-primary: #0a0a1a;
-            --glass-bg: rgba(255,255,255,0.06);
-            --glass-bg-hover: rgba(255,255,255,0.10);
-            --glass-border: rgba(255,255,255,0.10);
-            --glass-blur: 40px;
-            --glass-specular: inset 0 0.5px 0 rgba(255,255,255,0.12);
-            --glass-shadow: 0 8px 40px rgba(0,0,0,0.25);
-            --accent-cyan: #7dd3fc;
-            --accent-purple: #a78bfa;
-            --accent-green: #34d399;
-            --accent-red: #f87171;
-            --accent-yellow: #fbbf24;
-            --radius-card: 20px;
-            --radius-button: 12px;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
+        .page-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            padding-bottom: 6rem;
         }
-
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: var(--bg-primary);
-            color: var(--text-main);
-            font-family: system-ui, -apple-system, sans-serif;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
         }
-
-        /* Essential Layout & Overrides */
-        .desktop-nav { display: flex; padding: 1rem 2rem; border-bottom: 1px solid var(--glass-border); background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--glass-shadow); }
-        .mobile-nav { display: none; position: fixed; bottom: 0; width: 100%; padding: 1rem; background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); border-top: 1px solid var(--glass-border); z-index: 50; }
-        .main-content { padding: 2rem; flex: 1; max-width: 1400px; margin: 0 auto; width: 100%; box-sizing: border-box; padding-bottom: 6rem; }
-        
-        .logo { font-weight: bold; font-size: 1.25rem; background: linear-gradient(to right, var(--accent-cyan), var(--accent-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .nav-links a { color: var(--text-muted); text-decoration: none; font-weight: 500; transition: color 0.2s; }
-        .nav-links a:hover, .nav-links a.active { color: var(--accent-cyan); }
-        
-        /* Tabs System */
-        .tab-nav { display: flex; gap: 1rem; margin-bottom: 2rem; border-bottom: 1px solid var(--glass-border); padding-bottom: 1rem; overflow-x: auto;}
-        .tab-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer; padding: 0.5rem 1rem; border-radius: var(--radius-button); transition: all 0.2s; white-space: nowrap; }
-        .tab-btn:hover { background: var(--glass-bg-hover); color: var(--text-main); }
-        .tab-btn.active { background: var(--glass-bg); color: var(--accent-purple); box-shadow: var(--glass-specular); border: 1px solid var(--glass-border); }
-        .tab-pane { display: none; animation: fadeIn 0.3s ease; }
-        .tab-pane.active { display: block; }
-        
-        /* Kanban Board */
-        .kanban-board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; }
-        .kanban-col { background: rgba(0,0,0,0.2); border-radius: var(--radius-card); padding: 1rem; border: 1px solid var(--glass-border); min-height: 500px; display: flex; flex-direction: column; gap: 1rem; }
-        .kanban-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--glass-border); }
-        .task-card { padding: 1rem; cursor: grab; transition: transform 0.2s, box-shadow 0.2s; }
-        .task-card:hover { transform: translateY(-2px); box-shadow: var(--glass-shadow); }
-        
-        /* Utils */
-        .badge { padding: 0.25rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; background: var(--glass-bg); border: 1px solid var(--glass-border); }
-        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-        .status-dot.ok { background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
-        .status-dot.warning { background-color: var(--accent-yellow); box-shadow: 0 0 8px var(--accent-yellow); }
-        .status-dot.error { background-color: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
-        
-        /* Skeleton */
-        .skeleton { background: linear-gradient(90deg, var(--glass-bg) 25%, var(--glass-bg-hover) 50%, var(--glass-bg) 75%); background-size: 200% 100%; animation: loading 1.5s infinite; border-radius: 8px; min-height: 1rem; }
-        @keyframes loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-
-        /* Form Elements */
-        .glass-input, select.glass-input { width: 100%; padding: 0.75rem 1rem; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-button); color: var(--text-main); outline: none; margin-top: 0.5rem; box-sizing: border-box; }
-        .glass-input:focus { border-color: var(--accent-cyan); background: var(--glass-bg-hover); }
-        .glass-input option { background: var(--bg-primary); color: var(--text-main); }
-        
-        /* Toggle Switch */
-        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--glass-bg); transition: .4s; border-radius: 34px; border: 1px solid var(--glass-border); }
-        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: var(--text-muted); transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: rgba(52, 211, 153, 0.2); border-color: var(--accent-green); }
-        input:checked + .slider:before { transform: translateX(24px); background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
-
-        /* Responsive */
-        @media (max-width: 1024px) {
-            .kanban-board { grid-template-columns: repeat(2, 1fr); }
+        .stat-card { text-align: center; padding: 1.25rem 1rem; }
+        .stat-value { font-size: 2rem; font-weight: 700; line-height: 1; margin-bottom: 0.25rem; }
+        .stat-label { font-size: 0.75rem; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.05em; }
+        .team-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 2rem; align-items: center; }
+        .team-badge {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: 999px; padding: 0.35rem 0.875rem;
+            font-size: 0.8rem; font-weight: 500;
+            backdrop-filter: blur(var(--glass-blur));
         }
+        .team-badge .team-count { font-weight: 700; color: var(--accent-cyan); }
+        .tabs-header {
+            display: flex; gap: 0.5rem; margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--glass-border); padding-bottom: 0;
+        }
+        .tab-btn {
+            background: transparent; border: none; border-bottom: 2px solid transparent;
+            color: rgba(255,255,255,0.5); font-family: inherit; font-size: 0.875rem;
+            font-weight: 500; cursor: pointer; padding: 0.625rem 1.25rem;
+            margin-bottom: -1px; transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #fff; }
+        .tab-btn.active { color: var(--accent-cyan); border-bottom-color: var(--accent-cyan); }
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; animation: fadeUp 0.25s ease-out; }
+        .task-table-wrap { overflow-x: auto; border-radius: var(--radius-card); }
+        .task-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+        .task-table thead tr { background: rgba(255,255,255,0.04); }
+        .task-table th {
+            padding: 0.75rem 1rem; text-align: left; font-weight: 600;
+            font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+            color: rgba(255,255,255,0.5); border-bottom: 1px solid var(--glass-border); white-space: nowrap;
+        }
+        .task-table td { padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+        .task-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+        .task-table tbody tr:last-child td { border-bottom: none; }
+        .pill {
+            display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px;
+            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+        }
+        .pill-pending   { background: rgba(251,191,36,0.15);  color: var(--accent-yellow); border: 1px solid rgba(251,191,36,0.3); }
+        .pill-in_progress { background: rgba(167,139,250,0.15); color: var(--accent-purple); border: 1px solid rgba(167,139,250,0.3); }
+        .pill-done      { background: rgba(52,211,153,0.15);  color: var(--accent-green);  border: 1px solid rgba(52,211,153,0.3); }
+        .pill-failed    { background: rgba(248,113,113,0.15); color: var(--accent-red);    border: 1px solid rgba(248,113,113,0.3); }
+        .pill-low       { background: rgba(125,211,252,0.1);  color: var(--accent-cyan);   border: 1px solid rgba(125,211,252,0.25); }
+        .pill-medium    { background: rgba(52,211,153,0.1);   color: var(--accent-green);  border: 1px solid rgba(52,211,153,0.25); }
+        .pill-high      { background: rgba(251,191,36,0.1);   color: var(--accent-yellow); border: 1px solid rgba(251,191,36,0.25); }
+        .pill-critical  { background: rgba(248,113,113,0.1);  color: var(--accent-red);    border: 1px solid rgba(248,113,113,0.25); }
+        .filter-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+        .filter-row label { font-size: 0.8rem; color: rgba(255,255,255,0.5); white-space: nowrap; }
+        .create-form { max-width: 520px; }
+        .form-group { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.25rem; }
+        .form-group label { font-size: 0.8rem; font-weight: 500; color: rgba(255,255,255,0.6); }
+        .form-message {
+            font-size: 0.85rem; padding: 0.6rem 1rem; border-radius: 10px;
+            margin-bottom: 1rem; display: none;
+        }
+        .form-message.success { background: rgba(52,211,153,0.15); color: var(--accent-green); border: 1px solid rgba(52,211,153,0.3); display: block; }
+        .form-message.error   { background: rgba(248,113,113,0.15); color: var(--accent-red);   border: 1px solid rgba(248,113,113,0.3); display: block; }
+        .artifact-card { cursor: pointer; margin-bottom: 0.75rem; }
+        .artifact-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+        .artifact-topic { font-weight: 600; font-size: 0.95rem; }
+        .artifact-meta { font-size: 0.75rem; color: rgba(255,255,255,0.4); white-space: nowrap; }
+        .artifact-preview {
+            margin-top: 0.875rem; padding-top: 0.875rem;
+            border-top: 1px solid var(--glass-border);
+            font-size: 0.82rem; color: rgba(255,255,255,0.65); line-height: 1.6;
+            display: none; white-space: pre-wrap;
+        }
+        .artifact-card.expanded .artifact-preview { display: block; }
+        .artifact-expand-hint { font-size: 0.72rem; color: rgba(125,211,252,0.6); margin-top: 0.25rem; }
+        .listeners-card { max-width: 480px; text-align: center; padding: 2.5rem; }
+        .listener-state { font-size: 3rem; font-weight: 700; margin: 0.75rem 0; }
+        .listener-state.on  { color: var(--accent-green); }
+        .listener-state.off { color: rgba(255,255,255,0.3); }
+        .listener-desc { color: rgba(255,255,255,0.5); font-size: 0.875rem; margin-bottom: 1.5rem; }
+        .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.75rem; gap: 1rem; }
+        .page-header h1 { display: flex; align-items: center; gap: 0.6rem; margin: 0; }
+        .last-updated { font-size: 0.75rem; color: rgba(255,255,255,0.35); white-space: nowrap; }
+        .empty-state { text-align: center; padding: 2.5rem; color: rgba(255,255,255,0.35); font-size: 0.9rem; }
         @media (max-width: 768px) {
-            .desktop-nav { display: none; }
-            .mobile-nav { display: flex; }
-            .kanban-board { grid-template-columns: 1fr; }
+            .page-content { padding: 1rem; padding-bottom: 90px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
-        
-        /* Helper Classes */
-        .flex { display: flex; } .flex-col { display: flex; flex-direction: column; }
-        .items-center { align-items: center; } .justify-between { justify-content: space-between; }
-        .gap-1 { gap: 0.25rem; } .gap-2 { gap: 0.5rem; } .gap-3 { gap: 0.75rem; } .gap-4 { gap: 1rem; }
-        .mt-1 { margin-top: 0.25rem; } .mt-2 { margin-top: 0.5rem; } .mt-4 { margin-top: 1rem; }
-        .mb-2 { margin-bottom: 0.5rem; } .mb-4 { margin-bottom: 1rem; }
-        .text-sm { font-size: 0.875rem; } .text-xs { font-size: 0.75rem; }
-        .text-muted { color: var(--text-muted); } .text-accent { color: var(--accent-cyan); }
-        .text-success { color: var(--accent-green); } .text-error { color: var(--accent-red); }
-        .glass-button-primary { background: linear-gradient(135deg, rgba(125,211,252,0.2), rgba(167,139,250,0.2)); border: 1px solid var(--accent-purple); color: var(--text-main); padding: 0.75rem 1.5rem; border-radius: var(--radius-button); cursor: pointer; font-weight: 600; transition: all 0.2s; }
-        .glass-button-primary:hover { background: linear-gradient(135deg, rgba(125,211,252,0.3), rgba(167,139,250,0.3)); box-shadow: 0 0 15px rgba(167,139,250,0.4); }
-        .glass-card { background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)); border: 1px solid var(--glass-border); border-radius: var(--radius-card); box-shadow: var(--glass-shadow); }
-        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem; }
     </style>
 </head>
 <body>
 
-    <!-- Desktop Nav -->
-    <nav class="glass-nav desktop-nav items-center justify-between">
-        <div class="logo">Krab AI</div>
-        <div class="nav-links flex gap-4">
-            <a href="/">Home</a>
-            <a href="/v4/costs">Costs</a>
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
             <a href="/v4/chat" class="nav-link">Chat</a>
-            <a href="/v4/inbox">Inbox</a>
-            <a href="/v4/swarm" class="active text-accent">Swarm</a>
-            <a href="/v4/translator">Translator</a>
-        </div>
-        <div class="flex items-center gap-2 text-sm">
-            <span class="text-muted">System Health</span>
-            <div id="system-health-dot" class="status-dot ok"></div>
+            <a href="/v4/costs" class="nav-link">Costs</a>
+            <a href="/v4/inbox" class="nav-link">Inbox</a>
+            <a href="/v4/swarm" class="nav-link active">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
         </div>
     </nav>
 
-    <!-- Main Content -->
-    <main class="main-content">
-        <div class="flex justify-between items-center mb-4">
-            <h1 class="text-accent" style="margin: 0; font-size: 1.75rem;">Swarm Control</h1>
-            <div class="text-sm text-muted" id="last-updated">Updating...</div>
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Costs
+        </a>
+        <a href="/v4/swarm" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Swarm
+        </a>
+        <a href="/v4/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+            Trans
+        </a>
+    </div>
+
+    <div class="page-content">
+
+        <div class="page-header">
+            <h1>Swarm Control <span id="status-dot" class="status-dot warning"></span></h1>
+            <span class="last-updated" id="last-updated">Loading...</span>
         </div>
 
-        <!-- Stats Summary -->
-        <div class="stats-grid" id="stats-container">
-            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
-                <span class="text-muted text-sm mb-2">Pending</span>
-                <span class="text-accent-cyan" style="font-size: 2rem; font-weight: bold;" id="stat-pending"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
-            </div>
-            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
-                <span class="text-muted text-sm mb-2">In Progress</span>
-                <span class="text-accent-purple" style="font-size: 2rem; font-weight: bold;" id="stat-in_progress"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
-            </div>
-            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
-                <span class="text-muted text-sm mb-2">Done</span>
-                <span class="text-success" style="font-size: 2rem; font-weight: bold;" id="stat-done"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
-            </div>
-            <div class="glass-card flex flex-col items-center justify-center p-4" style="padding: 1.5rem;">
-                <span class="text-muted text-sm mb-2">Failed</span>
-                <span class="text-error" style="font-size: 2rem; font-weight: bold;" id="stat-failed"><div class="skeleton" style="width: 40px; height: 30px;"></div></span>
-            </div>
-        </div>
-
-        <!-- Tab Navigation -->
-        <div class="tab-nav">
-            <button class="tab-btn active" onclick="switchTab('board')">Task Board</button>
-            <button class="tab-btn" onclick="switchTab('create')">Create Task</button>
-            <button class="tab-btn" onclick="switchTab('artifacts')">Artifacts</button>
-            <button class="tab-btn" onclick="switchTab('listeners')">Listeners</button>
-        </div>
-
-        <!-- Tab: Task Board -->
-        <div id="tab-board" class="tab-pane active">
-            <div id="board-error" class="text-error mb-4" style="display: none;"></div>
-            <div class="kanban-board">
-                <div class="kanban-col">
-                    <div class="kanban-header">
-                        <h3 class="text-muted" style="margin:0; font-size: 1rem;">Pending</h3>
-                        <span class="badge" id="count-pending">0</span>
-                    </div>
-                    <div id="col-pending" class="flex flex-col gap-2">
-                        <div class="skeleton" style="height: 100px;"></div>
-                        <div class="skeleton" style="height: 100px;"></div>
-                    </div>
+        <div class="stats-grid">
+            <div class="glass-card stat-card">
+                <div class="stat-value" style="color:var(--accent-yellow);" id="stat-pending">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
-                <div class="kanban-col">
-                    <div class="kanban-header">
-                        <h3 class="text-accent-purple" style="margin:0; font-size: 1rem;">In Progress</h3>
-                        <span class="badge" id="count-in_progress">0</span>
-                    </div>
-                    <div id="col-in_progress" class="flex flex-col gap-2">
-                        <div class="skeleton" style="height: 100px;"></div>
-                    </div>
+                <div class="stat-label">Pending</div>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="stat-value" style="color:var(--accent-purple);" id="stat-in_progress">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
-                <div class="kanban-col">
-                    <div class="kanban-header">
-                        <h3 class="text-success" style="margin:0; font-size: 1rem;">Done</h3>
-                        <span class="badge" id="count-done">0</span>
-                    </div>
-                    <div id="col-done" class="flex flex-col gap-2">
-                        <div class="skeleton" style="height: 100px;"></div>
-                    </div>
+                <div class="stat-label">In Progress</div>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="stat-value text-success" id="stat-done">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
-                <div class="kanban-col">
-                    <div class="kanban-header">
-                        <h3 class="text-error" style="margin:0; font-size: 1rem;">Failed</h3>
-                        <span class="badge" id="count-failed">0</span>
-                    </div>
-                    <div id="col-failed" class="flex flex-col gap-2"></div>
+                <div class="stat-label">Done</div>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="stat-value text-error" id="stat-failed">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
                 </div>
+                <div class="stat-label">Failed</div>
             </div>
         </div>
 
-        <!-- Tab: Create Task -->
-        <div id="tab-create" class="tab-pane">
-            <div class="glass-card" style="max-width: 600px; margin: 0 auto; padding: 2rem;">
-                <h2 class="mb-4" style="margin-top:0;">Deploy New Task</h2>
-                <div id="create-msg" class="mb-4 text-sm"></div>
-                <form id="form-create-task" class="flex flex-col gap-4">
-                    <div>
-                        <label class="text-sm text-muted">Target Team</label>
-                        <select id="task-team" class="glass-input" required>
-                            <option value="traders">📈 Traders</option>
-                            <option value="coders">💻 Coders</option>
-                            <option value="analysts">📊 Analysts</option>
-                            <option value="creative">🎨 Creative</option>
+        <div class="team-row">
+            <span class="text-xs text-muted">By team:</span>
+            <span class="team-badge">Traders <span class="team-count" id="team-traders">-</span></span>
+            <span class="team-badge">Coders <span class="team-count" id="team-coders">-</span></span>
+            <span class="team-badge">Analysts <span class="team-count" id="team-analysts">-</span></span>
+            <span class="team-badge">Creative <span class="team-count" id="team-creative">-</span></span>
+        </div>
+
+        <div class="tabs-header">
+            <button class="tab-btn active" onclick="switchTab('tasks',this)">Tasks</button>
+            <button class="tab-btn" onclick="switchTab('create',this)">Create</button>
+            <button class="tab-btn" onclick="switchTab('artifacts',this)">Artifacts</button>
+            <button class="tab-btn" onclick="switchTab('listeners',this)">Listeners</button>
+        </div>
+
+        <div id="pane-tasks" class="tab-pane active">
+            <div class="filter-row">
+                <label for="team-filter">Filter:</label>
+                <select id="team-filter" class="glass-input" style="max-width:180px;" onchange="filterTasks()">
+                    <option value="">All Teams</option>
+                    <option value="traders">Traders</option>
+                    <option value="coders">Coders</option>
+                    <option value="analysts">Analysts</option>
+                    <option value="creative">Creative</option>
+                </select>
+            </div>
+            <div class="glass-card" style="padding:0;overflow:hidden;">
+                <div class="task-table-wrap">
+                    <table class="task-table">
+                        <thead>
+                            <tr>
+                                <th>Team</th>
+                                <th>Title</th>
+                                <th>Status</th>
+                                <th>Priority</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="task-tbody">
+                            <tr><td colspan="5" class="empty-state">Loading tasks...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="pane-create" class="tab-pane">
+            <div class="glass-card create-form">
+                <h2 style="margin-bottom:1.5rem;">Deploy New Task</h2>
+                <div id="create-msg" class="form-message"></div>
+                <form id="create-form" onsubmit="submitCreateTask(event)">
+                    <div class="form-group">
+                        <label>Team</label>
+                        <select id="c-team" class="glass-input">
+                            <option value="traders">Traders</option>
+                            <option value="coders">Coders</option>
+                            <option value="analysts">Analysts</option>
+                            <option value="creative">Creative</option>
                         </select>
                     </div>
-                    <div>
-                        <label class="text-sm text-muted">Task Title</label>
-                        <input type="text" id="task-title" class="glass-input" placeholder="e.g. Analyze Q3 market trends..." required>
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" id="c-title" class="glass-input" placeholder="Task description..." required>
                     </div>
-                    <div>
-                        <label class="text-sm text-muted">Priority</label>
-                        <select id="task-priority" class="glass-input" required>
+                    <div class="form-group">
+                        <label>Priority</label>
+                        <select id="c-priority" class="glass-input">
                             <option value="low">Low</option>
-                            <option value="normal" selected>Normal</option>
+                            <option value="medium" selected>Medium</option>
                             <option value="high">High</option>
                             <option value="critical">Critical</option>
                         </select>
                     </div>
-                    <button type="submit" class="glass-button-primary mt-4" id="btn-submit-task">Deploy Task</button>
+                    <button type="submit" class="glass-button glass-button-primary" id="c-submit" style="width:100%;">Deploy Task</button>
                 </form>
             </div>
         </div>
 
-        <!-- Tab: Artifacts -->
-        <div id="tab-artifacts" class="tab-pane">
-            <div id="artifacts-error" class="text-error mb-4" style="display: none;"></div>
-            <div id="artifacts-list" class="flex flex-col gap-3">
-                <div class="glass-card p-4 skeleton" style="height: 80px; padding: 1rem;"></div>
-                <div class="glass-card p-4 skeleton" style="height: 80px; padding: 1rem;"></div>
+        <div id="pane-artifacts" class="tab-pane">
+            <div id="artifacts-container">
+                <div class="glass-card skeleton" style="height:80px;margin-bottom:0.75rem;"></div>
+                <div class="glass-card skeleton" style="height:80px;margin-bottom:0.75rem;"></div>
+                <div class="glass-card skeleton" style="height:80px;"></div>
             </div>
         </div>
 
-        <!-- Tab: Listeners -->
-        <div id="tab-listeners" class="tab-pane">
-            <div id="listeners-error" class="text-error mb-4" style="display: none;"></div>
-            <div class="glass-card" style="max-width: 600px; margin: 0 auto; padding: 2rem;">
-                <div class="flex justify-between items-center mb-4 pb-4" style="border-bottom: 1px solid var(--glass-border);">
-                    <div>
-                        <h3 style="margin:0;">Global Swarm Network</h3>
-                        <span class="text-xs text-muted">Master override for all agent listeners</span>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" id="toggle-global" onchange="toggleListener('global', this.checked)">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                
-                <div class="flex flex-col gap-4" id="listeners-list">
-                    <!-- Populated by JS -->
-                    <div class="flex justify-between items-center skeleton" style="height: 40px;"></div>
-                    <div class="flex justify-between items-center skeleton" style="height: 40px;"></div>
-                </div>
+        <div id="pane-listeners" class="tab-pane">
+            <div class="glass-card listeners-card" style="margin:0 auto;">
+                <div class="text-muted text-sm">Agent Listener Network</div>
+                <div class="listener-state off" id="listener-state-text">-</div>
+                <p class="listener-desc" id="listener-desc">Loading current state...</p>
+                <button class="glass-button glass-button-primary" id="btn-toggle-listeners"
+                    onclick="toggleListeners()" style="min-width:160px;">Toggle</button>
             </div>
         </div>
-    </main>
 
-    <!-- Mobile Tab Bar -->
-    <div class="glass-tab-bar mobile-nav justify-between items-center">
-        <a href="/v4/" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
-            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
-            <span class="text-xs">Home</span>
-        </a>
-        <a href="/v4/costs" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
-            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-            <span class="text-xs">Costs</span>
-        </a>
-        <a href="/v4/chat" class="nav-link">Chat</a>
-            <a href="/v4/inbox" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
-            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-            <span class="text-xs">Inbox</span>
-        </a>
-        <a href="/v4/swarm" class="tab-item text-accent flex flex-col items-center gap-1" style="text-decoration: none;">
-            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-            <span class="text-xs">Swarm</span>
-        </a>
-        <a href="/v4/translator" class="tab-item text-muted flex flex-col items-center gap-1" style="text-decoration: none;">
-            <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"></path></svg>
-            <span class="text-xs">Translator</span>
-        </a>
     </div>
 
     <script>
-        const API_BASE = '/api/swarm';
-        const EMOJI_MAP = { traders: '📈', coders: '💻', analysts: '📊', creative: '🎨' };
-        const PRIORITY_COLORS = { low: 'var(--accent-cyan)', normal: 'var(--accent-green)', high: 'var(--accent-yellow)', critical: 'var(--accent-red)' };
-        
-        // Tab switching logic
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-            document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
-            
-            event.target.classList.add('active');
-            document.getElementById(`tab-${tabId}`).classList.add('active');
+        var allTasks = [];
+        var listenersEnabled = false;
+
+        function switchTab(name, btn) {
+            document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+            document.querySelectorAll('.tab-pane').forEach(function(p){ p.classList.remove('active'); });
+            btn.classList.add('active');
+            document.getElementById('pane-' + name).classList.add('active');
         }
 
-        // Set System Health
-        function setHealth(status) {
-            const dot = document.getElementById('system-health-dot');
-            dot.className = `status-dot ${status}`;
+        function setStatus(cls) {
+            var dot = document.getElementById('status-dot');
+            dot.className = 'status-dot ' + cls;
         }
 
-        // Format Date
-        function formatTime(isoString) {
-            if (!isoString) return '';
-            const d = new Date(isoString);
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-
-        // Fetch Dashboard Data
-        async function fetchDashboard() {
+        function fmtTime(iso) {
+            if (!iso) return '-';
             try {
-                const [boardRes, artifactsRes, listenersRes] = await Promise.all([
-                    fetch(`${API_BASE}/task-board`).catch(() => null),
-                    fetch(`${API_BASE}/artifacts`).catch(() => null),
-                    fetch(`${API_BASE}/listeners`).catch(() => null)
-                ]);
+                var d = new Date(iso);
+                return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            } catch(e) { return iso; }
+        }
 
-                if (!boardRes || !boardRes.ok) throw new Error('Task board API unavailable');
-                
-                const boardData = await boardRes.json();
-                renderBoard(boardData);
-                
-                if (artifactsRes && artifactsRes.ok) {
-                    const artifacts = await artifactsRes.json();
-                    renderArtifacts(artifacts);
-                }
+        function escHtml(s) {
+            if (!s) return '';
+            return String(s)
+                .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
 
-                if (listenersRes && listenersRes.ok) {
-                    const listeners = await listenersRes.json();
-                    renderListeners(listeners);
-                }
+        /* ---- Board ---- */
+        async function fetchBoard() {
+            try {
+                var r = await fetch('/api/swarm/task-board');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
 
-                setHealth('ok');
-                document.getElementById('last-updated').innerText = `Updated: ${new Date().toLocaleTimeString()}`;
-                
-                // Clear errors
-                document.getElementById('board-error').style.display = 'none';
-                document.getElementById('artifacts-error').style.display = 'none';
-                document.getElementById('listeners-error').style.display = 'none';
+                var bs = data.summary.by_status;
+                var bt = data.summary.by_team;
 
-            } catch (err) {
-                console.error(err);
-                setHealth('error');
-                showError('board-error', 'Failed to connect to Swarm API. Retrying...');
-                showError('artifacts-error', 'Failed to load artifacts.');
-                showError('listeners-error', 'Failed to load listeners.');
+                document.getElementById('stat-pending').textContent     = bs.pending     !== undefined ? bs.pending     : 0;
+                document.getElementById('stat-in_progress').textContent = bs.in_progress !== undefined ? bs.in_progress : 0;
+                document.getElementById('stat-done').textContent        = bs.done        !== undefined ? bs.done        : 0;
+                document.getElementById('stat-failed').textContent      = bs.failed      !== undefined ? bs.failed      : 0;
+
+                document.getElementById('team-traders').textContent  = bt.traders  !== undefined ? bt.traders  : 0;
+                document.getElementById('team-coders').textContent   = bt.coders   !== undefined ? bt.coders   : 0;
+                document.getElementById('team-analysts').textContent = bt.analysts !== undefined ? bt.analysts : 0;
+                document.getElementById('team-creative').textContent = bt.creative !== undefined ? bt.creative : 0;
+
+                setStatus('ok');
+            } catch(e) {
+                console.error('board fetch failed', e);
+                setStatus('error');
             }
         }
 
-        function showError(elementId, msg) {
-            const el = document.getElementById(elementId);
-            el.innerText = msg;
-            el.style.display = 'block';
+        /* ---- Tasks ---- */
+        async function fetchTasks() {
+            try {
+                var r = await fetch('/api/swarm/tasks?limit=30');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
+                allTasks = data.tasks || [];
+                renderTasks(allTasks);
+            } catch(e) {
+                console.error('tasks fetch failed', e);
+                var tbody = document.getElementById('task-tbody');
+                tbody.innerHTML = '';
+                var tr = document.createElement('tr');
+                var td = document.createElement('td');
+                td.colSpan = 5;
+                td.className = 'empty-state text-error';
+                td.textContent = 'Failed to load tasks';
+                tr.appendChild(td);
+                tbody.appendChild(tr);
+            }
         }
 
-        // Render Task Board & Stats
-        function renderBoard(data) {
-            const statuses = ['pending', 'in_progress', 'done', 'failed'];
-            const stats = { pending: 0, in_progress: 0, done: 0, failed: 0 };
-
-            statuses.forEach(status => {
-                const col = document.getElementById(`col-${status}`);
-                col.innerHTML = ''; // Clear skeletons
-                
-                const tasks = data[status] || [];
-                stats[status] = tasks.length;
-                document.getElementById(`count-${status}`).innerText = tasks.length;
-
-                tasks.forEach(task => {
-                    const card = document.createElement('div');
-                    card.className = 'glass-card task-card flex flex-col gap-2';
-                    const emoji = EMOJI_MAP[task.team] || '🤖';
-                    const pColor = PRIORITY_COLORS[task.priority] || 'var(--text-muted)';
-                    
-                    card.innerHTML = `
-                        <div class="flex justify-between items-center">
-                            <span class="badge" style="background: rgba(255,255,255,0.1); font-size:1rem;">${emoji}</span>
-                            <span class="text-xs text-muted">${formatTime(task.created_at)}</span>
-                        </div>
-                        <div style="font-weight: 500; font-size: 0.95rem; line-height: 1.4;">${task.title}</div>
-                        <div class="flex mt-1">
-                            <span class="badge" style="color: ${pColor}; border-color: ${pColor};">${task.priority.toUpperCase()}</span>
-                        </div>
-                    `;
-                    col.appendChild(card);
-                });
-
-                if (tasks.length === 0) {
-                    col.innerHTML = `<div class="text-muted text-sm text-center mt-4">No tasks</div>`;
-                }
-            });
-
-            // Update Stats
-            statuses.forEach(status => {
-                document.getElementById(`stat-${status}`).innerText = stats[status];
-            });
-        }
-
-        // Render Artifacts
-        function renderArtifacts(artifacts) {
-            const list = document.getElementById('artifacts-list');
-            list.innerHTML = '';
-            
-            if (!artifacts || artifacts.length === 0) {
-                list.innerHTML = `<div class="text-muted text-sm p-4 text-center">No artifacts generated yet.</div>`;
+        function renderTasks(tasks) {
+            var tbody = document.getElementById('task-tbody');
+            tbody.innerHTML = '';
+            if (!tasks.length) {
+                var tr = document.createElement('tr');
+                var td = document.createElement('td');
+                td.colSpan = 5;
+                td.className = 'empty-state';
+                td.textContent = 'No tasks found';
+                tr.appendChild(td);
+                tbody.appendChild(tr);
                 return;
             }
+            tasks.forEach(function(t) {
+                var tr = document.createElement('tr');
 
-            artifacts.forEach(art => {
-                const item = document.createElement('div');
-                item.className = 'glass-card p-4 flex flex-col gap-2';
-                item.style.padding = '1rem';
-                const emoji = EMOJI_MAP[art.team] || '🤖';
+                var tdTeam = document.createElement('td');
+                tdTeam.textContent = t.team || '';
 
-                item.innerHTML = `
-                    <div class="flex justify-between items-center">
-                        <div class="flex items-center gap-2">
-                            <span style="font-size: 1.2rem;">${emoji}</span>
-                            <strong class="text-sm" style="text-transform: capitalize;">${art.team} Team</strong>
-                        </div>
-                        <span class="text-xs text-muted">${formatTime(art.created_at)}</span>
-                    </div>
-                    <div class="text-sm text-muted" style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; margin-top: 0.5rem; white-space: pre-wrap;">${art.content}</div>
-                `;
-                list.appendChild(item);
+                var tdTitle = document.createElement('td');
+                tdTitle.style.maxWidth = '320px';
+                tdTitle.style.wordBreak = 'break-word';
+                tdTitle.textContent = t.title || '';
+
+                var tdStatus = document.createElement('td');
+                var spStatus = document.createElement('span');
+                spStatus.className = 'pill pill-' + (t.status || '');
+                spStatus.textContent = (t.status || '').replace('_', ' ');
+                tdStatus.appendChild(spStatus);
+
+                var tdPriority = document.createElement('td');
+                var spPriority = document.createElement('span');
+                spPriority.className = 'pill pill-' + (t.priority || '');
+                spPriority.textContent = t.priority || '';
+                tdPriority.appendChild(spPriority);
+
+                var tdTime = document.createElement('td');
+                tdTime.className = 'text-xs text-muted';
+                tdTime.style.whiteSpace = 'nowrap';
+                tdTime.textContent = fmtTime(t.created_at);
+
+                tr.appendChild(tdTeam);
+                tr.appendChild(tdTitle);
+                tr.appendChild(tdStatus);
+                tr.appendChild(tdPriority);
+                tr.appendChild(tdTime);
+                tbody.appendChild(tr);
             });
         }
 
-        // Render Listeners
-        function renderListeners(data) {
-            document.getElementById('toggle-global').checked = data.global;
-            
-            const list = document.getElementById('listeners-list');
-            list.innerHTML = '';
-
-            const teams = Object.keys(EMOJI_MAP);
-            teams.forEach(team => {
-                const isActive = data.teams ? data.teams[team] : false;
-                const emoji = EMOJI_MAP[team];
-                
-                const row = document.createElement('div');
-                row.className = 'flex justify-between items-center p-2';
-                row.style.borderBottom = '1px solid var(--glass-border)';
-                
-                row.innerHTML = `
-                    <div class="flex items-center gap-3">
-                        <span style="font-size: 1.5rem;">${emoji}</span>
-                        <span style="text-transform: capitalize; font-weight: 500;">${team} Node</span>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" onchange="toggleListener('${team}', this.checked)" ${isActive ? 'checked' : ''} ${!data.global ? 'disabled' : ''}>
-                        <span class="slider" style="${!data.global ? 'opacity: 0.5; cursor: not-allowed;' : ''}"></span>
-                    </label>
-                `;
-                list.appendChild(row);
-            });
+        function filterTasks() {
+            var v = document.getElementById('team-filter').value;
+            renderTasks(v ? allTasks.filter(function(t){ return t.team === v; }) : allTasks);
         }
 
-        // Toggle Listener API
-        async function toggleListener(target, state) {
+        /* ---- Artifacts ---- */
+        async function fetchArtifacts() {
             try {
-                const res = await fetch(`${API_BASE}/listeners/toggle`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ target, state })
-                });
-                if (!res.ok) throw new Error('Toggle failed');
-                fetchDashboard(); // Refresh state immediately
-            } catch (err) {
-                console.error(err);
-                alert('Failed to toggle listener. Check API connection.');
-                fetchDashboard(); // Revert UI
+                var r = await fetch('/api/swarm/artifacts?limit=10');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
+                renderArtifacts(data.artifacts || []);
+            } catch(e) {
+                console.error('artifacts fetch failed', e);
+                var c = document.getElementById('artifacts-container');
+                c.innerHTML = '';
+                var d = document.createElement('div');
+                d.className = 'empty-state text-error';
+                d.textContent = 'Failed to load artifacts';
+                c.appendChild(d);
             }
         }
 
-        // Handle Task Creation
-        document.getElementById('form-create-task').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const btn = document.getElementById('btn-submit-task');
-            const msg = document.getElementById('create-msg');
-            
-            const payload = {
-                team: document.getElementById('task-team').value,
-                title: document.getElementById('task-title').value,
-                priority: document.getElementById('task-priority').value
-            };
+        function renderArtifacts(artifacts) {
+            var container = document.getElementById('artifacts-container');
+            container.innerHTML = '';
+            if (!artifacts.length) {
+                var d = document.createElement('div');
+                d.className = 'empty-state';
+                d.textContent = 'No artifacts yet';
+                container.appendChild(d);
+                return;
+            }
+            artifacts.forEach(function(a, i) {
+                var card = document.createElement('div');
+                card.className = 'glass-card artifact-card';
+                card.id = 'art-' + i;
+                card.addEventListener('click', function(){ this.classList.toggle('expanded'); });
 
-            btn.innerText = 'Deploying...';
-            btn.disabled = true;
-            msg.innerText = '';
-            msg.className = 'mb-4 text-sm';
+                var header = document.createElement('div');
+                header.className = 'artifact-header';
 
+                var topicDiv = document.createElement('div');
+                var topicEl = document.createElement('div');
+                topicEl.className = 'artifact-topic';
+                topicEl.textContent = a.topic || '';
+                var hint = document.createElement('div');
+                hint.className = 'artifact-expand-hint';
+                hint.textContent = 'Click to expand';
+                topicDiv.appendChild(topicEl);
+                topicDiv.appendChild(hint);
+
+                var meta = document.createElement('div');
+                meta.className = 'artifact-meta';
+                meta.textContent = (a.team || '') + ' \u00b7 ' + fmtTime(a.timestamp_iso) + (a.duration_sec ? ' \u00b7 ' + a.duration_sec + 's' : '');
+
+                header.appendChild(topicDiv);
+                header.appendChild(meta);
+
+                var preview = document.createElement('div');
+                preview.className = 'artifact-preview';
+                preview.textContent = a.result_preview || '';
+
+                card.appendChild(header);
+                card.appendChild(preview);
+                container.appendChild(card);
+            });
+        }
+
+        /* ---- Listeners ---- */
+        async function fetchListeners() {
             try {
-                const res = await fetch(`${API_BASE}/tasks/create`, {
+                var r = await fetch('/api/swarm/listeners');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
+                listenersEnabled = data.listeners_enabled;
+                renderListeners(listenersEnabled);
+            } catch(e) {
+                console.error('listeners fetch failed', e);
+                document.getElementById('listener-desc').textContent = 'Failed to load listener state';
+            }
+        }
+
+        function renderListeners(enabled) {
+            var stateEl = document.getElementById('listener-state-text');
+            var descEl  = document.getElementById('listener-desc');
+            var btnEl   = document.getElementById('btn-toggle-listeners');
+            if (enabled) {
+                stateEl.textContent = 'ON';
+                stateEl.className   = 'listener-state on';
+                descEl.textContent  = 'All swarm team agents are listening for tasks.';
+                btnEl.textContent   = 'Turn OFF';
+            } else {
+                stateEl.textContent = 'OFF';
+                stateEl.className   = 'listener-state off';
+                descEl.textContent  = 'Swarm agents are paused - no DM commands processed.';
+                btnEl.textContent   = 'Turn ON';
+            }
+        }
+
+        async function toggleListeners() {
+            var btn = document.getElementById('btn-toggle-listeners');
+            btn.disabled = true;
+            btn.textContent = 'Toggling...';
+            try {
+                var r = await fetch('/api/swarm/listeners/toggle', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: '{}'
                 });
-                
-                if (!res.ok) throw new Error('Failed to create task');
-                
-                msg.innerText = 'Task deployed successfully!';
-                msg.classList.add('text-success');
-                document.getElementById('form-create-task').reset();
-                fetchDashboard(); // Update board
-                
-                setTimeout(() => { switchTab('board'); msg.innerText = ''; }, 1500);
-            } catch (err) {
-                console.error(err);
-                msg.innerText = 'Error: Could not deploy task. API unreachable.';
-                msg.classList.add('text-error');
+                if (!r.ok) throw new Error('toggle failed');
+                await fetchListeners();
+            } catch(e) {
+                console.error('toggle failed', e);
+                btn.textContent = 'Error - retry';
             } finally {
-                btn.innerText = 'Deploy Task';
                 btn.disabled = false;
             }
-        });
+        }
 
-        // Init and Auto-Refresh
-        fetchDashboard();
-        setInterval(fetchDashboard, 15000);
+        /* ---- Create Task ---- */
+        async function submitCreateTask(e) {
+            e.preventDefault();
+            var btn = document.getElementById('c-submit');
+            var msg = document.getElementById('create-msg');
+            msg.className = 'form-message';
+            msg.textContent = '';
 
+            var team     = document.getElementById('c-team').value;
+            var title    = document.getElementById('c-title').value.trim();
+            var priority = document.getElementById('c-priority').value;
+            if (!title) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Deploying...';
+
+            try {
+                var r = await fetch('/api/swarm/tasks/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ team: team, title: title, priority: priority })
+                });
+                var data = await r.json();
+                if (!data.ok) throw new Error(data.error || 'API error');
+                msg.className = 'form-message success';
+                msg.textContent = 'Task created: ' + data.task_id;
+                document.getElementById('create-form').reset();
+                fetchAll();
+            } catch(err) {
+                msg.className = 'form-message error';
+                msg.textContent = 'Failed: ' + err.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Deploy Task';
+            }
+        }
+
+        /* ---- Init ---- */
+        async function fetchAll() {
+            await Promise.allSettled([
+                fetchBoard(),
+                fetchTasks(),
+                fetchArtifacts(),
+                fetchListeners()
+            ]);
+            document.getElementById('last-updated').textContent =
+                'Updated ' + new Date().toLocaleTimeString();
+        }
+
+        fetchAll();
+        setInterval(fetchAll, 15000);
     </script>
 </body>
 </html>
