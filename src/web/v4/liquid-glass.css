@@ -38,7 +38,6 @@
 
 body {
   background-color: var(--bg-primary);
-  /* Ultra-modern gradient mesh background */
   background-image: 
     radial-gradient(circle at 15% 50%, rgba(125, 211, 252, 0.15), transparent 35%),
     radial-gradient(circle at 85% 30%, rgba(167, 139, 250, 0.15), transparent 35%),
@@ -52,9 +51,6 @@ body {
   overflow-x: hidden;
 }
 
-/* =========================================
-   16. Typography
-   ========================================= */
 h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; }
 h2 { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.01em; }
 h3 { font-size: 1rem; font-weight: 500; }
@@ -63,9 +59,6 @@ h3 { font-size: 1rem; font-weight: 500; }
 .text-xs { font-size: 0.75rem; }
 .text-lg { font-size: 1.125rem; }
 
-/* =========================================
-   3. Glass Card
-   ========================================= */
 .glass-card {
   background: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur)) saturate(180%);
@@ -82,9 +75,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   box-shadow: var(--glass-specular), 0 12px 48px rgba(125, 211, 252, 0.08);
 }
 
-/* =========================================
-   4. Glass Nav (Desktop)
-   ========================================= */
 .glass-nav {
   position: sticky;
   top: 0;
@@ -131,7 +121,7 @@ h3 { font-size: 1rem; font-weight: 500; }
 }
 
 .nav-link.active {
-  color: var(--accent-cyan);
+  color: #ffffff;
 }
 
 .nav-link.active::after {
@@ -162,9 +152,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   background: var(--glass-bg-hover);
 }
 
-/* =========================================
-   5. Glass Tab Bar (Mobile)
-   ========================================= */
 .glass-tab-bar {
   position: fixed;
   bottom: 0;
@@ -178,7 +165,7 @@ h3 { font-size: 1rem; font-weight: 500; }
   border-top: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   z-index: 100;
-  display: none; /* Flex on mobile via media query */
+  display: none;
   justify-content: space-around;
   align-items: center;
 }
@@ -196,12 +183,9 @@ h3 { font-size: 1rem; font-weight: 500; }
 }
 
 .tab-item.active {
-  color: var(--accent-cyan);
+  color: #e0f2fe;
 }
 
-/* =========================================
-   6. Glass Buttons
-   ========================================= */
 .glass-button {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
@@ -243,9 +227,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 6px 20px rgba(125, 211, 252, 0.5);
 }
 
-/* =========================================
-   7. Glass Input
-   ========================================= */
 .glass-input {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
@@ -272,9 +253,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2), 0 0 0 3px rgba(125, 211, 252, 0.25);
 }
 
-/* =========================================
-   8. Chat Components
-   ========================================= */
 .chat-container {
   display: flex;
   flex-direction: column;
@@ -296,6 +274,7 @@ h3 { font-size: 1rem; font-weight: 500; }
   background: rgba(125, 211, 252, 0.15);
   border: 1px solid rgba(125, 211, 252, 0.3);
   color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   padding: 0.875rem 1.25rem;
   border-radius: 20px 20px 4px 20px;
   max-width: 80%;
@@ -333,9 +312,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   z-index: 10;
 }
 
-/* =========================================
-   9. Tool Call Components
-   ========================================= */
 .tool-pill {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
@@ -386,9 +362,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   display: none;
 }
 
-/* =========================================
-   10. Mode Toggle
-   ========================================= */
 .mode-toggle {
   display: inline-flex;
   background: rgba(0, 0, 0, 0.2);
@@ -419,9 +392,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   box-shadow: var(--glass-specular), 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
-/* =========================================
-   11. Status Indicators
-   ========================================= */
 .status-dot {
   width: 8px;
   height: 8px;
@@ -460,9 +430,30 @@ h3 { font-size: 1rem; font-weight: 500; }
   border: 2px solid var(--bg-surface);
 }
 
-/* =========================================
-   13. Animations
-   ========================================= */
+/* Semantic Pills */
+.pill-pending, .pill-in_progress, .pill-done, .pill-failed,
+.pill-low, .pill-medium, .pill-high, .pill-critical {
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.pill-pending { background: rgba(251, 191, 36, 0.15); color: #fef3c7; border: 1px solid rgba(251, 191, 36, 0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.pill-in_progress { background: rgba(167, 139, 250, 0.15); color: #ddd6fe; border: 1px solid rgba(167, 139, 250, 0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.pill-done { background: rgba(52, 211, 153, 0.15); color: #a7f3d0; border: 1px solid rgba(52, 211, 153, 0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.pill-failed { background: rgba(248, 113, 113, 0.15); color: #fecaca; border: 1px solid rgba(248, 113, 113, 0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+
+.pill-low { background: rgba(125, 211, 252, 0.1); color: #e0f2fe; border: 1px solid rgba(125, 211, 252, 0.2); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.pill-medium { background: rgba(52, 211, 153, 0.1); color: #a7f3d0; border: 1px solid rgba(52, 211, 153, 0.2); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.pill-high { background: rgba(251, 191, 36, 0.1); color: #fef3c7; border: 1px solid rgba(251, 191, 36, 0.2); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.pill-critical { background: rgba(248, 113, 113, 0.1); color: #fecaca; border: 1px solid rgba(248, 113, 113, 0.2); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
@@ -478,13 +469,12 @@ h3 { font-size: 1rem; font-weight: 500; }
   100% { background-position: 200% 0; }
 }
 
-/* =========================================
-   14. Utility Classes
-   ========================================= */
-.text-accent { color: var(--accent-cyan); }
-.text-muted { color: rgba(255, 255, 255, 0.5); }
-.text-success { color: var(--accent-green); }
-.text-error { color: var(--accent-red); }
+.text-accent { color: #bae6fd; }
+.text-muted { color: rgba(255, 255, 255, 0.72); }
+.text-success { color: #6ee7b7; }
+.text-error { color: #fca5a5; }
+.text-accent-purple { color: #c4b5fd; }
+.text-accent-yellow { color: #fde68a; }
 
 .mt-1 { margin-top: 0.25rem; } .mt-2 { margin-top: 0.5rem; } 
 .mt-3 { margin-top: 1rem; } .mt-4 { margin-top: 1.5rem; }
@@ -501,15 +491,12 @@ h3 { font-size: 1rem; font-weight: 500; }
 .justify-between { justify-content: space-between; }
 
 .skeleton {
-  background: linear-gradient(90deg, var(--glass-bg) 25%, var(--glass-bg-hover) 50%, var(--glass-bg) 75%);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.08) 25%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.08) 75%);
   background-size: 200% 100%;
   animation: glassShimmer 2s infinite linear;
   border-radius: 8px;
 }
 
-/* =========================================
-   15. Hub Page Specific
-   ========================================= */
 .hub-grid {
   display: grid;
   gap: 1.5rem;
@@ -541,9 +528,6 @@ h3 { font-size: 1rem; font-weight: 500; }
   border-color: rgba(255, 255, 255, 0.2);
 }
 
-/* =========================================
-   17. Scrollbar Styling
-   ========================================= */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -562,50 +546,20 @@ h3 { font-size: 1rem; font-weight: 500; }
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* =========================================
-   12. Responsive
-   ========================================= */
 @media (max-width: 768px) {
-  .glass-nav {
-    display: none;
-  }
-  
-  .glass-tab-bar {
-    display: flex;
-  }
-  
-  .hub-grid {
-    grid-template-columns: 1fr;
-    padding: 1rem;
-    padding-bottom: 90px; /* Space for tab bar */
-  }
-  
-  .chat-container {
-    height: calc(100vh - 72px - env(safe-area-inset-bottom));
-  }
-  
-  .chat-input-bar {
-    bottom: calc(72px + env(safe-area-inset-bottom));
-    padding: 1rem;
-  }
+  .glass-nav { display: none; }
+  .glass-tab-bar { display: flex; }
+  .hub-grid { grid-template-columns: 1fr; padding: 1rem; padding-bottom: 90px; }
+  .chat-container { height: calc(100vh - 72px - env(safe-area-inset-bottom)); }
+  .chat-input-bar { bottom: calc(72px + env(safe-area-inset-bottom)); padding: 1rem; }
 }
 
 @media (min-width: 769px) {
-  .glass-tab-bar {
-    display: none;
-  }
-  
-  .glass-nav {
-    display: flex;
-  }
-  
-  .hub-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  .glass-tab-bar { display: none; }
+  .glass-nav { display: flex; }
+  .hub-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (min-width: 1024px) {
-  .hub-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
+  .hub-grid { grid-template-columns: repeat(3, 1fr); }
 }

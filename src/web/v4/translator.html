@@ -142,7 +142,7 @@
         <div class="flex items-center justify-center text-muted" style="padding: 0 0.5rem; flex-shrink: 0;">
           <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
         </div>
-        <div id="lastTrans" class="skeleton text-accent" style="flex: 1; padding: 1rem; background: rgba(125,211,252,0.05); border: 1px solid rgba(125,211,252,0.15); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word;">&nbsp;</div>
+        <div id="lastTrans" class="skeleton" style="flex: 1; padding: 1rem; background: rgba(125,211,252,0.05); border: 1px solid rgba(125,211,252,0.15); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word; color: #ffffff;">&nbsp;</div>
       </div>
     </div>
 
@@ -329,7 +329,8 @@
         origDiv.textContent = item.original || '';
 
         const transDiv = document.createElement('div');
-        transDiv.className = 'text-accent text-sm';
+        transDiv.className = 'text-sm';
+        transDiv.style.color = '#ffffff';
         transDiv.textContent = item.translation || '';
 
         col.appendChild(meta);
