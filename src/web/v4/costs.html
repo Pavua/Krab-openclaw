@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Costs Dashboard - Krab AI</title>
+    <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <style>
+        body {
+            margin: 0;
+            background-color: var(--bg-primary);
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+            padding-bottom: 80px; /* For mobile tab bar */
+        }
+
+        /* Layout Utilities */
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .justify-center { justify-content: center; }
+        .gap-1 { gap: 0.25rem; } .gap-2 { gap: 0.5rem; } .gap-3 { gap: 1rem; } .gap-4 { gap: 1.5rem; }
+        .mt-1 { margin-top: 0.25rem; } .mt-2 { margin-top: 0.5rem; } .mt-4 { margin-top: 1rem; }
+        .mb-2 { margin-bottom: 0.5rem; } .mb-4 { margin-bottom: 1rem; }
+        .p-2 { padding: 0.5rem; } .p-4 { padding: 1rem; }
+        .text-center { text-align: center; }
+        .text-right { text-align: right; }
+        .w-full { width: 100%; }
+        .relative { position: relative; }
+        
+        /* Typography */
+        .text-sm { font-size: 0.875rem; }
+        .text-lg { font-size: 1.125rem; }
+        .text-xl { font-size: 1.25rem; font-weight: 600; }
+        .text-2xl { font-size: 1.5rem; font-weight: 700; }
+        .text-3xl { font-size: 1.875rem; font-weight: 700; }
+        .text-muted { color: rgba(255, 255, 255, 0.72); }
+        .text-accent { color: #bae6fd; }
+        .text-success { color: #6ee7b7; }
+        .text-error { color: #fca5a5; }
+        .text-warning { color: #fde68a; }
+        .text-purple { color: #c4b5fd; }
+
+        /* Grids */
+        .grid { display: grid; }
+        .grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+        .grid-3 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+        .grid-2x2 { grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+        .glass-input {
+            background: rgba(0,0,0,0.2);
+            border: 1px solid var(--glass-border);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-button);
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            display: inline-block;
+        }
+
+        /* Progress Bar */
+        .progress-track {
+            background: rgba(0,0,0,0.3);
+            border-radius: 999px;
+            height: 12px;
+            width: 100%;
+            overflow: hidden;
+            border: 1px solid var(--glass-border);
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            transition: width 0.5s ease, background-color 0.5s ease;
+            border-radius: 999px;
+        }
+
+        /* Table */
+        .table-responsive { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--glass-border); }
+        th { color: #bae6fd; font-weight: 600; }
+        tbody tr:hover { background: var(--glass-bg-hover); }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(5px);
+            z-index: 100; display: none; align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content { max-width: 400px; width: 90%; }
+
+        /* Skeleton */
+        @keyframes shimmer {
+            0% { opacity: 0.3; } 50% { opacity: 0.7; } 100% { opacity: 0.3; }
+        }
+        .skeleton {
+            animation: shimmer 1.5s infinite;
+            background: var(--glass-bg-hover);
+            border-radius: 4px;
+            color: transparent !important;
+            min-height: 1.2em;
+            display: inline-block;
+        }
+
+        /* Stat Cards & Trends */
+        .stat-card {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 140px;
+        }
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        .trend-indicator {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            display: none; /* shown via JS */
+            align-items: center;
+            gap: 4px;
+        }
+        .sparkline-wrapper {
+            height: 36px;
+            width: 100%;
+            max-width: 120px;
+            opacity: 0.8;
+            margin-top: 0.5rem;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+        }
+
+        /* Bar Charts */
+        .bar-row {
+            display: grid;
+            grid-template-columns: 100px 1fr 70px;
+            gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .bar-label {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .bar-container {
+            background: rgba(0,0,0,0.3);
+            border-radius: 999px;
+            height: 8px;
+            width: 100%;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            transition: width 0.5s ease;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Desktop Nav -->
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/v4/costs" class="nav-link active">Costs</a>
+            <a href="/v4/inbox" class="nav-link">Inbox</a>
+            <a href="/v4/swarm" class="nav-link">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/ops" class="nav-link">Ops</a>
+            <a href="/v4/research" class="nav-link">Research</a>
+            <a href="/v4/settings" class="nav-link">Settings</a>
+            <a href="/v4/commands" class="nav-link">Commands</a>
+            <div class="nav-bell-wrapper">
+                <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    </svg>
+                    <span class="bell-count hidden" id="nav-bell-count">0</span>
+                </a>
+                <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+            </div>
+        </div>
+        <div class="badge text-muted" id="nav-timer">↻ 10s</div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="container">
+        <div class="flex justify-between items-center mb-4">
+            <h1 class="text-3xl">Costs Dashboard</h1>
+            <span class="status-dot ok" id="api-status" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--accent-green);"></span>
+        </div>
+
+        <!-- Budget Section -->
+        <div class="glass-card mb-4">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-lg">Monthly Budget</h3>
+                <button class="glass-button" onclick="openModal()">Set Budget</button>
+            </div>
+            <div class="progress-track mt-4">
+                <div class="progress-fill" id="budget-fill" style="width: 0%;"></div>
+            </div>
+            <div class="flex justify-between mt-2 text-sm">
+                <div class="flex-col">
+                    <span class="text-muted">Spent</span>
+                    <span class="text-xl skeleton" id="budget-spent">$0.00</span>
+                </div>
+                <div class="flex-col text-right">
+                    <span class="text-muted">Remaining (<span id="budget-limit" class="skeleton">$0</span>)</span>
+                    <span class="text-xl skeleton" id="budget-remaining">$0.00</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="grid-3 mb-4">
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Cost</span>
+                    <span id="trend-cost" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-success skeleton my-2" id="total-cost" data-val="0">$0.00</div>
+                <div id="sparkline-cost" class="sparkline-wrapper"></div>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Calls</span>
+                    <span id="trend-calls" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-accent skeleton my-2" id="total-calls" data-val="0">0</div>
+                <div id="sparkline-calls" class="sparkline-wrapper"></div>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="flex justify-between items-center w-full mb-1">
+                    <span class="text-muted text-sm">Total Tokens</span>
+                    <span id="trend-tokens" class="trend-indicator"></span>
+                </div>
+                <div class="text-3xl text-purple skeleton my-2" id="total-tokens" data-val="0">0</div>
+                <div id="sparkline-tokens" class="sparkline-wrapper"></div>
+            </div>
+        </div>
+
+        <!-- FinOps & Efficiency Grid -->
+        <div class="grid-2 mb-4">
+            <div class="glass-card">
+                <h3 class="text-lg mb-4 text-accent">FinOps Breakdown</h3>
+                <div class="grid grid-2x2 gap-3">
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Tool Calls</div>
+                        <div class="text-xl skeleton" id="tool-calls">0</div>
+                    </div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Fallbacks</div>
+                        <div class="text-xl text-warning skeleton" id="fallbacks">0</div>
+                    </div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Context Tokens</div>
+                        <div class="text-xl skeleton" id="context-tokens">0</div>
+                    </div>
+                    <div class="glass-card p-4 text-center">
+                        <div class="text-muted text-sm mb-1">Avg Context</div>
+                        <div class="text-xl skeleton" id="avg-context">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-col gap-4">
+                <div class="glass-card flex-1">
+                    <h3 class="text-lg mb-2 text-accent">Cost Efficiency</h3>
+                    <div class="flex justify-between items-center mt-4 border-b pb-2" style="border-color: var(--glass-border);">
+                        <span class="text-muted">Cost per Request</span>
+                        <span class="text-xl skeleton" id="cost-per-req">$0.0000</span>
+                    </div>
+                    <div class="flex justify-between items-center mt-4">
+                        <span class="text-muted">Tokens per $1</span>
+                        <span class="text-xl skeleton" id="tokens-per-dollar">0</span>
+                    </div>
+                </div>
+                
+                <div class="glass-card flex-1">
+                    <h3 class="text-lg mb-4 text-accent">By Channel</h3>
+                    <div id="channels-container">
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
+                        <div class="bar-row"><div class="skeleton" style="height:1em; width:100%; grid-column: 1 / -1;"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- By Model Table -->
+        <div class="glass-card mb-4">
+            <h3 class="text-lg mb-4 text-accent">Usage by Model</h3>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th class="text-right">Cost (USD)</th>
+                            <th class="text-right">Calls</th>
+                            <th class="text-right">Tokens</th>
+                            <th class="text-right">Avg Cost/Call</th>
+                        </tr>
+                    </thead>
+                    <tbody id="model-tbody">
+                        <tr>
+                            <td class="skeleton">gpt-4-turbo</td>
+                            <td class="skeleton text-right">$0.00</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">$0.00</td>
+                        </tr>
+                        <tr>
+                            <td class="skeleton">claude-3-opus</td>
+                            <td class="skeleton text-right">$0.00</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">0</td>
+                            <td class="skeleton text-right">$0.00</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex justify-between items-center text-muted text-sm mt-4">
+            <div id="last-updated">Last updated: --:--:--</div>
+            <div id="footer-timer">Next refresh in 10s</div>
+        </div>
+    </main>
+
+    <!-- Mobile Tab Bar -->
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Costs
+        </a>
+        <a href="/v4/inbox" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            Inbox
+        </a>
+        <a href="/v4/swarm" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Swarm
+        </a>
+        <a href="/v4/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+            Trans
+        </a>
+    </div>
+
+    <!-- Set Budget Modal -->
+    <div class="modal-overlay" id="budget-modal">
+        <div class="glass-card modal-content">
+            <h3 class="text-xl mb-4 text-accent">Set Monthly Budget</h3>
+            <form id="budget-form" onsubmit="submitBudget(event)">
+                <div class="mb-4">
+                    <label class="text-muted text-sm block mb-2">Monthly Limit (USD)</label>
+                    <input type="number" step="0.01" min="0" id="budget-input" class="glass-input" required placeholder="e.g. 50.00">
+                </div>
+                <div class="flex justify-between gap-2 mt-4">
+                    <button type="button" class="glass-button flex-1" onclick="closeModal()">Cancel</button>
+                    <button type="submit" class="glass-button glass-button-primary flex-1">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let timer = 10;
+        let isFirstLoad = true;
+        let refreshInterval;
+
+        // Mock Data Fallbacks
+        const mockReport = {
+            total_cost_usd: 42.15,
+            total_calls: 1254,
+            input_tokens: 850000,
+            output_tokens: 210000,
+            total_tool_calls: 342,
+            total_fallbacks: 12,
+            total_context_tokens: 1060000,
+            avg_context_tokens: 845,
+            by_model: {
+                "gpt-4o": { cost_usd: 28.50, calls: 800, tokens: 600000 },
+                "claude-3-5-sonnet": { cost_usd: 12.20, calls: 350, tokens: 400000 },
+                "llama-3-70b": { cost_usd: 1.45, calls: 104, tokens: 60000 }
+            },
+            by_channel: {
+                "telegram": 850,
+                "translator": 200,
+                "swarm": 154,
+                "api": 50
+            },
+            history: [
+                { date: '2023-10-01', cost_usd: 5.5, calls: 150, tokens: 75000 },
+                { date: '2023-10-02', cost_usd: 6.2, calls: 180, tokens: 82000 },
+                { date: '2023-10-03', cost_usd: 4.8, calls: 140, tokens: 65000 },
+                { date: '2023-10-04', cost_usd: 7.1, calls: 210, tokens: 95000 },
+                { date: '2023-10-05', cost_usd: 6.5, calls: 190, tokens: 88000 },
+                { date: '2023-10-06', cost_usd: 8.4, calls: 240, tokens: 110000 },
+                { date: '2023-10-07', cost_usd: 7.9, calls: 220, tokens: 105000 }
+            ]
+        };
+
+        const mockBudget = {
+            monthly_limit_usd: 50.00,
+            spent_usd: 42.15,
+            remaining_usd: 7.85,
+            budget_ok: true,
+            used_pct: 84.3
+        };
+
+        // Formatters
+        const fmtUSD = (num) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(num || 0);
+        const fmtNum = (num) => new Intl.NumberFormat('en-US').format(num || 0);
+        const fmtUSD4 = (num) => '$' + (num || 0).toFixed(4);
+
+        // Animation for numbers
+        function animateValue(obj, start, end, duration, formatter) {
+            let startTimestamp = null;
+            const step = (timestamp) => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                const easeProgress = 1 - Math.pow(1 - progress, 4);
+                const currentVal = start + easeProgress * (end - start);
+                obj.textContent = formatter(currentVal);
+                if (progress < 1) {
+                    window.requestAnimationFrame(step);
+                } else {
+                    obj.textContent = formatter(end);
+                    obj.dataset.val = end;
+                }
+            };
+            window.requestAnimationFrame(step);
+        }
+
+        function updateElement(id, value, formatter = fmtNum, animate = false) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('skeleton');
+            if (animate && isFirstLoad) {
+                const start = parseFloat(el.dataset.val || 0);
+                animateValue(el, start, value, 1500, formatter);
+            } else {
+                el.textContent = formatter(value);
+                el.dataset.val = value;
+            }
+        }
+
+        // Sparkline & Trend Generators
+        function createSparkline(data, color) {
+            if (!data || data.length < 2) return null;
+            const max = Math.max(...data);
+            const min = Math.min(...data);
+            const range = max - min || 1;
+            const width = 120;
+            const height = 36;
+            
+            const points = data.map((val, i) => {
+                const x = (i / (data.length - 1)) * width;
+                const y = height - ((val - min) / range) * height;
+                return `${x},${y}`;
+            }).join(' ');
+
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('viewBox', `0 -2 ${width} ${height + 4}`);
+            svg.setAttribute('preserveAspectRatio', 'none');
+            svg.style.overflow = 'visible';
+
+            const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+            polyline.setAttribute('fill', 'none');
+            polyline.setAttribute('stroke', color);
+            polyline.setAttribute('stroke-width', '2');
+            polyline.setAttribute('stroke-linecap', 'round');
+            polyline.setAttribute('stroke-linejoin', 'round');
+            polyline.setAttribute('points', points);
+
+            svg.appendChild(polyline);
+            return svg;
+        }
+
+        function renderSparkline(containerId, data, color) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = ''; 
+            const svg = createSparkline(data, color);
+            if (svg) container.appendChild(svg);
+        }
+
+        function updateTrend(elementId, data, isCost = false) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (!data || data.length < 2) {
+                el.style.display = 'none';
+                return;
+            }
+            const current = data[data.length - 1];
+            const prev = data[data.length - 2];
+            if (prev === 0) {
+                el.style.display = 'none';
+                return;
+            }
+            const pct = ((current - prev) / prev) * 100;
+            const absPct = Math.abs(pct).toFixed(1);
+            
+            el.style.display = 'inline-flex';
+            
+            if (pct > 0) {
+                el.textContent = `↑ ${absPct}%`;
+                el.style.color = isCost ? '#fca5a5' : '#6ee7b7'; 
+            } else {
+                el.textContent = `↓ ${absPct}%`;
+                el.style.color = isCost ? '#6ee7b7' : '#fca5a5'; 
+            }
+        }
+
+        function renderBarChart(containerId, dataObj) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = ''; 
+            
+            if (!dataObj) return;
+            
+            const entries = Object.entries(dataObj)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 8);
+                
+            if (entries.length === 0) return;
+            
+            const maxVal = entries[0][1] || 1;
+            const palette = ['#bae6fd', '#c4b5fd', '#6ee7b7', '#fde68a', '#fca5a5'];
+            
+            entries.forEach(([key, val], index) => {
+                const color = palette[index % palette.length];
+                const pct = (val / maxVal) * 100;
+                
+                const row = document.createElement('div');
+                row.className = 'bar-row';
+                
+                const label = document.createElement('span');
+                label.className = 'bar-label text-sm text-muted';
+                label.textContent = key;
+                label.title = key;
+                
+                const barContainer = document.createElement('div');
+                barContainer.className = 'bar-container';
+                
+                const barFill = document.createElement('div');
+                barFill.className = 'bar-fill';
+                barFill.style.width = `${pct}%`;
+                barFill.style.backgroundColor = color;
+                
+                barContainer.appendChild(barFill);
+                
+                const value = document.createElement('span');
+                value.className = 'bar-value text-sm text-right';
+                value.textContent = Number.isInteger(val) ? fmtNum(val) : fmtUSD(val);
+                
+                row.appendChild(label);
+                row.appendChild(barContainer);
+                row.appendChild(value);
+                
+                container.appendChild(row);
+            });
+        }
+
+        // Render Functions
+        function renderBudget(budget) {
+            updateElement('budget-spent', budget.spent_usd, fmtUSD);
+            updateElement('budget-remaining', budget.remaining_usd, fmtUSD);
+            
+            const limitEl = document.getElementById('budget-limit');
+            if (limitEl) {
+                limitEl.classList.remove('skeleton');
+                limitEl.textContent = fmtUSD(budget.monthly_limit_usd);
+            }
+
+            const fill = document.getElementById('budget-fill');
+            if (fill) {
+                const pct = Math.min(Math.max(budget.used_pct, 0), 100);
+                fill.style.width = pct + '%';
+
+                if (pct < 50) {
+                    fill.style.backgroundColor = 'var(--accent-green)';
+                } else if (pct < 80) {
+                    fill.style.backgroundColor = 'var(--accent-yellow)';
+                } else {
+                    fill.style.backgroundColor = 'var(--accent-red)';
+                }
+            }
+        }
+
+        function renderReport(report) {
+            // Summary
+            updateElement('total-cost', report.total_cost_usd, fmtUSD, true);
+            updateElement('total-calls', report.total_calls, fmtNum, true);
+            const totalTokens = (report.input_tokens || 0) + (report.output_tokens || 0);
+            updateElement('total-tokens', totalTokens, fmtNum, true);
+
+            // Trends & Sparklines
+            if (report.history && report.history.length > 0) {
+                const costs = report.history.map(h => h.cost_usd || 0);
+                const calls = report.history.map(h => h.calls || 0);
+                const tokens = report.history.map(h => h.tokens || 0);
+
+                updateTrend('trend-cost', costs, true);
+                updateTrend('trend-calls', calls, false);
+                updateTrend('trend-tokens', tokens, false);
+
+                renderSparkline('sparkline-cost', costs, '#6ee7b7');
+                renderSparkline('sparkline-calls', calls, '#bae6fd');
+                renderSparkline('sparkline-tokens', tokens, '#c4b5fd');
+            }
+
+            // FinOps
+            updateElement('tool-calls', report.total_tool_calls);
+            updateElement('fallbacks', report.total_fallbacks);
+            updateElement('context-tokens', report.total_context_tokens);
+            updateElement('avg-context', report.avg_context_tokens);
+
+            // Efficiency
+            const costPerReq = report.total_calls > 0 ? report.total_cost_usd / report.total_calls : 0;
+            const tokensPerDollar = report.total_cost_usd > 0 ? totalTokens / report.total_cost_usd : 0;
+            updateElement('cost-per-req', costPerReq, fmtUSD4);
+            updateElement('tokens-per-dollar', Math.round(tokensPerDollar));
+
+            // Channels Bar Chart
+            renderBarChart('channels-container', report.by_channel);
+
+            // Table
+            const tbody = document.getElementById('model-tbody');
+            if (tbody) {
+                tbody.innerHTML = ''; 
+                const models = Object.entries(report.by_model || {}).map(([name, data]) => ({ name, ...data }));
+                models.sort((a, b) => b.cost_usd - a.cost_usd);
+
+                models.forEach(m => {
+                    const tr = document.createElement('tr');
+                    const avgCost = m.calls > 0 ? m.cost_usd / m.calls : 0;
+                    
+                    const tdName = document.createElement('td');
+                    tdName.style.color = '#fff';
+                    tdName.textContent = m.name;
+                    
+                    const tdCost = document.createElement('td');
+                    tdCost.className = 'text-right text-success';
+                    tdCost.textContent = fmtUSD(m.cost_usd);
+                    
+                    const tdCalls = document.createElement('td');
+                    tdCalls.className = 'text-right';
+                    tdCalls.textContent = fmtNum(m.calls);
+                    
+                    const tdTokens = document.createElement('td');
+                    tdTokens.className = 'text-right text-muted';
+                    tdTokens.textContent = fmtNum(m.tokens);
+                    
+                    const tdAvg = document.createElement('td');
+                    tdAvg.className = 'text-right text-muted';
+                    tdAvg.textContent = fmtUSD4(avgCost);
+                    
+                    tr.appendChild(tdName);
+                    tr.appendChild(tdCost);
+                    tr.appendChild(tdCalls);
+                    tr.appendChild(tdTokens);
+                    tr.appendChild(tdAvg);
+                    
+                    tbody.appendChild(tr);
+                });
+            }
+        }
+
+        // API Calls
+        async function fetchData() {
+            let reportData = mockReport;
+            let budgetData = mockBudget;
+            const statusDot = document.getElementById('api-status');
+
+            try {
+                const [resReport, resBudget] = await Promise.all([
+                    fetch('/api/costs/report').catch(() => null),
+                    fetch('/api/costs/budget').catch(() => null)
+                ]);
+
+                if (resReport && resReport.ok) {
+                    const json = await resReport.json();
+                    if (json.report) reportData = json.report;
+                }
+                if (resBudget && resBudget.ok) {
+                    const json = await resBudget.json();
+                    if (json.budget) budgetData = json.budget;
+                }
+                if (statusDot) statusDot.style.background = 'var(--accent-green)';
+            } catch (err) {
+                console.warn("API unavailable, using mock data", err);
+                if (statusDot) statusDot.style.background = 'var(--accent-red)';
+            }
+
+            renderReport(reportData);
+            renderBudget(budgetData);
+            
+            isFirstLoad = false;
+            
+            const now = new Date();
+            const lastUpdated = document.getElementById('last-updated');
+            if (lastUpdated) lastUpdated.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+        }
+
+        async function submitBudget(e) {
+            e.preventDefault();
+            const input = document.getElementById('budget-input').value;
+            const val = parseFloat(input);
+            if (isNaN(val)) return;
+
+            try {
+                await fetch('/api/costs/budget', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ monthly_limit_usd: val })
+                });
+                mockBudget.monthly_limit_usd = val;
+                mockBudget.remaining_usd = val - mockBudget.spent_usd;
+                mockBudget.used_pct = (mockBudget.spent_usd / val) * 100;
+            } catch (err) {
+                console.error(err);
+            }
+            
+            closeModal();
+            fetchData();
+        }
+
+        // Modal Controls
+        function openModal() {
+            const modal = document.getElementById('budget-modal');
+            if (modal) {
+                modal.classList.add('active');
+                document.getElementById('budget-input').focus();
+            }
+        }
+        function closeModal() {
+            const modal = document.getElementById('budget-modal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        // Timer Logic
+        function tickTimer() {
+            timer--;
+            if (timer <= 0) {
+                timer = 10;
+                fetchData();
+            }
+            const navTimer = document.getElementById('nav-timer');
+            const footerTimer = document.getElementById('footer-timer');
+            if (navTimer) navTimer.textContent = `↻ ${timer}s`;
+            if (footerTimer) footerTimer.textContent = `Next refresh in ${timer}s`;
+        }
+
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchData();
+            refreshInterval = setInterval(tickTimer, 1000);
+            
+            const modal = document.getElementById('budget-modal');
+            if (modal) {
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) closeModal();
+                });
+            }
+        });
+
+        async function updateBellCount() {
+          try {
+            const [inboxRes, opsRes] = await Promise.all([
+              fetch('/api/inbox/status').catch(() => null),
+              fetch('/api/ops/alerts').catch(() => null)
+            ]);
+
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+              total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+              total = latestItems.length + alerts.length;
+            }
+
+            const countEl = document.getElementById('nav-bell-count');
+            if (countEl) {
+              if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+              } else {
+                countEl.classList.add('hidden');
+              }
+            }
+
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
+
+            dropdown.innerHTML = '';
+
+            if (alerts.length === 0 && latestItems.length === 0) {
+              const emptyDiv = document.createElement('div');
+              emptyDiv.className = 'bell-dropdown-empty';
+              emptyDiv.textContent = 'Нет уведомлений';
+              dropdown.appendChild(emptyDiv);
+            } else {
+              if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = '/v4/ops';
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+
+              if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+                  const text = document.createTextNode(item.title || 'Notification');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+
+          } catch (err) {
+            console.error(err);
+          }
+        }
+
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
+
+        const navBell = document.querySelector('.nav-bell');
+        if (navBell) {
+          const bellWrapper = navBell.closest('.nav-bell-wrapper');
+          const bellDropdown = document.getElementById('bell-dropdown');
+  
+          if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+              e.preventDefault();
+              bellDropdown.classList.toggle('hidden');
+            });
+
+            document.addEventListener('click', (e) => {
+              if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+          }
+        }
+    </script>
+</body>
+</html>

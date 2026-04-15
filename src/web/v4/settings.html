@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Settings - Krab AI</title>
+<link rel="stylesheet" href="/v4/liquid-glass.css">
+<script src="/v4/theme-toggle.js" defer></script>
+<style>
+    .page-content { max-width:1100px; margin:0 auto; padding:2rem; padding-bottom:6rem; }
+    .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.75rem; gap:1rem; flex-wrap:wrap; }
+    .page-header h1 { font-size:1.5rem; font-weight:600; margin:0; }
+    .last-saved { font-size:.75rem; color:rgba(255,255,255,.4); }
+
+    .section { margin-bottom:1.5rem; }
+    .section-card { padding:1.5rem; }
+    .section-title { display:flex; align-items:center; gap:.65rem; font-size:1.05rem; font-weight:600; margin:0 0 1rem 0; }
+    .section-title .section-icon { width:22px; height:22px; opacity:.7; }
+    .section-desc { font-size:.82rem; color:rgba(255,255,255,.55); margin:-0.35rem 0 1.1rem 0; line-height:1.4; }
+
+    .setting-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.75rem 0; border-bottom:1px solid rgba(255,255,255,.05); }
+    .setting-row:last-child { border-bottom:none; }
+    .setting-info { flex:1; min-width:0; }
+    .setting-label { font-size:.92rem; font-weight:500; color:#fff; margin-bottom:.15rem; }
+    .setting-sub { font-size:.75rem; color:rgba(255,255,255,.45); line-height:1.4; }
+    .setting-control { flex-shrink:0; }
+
+    .switch { position:relative; display:inline-block; width:52px; height:30px; cursor:pointer; }
+    .switch input { opacity:0; width:0; height:0; position:absolute; }
+    .switch .slider { position:absolute; inset:0; background:rgba(255,255,255,.15); border-radius:30px; transition:background .2s; border:1px solid rgba(255,255,255,.08); }
+    .switch .slider::before { content:''; position:absolute; top:2px; left:2px; width:24px; height:24px; background:#fff; border-radius:50%; transition:transform .2s; box-shadow:0 2px 4px rgba(0,0,0,.2); }
+    .switch input:checked + .slider { background:rgba(52,211,153,.55); border-color:rgba(52,211,153,.7); }
+    .switch input:checked + .slider::before { transform:translateX(22px); }
+    .switch.disabled { opacity:.5; cursor:not-allowed; pointer-events:none; }
+
+    .setting-value { font-family:monospace; font-size:.85rem; color:rgba(255,255,255,.85); background:rgba(255,255,255,.04); padding:.2rem .5rem; border-radius:6px; border:1px solid rgba(255,255,255,.06); }
+
+    .budget-input { width:140px; padding:.5rem .75rem; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); border-radius:8px; color:#fff; font-family:inherit; font-size:.9rem; text-align:right; }
+    .budget-input:focus { outline:none; border-color:rgba(125,211,252,.5); background:rgba(255,255,255,.08); }
+
+    .budget-progress { margin-top:1rem; }
+    .budget-bar-bg { height:10px; background:rgba(255,255,255,.06); border-radius:999px; overflow:hidden; border:1px solid rgba(255,255,255,.05); }
+    .budget-bar { height:100%; background:linear-gradient(90deg, #7dd3fc, #34d399); border-radius:999px; transition:width .3s; }
+    .budget-bar.warn { background:linear-gradient(90deg, #fbbf24, #f87171); }
+    .budget-bar.danger { background:linear-gradient(90deg, #f87171, #dc2626); }
+    .budget-stats { display:flex; justify-content:space-between; font-size:.75rem; color:rgba(255,255,255,.5); margin-top:.4rem; }
+
+    .warning-banner { display:none; margin-top:.75rem; padding:.6rem .85rem; border-radius:8px; background:rgba(251,191,36,.12); border:1px solid rgba(251,191,36,.3); color:#fef3c7; font-size:.8rem; }
+    .warning-banner.danger { background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.35); color:#fecaca; }
+    .warning-banner.visible { display:block; }
+
+    .runtime-grid { display:grid; grid-template-columns:repeat(2, 1fr); gap:.65rem; }
+    .runtime-item { padding:.65rem .85rem; background:rgba(255,255,255,.03); border-radius:8px; border:1px solid rgba(255,255,255,.05); }
+    .runtime-label { font-size:.7rem; color:rgba(255,255,255,.45); text-transform:uppercase; letter-spacing:.05em; margin-bottom:.2rem; }
+    .runtime-value { font-family:monospace; font-size:.85rem; color:#fff; word-break:break-all; }
+
+    .link-row { display:flex; align-items:center; justify-content:space-between; padding:.85rem 1rem; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.06); border-radius:10px; text-decoration:none; color:#fff; font-size:.88rem; margin-top:.75rem; transition:all .15s; }
+    .link-row:hover { background:rgba(255,255,255,.06); border-color:rgba(125,211,252,.3); }
+    .link-arrow { color:rgba(125,211,252,.7); font-size:1.1rem; }
+
+    .glass-button { background:var(--glass-bg, rgba(255,255,255,.06)); border:1px solid var(--glass-border, rgba(255,255,255,.1)); color:#fff; padding:.55rem 1rem; border-radius:10px; cursor:pointer; font-family:inherit; font-size:.82rem; backdrop-filter:blur(20px); transition:all .15s; }
+    .glass-button:hover { background:rgba(255,255,255,.1); }
+    .glass-button:disabled { opacity:.5; cursor:not-allowed; }
+    .glass-button.primary { background:rgba(125,211,252,.2); border-color:rgba(125,211,252,.4); }
+    .glass-button.primary:hover { background:rgba(125,211,252,.3); }
+
+    .toast-container { position:fixed; top:80px; right:20px; z-index:9999; display:flex; flex-direction:column; gap:.5rem; pointer-events:none; }
+    .toast { padding:.7rem 1rem; border-radius:10px; backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.1); color:#fff; font-size:.85rem; min-width:220px; max-width:320px; pointer-events:auto; opacity:0; transform:translateX(20px); transition:all .25s ease; }
+    .toast.visible { opacity:1; transform:translateX(0); }
+    .toast.success { background:rgba(52,211,153,.2); border-color:rgba(52,211,153,.4); }
+    .toast.error { background:rgba(248,113,113,.2); border-color:rgba(248,113,113,.4); }
+    .toast.info { background:rgba(125,211,252,.2); border-color:rgba(125,211,252,.4); }
+
+    .pill { display:inline-block; padding:.18rem .55rem; border-radius:999px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+    .pill-ok { background:rgba(52,211,153,.15); color:#a7f3d0; border:1px solid rgba(52,211,153,.35); }
+    .pill-off { background:rgba(255,255,255,.05); color:rgba(255,255,255,.55); border:1px solid rgba(255,255,255,.1); }
+
+    @media (max-width:768px) {
+        .page-content { padding:1rem; padding-bottom:90px; }
+        .runtime-grid { grid-template-columns:1fr; }
+        .setting-row { flex-direction:column; align-items:flex-start; gap:.5rem; }
+        .setting-control { align-self:flex-end; }
+    }
+</style>
+</head>
+<body>
+
+<nav class="glass-nav">
+    <div class="nav-logo">Krab AI</div>
+    <div class="nav-links">
+        <a href="/v4/" class="nav-link">Hub</a>
+        <a href="/v4/chat" class="nav-link">Chat</a>
+        <a href="/v4/costs" class="nav-link">Costs</a>
+        <a href="/v4/inbox" class="nav-link">Inbox</a>
+        <a href="/v4/swarm" class="nav-link">Swarm</a>
+        <a href="/v4/translator" class="nav-link">Translator</a>
+        <a href="/v4/ops" class="nav-link">Ops</a>
+        <a href="/v4/research" class="nav-link">Research</a>
+        <a href="/v4/settings" class="nav-link active">Settings</a>
+        <a href="/v4/commands" class="nav-link">Commands</a>
+        <div class="nav-bell-wrapper">
+            <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                </svg>
+                <span class="bell-count hidden" id="nav-bell-count">0</span>
+            </a>
+            <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+        </div>
+    </div>
+</nav>
+
+<div class="page-content">
+    <div class="page-header">
+        <h1>Settings</h1>
+        <div class="last-saved" id="last-saved">Loaded —</div>
+    </div>
+
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                </svg>
+                Notifications &amp; Silence
+            </h2>
+            <p class="section-desc">Контроль уведомлений, звуков и режима тишины (silence mode).</p>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Silence Mode</div>
+                    <div class="setting-sub">Краб не отвечает в чатах, но продолжает собирать сообщения для catchup.</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch" id="switch-silence">
+                        <input type="checkbox" id="toggle-silence">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Notifications</div>
+                    <div class="setting-sub">Отправлять proactive push-уведомления об алертах, digest и задачах свёрма.</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch" id="switch-notify">
+                        <input type="checkbox" id="toggle-notify">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+                Voice
+            </h2>
+            <p class="section-desc">Озвучивание ответов через TTS. Настройки голоса, скорости и режима доставки.</p>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Voice Mode</div>
+                    <div class="setting-sub">Краб автоматически озвучивает ответы в Telegram голосовыми сообщениями.</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch" id="switch-voice">
+                        <input type="checkbox" id="toggle-voice">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Current Voice</div>
+                    <div class="setting-sub">Edge-TTS ID. Настраивается командой <code>!voice voice &lt;id&gt;</code>.</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="voice-id">—</span>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Speed</div>
+                    <div class="setting-sub">Скорость речи (множитель 0.75–2.5).</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="voice-speed">—</span>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Delivery</div>
+                    <div class="setting-sub">Как доставляется ответ: только голос или текст+голос.</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="voice-delivery">—</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="1" x2="12" y2="23"></line>
+                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                </svg>
+                Budget &amp; Costs
+            </h2>
+            <p class="section-desc">Месячный бюджет на провайдеры AI. Алерты включаются при превышении 80% и 100%.</p>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Monthly Budget (USD)</div>
+                    <div class="setting-sub">Максимальные расходы за календарный месяц (все cloud-провайдеры).</div>
+                </div>
+                <div class="setting-control" style="display:flex; gap:.5rem; align-items:center;">
+                    <input type="number" id="budget-input" class="budget-input" placeholder="0.00" min="0" step="0.01">
+                    <button class="glass-button primary" id="btn-save-budget" onclick="saveBudget()">Save</button>
+                </div>
+            </div>
+
+            <div class="budget-progress">
+                <div class="budget-bar-bg">
+                    <div class="budget-bar" id="budget-bar" style="width:0%;"></div>
+                </div>
+                <div class="budget-stats">
+                    <span id="budget-spent">$0.00 spent</span>
+                    <span id="budget-pct">0%</span>
+                    <span id="budget-limit">of $0.00</span>
+                </div>
+                <div class="warning-banner" id="budget-warning">
+                    You have used more than 80% of your monthly budget.
+                </div>
+            </div>
+
+            <a href="/v4/costs" class="link-row">
+                <span>Full cost breakdown by provider &amp; model</span>
+                <span class="link-arrow">→</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 8l6 6"></path>
+                    <path d="M4 14l6-6 2-3"></path>
+                    <path d="M2 5h12"></path>
+                    <path d="M7 2h1"></path>
+                    <path d="M22 22l-5-10-5 10"></path>
+                    <path d="M14 18h6"></path>
+                </svg>
+                Translator
+            </h2>
+            <p class="section-desc">Режим live-перевода голосовых и субтитров. Управление парой языков и стратегией.</p>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Status</div>
+                    <div class="setting-sub">Текущее состояние сессии live-перевода.</div>
+                </div>
+                <div class="setting-control">
+                    <span class="pill pill-off" id="translator-status">OFF</span>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Language Pair</div>
+                    <div class="setting-sub">Направление перевода (исходный → целевой).</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="translator-lang">—</span>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <div class="setting-info">
+                    <div class="setting-label">Mode</div>
+                    <div class="setting-sub">bilingual / auto_to_ru / auto_to_en.</div>
+                </div>
+                <div class="setting-control">
+                    <span class="setting-value" id="translator-mode">—</span>
+                </div>
+            </div>
+
+            <a href="/v4/translator" class="link-row">
+                <span>Go to Translator control panel</span>
+                <span class="link-arrow">→</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="glass-card section-card">
+            <h2 class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                    <line x1="9" y1="4" x2="9" y2="20"></line>
+                </svg>
+                Runtime Info
+            </h2>
+            <p class="section-desc">Readonly данные: активная модель, провайдер, uptime. Обновляется каждые 30 секунд.</p>
+
+            <div class="runtime-grid">
+                <div class="runtime-item">
+                    <div class="runtime-label">Primary Model</div>
+                    <div class="runtime-value" id="rt-model">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Provider</div>
+                    <div class="runtime-value" id="rt-provider">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Last Route Time</div>
+                    <div class="runtime-value" id="rt-route-time">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Krab Version</div>
+                    <div class="runtime-value" id="rt-version">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Uptime</div>
+                    <div class="runtime-value" id="rt-uptime">—</div>
+                </div>
+                <div class="runtime-item">
+                    <div class="runtime-label">Status</div>
+                    <div class="runtime-value" id="rt-status">—</div>
+                </div>
+            </div>
+
+            <a href="/v4/ops" class="link-row">
+                <span>Open Operations Center</span>
+                <span class="link-arrow">→</span>
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<div class="glass-tab-bar">
+    <a href="/v4/" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        <span>Hub</span>
+    </a>
+    <a href="/v4/chat" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        <span>Chat</span>
+    </a>
+    <a href="/v4/costs" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+        <span>Costs</span>
+    </a>
+    <a href="/v4/ops" class="tab-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Ops</span>
+    </a>
+    <a href="/v4/settings" class="tab-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Settings</span>
+    </a>
+</div>
+
+<script>
+const API_BASE = '';
+
+function clearChildren(el) {
+    while (el && el.firstChild) el.removeChild(el.firstChild);
+}
+
+async function fetchJSON(path, opts) {
+    try {
+        const r = await window.fetch(API_BASE + path, opts || {});
+        if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+        const ct = r.headers.get('content-type') || '';
+        if (ct.includes('application/json')) return await r.json();
+        return null;
+    } catch (e) {
+        console.warn('fetch fail', path, e);
+        return null;
+    }
+}
+
+async function postJSON(path, body) {
+    const r = await window.fetch(API_BASE + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? null : JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    const ct = r.headers.get('content-type') || '';
+    return ct.includes('application/json') ? await r.json() : null;
+}
+
+function safeText(val, fallback) {
+    if (val === null || val === undefined || val === '') return fallback || '—';
+    return String(val);
+}
+
+function formatTime(ts) {
+    if (!ts) return 'N/A';
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? String(ts) : d.toLocaleTimeString();
+}
+
+function formatUptime(seconds) {
+    if (seconds === null || seconds === undefined) return '—';
+    const s = Number(seconds);
+    if (!isFinite(s) || s < 0) return '—';
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const parts = [];
+    if (d) parts.push(d + 'd');
+    if (h || d) parts.push(h + 'h');
+    parts.push(m + 'm');
+    return parts.join(' ');
+}
+
+function showToast(msg, type) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const t = document.createElement('div');
+    t.className = 'toast ' + (type || 'info');
+    t.textContent = msg;
+    container.appendChild(t);
+    requestAnimationFrame(() => t.classList.add('visible'));
+    setTimeout(() => {
+        t.classList.remove('visible');
+        setTimeout(() => t.remove(), 300);
+    }, 2800);
+}
+
+function markSaved(label) {
+    const el = document.getElementById('last-saved');
+    if (el) el.textContent = (label || 'Updated') + ' ' + new Date().toLocaleTimeString();
+}
+
+async function loadSilence() {
+    const data = await fetchJSON('/api/silence/status');
+    if (!data) return;
+    const active = !!(data.active || data.enabled || data.silent || (data.silence && data.silence.active));
+    const cb = document.getElementById('toggle-silence');
+    if (cb) cb.checked = active;
+}
+
+async function toggleSilence(e) {
+    const cb = e.target;
+    const desired = cb.checked;
+    const wrapper = document.getElementById('switch-silence');
+    wrapper.classList.add('disabled');
+    try {
+        await postJSON('/api/silence/toggle', { active: desired, enabled: desired });
+        showToast('Silence mode ' + (desired ? 'enabled' : 'disabled'), 'success');
+        markSaved('Saved');
+    } catch (err) {
+        cb.checked = !desired;
+        showToast('Failed to toggle silence: ' + err.message, 'error');
+    } finally {
+        wrapper.classList.remove('disabled');
+    }
+}
+
+async function loadNotify() {
+    const data = await fetchJSON('/api/notify/status');
+    if (!data) return;
+    const active = !!(data.enabled || data.active || (data.notify && data.notify.enabled));
+    const cb = document.getElementById('toggle-notify');
+    if (cb) cb.checked = active;
+}
+
+async function toggleNotify(e) {
+    const cb = e.target;
+    const desired = cb.checked;
+    const wrapper = document.getElementById('switch-notify');
+    wrapper.classList.add('disabled');
+    try {
+        await postJSON('/api/notify/toggle', { enabled: desired, active: desired });
+        showToast('Notifications ' + (desired ? 'enabled' : 'disabled'), 'success');
+        markSaved('Saved');
+    } catch (err) {
+        cb.checked = !desired;
+        showToast('Failed to toggle notifications: ' + err.message, 'error');
+    } finally {
+        wrapper.classList.remove('disabled');
+    }
+}
+
+async function loadVoice() {
+    const prof = await fetchJSON('/api/voice/profile');
+    if (!prof) return;
+
+    const data = prof.profile || prof.voice || prof;
+    const enabled = !!(data.enabled || data.active || data.voice_enabled || prof.enabled);
+    const cb = document.getElementById('toggle-voice');
+    if (cb) cb.checked = enabled;
+
+    document.getElementById('voice-id').textContent = safeText(data.voice || data.voice_id || data.name);
+    const speed = data.speed !== undefined ? data.speed : data.rate;
+    document.getElementById('voice-speed').textContent = speed !== undefined && speed !== null ? String(speed) + 'x' : '—';
+    document.getElementById('voice-delivery').textContent = safeText(data.delivery || data.delivery_mode);
+}
+
+async function toggleVoice(e) {
+    const cb = e.target;
+    const desired = cb.checked;
+    const wrapper = document.getElementById('switch-voice');
+    wrapper.classList.add('disabled');
+    try {
+        await postJSON('/api/voice/toggle', { enabled: desired, active: desired });
+        showToast('Voice mode ' + (desired ? 'enabled' : 'disabled'), 'success');
+        markSaved('Saved');
+        setTimeout(loadVoice, 250);
+    } catch (err) {
+        cb.checked = !desired;
+        showToast('Failed to toggle voice: ' + err.message, 'error');
+    } finally {
+        wrapper.classList.remove('disabled');
+    }
+}
+
+async function loadBudget() {
+    const data = await fetchJSON('/api/costs/budget');
+    if (!data) return;
+
+    const limit = Number(data.limit || data.budget || data.monthly_budget || data.amount || 0);
+    const spent = Number(data.spent || data.used || data.current || 0);
+
+    const input = document.getElementById('budget-input');
+    if (input && document.activeElement !== input) {
+        input.value = limit > 0 ? limit.toFixed(2) : '';
+    }
+
+    document.getElementById('budget-spent').textContent = '$' + spent.toFixed(2) + ' spent';
+    document.getElementById('budget-limit').textContent = 'of $' + limit.toFixed(2);
+
+    const pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
+    document.getElementById('budget-pct').textContent = Math.round(pct) + '%';
+
+    const bar = document.getElementById('budget-bar');
+    bar.style.width = pct + '%';
+    bar.classList.remove('warn', 'danger');
+    const warning = document.getElementById('budget-warning');
+    warning.classList.remove('visible', 'danger');
+    if (pct >= 100) {
+        bar.classList.add('danger');
+        warning.classList.add('visible', 'danger');
+        warning.textContent = 'You have exceeded your monthly budget. Cloud AI requests may be throttled.';
+    } else if (pct >= 80) {
+        bar.classList.add('warn');
+        warning.classList.add('visible');
+        warning.textContent = 'You have used more than 80% of your monthly budget.';
+    }
+}
+
+async function saveBudget() {
+    const btn = document.getElementById('btn-save-budget');
+    const input = document.getElementById('budget-input');
+    const val = parseFloat(input.value);
+    if (!isFinite(val) || val < 0) {
+        showToast('Invalid budget value', 'error');
+        return;
+    }
+    try {
+        btn.disabled = true;
+        btn.textContent = '...';
+        await postJSON('/api/costs/budget', { limit: val, budget: val, monthly_budget: val, amount: val });
+        showToast('Budget saved: $' + val.toFixed(2), 'success');
+        markSaved('Saved');
+        await loadBudget();
+    } catch (err) {
+        showToast('Failed to save budget: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+    }
+}
+
+async function loadTranslator() {
+    const data = await fetchJSON('/api/translator/bootstrap') || await fetchJSON('/api/translator/readiness');
+    if (!data) return;
+
+    const state = data.state || data.session || data.status || data;
+    const active = !!(state.active || state.enabled || state.on || (state.status && state.status !== 'off' && state.status !== 'idle'));
+
+    const statusEl = document.getElementById('translator-status');
+    if (active) {
+        statusEl.textContent = 'ON';
+        statusEl.className = 'pill pill-ok';
+    } else {
+        statusEl.textContent = 'OFF';
+        statusEl.className = 'pill pill-off';
+    }
+
+    const langFrom = state.src_lang || state.from || state.source || (state.pair && state.pair.from);
+    const langTo = state.dst_lang || state.to || state.target || (state.pair && state.pair.to);
+    if (langFrom && langTo) {
+        document.getElementById('translator-lang').textContent = langFrom + ' → ' + langTo;
+    } else if (state.lang || state.language_pair) {
+        document.getElementById('translator-lang').textContent = safeText(state.lang || state.language_pair);
+    } else {
+        document.getElementById('translator-lang').textContent = '—';
+    }
+
+    document.getElementById('translator-mode').textContent = safeText(state.mode);
+}
+
+async function loadRuntime() {
+    const [health, ver, up] = await Promise.all([
+        fetchJSON('/api/health/lite'),
+        fetchJSON('/api/version'),
+        fetchJSON('/api/uptime')
+    ]);
+
+    if (health) {
+        document.getElementById('rt-model').textContent = safeText(health.model);
+        document.getElementById('rt-provider').textContent = safeText(health.provider);
+        document.getElementById('rt-route-time').textContent = formatTime(health.last_runtime_route || health.timestamp);
+        document.getElementById('rt-status').textContent = safeText(health.status);
+    }
+
+    if (ver) {
+        document.getElementById('rt-version').textContent = safeText(ver.version || ver.krab_version || ver.build);
+    }
+
+    if (up) {
+        const secs = up.uptime_seconds !== undefined ? up.uptime_seconds : (up.uptime !== undefined ? up.uptime : up.seconds);
+        document.getElementById('rt-uptime').textContent = formatUptime(secs);
+    }
+}
+
+async function refreshAll() {
+    await Promise.allSettled([
+        loadSilence(),
+        loadNotify(),
+        loadVoice(),
+        loadBudget(),
+        loadTranslator(),
+        loadRuntime()
+    ]);
+    const el = document.getElementById('last-saved');
+    if (el) el.textContent = 'Loaded ' + new Date().toLocaleTimeString();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('toggle-silence').addEventListener('change', toggleSilence);
+    document.getElementById('toggle-notify').addEventListener('change', toggleNotify);
+    document.getElementById('toggle-voice').addEventListener('change', toggleVoice);
+
+    const input = document.getElementById('budget-input');
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveBudget();
+    });
+
+    refreshAll();
+    setInterval(refreshAll, 30000);
+});
+
+async function updateBellCount() {
+    try {
+        const [inboxRes, opsRes] = await Promise.all([
+            fetch('/api/inbox/status').catch(() => null),
+            fetch('/api/ops/alerts').catch(() => null)
+        ]);
+
+        const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+        const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+        const summary = inboxData.summary || {};
+        const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+        const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+        let total = 0;
+        if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+            total = (summary.open_items || 0) + (summary.attention_items || 0);
+        } else {
+            total = latestItems.length + alerts.length;
+        }
+
+        const countEl = document.getElementById('nav-bell-count');
+        if (countEl) {
+            if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+            } else {
+                countEl.classList.add('hidden');
+            }
+        }
+
+        const dropdown = document.getElementById('bell-dropdown');
+        if (!dropdown) return;
+
+        clearChildren(dropdown);
+
+        if (alerts.length === 0 && latestItems.length === 0) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'bell-dropdown-empty';
+            emptyDiv.textContent = 'Нет уведомлений';
+            dropdown.appendChild(emptyDiv);
+        } else {
+            if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                    const a = document.createElement('a');
+                    a.className = 'bell-dropdown-item';
+                    a.href = '/v4/ops';
+
+                    const dot = document.createElement('span');
+                    dot.className = 'bell-dropdown-severity ' + (alert.severity || 'error');
+
+                    const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+
+                    a.appendChild(dot);
+                    a.appendChild(text);
+                    dropdown.appendChild(a);
+                });
+            }
+
+            if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                    const a = document.createElement('a');
+                    a.className = 'bell-dropdown-item';
+                    a.href = '/v4/inbox#' + (item.id || item.item_id || '');
+
+                    const dot = document.createElement('span');
+                    dot.className = 'bell-dropdown-severity ' + (item.severity || 'info');
+
+                    const text = document.createTextNode(item.title || 'Notification');
+
+                    a.appendChild(dot);
+                    a.appendChild(text);
+                    dropdown.appendChild(a);
+                });
+            }
+        }
+
+        const footer = document.createElement('a');
+        footer.className = 'bell-dropdown-footer';
+        footer.href = '/v4/inbox';
+        footer.textContent = 'Открыть все →';
+        footer.style.display = 'block';
+        footer.style.textDecoration = 'none';
+        dropdown.appendChild(footer);
+
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+setInterval(updateBellCount, 30000);
+updateBellCount();
+
+const navBell = document.querySelector('.nav-bell');
+if (navBell) {
+    const bellWrapper = navBell.closest('.nav-bell-wrapper');
+    const bellDropdown = document.getElementById('bell-dropdown');
+
+    if (bellWrapper && bellDropdown) {
+        navBell.addEventListener('click', (e) => {
+            e.preventDefault();
+            bellDropdown.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+            }
+        });
+    }
+}
+</script>
+</body>
+</html>

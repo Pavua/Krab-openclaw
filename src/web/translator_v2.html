@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Translator Dashboard | Krab AI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a1a;
+            --card-bg: rgba(255, 255, 255, 0.02);
+            --card-border: rgba(255, 255, 255, 0.06);
+            --text-main: #ededed;
+            --text-muted: #a1a1aa;
+            --cyan: #00f0ff;
+            --purple: #8a2be2;
+            --green: #10b981;
+            --yellow: #fbbf24;
+            --red: #ef4444;
+            --font: 'Outfit', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            font-family: var(--font);
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Ambient Background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%; left: -50%;
+            width: 200%; height: 200%;
+            background: 
+                radial-gradient(circle at 20% 30%, rgba(0, 240, 255, 0.03), transparent 30%),
+                radial-gradient(circle at 80% 70%, rgba(138, 43, 226, 0.03), transparent 30%);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        /* Navbar */
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 26, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--card-border);
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+            z-index: 100;
+        }
+
+        .logo {
+            font-weight: 600;
+            font-size: 1.2rem;
+            background: linear-gradient(90deg, var(--cyan), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 1px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 400;
+            transition: all 0.2s;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+        }
+
+        .nav-links a:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-links a.active {
+            color: var(--cyan);
+            background: rgba(0, 240, 255, 0.1);
+        }
+
+        /* Main Container */
+        main {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        /* Header Section */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .status-container {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 500;
+        }
+
+        .badge {
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid transparent;
+        }
+
+        .badge::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .badge.active { background: rgba(16, 185, 129, 0.1); color: var(--green); border-color: rgba(16, 185, 129, 0.2); }
+        .badge.active::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
+        
+        .badge.paused { background: rgba(251, 191, 36, 0.1); color: var(--yellow); border-color: rgba(251, 191, 36, 0.2); }
+        .badge.paused::before { background: var(--yellow); }
+        
+        .badge.idle { background: rgba(161, 161, 170, 0.1); color: var(--text-muted); border-color: rgba(161, 161, 170, 0.2); }
+        .badge.idle::before { background: var(--text-muted); }
+
+        .lang-pair {
+            font-size: 1.1rem;
+            color: var(--purple);
+            background: rgba(138, 43, 226, 0.1);
+            padding: 0.3rem 0.8rem;
+            border-radius: 8px;
+            border: 1px solid rgba(138, 43, 226, 0.2);
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 0.8rem;
+        }
+
+        button {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            color: var(--text-main);
+            font-family: var(--font);
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            backdrop-filter: blur(10px);
+        }
+
+        button:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-start { border-color: rgba(0, 240, 255, 0.3); color: var(--cyan); }
+        .btn-start:hover:not(:disabled) { background: rgba(0, 240, 255, 0.1); box-shadow: 0 0 15px rgba(0, 240, 255, 0.1); }
+        
+        .btn-stop { border-color: rgba(239, 68, 68, 0.3); color: var(--red); }
+        .btn-stop:hover:not(:disabled) { background: rgba(239, 68, 68, 0.1); }
+
+        /* Grid Layout */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .card-header {
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--card-border);
+            padding-bottom: 0.8rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .kv-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .kv-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.95rem;
+        }
+
+        .kv-key { color: var(--text-muted); }
+        .kv-val { font-weight: 500; }
+
+        /* Toggles */
+        .toggle-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--red);
+            box-shadow: 0 0 5px rgba(239, 68, 68, 0.5);
+        }
+        .toggle-indicator.on {
+            background: var(--cyan);
+            box-shadow: 0 0 5px rgba(0, 240, 255, 0.5);
+        }
+
+        /* Last Translation Section */
+        .translation-box {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .text-panel {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 1.2rem;
+            min-height: 100px;
+            font-size: 1.05rem;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+
+        .text-panel.placeholder {
+            color: var(--text-muted);
+            font-style: italic;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dir-icon {
+            color: var(--purple);
+            font-size: 1.5rem;
+        }
+
+        /* History */
+        .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-height: 300px;
+            overflow-y: auto;
+            padding-right: 0.5rem;
+        }
+
+        .history-list::-webkit-scrollbar { width: 6px; }
+        .history-list::-webkit-scrollbar-track { background: transparent; }
+        .history-list::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 3px; }
+
+        .history-item {
+            background: rgba(255, 255, 255, 0.01);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            transition: background 0.2s;
+        }
+
+        .history-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .hist-orig { color: var(--text-muted); font-size: 0.9rem; }
+        .hist-trans { color: var(--text-main); font-size: 1rem; font-weight: 400; }
+        .hist-meta { font-size: 0.75rem; color: var(--purple); text-align: right; }
+
+        @media (max-width: 768px) {
+            .translation-box { grid-template-columns: 1fr; gap: 0.5rem; }
+            .dir-icon { transform: rotate(90deg); text-align: center; }
+            .nav-links { display: none; } /* Simplified for mobile */
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="logo">KRAB AI</div>
+        <div class="nav-links">
+            <a href="/">/</a>
+            <a href="/costs">/costs</a>
+            <a href="/inbox">/inbox</a>
+            <a href="/swarm">/swarm</a>
+            <a href="/translator" class="active">/translator</a>
+        </div>
+    </nav>
+
+    <main>
+        <div class="page-header">
+            <div class="status-container">
+                <h1>Translator</h1>
+                <div id="status-badge" class="badge idle">Idle</div>
+                <div id="lang-pair" class="lang-pair">-- → --</div>
+            </div>
+            <div class="controls">
+                <button id="btn-start" class="btn-start" onclick="sessionAction('start')">Start</button>
+                <button id="btn-pause" onclick="sessionAction('pause')">Pause</button>
+                <button id="btn-resume" class="btn-start" onclick="sessionAction('resume')" style="display:none;">Resume</button>
+                <button id="btn-stop" class="btn-stop" onclick="sessionAction('stop')">Stop</button>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <div class="card-header">Profile Configuration</div>
+                <div class="kv-list">
+                    <div class="kv-item">
+                        <span class="kv-key">Mode</span>
+                        <span class="kv-val" id="prof-mode">--</span>
+                    </div>
+                    <div class="kv-item">
+                        <span class="kv-key">Voice Strategy</span>
+                        <span class="kv-val" id="prof-voice">--</span>
+                    </div>
+                    <div class="kv-item">
+                        <span class="kv-key">Ordinary Calls</span>
+                        <span class="kv-val"><span id="prof-ord" class="toggle-indicator"></span></span>
+                    </div>
+                    <div class="kv-item">
+                        <span class="kv-key">Internet Calls</span>
+                        <span class="kv-val"><span id="prof-int" class="toggle-indicator"></span></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    Session Stats
+                    <span id="sess-muted" style="font-size:0.8rem;color:var(--yellow);display:none;">(Muted)</span>
+                </div>
+                <div class="kv-list">
+                    <div class="kv-item">
+                        <span class="kv-key">Active Chats</span>
+                        <span class="kv-val" id="sess-chats">0</span>
+                    </div>
+                    <div class="kv-item">
+                        <span class="kv-key">Total Translations</span>
+                        <span class="kv-val" id="sess-total">0</span>
+                    </div>
+                    <div class="kv-item">
+                        <span class="kv-key">Avg Latency</span>
+                        <span class="kv-val" id="sess-latency">0 ms</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Last Translation</div>
+            <div class="translation-box">
+                <div class="text-panel" id="last-orig">Waiting for input...</div>
+                <div class="dir-icon">→</div>
+                <div class="text-panel" style="color: var(--cyan);" id="last-trans">Waiting for translation...</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">History (Last 10)</div>
+            <div class="history-list" id="history-container">
+                <!-- History items injected here -->
+                <div style="color:var(--text-muted); padding: 1rem; text-align:center;">No history available.</div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API_BASE = 'http://localhost:8080/api/translator';
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch(`${API_BASE}/status`);
+                if (!res.ok) throw new Error('Network response was not ok');
+                const data = await res.json();
+                
+                if (data.ok) {
+                    updateDashboard(data);
+                }
+            } catch (error) {
+                console.error('Error fetching status:', error);
+                document.getElementById('status-badge').className = 'badge idle';
+                document.getElementById('status-badge').innerText = 'Offline';
+            }
+        }
+
+        async function fetchHistory() {
+            try {
+                const res = await fetch(`${API_BASE}/history?n=10`);
+                if (!res.ok) throw new Error('Network response was not ok');
+                const data = await res.json();
+                
+                const container = document.getElementById('history-container');
+                container.innerHTML = '';
+
+                if (data && data.length > 0) {
+                    data.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = 'history-item';
+                        div.innerHTML = `
+                            <div class="hist-orig">${escapeHTML(item.original || '')}</div>
+                            <div class="hist-trans">${escapeHTML(item.translation || '')}</div>
+                        `;
+                        container.appendChild(div);
+                    });
+                } else {
+                    container.innerHTML = '<div style="color:var(--text-muted); padding: 1rem; text-align:center;">No history available.</div>';
+                }
+            } catch (error) {
+                console.error('Error fetching history:', error);
+            }
+        }
+
+        function updateDashboard(data) {
+            const { profile, session } = data;
+
+            // Profile
+            if (profile) {
+                document.getElementById('lang-pair').innerText = profile.language_pair || '-- → --';
+                document.getElementById('prof-mode').innerText = profile.translation_mode || '--';
+                document.getElementById('prof-voice').innerText = profile.voice_strategy || '--';
+                
+                document.getElementById('prof-ord').className = `toggle-indicator ${profile.ordinary_calls_enabled ? 'on' : ''}`;
+                document.getElementById('prof-int').className = `toggle-indicator ${profile.internet_calls_enabled ? 'on' : ''}`;
+            }
+
+            // Session
+            if (session) {
+                const status = (session.session_status || 'idle').toLowerCase();
+                const badge = document.getElementById('status-badge');
+                badge.className = `badge ${status}`;
+                badge.innerText = status;
+
+                document.getElementById('sess-muted').style.display = session.translation_muted ? 'inline' : 'none';
+                document.getElementById('sess-chats').innerText = session.active_chats || 0;
+                
+                const stats = session.stats || {};
+                const total = stats.total_translations || 0;
+                const latency = stats.total_latency_ms || 0;
+                const avgLatency = total > 0 ? Math.round(latency / total) : 0;
+                
+                document.getElementById('sess-total').innerText = total;
+                document.getElementById('sess-latency').innerText = `${avgLatency} ms`;
+
+                // Last Translation
+                const origEl = document.getElementById('last-orig');
+                const transEl = document.getElementById('last-trans');
+                
+                if (session.last_translated_original) {
+                    origEl.innerText = session.last_translated_original;
+                    origEl.classList.remove('placeholder');
+                }
+                
+                if (session.last_translated_translation) {
+                    transEl.innerText = session.last_translated_translation;
+                    transEl.classList.remove('placeholder');
+                }
+
+                // Button states
+                const btnStart = document.getElementById('btn-start');
+                const btnPause = document.getElementById('btn-pause');
+                const btnResume = document.getElementById('btn-resume');
+                const btnStop = document.getElementById('btn-stop');
+
+                if (status === 'active') {
+                    btnStart.style.display = 'none';
+                    btnPause.style.display = 'inline-block';
+                    btnResume.style.display = 'none';
+                    btnStop.disabled = false;
+                } else if (status === 'paused') {
+                    btnStart.style.display = 'none';
+                    btnPause.style.display = 'none';
+                    btnResume.style.display = 'inline-block';
+                    btnStop.disabled = false;
+                } else {
+                    btnStart.style.display = 'inline-block';
+                    btnPause.style.display = 'inline-block';
+                    btnResume.style.display = 'none';
+                    btnPause.disabled = true;
+                    btnStop.disabled = true;
+                }
+            }
+        }
+
+        async function sessionAction(action) {
+            try {
+                let url = `${API_BASE}/session/action`;
+                let options = {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                };
+
+                if (action === 'start') {
+                    url = `${API_BASE}/session/start`;
+                    options = { method: 'POST' };
+                }
+
+                await fetch(url, options);
+                // Immediately refresh data
+                fetchStatus();
+            } catch (error) {
+                console.error(`Error performing action ${action}:`, error);
+            }
+        }
+
+        function escapeHTML(str) {
+            return str.replace(/[&<>'"]/g, 
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag] || tag)
+            );
+        }
+
+        // Init
+        fetchStatus();
+        fetchHistory();
+
+        // Auto-refresh every 10s
+        setInterval(() => {
+            fetchStatus();
+            fetchHistory();
+        }, 10000);
+    </script>
+</body>
+</html>

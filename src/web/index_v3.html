@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Krab Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0a0f;
+  --bg-card: #111118;
+  --bg-hover: #1a1a24;
+  --border: #1e1e2e;
+  --text: #e2e8f0;
+  --text-muted: #64748b;
+  --accent: #7dd3fc;
+  --accent-purple: #a78bfa;
+  --state-ok: #22c55e;
+  --state-warn: #f59e0b;
+  --state-error: #ef4444;
+  --font: 'Outfit', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font);
+  background-color: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  display: flex;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Typography & Utils */
+h1, h2, h3, h4 { font-weight: 600; color: #fff; }
+.text-muted { color: var(--text-muted); }
+.text-sm { font-size: 13px; }
+.text-xs { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.flex { display: flex; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+.mt-2 { margin-top: 8px; }
+.mt-4 { margin-top: 16px; }
+
+/* Buttons */
+button {
+  font-family: var(--font);
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.btn-primary:hover:not(:disabled) { background: #bae6fd; }
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--state-error);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.3); }
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 4px;
+  border-radius: 4px;
+}
+.icon-btn:hover { color: var(--text); background: var(--bg-hover); }
+
+/* Badges */
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge-ok { background: rgba(34, 197, 94, 0.15); color: var(--state-ok); border-color: rgba(34, 197, 94, 0.3); }
+.badge-warn { background: rgba(245, 158, 11, 0.15); color: var(--state-warn); border-color: rgba(245, 158, 11, 0.3); }
+.badge-error { background: rgba(239, 68, 68, 0.15); color: var(--state-error); border-color: rgba(239, 68, 68, 0.3); }
+.badge-info { background: rgba(125, 211, 252, 0.15); color: var(--accent); border-color: rgba(125, 211, 252, 0.3); }
+.badge-neutral { background: var(--bg-hover); color: var(--text-muted); border-color: var(--border); }
+
+/* Pulse Dot */
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+  50% { opacity: 0.7; box-shadow: 0 0 0 4px transparent; }
+}
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.pulse-dot.online { background-color: var(--state-ok); color: rgba(34, 197, 94, 0.4); animation: pulse 2s infinite; }
+.pulse-dot.offline { background-color: var(--state-error); color: rgba(239, 68, 68, 0.4); }
+
+/* Skeleton */
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-hover) 50%, var(--bg-card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+  color: transparent !important;
+  user-select: none;
+  min-height: 1em;
+  display: inline-block;
+}
+.skeleton * { visibility: hidden; }
+
+/* Layout: Sidebar */
+.sidebar {
+  width: 220px;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  z-index: 50;
+  transition: transform 0.3s ease;
+}
+
+.sidebar-header {
+  padding: 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-logo {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.5px;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.sidebar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.nav-group { margin-top: 24px; }
+.nav-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0 16px;
+  margin-bottom: 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 14px;
+  transition: all 0.2s;
+  gap: 12px;
+}
+.nav-item:hover { color: var(--text); background: var(--bg-hover); }
+.nav-item.active { color: var(--accent); background: rgba(125, 211, 252, 0.05); border-right: 2px solid var(--accent); }
+.nav-icon { font-size: 10px; color: inherit; opacity: 0.7; }
+
+/* Layout: Main */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Topbar */
+.topbar {
+  height: 48px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  justify-content: space-between;
+  background: rgba(10, 10, 15, 0.8);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.topbar-left { display: flex; align-items: center; gap: 12px; }
+.hamburger { display: none; }
+.breadcrumb { font-size: 14px; font-weight: 500; color: #fff; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+
+/* Dashboard Grid */
+.dashboard-content { padding: 24px; overflow-y: auto; flex: 1; }
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 16px;
+}
+
+/* Cards */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Specific Card Layouts */
+.col-span-12 { grid-column: span 12; }
+.col-span-8 { grid-column: span 8; }
+.col-span-6 { grid-column: span 6; }
+.col-span-4 { grid-column: span 4; }
+.col-span-3 { grid-column: span 3; }
+
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 16px; }
+.metric-item { display: flex; flex-direction: column; gap: 4px; }
+.metric-label { font-size: 12px; color: var(--text-muted); }
+.metric-value { font-size: 20px; font-weight: 600; color: #fff; }
+
+.status-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.status-row:last-child { border-bottom: none; padding-bottom: 0; }
+.status-name { font-size: 13px; color: var(--text-muted); }
+
+.alerts-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; }
+.alert-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.alert-item.severity-error { border-left: 3px solid var(--state-error); }
+.alert-item.severity-warn { border-left: 3px solid var(--state-warn); }
+.alert-item.severity-info { border-left: 3px solid var(--accent); }
+.alert-content { display: flex; flex-direction: column; gap: 4px; }
+.alert-msg { font-size: 13px; color: #fff; }
+.alert-code { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+.empty-state { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; font-style: italic; }
+
+.actions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+
+/* Toasts */
+#toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+}
+.toast {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(120%);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.toast.show { transform: translateX(0); }
+.toast-success { border-left: 3px solid var(--state-ok); }
+.toast-error { border-left: 3px solid var(--state-error); }
+.toast-info { border-left: 3px solid var(--accent); }
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .col-span-8, .col-span-6, .col-span-4, .col-span-3 { grid-column: span 6; }
+  .col-span-12 { grid-column: span 12; }
+}
+
+@media (max-width: 768px) {
+  .sidebar { position: fixed; height: 100vh; transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .hamburger { display: block; }
+  .dashboard-grid { grid-template-columns: 1fr; }
+  .col-span-8, .col-span-6, .col-span-4, .col-span-3, .col-span-12 { grid-column: span 1; }
+  .metric-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* Overlay for mobile sidebar */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 40;
+  backdrop-filter: blur(2px);
+}
+.sidebar-overlay.open { display: block; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+</style>
+</head>
+<body>
+
+<!-- Mobile Overlay -->
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">🦀 KRAB PANEL v2</div>
+    <div class="sidebar-status">
+      <span class="pulse-dot online" id="global-pulse"></span>
+      <span id="global-status-text">online</span>
+    </div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-group">
+      <div class="nav-title">DASHBOARD</div>
+      <a href="/" class="nav-item active"><span class="nav-icon">◆</span> Main</a>
+      <a href="/commands" class="nav-item"><span class="nav-icon">○</span> Commands</a>
+      <a href="/models" class="nav-item"><span class="nav-icon">○</span> Models</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-title">OPERATIONS</div>
+      <a href="/inbox" class="nav-item"><span class="nav-icon">○</span> Inbox</a>
+      <a href="/ops" class="nav-item"><span class="nav-icon">○</span> Ops</a>
+      <a href="/voice" class="nav-item"><span class="nav-icon">○</span> Voice</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-title">ANALYTICS</div>
+      <a href="/costs" class="nav-item"><span class="nav-icon">○</span> Costs</a>
+      <a href="/swarm" class="nav-item"><span class="nav-icon">○</span> Swarm</a>
+      <a href="/translator" class="nav-item"><span class="nav-icon">○</span> Translator</a>
+    </div>
+    <div class="nav-group">
+      <div class="nav-title">ADMIN</div>
+      <a href="/provisioning" class="nav-item"><span class="nav-icon">○</span> Provisioning</a>
+    </div>
+  </nav>
+</aside>
+
+<!-- Main Content -->
+<main class="main-content">
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="icon-btn hamburger" id="hamburger-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+      <div class="breadcrumb">Krab — Main Dashboard</div>
+    </div>
+    <div class="topbar-right">
+      <span class="badge badge-ok skeleton" id="topbar-sys-status">System: OK</span>
+      <button class="icon-btn" id="refresh-btn" title="Refresh">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-9-9c2.52 0 4.85 1.05 6.5 2.5L21 8M21 3v5h-5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Dashboard Content -->
+  <div class="dashboard-content">
+    <div class="dashboard-grid">
+
+      <!-- Today Costs Row -->
+      <div class="card col-span-12">
+        <div class="card-header" style="margin-bottom: 8px;">
+          <div class="card-title">Today Costs</div>
+        </div>
+        <div class="metric-grid">
+          <div class="metric-item">
+            <span class="metric-label">Cost ($)</span>
+            <span class="metric-value skeleton" id="val-cost-total">0.0000</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Calls</span>
+            <span class="metric-value skeleton" id="val-cost-calls">0</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Tokens</span>
+            <span class="metric-value skeleton" id="val-cost-tokens">-</span>
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Avg Cost / Call</span>
+            <span class="metric-value skeleton" id="val-cost-avg">0.0000</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Liveness Card -->
+      <div class="card col-span-4">
+        <div class="card-header">
+          <div class="card-title">System Liveness</div>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Telegram</span>
+          <span class="badge badge-neutral skeleton" id="live-tg">checking</span>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Gateway</span>
+          <span class="badge badge-neutral skeleton" id="live-gw">checking</span>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Scheduler</span>
+          <span class="badge badge-neutral skeleton" id="live-sch">checking</span>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Voice</span>
+          <span class="badge badge-neutral skeleton" id="live-voice">checking</span>
+        </div>
+      </div>
+
+      <!-- Route Card -->
+      <div class="card col-span-4">
+        <div class="card-header">
+          <div class="card-title">Current Route</div>
+        </div>
+        <div class="metric-item mt-2">
+          <span class="metric-label">Model</span>
+          <span class="metric-value text-sm skeleton" id="route-model" style="font-size: 16px;">-</span>
+        </div>
+        <div class="metric-item mt-4">
+          <span class="metric-label">Provider</span>
+          <span class="metric-value text-sm skeleton" id="route-provider" style="font-size: 16px;">-</span>
+        </div>
+        <div class="metric-item mt-4">
+          <span class="metric-label">Channel</span>
+          <span class="metric-value text-sm skeleton" id="route-channel" style="font-size: 16px;">-</span>
+        </div>
+      </div>
+
+      <!-- Queue Card -->
+      <div class="card col-span-4">
+        <div class="card-header">
+          <div class="card-title">Queue</div>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Pending</span>
+          <span class="text-sm font-bold skeleton" id="queue-pending">0</span>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Processing</span>
+          <span class="text-sm font-bold skeleton" id="queue-processing">0</span>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Done</span>
+          <span class="text-sm font-bold skeleton" id="queue-done">0</span>
+        </div>
+        <div class="status-row">
+          <span class="status-name">Total</span>
+          <span class="text-sm font-bold skeleton" id="queue-total">0</span>
+        </div>
+      </div>
+
+      <!-- Swarm Status -->
+      <div class="card col-span-4">
+        <div class="card-header">
+          <div class="card-title">Swarm Status</div>
+          <span class="badge badge-neutral skeleton" id="swarm-listeners">Listeners: OFF</span>
+        </div>
+        <div class="metric-grid" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div class="metric-item bg-hover" style="padding: 8px; border-radius: 4px; background: var(--bg-hover);">
+            <span class="metric-label">Pending</span>
+            <span class="metric-value skeleton" id="swarm-pending" style="font-size: 16px;">0</span>
+          </div>
+          <div class="metric-item bg-hover" style="padding: 8px; border-radius: 4px; background: var(--bg-hover);">
+            <span class="metric-label">In Progress</span>
+            <span class="metric-value skeleton" id="swarm-progress" style="font-size: 16px; color: var(--accent);">0</span>
+          </div>
+          <div class="metric-item bg-hover" style="padding: 8px; border-radius: 4px; background: var(--bg-hover);">
+            <span class="metric-label">Done</span>
+            <span class="metric-value skeleton" id="swarm-done" style="font-size: 16px; color: var(--state-ok);">0</span>
+          </div>
+          <div class="metric-item bg-hover" style="padding: 8px; border-radius: 4px; background: var(--bg-hover);">
+            <span class="metric-label">Failed</span>
+            <span class="metric-value skeleton" id="swarm-failed" style="font-size: 16px; color: var(--state-error);">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Translator Card -->
+      <div class="card col-span-4">
+        <div class="card-header">
+          <div class="card-title">Translator</div>
+          <span class="badge badge-neutral skeleton" id="trans-session">Inactive</span>
+        </div>
+        <div class="metric-item mt-2">
+          <span class="metric-label">Language Pair</span>
+          <span class="metric-value text-sm skeleton" id="trans-pair" style="font-size: 16px;">-</span>
+        </div>
+        <div class="metric-item mt-4">
+          <span class="metric-label">Mode</span>
+          <span class="metric-value text-sm skeleton" id="trans-mode" style="font-size: 16px;">-</span>
+        </div>
+        <div class="metric-item mt-4">
+          <span class="metric-label">Translations Count</span>
+          <span class="metric-value text-sm skeleton" id="trans-count" style="font-size: 16px;">0</span>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="card col-span-4">
+        <div class="card-header">
+          <div class="card-title">Quick Actions</div>
+        </div>
+        <div class="actions-grid">
+          <button class="btn-ghost" id="btn-recover">↻ Health Recheck</button>
+          <button class="btn-danger" id="btn-clear">Clear Session</button>
+          <button class="btn-ghost" id="btn-notify">Toggle Notify</button>
+          <button class="btn-ghost" id="btn-silence">Toggle Silence</button>
+        </div>
+      </div>
+
+      <!-- Alerts Panel -->
+      <div class="card col-span-12">
+        <div class="card-header">
+          <div class="card-title">Active Alerts</div>
+          <span class="badge badge-neutral skeleton" id="alerts-count">0</span>
+        </div>
+        <div class="alerts-list" id="alerts-list">
+          <div class="skeleton" style="height: 60px; width: 100%; border-radius: 4px;"></div>
+          <div class="skeleton" style="height: 60px; width: 100%; border-radius: 4px;"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<div id="toast-container"></div>
+
+<script>
+const API_BASE = 'http://127.0.0.1:8080';
+const REFRESH_INTERVAL = 15000;
+
+// Utils
+const $ = id => document.getElementById(id);
+const setSkeleton = (id, loading) => {
+  const el = $(id);
+  if (!el) return;
+  if (loading) el.classList.add('skeleton');
+  else el.classList.remove('skeleton');
+};
+
+const setText = (id, text, loading = false) => {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  setSkeleton(id, loading);
+};
+
+const setBadge = (id, text, statusClass, loading = false) => {
+  const el = $(id);
+  if (!el) return;
+  el.className = `badge ${statusClass} ${loading ? 'skeleton' : ''}`;
+  el.textContent = text;
+};
+
+// Fetch Wrapper with Timeout
+async function fetchAPI(endpoint, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', ...options.headers }
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
+// Toasts
+function showToast(msg, type = 'info') {
+  const container = $('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  
+  // trigger reflow
+  void toast.offsetWidth;
+  toast.classList.add('show');
+  
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+// State Management
+let isGlobalOnline = true;
+
+function setGlobalStatus(online) {
+  isGlobalOnline = online;
+  const pulse = $('global-pulse');
+  const text = $('global-status-text');
+  if (online) {
+    pulse.className = 'pulse-dot online';
+    text.textContent = 'online';
+  } else {
+    pulse.className = 'pulse-dot offline';
+    text.textContent = 'offline';
+  }
+}
+
+function getHealthBadgeClass(status) {
+  status = (status || '').toLowerCase();
+  if (status === 'ok' || status === 'healthy' || status === 'active') return 'badge-ok';
+  if (status === 'warn' || status === 'degraded') return 'badge-warn';
+  if (status === 'error' || status === 'failed' || status === 'offline') return 'badge-error';
+  return 'badge-neutral';
+}
+
+// Data Fetching & UI Updates
+async function loadData() {
+  const loading = true;
+  
+  // Fetch all endpoints concurrently
+  const [healthRes, summaryRes, queueRes, alertsRes] = await Promise.allSettled([
+    fetchAPI('/api/health/lite'),
+    fetchAPI('/api/runtime/summary'),
+    fetchAPI('/api/queue'),
+    fetchAPI('/api/ops/alerts')
+  ]);
+
+  // Global status fallback if everything fails
+  if (healthRes.status === 'rejected' && summaryRes.status === 'rejected') {
+    setGlobalStatus(false);
+    setBadge('topbar-sys-status', 'System: Offline', 'badge-error', false);
+  } else {
+    setGlobalStatus(true);
+  }
+
+  // --- 1. Health Lite (Topbar + Telegram session fallback) ---
+  if (healthRes.status === 'fulfilled') {
+    const data = healthRes.value;
+    const sysClass = data.ok ? 'badge-ok' : 'badge-error';
+    setBadge('topbar-sys-status', `System: ${data.status || (data.ok ? 'OK' : 'Error')}`, sysClass, false);
+  }
+
+  // --- 2. Runtime Summary (Liveness, Route, Costs, Swarm, Translator) ---
+  if (summaryRes.status === 'fulfilled') {
+    const data = summaryRes.value;
+    
+    // Liveness
+    const h = data.health || {};
+    setBadge('live-tg', h.telegram || '-', getHealthBadgeClass(h.telegram), false);
+    setBadge('live-gw', h.gateway || '-', getHealthBadgeClass(h.gateway), false);
+    setBadge('live-sch', h.scheduler || '-', getHealthBadgeClass(h.scheduler), false);
+    // Assuming voice is in health, or fallback
+    setBadge('live-voice', h.voice || 'OK', getHealthBadgeClass(h.voice || 'OK'), false);
+
+    // Route
+    const r = data.route || {};
+    setText('route-model', r.model || '-', false);
+    setText('route-provider', r.provider || '-', false);
+    setText('route-channel', r.channel || '-', false);
+
+    // Costs
+    const c = data.costs || {};
+    const cost = c.total_cost || 0;
+    const calls = c.calls || 0;
+    const avg = calls > 0 ? (cost / calls) : 0;
+    setText('val-cost-total', `$${cost.toFixed(4)}`, false);
+    setText('val-cost-calls', calls.toString(), false);
+    setText('val-cost-tokens', c.tokens !== undefined ? c.tokens : '-', false);
+    setText('val-cost-avg', `$${avg.toFixed(4)}`, false);
+
+    // Swarm
+    const s = data.swarm || {};
+    const tb = s.task_board || {};
+    setText('swarm-pending', tb.pending || '0', false);
+    setText('swarm-progress', tb.in_progress || '0', false);
+    setText('swarm-done', tb.done || '0', false);
+    setText('swarm-failed', tb.failed || '0', false);
+    setBadge('swarm-listeners', `Listeners: ${s.listeners_enabled ? 'ON' : 'OFF'}`, s.listeners_enabled ? 'badge-info' : 'badge-neutral', false);
+
+    // Translator
+    const t = data.translator || {};
+    const tp = t.profile || {};
+    const ts = t.session || {};
+    setText('trans-pair', tp.lang_pair || '-', false);
+    setText('trans-mode', tp.mode || '-', false);
+    setText('trans-count', ts.translations_count || '0', false);
+    setBadge('trans-session', ts.active ? 'Active' : 'Inactive', ts.active ? 'badge-ok' : 'badge-neutral', false);
+
+    // Update buttons state
+    if (data.notify_enabled !== undefined) {
+      $('btn-notify').textContent = data.notify_enabled ? 'Disable Notify' : 'Enable Notify';
+    }
+    if (data.silence && data.silence.enabled !== undefined) {
+      $('btn-silence').textContent = data.silence.enabled ? 'Disable Silence' : 'Enable Silence';
+    }
+
+  } else {
+    // Fallbacks if summary fails
+    ['live-tg', 'live-gw', 'live-sch', 'live-voice'].forEach(id => setBadge(id, '-', 'badge-neutral', false));
+    ['route-model', 'route-provider', 'route-channel', 'val-cost-total', 'val-cost-calls', 'val-cost-tokens', 'val-cost-avg', 'swarm-pending', 'swarm-progress', 'swarm-done', 'swarm-failed', 'trans-pair', 'trans-mode', 'trans-count'].forEach(id => setText(id, '-', false));
+    setBadge('swarm-listeners', 'Listeners: -', 'badge-neutral', false);
+    setBadge('trans-session', '-', 'badge-neutral', false);
+  }
+
+  // --- 3. Queue ---
+  if (queueRes.status === 'fulfilled') {
+    const q = queueRes.value;
+    setText('queue-pending', q.pending || '0', false);
+    setText('queue-processing', q.processing || '0', false);
+    setText('queue-done', q.done || '0', false);
+    setText('queue-total', q.total || '0', false);
+  } else {
+    ['queue-pending', 'queue-processing', 'queue-done', 'queue-total'].forEach(id => setText(id, '-', false));
+  }
+
+  // --- 4. Alerts ---
+  const alertsList = $('alerts-list');
+  if (alertsRes.status === 'fulfilled') {
+    const alerts = alertsRes.value || [];
+    const activeAlerts = alerts.filter(a => !a.acked);
+    setBadge('alerts-count', activeAlerts.length.toString(), activeAlerts.length > 0 ? 'badge-error' : 'badge-neutral', false);
+    
+    alertsList.innerHTML = '';
+    if (activeAlerts.length === 0) {
+      alertsList.innerHTML = '<div class="empty-state">No active alerts</div>';
+    } else {
+      activeAlerts.forEach(alert => {
+        const div = document.createElement('div');
+        div.className = `alert-item severity-${alert.severity || 'info'}`;
+        
+        const content = document.createElement('div');
+        content.className = 'alert-content';
+        content.innerHTML = `
+          <span class="alert-msg">${alert.message || 'Unknown alert'}</span>
+          <span class="alert-code">${alert.code || 'SYS_ERR'}</span>
+        `;
+        
+        const btn = document.createElement('button');
+        btn.className = 'btn-ghost btn-sm';
+        btn.textContent = 'Ack';
+        btn.onclick = () => ackAlert(alert.code);
+        
+        div.appendChild(content);
+        div.appendChild(btn);
+        alertsList.appendChild(div);
+      });
+    }
+  } else {
+    setBadge('alerts-count', '-', 'badge-neutral', false);
+    alertsList.innerHTML = '<div class="empty-state">Failed to load alerts</div>';
+  }
+}
+
+// Actions
+async function handleAction(promise, successMsg) {
+  try {
+    const res = await promise;
+    if (res.ok || res.enabled !== undefined) {
+      showToast(successMsg, 'success');
+      loadData(); // refresh immediately
+    } else {
+      showToast('Action failed', 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function ackAlert(code) {
+  handleAction(fetchAPI(`/api/ops/ack/${code}`, { method: 'POST' }), `Alert ${code} acknowledged`);
+}
+
+// Event Listeners
+$('btn-recover').addEventListener('click', () => {
+  handleAction(fetchAPI('/api/runtime/recover', { method: 'POST' }), 'Health recheck initiated');
+});
+
+$('btn-clear').addEventListener('click', () => {
+  if (confirm('Are you sure you want to clear the active chat session?')) {
+    handleAction(fetchAPI('/api/runtime/chat-session/clear', { method: 'POST' }), 'Session cleared');
+  }
+});
+
+$('btn-notify').addEventListener('click', () => {
+  handleAction(fetchAPI('/api/notify/toggle', { method: 'POST' }), 'Notify toggled');
+});
+
+$('btn-silence').addEventListener('click', () => {
+  handleAction(fetchAPI('/api/silence/toggle', { method: 'POST' }), 'Silence toggled');
+});
+
+$('refresh-btn').addEventListener('click', () => {
+  const btn = $('refresh-btn');
+  btn.style.opacity = '0.5';
+  loadData().finally(() => btn.style.opacity = '1');
+});
+
+// Mobile Sidebar Toggle
+const sidebar = $('sidebar');
+const overlay = $('sidebar-overlay');
+const hamburger = $('hamburger-btn');
+
+function toggleSidebar() {
+  sidebar.classList.toggle('open');
+  overlay.classList.toggle('open');
+}
+
+hamburger.addEventListener('click', toggleSidebar);
+overlay.addEventListener('click', toggleSidebar);
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+  loadData();
+  setInterval(loadData, REFRESH_INTERVAL);
+});
+</script>
+</body>
+</html>

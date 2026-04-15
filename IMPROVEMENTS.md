@@ -1,8 +1,345 @@
 # Краб — Архитектурный бэклог и задачи
 
-> Составлен: 2026-03-23 | Обновлён: 2026-04-12 (session 6)
+> Составлен: 2026-03-23 | Обновлён: 2026-04-15 (session 8)
 > Статус: Активная разработка
 > Владелец: По
+
+---
+
+## 📋 Session 8 (2026-04-15 → 2026-04-16) — MEGA PARALLEL CONVEYOR
+
+> **139+ коммитов Track B** | **+30+ тестов** (test_log + test_memory_adapter + test fixes) | **10 Gemini 3.1 Pro агентов параллельно** | **Track E Memory Layer** параллельно с 232 тестами
+
+### Статистика Session 8 (Track B + Track E)
+
+| Метрика | Session 7 | Session 8 |
+|---------|-----------|-----------|
+| Коммиты Track B | 91 | **139+** |
+| Коммиты Track E | — | **7** |
+| Всего тестов Track B | 7067 | ~7080+ |
+| Тестов Track E | — | **232** |
+| Dashboard V4 pages | 6 | **10** (+Ops, +Research, +Settings, +Commands) |
+| API endpoints | 201 | **207+** (SSE events, ops ack, theme-toggle, research route) |
+| Phase 7 готовность | 88% | **100%** |
+| Параллельных Gemini agents | ~50 session 7 | **10 одновременно session 8** |
+
+### Dashboard V4 — Session 8 полировка
+
+- **/v4/ops** (новая страница) — Operations Center: Active Alerts,
+  Metrics (p50/p95/p99, error_rate, throughput), Runtime Snapshot
+  (Providers + Services), Event Timeline, Actions footer
+- **Hub Fallback Chain editor** — add/remove/reorder (▲▼✕),
+  "+ Add Fallback" с фильтром уже добавленных, Apply Changes с dirty tracking
+  (badge "Есть несохранённые изменения" + dot)
+- **Hub UX overhaul** — Primary Model dropdown всегда виден, Apply Changes
+  большая кнопка ВНИЗУ, info "Изменения применяются сразу без рестарта"
+- **LM Studio two-phase loader** — Phase A ~1s cloud cache, Phase B ~100s
+  force_refresh в фоне (KrabEar забивает GPU). Fix: endpoint GET (было POST
+  → 405 Method Not Allowed)
+- **Contrast audit WCAG AA** — `.text-accent` #7dd3fc→#bae6fd,
+  `.text-muted` 0.5→0.72, 8 pill-классов, hero-badge dark on cyan
+- **Unified navbar 7 nav-links** + notification bell везде (counter "32")
+- **SSE auto-refresh** — Swarm/Inbox заменили polling на EventSource
+  (`/api/swarm/events`, `/api/inbox/events`). Hash-based change detection.
+
+### Phase 7 финализация (100%)
+
+- **`!log` tests** (`test_log_command.py`, 10/10 passed) — последний gap
+  закрыт, `!members` / `!cron` тесты уже были в Session 7
+
+### Track E (Memory Layer) — подготовка параллельно
+
+- **`src/core/memory_adapter.py`** — facade stub для HybridRetriever
+- **API контракт зафиксирован:** `HybridRetriever.search(query, chat_id,
+  top_k, with_context, decay_mode, owner_only) → list[SearchResult]`
+- **`test_memory_adapter.py`** (10/10 passed)
+- **Main baseline unblock** (`62c86b2` в main) — 158 файлов, pytest
+  разблокирован для Track E worktree
+
+### Коммиты Track B (`claude/youthful-pascal`) — последние 15
+
+```
+471052a fix(v4): восстановить Ops + Research nav-links в 8 страницах
+bdc3011 feat(v4): Session 8 wave 3b — index a11y + swarm FAB + ops route
+958b91f feat(v4): Session 8 wave 3a — costs charts + translator polish
+ddc1143 feat(v4): Session 8 wave 2 — 4 parallel Gemini agents
+4f329da feat(v4): notification bell dropdown с alerts+inbox
+2df60b3 docs: IMPROVEMENTS.md — Session 8 rollup
+8511e44 feat(memory): Track E integration stub — memory_adapter facade
+a0f2b6a feat(v4): SSE auto-refresh Swarm + Inbox
+d9e8d32 test: !log command (Phase 7 closed)
+484400a feat(v4): notification bell в ops.html
+27330f6 feat: Session 8 Dashboard polish (Ops + bell + LM Studio)
+70c8bd1 feat: Hub UX — Primary dropdown + Apply Changes
+26bc066 feat: Hub fallback chain editor
+eaf7a56 fix: V4 contrast issues
+df095d4 feat: V4 dashboard unification (6 pages)
+```
+
+### 10 Gemini 3.1 Pro agents Session 8
+
+| # | Target | Lines added | Status |
+|---|--------|-------------|--------|
+| 1 | inbox actions extend + handleAction fix | +2347 | ✅ |
+| 2 | /v4/research новая страница (1024 lines) | new file | ✅ |
+| 3 | chat Cmd+K palette + Cmd+/ help | +11837 | ✅ |
+| 4 | theme dark/light toggle + CSS 49+ overrides | +6131 CSS + 1925 JS | ✅ |
+| 5 | costs SVG charts + sparklines + trends | +9067 | ✅ |
+| 6 | translator language switcher + live indicator | +11675 | ✅ |
+| 7 | index Hub a11y (19 aria-labels) + hero fade | +8512 | ✅ |
+| 8 | swarm FAB + quick actions + filter bar | +15939 | ✅ |
+| 9 | /v4/settings новая страница | ~20KB | 🔄 |
+| 10 | /v4/commands catalog (175+ commands) | ~20KB | 🔄 |
+
+### Track E (Memory Layer) параллельно — claude/memory-layer
+
+**7 коммитов, 232 тестов, ~2900 LOC, 1.58s full pytest run**
+
+| Phase | Commit | Что |
+|-------|--------|-----|
+| 0 | 4a8ef11 | PII redactor + Track E plan |
+| 0 | 6c68212 | deps (sqlite-vec, model2vec, pymorphy3) |
+| 1 | 9fbedc7 | whitelist + chunking + archive DDL (52 tests) |
+| 2 | c4a0a36 | HybridRetriever + RRF + decay (43 tests) |
+| 1 | 1b4cc18 | JSON parser + ingestion pipeline (32 tests) |
+| 3 | 9acd2a0 | !archive + !memory stats commands (35 tests) |
+| 2 | 71063c9 | embedder + e2e integration (26 tests) |
+
+**E2E verified** через synthetic fixture: 36 msgs → whitelist filter → PII
+redact (4/4 пойманы) → chunking (7 chunks) → FTS5 index → Model2Vec embedding
+→ HybridRetriever search (FTS5 + vector RRF) → результаты.
+
+**Ready to merge** после Track B PR.
+
+### Dashboard V4 — финальные 10 страниц
+
+| Page | URL | Ключевая фича |
+|------|-----|---------------|
+| Hub | `/v4/` | Primary dropdown + Fallback editor + a11y + Recently switched badge |
+| Chat | `/v4/chat` | SSE streaming + Cmd+K palette + Cmd+/ help + Cmd+Enter |
+| Costs | `/v4/costs` | SVG bar charts + sparklines + trend ↑↓ indicators |
+| Inbox | `/v4/inbox` | Ack/Done/Dismiss actions + SSE + formatTimeAgo |
+| Swarm | `/v4/swarm` | FAB + quick actions + filter bar + sparklines + tooltips |
+| Translator | `/v4/translator` | Language switcher + live indicator + test box + latency |
+| Ops | `/v4/ops` | Operations Center (alerts, metrics, timeline) |
+| Research | `/v4/research` | Swarm Research Pipeline dashboard |
+| Settings | `/v4/settings` | Config editor (в работе Agent 9) |
+| Commands | `/v4/commands` | 175+ команд catalog (в работе Agent 10) |
+
+Все страницы:
+- **8 nav-links** (Hub/Chat/Costs/Inbox/Swarm/Translator/Ops/Research)
+- **Notification bell dropdown** с alerts + inbox items
+- **Theme toggle** dark/light с localStorage
+- **Liquid Glass** эстетика
+- **WCAG AA** контраст
+
+### Bugfixes Session 8
+
+- **loadCatalog schema mismatch** — `data.providers` → `data.catalog.cloud_inventory`
+- **loadCatalog method bug** — POST на GET-only endpoint → 405 → catalog пустой
+- **hero-model-badge cyan-on-cyan** — invisible text, fix color #fff + shadow
+- **chat.html btn-send white-on-cyan** — invisible, fix dark text + shadow
+
+### Session 9 backlog
+
+- Mobile PWA тестирование на iPhone (Add to Home Screen)
+- Bell onclick dropdown с последними alerts/inbox
+- Inbox actions: pin/archive/done (сейчас только Ack + handleAction schema bug)
+- Ops metrics real data collection (сейчас empty — new runtime)
+- Track E merge когда параллельный чат закончит MVP
+
+### Session 10+ паркованные идеи
+
+- **Remote access** через `152.89.100.100` (external IP есть) — Caddy SSL +
+  port-forward, без Cloudflare Tunnel
+- **Guest Mode** с ролями OWNER / VIEWER / DEMO (redaction + disable interactive)
+- Keyboard shortcuts Cmd+K, Cmd+/
+- Dark/Light theme toggle
+
+---
+
+## 📋 Session 7 (2026-04-12–13)
+
+> **91 коммит** | ~2508 новых тестов (3633→~6141) | **~130 фич** | ~50 параллельных агентов
+
+### Статистика
+
+| Метрика | Session 6 | Session 7 |
+|---------|-----------|-----------|
+| Коммиты | 9 | 91 |
+| Новых тестов | +1562 | +2508 |
+| Всего тестов | 3633 | ~6141 |
+| Новых фич | ~20 | ~130 |
+| Phase 7 готовность | 40% | **88%** |
+
+---
+
+### Bugfixes (session 7)
+- **`_current_runtime_primary_model` AttributeError** (`userbot_bridge.py`, `runtime_status.py`) — re-export из `llm_flow` после mixin decomposition; voice messages крашились
+- **`/api/inbox/items?status=all`** (`inbox_service.py`) — `status="all"` ошибочно фильтровал всё вместо отключения фильтра
+- **`!translator on/off/status`** (`command_handlers.py`) — добавлены shorthand алиасы (on→session start, off→session stop, status→session status)
+- **Voice AttributeError ×2** — mixin decomposition, re-export после рефакторинга userbot_bridge
+- **SQLite stale locks** для swarm listeners — race condition при параллельных запросах
+- **iMessage спам** — OpenClaw background job отключён (спамил папе)
+- **Nightly Self-Diagnostics channel** — fix канала для ночных диагностик
+- **f-string syntax errors** — исправлены для совместимости Python 3.12+
+- **Missing handler exports** в `__init__.py` — добавлены недостающие re-export'ы
+
+---
+
+### Phase 7 — Backend Service Workflows
+
+- **FinOps поля в `/api/costs/report`** (`web_app.py`) — добавлены `total_tool_calls`, `total_fallbacks`, `total_context_tokens`, `avg_context_tokens`, `by_channel` из `cost_analytics`
+- **WeeklyDigest Telegram delivery** (`weekly_digest.py`, `userbot_bridge.py`) — callback pattern через `_send_proactive_watch_alert`, auto-запуск loop в `_ensure_proactive_watch_started`
+- **Cost budget alert** (`proactive_watch.py`) — >80% warning, >100% error; dedupe по месяцу; интегрирован в `run_alert_checks()` (каждые 30 мин)
+- **Translator latency opt** (`translator_engine.py`) — `max_output_tokens` 2048→512, pre-clear session для снижения overhead
+- **Streaming UI config** (`config.py`, `userbot_bridge.py`) — explicit `TELEGRAM_STREAM_UPDATE_INTERVAL_SEC` (2.0s), `OPENCLAW_TOOL_PROGRESS_POLL_SEC` (3.0s), model hint в initial ack
+- **Research Pipeline модуль** (`src/core/swarm_research_pipeline.py`) — отдельный модуль для deep-research через analysts-команду
+- **Auto-Dispatch workflow_type** — `standard` / `research` / `report` в swarm scheduler
+- **LLM error auto-retry** — автоматический retry при LLM-ошибках в основном потоке
+- **Autonomous swarm DM handlers** — команды свёрма в DM от team-аккаунтов
+
+---
+
+### CommandRegistry — Центральный реестр команд
+
+- **`src/core/command_registry.py`** (новый модуль) — единый реестр ~55 команд с полями `name`, `category`, `description`, `owner_only`, `aliases`, `usage`
+- **`GET /api/commands`** — полный реестр с `total` / `categories` (обновлён `web_app.py`)
+- **`GET /api/commands/{name}`** — детальная информация, поиск по алиасу, 404 если нет
+- **`handle_help`** генерируется из registry (не hardcoded), пагинация сохранена
+- Тесты: `test_command_registry.py` (48), `test_web_api_commands_registry.py` (37), `test_help_command.py` (251 lines)
+
+---
+
+### !timer и !stopwatch — новые команды времени
+
+- **`!timer <время> [метка]`** — таймер через `asyncio.create_task` + `asyncio.sleep`; `_parse_duration()` принимает `5m`, `1h30m`, `90s`, `3600`; субкоманды: `list`, `cancel [id]`
+- **`!stopwatch`** — секундомер через `time.monotonic()`; субкоманды: `start`, `stop`, `lap`, `status`
+- 36 тестов в `test_timer_stopwatch_commands.py`
+
+---
+
+### !remind — Natural Language парсинг
+
+- **`split_reminder_input`** — форматы: `me in Nm текст`, `in Nm текст`, `in N minutes/hours/days/seconds текст`, `at HH:MM текст`, `tomorrow/завтра HH:MM текст`, `N минут текст`
+- **`parse_due_time`** — реализованы паттерны: `tomorrow/завтра`, `in Nm`, `in N minutes/hours/days/seconds`, `N минут` (рус. короткая форма без «через»)
+- **Субкоманды `!remind list`** и **`!remind cancel <id>`** — управление активными напоминаниями
+- Справка с примерами всех форматов; hint «Отменить: !remind cancel <id>»
+- +39 тест-кейсов (итого 61 тест в `test_scheduler.py`)
+
+---
+
+### Новые REST endpoints (Owner Panel)
+
+| Endpoint | Метод | Описание |
+|----------|-------|---------|
+| `/api/commands` | GET | Полный реестр команд из CommandRegistry |
+| `/api/commands/{name}` | GET | Детальная информация о команде, поиск по алиасу |
+| `/api/uptime` | GET | Аптайм Krab в секундах |
+| `/api/version` | GET | Версия Krab и информация о сессии |
+| `/api/system/info` | GET | Информация о хост-системе (CPU, RAM, disk) |
+| `/api/endpoints` | GET | Self-documenting список всех API endpoint'ов |
+
+---
+
+### Новые Telegram команды (~100 новых)
+
+#### AI & LLM
+`!ask`, `!translate`, `!summary`, `!catchup`, `!report`, `!weather`, `!define`, `!img`, `!ocr`, `!urban`, `!yt`, `!search` / `!web`
+
+#### Costs & Reports
+`!costs`, `!budget`, `!digest`, `!report daily/weekly`
+
+#### Notes & Storage
+`!memo`, `!note`, `!bookmark` / `!bm`, `!export`, `!snippet`, `!paste`, `!quote`, `!template`, `!tag`
+
+#### Chat Analysis (userbot-only)
+`!grep`, `!context`, `!monitor`, `!who`, `!fwd`, `!collect`, `!top`, `!history`, `!chatinfo`
+
+#### Messaging & Actions
+`!pin`, `!unpin`, `!del`, `!purge`, `!autodel`, `!schedule`, `!poll`, `!quiz`, `!dice`, `!typing`
+
+#### Text Utilities
+`!calc`, `!b64`, `!hash`, `!len` / `!count`, `!json`, `!sed`, `!diff`, `!regex`, `!rand`, `!qr`
+
+#### Time & Utility
+`!timer`, `!stopwatch`, `!remind` (NL), `!time`, `!currency`, `!ip`, `!dns`, `!ping`, `!link`, `!uptime`, `!sysinfo`
+
+#### Social & Moderation
+`!react`, `!afk` / `!back`, `!welcome`, `!sticker`, `!alias`, `!tts`, `!chatmute`, `!slowmode`, `!spam`, `!archive` / `!unarchive`, `!mark`, `!blocked`, `!invite`, `!profile`, `!contacts`
+
+#### Translator (обновлено)
+`!translator on` / `off` / `status` / `history` / `lang` / `test` / `auto` / `help`
+
+#### Swarm (обновлено)
+`!swarm <team> <задача>`, `!swarm research`, `!swarm summary` / `!swarm сводка`, `!swarm teams`, `!swarm schedule`, `!swarm memory`
+`!swarm task board` / `list` / `create` / `done` / `fail` / `assign` / `priority` / `count`
+
+#### System
+`!health`, `!stats` (обогащён FinOps/Translator/Swarm секциями), `!uptime`, `!sysinfo`, `!help` (из registry), `!run`, `!set`, `!todo`, `!restart`, `!remind`
+
+---
+
+### Новые модули (src/core/)
+
+| Модуль | Назначение |
+|--------|-----------|
+| `silence_schedule.py` | Расписание тишины (time-based auto-silence) |
+| `memo_service.py` | Временные заметки (in-memory) |
+| `bookmark_service.py` | Персистентные закладки на сообщения |
+| `chat_monitor.py` | Мониторинг ключевых слов по чатам |
+| `command_aliases.py` | Пользовательские алиасы команд (персистентные) |
+| `command_registry.py` | Центральный реестр всех команд (~55) |
+| `message_scheduler.py` | Планировщик отложенных сообщений |
+| `telegram_buttons.py` | Inline keyboard builder (callback_data) |
+| `reaction_engine.py` | Управление реакциями на сообщения |
+| `personal_todo.py` | Личный TODO-список через !todo |
+| `spam_guard.py` | Расширенная защита от спама |
+| `swarm_research_pipeline.py` | Research pipeline для !swarm research |
+
+---
+
+### Tests (+2508 новых)
+
+Ключевые новые тест-файлы session 7:
+
+| Файл | Тестов | Описание |
+|------|--------|---------|
+| `test_command_registry.py` | 48 | CommandRegistry: lookup, aliases, categories |
+| `test_web_api_commands_registry.py` | 37 | /api/commands, /api/commands/{name} |
+| `test_help_command.py` | (251 lines) | handle_help из registry, пагинация |
+| `test_timer_stopwatch_commands.py` | 36 | !timer, !stopwatch: parse_duration, create_task |
+| `test_scheduler.py` | итого 61 (+39) | NL remind парсинг: tomorrow, in Nm, at HH:MM |
+| `test_cost_budget_alert.py` | 4 | budget thresholds, >80%/>100% severity |
+| `test_weekly_digest.py` | 4 | callback, error resilience |
+| `test_translator_engine_optimized.py` | 5 | max_output_tokens 512, pre-clear |
+| `test_inbox_status_filter.py` | 7 | status=all/acked/open/empty |
+| `test_web_app_costs_finops.py` | 7 | FinOps response fields |
+
+---
+
+### Phase 7 статус (после session 7)
+
+- **Готовность: ~88%** (было ~40% после session 6)
+
+| Компонент | Статус |
+|-----------|--------|
+| WeeklyDigest Telegram delivery | ✅ |
+| Cost budget alert (>80% warn, >100% error) | ✅ |
+| Dashboard API gaps закрыты (6/6 verified) | ✅ |
+| Translator latency оптимизирована (512 tok) | ✅ |
+| Streaming UI конфигурация | ✅ |
+| Research Pipeline модуль | ✅ |
+| Auto-Dispatch workflow_type | ✅ |
+| CommandRegistry (55+ команд) | ✅ |
+| LLM error auto-retry | ✅ |
+| Autonomous swarm DM handlers | ✅ |
+| ~100 новых Telegram команд | ✅ |
+| 12 новых src/core/ модулей | ✅ |
+| Dashboard frontend spec (docs/DASHBOARD_REDESIGN_SPEC.md) | ✅ |
+| Dashboard frontend реализация | ❌ (session 8) |
+| Swarm listeners e2e | ❌ (session 8) |
+| KrabEar диаризация | ❌ (session 8) |
 
 ---
 

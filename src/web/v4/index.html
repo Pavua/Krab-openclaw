@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🦀 Krab ⏳</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <script src="/v4/theme-toggle.js" defer></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+            background-color: #0b0f19;
+            color: #e2e8f0;
+            padding-bottom: 80px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: var(--spacing-md);
+        }
+
+        .w-full { width: 100%; }
+        .h-full { height: 100%; }
+        .hidden { display: none !important; }
+        .m-0 { margin: 0; }
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mb-3 { margin-bottom: 0.75rem; }
+        .mb-4 { margin-bottom: 1rem; }
+        .mt-2 { margin-top: 0.5rem; }
+        .mt-4 { margin-top: 1rem; }
+        .p-2 { padding: var(--spacing-sm); }
+        .p-3 { padding: 0.75rem; }
+        .p-4 { padding: var(--spacing-md); }
+        .text-center { text-align: center; }
+        .text-sm { font-size: 0.875rem; }
+        .text-lg { font-size: 1.125rem; }
+        .text-xl { font-size: 1.25rem; }
+        .text-2xl { font-size: 1.5rem; }
+        .font-bold { font-weight: bold; }
+        .opacity-50 { opacity: 0.5; }
+        .cursor-pointer { cursor: pointer; }
+
+        .max-w-md { max-width: 28rem; }
+        .tracking-wider { letter-spacing: 0.05em; }
+        .sticky { position: sticky; }
+        .top-0 { top: 0; }
+        .z-50 { z-index: 50; }
+        .fixed { position: fixed; }
+        .bottom-0 { bottom: 0; }
+        .flex-1 { flex: 1 1 0%; }
+        .justify-center { justify-content: center; }
+        .justify-around { justify-content: space-around; }
+        .block { display: block; }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border-width: 0;
+        }
+
+        button:focus-visible, a:focus-visible, select:focus-visible, .fallback-item:focus-visible {
+            outline: 2px solid #7dd3fc;
+            outline-offset: 2px;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .hero-section { animation: fadeInUp 0.6s ease-out both; }
+        .hub-grid { animation: fadeInUp 0.6s 0.15s ease-out both; }
+        .routing-card { animation: fadeInUp 0.6s 0.3s ease-out both; }
+        .quick-actions { animation: fadeInUp 0.6s 0.45s ease-out both; }
+
+        @media (prefers-reduced-motion: reduce) {
+            * { animation: none !important; transition: none !important; }
+        }
+
+        .model-badge {
+            display: inline-block;
+            padding: 0.5rem 1.25rem;
+            border-radius: 100px;
+            background: rgba(125, 211, 252, 0.12);
+            border: 1px solid rgba(125, 211, 252, 0.4);
+            color: #ffffff;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            min-width: 200px;
+            text-align: center;
+        }
+
+        .hero-section {
+            min-height: 35vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        .hero-title {
+            font-size: clamp(2.5rem, 5vw, 4rem);
+            margin: 0;
+            line-height: 1.1;
+            background: linear-gradient(135deg, #fff, #a5b4fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hub-grid {
+            display: grid;
+            grid-template-columns: repeat(1, 1fr);
+            gap: var(--spacing-md);
+        }
+
+        .health-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .drag-handle {
+            color: rgba(255,255,255,0.3);
+            cursor: grab;
+            padding-right: 8px;
+        }
+
+        @media (min-width: 768px) {
+            .hub-grid { grid-template-columns: repeat(3, 1fr); }
+            .mobile-only { display: none !important; }
+            body { padding-bottom: 0; }
+        }
+
+        @media (max-width: 767px) {
+            .desktop-only { display: none !important; }
+            .health-row { flex-direction: column; width: 100%; }
+            .health-row .glass-card { justify-content: center; }
+            .quick-actions { flex-direction: column; }
+        }
+
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+            color: transparent !important;
+            border-radius: 4px;
+        }
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            background-color: #64748b;
+        }
+        .status-dot.ok { background-color: #10b981; box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
+        .status-dot.error { background-color: #ef4444; box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); }
+
+        @keyframes pulse-status {
+            0% { transform: scale(1); box-shadow: 0 0 0 rgba(0,0,0,0); }
+            50% { transform: scale(1.4); box-shadow: 0 0 12px currentColor; }
+            100% { transform: scale(1); box-shadow: 0 0 8px currentColor; }
+        }
+        .status-changed { animation: pulse-status 1.2s ease-out; }
+
+        .unsaved-badge {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+        .dirty-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #fbbf24;
+            border-radius: 50%;
+            display: inline-block;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+        }
+
+        .recently-switched {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.4);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            animation: fadeInUp 0.3s ease-out;
+            margin-left: 8px;
+        }
+
+        .fallback-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+        .fallback-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .fallback-btn {
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.6;
+            cursor: pointer;
+            transition: opacity 0.2s, color 0.2s;
+            border: none;
+            background: transparent;
+            color: inherit;
+            font-size: 14px;
+            padding: 0;
+        }
+        .fallback-btn:hover {
+            opacity: 1;
+        }
+        .fallback-btn:disabled {
+            opacity: 0.2;
+            pointer-events: none;
+        }
+        .fallback-btn-remove:hover {
+            color: #ef4444;
+        }
+        .fallback-add-button {
+            border: 1px dashed rgba(255, 255, 255, 0.3);
+            background: transparent;
+            color: #e2e8f0;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: all 0.2s;
+            width: 100%;
+            display: block;
+            margin-top: 8px;
+        }
+        .fallback-add-button:hover {
+            opacity: 1;
+            border-color: rgba(255, 255, 255, 0.6);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        #toast-container {
+            position: fixed;
+            bottom: 90px;
+            left: 0;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        .toast {
+            padding: 12px 24px;
+            border-radius: 8px;
+            margin-top: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            animation: slideUp 0.3s ease-out;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            pointer-events: auto;
+            transition: all 0.3s ease-in;
+        }
+        .toast-success {
+            background: rgba(16, 185, 129, 0.95);
+            color: #fff;
+            border: 1px solid #10b981;
+        }
+        .toast-error {
+            background: rgba(239, 68, 68, 0.95);
+            color: #fff;
+            border: 1px solid #ef4444;
+        }
+        @keyframes slideUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .glass-modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+        }
+        .glass-modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .glass-modal {
+            background: #0f172a;
+            border: 1px solid rgba(125, 211, 252, 0.2);
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+            transform: translateY(20px);
+            transition: transform 0.2s;
+        }
+        .glass-modal-overlay.active .glass-modal {
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link active">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/v4/costs" class="nav-link">Costs</a>
+            <a href="/v4/inbox" class="nav-link">Inbox</a>
+            <a href="/v4/swarm" class="nav-link">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/ops" class="nav-link">Ops</a>
+            <a href="/v4/research" class="nav-link">Research</a>
+            <a href="/v4/settings" class="nav-link">Settings</a>
+            <a href="/v4/commands" class="nav-link">Commands</a>
+            <div class="nav-bell-wrapper">
+                <a href="/v4/inbox" class="nav-bell" aria-label="Notifications (0 new)" title="Notifications">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    </svg>
+                    <span class="bell-count hidden" id="nav-bell-count">0</span>
+                </a>
+                <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Costs
+        </a>
+        <a href="/v4/swarm" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Swarm
+        </a>
+        <a href="/v4/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+            Trans
+        </a>
+    </div>
+
+    <main class="container">
+        <section class="hero-section mb-4">
+            <h1 class="hero-title">🦀 Krab</h1>
+            <p class="text-muted text-sm mt-2 mb-4">Autonomous AI Orchestration Hub</p>
+            
+            <div class="health-row gap-2 w-full max-w-md" role="status" aria-live="polite" aria-atomic="true">
+                <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
+                    <span class="status-dot" id="dot-tg" role="img" aria-label="Telegram: checking"></span> <span class="text-sm">Telegram</span>
+                </div>
+                <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
+                    <span class="status-dot" id="dot-claw" role="img" aria-label="OpenClaw: checking"></span> <span class="text-sm">OpenClaw</span>
+                </div>
+                <div class="glass-card flex items-center gap-2 p-2 flex-1 justify-center">
+                    <span class="status-dot" id="dot-sched" role="img" aria-label="Scheduler: checking"></span> <span class="text-sm">Scheduler</span>
+                </div>
+            </div>
+
+            <div class="glass-card mt-4 p-4 flex flex-col items-center gap-2 max-w-md w-full">
+                <span class="text-xs text-muted uppercase tracking-wider">Current Active Model</span>
+                <div class="model-badge skeleton" id="hero-model-badge" aria-live="polite">Loading...</div>
+                <div class="text-xs text-muted mt-2" id="hero-last-route" style="opacity:0.7;">Last route: — • — • —</div>
+            </div>
+        </section>
+
+        <section class="hub-grid mb-4">
+            <a href="/v4/costs" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">💰 Costs</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-costs">— today</span>
+            </a>
+            
+            <a href="/v4/inbox" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">📬 Inbox</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-inbox">— unread</span>
+            </a>
+
+            <a href="/v4/swarm" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">🐝 Swarm</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-swarm">— teams active</span>
+            </a>
+
+            <a href="/v4/translator" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">🔄 Translator</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-translator">— translations</span>
+            </a>
+
+            <a href="/v4/chat" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">💬 Chat</h3>
+                </div>
+                <span class="text-sm text-muted">Open AI Assistant</span>
+            </a>
+
+            <a href="#ops" class="glass-card hub-card p-4 flex flex-col justify-between" style="text-decoration: none;">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="m-0 text-accent text-lg">🔧 Ops</h3>
+                </div>
+                <span class="text-sm text-muted skeleton" id="stat-ops">— alerts</span>
+            </a>
+        </section>
+
+        <section class="glass-card p-4 mb-4 routing-card">
+            <div class="flex justify-between items-center mb-3">
+                <h2 class="m-0 text-lg">Model Routing & Fallbacks</h2>
+                <div class="flex gap-2">
+                    <button class="glass-button text-xs" onclick="refreshCatalog()" id="btn-refresh-cat" aria-label="Refresh catalog">Refresh</button>
+                    <button class="glass-button text-xs" onclick="toggleAdvanced()" aria-label="Toggle advanced routing settings">Advanced</button>
+                </div>
+            </div>
+            
+            <div class="flex flex-col gap-3">
+                <div class="glass-card p-3 flex flex-col gap-2" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(16, 185, 129, 0.3);">
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-success">PRIMARY ROUTE</span>
+                            <span id="primary-dirty-dot" class="dirty-dot hidden"></span>
+                            <span id="recently-switched-badge" class="recently-switched hidden">Recently switched</span>
+                        </div>
+                        <span class="badge text-xs skeleton" id="route-primary-provider">—</span>
+                    </div>
+                    <label for="primary-model-select" class="sr-only">Primary Model</label>
+                    <select id="primary-model-select" class="glass-input w-full text-sm font-bold text-accent" style="background: rgba(0,0,0,0.2);">
+                        <option value="">Loading catalog...</option>
+                    </select>
+                </div>
+
+                <div class="text-xs text-muted mt-2">Fallback Chain:</div>
+                <div id="fallback-chain" class="flex flex-col gap-2">
+                    <div class="skeleton p-2" style="height: 30px;"></div>
+                    <div class="skeleton p-2" style="height: 30px;"></div>
+                </div>
+
+                <div class="mt-4 flex flex-col gap-2">
+                    <div class="flex justify-center hidden" id="unsaved-changes-container">
+                        <span class="unsaved-badge">Есть несохранённые изменения</span>
+                    </div>
+                    <button id="btn-apply-changes" class="glass-button glass-button-primary w-full opacity-50" style="padding: 12px; font-size: 1rem; font-weight: 700;" disabled title="Сохранить и применить" aria-label="Apply routing changes" onclick="applyModelSwitch()">
+                        Apply Changes
+                    </button>
+                    <div class="text-muted text-xs text-center">Изменения применяются сразу без рестарта</div>
+                </div>
+            </div>
+
+            <div id="advanced-routing" class="hidden mt-4 pt-4" style="border-top: 1px solid rgba(255,255,255,0.1);">
+                <div class="flex flex-col gap-3">
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm">Force Local Only</span>
+                        <label for="toggle-local" class="sr-only">Force Local Only</label>
+                        <button class="glass-button text-xs" id="toggle-local" aria-label="Toggle Force Local Only" onclick="this.classList.toggle('glass-button-primary')">Off</button>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm">Thinking Depth</span>
+                        <label for="thinking-depth" class="sr-only">Thinking Depth</label>
+                        <select id="thinking-depth" class="glass-input text-xs" aria-label="Thinking Depth" style="width: auto;">
+                            <option>Auto</option>
+                            <option>Low</option>
+                            <option>High</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="quick-actions flex gap-2 justify-between mt-4">
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Run health check" onclick="runAction('/api/ops/diagnostics', 'GET', this)">
+                <span class="text-lg">🩺</span> <span class="text-xs">Health Check</span>
+            </button>
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Restart runtime" onclick="confirmAction('Restart runtime? This will disconnect current chat sessions temporarily.', '/api/runtime/recover', 'POST', this)">
+                <span class="text-lg">⚡</span> <span class="text-xs">Restart</span>
+            </button>
+            <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1 text-error" aria-label="Clear chat context" onclick="confirmAction('Clear current chat context? Unsaved messages will be lost.', '/api/runtime/chat-session/clear', 'POST', this)">
+                <span class="text-lg">🗑️</span> <span class="text-xs">Clear Context</span>
+            </button>
+        </section>
+    </main>
+
+    <div id="toast-container" role="alert" aria-live="assertive"></div>
+
+    <div id="custom-modal" class="glass-modal-overlay">
+        <div class="glass-modal">
+            <h3 class="m-0 mb-3 text-lg">Confirm Action</h3>
+            <p id="custom-modal-text" class="text-sm text-muted mb-4"></p>
+            <div class="flex justify-end gap-2">
+                <button class="glass-button" onclick="closeModal()">Cancel</button>
+                <button class="glass-button glass-button-primary" id="custom-modal-confirm">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let catalogData = [];
+        let fallbackChain = [];
+        let currentPrimaryModel = '';
+        let pendingPrimary = '';
+        let originalFallbacks = [];
+
+        async function fetchAPI(endpoint, options = {}) {
+            try {
+                const res = await fetch(API_BASE + endpoint, options);
+                if (!res.ok) return { _error: true, status: res.status };
+                const text = await res.text();
+                return text ? JSON.parse(text) : {};
+            } catch (e) {
+                console.error(`Error fetching ${endpoint}:`, e);
+                return { _error: true, message: e.message };
+            }
+        }
+
+        function setVal(id, val, isHtml = false) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('skeleton');
+            if (isHtml) el.innerHTML = val;
+            else el.textContent = val;
+        }
+
+        function setStatus(id, isOk, labelName) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const newClass = `status-dot ${isOk ? 'ok' : 'error'}`;
+            if (el.className !== newClass && el.className !== 'status-dot') {
+                el.classList.add('status-changed');
+                setTimeout(() => el.classList.remove('status-changed'), 1200);
+            }
+            el.className = newClass;
+            el.setAttribute('aria-label', `${labelName}: ${isOk ? 'connected' : 'error'}`);
+        }
+
+        function showToast(msg, type) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(100%)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        function arraysEqual(a, b) {
+            if (a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) {
+                if (a[i] !== b[i]) return false;
+            }
+            return true;
+        }
+
+        function checkRecentlySwitched() {
+            const lastTs = localStorage.getItem('lastPrimaryChangeTs');
+            const badge = document.getElementById('recently-switched-badge');
+            if (lastTs && (Date.now() - parseInt(lastTs)) < 5 * 60 * 1000) {
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        function updateDirtyUI() {
+            const isDirty = pendingPrimary !== currentPrimaryModel || !arraysEqual(fallbackChain, originalFallbacks);
+            
+            const badgeContainer = document.getElementById('unsaved-changes-container');
+            const dot = document.getElementById('primary-dirty-dot');
+            const applyBtn = document.getElementById('btn-apply-changes');
+            
+            if (isDirty) {
+                badgeContainer.classList.remove('hidden');
+                dot.classList.remove('hidden');
+                applyBtn.disabled = false;
+                applyBtn.classList.remove('opacity-50');
+            } else {
+                badgeContainer.classList.add('hidden');
+                dot.classList.add('hidden');
+                applyBtn.disabled = true;
+                applyBtn.classList.add('opacity-50');
+            }
+
+            let provider = '—';
+            const modelObj = catalogData.find(m => m.id === pendingPrimary);
+            if (modelObj) {
+                provider = modelObj.provider_label || modelObj.provider || 'unknown';
+            } else if (pendingPrimary) {
+                const parts = String(pendingPrimary).split('/');
+                if (parts.length > 1) provider = parts[0];
+            }
+            setVal('route-primary-provider', provider);
+            checkRecentlySwitched();
+        }
+
+        async function refreshDashboard() {
+            const [health, summary, budget, notifs, swarm, alerts] = await Promise.all([
+                fetchAPI('/api/health/lite'),
+                fetchAPI('/api/runtime/summary'),
+                fetchAPI('/api/costs/budget'),
+                fetchAPI('/api/notifications/count'),
+                fetchAPI('/api/swarm/task-board'),
+                fetchAPI('/api/ops/alerts')
+            ]);
+
+            const systemOk = !health._error && health.ok !== false && summary.health?.status !== 'error';
+            document.title = systemOk ? "🦀 Krab ✅" : "🦀 Krab ⚠️";
+
+            setStatus('dot-tg', health.telegram_session_state === 'connected' || health.ok, 'Telegram');
+            setStatus('dot-claw', systemOk, 'OpenClaw');
+            setStatus('dot-sched', systemOk, 'Scheduler');
+
+            const currentModel = summary.route?.model || health.last_runtime_route?.model || '—';
+            setVal('hero-model-badge', currentModel);
+
+            const lastRoute = health.last_runtime_route || {};
+            const lrModel = lastRoute.model || '—';
+            const lrProvider = lastRoute.provider || '—';
+            const lrTs = lastRoute.ts ? new Date(lastRoute.ts * 1000).toLocaleTimeString() : '—';
+            setVal('hero-last-route', `Last route: ${lrModel} • ${lrProvider} • ${lrTs}`);
+
+            if (!budget._error && budget.budget) {
+                setVal('stat-costs', `$${parseFloat(budget.budget.spent_usd || 0).toFixed(2)} today`);
+            } else setVal('stat-costs', '— today');
+
+            if (!notifs._error) {
+                setVal('stat-inbox', `${notifs.total || 0} unread`);
+            } else setVal('stat-inbox', '— unread');
+
+            if (!swarm._error && swarm.summary) {
+                const teams = swarm.summary.by_team ? Object.keys(swarm.summary.by_team).length : 0;
+                setVal('stat-swarm', `${teams} teams active`);
+            } else setVal('stat-swarm', '— teams active');
+
+            if (!summary._error && summary.translator) {
+                setVal('stat-translator', `${summary.translator.count || 0} translations`);
+            } else setVal('stat-translator', '— translations');
+
+            if (!alerts._error && alerts.alerts) {
+                const count = alerts.alerts.length;
+                setVal('stat-ops', count > 0 ? `<span class="text-error">${count} alerts</span>` : `0 alerts`, true);
+            } else setVal('stat-ops', '— alerts');
+
+            if (catalogData.length === 0) {
+                loadCatalog(false).then(() => {
+                    setTimeout(() => loadCatalog(true).catch(() => {}), 500);
+                });
+            }
+        }
+
+        function renderPrimarySelect() {
+            const select = document.getElementById('primary-model-select');
+            while (select.firstChild) select.removeChild(select.firstChild);
+            
+            const cloudInv = catalogData.filter(m => m.provider !== 'lm_studio');
+            const localModels = catalogData.filter(m => m.provider === 'lm_studio');
+            
+            const groupsByProvider = new Map();
+            cloudInv.forEach(m => {
+                const provider = m.provider || 'other';
+                if (!groupsByProvider.has(provider)) {
+                    groupsByProvider.set(provider, {label: m.provider_label || provider, models: []});
+                }
+                groupsByProvider.get(provider).models.push(m);
+            });
+
+            groupsByProvider.forEach((g, providerId) => {
+                const group = document.createElement('optgroup');
+                group.label = g.label;
+                g.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.id;
+                    if (m.id === pendingPrimary) opt.selected = true;
+                    group.appendChild(opt);
+                });
+                select.appendChild(group);
+            });
+
+            if (localModels.length > 0) {
+                const group = document.createElement('optgroup');
+                group.label = 'Local (LM Studio)';
+                localModels.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    const size = m.size_human ? ' \u2014 ' + m.size_human : '';
+                    const loaded = m.loaded ? ' [loaded]' : '';
+                    opt.textContent = m.id + size + loaded;
+                    if (m.id === pendingPrimary) opt.selected = true;
+                    group.appendChild(opt);
+                });
+                select.appendChild(group);
+            }
+
+            select.onchange = (e) => {
+                pendingPrimary = e.target.value;
+                updateDirtyUI();
+            };
+        }
+
+        async function loadCatalog(force = false) {
+            const endpoint = force ? '/api/model/catalog?force_refresh=true' : '/api/model/catalog';
+            const data = await fetchAPI(endpoint, {});
+
+            if (data._error) return;
+            const cat = data.catalog || {};
+            const cloudInv = cat.cloud_inventory || [];
+            const localModels = cat.local_models || [];
+            const routingStatus = cat.routing_status || {};
+            const currentPrimary = routingStatus.current_primary || (cat.cloud_slots && cat.cloud_slots.chat) || '';
+            
+            currentPrimaryModel = currentPrimary;
+            catalogData = [...cloudInv, ...localModels.map(m => ({...m, provider: 'lm_studio', provider_label: 'Local'}))];
+            fallbackChain = [...(routingStatus.current_fallbacks || [])];
+            
+            originalFallbacks = [...fallbackChain];
+            pendingPrimary = currentPrimaryModel;
+
+            renderPrimarySelect();
+            renderFallbackChain();
+            updateDirtyUI();
+        }
+
+        function renderFallbackChain() {
+            const container = document.getElementById('fallback-chain');
+            while (container.firstChild) container.removeChild(container.firstChild);
+
+            if (fallbackChain.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'text-xs text-muted p-2 text-center';
+                empty.textContent = 'No fallbacks configured.';
+                container.appendChild(empty);
+            } else {
+                fallbackChain.forEach((modelId, idx) => {
+                    let provider = 'unknown';
+                    const modelObj = catalogData.find(m => m.id === modelId);
+                    if (modelObj && modelObj.provider) {
+                        provider = modelObj.provider;
+                    } else {
+                        const parts = String(modelId).split('/');
+                        if (parts.length > 1) provider = parts[0];
+                    }
+
+                    const item = document.createElement('div');
+                    item.className = 'fallback-item p-2 flex justify-between items-center text-sm mb-2';
+                    item.tabIndex = 0;
+
+                    const left = document.createElement('div');
+                    left.className = 'flex items-center gap-2 overflow-hidden';
+                    
+                    const handle = document.createElement('span');
+                    handle.className = 'drag-handle';
+                    handle.textContent = '≡';
+                    
+                    const num = document.createElement('span');
+                    num.className = 'opacity-50 text-xs';
+                    num.textContent = (idx + 1) + '.';
+                    
+                    const name = document.createElement('span');
+                    name.className = 'truncate';
+                    name.textContent = modelId;
+
+                    left.appendChild(handle);
+                    left.appendChild(num);
+                    left.appendChild(name);
+
+                    const right = document.createElement('div');
+                    right.className = 'flex items-center gap-1 shrink-0';
+
+                    const prov = document.createElement('span');
+                    prov.className = 'text-xs text-muted mr-2 hidden md:inline';
+                    prov.textContent = provider;
+
+                    const btnUp = document.createElement('button');
+                    btnUp.className = 'fallback-btn';
+                    btnUp.textContent = '▲';
+                    btnUp.setAttribute('aria-label', `Move up ${modelId}`);
+                    if (idx === 0) btnUp.disabled = true;
+                    btnUp.onclick = () => moveFallback(idx, -1);
+
+                    const btnDown = document.createElement('button');
+                    btnDown.className = 'fallback-btn';
+                    btnDown.textContent = '▼';
+                    btnDown.setAttribute('aria-label', `Move down ${modelId}`);
+                    if (idx === fallbackChain.length - 1) btnDown.disabled = true;
+                    btnDown.onclick = () => moveFallback(idx, 1);
+
+                    const btnRm = document.createElement('button');
+                    btnRm.className = 'fallback-btn fallback-btn-remove';
+                    btnRm.textContent = '✕';
+                    btnRm.setAttribute('aria-label', `Remove fallback ${modelId}`);
+                    btnRm.onclick = () => removeFallback(idx);
+
+                    right.appendChild(prov);
+                    right.appendChild(btnUp);
+                    right.appendChild(btnDown);
+                    right.appendChild(btnRm);
+
+                    item.appendChild(left);
+                    item.appendChild(right);
+                    container.appendChild(item);
+
+                    item.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            if (document.activeElement === btnUp) btnUp.click();
+                            else if (document.activeElement === btnDown) btnDown.click();
+                            else if (document.activeElement === btnRm) btnRm.click();
+                        }
+                    });
+                });
+            }
+
+            const addContainer = document.createElement('div');
+            const addBtn = document.createElement('button');
+            addBtn.className = 'fallback-add-button text-sm';
+            addBtn.textContent = '+ Add Fallback';
+            addBtn.setAttribute('aria-label', 'Add new fallback model');
+            
+            addBtn.onclick = () => {
+                while (addContainer.firstChild) addContainer.removeChild(addContainer.firstChild);
+                
+                const selectorDiv = document.createElement('div');
+                selectorDiv.className = 'glass-card p-2 flex flex-col gap-2 mt-2';
+                
+                const select = document.createElement('select');
+                select.className = 'glass-input w-full text-sm';
+                select.setAttribute('aria-label', 'Select fallback model');
+                
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = '';
+                defaultOpt.textContent = 'Select model...';
+                select.appendChild(defaultOpt);
+
+                const groups = new Map();
+                catalogData.forEach(m => {
+                    if (fallbackChain.includes(m.id)) return;
+                    const p = m.provider || 'other';
+                    if (!groups.has(p)) groups.set(p, { label: m.provider_label || p, models: [] });
+                    groups.get(p).models.push(m);
+                });
+
+                groups.forEach((g, pId) => {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = g.label;
+                    g.models.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        opt.textContent = m.id;
+                        optgroup.appendChild(opt);
+                    });
+                    select.appendChild(optgroup);
+                });
+
+                const btnRow = document.createElement('div');
+                btnRow.className = 'flex gap-2 justify-end';
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'glass-button text-xs';
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.onclick = () => renderFallbackChain();
+
+                const confirmBtn = document.createElement('button');
+                confirmBtn.className = 'glass-button glass-button-primary text-xs';
+                confirmBtn.textContent = 'Add';
+                confirmBtn.onclick = () => {
+                    if (select.value) addFallback(select.value);
+                };
+
+                btnRow.appendChild(cancelBtn);
+                btnRow.appendChild(confirmBtn);
+
+                selectorDiv.appendChild(select);
+                selectorDiv.appendChild(btnRow);
+                addContainer.appendChild(selectorDiv);
+            };
+
+            addContainer.appendChild(addBtn);
+            container.appendChild(addContainer);
+        }
+
+        function addFallback(modelId) {
+            if (!fallbackChain.includes(modelId)) {
+                fallbackChain.push(modelId);
+                renderFallbackChain();
+                updateDirtyUI();
+            }
+        }
+
+        function removeFallback(idx) {
+            fallbackChain.splice(idx, 1);
+            renderFallbackChain();
+            updateDirtyUI();
+        }
+
+        function moveFallback(idx, dir) {
+            if (idx + dir < 0 || idx + dir >= fallbackChain.length) return;
+            const temp = fallbackChain[idx];
+            fallbackChain[idx] = fallbackChain[idx + dir];
+            fallbackChain[idx + dir] = temp;
+            renderFallbackChain();
+            updateDirtyUI();
+        }
+
+        function toggleAdvanced() {
+            document.getElementById('advanced-routing').classList.toggle('hidden');
+        }
+
+        async function refreshCatalog() {
+            const btn = document.getElementById('btn-refresh-cat');
+            btn.textContent = '...';
+            await loadCatalog(true);
+            btn.textContent = 'Refresh';
+        }
+
+        async function applyModelSwitch() {
+            const payload = {
+                action: "set_runtime_chain",
+                primary: pendingPrimary,
+                fallbacks: fallbackChain,
+                thinking_default: "off"
+            };
+
+            const btn = document.getElementById('btn-apply-changes');
+            const originalText = btn.textContent;
+            
+            btn.textContent = 'Applying...';
+            btn.classList.add('opacity-50');
+            btn.disabled = true;
+            
+            const res = await fetchAPI('/api/model/apply', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+
+            if(!res._error) {
+                btn.textContent = 'Success!';
+                btn.classList.add('text-success');
+                showToast('Routing chain updated successfully', 'success');
+                
+                currentPrimaryModel = pendingPrimary;
+                originalFallbacks = [...fallbackChain];
+                localStorage.setItem('lastPrimaryChangeTs', Date.now().toString());
+                updateDirtyUI();
+
+                setTimeout(() => {
+                    loadCatalog(true);
+                    refreshDashboard();
+                }, 500);
+            } else {
+                btn.textContent = 'Failed';
+                btn.classList.add('text-error');
+                showToast('Failed to update routing chain', 'error');
+                updateDirtyUI();
+            }
+
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.classList.remove('text-success', 'text-error');
+                updateDirtyUI();
+            }, 3000);
+        }
+
+        let pendingAction = null;
+        function confirmAction(message, endpoint, method, btnElement) {
+            document.getElementById('custom-modal-text').textContent = message;
+            const modal = document.getElementById('custom-modal');
+            modal.classList.add('active');
+            pendingAction = () => {
+                closeModal();
+                runAction(endpoint, method, btnElement);
+            };
+        }
+
+        function closeModal() {
+            document.getElementById('custom-modal').classList.remove('active');
+            pendingAction = null;
+        }
+
+        document.getElementById('custom-modal-confirm').addEventListener('click', () => {
+            if (pendingAction) pendingAction();
+        });
+
+        // Закрытие modal: по клику на backdrop и Escape
+        document.getElementById('custom-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'custom-modal') closeModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const modal = document.getElementById('custom-modal');
+                if (modal && modal.classList.contains('active')) closeModal();
+            }
+        });
+
+        async function runAction(endpoint, method, btnElement) {
+            const originalHtml = btnElement.innerHTML;
+            btnElement.innerHTML = '<span class="spinner"></span> <span class="text-xs">Wait...</span>';
+            
+            const res = await fetchAPI(endpoint, { method });
+            
+            if(!res._error) {
+                btnElement.innerHTML = '<span class="text-success text-xs">Done ✅</span>';
+                if (endpoint.includes('clear')) showToast('Context cleared', 'success');
+            } else {
+                btnElement.innerHTML = '<span class="text-error text-xs">Error ❌</span>';
+            }
+            
+            setTimeout(() => {
+                btnElement.innerHTML = originalHtml;
+                refreshDashboard();
+            }, 2000);
+        }
+
+        refreshDashboard();
+        setInterval(refreshDashboard, 15000);
+
+        async function updateBellCount() {
+          try {
+            const [inboxRes, opsRes] = await Promise.all([
+              fetch('/api/inbox/status').catch(() => null),
+              fetch('/api/ops/alerts').catch(() => null)
+            ]);
+
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+              total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+              total = latestItems.length + alerts.length;
+            }
+
+            const countEl = document.getElementById('nav-bell-count');
+            const navBell = document.querySelector('.nav-bell');
+            if (navBell) {
+                navBell.setAttribute('aria-label', `Notifications (${total} new)`);
+            }
+
+            if (countEl) {
+              if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+              } else {
+                countEl.classList.add('hidden');
+              }
+            }
+
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
+
+            dropdown.innerHTML = '';
+
+            if (alerts.length === 0 && latestItems.length === 0) {
+              const emptyDiv = document.createElement('div');
+              emptyDiv.className = 'bell-dropdown-empty';
+              emptyDiv.textContent = 'Нет уведомлений';
+              dropdown.appendChild(emptyDiv);
+            } else {
+              if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = '/v4/ops';
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+
+              if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+                  const text = document.createTextNode(item.title || 'Notification');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+
+          } catch (err) {
+            console.error(err);
+          }
+        }
+
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
+
+        const navBell = document.querySelector('.nav-bell');
+        if (navBell) {
+          const bellWrapper = navBell.closest('.nav-bell-wrapper');
+          const bellDropdown = document.getElementById('bell-dropdown');
+  
+          if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+              e.preventDefault();
+              bellDropdown.classList.toggle('hidden');
+              if (!bellDropdown.classList.contains('hidden')) {
+                  const firstItem = bellDropdown.querySelector('a');
+                  if (firstItem) setTimeout(() => firstItem.focus(), 50);
+              }
+            });
+
+            document.addEventListener('click', (e) => {
+              if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+                navBell.focus();
+              }
+            });
+
+            bellDropdown.addEventListener('keydown', (e) => {
+                const items = Array.from(bellDropdown.querySelectorAll('a'));
+                const index = items.indexOf(document.activeElement);
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    const next = items[index + 1] || items[0];
+                    if (next) next.focus();
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const prev = items[index - 1] || items[items.length - 1];
+                    if (prev) prev.focus();
+                }
+            });
+          }
+        }
+
+    </script>
+</body>
+</html>

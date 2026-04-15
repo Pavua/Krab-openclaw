@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swarm Control Dashboard | Krab AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+    :root {
+        --bg-color: #0a0a1a;
+        --card-bg: rgba(255, 255, 255, 0.03);
+        --card-border: rgba(255, 255, 255, 0.08);
+        --cyan: #00f0ff;
+        --purple: #b026ff;
+        --text-main: #ffffff;
+        --text-muted: #8a8a9e;
+        --pending: #ffb800;
+        --in-progress: #00f0ff;
+        --done: #00ff88;
+        --failed: #ff3366;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Outfit', sans-serif; }
+
+    body {
+        background-color: var(--bg-color);
+        background-image: 
+            radial-gradient(circle at 15% 50%, rgba(176, 38, 255, 0.08) 0%, transparent 50%),
+            radial-gradient(circle at 85% 30%, rgba(0, 240, 255, 0.08) 0%, transparent 50%);
+        color: var(--text-main);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Glassmorphism utilities */
+    .glass {
+        background: var(--card-bg);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--card-border);
+        border-radius: 16px;
+    }
+
+    /* Navbar */
+    .navbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1rem 2rem;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        border-bottom: 1px solid var(--card-border);
+        background: rgba(10, 10, 26, 0.8);
+        backdrop-filter: blur(16px);
+    }
+
+    .navbar .logo {
+        font-weight: 700;
+        font-size: 1.2rem;
+        background: linear-gradient(90deg, var(--cyan), var(--purple));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: 1px;
+    }
+
+    .navbar .links { display: flex; gap: 1.5rem; }
+
+    .navbar a {
+        color: var(--text-muted);
+        text-decoration: none;
+        font-size: 0.9rem;
+        font-weight: 500;
+        transition: all 0.3s ease;
+        padding: 0.4rem 0.8rem;
+        border-radius: 8px;
+    }
+
+    .navbar a:hover { color: var(--text-main); background: rgba(255,255,255,0.05); }
+
+    .navbar a.active {
+        color: var(--text-main);
+        background: rgba(255, 255, 255, 0.05);
+        box-shadow: inset 0 0 0 1px rgba(0, 240, 255, 0.2), 0 0 15px rgba(176, 38, 255, 0.1);
+    }
+
+    /* Layout */
+    .container { padding: 2rem; display: flex; flex-direction: column; gap: 1.5rem; max-width: 1600px; margin: 0 auto; width: 100%; }
+    
+    .header-row { display: flex; justify-content: space-between; align-items: flex-end; }
+    .header-row h1 { font-size: 1.8rem; font-weight: 600; }
+    .header-row .status-dot { width: 8px; height: 8px; background: var(--done); border-radius: 50%; display: inline-block; box-shadow: 0 0 8px var(--done); margin-right: 8px; }
+
+    .grid-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; }
+    .grid-main { display: grid; grid-template-columns: 3fr 1fr; gap: 1.5rem; }
+    @media (max-width: 1024px) { .grid-main { grid-template-columns: 1fr; } }
+
+    /* Summary Cards */
+    .stat-card { padding: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; position: relative; overflow: hidden; }
+    .stat-card::before { content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 2px; }
+    .stat-card.pending::before { background: var(--pending); box-shadow: 0 0 10px var(--pending); }
+    .stat-card.in_progress::before { background: var(--in-progress); box-shadow: 0 0 10px var(--in-progress); }
+    .stat-card.done::before { background: var(--done); box-shadow: 0 0 10px var(--done); }
+    .stat-card.failed::before { background: var(--failed); box-shadow: 0 0 10px var(--failed); }
+    
+    .stat-card .title { font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+    .stat-card .value { font-size: 2rem; font-weight: 700; }
+
+    /* Team Breakdown */
+    .team-breakdown { display: flex; gap: 1rem; margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-muted); }
+    .team-breakdown span { display: flex; align-items: center; gap: 0.3rem; }
+
+    /* Controls & Forms */
+    .panel { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+    .panel h3 { font-size: 1.1rem; font-weight: 500; border-bottom: 1px solid var(--card-border); padding-bottom: 0.8rem; margin-bottom: 0.5rem; }
+
+    input, select, button {
+        background: rgba(0,0,0,0.2); border: 1px solid var(--card-border); color: var(--text-main);
+        padding: 0.6rem 1rem; border-radius: 8px; outline: none; font-size: 0.9rem; transition: all 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 8px rgba(0, 240, 255, 0.2); }
+    
+    button { background: linear-gradient(135deg, rgba(0, 240, 255, 0.1), rgba(176, 38, 255, 0.1)); cursor: pointer; font-weight: 600; border: 1px solid rgba(176, 38, 255, 0.3); }
+    button:hover { background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(176, 38, 255, 0.2)); border-color: var(--cyan); }
+
+    .form-group { display: flex; gap: 0.8rem; }
+    .form-group input { flex: 1; }
+
+    /* Listeners Toggle */
+    .listener-header { display: flex; justify-content: space-between; align-items: center; }
+    .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .4s; border-radius: 24px; border: 1px solid var(--card-border); }
+    .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: var(--text-muted); transition: .4s; border-radius: 50%; }
+    input:checked + .slider { background-color: rgba(0, 240, 255, 0.2); border-color: var(--cyan); }
+    input:checked + .slider:before { transform: translateX(20px); background-color: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+
+    .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .pill { background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; color: var(--cyan); }
+
+    /* Table */
+    .table-container { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { padding: 1rem; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--card-border); }
+    td { padding: 1rem; border-bottom: 1px solid rgba(255,255,255,0.02); font-size: 0.9rem; vertical-align: middle; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    
+    .badge { padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem; }
+    .badge.pending { background: rgba(255, 184, 0, 0.1); color: var(--pending); border: 1px solid rgba(255, 184, 0, 0.2); }
+    .badge.in_progress { background: rgba(0, 240, 255, 0.1); color: var(--in-progress); border: 1px solid rgba(0, 240, 255, 0.2); }
+    .badge.done { background: rgba(0, 255, 136, 0.1); color: var(--done); border: 1px solid rgba(0, 255, 136, 0.2); }
+    .badge.failed { background: rgba(255, 51, 102, 0.1); color: var(--failed); border: 1px solid rgba(255, 51, 102, 0.2); }
+
+    .priority-select { background: transparent; border: 1px solid transparent; color: var(--text-muted); padding: 0.2rem; cursor: pointer; }
+    .priority-select:hover { border-color: var(--card-border); background: rgba(0,0,0,0.2); }
+
+    /* Artifacts */
+    .artifact-item { padding: 0.8rem; border: 1px solid var(--card-border); border-radius: 8px; margin-bottom: 0.8rem; background: rgba(0,0,0,0.2); cursor: pointer; transition: all 0.2s; }
+    .artifact-item:hover { border-color: var(--purple); box-shadow: 0 0 10px rgba(176, 38, 255, 0.1); }
+    .artifact-header { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--cyan); margin-bottom: 0.4rem; }
+    .artifact-content { font-size: 0.85rem; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .artifact-item.expanded .artifact-content { -webkit-line-clamp: unset; color: var(--text-main); }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+</style>
+</head>
+<body>
+
+<nav class="navbar">
+    <div class="logo">Krab AI</div>
+    <div class="links">
+        <a href="/">/</a>
+        <a href="/costs">/costs</a>
+        <a href="/inbox">/inbox</a>
+        <a href="/swarm" class="active">/swarm</a>
+        <a href="/translator">/translator</a>
+    </div>
+</nav>
+
+<div class="container">
+    <div class="header-row">
+        <h1><span class="status-dot"></span>Swarm Control</h1>
+        <div style="font-size: 0.85rem; color: var(--text-muted);" id="last-update">Updating...</div>
+    </div>
+
+    <!-- Top Grid: Summary & Controls -->
+    <div class="grid-top">
+        <div class="glass stat-card pending">
+            <div class="title">⏳ Pending</div>
+            <div class="value" id="stat-pending">-</div>
+        </div>
+        <div class="glass stat-card in_progress">
+            <div class="title">🔄 In Progress</div>
+            <div class="value" id="stat-inprogress">-</div>
+        </div>
+        <div class="glass stat-card done">
+            <div class="title">✅ Done</div>
+            <div class="value" id="stat-done">-</div>
+        </div>
+        <div class="glass stat-card failed">
+            <div class="title">❌ Failed</div>
+            <div class="value" id="stat-failed">-</div>
+        </div>
+
+        <div class="glass panel" style="grid-column: span 2;">
+            <div class="listener-header">
+                <h3>Swarm Listeners</h3>
+                <label class="switch">
+                    <input type="checkbox" id="listenerToggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="pills" id="listener-accounts">
+                <span class="pill" style="color: var(--text-muted); border-color: transparent;">Loading accounts...</span>
+            </div>
+        </div>
+
+        <div class="glass panel" style="grid-column: span 2;">
+            <h3>Create Task</h3>
+            <form id="createTaskForm" class="form-group">
+                <select id="taskTeam" required>
+                    <option value="traders">📈 Traders</option>
+                    <option value="coders">💻 Coders</option>
+                    <option value="analysts">📊 Analysts</option>
+                    <option value="creative">🎨 Creative</option>
+                </select>
+                <input type="text" id="taskTitle" placeholder="Enter task instruction..." required>
+                <button type="submit">Deploy Agent</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="team-breakdown glass" style="padding: 1rem; justify-content: space-around;" id="team-breakdown">
+        <span>📈 Traders: -</span>
+        <span>💻 Coders: -</span>
+        <span>📊 Analysts: -</span>
+        <span>🎨 Creative: -</span>
+    </div>
+
+    <!-- Main Grid: Table & Artifacts -->
+    <div class="grid-main">
+        <div class="glass panel tasks-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="border: none; margin: 0; padding: 0;">Active Tasks</h3>
+                <div style="display: flex; gap: 0.5rem;">
+                    <select id="filterTeam" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
+                        <option value="all">All Teams</option>
+                        <option value="traders">Traders</option>
+                        <option value="coders">Coders</option>
+                        <option value="analysts">Analysts</option>
+                        <option value="creative">Creative</option>
+                    </select>
+                    <select id="filterStatus" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
+                        <option value="all">All Status</option>
+                        <option value="pending">Pending</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="done">Done</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                </div>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Team</th>
+                            <th>Title</th>
+                            <th>Status</th>
+                            <th>Priority</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tasks-tbody">
+                        <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading tasks...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="glass panel artifacts-card">
+            <h3>Recent Artifacts</h3>
+            <div id="artifacts-list" style="max-height: 600px; overflow-y: auto; padding-right: 5px;">
+                <div style="text-align: center; color: var(--text-muted); font-size: 0.85rem;">Loading artifacts...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_BASE = 'http://localhost:8080/api/swarm';
+    const EMOJIS = { traders: '📈', coders: '💻', analysts: '📊', creative: '🎨' };
+    const STATUS_MAP = { 
+        pending: { text: 'Pending', class: 'pending', icon: '⏳' },
+        in_progress: { text: 'In Progress', class: 'in_progress', icon: '🔄' },
+        done: { text: 'Done', class: 'done', icon: '✅' },
+        failed: { text: 'Failed', class: 'failed', icon: '❌' }
+    };
+
+    let currentTasks = [];
+
+    async function fetchAPI(endpoint, options = {}) {
+        try {
+            const res = await fetch(`${API_BASE}${endpoint}`, {
+                ...options,
+                headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+            });
+            return await res.json();
+        } catch (err) {
+            console.error(`Error fetching ${endpoint}:`, err);
+            return null;
+        }
+    }
+
+    async function loadSummary() {
+        const data = await fetchAPI('/task-board');
+        if (data && data.summary) {
+            const st = data.summary.by_status;
+            document.getElementById('stat-pending').innerText = st.pending || 0;
+            document.getElementById('stat-inprogress').innerText = st.in_progress || 0;
+            document.getElementById('stat-done').innerText = st.done || 0;
+            document.getElementById('stat-failed').innerText = st.failed || 0;
+
+            const tb = data.summary.by_team || {};
+            document.getElementById('team-breakdown').innerHTML = `
+                <span>📈 Traders: ${tb.traders || 0}</span>
+                <span>💻 Coders: ${tb.coders || 0}</span>
+                <span>📊 Analysts: ${tb.analysts || 0}</span>
+                <span>🎨 Creative: ${tb.creative || 0}</span>
+            `;
+        }
+    }
+
+    async function loadTasks() {
+        const data = await fetchAPI('/tasks?limit=20');
+        if (data && data.items) {
+            currentTasks = data.items;
+            renderTasks();
+        }
+    }
+
+    function renderTasks() {
+        const tbody = document.getElementById('tasks-tbody');
+        const filterTeam = document.getElementById('filterTeam').value;
+        const filterStatus = document.getElementById('filterStatus').value;
+
+        const filtered = currentTasks.filter(t => {
+            const matchTeam = filterTeam === 'all' || t.team === filterTeam;
+            const matchStatus = filterStatus === 'all' || t.status === filterStatus;
+            return matchTeam && matchStatus;
+        });
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No tasks found.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = filtered.map(t => {
+            const st = STATUS_MAP[t.status] || STATUS_MAP.pending;
+            const teamEmoji = EMOJIS[t.team] || '🤖';
+            const date = new Date(t.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            
+            return `
+                <tr>
+                    <td style="color: var(--text-muted); font-family: monospace;">#${t.task_id.substring(0,6)}</td>
+                    <td>${teamEmoji} <span style="text-transform: capitalize;">${t.team}</span></td>
+                    <td style="max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${t.title}">${t.title}</td>
+                    <td><span class="badge ${st.class}">${st.icon} ${st.text}</span></td>
+                    <td>
+                        <select class="priority-select" onchange="updatePriority('${t.task_id}', this.value)">
+                            <option value="low" ${t.priority==='low'?'selected':''}>Low</option>
+                            <option value="normal" ${t.priority==='normal'?'selected':''}>Normal</option>
+                            <option value="high" ${t.priority==='high'?'selected':''}>High</option>
+                        </select>
+                    </td>
+                    <td style="color: var(--text-muted);">${date}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    async function loadArtifacts() {
+        const data = await fetchAPI('/artifacts?limit=10');
+        const list = document.getElementById('artifacts-list');
+        if (data && data.items && data.items.length > 0) {
+            list.innerHTML = data.items.map(a => `
+                <div class="artifact-item" onclick="this.classList.toggle('expanded')">
+                    <div class="artifact-header">
+                        <span>${EMOJIS[a.team] || '📁'} ${a.team}</span>
+                        <span>${new Date(a.created_at).toLocaleTimeString()}</span>
+                    </div>
+                    <div class="artifact-content">${a.content || a.summary || 'No content preview available.'}</div>
+                </div>
+            `).join('');
+        } else {
+            list.innerHTML = `<div style="text-align: center; color: var(--text-muted); font-size: 0.85rem;">No artifacts generated yet.</div>`;
+        }
+    }
+
+    async function loadListeners() {
+        const data = await fetchAPI('/listeners');
+        if (data) {
+            document.getElementById('listenerToggle').checked = data.listeners_enabled;
+            const pills = document.getElementById('listener-accounts');
+            if (data.accounts && data.accounts.length > 0) {
+                pills.innerHTML = data.accounts.map(acc => `<span class="pill">${acc}</span>`).join('');
+            } else {
+                pills.innerHTML = `<span class="pill" style="color: var(--text-muted); border-color: transparent;">No accounts connected</span>`;
+            }
+        }
+    }
+
+    // Event Listeners
+    document.getElementById('createTaskForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const team = document.getElementById('taskTeam').value;
+        const title = document.getElementById('taskTitle').value;
+        
+        const res = await fetchAPI('/tasks/create', {
+            method: 'POST',
+            body: JSON.stringify({ team, title, priority: 'normal' })
+        });
+        
+        if(res && res.ok) {
+            document.getElementById('taskTitle').value = '';
+            refreshDashboard();
+        } else {
+            alert('Failed to create task. Is the Swarm API running?');
+        }
+    });
+
+    document.getElementById('listenerToggle').addEventListener('change', async (e) => {
+        const enabled = e.target.checked;
+        await fetchAPI('/listeners/toggle', {
+            method: 'POST',
+            body: JSON.stringify({ enabled })
+        });
+    });
+
+    document.getElementById('filterTeam').addEventListener('change', renderTasks);
+    document.getElementById('filterStatus').addEventListener('change', renderTasks);
+
+    function updatePriority(taskId, newPriority) {
+        console.log(`Update priority for ${taskId} to ${newPriority}`);
+        // Mocking behavior since specific endpoint wasn't provided for priority edit
+    }
+
+    function updateTimestamp() {
+        const now = new Date();
+        document.getElementById('last-update').innerText = `Last updated: ${now.toLocaleTimeString()}`;
+    }
+
+    async function refreshDashboard() {
+        await Promise.all([
+            loadSummary(),
+            loadTasks(),
+            loadArtifacts(),
+            loadListeners()
+        ]);
+        updateTimestamp();
+    }
+
+    // Init and Auto-refresh
+    refreshDashboard();
+    setInterval(refreshDashboard, 15000);
+
+</script>
+</body>
+</html>

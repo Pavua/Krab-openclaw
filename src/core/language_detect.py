@@ -31,6 +31,23 @@ def detect_language(text: str) -> str:
         return ""
 
 
+def auto_detect_direction(detected_lang: str) -> tuple[str, str]:
+    """
+    Правила автоопределения направления перевода без profile pair.
+
+    ru → en, en → ru, es → ru, всё остальное → ru.
+    Используется в !translate когда нет явной language_pair в профиле.
+    """
+    if detected_lang == "ru":
+        return "ru", "en"
+    if detected_lang == "en":
+        return "en", "ru"
+    if detected_lang == "es":
+        return "es", "ru"
+    # Любой другой язык — переводим на русский
+    return detected_lang, "ru"
+
+
 def resolve_translation_pair(
     detected_lang: str,
     profile_pair: str,

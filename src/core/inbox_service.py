@@ -272,10 +272,12 @@ class InboxService:
         normalized_kind = str(kind or "").strip().lower()
         rows: list[dict[str, Any]] = []
         for item in self._load_items():
-            if normalized_status == "open" and item.status not in self._open_statuses:
-                continue
-            elif normalized_status and item.status != normalized_status:
-                continue
+            # "all" или пустой → без фильтра по статусу
+            if normalized_status and normalized_status != "all":
+                if normalized_status == "open" and item.status not in self._open_statuses:
+                    continue
+                elif normalized_status != "open" and item.status != normalized_status:
+                    continue
             if normalized_kind and item.kind != normalized_kind:
                 continue
             rows.append(item.to_dict())

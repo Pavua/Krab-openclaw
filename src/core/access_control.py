@@ -56,6 +56,7 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "inbox",
         "remember",
         "recall",
+        "memo",
         "ls",
         "read",
         "write",
@@ -68,6 +69,7 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "cronstatus",
         "acl",
         "access",
+        "scope",
         "reasoning",
         # CLI runner команды (Приоритет 3)
         "codex",
@@ -91,6 +93,29 @@ USERBOT_KNOWN_COMMANDS: frozenset[str] = frozenset(
         "chatban",
         # Aggregated runtime stats panel (rate limiter + caches + silence + voice)
         "stats",
+        # Контекст чата — просмотр / сброс / checkpoint
+        "context",
+        # Переписывание текста через AI
+        "rewrite",
+        # Управление сообщениями (owner-only)
+        "del",
+        "purge",
+        "autodel",
+        # Пользовательские алиасы команд
+        "alias",
+        # Автоприветствие новых участников
+        "welcome",
+        # AFK-режим
+        "afk",
+        "back",
+        # Paste — отправка длинных текстов как документов
+        "paste",
+        # Инфо о чате — подробная информация о текущем или заданном чате
+        "chatinfo",
+        # Статистика чата (история сообщений)
+        "history",
+        # Управление профилем userbot-аккаунта
+        "profile",
     }
 )
 
@@ -113,6 +138,15 @@ OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
         "cap",
         # Chat ban cache — runtime toggle списка забаненных чатов, только владелец
         "chatban",
+        # Пользовательские алиасы — изменяют поведение userbot, только владелец
+        "alias",
+        # Автоприветствие — изменяет поведение для новых участников, только владелец
+        "welcome",
+        # AFK-режим — управляет состоянием присутствия владельца, только владелец
+        "afk",
+        "back",
+        # Профиль userbot-аккаунта — изменяет данные аккаунта, только владелец
+        "profile",
     }
 )
 

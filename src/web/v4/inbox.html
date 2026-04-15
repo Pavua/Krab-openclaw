@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inbox | Krab</title>
+    <link href="/v4/liquid-glass.css" rel="stylesheet">
+    <script src="/v4/theme-toggle.js" defer></script>
+    <style>
+        /* Minimal page-specific CSS */
+        :root {
+            --text-muted: rgba(255, 255, 255, 0.6);
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            background-color: #0f0f13;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .page-header h1 {
+            margin: 0;
+            font-size: 2rem;
+            font-weight: 600;
+        }
+
+        .last-updated {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.35);
+            white-space: nowrap;
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        /* Filter Tabs */
+        .filter-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+            overflow-x: auto;
+        }
+
+        .filter-tab {
+            padding: 0.5rem 1.25rem;
+            cursor: pointer;
+            border-radius: 6px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .filter-tab:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .filter-tab.active {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.1);
+            font-weight: 500;
+        }
+
+        /* Items List */
+        .items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .inbox-item {
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .inbox-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .inbox-item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .inbox-item-main {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .severity-icon {
+            font-size: 1.25rem;
+        }
+
+        .item-title {
+            font-weight: 500;
+            font-size: 1.05rem;
+        }
+
+        .badges {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .badge {
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            color: #ddd;
+        }
+
+        .badge.critical { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
+        .badge.warning { background: rgba(255, 165, 2, 0.2); color: #ffa502; }
+        .badge.info { background: rgba(30, 144, 255, 0.2); color: #1e90ff; }
+
+        .inbox-item-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .inbox-actions { display: flex; gap: 0.4rem; }
+        .inbox-actions .glass-button { padding: 0.25rem 0.7rem; font-size: 0.75rem; }
+        .inbox-actions .btn-ack { color: var(--accent-yellow, #fde68a); border-color: rgba(251,191,36,0.3); }
+        .inbox-actions .btn-done { color: var(--accent-green, #6ee7b7); border-color: rgba(52,211,153,0.3); }
+        .inbox-actions .btn-dismiss { color: var(--accent-red, #fca5a5); border-color: rgba(248,113,113,0.3); }
+
+        .time-ago {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .inbox-item-body {
+            display: none;
+            padding-top: 1rem;
+            margin-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            color: #ccc;
+            line-height: 1.5;
+        }
+
+        .inbox-item.expanded .inbox-item-body {
+            display: block;
+        }
+
+        /* Skeletons */
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.03) 75%);
+            background-size: 200% 100%;
+            animation: skeleton-loading 1.5s infinite;
+            border-radius: 8px;
+        }
+
+        @keyframes skeleton-loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            z-index: 9999;
+        }
+
+        .toast {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            background: rgba(30, 30, 35, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s ease-out forwards;
+            min-width: 250px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(120%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Mobile Adjustments */
+        @media (max-width: 768px) {
+            .container {
+                padding: 1.5rem;
+                padding-bottom: 90px;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .inbox-item-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .inbox-item-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Desktop Nav -->
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/v4/costs" class="nav-link">Costs</a>
+            <a href="/v4/inbox" class="nav-link active">Inbox</a>
+            <a href="/v4/swarm" class="nav-link">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/ops" class="nav-link">Ops</a>
+            <a href="/v4/research" class="nav-link">Research</a>
+            <a href="/v4/settings" class="nav-link">Settings</a>
+            <a href="/v4/commands" class="nav-link">Commands</a>
+            <div class="nav-bell-wrapper">
+                <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    </svg>
+                    <span class="bell-count hidden" id="nav-bell-count">0</span>
+                </a>
+                <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Mobile Tab Bar -->
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+            Costs
+        </a>
+        <a href="/v4/inbox" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            Inbox
+        </a>
+        <a href="/v4/swarm" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            Swarm
+        </a>
+        <a href="/v4/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6"></path><path d="M4 14l6-6 2-3"></path><path d="M2 5h12"></path><path d="M7 2h1"></path><path d="M22 22l-5-10-5 10"></path><path d="M14 18h6"></path></svg>
+            Trans
+        </a>
+    </div>
+
+    <!-- Main Content -->
+    <main class="container">
+        <header class="page-header">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <h1>Inbox</h1>
+                <span class="last-updated" id="live-status">Connecting...</span>
+            </div>
+            <div class="actions">
+                <button class="glass-button" id="btn-remediate-stale">Remediate Stale</button>
+                <button class="glass-button glass-button-primary" id="btn-ack-all">Ack All Open</button>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <section class="stats-grid" id="stats-container">
+            <!-- Skeletons rendered by JS initially -->
+        </section>
+
+        <!-- Filter Tabs -->
+        <section class="filter-tabs" id="filter-tabs">
+            <div class="filter-tab active" data-filter="All">All</div>
+            <div class="filter-tab" data-filter="Open">Open</div>
+            <div class="filter-tab" data-filter="Acked">Acked</div>
+            <div class="filter-tab" data-filter="Processing">Processing</div>
+        </section>
+
+        <!-- Items List -->
+        <section class="items-list" id="inbox-items">
+            <!-- Skeletons rendered by JS initially -->
+        </section>
+    </main>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Vanilla JS Logic -->
+    <script>
+        function formatTimeAgo(iso) {
+            if (!iso) return '';
+            const then = new Date(iso);
+            if (isNaN(then)) return '';
+            const diff = (Date.now() - then) / 1000;
+            if (diff < 60) return Math.floor(diff) + 's ago';
+            if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+            return Math.floor(diff/86400) + 'd ago';
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // State
+            let currentFilter = 'All';
+            let lastItems = [];
+            let evtSource = null;
+
+            // DOM Elements
+            const statsContainer = document.getElementById('stats-container');
+            const itemsContainer = document.getElementById('inbox-items');
+            const filterTabs = document.getElementById('filter-tabs');
+            const liveStatusEl = document.getElementById('live-status');
+            const toastContainer = document.getElementById('toast-container');
+
+            // Initialize
+            renderSkeletons();
+            initialLoad();
+            connectSSE();
+
+            // --- Event Listeners ---
+            
+            // Filter Tabs
+            filterTabs.addEventListener('click', (e) => {
+                const tab = e.target.closest('.filter-tab');
+                if (!tab) return;
+                
+                document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentFilter = tab.dataset.filter;
+                
+                renderCurrentItems();
+            });
+
+            // Expand/Collapse and Action Button Delegation
+            itemsContainer.addEventListener('click', async (e) => {
+                const actionBtn = e.target.closest('[data-action]');
+                const item = e.target.closest('.inbox-item');
+
+                if (actionBtn) {
+                    e.stopPropagation();
+                    const action = actionBtn.dataset.action;
+                    const id = actionBtn.dataset.id;
+                    actionBtn.disabled = true;
+                    await handleAction(action, { id });
+                    setTimeout(() => initialLoad(), 300);
+                    return;
+                }
+
+                if (item) {
+                    item.classList.toggle('expanded');
+                }
+            });
+
+            // Header Actions
+            document.getElementById('btn-remediate-stale').addEventListener('click', () => {
+                handleAction('remediate_stale');
+            });
+
+            document.getElementById('btn-ack-all').addEventListener('click', () => {
+                handleAction('ack_all_open');
+            });
+
+            window.addEventListener('beforeunload', () => {
+                if (evtSource) evtSource.close();
+            });
+
+            // --- API & Data Handling ---
+
+            async function apiCall(endpoint, method = 'GET', body = null) {
+                const key = localStorage.getItem('krab_web_key') || '';
+                const options = {
+                    method,
+                    headers: {
+                        'X-Krab-Web-Key': key,
+                        'Content-Type': 'application/json'
+                    }
+                };
+                if (body) options.body = JSON.stringify(body);
+
+                try {
+                    const res = await fetch(endpoint, options);
+                    if (!res.ok) throw new Error(`API Error: ${res.status}`);
+                    return await res.json();
+                } catch (error) {
+                    console.warn(`Fetch to ${endpoint} failed. Using mock data for UI demonstration.`, error);
+                    return getMockData(endpoint, method, body);
+                }
+            }
+
+            async function initialLoad() {
+                try {
+                    const [statsData, itemsData] = await Promise.all([
+                        apiCall('/api/inbox/status'),
+                        apiCall('/api/inbox/items?status=all&limit=50')
+                    ]);
+                    loadStatsFromData(statsData);
+                    const items = itemsData?.items || itemsData || [];
+                    loadItemsFromData(items);
+                } catch (e) {
+                    console.warn("Initial load failed", e);
+                }
+            }
+
+            function connectSSE() {
+                if (evtSource) {
+                    evtSource.close();
+                }
+                evtSource = new EventSource('/api/inbox/events');
+
+                evtSource.addEventListener('update', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        const summary = data.summary || (data.workflow && data.workflow.summary) || {};
+                        loadStatsFromData(summary);
+                        if (data.items) {
+                            loadItemsFromData(data.items);
+                        }
+                    } catch (err) {
+                        console.error('Error parsing SSE update:', err);
+                    }
+                });
+
+                evtSource.addEventListener('error', (e) => {
+                    try {
+                        const data = JSON.parse(e.data);
+                        console.warn('SSE error event:', data.error);
+                        showToast(data.error || 'SSE Error', 'error');
+                    } catch(err) {
+                        console.warn('SSE disconnected');
+                        showToast('SSE disconnected', 'error');
+                    }
+                });
+
+                evtSource.onerror = (err) => {
+                    console.warn('EventSource onerror triggered. Reconnecting in 5s...');
+                    evtSource.close();
+                    setTimeout(connectSSE, 5000);
+                };
+            }
+
+            function loadStatsFromData(data) {
+                if (!data) return;
+                statsContainer.innerHTML = `
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Open</span>
+                        <span class="stat-value">${data.open || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Attention</span>
+                        <span class="stat-value" style="color: #ffa502;">${data.attention || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Escalations</span>
+                        <span class="stat-value" style="color: #ff4757;">${data.escalations || 0}</span>
+                    </div>
+                    <div class="glass-card stat-card">
+                        <span class="stat-label">Stale</span>
+                        <span class="stat-value" style="color: #1e90ff;">${data.stale || 0}</span>
+                    </div>
+                `;
+                const now = new Date();
+                liveStatusEl.innerText = `Updated ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+            }
+
+            function loadItemsFromData(items) {
+                if (!items) return;
+                lastItems = items;
+                renderCurrentItems();
+            }
+
+            function renderCurrentItems() {
+                let filtered = lastItems;
+                if (currentFilter !== 'All') {
+                    filtered = lastItems.filter(item => {
+                        const status = (item.status || '').toLowerCase();
+                        if (currentFilter === 'Open') return status !== 'acked';
+                        return status === currentFilter.toLowerCase();
+                    });
+                }
+
+                if (!filtered || filtered.length === 0) {
+                    itemsContainer.innerHTML = `
+                        <div class="glass-card" style="text-align:center; padding: 3rem; color: var(--text-muted);">
+                            No items found for "${currentFilter}".
+                        </div>
+                    `;
+                    return;
+                }
+
+                itemsContainer.innerHTML = filtered.map(item => `
+                    <div class="glass-card inbox-item" data-id="${item.item_id || item.id}">
+                        <div class="inbox-item-header">
+                            <div class="inbox-item-main">
+                                <span class="severity-icon">
+                                    ${item.severity === 'critical' ? '🔴' : item.severity === 'warning' ? '🟠' : '🔵'}
+                                </span>
+                                <span class="item-title">${item.title}</span>
+                                <div class="badges">
+                                    ${[item.kind, item.source].filter(Boolean).map(b => `<span class="badge ${item.severity}">${b}</span>`).join('')}
+                                </div>
+                            </div>
+                            <div class="inbox-item-actions">
+                                <span class="time-ago">${formatTimeAgo(item.created_at_utc || item.created_at)}</span>
+                                ${item.status !== 'acked' 
+                                    ? `<div class="inbox-actions">
+                                           <button class="glass-button btn-ack" data-id="${item.item_id || item.id}" data-action="ack">Ack</button>
+                                           <button class="glass-button btn-done" data-id="${item.item_id || item.id}" data-action="done">Done</button>
+                                           <button class="glass-button btn-dismiss" data-id="${item.item_id || item.id}" data-action="dismiss">Dismiss</button>
+                                       </div>` 
+                                    : `<span class="badge">Acked</span>`}
+                            </div>
+                        </div>
+                        <div class="inbox-item-body">
+                            ${item.body || 'No further details available for this event.'}
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            async function handleAction(action, payload = {}) {
+                const actionToStatus = {
+                    'ack': 'acked',
+                    'done': 'done',
+                    'dismiss': 'cancelled',
+                    'approve': 'approved',
+                    'reject': 'rejected',
+                };
+                const status = actionToStatus[action] || action;
+                const itemId = payload.id || payload.item_id;
+
+                // special header-level actions без itemId — остаются как есть (proxy API)
+                if (action === 'remediate_stale' || action === 'ack_all_open') {
+                    try {
+                        await apiCall('/api/inbox/update', 'POST', { action, ...payload });
+                        showToast(`Successfully executed: ${action.replace(/_/g, ' ')}`);
+                    } catch (error) {
+                        showToast(`Error executing ${action}`, 'error');
+                    }
+                    return;
+                }
+
+                if (!itemId) {
+                    showToast(`No item ID for action: ${action}`, 'error');
+                    return;
+                }
+
+                try {
+                    await apiCall('/api/inbox/update', 'POST', {
+                        item_id: itemId,
+                        status: status,
+                        actor: 'owner-ui',
+                        note: '',
+                    });
+                    showToast(`✓ ${action}: success`);
+                } catch (error) {
+                    showToast(`Error: ${action}`, 'error');
+                }
+            }
+
+            // --- UI Helpers ---
+
+            function renderSkeletons() {
+                statsContainer.innerHTML = Array(4).fill('<div class="glass-card skeleton" style="height: 104px;"></div>').join('');
+                renderItemsSkeletons();
+            }
+
+            function renderItemsSkeletons() {
+                itemsContainer.innerHTML = Array(5).fill('<div class="glass-card skeleton" style="height: 72px;"></div>').join('');
+            }
+
+            function showToast(message, type = 'success') {
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                toast.innerHTML = `
+                    <span>${message}</span>
+                    <span style="cursor:pointer;" onclick="this.parentElement.remove()">✕</span>
+                `;
+                toastContainer.appendChild(toast);
+                setTimeout(() => {
+                    if (toast.parentElement) {
+                        toast.style.opacity = '0';
+                        toast.style.transform = 'translateX(100%)';
+                        toast.style.transition = 'all 0.3s';
+                        setTimeout(() => toast.remove(), 300);
+                    }
+                }, 4000);
+            }
+
+            // --- Mock Data Fallback (For UI Testing without Backend) ---
+            function getMockData(endpoint, method, body) {
+                if (endpoint.includes('/status')) {
+                    return { open: 24, attention: 5, escalations: 2, stale: 8 };
+                }
+                if (endpoint.includes('/items')) {
+                    return [
+                        { id: 'evt-1', severity: 'critical', title: 'DB Connection Pool Exhausted', timeAgo: '2m ago', badges: ['database', 'prod'], body: 'Primary database cluster is rejecting connections. Active connections have exceeded 5000.', status: 'open' },
+                        { id: 'evt-2', severity: 'warning', title: 'High Memory Usage on Worker Node', timeAgo: '15m ago', badges: ['k8s', 'worker-4'], body: 'Node memory utilization has been above 90% for the last 10 minutes.', status: 'open' },
+                        { id: 'evt-3', severity: 'info', title: 'SSL Certificate Auto-Renewed', timeAgo: '1h ago', badges: ['security', 'automated'], body: 'Wildcard certificate for *.krab.internal successfully renewed and deployed.', status: 'acked' },
+                        { id: 'evt-4', severity: 'critical', title: 'Payment Gateway API Latency', timeAgo: '1h 12m ago', badges: ['api', 'payments'], body: 'P99 latency spiked to 4.5s. Upstream provider might be experiencing issues.', status: 'open' },
+                        { id: 'evt-5', severity: 'warning', title: 'Stale Cache Entries Detected', timeAgo: '3h ago', badges: ['redis', 'cache'], body: 'Eviction policy is failing to clear outdated keys in region us-east-1.', status: 'processing' }
+                    ];
+                }
+                if (endpoint.includes('/update')) {
+                    return { success: true };
+                }
+                return {};
+            }
+        });
+
+        async function updateBellCount() {
+          try {
+            const [inboxRes, opsRes] = await Promise.all([
+              fetch('/api/inbox/status').catch(() => null),
+              fetch('/api/ops/alerts').catch(() => null)
+            ]);
+
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+              total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+              total = latestItems.length + alerts.length;
+            }
+
+            const countEl = document.getElementById('nav-bell-count');
+            if (countEl) {
+              if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+              } else {
+                countEl.classList.add('hidden');
+              }
+            }
+
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
+
+            dropdown.innerHTML = '';
+
+            if (alerts.length === 0 && latestItems.length === 0) {
+              const emptyDiv = document.createElement('div');
+              emptyDiv.className = 'bell-dropdown-empty';
+              emptyDiv.textContent = 'Нет уведомлений';
+              dropdown.appendChild(emptyDiv);
+            } else {
+              if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = '/v4/ops';
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+
+              if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+                  const text = document.createTextNode(item.title || 'Notification');
+          
+                  a.appendChild(dot);
+                  a.appendChild(text);
+                  dropdown.appendChild(a);
+                });
+              }
+            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+
+          } catch (err) {
+            console.error(err);
+          }
+        }
+
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
+
+        const navBell = document.querySelector('.nav-bell');
+        if (navBell) {
+          const bellWrapper = navBell.closest('.nav-bell-wrapper');
+          const bellDropdown = document.getElementById('bell-dropdown');
+  
+          if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+              e.preventDefault();
+              bellDropdown.classList.toggle('hidden');
+            });
+
+            document.addEventListener('click', (e) => {
+              if (!bellWrapper.contains(e.target)) {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') {
+                bellDropdown.classList.add('hidden');
+              }
+            });
+          }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Krab AI - Translator</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="/v4/liquid-glass.css" rel="stylesheet">
+  <style>
+    /* New Custom Styles for Translator Dashboard */
+    
+    /* Pulse Animation for Live Indicator */
+    @keyframes pulse-green {
+      0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
+      70% { box-shadow: 0 0 0 20px rgba(34, 197, 94, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+    }
+
+    /* Live Indicator Card */
+    .live-indicator-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+      padding: 2rem;
+      background: rgba(0, 0, 0, 0.15);
+      border-radius: 16px;
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.1));
+    }
+    .live-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--text-muted, #9ca3af);
+      transition: all 0.3s ease;
+    }
+    .live-circle.active {
+      background: var(--accent-green, #22c55e);
+      animation: pulse-green 2s infinite;
+    }
+    .live-circle.paused {
+      background: var(--accent-yellow, #eab308);
+    }
+    .live-circle.error {
+      background: var(--accent-red, #f87171);
+    }
+    
+    /* Segmented Control (Language Switcher) */
+    .segmented-control {
+      display: flex;
+      gap: 0.5rem;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 0.5rem;
+      border-radius: 12px;
+      overflow-x: auto;
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.05));
+      scrollbar-width: none; /* Firefox */
+    }
+    .segmented-control::-webkit-scrollbar {
+      display: none; /* Chrome/Safari */
+    }
+    .segmented-btn {
+      padding: 0.5rem 1.25rem;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-muted, #9ca3af);
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .segmented-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: #ffffff;
+    }
+    .segmented-btn.active {
+      background: rgba(167, 139, 250, 0.15);
+      color: var(--accent-purple, #a78bfa);
+      border-color: rgba(167, 139, 250, 0.3);
+    }
+
+    /* Latency Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 1rem;
+    }
+    .stat-mini-card {
+      background: rgba(0, 0, 0, 0.2);
+      padding: 1.25rem 1rem;
+      border-radius: 12px;
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.05));
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: center;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #ffffff;
+    }
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted, #9ca3af);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+    }
+
+    /* Test Translation Box */
+    .test-input {
+      width: 100%;
+      height: 100px;
+      resize: none;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--glass-border, rgba(255,255,255,0.1));
+      border-radius: 12px;
+      padding: 1rem;
+      color: #ffffff;
+      font-family: inherit;
+      font-size: 0.95rem;
+      transition: border-color 0.2s;
+    }
+    .test-input:focus {
+      outline: none;
+      border-color: var(--accent-purple, #a78bfa);
+    }
+    .test-output-box {
+      flex: 1;
+      min-width: 250px;
+      background: rgba(125, 211, 252, 0.05);
+      border: 1px solid rgba(125, 211, 252, 0.15);
+      border-radius: 12px;
+      padding: 1rem;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100px;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      word-break: break-word;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="glass-nav">
+      <div class="nav-logo">Krab AI</div>
+      <div class="nav-links">
+          <a href="/v4/" class="nav-link">Hub</a>
+          <a href="/v4/chat" class="nav-link">Chat</a>
+          <a href="/v4/costs" class="nav-link">Costs</a>
+          <a href="/v4/inbox" class="nav-link">Inbox</a>
+          <a href="/v4/swarm" class="nav-link">Swarm</a>
+          <a href="/v4/translator" class="nav-link active">Translator</a>
+          <a href="/v4/ops" class="nav-link">Ops</a>
+          <a href="/v4/research" class="nav-link">Research</a>
+          <a href="/v4/settings" class="nav-link">Settings</a>
+          <a href="/v4/commands" class="nav-link">Commands</a>
+          <div class="nav-bell-wrapper">
+              <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                  </svg>
+                  <span class="bell-count hidden" id="nav-bell-count">0</span>
+              </a>
+              <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+          </div>
+      </div>
+  </nav>
+
+  <div class="glass-tab-bar">
+      <a href="/v4/" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Hub
+      </a>
+      <a href="/v4/chat" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Chat
+      </a>
+      <a href="/v4/costs" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Costs
+      </a>
+      <a href="/v4/swarm" class="tab-item">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Swarm
+      </a>
+      <a href="/v4/translator" class="tab-item active">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+          Trans
+      </a>
+  </div>
+
+  <!-- Main Content -->
+  <main style="max-width: 1100px; margin: 0 auto; padding: 2rem; display: flex; flex-direction: column; gap: 1.5rem; padding-bottom: 100px;">
+
+    <!-- Header -->
+    <header class="flex items-center justify-between" style="animation: fadeUp 0.4s ease-out backwards;">
+      <div class="flex items-center gap-3">
+        <div id="statusDot" class="status-dot warning"></div>
+        <h1 class="flex items-center gap-2">
+          Translator
+          <span id="langBadge" class="skeleton" style="display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; min-width: 80px; letter-spacing: 0.03em;">Loading</span>
+        </h1>
+      </div>
+      <div id="statusText" class="text-sm text-muted" style="font-weight: 600; letter-spacing: 0.08em;">INITIALIZING</div>
+    </header>
+
+    <!-- Session Controls -->
+    <div class="flex items-center gap-3" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.1s;">
+      <button id="btnStart" class="glass-button glass-button-primary" onclick="handleAction('start')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Start
+      </button>
+      <button id="btnPause" class="glass-button" onclick="handleAction('pause')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Pause
+      </button>
+      <button id="btnResume" class="glass-button glass-button-primary" onclick="handleAction('resume')" style="display: none;">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Resume
+      </button>
+      <button id="btnStop" class="glass-button" onclick="handleAction('stop')" style="display: none; color: var(--accent-red); border-color: rgba(248,113,113,0.3);">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M9 10h6v4H9z"></path></svg>
+        Stop
+      </button>
+    </div>
+
+    <!-- BIG Live Trial Indicator -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.15s; padding: 0; overflow: hidden;">
+      <div class="live-indicator-wrapper">
+        <div id="bigLiveCircle" class="live-circle"></div>
+        <div style="display: flex; flex-direction: column; align-items: flex-start;">
+          <h2 id="bigLiveText" style="margin: 0; font-size: 2.5rem; font-weight: 700; letter-spacing: 0.05em; line-height: 1; color: var(--text-muted);">OFFLINE</h2>
+          <span id="bigLiveSubtext" class="text-muted" style="font-size: 1rem; margin-top: 0.25rem;">System is currently idle</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Language Pair Switcher UI -->
+    <div style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.18s;">
+      <div id="langSwitcher" class="segmented-control">
+        <!-- Buttons injected dynamically -->
+      </div>
+    </div>
+
+    <!-- Cards Grid: Profile + Session -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+
+      <!-- Profile Card -->
+      <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.2s;">
+        <h2 class="mb-3">Profile Settings</h2>
+        <div class="flex flex-col gap-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Language Pair</span>
+            <span id="profLang" class="skeleton" style="min-width: 70px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Mode</span>
+            <span id="profMode" class="skeleton" style="min-width: 90px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Voice Strategy</span>
+            <span id="profVoice" class="skeleton" style="min-width: 110px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
+            <span class="text-muted">Ordinary Calls</span>
+            <div id="profOrd" class="status-dot" style="animation: none;"></div>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Internet Calls</span>
+            <div id="profInt" class="status-dot" style="animation: none;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session Card -->
+      <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.3s;">
+        <h2 class="mb-3">Live Session</h2>
+        <div class="flex flex-col gap-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Active Chats</span>
+            <span id="sessChats" class="text-accent skeleton" style="font-weight: 700; min-width: 30px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Total Translations</span>
+            <span id="sessTotal" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-muted">Avg Latency</span>
+            <span id="sessLatency" class="skeleton" style="min-width: 60px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+          <div class="flex justify-between items-center" style="padding-top: 0.75rem; border-top: 1px solid var(--glass-border);">
+            <span class="text-muted">Muted</span>
+            <span id="sessMuted" class="skeleton" style="min-width: 40px; display: inline-block; border-radius: 6px;">&nbsp;</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Latency Stats Dashboard -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.35s;">
+      <h2 class="mb-3">Latency & Performance</h2>
+      <div class="stats-grid">
+        <div class="stat-mini-card">
+          <span class="stat-label">Current Latency</span>
+          <span id="statCurLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
+        </div>
+        <div class="stat-mini-card">
+          <span class="stat-label">Avg Latency</span>
+          <span id="statAvgLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
+        </div>
+        <div class="stat-mini-card">
+          <span class="stat-label">Max Latency</span>
+          <span id="statMaxLat" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
+        </div>
+        <div class="stat-mini-card">
+          <span class="stat-label">Success Rate</span>
+          <span id="statSuccess" class="stat-value skeleton" style="min-width: 60px; border-radius: 6px;">&nbsp;</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Test Translation Quick Box -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.38s;">
+      <h2 class="mb-3">Test Translation</h2>
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 250px; display: flex; flex-direction: column; gap: 0.75rem;">
+          <textarea id="testInput" class="test-input" placeholder="Type something to translate..."></textarea>
+          <button onclick="handleTestTranslation()" class="glass-button glass-button-primary" style="align-self: flex-start;">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
+            Translate
+          </button>
+        </div>
+        <div class="test-output-box">
+          <span id="testOutput" class="text-muted">Result will appear here...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Last Translation -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.4s;">
+      <h2 class="mb-3">Last Translation</h2>
+      <div style="display: flex; gap: 1rem; align-items: stretch;">
+        <div id="lastOrig" class="skeleton text-muted" style="flex: 1; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word;">&nbsp;</div>
+        <div class="flex items-center justify-center text-muted" style="padding: 0 0.5rem; flex-shrink: 0;">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+        </div>
+        <div id="lastTrans" class="skeleton" style="flex: 1; padding: 1rem; background: rgba(125,211,252,0.05); border: 1px solid rgba(125,211,252,0.15); border-radius: 12px; min-height: 70px; font-size: 0.95rem; line-height: 1.5; word-break: break-word; color: #ffffff;">&nbsp;</div>
+      </div>
+    </div>
+
+    <!-- History Card -->
+    <div class="glass-card" style="animation: fadeUp 0.4s ease-out backwards; animation-delay: 0.5s;">
+      <div class="flex justify-between items-center mb-3">
+        <h2>Recent History</h2>
+        <span class="text-xs text-muted">Last 10</span>
+      </div>
+      <div id="historyContainer" class="flex flex-col gap-2">
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+        <div class="skeleton" style="height: 64px; border-radius: 12px;"></div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    const API = '/api/translator';
+
+    // XSS-safe helpers using DOM methods
+    function createTextNode(text) {
+      return document.createTextNode(text == null ? '' : String(text));
+    }
+
+    function setTextContent(id, text) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = text == null ? '' : String(text);
+      el.classList.remove('skeleton');
+    }
+
+    function setTextEl(el, text) {
+      if (!el) return;
+      el.textContent = text == null ? '' : String(text);
+      el.classList.remove('skeleton');
+    }
+
+    function makeSpan(text, cls) {
+      const span = document.createElement('span');
+      span.className = cls || '';
+      span.textContent = String(text);
+      return span;
+    }
+
+    let currentStatus = 'idle';
+    let availableLangs = ['es-ru', 'en-ru', 'ru-en', 'auto-ru', 'auto-en'];
+
+    async function fetchLanguages() {
+      try {
+        const res = await fetch(API + '/languages');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.languages) && data.languages.length > 0) {
+            availableLangs = data.languages;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch languages, using defaults', err);
+      }
+      renderLangSwitcher();
+    }
+
+    function renderLangSwitcher(currentLang) {
+      const container = document.getElementById('langSwitcher');
+      container.innerHTML = ''; // Safe: only appending created elements
+      
+      availableLangs.forEach(lang => {
+        const btn = document.createElement('button');
+        btn.className = 'segmented-btn' + (lang === currentLang ? ' active' : '');
+        btn.textContent = lang;
+        btn.onclick = () => setLanguage(lang);
+        container.appendChild(btn);
+      });
+    }
+
+    async function setLanguage(lang) {
+      try {
+        const res = await fetch(API + '/lang', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lang_pair: lang })
+        });
+        if (res.ok) {
+          fetchStatus();
+        } else {
+          console.error('Failed to set language: HTTP ' + res.status);
+        }
+      } catch (err) {
+        console.error('Language switch error:', err);
+      }
+    }
+
+    async function handleTestTranslation() {
+      const inputEl = document.getElementById('testInput');
+      const outputEl = document.getElementById('testOutput');
+      const text = inputEl.value.trim();
+      
+      if (!text) return;
+      
+      outputEl.textContent = 'Translating...';
+      outputEl.className = 'text-muted';
+      
+      try {
+        const res = await fetch(API + '/test?text=' + encodeURIComponent(text));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        
+        outputEl.textContent = data.translation || data.result || 'No translation returned';
+        outputEl.className = '';
+        outputEl.style.color = '#ffffff';
+      } catch (err) {
+        outputEl.textContent = 'Error: ' + err.message;
+        outputEl.className = 'text-error';
+        outputEl.style.color = 'var(--accent-red, #f87171)';
+      }
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch(API + '/status');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderStatus(data);
+      } catch (err) {
+        console.error('Status fetch failed:', err);
+        renderOffline();
+      }
+    }
+
+    async function fetchHistory() {
+      try {
+        const res = await fetch(API + '/history?n=10');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderHistory(Array.isArray(data) ? data : (data.items || []));
+      } catch (err) {
+        console.error('History fetch failed:', err);
+      }
+    }
+
+    function renderStatus(data) {
+      if (!data) return;
+      const profile = data.profile || {};
+      const session = data.session || {};
+      currentStatus = (session.session_status || 'idle').toLowerCase();
+
+      // Update Language Switcher UI
+      renderLangSwitcher(profile.language_pair);
+
+      // Status dot (Header)
+      const dot = document.getElementById('statusDot');
+      dot.className = 'status-dot ' + (currentStatus === 'active' ? 'ok' : currentStatus === 'paused' ? 'warning' : 'error');
+
+      // Status text (Header)
+      setTextContent('statusText', currentStatus.toUpperCase());
+
+      // BIG Live Trial Indicator
+      const bigCircle = document.getElementById('bigLiveCircle');
+      const bigText = document.getElementById('bigLiveText');
+      const bigSubtext = document.getElementById('bigLiveSubtext');
+      
+      bigCircle.className = 'live-circle ' + (currentStatus === 'active' ? 'active' : currentStatus === 'paused' ? 'paused' : '');
+      
+      if (currentStatus === 'active') {
+        bigText.textContent = 'LIVE';
+        bigText.style.color = 'var(--accent-green, #22c55e)';
+        bigSubtext.textContent = (session.active_chats != null ? session.active_chats : 0) + ' active chats';
+      } else if (currentStatus === 'paused') {
+        bigText.textContent = 'PAUSED';
+        bigText.style.color = 'var(--accent-yellow, #eab308)';
+        bigSubtext.textContent = 'Session is paused';
+      } else {
+        bigText.textContent = 'OFFLINE';
+        bigText.style.color = 'var(--text-muted, #9ca3af)';
+        bigSubtext.textContent = 'System is currently idle';
+      }
+
+      // Language badge
+      const badge = document.getElementById('langBadge');
+      badge.textContent = profile.language_pair || '-- -- --';
+      badge.classList.remove('skeleton');
+      badge.style.background = 'rgba(167,139,250,0.15)';
+      badge.style.color = 'var(--accent-purple)';
+      badge.style.border = '1px solid rgba(167,139,250,0.25)';
+
+      // Buttons visibility
+      const isIdle = currentStatus === 'idle' || currentStatus === 'stopped';
+      document.getElementById('btnStart').style.display = isIdle ? 'inline-flex' : 'none';
+      document.getElementById('btnPause').style.display = currentStatus === 'active' ? 'inline-flex' : 'none';
+      document.getElementById('btnResume').style.display = currentStatus === 'paused' ? 'inline-flex' : 'none';
+      document.getElementById('btnStop').style.display = (currentStatus === 'active' || currentStatus === 'paused') ? 'inline-flex' : 'none';
+
+      // Profile card
+      setTextContent('profLang', profile.language_pair || '--');
+      setTextContent('profMode', profile.translation_mode || '--');
+      setTextContent('profVoice', profile.voice_strategy || '--');
+      document.getElementById('profOrd').className = 'status-dot ' + (profile.ordinary_calls_enabled ? 'ok' : 'error');
+      document.getElementById('profInt').className = 'status-dot ' + (profile.internet_calls_enabled ? 'ok' : 'error');
+
+      // Session stats
+      const stats = session.stats || {};
+      const total = stats.total_translations || 0;
+      const avgMs = total > 0 ? Math.round((stats.total_latency_ms || 0) / total) : 0;
+      setTextContent('sessChats', session.active_chats != null ? session.active_chats : 0);
+      setTextContent('sessTotal', total);
+      setTextContent('sessLatency', avgMs + ' ms');
+
+      const mutedEl = document.getElementById('sessMuted');
+      mutedEl.textContent = '';
+      mutedEl.classList.remove('skeleton');
+      mutedEl.appendChild(makeSpan(session.translation_muted ? 'Yes' : 'No', session.translation_muted ? 'text-error' : 'text-success'));
+
+      // Latency Stats Dashboard
+      const curMs = stats.last_latency_ms || stats.current_latency_ms || stats.translation_ms || 0;
+      const maxMs = stats.max_latency_ms || 0;
+      const successCount = stats.success_count != null ? stats.success_count : total;
+      const successRate = total > 0 ? Math.round((successCount / total) * 100) : 100;
+
+      setTextContent('statCurLat', curMs > 0 ? curMs + ' ms' : '--');
+      setTextContent('statAvgLat', avgMs > 0 ? avgMs + ' ms' : '--');
+      setTextContent('statMaxLat', maxMs > 0 ? maxMs + ' ms' : '--');
+      setTextContent('statSuccess', total > 0 ? successRate + '%' : '--');
+
+      // Last translation
+      const origEl = document.getElementById('lastOrig');
+      origEl.textContent = session.last_translated_original || 'No recent translation.';
+      origEl.classList.remove('skeleton');
+      origEl.style.opacity = session.last_translated_original ? '1' : '0.5';
+
+      const transEl = document.getElementById('lastTrans');
+      transEl.textContent = session.last_translated_translation || 'Waiting for input...';
+      transEl.classList.remove('skeleton');
+    }
+
+    function renderOffline() {
+      document.getElementById('statusDot').className = 'status-dot error';
+      setTextContent('statusText', 'OFFLINE');
+      
+      const bigCircle = document.getElementById('bigLiveCircle');
+      const bigText = document.getElementById('bigLiveText');
+      const bigSubtext = document.getElementById('bigLiveSubtext');
+      
+      if(bigCircle) bigCircle.className = 'live-circle error';
+      if(bigText) {
+        bigText.textContent = 'ERROR';
+        bigText.style.color = 'var(--accent-red, #f87171)';
+      }
+      if(bigSubtext) bigSubtext.textContent = 'Cannot connect to API';
+
+      document.getElementById('btnStart').style.display = 'inline-flex';
+      ['btnPause','btnResume','btnStop'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+      });
+    }
+
+    function renderHistory(items) {
+      const container = document.getElementById('historyContainer');
+      container.textContent = '';
+
+      if (!items || items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-muted text-sm';
+        empty.style.cssText = 'text-align:center; padding: 1.5rem;';
+        empty.textContent = 'No translation history yet.';
+        container.appendChild(empty);
+        return;
+      }
+
+      items.forEach(item => {
+        const pill = document.createElement('div');
+        pill.className = 'tool-pill';
+        pill.style.cssText = 'margin:0; border-radius: 12px;';
+
+        const header = document.createElement('div');
+        header.className = 'tool-pill-header';
+
+        const col = document.createElement('div');
+        col.style.cssText = 'display:flex; flex-direction:column; gap:0.35rem; width:100%;';
+
+        const meta = document.createElement('div');
+        meta.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+
+        const langSpan = document.createElement('span');
+        langSpan.className = 'text-xs';
+        langSpan.style.color = 'var(--accent-purple)';
+        langSpan.textContent = item.language_pair || '';
+
+        const tsSpan = document.createElement('span');
+        tsSpan.className = 'text-xs text-muted';
+        if (item.timestamp) {
+          const d = new Date(typeof item.timestamp === 'number' && item.timestamp < 1e12 ? item.timestamp * 1000 : item.timestamp);
+          tsSpan.textContent = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        }
+
+        meta.appendChild(langSpan);
+        meta.appendChild(tsSpan);
+
+        const origDiv = document.createElement('div');
+        origDiv.className = 'text-muted text-sm';
+        origDiv.textContent = item.original || '';
+
+        const transDiv = document.createElement('div');
+        transDiv.className = 'text-sm';
+        transDiv.style.color = '#ffffff';
+        transDiv.textContent = item.translation || '';
+
+        col.appendChild(meta);
+        col.appendChild(origDiv);
+        col.appendChild(transDiv);
+        header.appendChild(col);
+        pill.appendChild(header);
+        container.appendChild(pill);
+      });
+    }
+
+    async function handleAction(action) {
+      try {
+        const res = await fetch(API + '/session/' + action, { method: 'POST' });
+        if (res.ok) fetchStatus();
+        else console.error('Action failed: HTTP ' + res.status);
+      } catch (err) {
+        console.error('Action error:', err);
+      }
+    }
+
+    // Init + auto-refresh every 10s
+    fetchLanguages().then(() => {
+      fetchStatus();
+      fetchHistory();
+    });
+    setInterval(function() { fetchStatus(); fetchHistory(); }, 10000);
+
+    async function updateBellCount() {
+      try {
+        const [inboxRes, opsRes] = await Promise.all([
+          fetch('/api/inbox/status').catch(() => null),
+          fetch('/api/ops/alerts').catch(() => null)
+        ]);
+
+        const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+        const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+        const summary = inboxData.summary || {};
+        const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+        const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+        let total = 0;
+        if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+          total = (summary.open_items || 0) + (summary.attention_items || 0);
+        } else {
+          total = latestItems.length + alerts.length;
+        }
+
+        const countEl = document.getElementById('nav-bell-count');
+        if (countEl) {
+          if (total > 0) {
+            countEl.textContent = total > 99 ? '99+' : String(total);
+            countEl.classList.remove('hidden');
+          } else {
+            countEl.classList.add('hidden');
+          }
+        }
+
+        const dropdown = document.getElementById('bell-dropdown');
+        if (!dropdown) return;
+
+        dropdown.innerHTML = '';
+
+        if (alerts.length === 0 && latestItems.length === 0) {
+          const emptyDiv = document.createElement('div');
+          emptyDiv.className = 'bell-dropdown-empty';
+          emptyDiv.textContent = 'Нет уведомлений';
+          dropdown.appendChild(emptyDiv);
+        } else {
+          if (alerts.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'bell-dropdown-header';
+            header.textContent = 'ALERTS';
+            dropdown.appendChild(header);
+
+            alerts.forEach(alert => {
+              const a = document.createElement('a');
+              a.className = 'bell-dropdown-item';
+              a.href = '/v4/ops';
+          
+              const dot = document.createElement('span');
+              dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+          
+              const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+          
+              a.appendChild(dot);
+              a.appendChild(text);
+              dropdown.appendChild(a);
+            });
+          }
+
+          if (latestItems.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'bell-dropdown-header';
+            header.textContent = 'INBOX';
+            dropdown.appendChild(header);
+
+            latestItems.forEach(item => {
+              const a = document.createElement('a');
+              a.className = 'bell-dropdown-item';
+              a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+          
+              const dot = document.createElement('span');
+              dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+          
+              const text = document.createTextNode(item.title || 'Notification');
+          
+              a.appendChild(dot);
+              a.appendChild(text);
+              dropdown.appendChild(a);
+            });
+          }
+        }
+
+        const footer = document.createElement('a');
+        footer.className = 'bell-dropdown-footer';
+        footer.href = '/v4/inbox';
+        footer.textContent = 'Открыть все →';
+        footer.style.display = 'block';
+        footer.style.textDecoration = 'none';
+        dropdown.appendChild(footer);
+
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    setInterval(updateBellCount, 30000);
+    updateBellCount();
+
+    const navBell = document.querySelector('.nav-bell');
+    if (navBell) {
+      const bellWrapper = navBell.closest('.nav-bell-wrapper');
+      const bellDropdown = document.getElementById('bell-dropdown');
+  
+      if (bellWrapper && bellDropdown) {
+        navBell.addEventListener('click', (e) => {
+          e.preventDefault();
+          bellDropdown.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', (e) => {
+          if (!bellWrapper.contains(e.target)) {
+            bellDropdown.classList.add('hidden');
+          }
+        });
+
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            bellDropdown.classList.add('hidden');
+          }
+        });
+      }
+    }
+  </script>
+</body>
+</html>

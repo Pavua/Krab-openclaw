@@ -155,6 +155,20 @@ class CacheManager:
         except sqlite3.Error as e:
             logger.warning("cache_delete_error", key=key, error=str(e))
 
+    def clear_all(self) -> int:
+        """Очищает все записи из кэша. Возвращает количество удалённых записей."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute("SELECT COUNT(*) FROM cache")
+                count = cursor.fetchone()[0]
+                conn.execute("DELETE FROM cache")
+                conn.commit()
+            logger.info("cache_cleared_all", count=count, db=self.db_path)
+            return count
+        except sqlite3.Error as e:
+            logger.warning("cache_clear_all_error", error=str(e))
+            return 0
+
 
 # TTL для истории чатов (24 часа) — переживает рестарт бота
 HISTORY_CACHE_TTL = 86400

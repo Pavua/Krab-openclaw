@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -53,6 +54,13 @@ class WeeklyDigestService:
 
     # Публичный интервал для удобства подключения в proactive_watch
     INTERVAL_SEC: int = WEEKLY_DIGEST_INTERVAL_SEC
+
+    # Callback для отправки digest в Telegram (устанавливается из userbot_bridge)
+    _telegram_callback: Callable[[str], Awaitable[None]] | None = None
+
+    def set_telegram_callback(self, cb: Callable[[str], Awaitable[None]]) -> None:
+        """Устанавливает async callback для Telegram delivery."""
+        self._telegram_callback = cb
 
     async def generate_digest(self) -> dict[str, Any]:
         """
@@ -121,6 +129,15 @@ class WeeklyDigestService:
             cost_usd=cost_usd,
             attention_count=attention_count,
         )
+
+        # Telegram delivery через callback из userbot_bridge
+        if self._telegram_callback:
+            try:
+                await self._telegram_callback(body)
+                logger.info("weekly_digest_telegram_delivered")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("weekly_digest_telegram_failed", error=str(exc))
+
         return {
             "ok": True,
             "total_rounds": total_rounds,

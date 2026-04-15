@@ -25,6 +25,7 @@ def default_translator_session_state() -> dict[str, Any]:
         "last_language_pair": "",
         "last_translated_original": "",
         "last_translated_translation": "",
+        "history": [],  # последние 20 переводов: {src_lang, tgt_lang, original, translation, latency_ms, timestamp}
         "last_event": "session_idle",
         "updated_at": "",
         "stats": {"total_translations": 0, "total_latency_ms": 0},
@@ -91,6 +92,38 @@ def apply_translator_session_update(
 
     result["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return result
+
+
+HISTORY_MAX = 20  # максимальное количество записей в history
+
+
+def append_translator_history_entry(
+    state: dict[str, Any],
+    *,
+    src_lang: str,
+    tgt_lang: str,
+    original: str,
+    translation: str,
+    latency_ms: int,
+) -> dict[str, Any]:
+    """
+    Добавляет новую запись в history переводов, ограничивая список до HISTORY_MAX.
+
+    Возвращает обновлённый state (не мутирует переданный).
+    """
+    entry = {
+        "src_lang": src_lang,
+        "tgt_lang": tgt_lang,
+        "original": original[:300],
+        "translation": translation[:300],
+        "latency_ms": latency_ms,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    history: list[dict] = list(state.get("history") or [])
+    history.append(entry)
+    if len(history) > HISTORY_MAX:
+        history = history[-HISTORY_MAX:]
+    return {**state, "history": history}
 
 
 def save_translator_session_state(path: Path, state: dict[str, Any]) -> None:

@@ -168,6 +168,12 @@ class Config:
     OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC: float = float(
         os.getenv("OPENCLAW_PHOTO_PROGRESS_NOTICE_REPEAT_SEC", "60")
     )
+    # Auto-retry при инфраструктурных ошибках LLM (quota, timeout, 5xx).
+    # Не применяется при ошибках пользователя (safety block, неверный запрос).
+    # RETRY_COUNT=0 — отключить auto-retry полностью.
+    # RETRY_DELAY_SEC — пауза перед каждой повторной попыткой.
+    OPENCLAW_AUTO_RETRY_COUNT: int = int(os.getenv("OPENCLAW_AUTO_RETRY_COUNT", "1"))
+    OPENCLAW_AUTO_RETRY_DELAY_SEC: float = float(os.getenv("OPENCLAW_AUTO_RETRY_DELAY_SEC", "2.0"))
     # Ограничение длины ответа userbot (ускоряет локальные модели в чатах).
     USERBOT_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_MAX_OUTPUT_TOKENS", "1200"))
     USERBOT_PHOTO_MAX_OUTPUT_TOKENS: int = int(os.getenv("USERBOT_PHOTO_MAX_OUTPUT_TOKENS", "420"))
@@ -263,6 +269,9 @@ class Config:
         "LOCAL_FALLBACK_ENABLED",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+
+    # Погода: город по умолчанию для !weather без аргументов
+    DEFAULT_WEATHER_CITY: str = os.getenv("DEFAULT_WEATHER_CITY", "Barcelona")
 
     # Tor SOCKS5 proxy (опционально, для анонимных запросов через Tor)
     TOR_ENABLED: bool = os.getenv("TOR_ENABLED", "0").strip().lower() in ("1", "true", "yes")
@@ -364,6 +373,19 @@ class Config:
         "STRIP_REPLY_TO_TAGS",
         "1",
     ).strip().lower() in ("1", "true", "yes")
+    # Streaming UI: интервал обновления сообщения при получении LLM chunks (секунды).
+    # Telegram rate limit ~20 edits/min на чат; 2s = безопасный default.
+    TELEGRAM_STREAM_UPDATE_INTERVAL_SEC: float = float(
+        os.getenv("TELEGRAM_STREAM_UPDATE_INTERVAL_SEC", "2.0")
+    )
+    # Streaming UI: интервал проверки tool progress (секунды).
+    OPENCLAW_TOOL_PROGRESS_POLL_SEC: float = float(
+        os.getenv("OPENCLAW_TOOL_PROGRESS_POLL_SEC", "3.0")
+    )
+    # Streaming UI: показывать reasoning (chain-of-thought) в сообщении.
+    TELEGRAM_STREAM_SHOW_REASONING: bool = os.getenv(
+        "TELEGRAM_STREAM_SHOW_REASONING", "0"
+    ).strip().lower() in ("1", "true", "yes")
     # Фоновые deferred-задачи (cron/reminders) в текущем userbot контуре.
     # По умолчанию включено: reminders должны работать "из коробки" после старта runtime.
     SCHEDULER_ENABLED: bool = os.getenv(
@@ -387,6 +409,10 @@ class Config:
         "true",
         "yes",
     )
+    # Реакции на owner-сообщения: 👀 при получении, ✅ успех, ❌ ошибка.
+    TELEGRAM_REACTIONS_ENABLED: bool = os.getenv(
+        "TELEGRAM_REACTIONS_ENABLED", "1"
+    ).strip().lower() in ("1", "true", "yes")
 
     # JSON-файл с настройками per-team Telegram аккаунтов для свёрма.
     # Формат: {"traders": {"session_name": "swarm_traders", "phone": "+34..."}, ...}
@@ -590,6 +616,12 @@ class Config:
                     cls.GEMINI_PAID_KEY_ENABLED = value.strip().lower() in ("1", "true", "yes")
                 elif key == "BRAVE_SEARCH_API_KEY":
                     cls.BRAVE_SEARCH_API_KEY = value
+                elif key == "TELEGRAM_STREAM_UPDATE_INTERVAL_SEC":
+                    cls.TELEGRAM_STREAM_UPDATE_INTERVAL_SEC = max(0.5, float(value))
+                elif key == "TELEGRAM_REACTIONS_ENABLED":
+                    cls.TELEGRAM_REACTIONS_ENABLED = value.strip().lower() in ("1", "true", "yes", "on")
+                elif key == "DEFAULT_WEATHER_CITY":
+                    cls.DEFAULT_WEATHER_CITY = value.strip()
 
             # Обновляем .env файл для сохранения между перезапусками
             env_path = cls.BASE_DIR / ".env"

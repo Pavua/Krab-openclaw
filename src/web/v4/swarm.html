@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swarm Control | Krab AI</title>
+    <link rel="stylesheet" href="/v4/liquid-glass.css">
+    <script src="/v4/theme-toggle.js" defer></script>
+    <style>
+        .page-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            padding-bottom: 6rem;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .stat-card { text-align: center; padding: 1.25rem 1rem; display: flex; flex-direction: column; align-items: center; }
+        .stat-value { font-size: 2rem; font-weight: 700; line-height: 1; margin-bottom: 0.25rem; }
+        .stat-label { font-size: 0.75rem; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.05em; }
+        
+        /* Sparklines */
+        .sparkline-container { height: 20px; width: 60px; margin-top: 0.5rem; opacity: 0.8; }
+        .sparkline path { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+        .team-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 2rem; align-items: center; }
+        .team-badge {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: 999px; padding: 0.35rem 0.875rem;
+            font-size: 0.8rem; font-weight: 500;
+            backdrop-filter: blur(var(--glass-blur));
+            position: relative; cursor: help;
+        }
+        .team-badge .team-count { font-weight: 700; color: var(--accent-cyan); }
+        
+        /* Tooltip */
+        .team-badge::after {
+            content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.85); color: #fff; padding: 0.5rem 0.75rem; border-radius: 8px;
+            font-size: 0.75rem; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s;
+            margin-bottom: 0.5rem; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.1); z-index: 100;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .team-badge:hover::after { opacity: 1; transform: translateX(-50%) translateY(-2px); }
+
+        .tabs-header {
+            display: flex; gap: 0.5rem; margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--glass-border); padding-bottom: 0;
+        }
+        .tab-btn {
+            background: transparent; border: none; border-bottom: 2px solid transparent;
+            color: rgba(255,255,255,0.5); font-family: inherit; font-size: 0.875rem;
+            font-weight: 500; cursor: pointer; padding: 0.625rem 1.25rem;
+            margin-bottom: -1px; transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #fff; }
+        .tab-btn.active { color: #e0f2fe; border-bottom-color: var(--accent-cyan); }
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; animation: fadeUp 0.25s ease-out; }
+        
+        /* Filters */
+        .filter-row { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.5rem; }
+        .filter-group-wrap { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+        .filter-group-wrap label { font-size: 0.8rem; color: rgba(255,255,255,0.5); white-space: nowrap; width: 50px; }
+        .filter-group { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .filter-pill {
+            background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border);
+            color: rgba(255,255,255,0.6); padding: 0.3rem 0.8rem; border-radius: 999px;
+            font-size: 0.75rem; font-weight: 500; cursor: pointer; transition: all 0.2s;
+        }
+        .filter-pill:hover { background: rgba(255,255,255,0.1); color: #fff; }
+        .filter-pill.active { background: rgba(125,211,252,0.15); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+
+        .task-table-wrap { overflow-x: auto; border-radius: var(--radius-card); }
+        .task-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+        .task-table thead tr { background: rgba(255,255,255,0.04); }
+        .task-table th {
+            padding: 0.75rem 1rem; text-align: left; font-weight: 600;
+            font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+            color: rgba(255,255,255,0.5); border-bottom: 1px solid var(--glass-border); white-space: nowrap;
+        }
+        .task-table td { padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+        .task-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+        .task-table tbody tr:last-child td { border-bottom: none; }
+        
+        /* Table Actions */
+        .task-table tbody tr .actions { opacity: 0; transition: opacity 0.2s; display: flex; gap: 0.4rem; justify-content: flex-end; }
+        .task-table tbody tr:hover .actions { opacity: 1; }
+        .action-btn { 
+            background: rgba(255,255,255,0.05); border: 1px solid transparent; cursor: pointer; 
+            padding: 0.3rem; border-radius: 6px; transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+        }
+        .action-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }
+        .action-done { color: var(--accent-green); }
+        .action-fail { color: var(--accent-red); }
+        .action-del { color: rgba(255,255,255,0.5); }
+        .action-del:hover { color: var(--accent-red); }
+
+        .pill {
+            display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px;
+            font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+        }
+        .pill-pending   { background: rgba(251,191,36,0.15);  color: #fef3c7; border: 1px solid rgba(251,191,36,0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        .pill-in_progress { background: rgba(167,139,250,0.15); color: #ddd6fe; border: 1px solid rgba(167,139,250,0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        .pill-done      { background: rgba(52,211,153,0.15);  color: #a7f3d0; border: 1px solid rgba(52,211,153,0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        .pill-failed    { background: rgba(248,113,113,0.15); color: #fecaca; border: 1px solid rgba(248,113,113,0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        .pill-low       { background: rgba(125,211,252,0.1);  color: #e0f2fe; border: 1px solid rgba(125,211,252,0.25); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        .pill-medium    { background: rgba(52,211,153,0.1);   color: #a7f3d0; border: 1px solid rgba(52,211,153,0.25); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        .pill-high      { background: rgba(251,191,36,0.1);   color: #fef3c7; border: 1px solid rgba(251,191,36,0.25); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        .pill-critical  { background: rgba(248,113,113,0.1);  color: #fecaca; border: 1px solid rgba(248,113,113,0.25); text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+        
+        .create-form { max-width: 520px; }
+        .form-group { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.25rem; }
+        .form-group label { font-size: 0.8rem; font-weight: 500; color: rgba(255,255,255,0.6); }
+        .form-message {
+            font-size: 0.85rem; padding: 0.6rem 1rem; border-radius: 10px;
+            margin-bottom: 1rem; display: none;
+        }
+        .form-message.success { background: rgba(52,211,153,0.15); color: var(--accent-green); border: 1px solid rgba(52,211,153,0.3); display: block; }
+        .form-message.error   { background: rgba(248,113,113,0.15); color: var(--accent-red);   border: 1px solid rgba(248,113,113,0.3); display: block; }
+        
+        .artifact-card { cursor: pointer; margin-bottom: 0.75rem; }
+        .artifact-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+        .artifact-topic { font-weight: 600; font-size: 0.95rem; }
+        .artifact-meta { font-size: 0.75rem; color: rgba(255,255,255,0.4); white-space: nowrap; }
+        .artifact-preview {
+            margin-top: 0.875rem; padding-top: 0.875rem;
+            border-top: 1px solid var(--glass-border);
+            font-size: 0.82rem; color: rgba(255,255,255,0.65); line-height: 1.6;
+            display: none; white-space: pre-wrap;
+        }
+        .artifact-card.expanded .artifact-preview { display: block; }
+        .artifact-expand-hint { font-size: 0.72rem; color: rgba(125,211,252,0.6); margin-top: 0.25rem; }
+        
+        .listeners-card { max-width: 480px; text-align: center; padding: 2.5rem; }
+        .listener-state { font-size: 3rem; font-weight: 700; margin: 0.75rem 0; }
+        .listener-state.on  { color: var(--accent-green); }
+        .listener-state.off { color: rgba(255,255,255,0.3); }
+        .listener-desc { color: rgba(255,255,255,0.5); font-size: 0.875rem; margin-bottom: 1.5rem; }
+        
+        .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.75rem; gap: 1rem; }
+        .page-header h1 { display: flex; align-items: center; gap: 0.6rem; margin: 0; }
+        .last-updated { font-size: 0.75rem; color: rgba(255,255,255,0.35); white-space: nowrap; }
+        .empty-state { text-align: center; padding: 2.5rem; color: rgba(255,255,255,0.35); font-size: 0.9rem; }
+
+        /* FAB */
+        .fab-button {
+            position: fixed; bottom: 5rem; right: 1.5rem; z-index: 900;
+            width: 56px; height: 56px; border-radius: 50%;
+            background: linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05));
+            backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4); color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .fab-button:hover { transform: scale(1.1); box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+        
+        /* Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
+            z-index: 1000; display: none; align-items: center; justify-content: center;
+            opacity: 0; transition: opacity 0.2s;
+        }
+        .modal-overlay.active { display: flex; opacity: 1; }
+        .modal-content {
+            background: rgba(15,23,42,0.7); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: var(--radius-card); padding: 2rem; width: 90%; max-width: 420px;
+            position: relative; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            transform: translateY(20px); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .modal-overlay.active .modal-content { transform: translateY(0); }
+        .modal-close { 
+            position: absolute; top: 1.2rem; right: 1.2rem; cursor: pointer; 
+            background: rgba(255,255,255,0.05); border: none; color: rgba(255,255,255,0.6); 
+            width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+        }
+        .modal-close:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+        /* Toast */
+        .toast-container { position: fixed; top: 1.5rem; left: 50%; transform: translateX(-50%); z-index: 1002; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none; }
+        .toast { 
+            background: rgba(15,23,42,0.8); border: 1px solid var(--accent-green); color: #fff; 
+            padding: 0.75rem 1.5rem; border-radius: 999px; backdrop-filter: blur(12px); 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3); font-size: 0.85rem; font-weight: 500;
+            animation: slideDown 0.3s, fadeOut 0.3s 2.7s forwards; display: flex; align-items: center; gap: 0.5rem;
+        }
+        @keyframes slideDown { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes fadeOut { to { opacity: 0; } }
+
+        @media (min-width: 768px) {
+            .fab-button { bottom: 2rem; }
+        }
+        @media (max-width: 768px) {
+            .page-content { padding: 1rem; padding-bottom: 90px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .task-table tbody tr .actions { opacity: 1; } /* Always show actions on mobile */
+        }
+    </style>
+</head>
+<body>
+
+    <nav class="glass-nav">
+        <div class="nav-logo">Krab AI</div>
+        <div class="nav-links">
+            <a href="/v4/" class="nav-link">Hub</a>
+            <a href="/v4/chat" class="nav-link">Chat</a>
+            <a href="/v4/costs" class="nav-link">Costs</a>
+            <a href="/v4/inbox" class="nav-link">Inbox</a>
+            <a href="/v4/swarm" class="nav-link active">Swarm</a>
+            <a href="/v4/translator" class="nav-link">Translator</a>
+            <a href="/v4/ops" class="nav-link">Ops</a>
+            <a href="/v4/research" class="nav-link">Research</a>
+            <a href="/v4/settings" class="nav-link">Settings</a>
+            <a href="/v4/commands" class="nav-link">Commands</a>
+            <div class="nav-bell-wrapper">
+                <a href="/v4/inbox" class="nav-bell" title="Notifications">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                    </svg>
+                    <span class="bell-count hidden" id="nav-bell-count">0</span>
+                </a>
+                <div class="bell-dropdown hidden" id="bell-dropdown"></div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="glass-tab-bar">
+        <a href="/v4/" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            Hub
+        </a>
+        <a href="/v4/chat" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+        </a>
+        <a href="/v4/costs" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Costs
+        </a>
+        <a href="/v4/swarm" class="tab-item active">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Swarm
+        </a>
+        <a href="/v4/translator" class="tab-item">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/></svg>
+            Trans
+        </a>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <div class="page-content">
+
+        <div class="page-header">
+            <h1>Swarm Control <span id="status-dot" class="status-dot warning"></span></h1>
+            <span class="last-updated" id="last-updated">Loading...</span>
+        </div>
+
+        <div class="stats-grid">
+            <div class="glass-card stat-card">
+                <div class="stat-value" style="color:var(--accent-yellow);" id="stat-pending">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
+                </div>
+                <div class="stat-label">Pending</div>
+                <svg class="sparkline-container sparkline" id="spark-pending" viewBox="0 0 60 20"></svg>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="stat-value" style="color:var(--accent-purple);" id="stat-in_progress">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
+                </div>
+                <div class="stat-label">In Progress</div>
+                <svg class="sparkline-container sparkline" id="spark-in_progress" viewBox="0 0 60 20"></svg>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="stat-value text-success" id="stat-done">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
+                </div>
+                <div class="stat-label">Done</div>
+                <svg class="sparkline-container sparkline" id="spark-done" viewBox="0 0 60 20"></svg>
+            </div>
+            <div class="glass-card stat-card">
+                <div class="stat-value text-error" id="stat-failed">
+                    <div class="skeleton" style="width:3rem;height:2rem;margin:0 auto;"></div>
+                </div>
+                <div class="stat-label">Failed</div>
+                <svg class="sparkline-container sparkline" id="spark-failed" viewBox="0 0 60 20"></svg>
+            </div>
+        </div>
+
+        <div class="team-row">
+            <span class="text-xs text-muted">By team:</span>
+            <span class="team-badge" id="badge-traders" data-tooltip="Loading...">Traders <span class="team-count" id="team-traders">-</span></span>
+            <span class="team-badge" id="badge-coders" data-tooltip="Loading...">Coders <span class="team-count" id="team-coders">-</span></span>
+            <span class="team-badge" id="badge-analysts" data-tooltip="Loading...">Analysts <span class="team-count" id="team-analysts">-</span></span>
+            <span class="team-badge" id="badge-creative" data-tooltip="Loading...">Creative <span class="team-count" id="team-creative">-</span></span>
+        </div>
+
+        <div class="tabs-header">
+            <button class="tab-btn active" onclick="switchTab('tasks',this)">Tasks</button>
+            <button class="tab-btn" onclick="switchTab('create',this)">Create</button>
+            <button class="tab-btn" onclick="switchTab('artifacts',this)">Artifacts</button>
+            <button class="tab-btn" onclick="switchTab('listeners',this)">Listeners</button>
+        </div>
+
+        <div id="pane-tasks" class="tab-pane active">
+            <div class="filter-row">
+                <div class="filter-group-wrap">
+                    <label for="team-filter">Team:</label>
+                    <select id="team-filter" class="glass-input" style="max-width:180px; padding: 0.3rem 0.8rem; font-size: 0.8rem;" onchange="filterTasks()">
+                        <option value="">All Teams</option>
+                        <option value="traders">Traders</option>
+                        <option value="coders">Coders</option>
+                        <option value="analysts">Analysts</option>
+                        <option value="creative">Creative</option>
+                    </select>
+                </div>
+                <div class="filter-group-wrap">
+                    <label>Priority:</label>
+                    <div class="filter-group">
+                        <button class="filter-pill p-pill active" onclick="setFilter('priority', 'all', this)">All</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'critical', this)">Critical</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'high', this)">High</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'medium', this)">Medium</button>
+                        <button class="filter-pill p-pill" onclick="setFilter('priority', 'low', this)">Low</button>
+                    </div>
+                </div>
+                <div class="filter-group-wrap">
+                    <label>Date:</label>
+                    <div class="filter-group">
+                        <button class="filter-pill d-pill active" onclick="setFilter('date', 'all', this)">All</button>
+                        <button class="filter-pill d-pill" onclick="setFilter('date', 'today', this)">Today</button>
+                        <button class="filter-pill d-pill" onclick="setFilter('date', 'week', this)">This week</button>
+                    </div>
+                </div>
+            </div>
+            <div class="glass-card" style="padding:0;overflow:hidden;">
+                <div class="task-table-wrap">
+                    <table class="task-table">
+                        <thead>
+                            <tr>
+                                <th>Team</th>
+                                <th>Title</th>
+                                <th>Status</th>
+                                <th>Priority</th>
+                                <th>Time</th>
+                                <th style="text-align: right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="task-tbody">
+                            <tr><td colspan="6" class="empty-state">Loading tasks...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="pane-create" class="tab-pane">
+            <div class="glass-card create-form">
+                <h2 style="margin-bottom:1.5rem;">Deploy New Task</h2>
+                <div id="c-msg" class="form-message"></div>
+                <form id="create-form" onsubmit="submitCreateTask(event, 'c-')">
+                    <div class="form-group">
+                        <label>Team</label>
+                        <select id="c-team" class="glass-input">
+                            <option value="traders">Traders</option>
+                            <option value="coders">Coders</option>
+                            <option value="analysts">Analysts</option>
+                            <option value="creative">Creative</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" id="c-title" class="glass-input" placeholder="Task description..." required>
+                    </div>
+                    <div class="form-group">
+                        <label>Priority</label>
+                        <select id="c-priority" class="glass-input">
+                            <option value="low">Low</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="high">High</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="glass-button glass-button-primary" id="c-submit" style="width:100%;">Deploy Task</button>
+                </form>
+            </div>
+        </div>
+
+        <div id="pane-artifacts" class="tab-pane">
+            <div id="artifacts-container">
+                <div class="glass-card skeleton" style="height:80px;margin-bottom:0.75rem;"></div>
+                <div class="glass-card skeleton" style="height:80px;margin-bottom:0.75rem;"></div>
+                <div class="glass-card skeleton" style="height:80px;"></div>
+            </div>
+        </div>
+
+        <div id="pane-listeners" class="tab-pane">
+            <div class="glass-card listeners-card" style="margin:0 auto;">
+                <div class="text-muted text-sm">Agent Listener Network</div>
+                <div class="listener-state off" id="listener-state-text">-</div>
+                <p class="listener-desc" id="listener-desc">Loading current state...</p>
+                <button class="glass-button glass-button-primary" id="btn-toggle-listeners"
+                    onclick="toggleListeners()" style="min-width:160px;">Toggle</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- FAB -->
+    <button id="task-fab" class="fab-button" onclick="openModal()" title="Quick Create Task">
+        <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path>
+        </svg>
+    </button>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="task-modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">
+                <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+            <h3 style="margin-top:0; margin-bottom:1.5rem;">Quick Task</h3>
+            <form id="modal-form" onsubmit="submitCreateTask(event, 'm-')">
+                <div class="form-group">
+                    <label>Team</label>
+                    <select id="m-team" class="glass-input">
+                        <option value="traders">Traders</option>
+                        <option value="coders">Coders</option>
+                        <option value="analysts">Analysts</option>
+                        <option value="creative">Creative</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="m-title" class="glass-input" placeholder="Task description..." required>
+                </div>
+                <div class="form-group">
+                    <label>Priority</label>
+                    <select id="m-priority" class="glass-input">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                </div>
+                <button type="submit" class="glass-button glass-button-primary" id="m-submit" style="width:100%; margin-top:0.5rem;">Deploy Task</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        var allTasks = [];
+        var listenersEnabled = false;
+        var evtSource = null;
+        
+        // Фильтры
+        var currentFilters = { team: '', priority: 'all', date: 'all' };
+        
+        // История для sparklines (in-memory mock if API doesn't provide)
+        var statsHistory = { pending: [0], in_progress: [0], done: [0], failed: [0] };
+
+        function switchTab(name, btn) {
+            document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+            document.querySelectorAll('.tab-pane').forEach(function(p){ p.classList.remove('active'); });
+            btn.classList.add('active');
+            document.getElementById('pane-' + name).classList.add('active');
+        }
+
+        function setStatus(cls) {
+            var dot = document.getElementById('status-dot');
+            dot.className = 'status-dot ' + cls;
+        }
+
+        function fmtTime(iso) {
+            if (!iso) return '-';
+            try {
+                var d = new Date(iso);
+                return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            } catch(e) { return iso; }
+        }
+
+        function escHtml(s) {
+            if (!s) return '';
+            return String(s)
+                .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        /* ---- Toast ---- */
+        function showToast(msg) {
+            var c = document.getElementById('toast-container');
+            var t = document.createElement('div');
+            t.className = 'toast';
+            t.innerHTML = '<svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path></svg> ' + escHtml(msg);
+            c.appendChild(t);
+            setTimeout(function(){ if(t.parentNode) t.remove(); }, 3000);
+        }
+
+        /* ---- Modal ---- */
+        function openModal() { document.getElementById('task-modal').classList.add('active'); document.getElementById('m-title').focus(); }
+        function closeModal() { document.getElementById('task-modal').classList.remove('active'); }
+        document.addEventListener('keydown', function(e) { if(e.key === 'Escape') closeModal(); });
+        document.getElementById('task-modal').addEventListener('click', function(e) { if(e.target.id === 'task-modal') closeModal(); });
+
+        /* ---- Sparklines ---- */
+        function updateSparklines(bs) {
+            var maxPts = 20;
+            ['pending', 'in_progress', 'done', 'failed'].forEach(function(k) {
+                var val = bs[k] || 0;
+                statsHistory[k].push(val);
+                if(statsHistory[k].length > maxPts) statsHistory[k].shift();
+                
+                var color = k==='pending' ? 'var(--accent-yellow)' : k==='in_progress' ? 'var(--accent-purple)' : k==='done' ? 'var(--accent-green)' : 'var(--accent-red)';
+                drawSparkline('spark-' + k, statsHistory[k], color);
+            });
+        }
+        function drawSparkline(id, data, color) {
+            var svg = document.getElementById(id);
+            if(!svg || data.length < 2) return;
+            var max = Math.max.apply(null, data), min = Math.min.apply(null, data);
+            if(max === min) { max += 1; min = Math.max(0, min - 1); }
+            var range = max - min;
+            var w = 60, h = 20;
+            var pts = data.map(function(v, i) {
+                var x = (i / (data.length - 1)) * w;
+                var y = h - ((v - min) / range) * h;
+                return x + ',' + y;
+            }).join(' L ');
+            svg.innerHTML = '<path d="M ' + pts + '" stroke="' + color + '" />';
+        }
+
+        /* ---- Tooltips ---- */
+        function updateTeamTooltips() {
+            var teams = ['traders', 'coders', 'analysts', 'creative'];
+            teams.forEach(function(team) {
+                var p=0, i=0, d=0, f=0;
+                allTasks.forEach(function(t) {
+                    if(t.team === team) {
+                        if(t.status === 'pending') p++;
+                        else if(t.status === 'in_progress') i++;
+                        else if(t.status === 'done') d++;
+                        else if(t.status === 'failed') f++;
+                    }
+                });
+                var el = document.getElementById('badge-' + team);
+                if(el) el.setAttribute('data-tooltip', 'Pending: '+p+' | In Progress: '+i+' | Done: '+d+' | Failed: '+f);
+            });
+        }
+
+        /* ---- Board ---- */
+        async function fetchBoard() {
+            try {
+                var r = await fetch('/api/swarm/task-board');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
+
+                var bs = data.summary.by_status;
+                var bt = data.summary.by_team;
+
+                document.getElementById('stat-pending').textContent     = bs.pending     !== undefined ? bs.pending     : 0;
+                document.getElementById('stat-in_progress').textContent = bs.in_progress !== undefined ? bs.in_progress : 0;
+                document.getElementById('stat-done').textContent        = bs.done        !== undefined ? bs.done        : 0;
+                document.getElementById('stat-failed').textContent      = bs.failed      !== undefined ? bs.failed      : 0;
+
+                document.getElementById('team-traders').textContent  = bt.traders  !== undefined ? bt.traders  : 0;
+                document.getElementById('team-coders').textContent   = bt.coders   !== undefined ? bt.coders   : 0;
+                document.getElementById('team-analysts').textContent = bt.analysts !== undefined ? bt.analysts : 0;
+                document.getElementById('team-creative').textContent = bt.creative !== undefined ? bt.creative : 0;
+
+                updateSparklines(bs);
+                setStatus('ok');
+            } catch(e) {
+                console.error('board fetch failed', e);
+                setStatus('error');
+            }
+        }
+
+        /* ---- Tasks & Filters ---- */
+        function setFilter(type, val, btn) {
+            currentFilters[type] = val;
+            var cls = type === 'priority' ? '.p-pill' : '.d-pill';
+            document.querySelectorAll(cls).forEach(function(b){ b.classList.remove('active'); });
+            btn.classList.add('active');
+            filterTasks();
+        }
+
+        async function fetchTasks() {
+            try {
+                var r = await fetch('/api/swarm/tasks?limit=50');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
+                allTasks = data.tasks || [];
+                filterTasks();
+                updateTeamTooltips();
+            } catch(e) {
+                console.error('tasks fetch failed', e);
+                var tbody = document.getElementById('task-tbody');
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state text-error">Failed to load tasks</td></tr>';
+            }
+        }
+
+        function filterTasks() {
+            currentFilters.team = document.getElementById('team-filter').value;
+            var now = new Date();
+            var todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+            var weekStart = todayStart - (now.getDay() * 86400000);
+
+            var filtered = allTasks.filter(function(t) {
+                if (currentFilters.team && t.team !== currentFilters.team) return false;
+                if (currentFilters.priority !== 'all' && t.priority !== currentFilters.priority) return false;
+                if (currentFilters.date !== 'all') {
+                    var tTime = new Date(t.created_at).getTime();
+                    if (currentFilters.date === 'today' && tTime < todayStart) return false;
+                    if (currentFilters.date === 'week' && tTime < weekStart) return false;
+                }
+                return true;
+            });
+            renderTasks(filtered);
+        }
+
+        function renderTasks(tasks) {
+            var tbody = document.getElementById('task-tbody');
+            tbody.innerHTML = '';
+            if (!tasks.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No tasks found matching criteria</td></tr>';
+                return;
+            }
+            tasks.forEach(function(t) {
+                var tr = document.createElement('tr');
+
+                var tdTeam = document.createElement('td');
+                tdTeam.textContent = t.team || '';
+
+                var tdTitle = document.createElement('td');
+                tdTitle.style.maxWidth = '300px';
+                tdTitle.style.wordBreak = 'break-word';
+                tdTitle.textContent = t.title || '';
+
+                var tdStatus = document.createElement('td');
+                var spStatus = document.createElement('span');
+                spStatus.className = 'pill pill-' + (t.status || '');
+                spStatus.textContent = (t.status || '').replace('_', ' ');
+                tdStatus.appendChild(spStatus);
+
+                var tdPriority = document.createElement('td');
+                var spPriority = document.createElement('span');
+                spPriority.className = 'pill pill-' + (t.priority || '');
+                spPriority.textContent = t.priority || '';
+                tdPriority.appendChild(spPriority);
+
+                var tdTime = document.createElement('td');
+                tdTime.className = 'text-xs text-muted';
+                tdTime.textContent = fmtTime(t.created_at);
+
+                // Actions
+                var tdActions = document.createElement('td');
+                tdActions.className = 'actions';
+                var actHtml = '';
+                var tid = t.id || t.task_id; // fallback
+                if (tid) {
+                    if (t.status === 'pending' || t.status === 'in_progress') {
+                        actHtml += '<button class="action-btn action-done" onclick="updateTaskStatus(\''+tid+'\', \'done\')" title="Mark Done"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg></button>';
+                        actHtml += '<button class="action-btn action-fail" onclick="updateTaskStatus(\''+tid+'\', \'failed\')" title="Mark Failed"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>';
+                    }
+                    actHtml += '<button class="action-btn action-del" onclick="deleteTask(\''+tid+'\')" title="Delete"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>';
+                }
+                tdActions.innerHTML = actHtml;
+
+                tr.appendChild(tdTeam);
+                tr.appendChild(tdTitle);
+                tr.appendChild(tdStatus);
+                tr.appendChild(tdPriority);
+                tr.appendChild(tdTime);
+                tr.appendChild(tdActions);
+                tbody.appendChild(tr);
+            });
+        }
+
+        /* ---- Task Actions ---- */
+        async function updateTaskStatus(id, status) {
+            try {
+                await fetch('/api/swarm/task/' + id + '/update', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: status })
+                });
+                fetchAll(); // Refresh
+            } catch(e) { console.error('Update failed', e); }
+        }
+
+        async function deleteTask(id) {
+            if(!confirm('Delete this task?')) return;
+            try {
+                await fetch('/api/swarm/task/' + id, { method: 'DELETE' });
+                fetchAll();
+            } catch(e) { console.error('Delete failed', e); }
+        }
+
+        /* ---- Artifacts ---- */
+        async function fetchArtifacts() {
+            try {
+                var r = await fetch('/api/swarm/artifacts?limit=10');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
+                renderArtifacts(data.artifacts || []);
+            } catch(e) {
+                var c = document.getElementById('artifacts-container');
+                c.innerHTML = '<div class="empty-state text-error">Failed to load artifacts</div>';
+            }
+        }
+
+        function renderArtifacts(artifacts) {
+            var container = document.getElementById('artifacts-container');
+            container.innerHTML = '';
+            if (!artifacts.length) {
+                container.innerHTML = '<div class="empty-state">No artifacts yet</div>';
+                return;
+            }
+            artifacts.forEach(function(a, i) {
+                var card = document.createElement('div');
+                card.className = 'glass-card artifact-card';
+                card.addEventListener('click', function(){ this.classList.toggle('expanded'); });
+
+                var header = document.createElement('div');
+                header.className = 'artifact-header';
+
+                var topicDiv = document.createElement('div');
+                var topicEl = document.createElement('div');
+                topicEl.className = 'artifact-topic';
+                topicEl.textContent = a.topic || '';
+                var hint = document.createElement('div');
+                hint.className = 'artifact-expand-hint';
+                hint.textContent = 'Click to expand';
+                topicDiv.appendChild(topicEl);
+                topicDiv.appendChild(hint);
+
+                var meta = document.createElement('div');
+                meta.className = 'artifact-meta';
+                meta.textContent = (a.team || '') + ' \u00b7 ' + fmtTime(a.timestamp_iso) + (a.duration_sec ? ' \u00b7 ' + a.duration_sec + 's' : '');
+
+                header.appendChild(topicDiv);
+                header.appendChild(meta);
+
+                var preview = document.createElement('div');
+                preview.className = 'artifact-preview';
+                preview.textContent = a.result_preview || '';
+
+                card.appendChild(header);
+                card.appendChild(preview);
+                container.appendChild(card);
+            });
+        }
+
+        /* ---- Listeners ---- */
+        async function fetchListeners() {
+            try {
+                var r = await fetch('/api/swarm/listeners');
+                var data = await r.json();
+                if (!data.ok) throw new Error('not ok');
+                listenersEnabled = data.listeners_enabled;
+                renderListeners(listenersEnabled);
+            } catch(e) {
+                document.getElementById('listener-desc').textContent = 'Failed to load listener state';
+            }
+        }
+
+        function renderListeners(enabled) {
+            var stateEl = document.getElementById('listener-state-text');
+            var descEl  = document.getElementById('listener-desc');
+            var btnEl   = document.getElementById('btn-toggle-listeners');
+            if (enabled) {
+                stateEl.textContent = 'ON';
+                stateEl.className   = 'listener-state on';
+                descEl.textContent  = 'All swarm team agents are listening for tasks.';
+                btnEl.textContent   = 'Turn OFF';
+            } else {
+                stateEl.textContent = 'OFF';
+                stateEl.className   = 'listener-state off';
+                descEl.textContent  = 'Swarm agents are paused - no DM commands processed.';
+                btnEl.textContent   = 'Turn ON';
+            }
+        }
+
+        async function toggleListeners() {
+            var btn = document.getElementById('btn-toggle-listeners');
+            btn.disabled = true; btn.textContent = 'Toggling...';
+            try {
+                var r = await fetch('/api/swarm/listeners/toggle', { method: 'POST', body: '{}' });
+                if (!r.ok) throw new Error('toggle failed');
+                await fetchListeners();
+            } catch(e) {
+                btn.textContent = 'Error - retry';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        /* ---- Create Task (Shared) ---- */
+        async function submitCreateTask(e, prefix) {
+            e.preventDefault();
+            var btn = document.getElementById(prefix + 'submit');
+            var team     = document.getElementById(prefix + 'team').value;
+            var title    = document.getElementById(prefix + 'title').value.trim();
+            var priority = document.getElementById(prefix + 'priority').value;
+            if (!title) return;
+
+            btn.disabled = true; btn.textContent = 'Deploying...';
+
+            try {
+                var r = await fetch('/api/swarm/tasks/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ team: team, title: title, priority: priority })
+                });
+                var data = await r.json();
+                if (!data.ok) throw new Error(data.error || 'API error');
+                
+                if (prefix === 'm-') {
+                    showToast('Task created: ' + (data.task_id || 'OK'));
+                    closeModal();
+                    document.getElementById('modal-form').reset();
+                } else {
+                    var msg = document.getElementById('c-msg');
+                    msg.className = 'form-message success';
+                    msg.textContent = 'Task created: ' + (data.task_id || 'OK');
+                    document.getElementById('create-form').reset();
+                }
+                fetchAll();
+            } catch(err) {
+                if (prefix === 'm-') {
+                    alert('Failed: ' + err.message);
+                } else {
+                    var msg = document.getElementById('c-msg');
+                    msg.className = 'form-message error';
+                    msg.textContent = 'Failed: ' + err.message;
+                }
+            } finally {
+                btn.disabled = false; btn.textContent = 'Deploy Task';
+            }
+        }
+
+        /* ---- Init & SSE ---- */
+        async function fetchAll() {
+            await Promise.allSettled([
+                fetchBoard(),
+                fetchTasks(),
+                fetchArtifacts(),
+                fetchListeners()
+            ]);
+            document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+        }
+
+        function connectSSE() {
+            if (evtSource) evtSource.close();
+            evtSource = new EventSource('/api/swarm/events');
+
+            evtSource.addEventListener('update', function(e) {
+                try {
+                    var data = JSON.parse(e.data);
+
+                    if (data.summary && data.summary.by_status) {
+                        var bs = data.summary.by_status;
+                        document.getElementById('stat-pending').textContent     = bs.pending     !== undefined ? bs.pending     : 0;
+                        document.getElementById('stat-in_progress').textContent = bs.in_progress !== undefined ? bs.in_progress : 0;
+                        document.getElementById('stat-done').textContent        = bs.done        !== undefined ? bs.done        : 0;
+                        document.getElementById('stat-failed').textContent      = bs.failed      !== undefined ? bs.failed      : 0;
+                        updateSparklines(bs);
+                    }
+
+                    if (data.summary && data.summary.by_team) {
+                        var bt = data.summary.by_team;
+                        document.getElementById('team-traders').textContent  = bt.traders  !== undefined ? bt.traders  : 0;
+                        document.getElementById('team-coders').textContent   = bt.coders   !== undefined ? bt.coders   : 0;
+                        document.getElementById('team-analysts').textContent = bt.analysts !== undefined ? bt.analysts : 0;
+                        document.getElementById('team-creative').textContent = bt.creative !== undefined ? bt.creative : 0;
+                    }
+
+                    if (data.tasks) {
+                        allTasks = data.tasks;
+                        filterTasks();
+                        updateTeamTooltips();
+                    }
+
+                    if (data.artifacts) renderArtifacts(data.artifacts);
+                    if (data.listeners_enabled !== undefined) {
+                        listenersEnabled = data.listeners_enabled;
+                        renderListeners(listenersEnabled);
+                    }
+
+                    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+                    setStatus('ok');
+                } catch(err) {
+                    console.error('Failed to parse SSE update', err);
+                }
+            });
+
+            evtSource.addEventListener('error', function(e) {
+                setStatus('error');
+            });
+
+            evtSource.onerror = function() {
+                setStatus('error');
+                evtSource.close();
+                setTimeout(connectSSE, 5000);
+            };
+        }
+
+        fetchAll();
+        connectSSE();
+
+        window.addEventListener('beforeunload', function() {
+            if (evtSource) evtSource.close();
+        });
+
+        /* ---- Bell Notifications ---- */
+        async function updateBellCount() {
+          try {
+            const [inboxRes, opsRes] = await Promise.all([
+              fetch('/api/inbox/status').catch(() => null),
+              fetch('/api/ops/alerts').catch(() => null)
+            ]);
+
+            const inboxData = (inboxRes && inboxRes.ok) ? await inboxRes.json().catch(() => ({})) : {};
+            const opsData = (opsRes && opsRes.ok) ? await opsRes.json().catch(() => ({})) : {};
+
+            const summary = inboxData.summary || {};
+            const latestItems = Array.isArray(summary.latest_open_items) ? summary.latest_open_items.slice(0, 5) : [];
+            const alerts = Array.isArray(opsData.alerts) ? opsData.alerts.slice(0, 3) : [];
+
+            let total = 0;
+            if (typeof summary.open_items === 'number' || typeof summary.attention_items === 'number') {
+              total = (summary.open_items || 0) + (summary.attention_items || 0);
+            } else {
+              total = latestItems.length + alerts.length;
+            }
+
+            const countEl = document.getElementById('nav-bell-count');
+            if (countEl) {
+              if (total > 0) {
+                countEl.textContent = total > 99 ? '99+' : String(total);
+                countEl.classList.remove('hidden');
+              } else {
+                countEl.classList.add('hidden');
+              }
+            }
+
+            const dropdown = document.getElementById('bell-dropdown');
+            if (!dropdown) return;
+
+            dropdown.innerHTML = '';
+
+            if (alerts.length === 0 && latestItems.length === 0) {
+              const emptyDiv = document.createElement('div');
+              emptyDiv.className = 'bell-dropdown-empty';
+              emptyDiv.textContent = 'Нет уведомлений';
+              dropdown.appendChild(emptyDiv);
+            } else {
+              if (alerts.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'ALERTS';
+                dropdown.appendChild(header);
+
+                alerts.forEach(alert => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = '/v4/ops';
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${alert.severity || 'error'}`;
+                  const text = document.createTextNode(alert.title || alert.message || alert.code || 'Alert');
+                  a.appendChild(dot); a.appendChild(text); dropdown.appendChild(a);
+                });
+              }
+
+              if (latestItems.length > 0) {
+                const header = document.createElement('div');
+                header.className = 'bell-dropdown-header';
+                header.textContent = 'INBOX';
+                dropdown.appendChild(header);
+
+                latestItems.forEach(item => {
+                  const a = document.createElement('a');
+                  a.className = 'bell-dropdown-item';
+                  a.href = `/v4/inbox#${item.id || item.item_id || ''}`;
+                  const dot = document.createElement('span');
+                  dot.className = `bell-dropdown-severity ${item.severity || 'info'}`;
+                  const text = document.createTextNode(item.title || 'Notification');
+                  a.appendChild(dot); a.appendChild(text); dropdown.appendChild(a);
+                });
+              }
+            }
+
+            const footer = document.createElement('a');
+            footer.className = 'bell-dropdown-footer';
+            footer.href = '/v4/inbox';
+            footer.textContent = 'Открыть все →';
+            footer.style.display = 'block';
+            footer.style.textDecoration = 'none';
+            dropdown.appendChild(footer);
+
+          } catch (err) { console.error(err); }
+        }
+
+        setInterval(updateBellCount, 30000);
+        updateBellCount();
+
+        const navBell = document.querySelector('.nav-bell');
+        if (navBell) {
+          const bellWrapper = navBell.closest('.nav-bell-wrapper');
+          const bellDropdown = document.getElementById('bell-dropdown');
+          if (bellWrapper && bellDropdown) {
+            navBell.addEventListener('click', (e) => {
+              e.preventDefault(); bellDropdown.classList.toggle('hidden');
+            });
+            document.addEventListener('click', (e) => {
+              if (!bellWrapper.contains(e.target)) bellDropdown.classList.add('hidden');
+            });
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') bellDropdown.classList.add('hidden');
+            });
+          }
+        }
+    </script>
+</body>
+</html>

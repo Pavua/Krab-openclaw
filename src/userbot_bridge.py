@@ -39,6 +39,7 @@ from .core.proactive_watch import proactive_watch
 from .core.routing_errors import RouterError, user_message_for_surface
 from .core.scheduler import krab_scheduler
 from .core.silence_mode import silence_manager
+from .core.silence_schedule import silence_schedule_manager
 from .core.spam_filter import is_bulk_sender as _is_bulk_sender_ext
 from .core.swarm_channels import swarm_channels
 from .core.swarm_scheduler import swarm_scheduler
@@ -49,6 +50,7 @@ from .core.translator_runtime_profile import (
     save_translator_runtime_profile,
 )
 from .core.translator_session_state import (
+    append_translator_history_entry,
     apply_translator_session_update,
     default_translator_session_state,
     load_translator_session_state,
@@ -58,35 +60,71 @@ from .employee_templates import ROLES
 from .handlers import (
     handle_acl,
     handle_agent,
+    handle_alias,
+    handle_ask,
+    handle_autodel,
+    handle_backup,
+    handle_bookmark,
     handle_browser,
+    handle_budget,
     handle_cap,
+    handle_catchup,
     handle_chatban,
     handle_claude_cli,
     handle_clear,
     handle_codex,
+    handle_collect,
     handle_config,
+    handle_context,
+    handle_costs,
     handle_cronstatus,
+    handle_debug,
+    handle_del,
     handle_diagnose,
+    handle_digest,
+    handle_emoji,
+    handle_export,
+    handle_fix,
+    handle_fwd,
     handle_gemini_cli,
+    handle_grep,
+    handle_health,
     handle_help,
     handle_hs,
+    handle_id,
     handle_inbox,
     handle_ls,
     handle_macos,
+    handle_memo,
     handle_memory,
     handle_model,
+    handle_monitor,
+    handle_news,
+    handle_note,
     handle_notify,
     handle_opencode,
     handle_panel,
+    handle_pin,
+    handle_poll,
+    handle_purge,
+    handle_qr,
+    handle_quiz,
+    handle_rate,
+    handle_react,
     handle_read,
     handle_reasoning,
     handle_recall,
     handle_remember,
     handle_remind,
     handle_reminders,
+    handle_report,
     handle_restart,
+    handle_rewrite,
     handle_rm_remind,
     handle_role,
+    handle_say,
+    handle_schedule,
+    handle_scope,
     handle_screenshot,
     handle_search,
     handle_set,
@@ -94,19 +132,30 @@ from .handlers import (
     handle_silence,
     handle_stats,
     handle_status,
+    handle_stopwatch,
+    handle_summary,
     handle_swarm,
     handle_sysinfo,
+    handle_timer,
+    handle_todo,
+    handle_translate,
     handle_translator,
+    handle_unpin,
     handle_voice,
     handle_watch,
     handle_web,
+    handle_who,
+    handle_whois,
     handle_write,
+    handle_eval,
+    handle_explain,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
 from .reserve_bot import reserve_bot
 from .search_engine import close_search
 from .userbot.access_control import AccessControlMixin
+from .userbot.auto_translate import AutoTranslateMixin
 from .userbot.background_tasks import BackgroundTasksMixin
 from .userbot.llm_flow import (
     LLMFlowMixin,
@@ -315,6 +364,7 @@ class KraabUserbot(
     LLMTextProcessingMixin,
     RuntimeStatusMixin,
     VoiceProfileMixin,
+    AutoTranslateMixin,
     AccessControlMixin,
     LLMFlowMixin,
     BackgroundTasksMixin,
@@ -401,6 +451,7 @@ class KraabUserbot(
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
         self._error_digest_task: Optional[asyncio.Task] = None
+        self._silence_schedule_task: Optional[asyncio.Task] = None
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -412,6 +463,9 @@ class KraabUserbot(
         self._hidden_reasoning_traces: dict[str, dict[str, Any]] = {}
         self._session_workdir = config.BASE_DIR / "data" / "sessions"
         self._disclosure_sent_for_chat_ids: set[str] = set()
+        # Время старта и счётчик обработанных сообщений за сессию (для !stats).
+        self._session_start_time: float = time.time()
+        self._session_messages_processed: int = 0
         # Runtime-состояние старта userbot для health/handoff и контролируемой деградации.
         self._startup_state = "initializing"
         self._startup_error_code = ""
@@ -580,6 +634,48 @@ class KraabUserbot(
             await run_cmd(handle_stats, m)
 
         @self.client.on_message(
+            filters.command("who", prefixes=prefixes) & _make_command_filter("who"), group=-1
+        )
+        async def wrap_who(c, m):
+            await run_cmd(handle_who, m)
+
+        @self.client.on_message(
+            filters.command("whois", prefixes=prefixes) & _make_command_filter("whois"), group=-1
+        )
+        async def wrap_whois(c, m):
+            await run_cmd(handle_whois, m)
+
+        @self.client.on_message(
+            filters.command("emoji", prefixes=prefixes) & _make_command_filter("emoji"), group=-1
+        )
+        async def wrap_emoji(c, m):
+            await run_cmd(handle_emoji, m)
+
+        @self.client.on_message(
+            filters.command("costs", prefixes=prefixes) & _make_command_filter("costs"), group=-1
+        )
+        async def wrap_costs(c, m):
+            await run_cmd(handle_costs, m)
+
+        @self.client.on_message(
+            filters.command("budget", prefixes=prefixes) & _make_command_filter("budget"), group=-1
+        )
+        async def wrap_budget(c, m):
+            await run_cmd(handle_budget, m)
+
+        @self.client.on_message(
+            filters.command("digest", prefixes=prefixes) & _make_command_filter("digest"), group=-1
+        )
+        async def wrap_digest(c, m):
+            await run_cmd(handle_digest, m)
+
+        @self.client.on_message(
+            filters.command("report", prefixes=prefixes) & _make_command_filter("report"), group=-1
+        )
+        async def wrap_report(c, m):
+            await run_cmd(handle_report, m)
+
+        @self.client.on_message(
             filters.command("watch", prefixes=prefixes) & _make_command_filter("watch"), group=-1
         )
         async def wrap_watch(c, m):
@@ -596,6 +692,12 @@ class KraabUserbot(
         )
         async def wrap_inbox(c, m):
             await run_cmd(handle_inbox, m)
+
+        @self.client.on_message(
+            filters.command("id", prefixes=prefixes) & _make_command_filter("id"), group=-1
+        )
+        async def wrap_id(c, m):
+            await run_cmd(handle_id, m)
 
         @self.client.on_message(
             filters.command("sysinfo", prefixes=prefixes) & _make_command_filter("sysinfo"),
@@ -624,10 +726,73 @@ class KraabUserbot(
             await run_cmd(handle_search, m)
 
         @self.client.on_message(
+            filters.command("explain", prefixes=prefixes) & _make_command_filter("explain"),
+            group=-1,
+        )
+        async def wrap_explain(c, m):
+            await run_cmd(handle_explain, m)
+
+        @self.client.on_message(
+            filters.command("news", prefixes=prefixes) & _make_command_filter("news"), group=-1
+        )
+        async def wrap_news(c, m):
+            await run_cmd(handle_news, m)
+
+        @self.client.on_message(
+            filters.command("rate", prefixes=prefixes) & _make_command_filter("rate"), group=-1
+        )
+        async def wrap_rate(c, m):
+            await run_cmd(handle_rate, m)
+
+        @self.client.on_message(
+            filters.command("grep", prefixes=prefixes) & _make_command_filter("grep"), group=-1
+        )
+        async def wrap_grep(c, m):
+            await run_cmd(handle_grep, m)
+
+        @self.client.on_message(
+            filters.command("ask", prefixes=prefixes) & _make_command_filter("ask"), group=-1
+        )
+        async def wrap_ask(c, m):
+            await run_cmd(handle_ask, m)
+
+        @self.client.on_message(
+            filters.command("fix", prefixes=prefixes) & _make_command_filter("fix"), group=-1
+        )
+        async def wrap_fix(c, m):
+            await run_cmd(handle_fix, m)
+
+        @self.client.on_message(
+            filters.command("rewrite", prefixes=prefixes) & _make_command_filter("rewrite"), group=-1
+        )
+        async def wrap_rewrite(c, m):
+            await run_cmd(handle_rewrite, m)
+
+        @self.client.on_message(
             filters.command("shop", prefixes=prefixes) & _make_command_filter("shop"), group=-1
         )
         async def wrap_shop(c, m):
             await run_cmd(handle_shop, m)
+
+        @self.client.on_message(
+            filters.command("memo", prefixes=prefixes) & _make_command_filter("memo"), group=-1
+        )
+        async def wrap_memo(c, m):
+            await run_cmd(handle_memo, m)
+
+        @self.client.on_message(
+            filters.command("note", prefixes=prefixes) & _make_command_filter("note"), group=-1
+        )
+        async def wrap_note(c, m):
+            await run_cmd(handle_note, m)
+
+        @self.client.on_message(
+            filters.command(["bookmark", "bm"], prefixes=prefixes)
+            & _make_command_filter("bookmark"),
+            group=-1,
+        )
+        async def wrap_bookmark(c, m):
+            await run_cmd(handle_bookmark, m)
 
         @self.client.on_message(
             filters.command("remember", prefixes=prefixes) & _make_command_filter("remember"),
@@ -641,6 +806,12 @@ class KraabUserbot(
         )
         async def wrap_recall(c, m):
             await run_cmd(handle_recall, m)
+
+        @self.client.on_message(
+            filters.command("todo", prefixes=prefixes) & _make_command_filter("todo"), group=-1
+        )
+        async def wrap_todo(c, m):
+            await run_cmd(handle_todo, m)
 
         @self.client.on_message(
             filters.command("ls", prefixes=prefixes) & _make_command_filter("ls"), group=-1
@@ -706,6 +877,12 @@ class KraabUserbot(
             await run_cmd(handle_acl, m)
 
         @self.client.on_message(
+            filters.command("scope", prefixes=prefixes) & _make_command_filter("scope"), group=-1
+        )
+        async def wrap_scope(c, m):
+            await run_cmd(handle_scope, m)
+
+        @self.client.on_message(
             filters.command("access", prefixes=prefixes) & _make_command_filter("access"), group=-1
         )
         async def wrap_access(c, m):
@@ -720,11 +897,57 @@ class KraabUserbot(
             await run_cmd(handle_reasoning, m)
 
         @self.client.on_message(
+            filters.command("debug", prefixes=prefixes) & _make_command_filter("debug"),
+            group=-1,
+        )
+        async def wrap_debug(c, m):
+            await run_cmd(handle_debug, m)
+
+        @self.client.on_message(
             filters.command("diagnose", prefixes=prefixes) & _make_command_filter("diagnose"),
             group=-1,
         )
         async def wrap_diagnose(c, m):
             await run_cmd(handle_diagnose, m)
+
+        @self.client.on_message(
+            filters.command("health", prefixes=prefixes) & _make_command_filter("health"),
+            group=-1,
+        )
+        async def wrap_health(c, m):
+            await run_cmd(handle_health, m)
+
+        @self.client.on_message(
+            filters.command("context", prefixes=prefixes) & _make_command_filter("context"),
+            group=-1,
+        )
+        async def wrap_context(c, m):
+            await run_cmd(handle_context, m)
+
+        @self.client.on_message(
+            filters.command("pin", prefixes=prefixes) & _make_command_filter("pin"), group=-1
+        )
+        async def wrap_pin(c, m):
+            await run_cmd(handle_pin, m)
+
+        @self.client.on_message(
+            filters.command("unpin", prefixes=prefixes) & _make_command_filter("unpin"), group=-1
+        )
+        async def wrap_unpin(c, m):
+            await run_cmd(handle_unpin, m)
+
+        @self.client.on_message(
+            filters.command("fwd", prefixes=prefixes) & _make_command_filter("fwd"), group=-1
+        )
+        async def wrap_fwd(c, m):
+            await run_cmd(handle_fwd, m)
+
+        @self.client.on_message(
+            filters.command("collect", prefixes=prefixes) & _make_command_filter("collect"),
+            group=-1,
+        )
+        async def wrap_collect(c, m):
+            await run_cmd(handle_collect, m)
 
         @self.client.on_message(
             filters.command("help", prefixes=prefixes) & _make_command_filter("help"), group=-1
@@ -760,11 +983,151 @@ class KraabUserbot(
             await run_cmd(handle_cronstatus, m)
 
         @self.client.on_message(
+            filters.command("schedule", prefixes=prefixes) & _make_command_filter("schedule"),
+            group=-1,
+        )
+        async def wrap_schedule(c, m):
+            await run_cmd(handle_schedule, m)
+
+        @self.client.on_message(
             filters.command("browser", prefixes=prefixes) & _make_command_filter("browser"),
             group=-1,
         )
         async def wrap_browser(c, m):
             await run_cmd(handle_browser, m)
+
+        @self.client.on_message(
+            filters.command("monitor", prefixes=prefixes) & _make_command_filter("monitor"),
+            group=-1,
+        )
+        async def wrap_monitor(c, m):
+            await run_cmd(handle_monitor, m)
+
+        # Управление сообщениями: !del, !purge, !autodel
+        @self.client.on_message(
+            filters.command("del", prefixes=prefixes) & _make_command_filter("del"), group=-1
+        )
+        async def wrap_del(c, m):
+            await run_cmd(handle_del, m)
+
+        @self.client.on_message(
+            filters.command("purge", prefixes=prefixes) & _make_command_filter("purge"), group=-1
+        )
+        async def wrap_purge(c, m):
+            await run_cmd(handle_purge, m)
+
+        @self.client.on_message(
+            filters.command("autodel", prefixes=prefixes) & _make_command_filter("autodel"),
+            group=-1,
+        )
+        async def wrap_autodel(c, m):
+            await run_cmd(handle_autodel, m)
+
+        @self.client.on_message(
+            filters.command("summary", prefixes=prefixes) & _make_command_filter("summary"),
+            group=-1,
+        )
+        async def wrap_summary(c, m):
+            await run_cmd(handle_summary, m)
+
+        @self.client.on_message(
+            filters.command("catchup", prefixes=prefixes) & _make_command_filter("catchup"),
+            group=-1,
+        )
+        async def wrap_catchup(c, m):
+            await run_cmd(handle_catchup, m)
+
+        @self.client.on_message(
+            filters.command("translate", prefixes=prefixes) & _make_command_filter("translate"),
+            group=-1,
+        )
+        async def wrap_translate(c, m):
+            await run_cmd(handle_translate, m)
+
+        @self.client.on_message(
+            filters.command("export", prefixes=prefixes) & _make_command_filter("export"),
+            group=-1,
+        )
+        async def wrap_export(c, m):
+            await run_cmd(handle_export, m)
+
+        @self.client.on_message(
+            filters.command("react", prefixes=prefixes) & _make_command_filter("react"),
+            group=-1,
+        )
+        async def wrap_react(c, m):
+            await run_cmd(handle_react, m)
+
+        @self.client.on_message(
+            filters.command("poll", prefixes=prefixes) & _make_command_filter("poll"),
+            group=-1,
+        )
+        async def wrap_poll(c, m):
+            await run_cmd(handle_poll, m)
+
+        @self.client.on_message(
+            filters.command("quiz", prefixes=prefixes) & _make_command_filter("quiz"),
+            group=-1,
+        )
+        async def wrap_quiz(c, m):
+            await run_cmd(handle_quiz, m)
+
+        @self.client.on_message(
+            filters.command("alias", prefixes=prefixes) & _make_command_filter("alias"),
+            group=-1,
+        )
+        async def wrap_alias(c, m):
+            await run_cmd(handle_alias, m)
+
+        @self.client.on_message(
+            filters.command("timer", prefixes=prefixes) & _make_command_filter("timer"),
+            group=-1,
+        )
+        async def wrap_timer(c, m):
+            await run_cmd(handle_timer, m)
+
+        @self.client.on_message(
+            filters.command("stopwatch", prefixes=prefixes) & _make_command_filter("stopwatch"),
+            group=-1,
+        )
+        async def wrap_stopwatch(c, m):
+            await run_cmd(handle_stopwatch, m)
+
+        @self.client.on_message(
+            filters.command("qr", prefixes=prefixes) & _make_command_filter("qr"), group=-1
+        )
+        async def wrap_qr(c, m):
+            await run_cmd(handle_qr, m)
+
+        # Тихая отправка сообщения от имени юзербота
+        @self.client.on_message(
+            filters.command("say", prefixes=prefixes) & _make_command_filter("say"), group=-1
+        )
+        async def wrap_say(c, m):
+            await run_cmd(handle_say, m)
+
+        @self.client.on_message(
+            filters.command("backup", prefixes=prefixes) & _make_command_filter("backup"),
+            group=-1,
+        )
+        async def wrap_backup(c, m):
+            await run_cmd(handle_backup, m)
+
+        @self.client.on_message(
+            filters.command("eval", prefixes=prefixes) & _make_command_filter("eval"), group=-1
+        )
+        async def wrap_eval(c, m):
+            await run_cmd(handle_eval, m)
+
+        # Хендлер для реакций других пользователей на сообщения Краба
+        @self.client.on_message_reaction_updated()
+        async def wrap_reaction_updated(c, reaction_update):
+            await self._handle_message_reaction_updated(reaction_update)
+
+        # Обработка callback query от inline-кнопок
+        @self.client.on_callback_query()
+        async def wrap_callback_query(c, cq):
+            await self._handle_callback_query(cq)
 
         # Обработка обычных сообщений, медиа, голосовых и документов.
         # Voice/audio проходят в _process_message → _transcribe_audio_message
@@ -847,6 +1210,106 @@ class KraabUserbot(
         if str(self._startup_state or "").strip().lower() == "degraded":
             self._set_startup_state(state="running")
             logger.info("telegram_transport_probe_recovered")
+
+    async def _handle_callback_query(self, callback_query) -> None:
+        """
+        Роутер входящих callback query от inline-кнопок.
+
+        Схемы prefix:
+          confirm:<action_id>:yes|no  — подтверждение/отказ
+          page:<prefix>:<page>        — пагинация
+          action:<action_id>          — произвольное действие
+        """
+        cq = callback_query
+        data: str = cq.data or ""
+        try:
+            if data.startswith("confirm:"):
+                await self._cb_confirm(cq, data)
+            elif data.startswith("page:"):
+                await self._cb_page(cq, data)
+            elif data.startswith("action:"):
+                await self._cb_action(cq, data)
+            else:
+                await cq.answer("⚠️ Неизвестное действие")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("callback_query_error", data=data, error=str(exc))
+            try:
+                await cq.answer("❌ Ошибка обработки")
+            except Exception:
+                pass
+
+    async def _cb_confirm(self, cq, data: str) -> None:
+        """Обработка confirm:<action_id>:yes|no."""
+        parts = data.split(":", 2)
+        if len(parts) < 3:
+            await cq.answer("⚠️ Некорректный формат")
+            return
+        action_id = parts[1]
+        choice = parts[2]
+        if choice == "yes":
+            await cq.answer("✅ Подтверждено")
+            await cq.message.reply(f"✅ Действие `{action_id}` подтверждено.")
+        else:
+            await cq.answer("❌ Отменено")
+            await cq.message.reply(f"❌ Действие `{action_id}` отменено.")
+
+    async def _cb_page(self, cq, data: str) -> None:
+        """Обработка page:<prefix>:<page>."""
+        parts = data.split(":", 2)
+        if len(parts) < 3:
+            await cq.answer("⚠️ Некорректный формат")
+            return
+        page_str = parts[2]
+        if page_str == "noop":
+            await cq.answer()
+            return
+        try:
+            page = int(page_str)
+        except ValueError:
+            await cq.answer("⚠️ Некорректный номер страницы")
+            return
+        await cq.answer(f"Страница {page + 1}")
+
+    async def _cb_action(self, cq, data: str) -> None:
+        """
+        Обработка action:<action_id>.
+
+        Известные action_id:
+          swarm_team:<team>  — подсказка по запуску swarm для команды
+          costs_detail       — подробная разбивка по моделям
+          health_recheck     — повторный health check
+        """
+        action = data[len("action:"):]
+        if action.startswith("swarm_team:"):
+            team = action[len("swarm_team:"):]
+            await cq.answer(f"🐝 {team}")
+            await cq.message.reply(
+                f"🐝 Используй команду:\n`!swarm {team} <тема>`\n\n"
+                f"Например: `!swarm {team} анализ текущей ситуации`"
+            )
+        elif action == "costs_detail":
+            await cq.answer("📊 Загружаю детали…")
+            from .core.cost_analytics import cost_analytics
+            report = cost_analytics.build_usage_report_dict()
+            by_model: dict = report.get("by_model", {})
+            if not by_model:
+                await cq.message.reply("ℹ️ Данных по моделям пока нет.")
+                return
+            lines = ["📊 **Детализация по моделям:**"]
+            for mid, d in sorted(by_model.items(), key=lambda x: -x[1].get("cost_usd", 0)):
+                calls = d.get("calls", 0)
+                tokens = d.get("tokens", 0)
+                cost = d.get("cost_usd", 0)
+                lines.append(f"• `{mid}`: ${cost:.4f} | {calls} calls | {tokens} tokens")
+            await cq.message.reply("\n".join(lines))
+        elif action == "health_recheck":
+            await cq.answer("🔄 Перепроверяю…")
+            await cq.message.reply(
+                "🔄 Запускаю повторный health check…\n"
+                "Используй `!health` для полного отчёта."
+            )
+        else:
+            await cq.answer(f"⚠️ Неизвестный action: {action}")
 
     async def _auto_export_handoff_snapshot(self, *, reason: str) -> dict[str, Any]:
         """
@@ -932,6 +1395,21 @@ class KraabUserbot(
             return
         raise RuntimeError("telegram_client_not_ready")
 
+    def _ensure_silence_schedule_started(self) -> None:
+        """Запускает фоновый loop проверки расписания ночного режима."""
+        if self._silence_schedule_task and not self._silence_schedule_task.done():
+            return
+
+        def _apply_mute() -> None:
+            silence_manager.mute_global(minutes=480)  # максимум 8 часов запас
+
+        def _remove_mute() -> None:
+            silence_manager.unmute_global()
+
+        self._silence_schedule_task = asyncio.create_task(
+            silence_schedule_manager.run_loop(_apply_mute, _remove_mute)
+        )
+
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
         if not bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)):
@@ -942,6 +1420,16 @@ class KraabUserbot(
         # Запускаем периодическую сводку ошибок (каждые 6 часов)
         if self._error_digest_task is None or self._error_digest_task.done():
             self._error_digest_task = proactive_watch.start_error_digest_loop()
+        # WeeklyDigest: подключаем Telegram delivery callback + запускаем loop
+        try:
+            from .core.weekly_digest import weekly_digest  # noqa: PLC0415
+
+            weekly_digest.set_telegram_callback(self._send_proactive_watch_alert)
+            wdt = getattr(self, "_weekly_digest_task", None)
+            if wdt is None or wdt.done():
+                self._weekly_digest_task = weekly_digest.start_weekly_digest_loop()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly_digest_setup_failed", error=str(exc))
 
     async def _run_proactive_watch_loop(self) -> None:
         """
@@ -1196,15 +1684,25 @@ class KraabUserbot(
         reply_text = f"🔄 {src_lang}→{tgt_lang}\n**{result.original}**\n_{result.translated}_"
         await self._safe_reply_or_send_new(message, reply_text)
 
-        # Обновляем session stats
+        # Обновляем session stats и добавляем запись в history
         try:
             state = self.get_translator_session_state()
             stats = state.get("stats") or {"total_translations": 0, "total_latency_ms": 0}
+            # Добавляем запись в историю переводов
+            updated_state = append_translator_history_entry(
+                state,
+                src_lang=src_lang,
+                tgt_lang=tgt_lang,
+                original=transcript[:300],
+                translation=result.translated[:300],
+                latency_ms=result.latency_ms,
+            )
             self.update_translator_session_state(
                 last_language_pair=f"{src_lang}-{tgt_lang}",
                 last_translated_original=transcript[:200],
                 last_translated_translation=result.translated[:200],
                 last_event="translation_completed",
+                history=updated_state["history"],
                 stats={
                     "total_translations": stats.get("total_translations", 0) + 1,
                     "total_latency_ms": stats.get("total_latency_ms", 0) + result.latency_ms,
@@ -1418,6 +1916,7 @@ class KraabUserbot(
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
         self._background_task_reaper_task = asyncio.create_task(self._background_task_reaper())
         self._ensure_proactive_watch_started()
+        self._ensure_silence_schedule_started()
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
@@ -1442,12 +1941,26 @@ class KraabUserbot(
         for team, acct in accounts.items():
             session_name = acct.get("session_name", f"swarm_{team}")
             try:
+                # Очистка stale SQLite lock (database is locked)
+                _sess_path = Path(self._session_workdir) / f"{session_name}.session"
+                if _sess_path.exists():
+                    _journal = _sess_path.with_suffix(".session-journal")
+                    _wal = _sess_path.with_suffix(".session-wal")
+                    for _lockf in (_journal, _wal):
+                        if _lockf.exists():
+                            try:
+                                _lockf.unlink()
+                                logger.info(
+                                    "swarm_stale_lock_cleaned",
+                                    team=team, file=str(_lockf),
+                                )
+                            except OSError:
+                                pass
                 cl = Client(
                     session_name,
                     api_id=config.TELEGRAM_API_ID,
                     api_hash=config.TELEGRAM_API_HASH,
                     workdir=str(self._session_workdir),
-                    # no_updates=False — нужно для on_message handlers (team listener)
                 )
                 await asyncio.wait_for(cl.start(), timeout=15)
                 me = await cl.get_me()
@@ -1619,6 +2132,7 @@ class KraabUserbot(
         await self._cancel_background_task("_telegram_watchdog_task")
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
+        await self._cancel_background_task("_silence_schedule_task")
         # Per-team swarm clients — остановить до основного клиента
         await self._stop_swarm_team_clients()
         try:
@@ -1702,6 +2216,7 @@ class KraabUserbot(
                 sent = await self._safe_reply_or_send_new(source_message, part)
                 if getattr(sent, "id", None):
                     delivered_ids.append(str(sent.id))
+            self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "edit_and_reply",
                 "text_message_ids": delivered_ids,
@@ -1732,6 +2247,7 @@ class KraabUserbot(
                     await delete_coro()
             except Exception:
                 pass
+            self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
             return {
                 "delivery_mode": "send_message",
                 "text_message_ids": delivered_ids,
@@ -1745,11 +2261,29 @@ class KraabUserbot(
             sent = await self._safe_reply_or_send_new(source_message, part)
             if getattr(sent, "id", None):
                 delivered_ids.append(str(sent.id))
-        return {
+        result = {
             "delivery_mode": "edit_and_reply",
             "text_message_ids": delivered_ids,
             "parts_count": len(parts),
         }
+        self._maybe_schedule_autodel(source_message.chat.id, delivered_ids)
+        return result
+
+    def _maybe_schedule_autodel(self, chat_id: int, delivered_ids: list[str]) -> None:
+        """
+        Если для чата включено autodel — планирует удаление доставленных сообщений.
+        """
+        from .handlers.command_handlers import get_autodel_delay, schedule_autodel
+
+        delay = get_autodel_delay(self, chat_id)
+        if not delay or not delivered_ids:
+            return
+        for msg_id_str in delivered_ids:
+            try:
+                msg_id = int(msg_id_str)
+            except (ValueError, TypeError):
+                continue
+            schedule_autodel(self.client, chat_id, msg_id, delay)
 
     @staticmethod
     def _message_ids_from_delivery(delivery_result: dict[str, Any] | None) -> list[str]:
@@ -2252,6 +2786,135 @@ class KraabUserbot(
         """Определяет ошибку Telegram при превышении лимита длины сообщения (4096 chars)."""
         return "MESSAGE_TOO_LONG" in str(exc).upper()
 
+    async def _send_message_reaction(self, message: Message, emoji: str) -> None:
+        """
+        Ставит реакцию на сообщение через pyrofork send_reaction.
+
+        Молча игнорирует ошибки — не все чаты/типы сообщений поддерживают реакции
+        (каналы без реакций, анонимные группы, старые клиенты и т.д.).
+        Не ставит реакцию если TELEGRAM_REACTIONS_ENABLED=False.
+        """
+        if not bool(getattr(config, "TELEGRAM_REACTIONS_ENABLED", True)):
+            return
+        chat_id_int = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+        message_id_int = int(getattr(message, "id", 0) or 0)
+        if not chat_id_int or not message_id_int:
+            return
+        try:
+            await self.client.send_reaction(
+                chat_id=chat_id_int,
+                message_id=message_id_int,
+                emoji=emoji,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # реакции — best-effort, не прерываем основной flow
+
+    async def _handle_message_reaction_updated(self, reaction_update: Any) -> None:
+        """
+        Обрабатывает обновление реакции пользователя на сообщение.
+
+        Логирует реакции как feedback и передаёт в ReactionEngine для накопления статистики.
+        Полезно: 👍/❤️ = пользователь доволен ответом, 👎 = недоволен.
+        """
+        try:
+            # Извлекаем поля из MessageReactionUpdated
+            chat = getattr(reaction_update, "chat", None)
+            from_user = getattr(reaction_update, "from_user", None)
+            message_id = int(getattr(reaction_update, "id", 0) or 0)
+            chat_id = int(getattr(chat, "id", 0) or 0) if chat else 0
+            user_id = int(getattr(from_user, "id", 0) or 0) if from_user else None
+
+            if not chat_id or not message_id:
+                return
+
+            # Список Reaction объектов
+            new_reactions = list(getattr(reaction_update, "new_reaction", None) or [])
+            old_reactions = list(getattr(reaction_update, "old_reaction", None) or [])
+
+            def _extract_emojis(reactions: list) -> list[str]:
+                """Извлекает emoji-строки из объектов Reaction."""
+                result = []
+                for r in reactions:
+                    emoji = getattr(r, "emoji", None) or getattr(r, "emoticon", None)
+                    if emoji:
+                        result.append(str(emoji))
+                return result
+
+            new_emojis = _extract_emojis(new_reactions)
+            old_emojis = _extract_emojis(old_reactions)
+
+            # Добавленные реакции (не было в old, появились в new)
+            added = [e for e in new_emojis if e not in old_emojis]
+            removed = [e for e in old_emojis if e not in new_emojis]
+
+            if not added and not removed:
+                return
+
+            logger.info(
+                "reaction_updated",
+                chat_id=chat_id,
+                message_id=message_id,
+                user_id=user_id,
+                added=added,
+                removed=removed,
+            )
+
+            # Передаём в ReactionEngine для накопления feedback
+            try:
+                from .core.reaction_engine import reaction_engine  # noqa: PLC0415
+                reaction_engine.record_reaction(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    user_id=user_id,
+                    new_emojis=new_emojis,
+                    old_emojis=old_emojis,
+                )
+            except Exception as eng_exc:  # noqa: BLE001
+                logger.warning("reaction_engine_record_failed", error=str(eng_exc))
+
+        except Exception:  # noqa: BLE001
+            logger.exception("handle_message_reaction_updated_error")
+
+    async def _send_monitor_alert(self, message: Message, matched_keyword: str) -> None:
+        """Отправляет alert owner'у в Saved Messages при совпадении keyword в мониторимом чате."""
+        try:
+            if not self.me:
+                return
+            # Информация об отправителе
+            sender = message.from_user
+            sender_name = (
+                getattr(sender, "username", None)
+                or getattr(sender, "first_name", None)
+                or str(getattr(sender, "id", "?"))
+            ) if sender else "Unknown"
+            # Название чата
+            chat_title = (
+                getattr(message.chat, "title", None)
+                or getattr(message.chat, "first_name", None)
+                or str(message.chat.id)
+            )
+            # Текст сообщения (обрезаем длинные)
+            msg_text = (message.text or "").strip()
+            if len(msg_text) > 800:
+                msg_text = msg_text[:797] + "..."
+            alert = (
+                f"\U0001f514 **Monitor Alert**\n"
+                f"Chat: {chat_title} (`{message.chat.id}`)\n"
+                f"From: @{sender_name}\n"
+                f"Keyword: `{matched_keyword}`\n"
+                f"\u2500\u2500\u2500\u2500\u2500\n"
+                f"{msg_text}"
+            )
+            await self.client.send_message(self.me.id, alert)
+            logger.info(
+                "monitor_alert_sent",
+                chat_id=str(message.chat.id),
+                keyword=matched_keyword,
+                sender=sender_name,
+            )
+        except Exception as exc:
+            logger.warning("monitor_alert_error", error=str(exc))
+
     async def _safe_edit(self, msg: Message, text: str) -> Message:
         """
         Безопасно редактирует сообщение через _telegram_send_queue (с retry).
@@ -2346,8 +3009,18 @@ class KraabUserbot(
         chat_id: str,
     ) -> None:
         """Обрабатывает одно входящее сообщение под эксклюзивным lock чата."""
+        from .core.command_aliases import alias_service as _alias_svc  # noqa: PLC0415
+
         text = message.text or message.caption or ""
         has_audio_message = self._message_has_audio(message)
+
+        # Разрешаем алиасы ПЕРЕД routing: !t привет → !translate привет
+        if text and text.lstrip()[:1] in ("!", "/", "."):
+            resolved = _alias_svc.resolve(text)
+            if resolved != text:
+                # Подменяем текст сообщения — Pyrogram допускает это до обработки
+                message.text = resolved  # type: ignore[assignment]
+                text = resolved
 
         if text and text.lstrip()[:1] in ("!", "/", "."):
             cmd_word = text.lstrip().split()[0].lstrip("!/.").lower()
@@ -2362,6 +3035,9 @@ class KraabUserbot(
         has_document = bool(getattr(message, "document", None))
         if not text and not message.photo and not has_audio_message and not has_document:
             return
+
+        # Счётчик обработанных сообщений за сессию (для !stats).
+        self._session_messages_processed += 1
 
         runtime_chat_id = self._build_runtime_chat_scope_id(
             chat_id=chat_id,
@@ -2488,6 +3164,11 @@ class KraabUserbot(
                 )
             )
 
+        # Реакция "видит" — owner сразу понимает что Краб получил сообщение.
+        # Только для owner-сообщений (is_self=True или is_allowed_sender+is_self check).
+        if is_self:
+            asyncio.create_task(self._send_message_reaction(message, "👀"))
+
         _ai_request_start_ts = time.time()
         logger.info(
             "processing_ai_request",
@@ -2516,21 +3197,29 @@ class KraabUserbot(
                     return
 
         temp_msg = message
+        # Формируем информативный ack с моделью и маршрутом
+        _ack_model = ""
+        try:
+            from .userbot.llm_flow import _current_runtime_primary_model  # noqa: PLC0415
+            _ack_model = _current_runtime_primary_model() or ""
+        except Exception:
+            pass
+        _ack_model_hint = f"\nТекущий маршрут: `{_ack_model}`" if _ack_model else ""
+        _ack_text = (
+            f"🦀 Принял запрос.\n\n"
+            f"🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
+        )
         if not is_self:
             try:
                 temp_msg = await asyncio.wait_for(
-                    self._safe_reply_or_send_new(
-                        message,
-                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
-                    ),
+                    self._safe_reply_or_send_new(message, _ack_text),
                     timeout=10.0,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
                 try:
                     temp_msg = await self.client.send_message(
-                        message.chat.id,
-                        "🦀 Принял запрос.\n\n🛠️ Собираю контекст и запускаю маршрут...",
+                        message.chat.id, _ack_text,
                     )
                 except Exception as send_exc:  # noqa: BLE001
                     logger.warning(
@@ -2542,7 +3231,7 @@ class KraabUserbot(
         else:
             message = await self._safe_edit(
                 message,
-                f"🦀 {query}\n\n🛠️ Собираю контекст и запускаю маршрут...",
+                f"🦀 {query}\n\n🛠️ Собираю контекст...{_ack_model_hint}",
             )
 
         if self._looks_like_runtime_truth_question(query) or self._looks_like_model_status_question(
@@ -2895,6 +3584,36 @@ class KraabUserbot(
                     user=getattr(user, "username", None),
                 )
                 return
+
+            # MONITOR: проверяем активные мониторинги чатов на ключевые слова.
+            # Уникальная фича юзербота — видим ВСЕ сообщения во всех чатах.
+            # Проверяем только чужие сообщения (не self).
+            if not _is_self_for_guard and message.text and chat_id:
+                from .core.chat_monitor import chat_monitor_service
+
+                _matched_kw = chat_monitor_service.check_message(chat_id, message.text)
+                if _matched_kw is not None:
+                    asyncio.create_task(
+                        self._send_monitor_alert(message=message, matched_keyword=_matched_kw)
+                    )
+
+            # AUTO-TRANSLATE: если для чата включён автоперевод (!translate auto),
+            # переводим входящее текстовое сообщение (не от self, не команду).
+            # Fire-and-forget — не блокируем основной обработчик.
+            if (
+                not _is_self_for_guard
+                and not _is_command_for_guard
+                and message.text
+                and chat_id
+                and self.is_auto_translate_enabled(chat_id)
+            ):
+                asyncio.create_task(
+                    self._handle_auto_translate_message(
+                        message=message,
+                        text=str(message.text),
+                        chat_id=chat_id,
+                    )
+                )
 
             # B.6 chat capability cache: fire-and-forget refresh если в кеше
             # нет свежей записи. `_refresh_chat_capabilities_background` сам

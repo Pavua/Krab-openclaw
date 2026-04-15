@@ -7554,33 +7554,27 @@ class WebApp:
 
         @self.app.get("/inbox", response_class=HTMLResponse)
         async def inbox_dashboard():
-            """Inbox items dashboard с фильтрами и карточками (Gemini 3.1 Pro)."""
-            from .web_app_inbox_dashboard import INBOX_DASHBOARD_HTML
-
-            return HTMLResponse(
-                INBOX_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
+            """Inbox items dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "inbox_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>Inbox page not found</h1>", headers=_no_store_headers())
 
         @self.app.get("/costs", response_class=HTMLResponse)
         async def costs_dashboard():
-            """Cost analytics dashboard с бюджетом и breakdown (Gemini 3.1 Pro)."""
-            from .web_app_costs_dashboard import COSTS_DASHBOARD_HTML
-
-            return HTMLResponse(
-                COSTS_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
+            """Cost analytics dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "costs_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>Costs page not found</h1>", headers=_no_store_headers())
 
         @self.app.get("/swarm", response_class=HTMLResponse)
         async def swarm_dashboard():
-            """Swarm multi-agent teams visualizer (Gemini 3.1 Pro)."""
-            from .web_app_swarm_dashboard import SWARM_DASHBOARD_HTML
-
-            return HTMLResponse(
-                SWARM_DASHBOARD_HTML,
-                headers=_no_store_headers(),
-            )
+            """Swarm multi-agent dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "swarm_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>Swarm page not found</h1>", headers=_no_store_headers())
 
         @self.app.get("/prototypes/{page}", response_class=HTMLResponse)
         async def prototype_page(page: str):
@@ -7597,11 +7591,110 @@ class WebApp:
 
         @self.app.get("/translator", response_class=HTMLResponse)
         async def translator_dashboard():
-            """Translator status page (Gemini-generated prototype)."""
-            proto = config.BASE_DIR / "src" / "web" / "prototypes" / "translator_v1.html"
-            if proto.exists():
-                return FileResponse(proto, headers=_no_store_headers())
+            """Translator dashboard (Gemini 3.1 Pro generated)."""
+            page = config.BASE_DIR / "src" / "web" / "translator_v2.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
             return HTMLResponse("<h1>Translator page not found</h1>", headers=_no_store_headers())
+
+        # ── V4 Dashboard (Liquid Glass) ────────────────────────────────
+
+        @self.app.get("/v4", response_class=HTMLResponse)
+        @self.app.get("/v4/", response_class=HTMLResponse)
+        async def v4_index():
+            """V4 Liquid Glass dashboard — главная страница."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "index.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/chat", response_class=HTMLResponse)
+        async def v4_chat():
+            """V4 Liquid Glass dashboard — AI Chat."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "chat.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Chat not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/costs", response_class=HTMLResponse)
+        async def v4_costs():
+            """V4 Liquid Glass dashboard — Costs."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "costs.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Costs not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/inbox", response_class=HTMLResponse)
+        async def v4_inbox():
+            """V4 Liquid Glass dashboard — Inbox."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "inbox.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Inbox not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/swarm", response_class=HTMLResponse)
+        async def v4_swarm():
+            """V4 Liquid Glass dashboard — Swarm."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "swarm.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Swarm not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/translator", response_class=HTMLResponse)
+        async def v4_translator():
+            """V4 Liquid Glass dashboard — Translator."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "translator.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Translator not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/ops", response_class=HTMLResponse)
+        async def v4_ops():
+            """V4 Liquid Glass dashboard — Operations Center."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "ops.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Ops not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/research", response_class=HTMLResponse)
+        async def v4_research():
+            """V4 Liquid Glass dashboard — Swarm Research Pipeline."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "research.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Research not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/settings", response_class=HTMLResponse)
+        async def v4_settings():
+            """V4 Liquid Glass dashboard — Settings editor."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "settings.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Settings not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/commands", response_class=HTMLResponse)
+        async def v4_commands():
+            """V4 Liquid Glass dashboard — Commands catalog."""
+            page = config.BASE_DIR / "src" / "web" / "v4" / "commands.html"
+            if page.exists():
+                return FileResponse(page, headers=_no_store_headers())
+            return HTMLResponse("<h1>V4 Commands not ready</h1>", headers=_no_store_headers())
+
+        @self.app.get("/v4/liquid-glass.css")
+        async def v4_css():
+            """V4 Liquid Glass — общий CSS."""
+            css = config.BASE_DIR / "src" / "web" / "v4" / "liquid-glass.css"
+            if css.exists():
+                return FileResponse(css, media_type="text/css", headers=_no_store_headers())
+            return HTMLResponse("/* not found */", media_type="text/css")
+
+        @self.app.get("/v4/theme-toggle.js")
+        async def v4_theme_toggle():
+            """V4 — скрипт dark/light theme toggle с localStorage."""
+            js = config.BASE_DIR / "src" / "web" / "v4" / "theme-toggle.js"
+            if js.exists():
+                return FileResponse(js, media_type="application/javascript", headers=_no_store_headers())
+            return HTMLResponse("// not found", media_type="application/javascript")
 
         # ── Costs + Swarm API endpoints (backend для Gemini dashboards) ────
 
@@ -7629,6 +7722,12 @@ class WebApp:
                     .isoformat(),
                     "input_tokens": raw.get("input_tokens", 0),
                     "output_tokens": raw.get("output_tokens", 0),
+                    # FinOps поля для dashboard migration
+                    "total_tool_calls": raw.get("total_tool_calls", 0),
+                    "total_fallbacks": raw.get("total_fallbacks", 0),
+                    "total_context_tokens": raw.get("total_context_tokens", 0),
+                    "avg_context_tokens": raw.get("avg_context_tokens", 0),
+                    "by_channel": raw.get("by_channel", {}),
                 }
                 return {"ok": True, "report": report}
             except Exception as exc:
@@ -8313,6 +8412,18 @@ class WebApp:
                 "result": result,
             }
 
+        @self.app.get("/api/notifications/count")
+        async def notification_count():
+            """Количество уведомлений для badge в UI."""
+            try:
+                items = inbox_service.list_items(status="open", limit=100)
+                attention = [
+                    i for i in items if i.get("severity") in ("error", "warning")
+                ]
+                return {"ok": True, "total": len(items), "attention": len(attention)}
+            except Exception:
+                return {"ok": True, "total": 0, "attention": 0}
+
         @self.app.post("/api/openclaw/cron/jobs/create")
         async def openclaw_cron_job_create(
             request: Request,
@@ -8865,22 +8976,28 @@ class WebApp:
             return {"ok": True, "language_pair": pair}
 
         @self.app.get("/api/translator/history")
-        async def translator_history():
-            """История переводов и статистика."""
+        async def translator_history(n: int = 20):
+            """История переводов и статистика. ?n=N — последние N записей (default 20)."""
             try:
                 state = self.kraab.get_translator_session_state()
                 stats = state.get("stats") or {}
+                total = stats.get("total_translations", 0)
+                history: list[dict] = list(state.get("history") or [])
+                # Ограничиваем выборку по параметру n
+                n_clamped = max(1, min(20, n))
+                recent = history[-n_clamped:] if history else []
                 return {
                     "ok": True,
-                    "total_translations": stats.get("total_translations", 0),
+                    "total_translations": total,
                     "total_latency_ms": stats.get("total_latency_ms", 0),
                     "avg_latency_ms": round(
-                        stats.get("total_latency_ms", 0)
-                        / max(1, stats.get("total_translations", 1))
+                        stats.get("total_latency_ms", 0) / max(1, total)
                     ),
                     "last_pair": state.get("last_language_pair", ""),
                     "last_original": state.get("last_translated_original", ""),
                     "last_translation": state.get("last_translated_translation", ""),
+                    "history": list(reversed(recent)),  # новые первыми
+                    "history_count": len(history),
                 }
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
@@ -10173,26 +10290,22 @@ class WebApp:
 
         @self.app.get("/api/commands")
         async def list_commands():
-            """Список доступных Telegram команд."""
-            return {
-                "ok": True,
-                "commands": [
-                    {"cmd": "!status", "desc": "статус системы"},
-                    {"cmd": "!model", "desc": "маршрутизация модели"},
-                    {"cmd": "!clear", "desc": "очистить историю"},
-                    {"cmd": "!voice", "desc": "голосовой профиль"},
-                    {"cmd": "!notify", "desc": "toggle tool narrations"},
-                    {"cmd": "!тишина", "desc": "режим тишины"},
-                    {"cmd": "!translator", "desc": "переводчик"},
-                    {"cmd": "!swarm", "desc": "multi-agent teams"},
-                    {"cmd": "!search", "desc": "веб-поиск"},
-                    {"cmd": "!inbox", "desc": "owner inbox"},
-                    {"cmd": "!watch", "desc": "proactive watch"},
-                    {"cmd": "!remember", "desc": "запомнить"},
-                    {"cmd": "!recall", "desc": "вспомнить"},
-                    {"cmd": "!help", "desc": "справка"},
-                ],
-            }
+            """Полный список команд с метаданными из command_registry."""
+            from ..core.command_registry import registry as _reg
+            return _reg.to_api_response()
+
+        @self.app.get("/api/commands/{name}")
+        async def get_command(name: str):
+            """Детальная информация о конкретной команде."""
+            from ..core.command_registry import registry as _reg
+            cmd = _reg.get(name)
+            if cmd is None:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Команда '{name}' не найдена",
+                )
+            return {"ok": True, "command": cmd.to_dict()}
 
         @self.app.get("/api/model/status")
         async def model_status():
@@ -12776,6 +12889,206 @@ class WebApp:
                 response_payload["reply"] = _build_model_status_from_route(last_route)
             self._idempotency_set("assistant_query", idem_key, response_payload)
             return response_payload
+
+        @self.app.get("/api/assistant/stream")
+        async def assistant_stream(
+            prompt: str = Query(default=""),
+            token: str = Query(default=""),
+            task_type: str = Query(default="chat"),
+        ):
+            """SSE streaming для AI Chat dashboard."""
+            from fastapi.responses import StreamingResponse as _StreamingResponse
+
+            # Auth: dev mode — SSE chat доступен без ключа
+            # (write-endpoints защищены отдельно через X-Krab-Web-Key)
+            if not prompt.strip():
+                return {"ok": False, "error": "empty prompt"}
+
+            async def event_generator():
+                import json as _json
+
+                # Фаза routing
+                yield f"event: status\ndata: {_json.dumps({'phase': 'routing'})}\n\n"
+
+                try:
+                    from ..openclaw_client import openclaw_client
+
+                    # Фаза обработки
+                    yield f"event: status\ndata: {_json.dumps({'phase': 'processing'})}\n\n"
+
+                    # Собираем ответ
+                    chunks = []
+                    async for chunk in openclaw_client.send_message_stream(
+                        message=prompt,
+                        chat_id=f"web_chat_{id(prompt) % 10000}",
+                        system_prompt="Ты — AI ассистент Krab. Отвечай полезно и по делу.",
+                        force_cloud=True,
+                    ):
+                        chunks.append(chunk)
+
+                    reply = "".join(chunks).strip()
+
+                    # Tool calls info
+                    if hasattr(openclaw_client, "_active_tool_calls"):
+                        for i, tc in enumerate(openclaw_client._active_tool_calls):
+                            yield f"event: tool_done\ndata: {_json.dumps({'name': tc.get('name', '?'), 'index': i})}\n\n"
+
+                    # Route info
+                    route = {}
+                    if hasattr(openclaw_client, "get_last_runtime_route"):
+                        route = openclaw_client.get_last_runtime_route() or {}
+
+                    yield f"event: route\ndata: {_json.dumps({'model': route.get('model', '?'), 'provider': route.get('provider', '?')})}\n\n"
+                    yield f"event: message\ndata: {_json.dumps({'reply': reply})}\n\n"
+
+                except Exception as exc:
+                    yield f"event: error\ndata: {_json.dumps({'error': str(exc)})}\n\n"
+
+                yield "event: done\ndata: {}\n\n"
+
+            return _StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        @self.app.get("/api/swarm/events")
+        async def swarm_events(token: str = Query(default="")):
+            """SSE stream для обновлений Swarm task board.
+
+            Стримит snapshot task_board + artifacts_count + listeners_enabled.
+            Эмитит event 'update' только при реальном изменении состояния (hash-based).
+            Heartbeat каждые 5 секунд.
+            """
+            from fastapi.responses import StreamingResponse as _StreamingResponse
+
+            async def event_stream():
+                last_hash: Optional[str] = None
+                while True:
+                    try:
+                        from ..core.swarm_artifact_store import swarm_artifact_store
+                        from ..core.swarm_task_board import swarm_task_board
+                        from ..core.swarm_team_listener import is_listeners_enabled
+
+                        board = swarm_task_board.get_board_summary()
+                        tasks = swarm_task_board.list_tasks(limit=30)
+                        tasks_payload = [
+                            {
+                                "task_id": t.task_id,
+                                "team": t.team,
+                                "title": t.title,
+                                "status": t.status,
+                                "priority": t.priority,
+                                "created_at": t.created_at,
+                            }
+                            for t in tasks
+                        ]
+                        arts = swarm_artifact_store.list_artifacts(limit=10)
+                        arts_payload = [
+                            {
+                                "team": a.get("team"),
+                                "topic": a.get("topic"),
+                                "timestamp_iso": a.get("timestamp_iso"),
+                                "duration_sec": a.get("duration_sec"),
+                                "result_preview": (a.get("result") or "")[:200],
+                            }
+                            for a in arts
+                        ]
+                        listeners_enabled = is_listeners_enabled()
+
+                        payload = {
+                            "summary": board,
+                            "tasks": tasks_payload,
+                            "artifacts": arts_payload,
+                            "listeners_enabled": listeners_enabled,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
+
+                        current_hash = hashlib.sha256(
+                            json.dumps(
+                                {
+                                    "summary": board,
+                                    "tasks": tasks_payload,
+                                    "artifacts": arts_payload,
+                                    "listeners_enabled": listeners_enabled,
+                                },
+                                sort_keys=True,
+                                default=str,
+                            ).encode()
+                        ).hexdigest()
+
+                        if current_hash != last_hash:
+                            last_hash = current_hash
+                            yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
+                        else:
+                            yield ": heartbeat\n\n"
+
+                        await asyncio.sleep(5)
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as exc:
+                        logger.error("swarm_events_error", error=str(exc))
+                        yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                        await asyncio.sleep(10)
+
+            return _StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        @self.app.get("/api/inbox/events")
+        async def inbox_events(token: str = Query(default="")):
+            """SSE stream для inbox updates.
+
+            Стримит summary (open/attention/escalations/stale) + items list.
+            Эмитит event 'update' только при реальном изменении состояния.
+            Heartbeat каждые 5 секунд.
+            """
+            from fastapi.responses import StreamingResponse as _StreamingResponse
+
+            async def event_stream():
+                last_hash: Optional[str] = None
+                while True:
+                    try:
+                        workflow = inbox_service.get_workflow_snapshot()
+                        summary = workflow.get("summary") or {}
+                        items = inbox_service.list_items(status="all", kind="", limit=20)
+
+                        payload = {
+                            "summary": summary,
+                            "workflow": workflow,
+                            "items": items,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
+
+                        current_hash = hashlib.sha256(
+                            json.dumps(
+                                {"summary": summary, "items": items},
+                                sort_keys=True,
+                                default=str,
+                            ).encode()
+                        ).hexdigest()
+
+                        if current_hash != last_hash:
+                            last_hash = current_hash
+                            yield f"event: update\ndata: {json.dumps(payload, default=str)}\n\n"
+                        else:
+                            yield ": heartbeat\n\n"
+
+                        await asyncio.sleep(5)
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as exc:
+                        logger.error("inbox_events_error", error=str(exc))
+                        yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+                        await asyncio.sleep(10)
+
+            return _StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         @self.app.get("/api/openclaw/report")
         async def openclaw_report():
