@@ -34,6 +34,7 @@ from .core.chat_capability_cache import chat_capability_cache
 from .core.exceptions import KrabError, UserInputError
 from .core.inbox_service import inbox_service
 from .core.logger import get_logger
+from .core.memory_indexer_worker import get_indexer
 from .core.operator_identity import build_trace_id
 from .core.proactive_watch import proactive_watch
 from .core.routing_errors import RouterError, user_message_for_surface
@@ -83,6 +84,8 @@ from .handlers import (
     handle_diagnose,
     handle_digest,
     handle_emoji,
+    handle_eval,
+    handle_explain,
     handle_export,
     handle_fix,
     handle_fwd,
@@ -147,8 +150,6 @@ from .handlers import (
     handle_who,
     handle_whois,
     handle_write,
-    handle_eval,
-    handle_explain,
 )
 from .model_manager import model_manager
 from .openclaw_client import openclaw_client
@@ -450,6 +451,7 @@ class KraabUserbot(
         self._telegram_watchdog_task: Optional[asyncio.Task] = None
         self._background_task_reaper_task: Optional[asyncio.Task] = None
         self._proactive_watch_task: Optional[asyncio.Task] = None
+        self._memory_indexer_task: Optional[asyncio.Task] = None
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
@@ -1410,6 +1412,18 @@ class KraabUserbot(
             silence_schedule_manager.run_loop(_apply_mute, _remove_mute)
         )
 
+    def _ensure_memory_indexer_started(self) -> None:
+        """Lazy boot Memory Indexer Worker (Phase 4)."""
+        if self._memory_indexer_task and not self._memory_indexer_task.done():
+            return
+        try:
+            indexer = get_indexer()
+            self._memory_indexer_task = asyncio.create_task(indexer.start())
+            self._memory_indexer_task.add_done_callback(self._log_background_task_exception_cb)
+            logger.info("memory_indexer_supervisor_started")
+        except Exception as exc:
+            logger.warning("memory_indexer_start_failed", error=str(exc), non_fatal=True)
+
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
         if not bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)):
@@ -1917,6 +1931,7 @@ class KraabUserbot(
         self._background_task_reaper_task = asyncio.create_task(self._background_task_reaper())
         self._ensure_proactive_watch_started()
         self._ensure_silence_schedule_started()
+        self._ensure_memory_indexer_started()
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
@@ -2133,6 +2148,12 @@ class KraabUserbot(
         await self._cancel_background_task("_background_task_reaper_task")
         await self._cancel_background_task("_proactive_watch_task")
         await self._cancel_background_task("_silence_schedule_task")
+        await self._cancel_background_task("_memory_indexer_task")
+        try:
+            from .core.memory_indexer_worker import get_indexer as _get_idx
+            await _get_idx().stop(drain=True, timeout=10.0)
+        except Exception as _stop_exc:  # noqa: BLE001
+            logger.debug("memory_indexer_stop_failed", error=str(_stop_exc))
         # Per-team swarm clients — остановить до основного клиента
         await self._stop_swarm_team_clients()
         try:
@@ -3596,6 +3617,14 @@ class KraabUserbot(
                     asyncio.create_task(
                         self._send_monitor_alert(message=message, matched_keyword=_matched_kw)
                     )
+
+            # MEMORY LAYER (Phase 4): real-time индексация в archive.db.
+            if message.text and chat_id and not _is_command_for_guard:
+                try:
+                    indexer = get_indexer()
+                    await indexer.enqueue(message)
+                except Exception as _idx_exc:  # noqa: BLE001
+                    logger.debug("memory_indexer_enqueue_failed", error=str(_idx_exc), chat_id=chat_id)
 
             # AUTO-TRANSLATE: если для чата включён автоперевод (!translate auto),
             # переводим входящее текстовое сообщение (не от self, не команду).
