@@ -528,6 +528,16 @@
             </div>
         </section>
 
+        <section class="glass-card p-4 mb-4" id="provider-cards-section">
+            <div class="flex justify-between items-center mb-3">
+                <h2 class="m-0 text-lg">Provider Status</h2>
+                <button class="glass-button text-xs" onclick="refreshProviderCards()" aria-label="Refresh provider status">Refresh</button>
+            </div>
+            <div id="provider-cards" class="flex flex-col gap-2">
+                <div class="skeleton p-3" style="height: 50px;"></div>
+            </div>
+        </section>
+
         <section class="quick-actions flex gap-2 justify-between mt-4">
             <button class="glass-button flex-1 p-3 flex flex-col items-center gap-1" aria-label="Run health check" onclick="runAction('/api/ops/diagnostics', 'GET', this)">
                 <span class="text-lg">🩺</span> <span class="text-xs">Health Check</span>
@@ -708,6 +718,74 @@
                 loadCatalog(false).then(() => {
                     setTimeout(() => loadCatalog(true).catch(() => {}), 500);
                 });
+            }
+            refreshProviderCards();
+        }
+
+        async function refreshProviderCards() {
+            const container = document.getElementById('provider-cards');
+            if (!container) return;
+            const data = await fetchAPI('/api/openclaw/model-routing/status');
+            if (data._error) { container.textContent = 'Ошибка загрузки'; return; }
+            const routing = data.routing || data;
+            const providers = [];
+            for (const [key, val] of Object.entries(routing)) {
+                if (val && typeof val === 'object' && val.provider) providers.push(val);
+            }
+            if (providers.length === 0) { container.textContent = 'Нет провайдеров'; return; }
+            while (container.firstChild) container.removeChild(container.firstChild);
+            for (const p of providers) {
+                const card = document.createElement('div');
+                card.className = 'glass-card p-3 flex justify-between items-center';
+                const borderColor = p.readiness === 'ready' ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)';
+                card.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid ' + borderColor;
+                const left = document.createElement('div');
+                left.className = 'flex flex-col gap-1';
+                const nameEl = document.createElement('div');
+                nameEl.className = 'text-sm font-bold';
+                nameEl.textContent = p.provider;
+                const statusEl = document.createElement('div');
+                statusEl.className = 'text-xs ' + (p.readiness === 'ready' ? 'text-success' : 'text-error');
+                const models = (p.runtime_models || []).join(', ') || 'нет моделей';
+                statusEl.textContent = p.readiness.toUpperCase() + ' \u00b7 ' + p.auth_mode + ' \u00b7 ' + models;
+                left.appendChild(nameEl);
+                left.appendChild(statusEl);
+                if (p.expired_profiles && p.expired_profiles.length > 0) {
+                    const expEl = document.createElement('div');
+                    expEl.className = 'text-xs text-warning';
+                    expEl.textContent = '\u26a0\ufe0f ' + p.expired_profiles.map(function(e) { return e.profile; }).join(', ');
+                    left.appendChild(expEl);
+                }
+                card.appendChild(left);
+                if (p.readiness !== 'ready' && p.auth_mode === 'oauth') {
+                    const btn = document.createElement('button');
+                    btn.className = 'glass-button text-xs';
+                    btn.style.cssText = 'white-space:nowrap;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4)';
+                    btn.textContent = '\ud83d\udd11 Re-login';
+                    btn.setAttribute('aria-label', 'Re-login ' + p.provider);
+                    btn.onclick = async function() {
+                        btn.disabled = true; btn.textContent = '\u23f3...';
+                        const res = await fetchAPI('/api/model/provider-action', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({provider: p.provider, action: 'repair_oauth'})
+                        });
+                        if (res._error || !res.ok) {
+                            btn.textContent = '\u274c \u041e\u0448\u0438\u0431\u043a\u0430';
+                            setTimeout(function() { btn.textContent = '\ud83d\udd11 Re-login'; btn.disabled = false; }, 3000);
+                        } else {
+                            btn.textContent = '\u2705 Helper \u043e\u0442\u043a\u0440\u044b\u0442';
+                            setTimeout(function() { btn.textContent = '\ud83d\udd11 Re-login'; btn.disabled = false; refreshProviderCards(); }, 5000);
+                        }
+                    };
+                    card.appendChild(btn);
+                } else if (p.readiness === 'ready') {
+                    const badge = document.createElement('span');
+                    badge.className = 'badge text-xs text-success';
+                    badge.textContent = '\u2705 OK';
+                    card.appendChild(badge);
+                }
+                container.appendChild(card);
             }
         }
 
