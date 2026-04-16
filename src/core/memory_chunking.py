@@ -41,7 +41,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Iterable, Iterator
 
-
 # ---------------------------------------------------------------------------
 # Модели.
 # ---------------------------------------------------------------------------
@@ -193,6 +192,36 @@ class ChunkBuilder:
         self._closed_chunks = []
         self._current_chat_id = None
         return result
+
+    def harvest_closed(
+        self,
+        now: datetime,
+        time_gap: timedelta = DEFAULT_TIME_GAP,
+    ) -> list[Chunk]:
+        """
+        Закрывает все open chunks где (now - end_timestamp) > time_gap,
+        возвращает их и удаляет из _open_chunks.
+
+        Используется streaming worker'ом (Phase 4) для периодического flush'а
+        chunks которые не получили продолжение в текущем batch'е.
+
+        Идемпотентно: повторный вызов сразу после возвращает пустой список,
+        если состояние builder'а не менялось.
+        """
+        harvested: list[Chunk] = []
+        keep: list[Chunk] = []
+        while self._open_chunks:
+            chunk = self._open_chunks.popleft()
+            if chunk.is_empty():
+                continue
+            end = chunk.end_timestamp
+            if end is not None and (now - end) > time_gap:
+                harvested.append(chunk)
+            else:
+                keep.append(chunk)
+        for chunk in keep:
+            self._open_chunks.append(chunk)
+        return harvested
 
     # ------------------------------------------------------------------
     # Внутренние методы.
