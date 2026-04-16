@@ -77,6 +77,32 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from ..userbot_bridge import KraabUserbot
 
+
+# ---------------------------------------------------------------------------
+# Утилита: тех-ответ только в ЛС владельца
+# ---------------------------------------------------------------------------
+
+async def _reply_tech(message: Message, bot: "KraabUserbot", text: str, **kwargs: Any) -> None:
+    """Отправляет тех-ответ: в группе — редиректит в ЛС, в ЛС — обычный reply.
+
+    Предназначена для команд с техническим выводом (логи, cron и т.п.),
+    которые не должны «засорять» групповые чаты.
+    """
+    if message.chat.id < 0:
+        # Уведомление в группе
+        try:
+            await message.reply("📬 Ответ в ЛС (тех-команда).")
+        except Exception:  # noqa: BLE001
+            pass
+        # Сам ответ — в Saved Messages
+        try:
+            await bot.client.send_message("me", text, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tech_dm_redirect_failed", error=str(exc))
+    else:
+        await message.reply(text, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # In-memory хранилище таймеров и секундомеров
 # ---------------------------------------------------------------------------
@@ -4089,7 +4115,9 @@ async def handle_rm_remind(bot: "KraabUserbot", message: Message) -> None:
 async def handle_cronstatus(bot: "KraabUserbot", message: Message) -> None:
     """Отдает runtime-статус scheduler."""
     status = krab_scheduler.get_status()
-    await message.reply(
+    # Тех-вывод: группа → редирект в ЛС
+    await _reply_tech(
+        message, bot,
         "🧭 **Scheduler status**\n"
         f"- enabled (config): `{status.get('scheduler_enabled')}`\n"
         f"- started: `{status.get('started')}`\n"
@@ -4222,7 +4250,8 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
             f"• выключено: {disabled}",
             f"• с ошибками: {errors}",
         ]
-        await message.reply("\n".join(lines))
+        # Тех-вывод: группа → редирект в ЛС
+        await _reply_tech(message, bot, "\n".join(lines))
         return
 
     # ---------- !cron list ----------
@@ -4241,7 +4270,8 @@ async def handle_cron(bot: "KraabUserbot", message: Message) -> None:
             last_status = _cron_format_last_status(job)
             lines.append(f"{flag} **{name}**")
             lines.append(f"   расписание: {schedule} | статус: `{last_status}`")
-        await message.reply("\n".join(lines))
+        # Тех-вывод: группа → редирект в ЛС
+        await _reply_tech(message, bot, "\n".join(lines))
         return
 
     # ---------- !cron enable / !cron disable ----------
@@ -14331,9 +14361,32 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
         else:
             log_path = _KRAB_LOG_PATH
 
+    # Определяем цель: в группе — редирект в ЛС
+    _log_target = "me" if message.chat.id < 0 else None
+    if message.chat.id < 0:
+        try:
+            await message.reply("📬 Ответ в ЛС (тех-команда).")
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _send_log_text(text: str) -> None:
+        """Отправляет текст лога в правильный чат."""
+        if _log_target:
+            try:
+                await bot.client.send_message(_log_target, text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("tech_dm_redirect_failed", error=str(exc))
+        else:
+            await message.reply(text)
+
+    async def _send_log_document(filepath: pathlib.Path, caption: str) -> None:
+        """Отправляет документ лога в правильный чат."""
+        target = _log_target or message.chat.id
+        await bot.client.send_document(target, str(filepath), caption=caption)
+
     # Лог-файл должен существовать
     if not log_path.exists():
-        await message.reply(
+        await _send_log_text(
             f"📋 Лог-файл не найден: `{log_path}`\n"
             "Убедись, что Краб запущен и лог активен."
         )
@@ -14378,7 +14431,7 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
         else:
             lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except (OSError, IOError) as e:
-        await message.reply(f"❌ Ошибка чтения лога: {e}")
+        await _send_log_text(f"❌ Ошибка чтения лога: {e}")
         return
 
     # --- Фильтрация ---
@@ -14390,14 +14443,14 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
         ]
         header = "⚠️ **Ошибки в логах Краба**"
         if not result_lines:
-            await message.reply("✅ Ошибок в логах нет.")
+            await _send_log_text("✅ Ошибок в логах нет.")
             return
     elif mode == "search":
         assert query is not None
         result_lines = [ln for ln in lines if query.lower() in ln.lower()]
         header = f"🔍 **Поиск в логах:** `{query}`"
         if not result_lines:
-            await message.reply(f"🔍 По запросу `{query}` ничего не найдено.")
+            await _send_log_text(f"🔍 По запросу `{query}` ничего не найдено.")
             return
     else:
         # tail режим
@@ -14408,11 +14461,11 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
     body = "\n".join(result_lines)
     full_text = f"{header}\n\n```\n{body}\n```"
 
-    # --- Отправка: короткий текст → reply, длинный → document ---
+    # --- Отправка: короткий текст → reply/DM, длинный → document ---
     if len(full_text) <= 3900 and len(result_lines) <= _LOG_TEXT_MAX_LINES:
         parts = _split_text_for_telegram(full_text)
         for part in parts:
-            await message.reply(part)
+            await _send_log_text(part)
     else:
         # Отправляем как документ
         now = datetime.datetime.now()
@@ -14425,13 +14478,9 @@ async def handle_log(bot: "KraabUserbot", message: Message) -> None:
         export_text = f"{header}\n\n{body}"
         try:
             filepath.write_text(export_text, encoding="utf-8")
-            await bot.client.send_document(
-                message.chat.id,
-                str(filepath),
-                caption=f"📋 {header} ({len(result_lines)} строк)",
-            )
+            await _send_log_document(filepath, caption=f"📋 {header} ({len(result_lines)} строк)")
         except (OSError, IOError) as e:
-            await message.reply(f"❌ Ошибка создания файла: {e}")
+            await _send_log_text(f"❌ Ошибка создания файла: {e}")
         finally:
             try:
                 filepath.unlink(missing_ok=True)

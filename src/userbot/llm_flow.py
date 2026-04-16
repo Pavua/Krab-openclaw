@@ -357,6 +357,7 @@ class LLMFlowMixin:
         action_stop_event: asyncio.Event,
         action_task: asyncio.Task,
         prefer_send_message_for_background: bool = False,
+        show_progress_notices: bool = True,
     ) -> None:
         """Общий long-path LLM/tool flow для inline и background режима."""
         # Ленивые импорты модулей, которые живут в userbot_bridge / соседних пакетах.
@@ -376,6 +377,9 @@ class LLMFlowMixin:
         last_edit_time = 0.0
         timeout_error_was_sent = False
         _reaction_sent = False  # флаг: уже поставили ✅/❌ на исходное сообщение
+        # Progress-уведомления только в личных чатах или для self-сообщений.
+        # В группах обрабатываем молча — финальный ответ всё равно отправляем.
+        _show_progress = show_progress_notices
 
         first_chunk_timeout_sec, chunk_timeout_sec = _resolve_openclaw_stream_timeouts(
             has_photo=bool(images)
@@ -653,7 +657,7 @@ class LLMFlowMixin:
                                 gateway_progress=gateway_progress_text,
                                 gateway_dead=gateway_http_dead,
                             )
-                            if (
+                            if _show_progress and (
                                 progress_notice != last_progress_notice_text
                                 or tool_summary != last_tool_summary
                                 or gateway_progress_text != last_gateway_progress
@@ -713,23 +717,24 @@ class LLMFlowMixin:
                             route_model=route_model,
                             attempt=route_attempt,
                         )
-                        try:
-                            if is_self:
-                                message = await self._safe_edit(
-                                    message, f"🦀 {query}\n\n{slow_notice}"
+                        if _show_progress:
+                            try:
+                                if is_self:
+                                    message = await self._safe_edit(
+                                        message, f"🦀 {query}\n\n{slow_notice}"
+                                    )
+                                else:
+                                    temp_msg = await self._safe_edit(temp_msg, slow_notice)
+                            except Exception as exc:
+                                # P0 (2026-04-09): здесь раньше был литеральный `...` как positional arg,
+                                # из-за чего structlog stdlib factory падал на `event % (Ellipsis,)` →
+                                # TypeError "not all arguments converted". Заменено на штатные kwargs.
+                                logger.warning(
+                                    "openclaw_slow_notice_delivery_failed",
+                                    chat_id=chat_id,
+                                    error=str(exc),
+                                    error_type=type(exc).__name__,
                                 )
-                            else:
-                                temp_msg = await self._safe_edit(temp_msg, slow_notice)
-                        except Exception as exc:
-                            # P0 (2026-04-09): здесь раньше был литеральный `...` как positional arg,
-                            # из-за чего structlog stdlib factory падал на `event % (Ellipsis,)` →
-                            # TypeError "not all arguments converted". Заменено на штатные kwargs.
-                            logger.warning(
-                                "openclaw_slow_notice_delivery_failed",
-                                chat_id=chat_id,
-                                error=str(exc),
-                                error_type=type(exc).__name__,
-                            )
                         # We don't continue immediately, we might have progress notice to send
 
                     # Handle Progress Notice Keepalive
@@ -774,27 +779,28 @@ class LLMFlowMixin:
                             gateway_progress=_kp_gateway_progress,
                             gateway_dead=gateway_http_dead,
                         )
-                        try:
-                            if is_self:
-                                message = await self._safe_edit(
-                                    message, f"🦀 {query}\n\n{progress_notice}"
+                        if _show_progress:
+                            try:
+                                if is_self:
+                                    message = await self._safe_edit(
+                                        message, f"🦀 {query}\n\n{progress_notice}"
+                                    )
+                                else:
+                                    temp_msg = await self._safe_edit(temp_msg, progress_notice)
+                                last_progress_notice_text = progress_notice
+                                last_tool_summary = tool_summary
+                            except Exception as exc:
+                                # P0 (2026-04-09): литеральный `...` в kwargs ломал structlog stdlib.
+                                # Важный инвариант: вся цепочка _run_llm_request_flow запускается в фоне
+                                # через _finish_ai_request_background, и TypeError отсюда валил весь
+                                # stream до получения первого chunk'а — Краб "зависал" после 15 сек.
+                                logger.warning(
+                                    "openclaw_progress_notice_delivery_failed",
+                                    chat_id=chat_id,
+                                    notice_index=progress_notice_count,
+                                    error=str(exc),
+                                    error_type=type(exc).__name__,
                                 )
-                            else:
-                                temp_msg = await self._safe_edit(temp_msg, progress_notice)
-                            last_progress_notice_text = progress_notice
-                            last_tool_summary = tool_summary
-                        except Exception as exc:
-                            # P0 (2026-04-09): литеральный `...` в kwargs ломал structlog stdlib.
-                            # Важный инвариант: вся цепочка _run_llm_request_flow запускается в фоне
-                            # через _finish_ai_request_background, и TypeError отсюда валил весь
-                            # stream до получения первого chunk'а — Краб "зависал" после 15 сек.
-                            logger.warning(
-                                "openclaw_progress_notice_delivery_failed",
-                                chat_id=chat_id,
-                                notice_index=progress_notice_count,
-                                error=str(exc),
-                                error_type=type(exc).__name__,
-                            )
                         next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
                         next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
 
