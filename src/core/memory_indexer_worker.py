@@ -450,9 +450,16 @@ class MemoryIndexerWorker:
 
         Возвращает список chunk_id которые реально вставлены.
         """
+        from src.core.memory_archive import create_schema, enforce_archive_permissions
+
         conn = open_archive(self._paths)
         committed: list[str] = []
         try:
+            # Гарантируем schema (первый flush создаёт таблицы).
+            try:
+                conn.execute("SELECT 1 FROM meta LIMIT 1;")
+            except sqlite3.OperationalError:
+                create_schema(conn)
             conn.execute("PRAGMA foreign_keys = ON;")
             conn.execute("BEGIN;")
 
@@ -543,6 +550,11 @@ class MemoryIndexerWorker:
             # Обновляем in-memory watermark cache после успешного коммита.
             for cid, last_msg_id in per_chat_last_msg_id.items():
                 self._watermark_cache[cid] = last_msg_id
+            # Privacy: chmod 600 на файл БД.
+            try:
+                enforce_archive_permissions(self._paths)
+            except OSError:
+                pass
         except sqlite3.Error as exc:
             conn.rollback()
             logger.error("memory_indexer_db_error", error=str(exc))
