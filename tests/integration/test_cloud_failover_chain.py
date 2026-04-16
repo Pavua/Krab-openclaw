@@ -28,7 +28,7 @@ async def test_cloud_failover_chain_smoke(monkeypatch: pytest.MonkeyPatch) -> No
         "Локальный fallback ответ",
     ]
 
-    async def _fake_once(*, model_id: str, messages_to_send):  # noqa: ANN001
+    async def _fake_once(*, model_id: str, messages_to_send, **kwargs):  # noqa: ANN001
         return sequence.pop(0)
 
     monkeypatch.setattr(client, "_openclaw_completion_once", _fake_once)
