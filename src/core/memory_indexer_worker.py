@@ -128,6 +128,8 @@ class MemoryIndexerWorker:
         self._stop_requested: bool = False
         self._stats = IndexerStats(queue_maxsize=queue_maxsize)
         self._builders: dict[str, ChunkBuilder] = {}
+        # Watermark cache: chat_id → last indexed message_id (для idempotency).
+        self._watermark_cache: dict[str, str] = {}
 
     async def start(self) -> None:
         """Запускает worker: создаёт queue и consumer task."""
@@ -137,7 +139,10 @@ class MemoryIndexerWorker:
         self._stop_requested = False
         self._stats.started_at = datetime.now(timezone.utc)
         self._stats.is_running = True
-        self._consumer_task = asyncio.create_task(self._consumer_loop())
+        # Загружаем watermark cache из БД для idempotency при рестарте.
+        # Вызываем синхронно (быстрый SELECT, не блокирует event loop надолго).
+        self._load_watermark_cache()
+        self._consumer_task = asyncio.create_task(self._supervised_loop())
         logger.info(
             "memory_indexer_started",
             queue_maxsize=self._queue_maxsize,
@@ -205,6 +210,16 @@ class MemoryIndexerWorker:
             self._stats.bump_skipped("empty_text")
             return False
 
+        # Watermark gate: пропускаем уже проиндексированные сообщения.
+        last_seen = self._watermark_cache.get(chat_id)
+        if last_seen is not None:
+            try:
+                if int(message_id) <= int(last_seen):
+                    self._stats.bump_skipped("already_indexed")
+                    return False
+            except ValueError:
+                pass
+
         # Строим QueuedMessage.
         from_user = getattr(pyrofork_message, "from_user", None)
         sender_id = str(from_user.id) if from_user and from_user.id else None
@@ -240,6 +255,61 @@ class MemoryIndexerWorker:
             self._stats.queue_size = self._queue.qsize()
         self._stats.builders_active = len(self._builders)
         return self._stats
+
+    # ---------------------------------------------------------------------------
+    # Watermark cache.
+    # ---------------------------------------------------------------------------
+
+    def _load_watermark_cache(self) -> None:
+        """Загружает indexer_state.last_message_id per chat для skip replay."""
+        try:
+            conn = open_archive(self._paths, create_if_missing=False)
+        except (FileNotFoundError, Exception):
+            return
+        try:
+            rows = conn.execute(
+                "SELECT chat_id, last_message_id FROM indexer_state;"
+            ).fetchall()
+            self._watermark_cache = {r[0]: r[1] for r in rows}
+        except Exception as exc:
+            logger.warning("memory_indexer_watermark_load_failed", error=str(exc))
+        finally:
+            conn.close()
+
+    # ---------------------------------------------------------------------------
+    # Supervisor wrapper.
+    # ---------------------------------------------------------------------------
+
+    async def _supervised_loop(self) -> None:
+        """Auto-restart wrapper. Backoff 1s → 2s → 4s → ... → 30s max.
+
+        _consumer_loop всегда запускается хотя бы раз — он сам управляет
+        условием завершения (`_stop_requested + queue.empty`). Перезапуск
+        происходит только при необработанном исключении и только если
+        остановка ещё не запрошена.
+        """
+        backoff_sec = 1.0
+        max_backoff = 30.0
+        while True:
+            try:
+                await self._consumer_loop()
+                break  # Нормальный выход (consumer решил остановиться)
+            except asyncio.CancelledError:
+                raise  # Пробрасываем cancel без рестарта
+            except Exception as exc:
+                self._stats.restarts += 1
+                logger.error(
+                    "memory_indexer_consumer_crashed",
+                    error=str(exc),
+                    exc_info=True,
+                    restart_in_sec=backoff_sec,
+                    restart_count=self._stats.restarts,
+                )
+                # Не перезапускаем если остановка уже запрошена.
+                if self._stop_requested:
+                    break
+                await asyncio.sleep(backoff_sec)
+                backoff_sec = min(backoff_sec * 2, max_backoff)
 
     # ---------------------------------------------------------------------------
     # Consumer loop.
@@ -298,9 +368,18 @@ class MemoryIndexerWorker:
         per_chat_last_msg_id: dict[str, str] = {}
 
         for qmsg in batch:
-            # PII redact
-            redaction = self._redactor.redact(qmsg.text)
-            redacted_text = redaction.text
+            # PII redact — изолируем per-message, чтобы сбой не убивал весь batch.
+            try:
+                redaction = self._redactor.redact(qmsg.text)
+                redacted_text = redaction.text
+            except Exception as pii_exc:
+                self._stats.bump_failed("pii")
+                logger.warning(
+                    "memory_indexer_pii_failed",
+                    message_id=qmsg.message_id,
+                    error=str(pii_exc),
+                )
+                redacted_text = qmsg.text  # Используем оригинал как fallback
 
             # Строим Message для ChunkBuilder
             msg = Message(
@@ -461,6 +540,9 @@ class MemoryIndexerWorker:
                 )
 
             conn.commit()
+            # Обновляем in-memory watermark cache после успешного коммита.
+            for cid, last_msg_id in per_chat_last_msg_id.items():
+                self._watermark_cache[cid] = last_msg_id
         except sqlite3.Error as exc:
             conn.rollback()
             logger.error("memory_indexer_db_error", error=str(exc))

@@ -3,6 +3,10 @@ Unit-тесты MemoryIndexerWorker (Phase 4).
 
 Покрывают:
   - enqueue side (whitelist, overflow, empty text)
+  - consumer loop: batch triggers, DB writes, chunking
+  - idempotency: watermark cache, drain
+  - failure modes: PII isolation, sqlite error resilience
+  - supervisor: auto-restart, cancel propagation
 
 Запуск:
     venv/bin/python -m pytest tests/unit/test_memory_indexer_worker.py -q
@@ -11,10 +15,12 @@ Unit-тесты MemoryIndexerWorker (Phase 4).
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -334,3 +340,151 @@ class TestConsumerChunking:
             assert chunk_count == 2
         finally:
             conn.close()
+
+
+class TestIdempotency:
+    """Tests #15-17: watermark idempotency + drain."""
+
+    @pytest.mark.asyncio
+    async def test_replay_same_message_skipped(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+        """Test #15: enqueue same msg twice across restart → second skipped."""
+        await worker.start()
+        msg = _fake_pyrofork_message(message_id="42")
+        await worker.enqueue(msg)
+        await worker.stop(drain=True, timeout=3.0)
+        # Рестартуем — watermark cache должен загрузиться из БД.
+        await worker.start()
+        msg2 = _fake_pyrofork_message(message_id="42")
+        await worker.enqueue(msg2)
+        await worker.stop(drain=True, timeout=3.0)
+        stats = worker.get_stats()
+        assert stats.skipped.get("already_indexed", 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_restart_resumes_from_watermark(self, worker: MemoryIndexerWorker, temp_archive: ArchivePaths) -> None:
+        """Test #16: stop → start → новые msg обрабатываются, старые не повторяются."""
+        await worker.start()
+        for i in range(3):
+            await worker.enqueue(
+                _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
+            )
+        await worker.stop(drain=True, timeout=3.0)
+        # Рестарт + новые сообщения с бо́льшими ID.
+        await worker.start()
+        for i in range(3, 6):
+            await worker.enqueue(
+                _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
+            )
+        await worker.stop(drain=True, timeout=3.0)
+        conn = open_archive(temp_archive)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE chat_id = ?;", (ALLOWED_CHAT_ID,)
+            ).fetchone()[0]
+            assert count == 6
+        finally:
+            conn.close()
+
+    @pytest.mark.asyncio
+    async def test_drain_on_stop_waits_for_queue_empty(self, worker: MemoryIndexerWorker) -> None:
+        """Test #17: stop(drain=True) ждёт пока всё обработано."""
+        await worker.start()
+        for i in range(5):
+            await worker.enqueue(
+                _fake_pyrofork_message(message_id=str(i + 1), offset_sec=i * 10)
+            )
+        await worker.stop(drain=True, timeout=5.0)
+        stats = worker.get_stats()
+        assert stats.processed_total == 5
+        assert stats.queue_size == 0
+
+
+class TestFailureModes:
+    """Tests #19-20: graceful degradation."""
+
+    @pytest.mark.asyncio
+    async def test_pii_failure_does_not_kill_worker(
+        self, temp_archive: ArchivePaths, whitelist_strict: MemoryWhitelist
+    ) -> None:
+        """Test #19: redactor raises на первом msg → failed.pii++, worker живёт."""
+        from types import SimpleNamespace as SNS
+
+        bad_redactor = MagicMock()
+        good_result = SNS(text="clean text", stats=SNS(counts={}, total=0))
+        # Первый вызов (из _flush_batch) — падает; второй (из _sync_flush_to_db) — ОК.
+        bad_redactor.redact.side_effect = [RuntimeError("pii broke"), good_result]
+
+        w = MemoryIndexerWorker(
+            archive_paths=temp_archive,
+            whitelist=whitelist_strict,
+            redactor=bad_redactor,
+            queue_maxsize=100,
+            batch_size=5,
+            batch_timeout_sec=0.5,
+        )
+        await w.start()
+        await w.enqueue(_fake_pyrofork_message(message_id="1", text="bad msg"))
+        await w.enqueue(_fake_pyrofork_message(message_id="2", text="good msg", offset_sec=10))
+        await w.stop(drain=True, timeout=3.0)
+        stats = w.get_stats()
+        # Worker должен выжить и что-то обработать (или зафиксировать ошибку).
+        assert stats.processed_total >= 1 or stats.failed.get("pii", 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_sqlite_error_keeps_worker_alive(
+        self, worker: MemoryIndexerWorker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test #20: sqlite error → failed.flush или failed.db, worker живёт."""
+        original_flush = worker._sync_flush_to_db
+        call_count = [0]
+
+        def flaky_flush(*args: object, **kwargs: object) -> list[str]:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise sqlite3.DatabaseError("disk gone")
+            return original_flush(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(worker, "_sync_flush_to_db", flaky_flush)
+        await worker.start()
+        await worker.enqueue(_fake_pyrofork_message(message_id="1"))
+        await asyncio.sleep(1.0)
+        await worker.stop(drain=True, timeout=3.0)
+        stats = worker.get_stats()
+        total_failed = sum(stats.failed.values())
+        assert total_failed >= 1
+
+
+class TestSupervisor:
+    """Tests #25-27: supervisor auto-restart."""
+
+    @pytest.mark.asyncio
+    async def test_supervisor_restarts_on_unhandled_exception(
+        self, worker: MemoryIndexerWorker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test #25: consumer raises → supervisor перезапускает, restarts >= 1."""
+        crash_count = [0]
+        original_loop = MemoryIndexerWorker._consumer_loop
+
+        async def crashing_then_normal(self_: MemoryIndexerWorker) -> None:
+            crash_count[0] += 1
+            if crash_count[0] == 1:
+                raise RuntimeError("simulated crash")
+            await original_loop(self_)
+
+        monkeypatch.setattr(MemoryIndexerWorker, "_consumer_loop", crashing_then_normal)
+        await worker.start()
+        await asyncio.sleep(2.0)  # Ждём пока supervisor перезапустит
+        await worker.stop(drain=False, timeout=2.0)
+        stats = worker.get_stats()
+        assert stats.restarts >= 1
+
+    @pytest.mark.asyncio
+    async def test_supervisor_does_not_restart_on_cancelled(
+        self, worker: MemoryIndexerWorker
+    ) -> None:
+        """Test #27: cancel → CancelledError пробрасывается, restarts=0."""
+        await worker.start()
+        await asyncio.sleep(0.1)
+        await worker.stop(drain=False, timeout=2.0)
+        stats = worker.get_stats()
+        assert stats.restarts == 0
