@@ -10364,6 +10364,18 @@ class WebApp:
             from ..core.command_registry import registry as _reg
             return _reg.to_api_response()
 
+        @self.app.get("/api/commands/usage")
+        async def get_command_usage():
+            """Статистика вызовов команд (отсортировано по убыванию)."""
+            from ..core.command_registry import get_usage as _get_usage
+            usage = _get_usage()
+            return {
+                "ok": True,
+                "total_calls": sum(usage.values()),
+                "unique_commands": len(usage),
+                "usage": usage,
+            }
+
         @self.app.get("/api/commands/{name}")
         async def get_command(name: str):
             """Детальная информация о конкретной команде."""

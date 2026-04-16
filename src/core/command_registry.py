@@ -5,6 +5,7 @@
 Используется:
 - Owner panel /api/commands (GET список, GET по имени)
 - !help — генерация справки из реестра
+- /api/commands/usage — аналитика использования команд
 
 Категории:
   basic       — базовая справка, диагностика
@@ -25,8 +26,53 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
+
+import structlog
+
+_log = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Аналитика использования команд
+# ---------------------------------------------------------------------------
+
+_command_usage: dict[str, int] = {}
+_usage_file = Path("~/.openclaw/krab_runtime_state/command_usage.json").expanduser()
+
+
+def bump_command(name: str) -> None:
+    """Инкрементирует счётчик вызова команды."""
+    _command_usage[name] = _command_usage.get(name, 0) + 1
+
+
+def get_usage() -> dict[str, int]:
+    """Возвращает счётчики, отсортированные по убыванию."""
+    return dict(sorted(_command_usage.items(), key=lambda x: -x[1]))
+
+
+def save_usage() -> None:
+    """Сохраняет счётчики на диск (вызывается периодически и при остановке)."""
+    try:
+        _usage_file.parent.mkdir(parents=True, exist_ok=True)
+        _usage_file.write_text(json.dumps(_command_usage, indent=2, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("command_usage_save_failed", error=str(exc))
+
+
+def load_usage() -> None:
+    """Загружает счётчики с диска при старте."""
+    global _command_usage  # noqa: PLW0603
+    try:
+        _command_usage = json.loads(_usage_file.read_text())
+        _log.info("command_usage_loaded", commands=len(_command_usage))
+    except FileNotFoundError:
+        _command_usage = {}
+    except json.JSONDecodeError as exc:
+        _log.warning("command_usage_corrupt", error=str(exc))
+        _command_usage = {}
 
 
 @dataclass(frozen=True)

@@ -491,6 +491,7 @@ class KraabUserbot(
         self._memory_indexer_task: Optional[asyncio.Task] = None
         self._error_digest_task: Optional[asyncio.Task] = None
         self._silence_schedule_task: Optional[asyncio.Task] = None
+        self._command_usage_save_task: Optional[asyncio.Task] = None
         self._swarm_team_clients: dict[str, Any] = {}  # team → Pyrogram Client
         self._session_recovery_lock = asyncio.Lock()
         self._client_lifecycle_lock = asyncio.Lock()
@@ -544,6 +545,13 @@ class KraabUserbot(
             return filters.create(check_access)
 
         async def run_cmd(handler, m):
+            # Учёт вызовов команд (аналитика)
+            try:
+                _cmd_name = handler.__name__.removeprefix("handle_")
+                from .core.command_registry import bump_command
+                bump_command(_cmd_name)
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 await handler(self, m)
             except UserInputError as e:
@@ -1461,6 +1469,16 @@ class KraabUserbot(
         except Exception as exc:
             logger.warning("memory_indexer_start_failed", error=str(exc), non_fatal=True)
 
+    async def _command_usage_save_loop(self) -> None:
+        """Периодически (каждые 5 минут) сохраняет счётчики команд на диск."""
+        while True:
+            await asyncio.sleep(300)  # 5 минут
+            try:
+                from .core.command_registry import save_usage as _save_usage
+                _save_usage()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("command_usage_periodic_save_failed", error=str(exc))
+
     def _ensure_proactive_watch_started(self) -> None:
         """Запускает фоновый proactive watch, если он включён конфигом."""
         if not bool(getattr(config, "PROACTIVE_WATCH_ENABLED", False)):
@@ -1965,6 +1983,13 @@ class KraabUserbot(
         except Exception as e:
             logger.error("wake_up_failed", error=str(e))
 
+        # Загружаем счётчики вызовов команд с диска
+        try:
+            from .core.command_registry import load_usage as _load_usage
+            _load_usage()
+        except Exception as _exc:
+            logger.warning("command_usage_load_failed", error=str(_exc))
+
         # Запуск фоновых задач (Safe Start)
         self._ensure_maintenance_started()
         self._telegram_watchdog_task = asyncio.create_task(self._telegram_session_watchdog())
@@ -1972,6 +1997,7 @@ class KraabUserbot(
         self._ensure_proactive_watch_started()
         self._ensure_silence_schedule_started()
         self._ensure_memory_indexer_started()
+        self._command_usage_save_task = asyncio.create_task(self._command_usage_save_loop())
 
         # Reserve bot (Phase 2.1) — запускаем после userbot, не блокируем старт при ошибке
         try:
