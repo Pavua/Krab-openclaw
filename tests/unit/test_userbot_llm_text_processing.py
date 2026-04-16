@@ -464,3 +464,69 @@ def test_is_text_batch_candidate_photo_excluded() -> None:
         )
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# escape_urls_for_restricted_groups
+# ---------------------------------------------------------------------------
+
+
+def test_escape_bare_url_single() -> None:
+    """Одиночный URL должен быть обёрнут в бэктики."""
+    result = KraabUserbot.escape_urls_for_restricted_groups("Visit https://example.com")
+    assert result == "Visit `https://example.com`"
+
+
+def test_escape_bare_url_multiple() -> None:
+    """Несколько URL в одной строке — каждый оборачивается отдельно."""
+    result = KraabUserbot.escape_urls_for_restricted_groups(
+        "https://a.com and https://b.com"
+    )
+    assert result == "`https://a.com` and `https://b.com`"
+
+
+def test_no_double_escape_already_in_backticks() -> None:
+    """URL уже в бэктиках — повторное оборачивание не происходит."""
+    result = KraabUserbot.escape_urls_for_restricted_groups("Visit `https://example.com`")
+    assert result == "Visit `https://example.com`"
+
+
+def test_markdown_link_not_escaped() -> None:
+    """Markdown-ссылка [текст](url) — URL внутри скобок не трогаем."""
+    result = KraabUserbot.escape_urls_for_restricted_groups(
+        "Посетите [сайт](https://example.com) прямо сейчас"
+    )
+    assert result == "Посетите [сайт](https://example.com) прямо сейчас"
+
+
+def test_empty_string_unchanged() -> None:
+    """Пустая строка остаётся пустой."""
+    assert KraabUserbot.escape_urls_for_restricted_groups("") == ""
+
+
+def test_no_urls_unchanged() -> None:
+    """Текст без URL не изменяется."""
+    text = "Привет, это просто текст!"
+    assert KraabUserbot.escape_urls_for_restricted_groups(text) == text
+
+
+def test_url_with_path_and_query() -> None:
+    """URL со сложным путём и query-параметрами оборачивается целиком."""
+    url = "https://example.com/path?foo=bar&baz=1"
+    result = KraabUserbot.escape_urls_for_restricted_groups(f"See {url}")
+    assert result == f"See `{url}`"
+
+
+def test_mixed_bare_and_escaped_urls() -> None:
+    """Часть URL уже в бэктиках, часть — нет: только «голые» оборачиваются."""
+    text = "See `https://safe.com` and also https://bare.com"
+    result = KraabUserbot.escape_urls_for_restricted_groups(text)
+    assert result == "See `https://safe.com` and also `https://bare.com`"
+
+
+def test_code_block_url_untouched() -> None:
+    """URL внутри code-блока (тройные бэктики) не оборачивается."""
+    text = "```\nhttps://inside-code.com\n```"
+    result = KraabUserbot.escape_urls_for_restricted_groups(text)
+    # тройные бэктики — это просто нечётный индекс в split, внутренний URL не трогается
+    assert "`https://inside-code.com`" not in result

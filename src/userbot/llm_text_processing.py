@@ -500,6 +500,40 @@ class LLMTextProcessingMixin:
         return decorated
 
     @staticmethod
+    def escape_urls_for_restricted_groups(text: str) -> str:
+        """
+        Оборачивает «голые» URL в бэктики, чтобы обойти детектор ссылок
+        admin-ботов в публичных группах (например, HOW2AI).
+
+        Telegram отображает `https://...` в коде как моноширинный текст —
+        ссылки не кликабельны, поэтому LinkRestrict-боты их не удаляют.
+
+        Правила:
+        - Только сегменты вне бэктиков — уже обёрнутые URL не трогаем.
+        - Markdown-ссылки [текст](url) — не трогаем (ищем только «голые» URL).
+        """
+        if not text:
+            return text
+
+        # Паттерн для «голых» URL (не внутри markdown-ссылки и не в бэктиках)
+        _url_re = re.compile(r'https?://[^\s\)\]`>]+', re.IGNORECASE)
+
+        # Разбиваем по бэктикам: чётные индексы — вне кода, нечётные — внутри.
+        parts = text.split("`")
+        for i in range(0, len(parts), 2):
+            segment = parts[i]
+            # Не трогаем URL внутри markdown-ссылок вида [текст](url)
+            def _maybe_wrap(m: re.Match) -> str:
+                # Смотрим символ перед совпадением: если '(' — это markdown-ссылка
+                start = m.start()
+                if start > 0 and segment[start - 1] == "(":
+                    return m.group(0)
+                return f"`{m.group(0)}`"
+
+            parts[i] = _url_re.sub(_maybe_wrap, segment)
+        return "`".join(parts)
+
+    @staticmethod
     def _normalize_user_visible_fallback_text(text: str) -> str:
         """
         Приводит сырые fallback-строки OpenClaw к понятному Telegram-тексту.

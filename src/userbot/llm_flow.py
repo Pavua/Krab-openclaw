@@ -1049,6 +1049,13 @@ class LLMFlowMixin:
                 text=full_response,
             )
 
+            # Экранируем URL в группах: admin-боты (например, HOW2AI) удаляют
+            # сообщения с кликабельными ссылками у не-админов. Оборачиваем в
+            # бэктики — Telegram рендерит их как код, не как гиперссылку.
+            _chat_type = getattr(getattr(message, "chat", None), "type", None)
+            if _chat_type not in (enums.ChatType.PRIVATE, enums.ChatType.BOT):
+                full_response = self.escape_urls_for_restricted_groups(full_response)
+
             delivery_result = await self._deliver_response_parts(
                 source_message=message,
                 temp_message=temp_msg,
