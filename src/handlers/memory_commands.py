@@ -257,7 +257,43 @@ def _format_stats(s: MemoryStats) -> str:
     else:
         lines.append(_escape_md("• Vectors:       (sqlite-vec не подключён)"))
     lines.append(_escape_md(f"• DB size:       {_format_bytes(s.db_size_bytes)}"))
-    return "\n".join(lines)
+
+    # Phase 4: блок индексера реального времени.
+    try:
+        from src.core.memory_indexer_worker import get_indexer  # noqa: PLC0415
+        idx = get_indexer().get_stats()
+        status_str = "running" if idx.is_running else "stopped"
+        if idx.is_running and idx.started_at:
+            delta = datetime.now(timezone.utc) - idx.started_at
+            hours = int(delta.total_seconds() // 3600)
+            mins = int((delta.total_seconds() % 3600) // 60)
+            status_str += f" ({hours}h{mins}m)"
+        flush_str = "never"
+        if idx.last_flush_at:
+            age = (datetime.now(timezone.utc) - idx.last_flush_at).total_seconds()
+            flush_str = (
+                f"{int(age)}s ago ({int(idx.last_flush_duration_sec * 1000)}ms)"
+            )
+        skip_parts = [f"{k}={v}" for k, v in idx.skipped.items() if v > 0]
+        fail_parts = [f"{k}={v}" for k, v in idx.failed.items() if v > 0]
+        idx_text = (
+            "\n\n**Indexer (real-time):**\n"
+            f"  Status: {status_str}\n"
+            f"  Queue: {idx.queue_size} / {idx.queue_maxsize}\n"
+            f"  Last flush: {flush_str}\n"
+            f"  Processed: {idx.processed_total} / Enqueued: {idx.enqueued_total}\n"
+            f"  Chunks committed: {idx.chunks_committed}\n"
+            f"  Embeddings: {idx.embeddings_committed}\n"
+            f"  Skipped: {sum(idx.skipped.values())} ({', '.join(skip_parts) or '—'})\n"
+            f"  Dropped: {idx.dropped_queue_full}\n"
+            f"  Failed: {sum(idx.failed.values())} ({', '.join(fail_parts) or '—'})\n"
+            f"  Restarts: {idx.restarts}\n"
+            f"  Active builders: {idx.builders_active}"
+        )
+    except Exception:  # noqa: BLE001 — индексер может не быть запущен
+        idx_text = "\n\nIndexer: недоступен"
+
+    return "\n".join(lines) + _escape_md(idx_text)
 
 
 def _usage_archive() -> str:
