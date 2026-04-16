@@ -93,6 +93,31 @@ from src.integrations.voice_gateway_subscriber import VoiceGatewayEventSubscribe
 logger = structlog.get_logger("WebApp")
 
 
+# ── Хелперы memory_indexer для health/lite ────────────────────────────────────
+
+def _resolve_memory_indexer_state() -> str:
+    """running | stopped | degraded — для health/lite."""
+    try:
+        from src.core.memory_indexer_worker import get_indexer
+        stats = get_indexer().get_stats()
+        if not stats.is_running:
+            return "stopped"
+        if stats.failed.get("flush", 0) > 0 or stats.embed_disabled:
+            return "degraded"
+        return "running"
+    except Exception:
+        return "stopped"
+
+
+def _resolve_memory_indexer_queue_size() -> int:
+    """Размер очереди индексера или 0 при ошибке."""
+    try:
+        from src.core.memory_indexer_worker import get_indexer
+        return get_indexer().get_stats().queue_size
+    except Exception:
+        return 0
+
+
 class WebApp:
     """Web-панель Krab с API статуса экосистемы."""
 
@@ -7485,10 +7510,55 @@ class WebApp:
                 "scheduler_enabled": runtime.get("scheduler_enabled"),
                 "inbox_summary": runtime.get("inbox_summary"),
                 "voice_gateway_configured": runtime.get("voice_gateway_configured"),
+                "memory_indexer_state": _resolve_memory_indexer_state(),
+                "memory_indexer_queue_size": _resolve_memory_indexer_queue_size(),
             }
             if _rate_limiter_stats is not None:
                 result["telegram_rate_limiter"] = _rate_limiter_stats
             return result
+
+        # ── Memory Indexer API (phase 4) ─────────────────────────────────────
+
+        @self.app.get("/api/memory/indexer")
+        async def memory_indexer_stats():
+            """Снимок IndexerStats для owner panel."""
+            try:
+                from ..core.memory_indexer_worker import get_indexer
+            except ImportError:
+                return {"error": "indexer_unavailable"}
+            stats = get_indexer().get_stats()
+            return {
+                "is_running": stats.is_running,
+                "started_at": stats.started_at.isoformat() if stats.started_at else None,
+                "queue_size": stats.queue_size,
+                "queue_maxsize": stats.queue_maxsize,
+                "enqueued_total": stats.enqueued_total,
+                "processed_total": stats.processed_total,
+                "chunks_committed": stats.chunks_committed,
+                "embeddings_committed": stats.embeddings_committed,
+                "skipped": dict(stats.skipped),
+                "dropped_queue_full": stats.dropped_queue_full,
+                "failed": dict(stats.failed),
+                "last_flush_at": stats.last_flush_at.isoformat() if stats.last_flush_at else None,
+                "last_flush_duration_sec": stats.last_flush_duration_sec,
+                "builders_active": stats.builders_active,
+                "restarts": stats.restarts,
+                "embed_disabled": stats.embed_disabled,
+            }
+
+        @self.app.post("/api/memory/indexer/flush")
+        async def memory_indexer_flush():
+            """Принудительный flush (debug/owner tool)."""
+            try:
+                from ..core.memory_indexer_worker import get_indexer
+            except ImportError:
+                return {"error": "indexer_unavailable"}
+            stats = get_indexer().get_stats()
+            return {
+                "ack": True,
+                "queue_size": stats.queue_size,
+                "note": "flush будет выполнен в течение batch_timeout_sec",
+            }
 
         # ── Stats Dashboard (session 4+, Gemini 3.1 Pro frontend) ──────────
 

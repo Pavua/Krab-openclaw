@@ -309,3 +309,58 @@ class TestRealWorldScenarios:
         # Более сложное разделение потребует LLM-based topic clustering,
         # что вне scope'а regex-chunker'а. Фиксируем поведение тестом.
         assert len(chunks[0].messages) == 4
+
+
+# ---------------------------------------------------------------------------
+# harvest_closed (Phase 4 streaming).
+# ---------------------------------------------------------------------------
+
+class TestHarvestClosed:
+    """Тесты метода ChunkBuilder.harvest_closed для real-time worker."""
+
+    def test_empty_builder_returns_empty(self) -> None:
+        builder = ChunkBuilder()
+        result = builder.harvest_closed(
+            now=BASE_TIME + timedelta(hours=1),
+            time_gap=timedelta(minutes=5),
+        )
+        assert result == []
+
+    def test_keeps_recent_open_chunks(self) -> None:
+        builder = ChunkBuilder()
+        builder.add(_msg("1", offset_sec=0))
+        builder.add(_msg("2", offset_sec=60))
+        result = builder.harvest_closed(
+            now=BASE_TIME + timedelta(minutes=2),
+            time_gap=timedelta(minutes=5),
+        )
+        assert result == []
+        flushed = builder.flush()
+        assert len(flushed) == 1
+
+    def test_removes_old_chunks_from_open(self) -> None:
+        builder = ChunkBuilder()
+        builder.add(_msg("1", offset_sec=0))
+        builder.add(_msg("2", offset_sec=60))
+        result = builder.harvest_closed(
+            now=BASE_TIME + timedelta(minutes=10),
+            time_gap=timedelta(minutes=5),
+        )
+        assert len(result) == 1
+        assert {m.message_id for m in result[0].messages} == {"1", "2"}
+        flushed = builder.flush()
+        assert flushed == []
+
+    def test_idempotent_on_repeated_call(self) -> None:
+        builder = ChunkBuilder()
+        builder.add(_msg("1", offset_sec=0))
+        first = builder.harvest_closed(
+            now=BASE_TIME + timedelta(minutes=10),
+            time_gap=timedelta(minutes=5),
+        )
+        second = builder.harvest_closed(
+            now=BASE_TIME + timedelta(minutes=10),
+            time_gap=timedelta(minutes=5),
+        )
+        assert len(first) == 1
+        assert second == []
