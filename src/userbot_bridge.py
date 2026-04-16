@@ -245,6 +245,8 @@ class _TelegramSendQueue:
     def __init__(self) -> None:
         self._queues: dict[int, asyncio.Queue] = {}
         self._workers: dict[int, asyncio.Task] = {}
+        # slowmode: chat_id → последний момент успешной отправки (time.monotonic())
+        self._slowmode_last_sent: dict[int, float] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -283,6 +285,21 @@ class _TelegramSendQueue:
     # Internals
     # ------------------------------------------------------------------
 
+    async def _enforce_slowmode_for_chat(self, chat_id: int) -> None:
+        """
+        Ждёт, если для чата установлен slowmode.
+        Вызывать перед первой попыткой отправки — не в retry-цикле.
+        """
+        slow_sec = chat_capability_cache.get_slow_mode_seconds(chat_id)
+        if not slow_sec or slow_sec <= 0:
+            return
+        last_sent = self._slowmode_last_sent.get(chat_id, 0.0)
+        elapsed = time.monotonic() - last_sent
+        remaining = slow_sec - elapsed
+        if remaining > 0:
+            logger.debug("slowmode_wait", chat_id=chat_id, wait_sec=round(remaining, 1))
+            await asyncio.sleep(remaining)
+
     def _get_or_create_queue(self, chat_id: int) -> asyncio.Queue:
         if chat_id not in self._queues:
             self._queues[chat_id] = asyncio.Queue()
@@ -310,6 +327,10 @@ class _TelegramSendQueue:
             result_exc: BaseException | None = None
             result_val: Any = None
 
+            # Slowmode: ждём перед отправкой, если у чата настроен slowmode.
+            # Делаем ДО retry-цикла — не нужно засыпать снова при retry.
+            await self._enforce_slowmode_for_chat(chat_id)
+
             for attempt in range(self._MAX_RETRIES):
                 try:
                     # B.7: global API rate limit. acquire() → sleep если
@@ -317,12 +338,28 @@ class _TelegramSendQueue:
                     # Ставим ДО coro_factory чтобы retry тоже учитывались.
                     await telegram_rate_limiter.acquire(purpose="send_queue")
                     result_val = await coro_factory()
+                    # Фиксируем время успешной отправки для slowmode-трекинга.
+                    self._slowmode_last_sent[chat_id] = time.monotonic()
                     result_exc = None
                     break
                 except Exception as exc:  # noqa: BLE001
                     err_upper = str(exc).upper()
                     is_flood = "FLOOD" in err_upper
+                    is_slowmode = "SLOWMODE_WAIT" in err_upper
                     is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+                    if is_slowmode:
+                        # SlowmodeWait: обновляем last_sent и ждём
+                        self._slowmode_last_sent[chat_id] = time.monotonic()
+                        m = re.search(r"(\d+)", str(exc))
+                        slow_wait = float(m.group(1)) if m else 10.0
+                        logger.warning(
+                            "slowmode_wait_from_error",
+                            chat_id=chat_id,
+                            wait_sec=slow_wait,
+                        )
+                        if attempt < self._MAX_RETRIES - 1:
+                            await asyncio.sleep(slow_wait)
+                            continue
                     if (is_flood or is_timeout) and attempt < self._MAX_RETRIES - 1:
                         delay = self._BASE_BACKOFF_SEC * (2**attempt)
                         if is_flood:
@@ -3620,6 +3657,28 @@ class KraabUserbot(
                     asyncio.create_task(
                         self._send_monitor_alert(message=message, matched_keyword=_matched_kw)
                     )
+
+            # SPAM GUARD: проверяем входящее сообщение (если spam_guard включён
+            # для чата). Только чужие сообщения, не команды — fire-and-forget.
+            if not _is_self_for_guard and not _is_command_for_guard and chat_id:
+                try:
+                    from .core.spam_guard import classify_message as _spam_classify
+                    from .core.spam_guard import is_enabled as _spam_is_enabled
+
+                    if _spam_is_enabled(chat_id):
+                        _spam_reason = _spam_classify(
+                            chat_id=message.chat.id,
+                            user_id=getattr(user, "id", 0),
+                            message=message,
+                        )
+                        if _spam_reason:
+                            from .handlers.command_handlers import apply_spam_action
+
+                            asyncio.create_task(
+                                apply_spam_action(self, message, _spam_reason)
+                            )
+                except Exception as _spam_exc:  # noqa: BLE001
+                    logger.debug("spam_guard_check_failed", error=str(_spam_exc))
 
             # MEMORY LAYER (Phase 4): real-time индексация в archive.db.
             if message.text and chat_id and not _is_command_for_guard:
