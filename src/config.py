@@ -138,12 +138,12 @@ class Config:
     OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
         float(x)
         if (x := os.getenv("OPENCLAW_CODEX_CLI_BUFFERED_READ_TIMEOUT_SEC", "").strip())
-        else None
+        else 180.0  # 3 мин — если codex-cli не ответил, fallback на Gemini
     )
     OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
         float(x)
         if (x := os.getenv("OPENCLAW_GOOGLE_GEMINI_CLI_BUFFERED_READ_TIMEOUT_SEC", "").strip())
-        else None
+        else 120.0  # 2 мин — Gemini CLI быстрее codex
     )
     OPENCLAW_OPENAI_CODEX_BUFFERED_READ_TIMEOUT_SEC: Optional[float] = (
         float(x)
