@@ -615,3 +615,31 @@ def _chunk_hash(chat_id: str, start_message_id: str) -> str:
     """Детерминированный chunk_id: sha256(chat_id + "\\x00" + start_msg_id)[:16]."""
     payload = f"{chat_id}\x00{start_message_id}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton helpers.
+# ---------------------------------------------------------------------------
+
+_worker_singleton: MemoryIndexerWorker | None = None
+
+
+def get_indexer() -> MemoryIndexerWorker:
+    """Возвращает (создавая lazy) singleton worker."""
+    global _worker_singleton
+    if _worker_singleton is None:
+        _worker_singleton = MemoryIndexerWorker()
+    return _worker_singleton
+
+
+def is_indexer_running() -> bool:
+    """True если singleton создан И is_running."""
+    if _worker_singleton is None:
+        return False
+    return _worker_singleton.get_stats().is_running
+
+
+def _reset_singleton_for_tests() -> None:
+    """Сбрасывает singleton — ТОЛЬКО для тестов."""
+    global _worker_singleton
+    _worker_singleton = None

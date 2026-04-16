@@ -488,3 +488,32 @@ class TestSupervisor:
         await worker.stop(drain=False, timeout=2.0)
         stats = worker.get_stats()
         assert stats.restarts == 0
+
+
+class TestStats:
+    """Test #18: stats observable + module helpers."""
+
+    @pytest.mark.asyncio
+    async def test_stats_observable(self, worker):
+        """get_stats() returns correct counters after work."""
+        await worker.start()
+        await worker.enqueue(_fake_pyrofork_message(message_id="1"))
+        await worker.enqueue(_fake_pyrofork_message(message_id="2", offset_sec=10))
+        await worker.stop(drain=True, timeout=3.0)
+        stats = worker.get_stats()
+        assert stats.enqueued_total == 2
+        assert stats.processed_total == 2
+        assert stats.is_running is False
+        assert stats.started_at is not None
+        assert isinstance(stats.skipped, dict)
+        assert isinstance(stats.failed, dict)
+
+    def test_module_helpers_singleton(self):
+        """Module-level get_indexer returns singleton."""
+        from src.core.memory_indexer_worker import get_indexer, is_indexer_running, _reset_singleton_for_tests
+        _reset_singleton_for_tests()
+        first = get_indexer()
+        second = get_indexer()
+        assert first is second
+        assert is_indexer_running() is False
+        _reset_singleton_for_tests()  # cleanup
