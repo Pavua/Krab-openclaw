@@ -1,9 +1,8 @@
 # Track E — Memory Layer для Краба
 
-**Статус:** planning → Phase 0 in progress
-**Ветка:** `claude/memory-layer`
-**Worktree:** `.claude/worktrees/memory-layer`
-**Координация:** основной чат работает на Track B (Dashboard V4, Phase 7) — не трогает memory-* файлы.
+**Статус:** Phase 0–3 merged (PRs #12, #13, #14, #15). Phase 4 in progress.
+**Текущая ветка:** `claude/memory-phase4-indexer`
+**Координация:** Track B merged (PR #11), memory_adapter.py автоматически подхватывает real HybridRetriever.
 
 ## Цель
 
@@ -169,11 +168,54 @@ class HybridRetriever:
 - `!memory stats` — count/size/coverage per chat
 - `!archive <q>` — текст редактед, показываем score, timestamp, chat_title
 
-### Phase 4 — incremental indexer (1 день)
+### Phase 4 — incremental indexer (Session 9, in progress)
 
-- `src/core/memory_indexer_worker.py` — async worker в `aux_tasks`
-- `indexer.ingest_message(msg)` — API для Track B hook
-- Watermark таблица, инвалидация эмбеддингов на edit
+`src/core/memory_indexer_worker.py` — async background worker:
+
+**Архитектура:**
+```
+_process_message(msg) → asyncio.create_task(indexer.ingest(msg))
+                              ↓
+                        asyncio.Queue (buffer, max 5000)
+                              ↓
+                  flush loop (60s interval / 50 msg batch)
+                              ↓
+              whitelist → PII redact → chunk → INSERT → FTS5 → embed
+```
+
+**API для Track B hook:**
+```python
+class MemoryIndexerWorker:
+    async def start(self) -> None          # запуск flush loop
+    async def ingest(self, msg) -> None    # fire-and-forget, duck-typed Pyrogram Message
+    async def flush(self) -> FlushStats    # принудительный flush
+    async def stop(self) -> None           # graceful shutdown + final flush
+    queue_size -> int                      # pending items
+    stats -> IndexerStats                  # кумулятивные метрики
+```
+
+**Lifecycle в userbot_bridge.py (Track B добавит):**
+```python
+# __init__:
+self._memory_indexer = MemoryIndexerWorker()
+
+# start():
+self._memory_indexer_task = asyncio.create_task(self._memory_indexer.start())
+
+# _process_message():
+asyncio.create_task(self._memory_indexer.ingest(message))
+
+# stop():
+await self._memory_indexer.stop()
+```
+
+**Ключевые решения:**
+- asyncio.Queue с back-pressure (max 5000 items) — при переполнении drop + warning
+- Дедупликация в buffer через seen_ids set (chat_id:msg_id)
+- Watermark через `indexer_state` table (already in DDL)
+- Embedder optional (inject через `_embedder=`)
+- Flush синхронный I/O через `asyncio.to_thread()`
+- INSERT OR IGNORE для idempotent'ного повторного прогона
 
 ### Privacy hardening (2 дня, параллельно с Phase 1-3)
 
