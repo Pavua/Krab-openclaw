@@ -85,9 +85,10 @@ def temp_archive(tmp_path: Path) -> ArchivePaths:
 
 
 @pytest.fixture
-def whitelist_strict() -> MemoryWhitelist:
+def whitelist_strict(tmp_path: Path) -> MemoryWhitelist:
+    # Несуществующий config_path чтобы hot-reload не подхватил глобальный whitelist.json.
     config = WhitelistConfig(allow_ids={ALLOWED_CHAT_ID})
-    return MemoryWhitelist(config=config)
+    return MemoryWhitelist(config_path=tmp_path / "fake_whitelist.json", config=config)
 
 
 @pytest.fixture
