@@ -1123,8 +1123,10 @@ class LLMFlowMixin:
             for _mpath in _media_refs:
                 if not os.path.exists(_mpath):
                     logger.warning("media_file_not_found", path=_mpath)
+                    # Техошибки — только в DM владельца, не спамим в групповой чат
+                    _err_chat = "me" if message.chat.id < 0 else message.chat.id
                     await self.client.send_message(
-                        message.chat.id, f"⚠️ Медиафайл не найден: `{_mpath}`"
+                        _err_chat, f"⚠️ Медиафайл не найден: `{_mpath}`"
                     )
                     continue
                 try:
@@ -1168,8 +1170,10 @@ class LLMFlowMixin:
                     logger.info("media_sent", path=_mpath, ext=_ext)
                 except Exception as _me:  # noqa: BLE001
                     logger.error("media_send_failed", path=_mpath, error=str(_me))
+                    # Техошибки — только в DM владельца, не спамим в групповой чат
+                    _err_chat = "me" if message.chat.id < 0 else message.chat.id
                     await self.client.send_message(
-                        message.chat.id,
+                        _err_chat,
                         f"⚠️ Не удалось отправить медиа `{os.path.basename(_mpath)}`: `{str(_me)[:200]}`",
                     )
 
@@ -1335,7 +1339,9 @@ class LLMFlowMixin:
             )
             try:
                 if temp_msg is not None:
-                    await self.client.send_message(temp_msg.chat.id, error_text)
+                    # Техошибки — только в DM владельца, не спамим в групповой чат
+                    _err_chat = "me" if temp_msg.chat.id < 0 else temp_msg.chat.id
+                    await self.client.send_message(_err_chat, error_text)
             except Exception as notify_exc:  # noqa: BLE001
                 # silent-failure-hunter review (B.7): раньше тут был пустой pass.
                 # Это значит что если и notify fails (тот же USER_BANNED_IN_CHANNEL
