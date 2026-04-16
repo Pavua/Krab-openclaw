@@ -36,6 +36,7 @@ from .core.exceptions import ProviderAuthError, ProviderError
 from .core.lm_studio_auth import build_lm_studio_auth_headers
 from .core.lm_studio_health import is_lm_studio_available
 from .core.logger import get_logger
+from .core.observability import metrics
 from .core.openclaw_runtime_models import (
     get_runtime_fallback_models,
     get_runtime_primary_model,
@@ -1898,6 +1899,7 @@ class OpenClawClient:
             )
 
         # Используем обычный POST (не streaming), чтобы получить единый JSON-ответ
+        _t0 = time.monotonic()
         try:
             response = await self._http_client.post(
                 f"{self.base_url}/v1/chat/completions",
@@ -1908,6 +1910,7 @@ class OpenClawClient:
             # Пробрасываем как ProviderError(retryable=True), чтобы fallback-loop
             # (for attempt in range(4)) поймал его через except (ProviderAuthError, ProviderError)
             # и попробовал следующую модель в цепочке.
+            metrics.inc("llm_error")
             raise ProviderError(
                 message=f"timeout waiting for {model_id}: {exc}",
                 user_message="Таймаут провайдера",
@@ -1918,6 +1921,7 @@ class OpenClawClient:
         if response.status_code != 200:
             body_str = response.text
             logger.error("openclaw_api_error", status=response.status_code, body=body_str)
+            metrics.inc("llm_error")
             if response.status_code in (401, 403):
                 if allow_auth_retry and self._refresh_gateway_token_from_runtime():
                     retry_after_token_refresh = True
@@ -2036,6 +2040,10 @@ class OpenClawClient:
             tool_calls_count=len(self._active_tool_calls),
             channel="telegram",  # можно расширить для других каналов
         )
+        # Инструментирование: замер задержки и счётчик успешных вызовов
+        _elapsed_ms = (time.monotonic() - _t0) * 1000
+        metrics.add_latency(_elapsed_ms)
+        metrics.inc("llm_success")
         return full_response.strip()
 
     async def _resolve_local_model_for_retry(

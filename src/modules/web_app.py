@@ -11216,8 +11216,27 @@ class WebApp:
 
         @self.app.get("/api/ops/metrics")
         async def ops_metrics():
-            """Export internal metrics."""
-            return {"ok": True, "metrics": metrics.get_snapshot()}
+            """Export internal metrics — flat fields для V4 ops dashboard sparklines."""
+            snap = metrics.get_snapshot()
+            counters = snap.get("counters", {})
+            latencies = snap.get("latencies", {})
+
+            # Производные метрики для V4 ops.html sparklines
+            success = counters.get("llm_success", 0)
+            errors = counters.get("llm_error", 0)
+            total = success + errors
+            error_rate = (errors / total * 100) if total > 0 else 0.0
+
+            return {
+                "ok": True,
+                "metrics": snap,
+                # Плоские поля для V4 ops dashboard
+                "latency_p50": latencies.get("p50_ms", 0),
+                "latency_p95": latencies.get("p95_ms", 0),
+                "latency_p99": 0,  # LatencyTracker считает p50/p95; p99 зарезервирован
+                "error_rate": round(error_rate, 2),
+                "throughput": total,
+            }
 
         @self.app.get("/api/ops/timeline")
         @self.app.get("/api/timeline")
