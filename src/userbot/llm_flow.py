@@ -23,6 +23,12 @@ if TYPE_CHECKING:
 
 from ..config import config
 from ..core.logger import get_logger
+from ..core.openclaw_task_poller import (
+    check_gateway_http_alive,
+    check_tasks_hung,
+    format_task_progress_for_telegram,
+    poll_active_tasks,
+)
 
 logger = get_logger(__name__)
 
@@ -135,6 +141,8 @@ def _build_openclaw_progress_wait_notice(
     elapsed_sec: float,
     notice_index: int,
     tool_calls_summary: str = "",
+    gateway_progress: str = "",
+    gateway_dead: bool = False,
 ) -> str:
     """
     Формирует раннее тех-уведомление о том, что buffered-запрос всё ещё жив.
@@ -229,6 +237,11 @@ def _build_openclaw_progress_wait_notice(
     result = f"{lead}\n⏱ Прошло: {elapsed_label}" + route_line
     if tool_calls_summary:
         result += f"\n\n{tool_calls_summary}"
+    # Прогресс задач из OpenClaw Gateway SQLite
+    if gateway_dead:
+        result += "\n\n⚠️ Gateway не отвечает на /healthz"
+    elif gateway_progress:
+        result += f"\n\n📋 Gateway:\n{gateway_progress}"
     return result
 
 
@@ -423,6 +436,11 @@ class LLMFlowMixin:
             getattr(config, "OPENCLAW_NO_TOOL_ACTIVITY_TIMEOUT_SEC", 300.0) or 300.0
         )
         no_tool_activity_timeout_sec = max(60.0, no_tool_activity_timeout_sec)
+        # Gateway watchdog: интервал HTTP health-check (каждые 30 сек)
+        gateway_http_check_interval_sec = 30.0
+        next_gateway_http_check_sec = gateway_http_check_interval_sec
+        last_gateway_progress = ""  # последний SQLite-прогресс (для дедупликации)
+        gateway_http_dead = False  # True если /healthz не ответил
         startup_route_model = str(
             _current_runtime_primary_model() or getattr(config, "MODEL", "") or ""
         ).strip()
@@ -507,6 +525,11 @@ class LLMFlowMixin:
                         wait_timeout = min(
                             wait_timeout,
                             max(0.0, next_tool_progress_sec - elapsed_wait_sec),
+                        )
+                    if next_gateway_http_check_sec > 0.0:
+                        wait_timeout = min(
+                            wait_timeout,
+                            max(0.0, next_gateway_http_check_sec - elapsed_wait_sec),
                         )
                     wait_timeout = min(wait_timeout, remaining_total_timeout_sec)
                 try:
@@ -596,7 +619,18 @@ class LLMFlowMixin:
                     # Handle Tool Progress
                     if elapsed_wait_sec >= next_tool_progress_sec - 1e-6:
                         handled_interval = True
-                        if tool_summary:
+                        # Поллинг задач из OpenClaw Gateway SQLite
+                        gateway_tasks = poll_active_tasks()
+                        gateway_progress_text = format_task_progress_for_telegram(gateway_tasks)
+                        # Watchdog: все running задачи зависли > 3 мин?
+                        hung_sec = check_tasks_hung(gateway_tasks, hung_threshold_sec=180.0)
+                        if hung_sec is not None:
+                            logger.warning(
+                                "openclaw_gateway_possibly_hung",
+                                stale_sec=int(hung_sec),
+                                chat_id=chat_id,
+                            )
+                        if tool_summary or gateway_progress_text or gateway_http_dead:
                             route_meta = {}
                             if hasattr(openclaw_client, "get_last_runtime_route"):
                                 try:
@@ -616,10 +650,13 @@ class LLMFlowMixin:
                                 elapsed_sec=elapsed_wait_sec,
                                 notice_index=max(1, progress_notice_count),
                                 tool_calls_summary=tool_summary,
+                                gateway_progress=gateway_progress_text,
+                                gateway_dead=gateway_http_dead,
                             )
                             if (
                                 progress_notice != last_progress_notice_text
                                 or tool_summary != last_tool_summary
+                                or gateway_progress_text != last_gateway_progress
                             ):
                                 try:
                                     if is_self:
@@ -630,6 +667,7 @@ class LLMFlowMixin:
                                         temp_msg = await self._safe_edit(temp_msg, progress_notice)
                                     last_progress_notice_text = progress_notice
                                     last_tool_summary = tool_summary
+                                    last_gateway_progress = gateway_progress_text
                                 except Exception as exc:
                                     logger.warning(
                                         "openclaw_tool_progress_notice_delivery_failed",
@@ -723,12 +761,18 @@ class LLMFlowMixin:
                             route_attempt=route_attempt,
                             has_photo=bool(images),
                         )
+                        # Поллинг задач из OpenClaw Gateway SQLite для keepalive notice
+                        _kp_gateway_tasks = poll_active_tasks()
+                        _kp_gateway_progress = format_task_progress_for_telegram(_kp_gateway_tasks)
+                        last_gateway_progress = _kp_gateway_progress
                         progress_notice = _build_openclaw_progress_wait_notice(
                             route_model=route_model,
                             attempt=route_attempt,
                             elapsed_sec=elapsed_wait_sec,
                             notice_index=progress_notice_count,
                             tool_calls_summary=tool_summary,
+                            gateway_progress=_kp_gateway_progress,
+                            gateway_dead=gateway_http_dead,
                         )
                         try:
                             if is_self:
@@ -753,6 +797,28 @@ class LLMFlowMixin:
                             )
                         next_progress_notice_sec = elapsed_wait_sec + progress_notice_repeat_sec
                         next_tool_progress_sec = elapsed_wait_sec + tool_progress_poll_sec
+
+                    # Handle Gateway HTTP Health Check (каждые 30 сек)
+                    if elapsed_wait_sec >= next_gateway_http_check_sec - 1e-6:
+                        handled_interval = True
+                        _gw_alive = await check_gateway_http_alive()
+                        if not _gw_alive:
+                            if not gateway_http_dead:
+                                logger.warning(
+                                    "openclaw_gateway_http_not_responding",
+                                    chat_id=chat_id,
+                                    elapsed_sec=round(elapsed_wait_sec, 1),
+                                )
+                            gateway_http_dead = True
+                        else:
+                            if gateway_http_dead:
+                                logger.info(
+                                    "openclaw_gateway_http_recovered",
+                                    chat_id=chat_id,
+                                    elapsed_sec=round(elapsed_wait_sec, 1),
+                                )
+                            gateway_http_dead = False
+                        next_gateway_http_check_sec = elapsed_wait_sec + gateway_http_check_interval_sec
 
                     if handled_interval:
                         continue
