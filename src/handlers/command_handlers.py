@@ -8868,15 +8868,24 @@ async def handle_timer(bot: "KraabUserbot", message: Message) -> None:
     tid = _timer_counter
 
     async def _timer_callback(t_id: int, secs: int, c_id: int, lbl: str) -> None:
-        """Ждёт нужное время, затем отправляет уведомление в чат."""
+        """Ждёт нужное время, затем отправляет уведомление в чат.
+        Если таймер был запущен в группе — уведомление идёт в Saved Messages,
+        чтобы не засорять групповой чат техническими нотификациями.
+        """
         try:
             await asyncio.sleep(secs)
         except asyncio.CancelledError:
             return
         label_part = f" — {lbl}" if lbl else ""
-        text = f"⏰ **Таймер истёк!**{label_part} (#{t_id})"
+        # Группы имеют отрицательный chat_id — перенаправляем к себе
+        if c_id < 0:
+            target = "me"
+            text = f"⏰ **Таймер истёк!**{label_part} (#{t_id})\n_(из группы `{c_id}`)_"
+        else:
+            target = c_id
+            text = f"⏰ **Таймер истёк!**{label_part} (#{t_id})"
         try:
-            await bot.client.send_message(c_id, text)
+            await bot.client.send_message(target, text)
         except Exception as exc:  # noqa: BLE001
             logger.warning("timer_notify_failed", timer_id=t_id, error=str(exc))
         finally:
