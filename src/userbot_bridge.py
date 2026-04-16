@@ -3267,25 +3267,43 @@ class KraabUserbot(
             f"🦀 Принял запрос.\n\n"
             f"🛠️ Собираю контекст и запускаю маршрут...{_ack_model_hint}"
         )
+        # Progress-уведомления только в личных чатах (PRIVATE). В группах — молчим
+        # и отправляем только финальный ответ.
+        from pyrogram import enums as _pg_enums  # noqa: PLC0415
+        _chat_type = getattr(getattr(message, "chat", None), "type", None)
+        _is_private_chat = _chat_type == _pg_enums.ChatType.PRIVATE
+        _show_progress_notices = _is_private_chat or is_self
         if not is_self:
-            try:
-                temp_msg = await asyncio.wait_for(
-                    self._safe_reply_or_send_new(message, _ack_text),
-                    timeout=10.0,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
+            if _show_progress_notices:
+                # Личный чат — отправляем полный ack
                 try:
-                    temp_msg = await self.client.send_message(
-                        message.chat.id, _ack_text,
+                    temp_msg = await asyncio.wait_for(
+                        self._safe_reply_or_send_new(message, _ack_text),
+                        timeout=10.0,
                     )
-                except Exception as send_exc:  # noqa: BLE001
-                    logger.warning(
-                        "initial_request_ack_send_fallback_failed",
-                        chat_id=chat_id,
-                        error=str(send_exc),
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("initial_request_ack_failed", chat_id=chat_id, error=str(exc))
+                    try:
+                        temp_msg = await self.client.send_message(
+                            message.chat.id, _ack_text,
+                        )
+                    except Exception as send_exc:  # noqa: BLE001
+                        logger.warning(
+                            "initial_request_ack_send_fallback_failed",
+                            chat_id=chat_id,
+                            error=str(send_exc),
+                        )
+                        temp_msg = message
+            else:
+                # Групповой чат — только typing indicator, без текстового ack
+                try:
+                    from pyrogram import enums as _e  # noqa: PLC0415
+                    await self.client.send_chat_action(
+                        message.chat.id, _e.ChatAction.TYPING
                     )
-                    temp_msg = message
+                except Exception:
+                    pass
+                temp_msg = message
         else:
             message = await self._safe_edit(
                 message,
@@ -3543,6 +3561,7 @@ class KraabUserbot(
                 "system_prompt": system_prompt,
                 "action_stop_event": _typing_stop_event,
                 "action_task": _typing_task,
+                "show_progress_notices": _show_progress_notices,
             }
             if active_background_task is not None:
                 background_task = asyncio.create_task(
@@ -3574,6 +3593,7 @@ class KraabUserbot(
             action_stop_event=_typing_stop_event,
             action_task=_typing_task,
             prefer_send_message_for_background=False,
+            show_progress_notices=_show_progress_notices,
         )
 
     async def _process_message(self, message: Message):
